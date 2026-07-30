@@ -1,0 +1,619 @@
+{
+ "registered_before_measurement": true,
+ "cycle": 12,
+ "patches": 36,
+ "commit_sha": "d5389b1",
+ "fingerprint": "bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5",
+ "probes": "9/9 PASS on this build (scripts/engine_behavioral_probes.py) before any row was read",
+ "derivation": "committed artifacts only: reports/c9_decomposition.json minus the 30 rows the four fix lanes claim (ledger Z4.6, Z5.3, Z6.4, Z7.5/postmerge_restatement), plus Z7.3's re-filing of 1500028/44. The c11 row-level data was NOT opened before this file was committed.",
+ "predictions": [
+  {
+   "id": "P1",
+   "claim": "reports/c11_statfloor_differential.json contains exactly these 78 outside-limits rows (identity, not count): c9's 108 minus the 30 named in `cleared_rows`; zero new rows; repro_retention.repros_complete true",
+   "cleared_rows": [
+    [
+     1500024,
+     9
+    ],
+    [
+     1500036,
+     14
+    ],
+    [
+     1500051,
+     117
+    ],
+    [
+     1500051,
+     124
+    ],
+    [
+     1500059,
+     1
+    ],
+    [
+     1500060,
+     49
+    ],
+    [
+     1500072,
+     48
+    ],
+    [
+     1500074,
+     12
+    ],
+    [
+     1500074,
+     32
+    ],
+    [
+     1500074,
+     57
+    ],
+    [
+     1500076,
+     96
+    ],
+    [
+     1500084,
+     31
+    ],
+    [
+     1500099,
+     49
+    ],
+    [
+     1500121,
+     67
+    ],
+    [
+     1500123,
+     38
+    ],
+    [
+     1500126,
+     13
+    ],
+    [
+     1500136,
+     27
+    ],
+    [
+     1500161,
+     44
+    ],
+    [
+     1500180,
+     35
+    ],
+    [
+     1500188,
+     33
+    ],
+    [
+     1500188,
+     57
+    ],
+    [
+     1500191,
+     20
+    ],
+    [
+     1500204,
+     83
+    ],
+    [
+     1500221,
+     13
+    ],
+    [
+     1500232,
+     54
+    ],
+    [
+     1500266,
+     79
+    ],
+    [
+     1500267,
+     77
+    ],
+    [
+     1500278,
+     30
+    ],
+    [
+     1500285,
+     14
+    ],
+    [
+     1500286,
+     38
+    ]
+   ]
+  },
+  {
+   "id": "P2",
+   "claim": "the 5 c9-walk limit rows are present with classes unchanged; the X-standard relabels therefore apply (sanctioned manual path), 78 -> 73; the 3 limit_not_established rows and the 1 damage_calc walk row (1500251/56) are present and keep their labels",
+   "relabel_rows": [
+    [
+     1500050,
+     33
+    ],
+    [
+     1500168,
+     97
+    ],
+    [
+     1500219,
+     62
+    ],
+    [
+     1500242,
+     56
+    ],
+    [
+     1500255,
+     55
+    ]
+   ],
+   "stay_rows": [
+    [
+     1500012,
+     24
+    ],
+    [
+     1500105,
+     111
+    ],
+    [
+     1500242,
+     60
+    ],
+    [
+     1500251,
+     56
+    ]
+   ]
+  },
+  {
+   "id": "P3",
+   "claim": "re-walking the 9 surviving walk rows against the c11 report reproduces the c9 verdicts: 5 limit (mass >= 1%), 3 limit_not_established (< 1%), 1 damage_calc; masses for the marker rows 1500012/24 and 1500242/60 may shift (Z7.6 stale-in-detail) but not across the 1% floor in the residue-reducing direction without being re-adjudicated",
+   "expect": {
+    "limit": 5,
+    "limit_not_established": 3,
+    "damage_calc": 1
+   }
+  },
+  {
+   "id": "P4",
+   "claim": "the 73 decompose into the family table in `expected_survivors` (row identities per family)",
+   "expected_family_counts": {
+    "matcher_heal_cap_structural": 10,
+    "matcher_accounting_best_branch": 9,
+    "roll_divergent_lethality_shape_compound": 7,
+    "sleeptalk_callee_union": 7,
+    "measurement_boundary_residual_truncation": 6,
+    "matcher_overreport_window": 6,
+    "adjudicated_limit_roll_divergent_lethality": 5,
+    "limit_not_established_keeps_label": 3,
+    "attribution_heal_vs_leechseed_I2": 3,
+    "matcher_overreport_legal_roll": 3,
+    "fixed_damage_skips_contact_abilities": 3,
+    "counter_mirrorcoat_damage_dealt_semantics": 3,
+    "matcher_roll_inherited_painsplit": 3,
+    "damage_calc_one_point_family": 2,
+    "boundary_builder_traced_ability_drift": 2,
+    "confusion_fanout_roll": 1,
+    "engine_waterabsorb_fires_on_raindance": 1,
+    "recoil_rounding_candidate": 1,
+    "battle_end_residual_truncation_attribution": 1,
+    "boundary_builder_toxic_stage_stale": 1,
+    "matcher_roll_inherited_cap": 1
+   },
+   "lane_shape": {
+    "matcher_instrument_incl_sleeptalk": 49,
+    "limit_shape_candidates": 11,
+    "engine_followups": 10,
+    "world_drift": 3
+   }
+  },
+  {
+   "id": "P5",
+   "claim": "clearance-signature predictions for the fix backlog (scored by FUTURE cycles): magnitude mechanisms (BP-side one-point, recoil rounding, WaterAbsorb-on-RainDance) clear in place without scattering; structural mechanisms (Counter/MirrorCoat, fixed-damage post-hooks, traced-ability, toxic-stage) scatter across matcher classes and will under-count from family labels (Z6.4 rule)"
+  }
+ ],
+ "expected_survivors": [
+  {
+   "seed": 1500005,
+   "step": 67,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500012,
+   "step": 24,
+   "family": "limit_not_established_keeps_label"
+  },
+  {
+   "seed": 1500014,
+   "step": 69,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500016,
+   "step": 87,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500017,
+   "step": 55,
+   "family": "attribution_heal_vs_leechseed_I2"
+  },
+  {
+   "seed": 1500028,
+   "step": 44,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500033,
+   "step": 227,
+   "family": "attribution_heal_vs_leechseed_I2"
+  },
+  {
+   "seed": 1500037,
+   "step": 28,
+   "family": "matcher_overreport_legal_roll"
+  },
+  {
+   "seed": 1500040,
+   "step": 70,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500050,
+   "step": 33,
+   "family": "adjudicated_limit_roll_divergent_lethality"
+  },
+  {
+   "seed": 1500050,
+   "step": 48,
+   "family": "confusion_fanout_roll"
+  },
+  {
+   "seed": 1500053,
+   "step": 26,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500054,
+   "step": 21,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500054,
+   "step": 125,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500055,
+   "step": 60,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500057,
+   "step": 38,
+   "family": "matcher_overreport_legal_roll"
+  },
+  {
+   "seed": 1500062,
+   "step": 9,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500068,
+   "step": 79,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500072,
+   "step": 38,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500079,
+   "step": 17,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500080,
+   "step": 11,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500086,
+   "step": 66,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500099,
+   "step": 5,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500103,
+   "step": 76,
+   "family": "fixed_damage_skips_contact_abilities"
+  },
+  {
+   "seed": 1500105,
+   "step": 64,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500105,
+   "step": 111,
+   "family": "limit_not_established_keeps_label"
+  },
+  {
+   "seed": 1500105,
+   "step": 118,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500108,
+   "step": 67,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500112,
+   "step": 40,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500118,
+   "step": 16,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500123,
+   "step": 79,
+   "family": "damage_calc_one_point_family"
+  },
+  {
+   "seed": 1500124,
+   "step": 58,
+   "family": "engine_waterabsorb_fires_on_raindance"
+  },
+  {
+   "seed": 1500125,
+   "step": 45,
+   "family": "attribution_heal_vs_leechseed_I2"
+  },
+  {
+   "seed": 1500130,
+   "step": 53,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500137,
+   "step": 132,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500150,
+   "step": 10,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500150,
+   "step": 39,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500155,
+   "step": 22,
+   "family": "counter_mirrorcoat_damage_dealt_semantics"
+  },
+  {
+   "seed": 1500155,
+   "step": 145,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500162,
+   "step": 115,
+   "family": "matcher_overreport_legal_roll"
+  },
+  {
+   "seed": 1500168,
+   "step": 97,
+   "family": "adjudicated_limit_roll_divergent_lethality"
+  },
+  {
+   "seed": 1500174,
+   "step": 43,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500174,
+   "step": 72,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500175,
+   "step": 67,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500182,
+   "step": 25,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500182,
+   "step": 60,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500189,
+   "step": 61,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500192,
+   "step": 91,
+   "family": "counter_mirrorcoat_damage_dealt_semantics"
+  },
+  {
+   "seed": 1500196,
+   "step": 35,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500200,
+   "step": 47,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500206,
+   "step": 45,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500207,
+   "step": 27,
+   "family": "recoil_rounding_candidate"
+  },
+  {
+   "seed": 1500208,
+   "step": 40,
+   "family": "matcher_roll_inherited_painsplit"
+  },
+  {
+   "seed": 1500210,
+   "step": 32,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500211,
+   "step": 46,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500214,
+   "step": 36,
+   "family": "matcher_roll_inherited_painsplit"
+  },
+  {
+   "seed": 1500214,
+   "step": 37,
+   "family": "matcher_roll_inherited_painsplit"
+  },
+  {
+   "seed": 1500217,
+   "step": 112,
+   "family": "roll_divergent_lethality_shape_compound"
+  },
+  {
+   "seed": 1500219,
+   "step": 62,
+   "family": "adjudicated_limit_roll_divergent_lethality"
+  },
+  {
+   "seed": 1500223,
+   "step": 70,
+   "family": "matcher_overreport_window"
+  },
+  {
+   "seed": 1500226,
+   "step": 71,
+   "family": "measurement_boundary_residual_truncation"
+  },
+  {
+   "seed": 1500226,
+   "step": 83,
+   "family": "battle_end_residual_truncation_attribution"
+  },
+  {
+   "seed": 1500231,
+   "step": 109,
+   "family": "matcher_accounting_best_branch"
+  },
+  {
+   "seed": 1500239,
+   "step": 60,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500242,
+   "step": 56,
+   "family": "adjudicated_limit_roll_divergent_lethality"
+  },
+  {
+   "seed": 1500242,
+   "step": 60,
+   "family": "limit_not_established_keeps_label"
+  },
+  {
+   "seed": 1500243,
+   "step": 79,
+   "family": "boundary_builder_toxic_stage_stale"
+  },
+  {
+   "seed": 1500248,
+   "step": 77,
+   "family": "boundary_builder_traced_ability_drift"
+  },
+  {
+   "seed": 1500248,
+   "step": 78,
+   "family": "boundary_builder_traced_ability_drift"
+  },
+  {
+   "seed": 1500251,
+   "step": 56,
+   "family": "damage_calc_one_point_family"
+  },
+  {
+   "seed": 1500253,
+   "step": 70,
+   "family": "matcher_roll_inherited_cap"
+  },
+  {
+   "seed": 1500255,
+   "step": 55,
+   "family": "adjudicated_limit_roll_divergent_lethality"
+  },
+  {
+   "seed": 1500264,
+   "step": 40,
+   "family": "counter_mirrorcoat_damage_dealt_semantics"
+  },
+  {
+   "seed": 1500274,
+   "step": 15,
+   "family": "fixed_damage_skips_contact_abilities"
+  },
+  {
+   "seed": 1500287,
+   "step": 76,
+   "family": "fixed_damage_skips_contact_abilities"
+  },
+  {
+   "seed": 1500290,
+   "step": 26,
+   "family": "matcher_heal_cap_structural"
+  },
+  {
+   "seed": 1500291,
+   "step": 83,
+   "family": "sleeptalk_callee_union"
+  },
+  {
+   "seed": 1500294,
+   "step": 110,
+   "family": "sleeptalk_callee_union"
+  }
+ ]
+}
