@@ -5915,3 +5915,85 @@ Zero clearance overlap between the parents held (the near-miss 1500248/78 is #96
 clear and this lane's stale stay, per the Z10.6 bridge). The merged-main residue
 frame for the next cycle: **103 diverged = 58 adjudicated outside-limits + 5
 relabeled + 2 I1-candidate new rows + 38 limit.**
+
+---
+
+# Appendix Z11 — Cycle fourteen: the A1 walks, the last engine row dissolves, and the instrument adjudication
+
+Commit `05c4624` (main at #968), fingerprint `3204c777…`, 41 patches, probes 9/9.
+Walked against the c13 re-baseline (`repros_complete: true`, 103/103). Predictions
+pre-registered in `reports/c14_predictions.json` (separate first commit).
+
+## Z11.1 The A1 walks: predicted 5/2/0/0, actual 2/1/0/4 — and both misses taught the walker something
+
+| row | exit | mass |
+|---|---|---|
+| 1500200/47 | **limit** (RELABELED) | 5.86% |
+| 1500217/112 | **limit** (RELABELED) | 11.72% |
+| 1500055/60 | limit_not_established | 0.687% |
+| 1500054/125, 1500108/67, 1500112/40, 1500182/25 | cannot_enumerate | — |
+
+The four refusals share one structural cause, verified per row: a faint-capped
+damage value on a boundary where `calculate_damage` prices the wrong move or
+defender (Sleep Talk callee, or damage into a mid-turn switch-in), so no move
+admits a determinate roll index — X.3.4's licence, quoted per row in
+`reports/c14_walks.json`. The walker previously INFERRED a base there; the
+first sample-of-4 produced two damage_calc verdicts that hand-replay exposed as
+base artifacts, and the walker now refuses instead (predicted-vs-actual scored
+honestly: the split prediction was wrong).
+
+**Kill-split correction (Z10.1), propagated to every verdict.** The engine's
+kill-split non-lethal arm applies `compare_health_with_damage_multiples`' 
+conditional average, not `trunc(0.925·max)`. The walker now derives bases
+through BOTH identities against `calculate_damage`'s maxes and uses the
+engine's float-increment roll ladder. All 7 prior relabels re-verified under
+the corrected derivation — identical verdicts and masses (1500050/33's recorded
+base corrects 63 -> 66, mass unchanged at 6.59%). **1500251/56's c9 damage_calc
+verdict is formally corrected**: true max 135 (kill-split identity, matching
+Z10.1's live verification), observed 116 reachable at 0.215% mass ->
+`limit_not_established`, I1 cap-state shape, instrument lane. The last
+engine-side attributed row dissolves.
+
+## Z11.2 The two Z10.8 I1-candidates: walked per the registered conditional
+
+Replay showed both are roll-divergent capped-tick shapes on clean boundaries
+(not heal-cap shapes) — P2's "formalize without a walk" was wrong, its
+conditional fired. 1500129/46: reachable, 0.343% (two-roll conjunction), keeps
+its label. 1500200/87: reachable at **4.40%** — above the floor, recorded as
+candidate evidence with the demonstration attached, **NOT relabeled** (not a
+member of the sanctioned adjudication set; pre-registered as such).
+
+## Z11.3 The adjudicated frame after this cycle
+
+65 observed outside-limits = **7 relabeled** (5 from c9 + 2 this cycle, every
+demonstration re-verified at 41 patches) + **58 residue**, all attributed:
+
+| lane | rows |
+|---|---|
+| instrument families (I1–I6) | 46 |
+| limit-shape candidates (incl. both I1-walk rows and 1500251/56) | 12 |
+| engine-side | **0** |
+| world-side | **0** |
+
+## Z11.4 Instrument adjudication (the #965-endorsed disjunction, exercised)
+
+**Instrument families are adjudicated rather than fixed because the divergence
+is in the comparison, not the engine.** Per family: I1 heal-cap/cap-state
+shapes (11 incl. 1500028/44 and 1500251/56), I2 matcher accounting +
+legal-set availability (17), I3 roll-inherited exact components (3), I4 mapper
+attribution (4), I5 measurement-boundary truncation (6), I6 Sleep Talk callee
+union (7) — 46 rows plus the 12 limit-shape candidates whose divergence is a
+sampling comparison against a stochastic branch set. Each family's mechanism
+is documented with row identities in `reports/c12_decomposition.json` (bases
+carried, content byte-identity verified through four fix boundaries) and the
+per-row walk evidence in `reports/c9_capped_lethal_walk.json` /
+`reports/c12_walk_rederivation.json` / `reports/c14_walks.json`. For the
+certification claim these families are the documented comparison-limit
+classes: the engine is not wrong on them, and no engine change can clear them.
+
+## Z11.5 GATE: held
+
+Every row attributed; engine-side known divergences all fixed (#967/#968,
+patches 34–41) or formally zero-row (E6 was fixed as patch 41 with its first
+attributed row; no engine-side family retains an attributed row). The
+certification sweep is authorized under its standing requirements.
