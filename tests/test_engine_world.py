@@ -494,6 +494,7 @@ class BattleSpecConstructionTests(unittest.TestCase):
 
         payload["sides"]["p2"]["volatiles"] = []
         payload["sides"]["p2"]["substituteHealthState"] = "broken"
+        payload["sides"]["p2"]["substituteDepletion"] = None
         broken = battle_spec_from_payload(
             payload, _override(), dex=self.dex, approximate_substitute_health=True
         ).spec.side_two
@@ -527,6 +528,81 @@ class BattleSpecConstructionTests(unittest.TestCase):
                     caught.exception.reason,
                     "substitute_health_provenance_contradiction",
                 )
+
+    def test_substitute_state_depletion_pair_matrix(self) -> None:
+        cases = (
+            # Active canonical pairs.
+            (True, "full", None, "built"),
+            (True, "full", 0, "built"),
+            (True, "unknown", None, "unknown"),
+            (True, "unknown", 0, "unknown"),
+            (True, "exact", 7, "built"),
+            # Active non-canonical companions and states.
+            (True, "full", 50, "contradiction"),
+            (True, "unknown", 50, "contradiction"),
+            (True, "full", -1, "contradiction"),
+            (True, "unknown", -1, "contradiction"),
+            (True, "full", "0", "contradiction"),
+            (True, "unknown", "0", "contradiction"),
+            (True, "full", 0.0, "contradiction"),
+            (True, "unknown", 0.0, "contradiction"),
+            (True, "full", False, "contradiction"),
+            (True, "unknown", False, "contradiction"),
+            (True, "exact", None, "contradiction"),
+            (True, "exact", 0, "contradiction"),
+            (True, "exact", -1, "contradiction"),
+            (True, "exact", "7", "contradiction"),
+            (True, "exact", 7.0, "contradiction"),
+            (True, "exact", True, "contradiction"),
+            (True, "absent", None, "contradiction"),
+            (True, "broken", None, "contradiction"),
+            # Inactive canonical pairs require no depletion.
+            (False, None, None, "built"),
+            (False, "", None, "built"),
+            (False, "absent", None, "built"),
+            (False, "broken", None, "built"),
+            (False, None, 0, "contradiction"),
+            (False, "absent", 0, "contradiction"),
+            (False, "broken", 50, "contradiction"),
+            (False, "absent", "0", "contradiction"),
+            (False, "broken", False, "contradiction"),
+            (False, "full", None, "contradiction"),
+            (False, "unknown", None, "contradiction"),
+            (False, "exact", 7, "contradiction"),
+        )
+        for active, state, depletion, outcome in cases:
+            with self.subTest(
+                active=active,
+                state=state,
+                depletion=depletion,
+                outcome=outcome,
+            ):
+                payload = _payload(self.dex)
+                payload["sides"]["p2"]["volatiles"] = ["Substitute"] if active else []
+                if state is not None:
+                    payload["sides"]["p2"]["substituteHealthState"] = state
+                payload["sides"]["p2"]["substituteDepletion"] = depletion
+                if outcome == "built":
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_substitute_health=True,
+                    )
+                    continue
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_substitute_health=True,
+                    )
+                expected = (
+                    "substitute_health_unknown"
+                    if outcome == "unknown"
+                    else "substitute_health_provenance_contradiction"
+                )
+                self.assertEqual(caught.exception.reason, expected)
 
     def test_exact_depletion_is_applied_relative_to_sampled_max_hp(self) -> None:
         payload = _payload(self.dex)

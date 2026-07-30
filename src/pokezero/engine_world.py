@@ -1127,8 +1127,22 @@ def _build_side_spec(
     if "substitute" in volatiles:
         # A freshly-created Substitute is public-exact at floor(maxhp / 4).
         # Only canonical ``unknown`` provenance is a named public-information
-        # limit. Missing or malformed provenance signals a broken fold.
+        # limit. Validate the state/value PAIR before construction or limit
+        # accounting so a malformed companion cannot hide behind a valid name.
         initial_substitute_health = party[active_index].maxhp // 4
+        if substitute_health_state in {"full", "unknown"} and not (
+            raw_substitute_depletion is None
+            or (
+                not isinstance(raw_substitute_depletion, bool)
+                and isinstance(raw_substitute_depletion, int)
+                and raw_substitute_depletion == 0
+            )
+        ):
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} Substitute state {substitute_health_state!r} "
+                f"cannot carry depletion {raw_substitute_depletion!r}",
+            )
         if substitute_health_state == "full":
             substitute_health = initial_substitute_health
         elif substitute_health_state == "exact":
@@ -1161,12 +1175,19 @@ def _build_side_spec(
                 f"side {slot!r} has active Substitute with invalid public state "
                 f"{raw_substitute_health_state!r}",
             )
-    elif substitute_health_state not in {None, "", "absent", "broken"}:
-        raise EngineWorldUnsupported(
-            "substitute_health_provenance_contradiction",
-            f"side {slot!r} has no Substitute volatile but health state "
-            f"{raw_substitute_health_state!r}",
-        )
+    else:
+        if raw_substitute_depletion is not None:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has no Substitute volatile but carries depletion "
+                f"{raw_substitute_depletion!r}",
+            )
+        if substitute_health_state not in {None, "", "absent", "broken"}:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has no Substitute volatile but health state "
+                f"{raw_substitute_health_state!r}",
+            )
 
     boosts: dict[str, int] = {}
     for key, value in (side_payload.get("boosts") or {}).items():
