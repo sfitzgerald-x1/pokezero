@@ -67,6 +67,8 @@ from engine_transition_differential import (  # noqa: E402
 from cert_execution_manifest import (  # noqa: E402
     EMITTABLE_DOCUMENTED_FAMILIES,
     EMITTABLE_EXCLUSION_COUNTERS,
+    EMITTABLE_LIMIT_FAMILIES,
+    REGISTERED_ZERO_EXCLUSION_COUNTERS,
     validate_execution_manifest_schema,
     validate_final_contract_schema,
     validate_predicted_class_rates,
@@ -682,6 +684,7 @@ def _contract_gates(
 
     expected_shards = _strict_int(gates.get("expected_shards"))
     expected_games = _strict_int(gates.get("expected_games"))
+    minimum_full_rounds = _strict_int(gates.get("minimum_boundaries_full_round"))
     minimum_coverage = _finite_number(gates.get("minimum_coverage_measured_fraction"))
     if expected_shards is None or expected_shards <= 0:
         failures.append("expected_shards must be a positive integer")
@@ -689,6 +692,18 @@ def _contract_gates(
     if expected_games is None or expected_games <= 0:
         failures.append("expected_games must be a positive integer")
         expected_games = 0
+    if minimum_full_rounds is None or minimum_full_rounds <= 0:
+        failures.append("minimum_boundaries_full_round must be a positive integer")
+        minimum_full_rounds = 0
+    observed_full_rounds = _strict_int(aggregate.get("boundaries_full_round"))
+    if observed_full_rounds is None or observed_full_rounds < 0:
+        failures.append("aggregate boundaries_full_round must be a non-negative integer")
+        observed_full_rounds = 0
+    if observed_full_rounds < minimum_full_rounds:
+        failures.append(
+            f"full-round boundaries {observed_full_rounds} are below registered "
+            f"minimum {minimum_full_rounds}"
+        )
     if minimum_coverage is None or not 0.0 < minimum_coverage <= 1.0:
         failures.append("minimum_coverage_measured_fraction must be in (0, 1]")
         minimum_coverage = 1.0
@@ -842,6 +857,8 @@ def _contract_gates(
     evidence.update({
         "expected_shards": expected_shards,
         "expected_games": expected_games,
+        "minimum_boundaries_full_round": minimum_full_rounds,
+        "observed_boundaries_full_round": observed_full_rounds,
         "distinct_seed_total": distinct_seed_total,
         "seed_blocks": normalized_actual_blocks,
         "minimum_coverage_measured_fraction": minimum_coverage,
@@ -993,6 +1010,8 @@ def _family_rate_gates(
     contract: Mapping[str, Any],
     *,
     boundaries_measured: int,
+    boundaries_full_round: int | None = None,
+    aggregate_counters: Mapping[str, int] | None = None,
     exclusion_counts: Mapping[str, int] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Bind registered upper rates and predicted-zero counters.
@@ -1024,58 +1043,101 @@ def _family_rate_gates(
     if calibration_boundaries is None:
         calibration_boundaries = -1
 
-    observed_families = set(family_counts) - {"UNATTRIBUTED"}
+    counter_families = {
+        key: value
+        for key, value in (aggregate_counters or {}).items()
+        if isinstance(key, str) and key.startswith("limit:")
+    }
+    observed_families = (
+        set(family_counts) - {"UNATTRIBUTED"}
+    ) | set(counter_families)
     for family in observed_families - set(registered):
         failures.append(f"attributed family {family!r} was not pre-registered")
     for family, prediction in registered.items():
         if not isinstance(family, str) or not (
             family in EMITTABLE_DOCUMENTED_FAMILIES
-            or (family.startswith("limit:") and len(family) > len("limit:"))
+            or family in EMITTABLE_LIMIT_FAMILIES
         ):
             failures.append(f"registered family {family!r} cannot be emitted by the classifier")
             continue
         if not isinstance(prediction, Mapping):
             failures.append(f"registered family {family!r} has no prediction object")
             continue
-        rate_interval = prediction.get("wilson95_rate")
-        if rate_interval is None:
-            count_interval = prediction.get("wilson95")
+        explicit_upper_rate = _finite_number(
+            prediction.get("upper_full_round_rate")
+        )
+        if prediction.get("upper_full_round_rate") is not None:
             if (
-                isinstance(count_interval, list)
-                and len(count_interval) == 2
-                and all(_finite_number(value) is not None for value in count_interval)
-                and calibration_boundaries > 0
+                family != "limit:world_substitute_health_unknown"
+                or explicit_upper_rate is None
+                or not 0.0 <= explicit_upper_rate <= 1.0
+                or prediction.get("upper_rate_basis")
+                != "pre_registered_risk_budget"
+                or not isinstance(prediction.get("risk_budget_rationale"), str)
+                or not prediction["risk_budget_rationale"].strip()
+                or prediction.get("wilson95_rate") is not None
+                or prediction.get("wilson95") is not None
             ):
-                rate_interval = [
-                    float(count_interval[0]) / calibration_boundaries,
-                    float(count_interval[1]) / calibration_boundaries,
-                ]
-        elif not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
-            failures.append(
-                f"registered family {family!r} has an invalid wilson95_rate interval"
-            )
-            continue
-        if not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
-            failures.append(
-                f"registered family {family!r} has no registered Wilson rate interval"
-            )
-            continue
-        if not (
-            0.0 <= float(rate_interval[0]) <= float(rate_interval[1]) <= 1.0
-        ):
-            failures.append(
-                f"registered family {family!r} has an invalid Wilson rate interval"
-            )
-            continue
-        lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
+                failures.append(
+                    f"registered family {family!r} has an invalid full-round "
+                    "risk budget"
+                )
+                continue
+            if (
+                type(boundaries_full_round) is not int
+                or boundaries_full_round <= 0
+            ):
+                failures.append(
+                    f"registered family {family!r} requires positive "
+                    "boundaries_full_round"
+                )
+                continue
+            rate_interval = None
+            lower_rate, upper_rate = 0.0, explicit_upper_rate
+            upper_rate_basis = "pre_registered_risk_budget"
+            rate_denominator = "boundaries_full_round"
+        else:
+            rate_interval = prediction.get("wilson95_rate")
+            if rate_interval is None:
+                count_interval = prediction.get("wilson95")
+                if (
+                    isinstance(count_interval, list)
+                    and len(count_interval) == 2
+                    and all(_finite_number(value) is not None for value in count_interval)
+                    and calibration_boundaries > 0
+                ):
+                    rate_interval = [
+                        float(count_interval[0]) / calibration_boundaries,
+                        float(count_interval[1]) / calibration_boundaries,
+                    ]
+            elif not (
+                isinstance(rate_interval, list)
+                and len(rate_interval) == 2
+                and all(_finite_number(value) is not None for value in rate_interval)
+            ):
+                failures.append(
+                    f"registered family {family!r} has an invalid wilson95_rate interval"
+                )
+                continue
+            if not (
+                isinstance(rate_interval, list)
+                and len(rate_interval) == 2
+                and all(_finite_number(value) is not None for value in rate_interval)
+            ):
+                failures.append(
+                    f"registered family {family!r} has no registered Wilson rate interval"
+                )
+                continue
+            if not (
+                0.0 <= float(rate_interval[0]) <= float(rate_interval[1]) <= 1.0
+            ):
+                failures.append(
+                    f"registered family {family!r} has an invalid Wilson rate interval"
+                )
+                continue
+            lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
+            upper_rate_basis = "wilson95"
+            rate_denominator = "boundaries_measured"
         prediction_interval = prediction.get("prediction_interval_rate")
         has_prediction_interval = (
             isinstance(prediction_interval, list)
@@ -1086,17 +1148,31 @@ def _family_rate_gates(
         if prediction_interval is not None and not has_prediction_interval:
             failures.append(f"registered family {family!r} has an invalid prediction interval")
             continue
-        count = _strict_int(family_counts.get(family, 0))
-        if count is None or count < 0:
+        row_count = _strict_int(family_counts.get(family, 0))
+        counter_count = _strict_int(counter_families.get(family, 0))
+        if row_count is None or row_count < 0:
             failures.append(f"family {family!r} has a malformed observed count")
-            count = 0
-        observed_rate = count / max(1, boundaries_measured)
+            row_count = 0
+        if counter_count is None or counter_count < 0:
+            failures.append(f"family counter {family!r} has a malformed observed count")
+            counter_count = 0
+        count = row_count + counter_count
+        denominator = (
+            boundaries_full_round
+            if rate_denominator == "boundaries_full_round"
+            else boundaries_measured
+        )
+        observed_rate = count / max(1, denominator)
         evidence["families"][family] = {
             "observed": int(count),
-            "observed_rate_per_measured_boundary": observed_rate,
+            "divergence_row_observed": int(row_count),
+            "aggregate_counter_observed": int(counter_count),
+            "observed_rate": observed_rate,
+            "observed_rate_denominator": rate_denominator,
             "registered_wilson95_rate": rate_interval,
             "lower_rate_advisory": lower_rate,
             "upper_rate_enforced": upper_rate,
+            "upper_rate_basis": upper_rate_basis,
             "prediction_interval_rate": prediction_interval if has_prediction_interval else None,
         }
         if has_prediction_interval and observed_rate < float(prediction_interval[0]):
@@ -1125,7 +1201,10 @@ def _family_rate_gates(
                 failures.append(f"post-fix mechanism {mechanism!r} is not registered at zero")
                 continue
             counter = prediction.get("exclusion_counter")
-            if prediction.get("classifier_outcome") != "UNATTRIBUTED" or counter not in EMITTABLE_EXCLUSION_COUNTERS:
+            if (
+                prediction.get("classifier_outcome") != "UNATTRIBUTED"
+                or counter not in REGISTERED_ZERO_EXCLUSION_COUNTERS
+            ):
                 failures.append(
                     f"post-fix mechanism {mechanism!r} has no emittable classifier exclusion counter"
                 )
@@ -1359,6 +1438,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         fam_counts,
         pred,
         boundaries_measured=agg["boundaries_measured"],
+        boundaries_full_round=agg["boundaries_full_round"],
+        aggregate_counters=aggregate_counters,
         exclusion_counts=exclusion_counts,
     )
     repro_failures = _repro_integrity_gates(rows, shards)
@@ -1374,6 +1455,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         key: value for key, value in sorted(aggregate_counters.items())
         if key.startswith("skip:")
     }
+    comparison_limit_counters = {
+        key: value for key, value in sorted(aggregate_counters.items())
+        if key.startswith("limit:")
+    }
     full_rounds = max(1, agg["boundaries_full_round"])
     skip_counter_rates = {
         key: value / full_rounds for key, value in skip_counters.items()
@@ -1385,6 +1470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
         "skip_counters": skip_counters,
         "skip_counter_rates_per_full_round": skip_counter_rates,
+        "comparison_limit_counters": comparison_limit_counters,
         "repros_complete_all_shards": retention_ok,
         "rows_retained": len(rows),
         "repro_integrity_failures": repro_failures,

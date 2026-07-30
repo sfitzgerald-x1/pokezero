@@ -20,7 +20,10 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
 uv run --python "$PYTHON" pip download "poke-engine==$VERSION" --no-deps --no-binary :all: -d "$BUILD_DIR" >/dev/null
-tar xzf "$BUILD_DIR"/poke_engine-"$VERSION".tar.gz -C "$BUILD_DIR"
+ARCHIVE="$BUILD_DIR/poke_engine-$VERSION.tar.gz"
+"$PYTHON" "$REPO/scripts/verify_poke_engine_source.py" \
+  "$ARCHIVE" --expected-version "$VERSION"
+tar xzf "$ARCHIVE" -C "$BUILD_DIR"
 SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"

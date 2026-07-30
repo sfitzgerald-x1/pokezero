@@ -27,7 +27,10 @@ trap 'rm -rf "$DL_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
 uv run --python "$PYTHON" pip download "poke-engine==$VERSION" --no-deps --no-binary :all: -d "$DL_DIR" >/dev/null
-tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
+ARCHIVE="$DL_DIR/poke_engine-$VERSION.tar.gz"
+"$PYTHON" "$REPO/scripts/verify_poke_engine_source.py" \
+  "$ARCHIVE" --expected-version "$VERSION"
+tar xzf "$ARCHIVE" -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
