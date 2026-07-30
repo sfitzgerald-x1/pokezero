@@ -1,0 +1,212 @@
+{
+  "schema": "pokezero.c15_why_remainder_predictions.v1",
+  "registered_before_remaining_measurement": true,
+  "scope": {
+    "source_population": "reports/c14_cert_sweep_readout.json",
+    "prior_measured_artifact": "reports/c15_why_magnitude_statgap_results.json",
+    "population_rule": "the exact identity complement of the prior 16-row fixed sample within all CAND_unresolved_magnitude and CAND_same_turn_stat_event_gap rows",
+    "remaining_count": 21,
+    "family_counts": {
+      "CAND_unresolved_magnitude": 17,
+      "CAND_same_turn_stat_event_gap": 4
+    },
+    "sampling_method": "census: adjudicate every remaining identity; no further sampling or replacement"
+  },
+  "disclosure": "These predictions use only committed C14 family/class/basis strings and the already-committed 16-row C15 findings. No retained repro, branch instruction, engine roll, protocol ordering, or source locus for these 21 identities was inspected before this registration.",
+  "hypotheses": {
+    "M1_legal_roll_matcher_accounting": "The observed component is inside the engine's exact legal roll set, but the comparison path rejects it because it uses a representative roll or a non-event-aware set.",
+    "M2_switch_boundary_comparison_limit": "The row crosses a switch boundary, so pre-state calculate_damage legality is not evidence for the post-switch hit; the row remains WHAT unless the retained branch state licenses a post-switch roll set.",
+    "M3_dynamic_state_timing": "A damage-dependent fact such as HP, type, weather, status, or ability activation is read at the wrong point in the engine branch; a controlled one-fact replay should identify the exact timing locus.",
+    "M4_capped_or_inherited_residual": "The mismatch is inherited from a capped or residual component whose represented value is not a freely roll-scaled damage component.",
+    "M5_static_engine_base_candidate": "The observed value is outside the engine's exact legal roll set with no demonstrated dynamic timing cause. This remains WHAT-level unless branch/source reads identify an exact pipeline locus.",
+    "S1_event_aware_legal_set": "A same-turn stat event is applied before damage in the engine branch and the observed value enters the post-event legal set, making this a comparison-instrument omission.",
+    "S2_post_event_base_discrepancy": "The engine applies the same-turn event before damage, but the observed value remains outside the post-event legal set. This is an engine candidate but remains WHAT without an exact source locus.",
+    "S3_noncausal_or_misbucketed_event": "The cited event occurs after the hit, affects the wrong battler/stat, or is unrelated to the mismatched component; the family label is not the WHY."
+  },
+  "controls": [
+    "Replay each retained repro first and read raw protocol order plus raw engine branch instructions before assigning a mechanism.",
+    "Enumerate calculate_damage legal rolls for the retained candidate state and both critical modes where legal; use membership, never roll-count similarity.",
+    "Do not use a pre-switch legal set to adjudicate damage after a switch. Require a retained post-switch state or leave the magnitude WHAT-level.",
+    "For same-turn events, compare pre-event and branch-applied post-event legal sets and inspect instruction ordering before calling either an engine phase defect or an instrument omission.",
+    "Run a controlled one-fact counterfactual only when the retained branch exposes a unique state anchor; record the changed fact and preserve all other state.",
+    "Check each row and its game for overlap with patches 42-44 and active world lanes; shared games do not imply shared row mechanisms.",
+    "Generalize only when every member of a proposed sub-shape supports the same WHY. Otherwise preserve row-level verdicts or WHAT status.",
+    "Do not implement engine fixes in this lane. Bank exact source/patch loci for a follow-up lane only after replay and source evidence agree."
+  ],
+  "predictions": [
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2100482,
+      "step": 83,
+      "basis": "majority ratio 0.90",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2200369,
+      "step": 75,
+      "basis": "majority ratio 0.89",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2300154,
+      "step": 80,
+      "basis": "majority ratio 0.89",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2400172,
+      "step": 89,
+      "basis": "majority ratio 0.90",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2401002,
+      "step": 8,
+      "basis": "majority ratio 0.89",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2401237,
+      "step": 14,
+      "basis": "majority ratio 0.88",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2500151,
+      "step": 116,
+      "basis": "majority ratio 0.89",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2500297,
+      "step": 96,
+      "basis": "majority ratio 0.87",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2501061,
+      "step": 96,
+      "basis": "majority ratio 0.87",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2600510,
+      "step": 111,
+      "basis": "majority ratio 0.91",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2600535,
+      "step": 80,
+      "basis": "unresolved shape",
+      "expected_mechanisms": ["M2_switch_boundary_comparison_limit", "M4_capped_or_inherited_residual", "M5_static_engine_base_candidate"],
+      "discriminator": "protocol component identity and branch instruction structure before any numerical inference"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2600546,
+      "step": 25,
+      "basis": "majority ratio 0.88",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2600992,
+      "step": 21,
+      "basis": "majority ratio 0.82",
+      "expected_mechanisms": ["M3_dynamic_state_timing", "M5_static_engine_base_candidate"],
+      "discriminator": "raw branch timing followed by a uniquely anchored one-fact counterfactual"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2601033,
+      "step": 129,
+      "basis": "majority ratio 0.89",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2601196,
+      "step": 25,
+      "basis": "majority ratio 0.87",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2700218,
+      "step": 151,
+      "basis": "majority ratio 0.90",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_unresolved_magnitude",
+      "seed": 2700355,
+      "step": 37,
+      "basis": "majority ratio 0.87",
+      "expected_mechanisms": ["M1_legal_roll_matcher_accounting", "M5_static_engine_base_candidate"],
+      "discriminator": "exact legal-roll membership, then raw branch component ordering"
+    },
+    {
+      "family": "CAND_same_turn_stat_event_gap",
+      "seed": 2001162,
+      "step": 120,
+      "basis": "majority magnitude ratio 0.91 on a boundary with a same-turn boost/status event",
+      "expected_mechanisms": ["S1_event_aware_legal_set", "S2_post_event_base_discrepancy", "S3_noncausal_or_misbucketed_event"],
+      "discriminator": "protocol and instruction order plus pre-event versus post-event legal-roll membership"
+    },
+    {
+      "family": "CAND_same_turn_stat_event_gap",
+      "seed": 2400140,
+      "step": 9,
+      "basis": "majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event",
+      "expected_mechanisms": ["S1_event_aware_legal_set", "S2_post_event_base_discrepancy", "S3_noncausal_or_misbucketed_event"],
+      "discriminator": "protocol and instruction order plus pre-event versus post-event legal-roll membership"
+    },
+    {
+      "family": "CAND_same_turn_stat_event_gap",
+      "seed": 2400342,
+      "step": 78,
+      "basis": "majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event",
+      "expected_mechanisms": ["S1_event_aware_legal_set", "S2_post_event_base_discrepancy", "S3_noncausal_or_misbucketed_event"],
+      "discriminator": "protocol and instruction order plus pre-event versus post-event legal-roll membership"
+    },
+    {
+      "family": "CAND_same_turn_stat_event_gap",
+      "seed": 2600546,
+      "step": 22,
+      "basis": "majority magnitude ratio 0.88 on a boundary with a same-turn boost/status event",
+      "expected_mechanisms": ["S1_event_aware_legal_set", "S2_post_event_base_discrepancy", "S3_noncausal_or_misbucketed_event"],
+      "discriminator": "protocol and instruction order plus pre-event versus post-event legal-roll membership"
+    }
+  ],
+  "scoring_rule": {
+    "confirmed": "the first listed expected mechanism is established by replay plus its registered discriminator",
+    "partial": "one of the listed expected mechanisms is supported, but the row remains WHAT-level or the exact source locus is not licensed",
+    "refuted": "none of the listed expected mechanisms explains the retained row",
+    "preserve_prior_score": "score these 21 separately and also report the cumulative 37-row score without changing the prior 16 labels"
+  }
+}
