@@ -70,7 +70,10 @@ class CertificationContractTests(unittest.TestCase):
             "counters": {
                 "boundaries_full_round": 100,
                 "boundaries_measured": measured,
+                "engine_error": 0,
                 "skip:world_unsupported:test_fixture": 2,
+                "transition:diverged": 0,
+                "transition:matched": measured,
             },
             "divergence_classes": {},
             "engine_errors": 0,
@@ -140,6 +143,15 @@ class CertificationContractTests(unittest.TestCase):
                     "schema": "engine-transition-differential/1",
                     "build_check": "gated",
                     "seed": seed,
+                    "counters": {
+                        "boundaries_full_round": 100,
+                        "boundaries_measured": 100,
+                        "engine_error": 0,
+                        "skip:world_unsupported:test_fixture": 2,
+                        "transition:diverged": 0,
+                        "transition:matched": 100,
+                    },
+                    "repros": [],
                     "provenance": {
                         "source_commit": self.source_commit,
                         "engine_fingerprint": self.engine_fingerprint,
@@ -380,9 +392,78 @@ class CertificationContractTests(unittest.TestCase):
                 expected_seed_range=(1000, 1001),
                 expected_records=2,
                 expected_distinct_seeds=2,
+                report={
+                    "counters": {
+                        "boundaries_full_round": 100,
+                        "boundaries_measured": 100,
+                        "engine_error": 0,
+                        "skip:world_unsupported:test_fixture": 2,
+                        "transition:diverged": 0,
+                        "transition:matched": 100,
+                    },
+                    "transitions_diverged": 0,
+                    "engine_errors": 0,
+                    "transitions_matched": 100,
+                    "boundaries_full_round": 100,
+                    "boundaries_measured": 100,
+                    "repros": [],
+                    "repro_retention": {
+                        "keep_repro": 1000,
+                        "repros_retained": 0,
+                        "transitions_diverged": 0,
+                    },
+                },
             )
         self.assertIn("two-game checkpoint has 1 checkpoint records, expected 2 for its shard", failures)
         self.assertIn("two-game checkpoint has 1 distinct checkpoint seeds, expected 2 for its shard", failures)
+
+    def test_checkpoint_counter_and_repro_mismatch_cannot_pass_readout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            checkpoint_path = Path(manifest["shards"][0]["checkpoint"]["path"])
+            row = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            row["counters"]["transition:diverged"] = 1
+            row["repros"] = [{"seed": 1000, "step": 3, "reason": "fixture"}]
+            checkpoint_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            manifest["shards"][0]["checkpoint"]["sha256"] = readout._sha256(checkpoint_path)
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(any("checkpoint aggregate" in failure for failure in payload["gate_failures"]))
+
+    def test_overlapping_registered_seed_blocks_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract["certification_gates"]["seed_blocks"] = [
+                {"start": 1000, "games": 1},
+                {"start": 1000, "games": 1},
+            ]
+            payload = self._run(root, contract=contract)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(any("registered seed blocks overlap" in failure for failure in payload["gate_failures"]))
+
+    def test_overlapping_observed_seed_bands_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            second = json.loads(paths[1].read_text(encoding="utf-8"))
+            second["seeds"] = {"min": 1000, "max": 1000, "distinct": 1}
+            paths[1].write_text(json.dumps(second), encoding="utf-8")
+            payload = self._run(root)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(any("observed seed blocks overlap" in failure for failure in payload["gate_failures"]))
 
     def test_incomplete_shard_checkpoint_provenance_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

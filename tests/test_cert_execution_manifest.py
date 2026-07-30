@@ -39,8 +39,26 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             root / "shard.json",
             json.dumps(
                 {
+                    "boundaries_full_round": 1,
+                    "boundaries_measured": 1,
+                    "counters": {
+                        "boundaries_full_round": 1,
+                        "boundaries_measured": 1,
+                        "engine_error": 0,
+                        "transition:diverged": 0,
+                        "transition:matched": 1,
+                    },
+                    "engine_errors": 0,
                     "games": 1,
+                    "repros": [],
+                    "repro_retention": {
+                        "keep_repro": 40,
+                        "repros_retained": 0,
+                        "transitions_diverged": 0,
+                    },
                     "seeds": {"min": 1000, "max": 1000, "distinct": 1},
+                    "transitions_diverged": 0,
+                    "transitions_matched": 1,
                     "checkpoint_provenance": {
                         "complete": True,
                         "records_with_provenance": 1,
@@ -55,6 +73,14 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     "schema": "engine-transition-differential/1",
                     "build_check": "gated",
                     "seed": 1000,
+                    "counters": {
+                        "boundaries_full_round": 1,
+                        "boundaries_measured": 1,
+                        "engine_error": 0,
+                        "transition:diverged": 0,
+                        "transition:matched": 1,
+                    },
+                    "repros": [],
                     "provenance": {
                         "source_commit": source,
                         "engine_fingerprint": fingerprint,
@@ -99,7 +125,21 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 {
                     "registered_before_launch": True,
                     "requires_execution_contract": True,
+                    "launch_registration": {
+                        "fresh_measurements_inspected_before_registration": 0,
+                        "coordinator_go": True,
+                        "engine_patch_count": 1,
+                    },
                     "certification_gates": {
+                        "expected_shards": 1,
+                        "expected_games": 1,
+                        "seed_blocks": [{"start": 1000, "games": 1}],
+                        "minimum_coverage_measured_fraction": 0.97,
+                        "required_build_check": "gated",
+                        "required_matcher": "strict",
+                        "required_repros_per_game": 40,
+                        "required_keep_repro": 40,
+                        "required_behavioral_probe_passes": 9,
                         "required_source_commit": source,
                         "required_image_commit": "c" * 40,
                         "required_engine_fingerprint": "b" * 64,
@@ -196,6 +236,29 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     engine_stamp=paths["stamp"],
                 )
 
+    def test_producer_rejects_checkpoint_counter_and_repro_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            row = json.loads(paths["checkpoint"].read_text(encoding="utf-8"))
+            row["counters"]["transition:diverged"] = 1
+            row["repros"] = [{"seed": 1000, "step": 1, "reason": "fixture"}]
+            paths["checkpoint"].write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not bind checkpoint content"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
     def test_final_contract_producer_uses_injected_public_commit_without_git(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -232,6 +295,29 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         }
         errors = manifest.validate_final_contract_schema(contract)
         self.assertIn("final contract predicted_class_rates_10k is not an object", errors)
+
+    def test_final_contract_schema_rejects_consumer_required_gate_before_production(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["certification_gates"].pop("required_matcher")
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "required_matcher"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ import poke_engine  # noqa: E402
 from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 
 from engine_transition_differential import (  # noqa: E402
+    checkpoint_report_binding_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
     legal_roll_damages,
@@ -482,6 +483,25 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _non_overlapping_seed_total(
+    blocks: Sequence[Mapping[str, int]], *, label: str, failures: list[str]
+) -> int:
+    """Reject overlap before treating per-block counts as a global seed total."""
+
+    total = 0
+    previous_max: int | None = None
+    for block in sorted(blocks, key=lambda item: item["start"]):
+        start, games = block["start"], block["games"]
+        maximum = start + games - 1
+        if previous_max is not None and start <= previous_max:
+            failures.append(
+                f"{label} seed blocks overlap at {start}..{maximum} after {previous_max}"
+            )
+        total += games
+        previous_max = max(previous_max, maximum) if previous_max is not None else maximum
+    return total
+
+
 def _current_runtime_provenance() -> dict[str, Any]:
     """Evidence from the checkout executing this readout, not a contract field."""
 
@@ -570,6 +590,7 @@ def _checkpoint_provenance(
     expected_seed_range: tuple[int, int],
     expected_records: int,
     expected_distinct_seeds: int,
+    report: Mapping[str, Any],
 ) -> None:
     evidence = _file_evidence(value, label=label, failures=failures)
     if evidence is None:
@@ -577,6 +598,7 @@ def _checkpoint_provenance(
     path = Path(str(evidence["path"]))
     records = 0
     seeds: set[int] = set()
+    checkpoint_rows: list[Mapping[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -593,6 +615,7 @@ def _checkpoint_provenance(
         if not isinstance(record, Mapping):
             failures.append(f"{label} has a non-object record {number}")
             continue
+        checkpoint_rows.append(record)
         seed = _strict_int(record.get("seed"))
         if seed is None or not expected_seed_range[0] <= seed <= expected_seed_range[1]:
             failures.append(f"{label} record {number} has a seed outside its shard band")
@@ -621,6 +644,8 @@ def _checkpoint_provenance(
             f"{label} has {len(seeds)} distinct checkpoint seeds, expected "
             f"{expected_distinct_seeds} for its shard"
         )
+    for failure in checkpoint_report_binding_failures(checkpoint_rows, report):
+        failures.append(f"{label}: {failure}")
 
 
 def _contract_gates(
@@ -702,6 +727,17 @@ def _contract_gates(
                 continue
             expected_blocks.append({"start": start, "games": games})
     expected_blocks.sort(key=lambda block: block["start"])
+    expected_seed_total = _non_overlapping_seed_total(
+        expected_blocks, label="registered", failures=failures
+    )
+    if len(expected_blocks) != expected_shards:
+        failures.append(
+            f"registered seed blocks contain {len(expected_blocks)} blocks, expected {expected_shards}"
+        )
+    if expected_seed_total != expected_games:
+        failures.append(
+            f"registered seed blocks contain {expected_seed_total} games, expected {expected_games}"
+        )
     if len(paths) != expected_shards:
         failures.append(f"expected {expected_shards} shard reports, found {len(paths)}")
     if aggregate.get("games") != expected_games:
@@ -740,7 +776,6 @@ def _contract_gates(
             failures.append(f"{path.name}: repeats shard seed start {start}")
         else:
             actual_shards[start] = (path, shard, block)
-        distinct_seed_total += max(0, distinct)
         if games <= 0:
             failures.append(f"{path.name}: non-positive game count")
         expected_max = start + games - 1
@@ -768,6 +803,9 @@ def _contract_gates(
     normalized_actual_blocks = sorted(
         ({"start": block["start"], "games": block["games"]} for block in actual_blocks),
         key=lambda block: block["start"],
+    )
+    distinct_seed_total = _non_overlapping_seed_total(
+        normalized_actual_blocks, label="observed", failures=failures
     )
     if normalized_actual_blocks != expected_blocks:
         failures.append("observed seed blocks do not exactly match the registered blocks")
@@ -945,6 +983,7 @@ def _contract_gates(
             required_image=str(required_image),
             expected_seed_range=(block["start"], block["max"]),
             expected_records=block["games"], expected_distinct_seeds=block["distinct"],
+            report=shard,
         )
         report_provenance = shard.get("checkpoint_provenance")
         if not isinstance(report_provenance, Mapping):

@@ -1941,6 +1941,87 @@ def checkpoint_record(
     }
 
 
+def checkpoint_report_aggregate(
+    records: Sequence[Mapping[str, Any]], *, keep_repro: int
+) -> dict[str, Any]:
+    """Reconstruct the report fields that durable checkpoint rows determine.
+
+    A report is derived evidence, while the JSONL checkpoint is the durable
+    per-game source.  Certification callers use this exact aggregate to reject
+    a stale report that hides checkpoint counters or retained repros.
+    """
+
+    totals: Counter = Counter()
+    repros: list[dict[str, Any]] = []
+    for record in records:
+        counters = record.get("counters")
+        if not isinstance(counters, Mapping):
+            raise ValueError("checkpoint record has no counters object")
+        normalized: dict[str, int] = {}
+        for key, value in counters.items():
+            if not isinstance(key, str) or type(value) is not int:
+                raise ValueError("checkpoint record has malformed counter")
+            normalized[key] = value
+        totals.update(normalized)
+        record_repros = record.get("repros")
+        if not isinstance(record_repros, list) or not all(
+                isinstance(repro, Mapping) for repro in record_repros):
+            raise ValueError("checkpoint record has malformed repros")
+        for repro in record_repros:
+            if len(repros) < keep_repro:
+                repros.append(dict(repro))
+    # Match build_report's Counter access order so absent-but-observed-as-zero
+    # aggregate fields are represented identically in report["counters"].
+    measured = totals["boundaries_measured"]
+    diverged = totals["transition:diverged"]
+    engine_errors = totals["engine_error"]
+    matched = totals["transition:matched"]
+    full_rounds = totals["boundaries_full_round"]
+    return {
+        "counters": dict(sorted(totals.items())),
+        "transitions_diverged": diverged,
+        "engine_errors": engine_errors,
+        "transitions_matched": matched,
+        "boundaries_full_round": full_rounds,
+        "boundaries_measured": measured,
+        "repros": repros,
+    }
+
+
+def checkpoint_report_binding_failures(
+    records: Sequence[Mapping[str, Any]], report: Mapping[str, Any]
+) -> list[str]:
+    """Return exact checkpoint/report disagreements for certification callers."""
+
+    retention = report.get("repro_retention")
+    if not isinstance(retention, Mapping):
+        return ["report has no repro_retention object"]
+    keep_repro = retention.get("keep_repro")
+    if type(keep_repro) is not int or keep_repro < 0:
+        return ["report repro_retention.keep_repro is malformed"]
+    try:
+        aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
+    except ValueError as error:
+        return [str(error)]
+    failures: list[str] = []
+    for field in (
+        "counters",
+        "transitions_diverged",
+        "engine_errors",
+        "transitions_matched",
+        "boundaries_full_round",
+        "boundaries_measured",
+        "repros",
+    ):
+        if report.get(field) != aggregate[field]:
+            failures.append(f"report {field} does not match the checkpoint aggregate")
+    if retention.get("transitions_diverged") != aggregate["transitions_diverged"]:
+        failures.append("report repro_retention.transitions_diverged does not match the checkpoint aggregate")
+    if retention.get("repros_retained") != len(aggregate["repros"]):
+        failures.append("report repro_retention.repros_retained does not match the checkpoint aggregate")
+    return failures
+
+
 def append_checkpoint(handle: Any, record: Mapping[str, Any]) -> None:
     """Append one record and flush, so a kill loses at most the in-flight game."""
 
@@ -2005,23 +2086,20 @@ def build_report(
     artifact instead of resting on the runner's memory of the flags.
     """
 
-    totals: Counter = Counter()
-    repros: list[dict[str, Any]] = []
+    aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
+    totals: Counter = Counter(aggregate["counters"])
+    repros: list[dict[str, Any]] = list(aggregate["repros"])
     seeds: list[int] = []
     total_seconds = 0.0
     build_checks: set[str] = set()
     provenance_rows: list[Mapping[str, Any]] = []
     for record in records:
         build_checks.add(str(record.get("build_check", "unknown")))
-        totals.update({str(k): int(v) for k, v in (record.get("counters") or {}).items()})
         seeds.append(int(record.get("seed", -1)))
         total_seconds += float(record.get("seconds") or 0.0)
         provenance = record.get("provenance")
         if isinstance(provenance, Mapping):
             provenance_rows.append(provenance)
-        for repro in record.get("repros") or ():
-            if len(repros) < keep_repro:
-                repros.append(dict(repro))
 
     games = len(records)
     measured = totals["boundaries_measured"]

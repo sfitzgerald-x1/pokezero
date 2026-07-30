@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -35,8 +36,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pokezero.audit_provenance import public_repo_commit  # noqa: E402
+from engine_transition_differential import (  # noqa: E402
+    CHECKPOINT_SCHEMA,
+    checkpoint_report_binding_failures,
+)
 
-CHECKPOINT_SCHEMA = "engine-transition-differential/1"
 MANIFEST_SCHEMA = "engine-cert-execution-manifest/2"
 STAMP_SCHEMA = "pokezero-engine-build/2"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -186,6 +190,49 @@ def validate_final_contract_schema(contract: object) -> list[str]:
     gates = contract.get("certification_gates")
     if not isinstance(gates, Mapping):
         return errors + ["final contract has no certification_gates object"]
+    for field in ("expected_shards", "expected_games"):
+        value = _strict_int(gates.get(field))
+        if value is None or value <= 0:
+            errors.append(f"final contract {field} is not a positive integer")
+    coverage = gates.get("minimum_coverage_measured_fraction")
+    if type(coverage) not in (int, float) or not math.isfinite(float(coverage)) \
+            or not 0.0 < float(coverage) <= 1.0:
+        errors.append("final contract minimum_coverage_measured_fraction is not in (0, 1]")
+    blocks = gates.get("seed_blocks")
+    if not isinstance(blocks, list) or not blocks:
+        errors.append("final contract seed_blocks is not a non-empty array")
+    else:
+        previous_max: int | None = None
+        total_games = 0
+        normalized: list[tuple[int, int]] = []
+        for index, raw in enumerate(blocks):
+            if not isinstance(raw, Mapping):
+                errors.append(f"final contract seed_blocks[{index}] is not an object")
+                continue
+            start, games = _strict_int(raw.get("start")), _strict_int(raw.get("games"))
+            if start is None or start < 0 or games is None or games <= 0:
+                errors.append(f"final contract seed_blocks[{index}] has malformed start/games")
+                continue
+            normalized.append((start, games))
+        for start, games in sorted(normalized):
+            if previous_max is not None and start <= previous_max:
+                errors.append("final contract seed_blocks overlap")
+            previous_max = max(previous_max, start + games - 1) if previous_max is not None else start + games - 1
+            total_games += games
+        if len(normalized) != _strict_int(gates.get("expected_shards")):
+            errors.append("final contract seed_blocks count does not match expected_shards")
+        if total_games != _strict_int(gates.get("expected_games")):
+            errors.append("final contract seed_blocks games do not match expected_games")
+    for field in ("required_repros_per_game", "required_keep_repro"):
+        value = _strict_int(gates.get(field))
+        if value is None or value < 0:
+            errors.append(f"final contract {field} is not a non-negative integer")
+    probe_passes = _strict_int(gates.get("required_behavioral_probe_passes"))
+    if probe_passes is None or probe_passes <= 0:
+        errors.append("final contract required_behavioral_probe_passes is not a positive integer")
+    for field in ("required_build_check", "required_matcher"):
+        if not isinstance(gates.get(field), str) or not gates[field]:
+            errors.append(f"final contract {field} is not a non-empty string")
     for field, pattern in (
         ("required_source_commit", _GIT_RE),
         ("required_image_commit", _GIT_RE),
@@ -205,6 +252,19 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 errors.append(f"final contract pre_registered_family_rate_table.{field} is not an object")
     if not isinstance(contract.get("predicted_class_rates_10k"), Mapping):
         errors.append("final contract predicted_class_rates_10k is not an object")
+    launch = contract.get("launch_registration")
+    if not isinstance(launch, Mapping):
+        errors.append("final contract has no launch_registration object")
+    else:
+        if launch.get("fresh_measurements_inspected_before_registration") != 0:
+            errors.append(
+                "final contract launch_registration.fresh_measurements_inspected_before_registration is not zero"
+            )
+        if launch.get("coordinator_go") is not True:
+            errors.append("final contract launch_registration.coordinator_go is not true")
+        patch_count = _strict_int(launch.get("engine_patch_count"))
+        if patch_count is None or patch_count <= 0:
+            errors.append("final contract launch_registration.engine_patch_count is not positive")
     return errors
 
 
@@ -329,6 +389,12 @@ def _checkpoint(path: Path, *, report: Mapping[str, Any]) -> tuple[dict[str, Any
         raise ValueError(f"{path}: checkpoint seed is outside paired shard seed band")
     if len(records) != games or len(set(seeds)) != games:
         raise ValueError(f"{path}: checkpoint record population does not match paired shard report")
+    binding_failures = checkpoint_report_binding_failures(records, report)
+    if binding_failures:
+        raise ValueError(
+            f"{path}: paired shard report does not bind checkpoint content: "
+            + "; ".join(binding_failures)
+        )
     provenance_rows = [record["provenance"] for record in records]
 
     def one_hash(field: str, pattern: re.Pattern[str], label: str) -> str:

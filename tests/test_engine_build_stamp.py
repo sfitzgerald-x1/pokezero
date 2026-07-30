@@ -61,6 +61,10 @@ class EngineBuildStampTests(unittest.TestCase):
             for directory in (crate, vendored):
                 (directory / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
                 (directory / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            py_crate = vendored / "poke-engine-py"
+            py_crate.mkdir()
+            py_manifest = py_crate / "Cargo.toml"
+            py_manifest.write_text("[package]\nname='poke-engine-py'\n", encoding="utf-8")
             with (
                 patch.object(fingerprint, "REPO_ROOT", root),
                 patch.object(fingerprint, "PATCH_LIST", patch_list),
@@ -73,8 +77,11 @@ class EngineBuildStampTests(unittest.TestCase):
                 after_vendored_lock = fingerprint.compute_fingerprint()["fingerprint"]
                 (crate / "Cargo.toml").write_text("[package]\nname='changed'\n", encoding="utf-8")
                 after_crate_manifest = fingerprint.compute_fingerprint()["fingerprint"]
+                py_manifest.write_text("[package]\nname='changed-poke-engine-py'\n", encoding="utf-8")
+                after_nested_vendored_manifest = fingerprint.compute_fingerprint()["fingerprint"]
         self.assertNotEqual(before, after_vendored_lock)
         self.assertNotEqual(after_vendored_lock, after_crate_manifest)
+        self.assertNotEqual(after_crate_manifest, after_nested_vendored_manifest)
 
 
 if __name__ == "__main__":

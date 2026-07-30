@@ -91,15 +91,15 @@ def crate_sources() -> list[Path]:
 
 
 def cargo_inputs() -> list[Path]:
-    """Cargo manifests/locks that determine the native dependency graph."""
+    """Every Cargo manifest/lock compiled by either native consumer tree."""
 
-    paths = [
-        CRATE_ROOT / "Cargo.toml",
-        CRATE_ROOT / "Cargo.lock",
-        VENDORED / "Cargo.toml",
-        VENDORED / "Cargo.lock",
-    ]
-    return [path for path in paths if path.is_file()]
+    paths: set[Path] = set()
+    for root in (VENDORED, CRATE_ROOT):
+        if not root.exists():
+            continue
+        for name in ("Cargo.toml", "Cargo.lock"):
+            paths.update(path for path in root.rglob(name) if path.is_file())
+    return sorted(paths)
 
 
 def build_inputs() -> list[Path]:
