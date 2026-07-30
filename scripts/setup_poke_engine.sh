@@ -8,7 +8,7 @@
 # can never drift (they did once — see that file's header). Per-patch rationale
 # lives there and in docs/engine_fidelity_findings.md.
 #
-# Requires: rustup/cargo, uv. Usage: scripts/setup_poke_engine.sh [venv-python]
+# Requires: rustup/cargo, uv, git. Usage: scripts/setup_poke_engine.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"

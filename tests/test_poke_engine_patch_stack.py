@@ -8,6 +8,7 @@ The separate engine behavior pins verify the zero-heal markers this stack adds.
 from __future__ import annotations
 
 import os
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
+
+
+EXPECTED_FINAL_SHA256 = {
+    "src/gen3/generate_instructions.rs": "049207205e5f41888836f139d554946cf8fbff55f0448b81bab6e087d7829448",
+    "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
+    "src/gen3/choice_effects.rs": "3ebd97f07bd5c56975d75b687845651c02a53f80aa359a924c2ab2fbac2dc062",
+}
 
 
 class PokeEnginePatchStackTests(unittest.TestCase):
@@ -66,14 +74,25 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             source = directory / "poke_engine-0.0.47"
             applied = patch_stack.apply_patch_stack(source)
 
-            self.assertEqual(applied, patch_stack.patch_names())
-            self.assertEqual(applied[-5], "poke-engine-gen3-public-noop-branches.patch")
+            self.assertEqual([entry.name for entry in applied], patch_stack.patch_names())
+            self.assertTrue(
+                all(entry.backend == "git-apply" for entry in applied[:46]),
+                applied,
+            )
+            self.assertEqual(
+                [entry.backend for entry in applied[46:]],
+                ["patch-fallback", "patch-fallback"],
+            )
+            self.assertEqual(applied[43].name, "poke-engine-gen3-public-noop-branches.patch")
             generated = (source / "src/gen3/generate_instructions.rs").read_text(
                 encoding="utf-8"
             )
             self.assertIn("let original_accuracy = choice.accuracy;", generated)
             self.assertIn("heal_amount: 0", generated)
             self.assertIn("blocked_by_protect && incoming_instructions.percentage != 0.0", generated)
+            for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
+                actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()
+                self.assertEqual(actual_sha256, expected_sha256, relative_path)
 
 
 if __name__ == "__main__":  # pragma: no cover

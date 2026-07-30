@@ -13,7 +13,7 @@
 # can never drift (they did once — see that file's header). Per-patch rationale
 # lives there and in docs/engine_fidelity_findings.md.
 #
-# Requires: uv, rsync. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
+# Requires: uv, rsync, git. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
