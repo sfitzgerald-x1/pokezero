@@ -288,7 +288,7 @@ class EventAwareBranchLegality(unittest.TestCase):
     def tearDown(self):
         differential.poke_engine = self._original_poke_engine
 
-    def test_uses_post_state_after_a_same_turn_stat_boost(self):
+    def test_uses_pre_damage_snapshot_after_a_same_turn_stat_boost(self):
         legal = branch_event_legal_rolls(
             {
                 "events": [
@@ -297,7 +297,7 @@ class EventAwareBranchLegality(unittest.TestCase):
                     "|move|p1a: Clefable|Fire Blast|p2a: Clefable",
                     "|-damage|p2a: Clefable|279/300 par",
                 ],
-                "post_state": "post-boost",
+                "legal_roll_state": "post-boost",
             },
             side_one_choice="fireblast",
             side_two_choice="calmmind",
@@ -306,7 +306,7 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertEqual(legal, {21, 22, 23, 24, 25})
         self.assertEqual(self.loaded_states, ["post-boost"])
 
-    def test_uses_post_state_after_a_same_turn_switch(self):
+    def test_uses_pre_damage_snapshot_after_a_same_turn_switch(self):
         legal = branch_event_legal_rolls(
             {
                 "events": [
@@ -314,7 +314,7 @@ class EventAwareBranchLegality(unittest.TestCase):
                     "|move|p1a: Sableye|knockoff|p2a: Lanturn",
                     "|-damage|p2a: Lanturn|122/339 tox",
                 ],
-                "post_state": "post-switch",
+                "legal_roll_state": "post-switch",
             },
             side_one_choice="knockoff",
             side_two_choice="lanturn",
@@ -338,6 +338,23 @@ class EventAwareBranchLegality(unittest.TestCase):
         )
 
         self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
+    def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
+        with self.assertRaises(differential.BranchLegalRollError):
+            branch_event_legal_rolls(
+                {
+                    "events": [
+                        "|switch|p2a: Lanturn|Lanturn, L82, M|143/339 tox",
+                        "|move|p1a: Sableye|knockoff|p2a: Lanturn",
+                        "|-damage|p2a: Lanturn|122/339 tox",
+                    ],
+                    "post_state": "must-not-load",
+                },
+                side_one_choice="knockoff",
+                side_two_choice="lanturn",
+            )
+
         self.assertEqual(self.loaded_states, [])
 
 

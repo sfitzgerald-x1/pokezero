@@ -537,9 +537,11 @@ def branch_event_legal_rolls(
 
     ``calculate_damage`` on the boundary pre-state prices the wrong target when
     a switch resolves first, and the wrong stages when Boost/Unboost resolves
-    first. The event mapper already emits a serialized state for every concrete
-    branch, so only those branches are repriced. A post-damage state change is
-    deliberately excluded: it cannot affect the hit already being compared.
+    first. The mapper supplies ``legal_roll_state`` only when it has serialized
+    the exact branch prefix immediately before the first defender damage. The
+    completed ``post_state`` is deliberately never accepted here: it may include
+    the hit itself and later effects (for example Knock Off's item removal),
+    which cannot affect the hit being compared.
     """
 
     events = branch.get("events")
@@ -567,11 +569,13 @@ def branch_event_legal_rolls(
     if not state_changed_before_damage:
         return None
 
-    post_state = branch.get("post_state")
-    if not isinstance(post_state, str) or not post_state:
-        raise BranchLegalRollError("state-changing branch omitted post_state")
+    legal_roll_state = branch.get("legal_roll_state")
+    if not isinstance(legal_roll_state, str) or not legal_roll_state:
+        raise BranchLegalRollError(
+            "state-changing branch omitted pre-damage legal_roll_state"
+        )
     try:
-        state = poke_engine.State.from_string(post_state)
+        state = poke_engine.State.from_string(legal_roll_state)
         side_one_rolls, side_two_rolls = poke_engine.calculate_damage(
             state, side_one_choice, side_two_choice, True
         )
