@@ -277,7 +277,7 @@ class EventAwareBranchLegality(unittest.TestCase):
         def calculate_damage(state: str, _side_one: str, _side_two: str, _critical: bool):
             # 25 has the Gen 3 85..100% support 21..25. The retained Calm Mind
             # row needs 21 after the boost; the stale pre-state range was 24..29.
-            self.assertIn(state, {"post-boost", "post-switch"})
+            self.assertIn(state, {"post-boost", "post-switch", "after-drop"})
             return [25], []
 
         differential.poke_engine = SimpleNamespace(
@@ -373,6 +373,25 @@ class EventAwareBranchLegality(unittest.TestCase):
 
         self.assertIsNone(legal)
         self.assertEqual(self.loaded_states, [])
+
+    def test_uses_the_first_opponent_hit_affected_by_a_stat_event(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Aurora Beam|p2a: Chansey",
+                    "|-damage|p2a: Chansey|49/100",
+                    "|-unboost|p2a: Chansey|atk|1",
+                    "|move|p2a: Chansey|Tackle|p1a: Rattata",
+                    "|-damage|p1a: Rattata|67/100",
+                ],
+                "legal_roll_state": "after-drop",
+            },
+            side_one_choice="aurorabeam",
+            side_two_choice="tackle",
+        )
+
+        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["after-drop"])
 
     def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
         with self.assertRaises(differential.BranchLegalRollError):

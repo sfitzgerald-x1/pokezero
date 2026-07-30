@@ -584,15 +584,10 @@ def branch_event_legal_rolls(
         # support and the mapper correctly has no pre-hit snapshot for it.
         # Malformed idents remain fail-closed as potential direct damage.
         if acting_side is None or target_side not in {"p1", "p2"} or target_side != acting_side:
-            direct_damage_index = index
-            break
+            if any(_event_changes_roll_state(prior) for prior in events[:index]):
+                direct_damage_index = index
+                break
     if direct_damage_index is None:
-        return None
-
-    state_changed_before_damage = any(
-        _event_changes_roll_state(event) for event in events[:direct_damage_index]
-    )
-    if not state_changed_before_damage:
         return None
 
     legal_roll_state = branch.get("legal_roll_state")
