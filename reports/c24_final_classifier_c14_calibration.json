@@ -3,16 +3,17 @@
   "purpose": "Prediction-first calibration for the fresh 48-patch certification sweep. This artifact reclassifies the already-consumed C14 archive and contains no sweep-2 measurement.",
   "source_evidence": {
     "archive": "The complete 10,000-game C14 certification archive whose hashes are recorded in docs/engine_divergence_ledger_20260728.md Appendix Z12.6.",
+    "boundaries_full_round": 810125,
     "boundaries_measured": 791757,
     "coverage_measured_fraction": 0.9773,
-    "current_classifier_source_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
-    "current_classifier_readout_sha256": "820639a9cb163caddbe3b11a79b5cd333e9fd5816568937f4bdb8441af45bb99",
+    "current_classifier_source_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "current_classifier_readout_sha256": "57e3269d76251d7b681fdcacb4188df4e15b60a25ed1f2be50598c260d78491a",
     "fresh_sweep2_measurements_inspected": 0
   },
   "method": {
     "classifier_replay": "Run the archived C14 shard reports through the final cert_sweep_readout.py classifier with the explicit historical legacy opt-out.",
-    "upper_rate_policy": "Use the larger conservative historical Wilson upper count where classifier tightening moved old rows out of an attributed family. Wilson lower counts remain advisory and are set to zero for newly registered families.",
-    "substitute_limit_policy": "The archived rows predate the archive-wide Substitute counter. reports/c17_substitute_retained_verification.json verifies emission semantics on 13 retained identities but is not a rate-calibration population. The registered 0.031 upper rate is therefore a conservative non-empirical coverage-budget bound: (1 - 0.97) / 0.97 = 0.030927835.",
+    "upper_rate_policy": "Calculate Wilson upper counts from the final classifier's own replay counts over the consumed C14 archive. Wilson lower counts remain advisory and are set to zero except for the two long-standing comparison-limit families.",
+    "substitute_limit_policy": "The archived rows predate the archive-wide Substitute counter. reports/c17_substitute_retained_verification.json verifies emission semantics on 13 retained identities but is not a rate-calibration population. The registered 0.001-per-full-round upper rate is an explicit pre-registered risk budget, not an empirical interval. It is thirty times tighter than the global 3% uncovered-boundary allowance and can therefore fail independently.",
     "no_two_sided_prediction": "No prediction_interval_rate is registered. Only each Wilson upper rate is binding."
   },
   "current_classifier_archive_replay": {
@@ -108,38 +109,40 @@
   },
   "registered_family_source_counts": {
     "limit:roll_divergent_lethality": 1281,
-    "I1_cap_state_shape": 517,
-    "LS_capped_lethal_shape": 478,
+    "I1_cap_state_shape": 52,
+    "LS_capped_lethal_shape": 438,
     "limit:world_sample_drag_target": 271,
-    "I3_roll_inherited": 240,
-    "I6_sleeptalk_callee_union": 215,
+    "I3_roll_inherited": 235,
+    "I6_sleeptalk_callee_union": 35,
     "I4_attribution_tie": 166,
     "I5_boundary_truncation": 164,
-    "I2_matcher_accounting": 111,
-    "LS_crit_arm_pairing_echo": 28,
-    "LS_confusion_fan": 26,
-    "LS_structural_arm_echo": 41
+    "I2_matcher_accounting": 2,
+    "LS_crit_arm_pairing_echo": 2,
+    "LS_confusion_fan": 3,
+    "LS_structural_arm_echo": 0
   },
   "registered_family_count_intervals": {
     "limit:roll_divergent_lethality": [1213, 1353],
-    "I1_cap_state_shape": [0, 564],
-    "LS_capped_lethal_shape": [0, 523],
+    "I1_cap_state_shape": [0, 68],
+    "LS_capped_lethal_shape": [0, 481],
     "limit:world_sample_drag_target": [241, 305],
-    "I3_roll_inherited": [0, 272],
-    "I6_sleeptalk_callee_union": [0, 246],
+    "I3_roll_inherited": [0, 267],
+    "I6_sleeptalk_callee_union": [0, 49],
     "I4_attribution_tie": [0, 193],
     "I5_boundary_truncation": [0, 191],
-    "I2_matcher_accounting": [0, 134],
-    "LS_crit_arm_pairing_echo": [0, 40],
-    "LS_confusion_fan": [0, 38],
-    "LS_structural_arm_echo": [0, 56]
+    "I2_matcher_accounting": [0, 7],
+    "LS_crit_arm_pairing_echo": [0, 7],
+    "LS_confusion_fan": [0, 9],
+    "LS_structural_arm_echo": [0, 4]
   },
   "registered_non_empirical_upper_rates": {
     "limit:world_substitute_health_unknown": {
-      "upper_rate": 0.031,
-      "basis": "coverage_budget",
+      "upper_full_round_rate": 0.001,
+      "basis": "pre_registered_risk_budget",
+      "denominator": "boundaries_full_round",
       "coverage_floor": 0.97,
-      "derived_max_unmeasured_per_measured": 0.03092783505154642,
+      "global_uncovered_budget": 0.03,
+      "risk_budget_multiple_tighter_than_global": 30,
       "semantic_probe": "reports/c17_substitute_retained_verification.json"
     }
   },
@@ -147,7 +150,6 @@
     "absorb_through_protect_or_miss",
     "incapacitated_arm_pricing",
     "recharge_turn_residual_gap",
-    "recoil_vs_substitute_basis",
     "same_turn_stat_event_gap",
     "structural_component_count_without_supported_sibling",
     "truant_loaf_phase_drift",

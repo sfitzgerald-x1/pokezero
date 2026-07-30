@@ -6,13 +6,14 @@
     "fresh_measurements_inspected_before_registration": 0,
     "coordinator_go": true,
     "engine_patch_count": 48,
-    "public_source_parent_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
-    "public_source_parent_note": "This immutable launch-source commit contains the 48-patch engine, exact limit vocabulary, coverage-budget Substitute gate, deterministic fingerprint check, and non-circular gate regression. The following contract commit only updates its source/image provenance pins.",
+    "public_source_parent_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "public_source_parent_note": "This immutable launch-source commit contains the 48-patch engine, exact limit vocabulary, independent full-round Substitute risk gate, reproducible upstream-source fingerprint check, and non-circular gate regression. The following contract commit only updates its source/image provenance pins.",
     "calibration_evidence": "reports/c24_final_classifier_c14_calibration.json"
   },
   "certification_gates": {
     "expected_shards": 8,
     "expected_games": 10000,
+    "minimum_boundaries_full_round": 700000,
     "seed_blocks": [
       {"start": 2800000, "games": 1250},
       {"start": 2900000, "games": 1250},
@@ -29,44 +30,45 @@
     "required_repros_per_game": 40,
     "required_keep_repro": 1000,
     "required_behavioral_probe_passes": 9,
-    "required_source_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
-    "required_image_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
-    "required_engine_fingerprint": "d6f514411bfe4e2cd665b0b7af6eb77a33676c25f66734ca4e33cb9a635b75aa",
-    "required_readout_sha256": "820639a9cb163caddbe3b11a79b5cd333e9fd5816568937f4bdb8441af45bb99",
-    "required_execution_manifest_producer_sha256": "653014317f3ed2739aadc8431c4f6240dc5f00913cb57995cf03b3ade474b953"
+    "required_source_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "required_image_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
+    "required_readout_sha256": "57e3269d76251d7b681fdcacb4188df4e15b60a25ed1f2be50598c260d78491a",
+    "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
   },
   "gated_on": [
     "SATISFIED: all 48 vendored engine patches, world-construction repairs, matcher repairs, and row-level adjudications are merged in the pinned source parent.",
     "SATISFIED: the final classifier was replayed over the consumed C14 archive before registration; no sweep-2 measurement was inspected.",
-    "SATISFIED: all currently emittable documented families and all eight exclusion counters are pre-registered.",
+    "SATISFIED: all currently emittable documented families and all seven post-fix exclusion counters are pre-registered; the recoil/Substitute boundary is governed by the independent full-round Substitute risk gate.",
     "SATISFIED: the execution contract binds source/image commits, engine fingerprint, readout and manifest-producer hashes, seed blocks, coverage, probes, matcher mode, and repro retention.",
     "SATISFIED: coordinator go is recorded before launch. The fresh 10,000-game readout remains the binding result."
   ],
   "execution": "Eight persistent CPU-only shards of 1,250 games. Each shard rebuilds the wheel and search crate, passes 9/9 behavioral probes, uses the strict matcher, writes resumable per-game checkpoints, retains 40 repros per game up to 1,000, and writes its completion marker last. A persistent aggregate job validates all provenance before producing the binding readout.",
   "acceptance_criterion": {
-    "binding": "PASS only with zero unattributed rows, zero engine errors, complete repro retention, all registered family rates at or below their upper bounds, all eight predicted-zero counters at zero, coverage at least 0.97, and exactly 10,000 distinct games from the registered seed blocks.",
+    "binding": "PASS only with zero unattributed rows, zero engine errors, complete repro retention, all registered family rates at or below their upper bounds, all seven predicted-zero counters at zero, at least 700,000 full-round boundaries with measured coverage at least 0.97, and exactly 10,000 distinct games from the registered seed blocks.",
     "failure": "Any unattributed row, engine error, missing or duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, nonzero exclusion counter, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",
     "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
   },
   "pre_registered_family_rate_table": {
-    "note": "Twelve count intervals are calibrated from the consumed C14/C15 archive over 791,757 measured boundaries and normalized by the readout. The Substitute-health counter did not exist archive-wide, so it uses an explicit conservative 0.031 upper rate derived from the 3% coverage budget rather than a false empirical Wilson claim. Lower Wilson bounds are advisory; every upper rate is binding.",
+    "note": "Twelve count intervals are calibrated from the final classifier's replay of the consumed C14 archive over 791,757 measured boundaries and normalized by the readout. The Substitute-health counter did not exist archive-wide, so it uses an explicit non-empirical risk ceiling of 0.001 per full-round boundary. That ceiling is thirty times tighter than the global 3% uncovered-boundary budget, so it can fail independently. Lower Wilson bounds are advisory; every upper rate is binding.",
     "calibration_boundaries": 791757,
     "documented_families": {
       "limit:roll_divergent_lethality": {"wilson95": [1213, 1353]},
-      "I1_cap_state_shape": {"wilson95": [0, 564]},
-      "LS_capped_lethal_shape": {"wilson95": [0, 523]},
+      "I1_cap_state_shape": {"wilson95": [0, 68]},
+      "LS_capped_lethal_shape": {"wilson95": [0, 481]},
       "limit:world_sample_drag_target": {"wilson95": [241, 305]},
-      "I3_roll_inherited": {"wilson95": [0, 272]},
-      "I6_sleeptalk_callee_union": {"wilson95": [0, 246]},
+      "I3_roll_inherited": {"wilson95": [0, 267]},
+      "I6_sleeptalk_callee_union": {"wilson95": [0, 49]},
       "I4_attribution_tie": {"wilson95": [0, 193]},
       "I5_boundary_truncation": {"wilson95": [0, 191]},
-      "I2_matcher_accounting": {"wilson95": [0, 134]},
-      "LS_crit_arm_pairing_echo": {"wilson95": [0, 40]},
-      "LS_confusion_fan": {"wilson95": [0, 38]},
-      "LS_structural_arm_echo": {"wilson95": [0, 56]},
+      "I2_matcher_accounting": {"wilson95": [0, 7]},
+      "LS_crit_arm_pairing_echo": {"wilson95": [0, 7]},
+      "LS_confusion_fan": {"wilson95": [0, 9]},
+      "LS_structural_arm_echo": {"wilson95": [0, 4]},
       "limit:world_substitute_health_unknown": {
-        "upper_rate": 0.031,
-        "upper_rate_basis": "coverage_budget"
+        "upper_full_round_rate": 0.001,
+        "upper_rate_basis": "pre_registered_risk_budget",
+        "risk_budget_rationale": "At most one unknown-Substitute boundary per 1,000 full-round boundaries; this is thirty times tighter than the global 3% uncovered-boundary allowance and therefore independently falsifiable."
       }
     },
     "new_mechanisms_post_fix": {
@@ -84,11 +86,6 @@
         "predicted_next": 0,
         "classifier_outcome": "UNATTRIBUTED",
         "exclusion_counter": "recharge_turn_residual_gap"
-      },
-      "recoil_vs_substitute_basis": {
-        "predicted_next": 0,
-        "classifier_outcome": "UNATTRIBUTED",
-        "exclusion_counter": "recoil_vs_substitute_basis"
       },
       "same_turn_stat_event_gap": {
         "predicted_next": 0,
