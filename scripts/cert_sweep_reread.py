@@ -1,0 +1,153 @@
+#!/usr/bin/env python
+"""Re-read retained certification-sweep rows through the CURRENT engine build.
+
+The certification sweep (ledger Appendix Z12) retained every divergent row with
+full repro payloads (``repros_complete`` on all shards). Because a retained row
+carries the exact engine states, both choices, the observed features and the
+step protocol, the strict per-boundary comparison can be re-executed OFFLINE
+against a rebuilt engine — no Showdown re-run — which makes "does the fix clear
+the row?" a direct per-row measurement over the full sweep population instead
+of a fresh-sample estimate.
+
+Method: for every retained ``transition_diverged`` row, rebuild the matcher
+inputs from the recorded payloads and call the differential's own
+``evaluate_boundary_strict`` (imported, not reimplemented) on the current
+build. Two caveats, both verified by the validation gate below:
+
+* ``slot_sides`` is not recorded on rows; the identity mapping (p1=side_one)
+  is used, exactly as ``scripts/replay_residue.py`` does.
+* observed side conditions are recorded as PRESENCE (the verdict compares
+  presence only, ``_transition_mismatch``), so reconstruction is lossless for
+  the verdict.
+
+VALIDATION GATE: run with ``--expect diverged`` on the build the sweep itself
+used (same fingerprint) — every row must re-read as diverged. A row that
+re-reads as matched on the sweep's own build marks reconstruction infidelity
+and is counted separately (``reread_infidelity``), never as a clearance.
+
+Usage::
+
+    PYTHONPATH=src python scripts/cert_sweep_reread.py \\
+        --shards 'path/cert_shard_*.json' --json out.json [--expect diverged]
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any, Mapping
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import poke_engine  # noqa: E402
+
+from pokezero.engine_fidelity import TurnFeatures  # noqa: E402
+
+from engine_transition_differential import (  # noqa: E402
+    classify_divergence,
+    evaluate_boundary_strict,
+)
+
+_MON_NAME = re.compile(r"(?:^|=)([A-Z0-9]+),\d+,[A-Z]+,[A-Z]+,")
+
+
+def _features(payload: Mapping[str, Any]) -> TurnFeatures:
+    return TurnFeatures(
+        p1_hp=int(payload["p1_hp"]),
+        p2_hp=int(payload["p2_hp"]),
+        p1_status=str(payload["p1_status"]),
+        p2_status=str(payload["p2_status"]),
+        fainted=frozenset(payload.get("fainted") or []),
+        weather=str(payload["weather"]),
+        side_conditions={
+            side: {name: 1 for name in names}
+            for side, names in (payload.get("side_conditions") or {}).items()
+        },
+    )
+
+
+def _party_display(state_str: str) -> dict[str, list[str]]:
+    names = [m.group(1).title() for m in _MON_NAME.finditer(state_str)]
+    # The serialized state lists side_one's six mons first, then side_two's.
+    if len(names) >= 12:
+        return {"p1": names[:6], "p2": names[6:12]}
+    half = max(1, len(names) // 2)
+    return {"p1": names[:half], "p2": names[half:]}
+
+
+def reread_row(row: Mapping[str, Any]) -> tuple[str, list[str], int]:
+    states = [poke_engine.State.from_string(s) for s in row["engine_states"]]
+    slot_sides = {"p1": "side_one", "p2": "side_two"}
+    counts: Counter = Counter()
+    return evaluate_boundary_strict(
+        states=states,
+        slot_sides=slot_sides,
+        choices=row["choices"],
+        party_display=_party_display(row["engine_states"][0]),
+        turn=0,
+        pre_features=_features(row["pre_features"]),
+        observed=_features(row["observed"]),
+        step_lines=list(row["protocol"]),
+        observed_boosts=row.get("observed_boost_deltas") or {},
+        active_changed=row.get("active_changed") or {"p1": False, "p2": False},
+        counts=counts,
+    )
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--shards", required=True)
+    parser.add_argument("--json", required=True)
+    parser.add_argument("--expect", choices=["diverged"], default=None,
+                        help="validation gate: every row must re-read diverged")
+    args = parser.parse_args(argv)
+
+    results = []
+    tally: Counter = Counter()
+    for shard in sorted(glob.glob(args.shards)):
+        data = json.loads(Path(shard).read_text())
+        for row in data.get("repros") or []:
+            if row.get("kind") != "transition_diverged":
+                continue
+            key = {"seed": row["seed"], "step": row["step"],
+                   "recorded_class": row.get("divergence_class")}
+            try:
+                verdict, misses, _branches = reread_row(row)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as error:  # noqa: BLE001
+                tally["reread_error"] += 1
+                results.append({**key, "verdict": f"error:{type(error).__name__}"})
+                continue
+            entry = {**key, "verdict": verdict}
+            if verdict == "diverged":
+                entry["class"] = classify_divergence(row["protocol"], misses)
+                entry["misses"] = misses[:4]
+            results.append(entry)
+            tally[verdict] += 1
+
+    out = {
+        "engine_note": "verdicts computed against the CURRENTLY INSTALLED build; "
+                       "pair this file with the build fingerprint recorded beside it",
+        "rows": len(results),
+        "tally": dict(tally),
+        "results": results,
+    }
+    Path(args.json).write_text(json.dumps(out, indent=1))
+    print(f"re-read {len(results)} rows: {dict(tally)} -> {args.json}")
+
+    if args.expect == "diverged" and (tally.get("matched") or tally.get("reread_error")):
+        print("VALIDATION GATE FAILED: matched/error rows on the reference build")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
