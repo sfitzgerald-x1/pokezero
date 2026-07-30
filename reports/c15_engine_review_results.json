@@ -1,0 +1,45 @@
+{
+  "purpose": "Post-review correction evidence for patch 45 and the Rust event mapper",
+  "chronology": {
+    "prediction_commit": "4e3cae3",
+    "implementation_commit": "2b41206"
+  },
+  "build": {
+    "patch_count": 45,
+    "fingerprint": "7376b4dcd9c30d373baa7305d3d7237bbdcf17a7e5887c64af4ad7d9612fcf99",
+    "python_builder": "PASS: every patch applied with fuzz=0",
+    "vendored_builder": "PASS: every patch applied with fuzz=0",
+    "fixture_refresh_last": true
+  },
+  "live_showdown_probe": {
+    "format": "gen3customgame",
+    "seeds": [1, 64],
+    "hydro_pump_into_protect": {
+      "protect": 57,
+      "miss": 7
+    },
+    "hydro_pump_into_full_hp_water_absorb": {
+      "ability_immunity": 57,
+      "miss": 7
+    }
+  },
+  "native_event_mapper": {
+    "hydro_pump_into_protect": {
+      "protect_percentage": 80.0,
+      "miss_percentage": 19.999998092651367,
+      "lossy_markers": 0
+    },
+    "hydro_pump_into_full_hp_water_absorb": {
+      "ability_immunity_percentage": 80.0,
+      "miss_percentage": 19.999998092651367,
+      "lossy_markers": 0
+    }
+  },
+  "verification": {
+    "focused_python": "28/28 PASS",
+    "rust_release_suite": "289/289 PASS",
+    "behavioral_probes": "9/9 PASS",
+    "force_switch_mapper_pin": "PASS"
+  },
+  "scope": "This closes the independent review's composed Protect/accuracy, full-HP absorb attribution, force-switch mirror, and evidence-contract findings. It does not substitute for the final fresh 10k zero-unattributed sweep."
+}
