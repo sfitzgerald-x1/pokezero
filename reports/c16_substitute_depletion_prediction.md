@@ -37,6 +37,13 @@ world whose initial Substitute could not have publicly survived the exact
 depletion fails with a distinct incompatibility reason, never the accepted
 unknown-health limit.
 
+The state/value pair is canonical as well as the state name. Active `full` and
+`unknown` accept only `null` or integer-zero depletion; any nonzero or malformed
+companion value is a provenance contradiction before construction or accepted-
+limit accounting. Active `exact` requires a positive integer depletion.
+Inactive `absent`/`broken` states carry no depletion. Booleans are not integers
+for this contract even though Python's runtime integer hierarchy includes them.
+
 ## Predicted Affected Certification Rows
 
 The following 12 rows are the complete `CAND_recoil_vs_substitute_basis`
@@ -87,5 +94,11 @@ Substitute HP cannot be known.
 8. A sampled Substitute with initial HP less than or equal to exact depletion
    fails with a precise sampled-world incompatibility reason that differential
    accounting does not count as `limit:world_substitute_health_unknown`.
-9. Non-Substitute construction and the pre-existing `volatile_unsupported`
+9. Active `unknown` plus depletion 50 and active `full` plus depletion 50 both
+   fail as `substitute_health_provenance_contradiction`; the former never enters
+   accepted-limit accounting.
+10. The full state/depletion matrix accepts only canonical pairs: `full` and
+    `unknown` with `null`/integer zero, `exact` with a positive integer, and
+    inactive `absent`/`broken` with `null`.
+11. Non-Substitute construction and the pre-existing `volatile_unsupported`
    behavior when the opt-in flag is disabled remain unchanged.
