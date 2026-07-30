@@ -51,7 +51,10 @@ claim. The broader tests pin:
 - snapshot restoration of attempt, applied-refund, pending-refund, and pending-attempt state;
 - Natural Cure, faint, per-mon cure, and team-cure cleanup of all Rest provenance maps;
 - Early Bird's two-units-per-attempt and one-unit-per-refund arithmetic;
+- malformed, out-of-range, and Early-Bird-inconsistent explicit Rest provenance
+  refusing construction rather than approximating as induced sleep;
 - exact opponent-side public-row materialization.
 
-The fresh certification re-sweep remains the global regression and recurrence
-bound.
+The recorded replay clearance predates this malformed-provenance guard; it is not
+evidence for that refusal path. The focused tests above are its verification, and a
+fresh certification re-sweep remains the global regression and recurrence bound.
