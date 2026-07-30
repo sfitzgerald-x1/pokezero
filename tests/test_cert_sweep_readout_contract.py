@@ -54,6 +54,7 @@ class CertificationContractTests(unittest.TestCase):
             "registered_before_launch": True,
             "launch_registration": {
                 "fresh_measurements_inspected_before_registration": 0,
+                "coordinator_go": True,
                 "public_source_parent_commit": self.source_commit,
                 "engine_patch_count": 1,
                 "engine_fingerprint": self.engine_fingerprint,
@@ -97,12 +98,33 @@ class CertificationContractTests(unittest.TestCase):
             "engine_fingerprint": self.engine_fingerprint,
             "readout_sha256": readout._sha256(Path(readout.__file__)),
             "contract_sha256": readout._sha256(contract_path),
+            "aggregate_provenance": {
+                "image_commit": "c" * 40,
+                "engine_fingerprint": self.engine_fingerprint,
+                "behavioral_probes": {
+                    "passed": 9,
+                    "total": 9,
+                    "log_sha256": "d" * 64,
+                },
+                "branch_events_probe": {
+                    "passed": True,
+                    "log_sha256": "e" * 64,
+                },
+            },
             "shards": [
                 {
                     "seed_start": 1000 if index == 0 else 2000,
                     "report_sha256": readout._sha256(path),
                     "complete_marker": complete,
-                    "behavioral_probes": {"passed": 9, "total": 9},
+                    "behavioral_probes": {
+                        "passed": 9,
+                        "total": 9,
+                        "log_sha256": "d" * 64,
+                    },
+                    "branch_events_probe": {
+                        "passed": True,
+                        "log_sha256": "e" * 64,
+                    },
                     "source_commit": self.source_commit,
                     "engine_fingerprint": self.engine_fingerprint,
                 }

@@ -555,6 +555,8 @@ def _contract_gates(
             failures.append(
                 "contract does not prove zero fresh measurements inspected before registration"
             )
+        if launch_registration.get("coordinator_go") is not True:
+            failures.append("contract has no explicit coordinator go")
         for field, required in (
             ("public_source_parent_commit", required_source),
             ("engine_fingerprint", required_fingerprint),
@@ -599,6 +601,31 @@ def _contract_gates(
     if not _is_lower_hex(image_commit, 40):
         failures.append("execution manifest image_commit is not a full lowercase Git SHA")
     evidence["image_commit"] = image_commit
+    aggregate_provenance = execution_manifest.get("aggregate_provenance")
+    if not isinstance(aggregate_provenance, Mapping):
+        failures.append("execution manifest has no aggregate provenance")
+    else:
+        if aggregate_provenance.get("image_commit") != image_commit:
+            failures.append("aggregate image commit does not match execution manifest")
+        if aggregate_provenance.get("engine_fingerprint") != required_fingerprint:
+            failures.append("aggregate engine fingerprint does not match contract")
+        aggregate_probes = aggregate_provenance.get("behavioral_probes")
+        if not isinstance(aggregate_probes, Mapping):
+            failures.append("aggregate behavioral probe evidence is absent")
+        elif (
+            int(aggregate_probes.get("passed", -1)) != required_probe_passes
+            or int(aggregate_probes.get("total", -1)) != required_probe_passes
+            or not _is_lower_hex(aggregate_probes.get("log_sha256"), 64)
+        ):
+            failures.append("aggregate behavioral probe evidence is invalid")
+        aggregate_branch_probe = aggregate_provenance.get("branch_events_probe")
+        if not isinstance(aggregate_branch_probe, Mapping):
+            failures.append("aggregate branch-events probe evidence is absent")
+        elif (
+            aggregate_branch_probe.get("passed") is not True
+            or not _is_lower_hex(aggregate_branch_probe.get("log_sha256"), 64)
+        ):
+            failures.append("aggregate branch-events probe evidence is invalid")
 
     manifest_shards = execution_manifest.get("shards")
     if not isinstance(manifest_shards, list):
@@ -648,6 +675,16 @@ def _contract_gates(
                 f"{path.name}: behavioral probes are not "
                 f"{required_probe_passes}/{required_probe_passes}"
             )
+        elif not _is_lower_hex(probes.get("log_sha256"), 64):
+            failures.append(f"{path.name}: behavioral probe log hash is absent")
+        branch_probe = entry.get("branch_events_probe")
+        if not isinstance(branch_probe, Mapping):
+            failures.append(f"{path.name}: branch-events probe evidence is absent")
+        else:
+            if branch_probe.get("passed") is not True:
+                failures.append(f"{path.name}: branch-events probe did not pass")
+            if not _is_lower_hex(branch_probe.get("log_sha256"), 64):
+                failures.append(f"{path.name}: branch-events probe log hash is absent")
         if entry.get("source_commit") != required_source:
             failures.append(f"{path.name}: source commit does not match contract")
         if entry.get("engine_fingerprint") != required_fingerprint:
