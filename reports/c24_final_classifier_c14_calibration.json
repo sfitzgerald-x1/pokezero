@@ -6,8 +6,8 @@
     "boundaries_full_round": 810125,
     "boundaries_measured": 791757,
     "coverage_measured_fraction": 0.9773,
-    "current_classifier_source_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
-    "current_classifier_readout_sha256": "57e3269d76251d7b681fdcacb4188df4e15b60a25ed1f2be50598c260d78491a",
+    "current_classifier_source_commit": "7c76899d23954b22dc2ab272b4ef07d576aa1ebc",
+    "current_classifier_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
     "fresh_sweep2_measurements_inspected": 0
   },
   "method": {

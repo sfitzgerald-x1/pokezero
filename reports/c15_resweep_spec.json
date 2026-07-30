@@ -6,7 +6,7 @@
     "fresh_measurements_inspected_before_registration": 0,
     "coordinator_go": true,
     "engine_patch_count": 48,
-    "public_source_parent_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "public_source_parent_commit": "7c76899d23954b22dc2ab272b4ef07d576aa1ebc",
     "public_source_parent_note": "This immutable launch-source commit contains the 48-patch engine, exact limit vocabulary, independent full-round Substitute risk gate, reproducible upstream-source fingerprint check, and non-circular gate regression. The following contract commit only updates its source/image provenance pins.",
     "calibration_evidence": "reports/c24_final_classifier_c14_calibration.json"
   },
@@ -30,10 +30,10 @@
     "required_repros_per_game": 40,
     "required_keep_repro": 1000,
     "required_behavioral_probe_passes": 9,
-    "required_source_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
-    "required_image_commit": "52d5a8126f5c64d6ef1a2c46cc547f9b79bc5232",
+    "required_source_commit": "7c76899d23954b22dc2ab272b4ef07d576aa1ebc",
+    "required_image_commit": "7c76899d23954b22dc2ab272b4ef07d576aa1ebc",
     "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
-    "required_readout_sha256": "57e3269d76251d7b681fdcacb4188df4e15b60a25ed1f2be50598c260d78491a",
+    "required_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
     "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
   },
   "gated_on": [
