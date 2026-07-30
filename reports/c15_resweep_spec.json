@@ -46,6 +46,7 @@
  "scope_statement": "#970 lesson folded: this sweep bounds NEW rows GLOBALLY by construction - 10,000 fresh games with full-frame attribution and the zero-unattributed criterion - not merely clearance at the fix lanes' aimed seeds. Any mechanism the fixes regress or newly expose surfaces as UNATTRIBUTED.",
  "draft_family_rate_table": {
   "note": "NONBINDING DRAFT carried from c14. Recompute with the final classifier after all source fixes merge, then rename this field to pre_registered_family_rate_table in a separate pre-launch commit.",
+  "calibration_boundaries": 791757,
   "documented_families": {
    "limit:roll_divergent_lethality": {
     "observed_c14": 1281,
