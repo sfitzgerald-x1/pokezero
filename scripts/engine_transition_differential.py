@@ -601,15 +601,20 @@ def _direct_hit_is_critical(
     direct_damage_index: int,
     target_side: str,
 ) -> bool:
-    """Whether the selected direct hit, not another turn event, is critical."""
+    """Whether the selected direct hit's own protocol segment is critical.
 
-    move_index = -1
+    Showdown emits ``|-crit|`` per hit. Multi-hit moves therefore require the
+    scan to reset after the previous ``|-damage|``; scanning from ``|move|``
+    would leak a first-hit critical marker into every later hit.
+    """
+
+    segment_start = -1
     for index in range(direct_damage_index - 1, -1, -1):
         event = events[index]
-        if isinstance(event, str) and event.startswith("|move|"):
-            move_index = index
+        if isinstance(event, str) and event.startswith(("|move|", "|-damage|")):
+            segment_start = index
             break
-    for event in events[move_index + 1:direct_damage_index]:
+    for event in events[segment_start + 1:direct_damage_index]:
         if not isinstance(event, str) or not event.startswith("|-crit|"):
             continue
         fields = event.split("|")

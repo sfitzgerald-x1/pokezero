@@ -494,6 +494,44 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertEqual(support.damages, {21, 22, 23, 24, 25})
         self.assertNotIn(85, support.damages)
 
+    def test_first_hit_critical_does_not_mark_second_hit_critical(self):
+        events = [
+            "|move|p1a: A|Double Kick|p2a: B",
+            "|-crit|p2a: B",
+            "|-damage|p2a: B|150/200",
+            "|-damage|p2a: B|125/200",
+        ]
+
+        self.assertTrue(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=2, target_side="p2"
+            )
+        )
+        self.assertFalse(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=3, target_side="p2"
+            )
+        )
+
+    def test_second_hit_critical_is_local_to_second_hit(self):
+        events = [
+            "|move|p1a: A|Double Kick|p2a: B",
+            "|-damage|p2a: B|175/200",
+            "|-crit|p2a: B",
+            "|-damage|p2a: B|125/200",
+        ]
+
+        self.assertFalse(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=1, target_side="p2"
+            )
+        )
+        self.assertTrue(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=3, target_side="p2"
+            )
+        )
+
     def test_selected_direct_support_cannot_legalize_other_components(self):
         support = differential.BranchLegalRollSupport(
             target_side="p1",
