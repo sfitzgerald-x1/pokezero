@@ -350,6 +350,25 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(payload["enforcement_status"], "refused-final-contract")
         self.assertIn("certification gates are absent", payload["gate_failures"][0])
 
+    def test_boolean_zero_measurement_attestation_cannot_pass_readout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract["launch_registration"][
+                "fresh_measurements_inspected_before_registration"
+            ] = False
+            payload = self._run(root, contract=contract)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(
+            any(
+                "does not prove zero fresh measurements" in failure
+                for failure in payload["gate_failures"]
+            )
+        )
+
     def test_unregistered_legacy_requires_two_explicit_opt_ins(self) -> None:
         contract = {"legacy_contract_opt_out": True}
         failures, evidence = readout._contract_gates(

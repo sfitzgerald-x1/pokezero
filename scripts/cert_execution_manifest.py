@@ -337,7 +337,10 @@ def validate_final_contract_schema(contract: object) -> list[str]:
     if not isinstance(launch, Mapping):
         errors.append("final contract has no launch_registration object")
     else:
-        if launch.get("fresh_measurements_inspected_before_registration") != 0:
+        fresh_measurements = launch.get(
+            "fresh_measurements_inspected_before_registration"
+        )
+        if type(fresh_measurements) is not int or fresh_measurements != 0:
             errors.append(
                 "final contract launch_registration.fresh_measurements_inspected_before_registration is not zero"
             )

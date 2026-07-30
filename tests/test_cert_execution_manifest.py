@@ -465,6 +465,22 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             errors,
         )
 
+    def test_final_contract_rejects_boolean_zero_measurement_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["launch_registration"][
+                "fresh_measurements_inspected_before_registration"
+            ] = False
+            errors = manifest.validate_final_contract_schema(contract)
+        self.assertIn(
+            "final contract launch_registration."
+            "fresh_measurements_inspected_before_registration is not zero",
+            errors,
+        )
+
     def test_final_contract_schema_rejects_consumer_required_gate_before_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

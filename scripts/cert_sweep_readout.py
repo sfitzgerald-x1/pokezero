@@ -828,7 +828,10 @@ def _contract_gates(
     if not isinstance(launch_registration, Mapping):
         failures.append("contract has no launch_registration provenance")
     else:
-        if launch_registration.get("fresh_measurements_inspected_before_registration") != 0:
+        fresh_measurements = launch_registration.get(
+            "fresh_measurements_inspected_before_registration"
+        )
+        if type(fresh_measurements) is not int or fresh_measurements != 0:
             failures.append("contract does not prove zero fresh measurements inspected before registration")
         if launch_registration.get("coordinator_go") is not True:
             failures.append("contract has no explicit coordinator go")
