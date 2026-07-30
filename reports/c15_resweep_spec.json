@@ -6,8 +6,8 @@
     "fresh_measurements_inspected_before_registration": 0,
     "coordinator_go": true,
     "engine_patch_count": 48,
-    "public_source_parent_commit": "2005dbe7cc679f4564a54cabaeeffbc77a9215ae",
-    "public_source_parent_note": "This immutable build-source commit contains the 48-patch engine, exact limit vocabulary, reproducible upstream-source fingerprint check, and an explicit non-launchable lifecycle marker. It intentionally contains no registered final contract, calibration artifact, or attestation. This later contract commit pins that source without circular Git metadata.",
+    "public_source_parent_commit": "4aa8e92d2076f4bc6711d8ccee58bdb691719df3",
+    "public_source_parent_note": "This immutable build-source commit contains the 48-patch engine, a cross-platform strict patch applicator, exact limit vocabulary, reproducible upstream-source fingerprint check, and an explicit non-launchable lifecycle marker. It intentionally contains no registered final contract, calibration artifact, or attestation. This later contract commit pins that source without circular Git metadata.",
     "calibration_evidence": "reports/c24_final_classifier_c14_calibration.json"
   },
   "certification_gates": {
@@ -30,8 +30,8 @@
     "required_repros_per_game": 40,
     "required_keep_repro": 1000,
     "required_behavioral_probe_passes": 9,
-    "required_source_commit": "2005dbe7cc679f4564a54cabaeeffbc77a9215ae",
-    "required_image_commit": "2005dbe7cc679f4564a54cabaeeffbc77a9215ae",
+    "required_source_commit": "4aa8e92d2076f4bc6711d8ccee58bdb691719df3",
+    "required_image_commit": "4aa8e92d2076f4bc6711d8ccee58bdb691719df3",
     "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
     "required_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
     "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
