@@ -9,6 +9,7 @@ attest native branch generation or Gen 3 damage arithmetic.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import struct
 from typing import Any, Mapping, Sequence
 
 from .dex import normalize_id
@@ -21,7 +22,10 @@ _BOOST_FIELDS = (
     "special_attack_boost",
     "special_defense_boost",
     "speed_boost",
+    "accuracy_boost",
+    "evasion_boost",
 )
+_PRE_TRANSFORM_MOVE_SLOTS = 4
 
 
 def _id(value: object | None) -> str:
@@ -38,6 +42,75 @@ def _types(values: Sequence[object]) -> tuple[str, str]:
     if len(normalized) == 1:
         return normalized + (TYPELESS,)
     return normalized  # Adapter validation limits this to exactly two slots.
+
+
+def _gender(value: object | None) -> str:
+    """Normalize the adapter's compact gender inputs and native display values."""
+
+    normalized = _id(value)
+    return {
+        "": "none",
+        "m": "male",
+        "male": "male",
+        "f": "female",
+        "female": "female",
+        "n": "none",
+        "none": "none",
+    }.get(normalized, f"invalid:{value!r}")
+
+
+def _float32(value: object) -> float:
+    """Canonicalize Python inputs to the binding's native ``f32`` precision."""
+
+    return struct.unpack("!f", struct.pack("!f", float(value)))[0]
+
+
+def _pre_transform_from_spec(member: Any) -> dict[str, object] | None:
+    """Canonicalize the exact restoration snapshot forwarded by the adapter."""
+
+    base = member.pre_transform
+    if base is None:
+        return None
+    moves = [
+        (_id(move.id), int(move.pp))
+        for move in base.moves[:_PRE_TRANSFORM_MOVE_SLOTS]
+    ]
+    moves.extend(
+        [("none", 0)] * (_PRE_TRANSFORM_MOVE_SLOTS - len(moves))
+    )
+    return {
+        "id": _id(base.id),
+        **{field: int(getattr(base, field)) for field in _STAT_FIELDS},
+        "moves": tuple(moves),
+    }
+
+
+def _pre_transform_from_native(value: object | None) -> dict[str, object] | None:
+    """Parse the binding's public PreTransform wire record without hiding corruption."""
+
+    raw = str(value or "")
+    if not raw:
+        return None
+    fields = raw.split(";")
+    if len(fields) != 6 + _PRE_TRANSFORM_MOVE_SLOTS:
+        return {"invalid_wire": raw}
+    try:
+        moves: list[tuple[str, int]] = []
+        for slot in fields[6:]:
+            move_id, separator, pp = slot.partition(":")
+            if not separator:
+                return {"invalid_wire": raw}
+            moves.append((_id(move_id), int(pp)))
+        return {
+            "id": _id(fields[0]),
+            **{
+                field: int(fields[index])
+                for index, field in enumerate(_STAT_FIELDS, start=1)
+            },
+            "moves": tuple(moves),
+        }
+    except (TypeError, ValueError):
+        return {"invalid_wire": raw}
 
 
 def _native_active_index(value: object) -> int | str:
@@ -211,6 +284,8 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                 "ability": _id(member.ability or "none"),
                 "base_ability": _id(member.base_ability or member.ability or "none"),
                 "item": _id(member.item or "none"),
+                "nature": _id(member.nature or "serious"),
+                "gender": _gender(member.gender),
                 "status": _id(member.status),
                 "types": _types(member.types),
                 "base_types": _types(member.types if member.base_types is None else member.base_types),
@@ -218,9 +293,10 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                     (_id(move.id), int(move.pp), bool(move.disabled)) for move in member.moves
                 ),
                 # Low Kick's Gen 3 base power depends on this value.
-                "weight_kg": float(member.weight_kg or 0.0),
+                "weight_kg": _float32(member.weight_kg or 0.0),
                 "rest_turns": int(member.rest_turns),
                 "sleep_turns": int(member.sleep_turns),
+                "pre_transform": _pre_transform_from_spec(member),
             }
             expected[key] = expected_member
             if index >= len(native_party):
@@ -236,6 +312,8 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                 "ability": _id(native_member.ability),
                 "base_ability": _id(native_member.base_ability),
                 "item": _id(native_member.item),
+                "nature": _id(native_member.nature),
+                "gender": _gender(native_member.gender),
                 "status": _id(native_member.status),
                 "types": _types(native_member.types),
                 "base_types": _types(native_member.base_types),
@@ -243,9 +321,10 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                     (_id(move.id), int(move.pp), bool(getattr(move, "disabled", False)))
                     for move in native_member.moves
                 ),
-                "weight_kg": float(native_member.weight_kg),
+                "weight_kg": _float32(native_member.weight_kg),
                 "rest_turns": int(native_member.rest_turns),
                 "sleep_turns": int(native_member.sleep_turns),
+                "pre_transform": _pre_transform_from_native(native_member.pre_transform),
             }
             actual[key] = actual_member
             _compare_mapping(key, expected_member, actual_member, mismatches)

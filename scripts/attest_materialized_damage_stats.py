@@ -11,9 +11,11 @@ arithmetic remain deliberately outside its evidence boundary.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import shlex
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -46,6 +48,125 @@ def _target(value: str) -> tuple[int, int]:
     if not separator or not seed.isdigit() or not step.isdigit():
         raise argparse.ArgumentTypeError("targets must be SEED/STEP")
     return int(seed), int(step)
+
+
+def _hash_source_files(repo_root: Path, paths: Sequence[Path]) -> str:
+    """Hash source paths and bytes with stable repository-relative names."""
+
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda item: str(item.relative_to(repo_root))):
+        relative = path.relative_to(repo_root).as_posix()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative.encode("utf-8"))
+        payload = path.read_bytes()
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def _public_source_provenance(
+    repo_root: Path,
+    *,
+    source_commit: str,
+) -> dict[str, object]:
+    """Bind the recorded commit to a clean checkout or an explicit source hash."""
+
+    git_metadata = repo_root / ".git"
+    if not git_metadata.exists():
+        roots = (
+            repo_root / "src" / "pokezero",
+            repo_root / "scripts",
+        )
+        paths = [
+            path
+            for root in roots
+            if root.exists()
+            for path in root.rglob("*.py")
+            if path.is_file() and "__pycache__" not in path.parts
+        ]
+        pyproject = repo_root / "pyproject.toml"
+        if pyproject.is_file():
+            paths.append(pyproject)
+        if not paths:
+            raise RuntimeError(
+                "could not resolve executable public source files for provenance"
+            )
+        return {
+            "public_source_tree_status": "explicit_hash_without_git",
+            "public_source_tree_sha256": _hash_source_files(repo_root, paths),
+            "public_source_tree_hash_scope": "src/pokezero/**/*.py;scripts/**/*.py;pyproject.toml",
+        }
+    try:
+        head = subprocess.run(
+            ("git", "-C", str(repo_root), "rev-parse", "HEAD"),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip().lower()
+        if source_commit != head:
+            raise RuntimeError(
+                "recorded public source commit does not match the executed checkout "
+                f"(recorded {source_commit}, checkout {head})"
+            )
+        result = subprocess.run(
+            (
+                "git",
+                "-C",
+                str(repo_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            "could not verify the tracked public source tree before attestation"
+        ) from error
+    dirty = result.stdout.rstrip("\n")
+    if dirty.strip():
+        paths = ", ".join(
+            line[3:].strip() for line in dirty.splitlines()[:8] if len(line) > 3
+        )
+        raise RuntimeError(
+            "refusing to write a transport attestation from a dirty tracked public "
+            f"source tree ({paths or 'tracked changes detected'}); commit or revert "
+            "the tracked changes so source_commit is reproducible"
+        )
+    tracked = subprocess.run(
+        ("git", "-C", str(repo_root), "ls-files", "-z"),
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    paths = [
+        repo_root / value.decode("utf-8")
+        for value in tracked
+        if value and (repo_root / value.decode("utf-8")).is_file()
+    ]
+    return {
+        "public_source_tree_status": "clean_tracked_checkout",
+        "public_source_tree_sha256": _hash_source_files(repo_root, paths),
+        "public_source_tree_hash_scope": "git_ls_files",
+        "public_source_checkout_head": head,
+    }
+
+
+def _resolved_showdown_provenance(source: Gen3RandbatSource) -> dict[str, object]:
+    """Record the exact content-resolved randbat/Showdown source identity."""
+
+    metadata = source.metadata.to_payload()
+    source_hash = str(metadata.get("source_hash") or "")
+    if not source_hash:
+        raise RuntimeError(
+            "refusing to write a transport attestation without a resolved "
+            "Showdown/randbat source hash"
+        )
+    return {
+        "showdown_randbat_source_hash": source_hash,
+        "showdown_randbat_source": metadata,
+    }
 
 
 def attest_target(
@@ -201,11 +322,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "current engine-fingerprint provenance"
         )
 
+    source_tree = _public_source_provenance(
+        REPO_ROOT,
+        source_commit=str(provenance["source_commit"]),
+    )
     dex = load_showdown_dex(args.showdown_root)
+    set_source = Gen3RandbatSource.from_showdown_root(args.showdown_root)
+    provenance = {
+        **provenance,
+        **source_tree,
+        **_resolved_showdown_provenance(set_source),
+    }
     env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True))
     policy = EngineMctsPolicy(
         dex=dex,
-        set_source=Gen3RandbatSource.from_showdown_root(args.showdown_root),
+        set_source=set_source,
         config=EngineMctsConfig(worlds=1, search_time_ms=1),
     )
     try:
@@ -223,7 +354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         env.close()
     payload = {
-        "schema_version": "pokezero.battle_spec_transport_attestation.v2",
+        "schema_version": "pokezero.battle_spec_transport_attestation.v3",
         "command": shlex.join(
             [sys.executable, str(Path(__file__).relative_to(REPO_ROOT)), *effective_argv]
         ),
