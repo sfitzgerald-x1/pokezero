@@ -225,6 +225,64 @@ class ToxicStageWorldTest(unittest.TestCase):
         self.assertEqual(_materialization_toxic_stage(ordinary, "p1"), 1)
         self.assertEqual(_materialization_toxic_stage(ordinary, "p2"), 0)
 
+    def test_post_upkeep_poisoned_replacement_materializes_zero_for_both_sides(self) -> None:
+        """A forced post-residual replacement has not yet paid its first Toxic tick."""
+        for replaced_side in ("p1", "p2"):
+            with self.subTest(replaced_side=replaced_side):
+                parser = _ReplayParser(
+                    f"toxic-post-upkeep-{replaced_side}",
+                    complete_prefix=True,
+                    hp_visibility={"p1": "exact", "p2": "exact"},
+                )
+                other_side = "p2" if replaced_side == "p1" else "p1"
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        f"|faint|{replaced_side}a: {'LeadOne' if replaced_side == 'p1' else 'LeadTwo'}",
+                        "|upkeep",
+                        (
+                            f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
+                            "90/100 tox"
+                        ),
+                        "|turn|2",
+                        f'|request|{{"side":{{"id":"{replaced_side}"}}}}',
+                    ]
+                )
+
+                replay = parser.snapshot()
+                self.assertFalse(replay.post_upkeep_window)
+                self.assertEqual(replay.toxic_stage[replaced_side], 0)
+                self.assertTrue(replay.toxic_stage_known[replaced_side])
+                self.assertTrue(replay.toxic_stage_zero_after_upkeep[replaced_side])
+                self.assertEqual(_materialization_toxic_stage(replay, replaced_side), 0)
+                self.assertEqual(_materialization_toxic_stage(replay, other_side), 0)
+
+                resumed = _ReplayParser.from_snapshot(replay).snapshot()
+                self.assertTrue(resumed.toxic_stage_zero_after_upkeep[replaced_side])
+                self.assertEqual(_materialization_toxic_stage(resumed, replaced_side), 0)
+
+    def test_active_toxic_zero_without_post_upkeep_replacement_proof_fails_closed(self) -> None:
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 0},
+            toxic_stage_known={"p1": True},
+            toxic_stage_zero_after_upkeep={"p1": False},
+            public_active={"p1": SimpleNamespace(condition="90/100 tox")},
+            post_upkeep_window=False,
+        )
+        self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_unknown_post_upkeep_toxic_zero_still_fails_closed(self) -> None:
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 0},
+            toxic_stage_known={"p1": False},
+            toxic_stage_zero_after_upkeep={"p1": True},
+            public_active={"p1": SimpleNamespace(condition="90/100 tox")},
+            post_upkeep_window=False,
+        )
+        self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
     def test_stage_fifteen_saturation_survives_both_boundaries(self) -> None:
         replay = SimpleNamespace(
             toxic_stage={"p1": 16},

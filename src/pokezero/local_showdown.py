@@ -2262,6 +2262,14 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
     if not bool(known):
         return None
     tracked_stage = int(replay.toxic_stage.get(player, 0))
+    if tracked_stage == 0:
+        # A poisoned replacement that entered after upkeep missed the residual
+        # that just ran. Its next Toxic tick is stage 1, so the engine's
+        # pre-tick counter is correctly zero. No other active-Toxic zero has
+        # enough public chronology to distinguish that fact from an incomplete
+        # prefix, and therefore remains fail-closed.
+        zero_after_upkeep = getattr(replay, "toxic_stage_zero_after_upkeep", {})
+        return 0 if bool(zero_after_upkeep.get(player, False)) else None
     if not 1 <= tracked_stage <= 16:
         return None
     if replay.post_upkeep_window:

@@ -6527,8 +6527,9 @@ an already-saturated Showdown stage 15 across the ordinary-boundary subtraction,
 while observation encoding remains capped at 15. Controls cover the exact-100
 scenario, the 316-HP real capture with Leftovers-before-Toxic ordering,
 repeated ticks, switch/drag, Baton Pass, Rest/status replacement, Natural Cure,
-failed/reapplied Toxic, faint, and resume. This is a parser/world construction
-correction, not an engine defect.
+failed/reapplied Toxic, faint, and resume. This was the original parser/world
+construction disposition. Independent review later found the separate engine
+stage-cap defect documented in Z17.1; the final disposition includes both fixes.
 
 ## Z17.1 Independent-review amendment: saturation and production rendering
 

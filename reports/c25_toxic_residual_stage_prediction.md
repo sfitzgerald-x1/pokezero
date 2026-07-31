@@ -4,9 +4,10 @@
 
 This prediction concerns only public replay recovery of a surviving Gen 3
 badly-poisoned (`tox`) residual in
-`ShowdownReplayState._reseed_toxic_stage_from_residual`. It does not alter the
-engine's Toxic implementation or infer hidden stages from capped or lethal
-residuals.
+`ShowdownReplayState._reseed_toxic_stage_from_residual`. The original prediction
+covered parser/world recovery only and did not anticipate an engine-rule change.
+The final reviewed disposition below also includes a separate engine stage-cap
+correction; it still does not infer hidden stages from capped or lethal residuals.
 
 The retained identities use an absolute maximum HP of 239. Percentage-form
 Showdown conditions use a `/100` denominator and round the hidden HP delta, so
@@ -87,9 +88,9 @@ remains 15", while the observation still clamps both to its public stage-15
 maximum. The Rust engine then applies `min(15, toxic_count + 1)` at its next residual.
 The real 316-HP capture and exact-100 HP scenario controls pin those conventions,
 while lifecycle controls cover switch/drag, Baton Pass, status overwrite/Rest,
-Natural Cure, reapplication, faint, and checkpoint resume. This result is
-parser/world provenance recovery only; it does not claim an engine-rule
-correction.
+Natural Cure, reapplication, faint, and checkpoint resume. This section records
+the parser/world provenance portion of the work. The final disposition also
+includes the engine stage-cap correction documented in the review amendment below.
 
 Caller provenance is explicit. Local Showdown and the controlled FoulPlay bridge
 own full omniscient streams and mark both sides exact. The online client owns its

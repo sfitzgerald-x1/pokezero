@@ -1127,6 +1127,12 @@ class ShowdownReplayState:
     # its legacy zero encoding, but direct world construction must reject the
     # latter rather than silently seed a false ``toxic_count = 0``.
     toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
+    # A known stage-0 active ``tox`` counter is normally ambiguous at an
+    # action boundary. This proof is set only when a switch/drag introduced the
+    # poisoned Pokemon after upkeep, after that turn's residual had already
+    # run. It permits the engine's legitimate pre-tick counter 0 without
+    # relaxing the fail-closed rule for every other stage-0 snapshot.
+    toxic_stage_zero_after_upkeep: Mapping[str, bool] = field(default_factory=dict)
     # Provenance for HP numerators/denominators in this protocol stream. ``exact`` means the
     # denominator is the Pokemon's real max HP; ``percentage`` means Showdown's rounded /100
     # player view; absent/``unknown`` means residual magnitude must not distinguish the two.
@@ -1301,6 +1307,7 @@ class _ReplayParser:
             "p1": bool(complete_prefix),
             "p2": bool(complete_prefix),
         }
+        self.toxic_stage_zero_after_upkeep: dict[str, bool] = {"p1": False, "p2": False}
         self.hp_visibility: dict[str, str] = {"p1": "unknown", "p2": "unknown"}
         for slot, visibility in (hp_visibility or {}).items():
             if slot not in self.hp_visibility:
@@ -1409,6 +1416,11 @@ class _ReplayParser:
         for slot, known in parser.toxic_stage_known.items():
             if not known:
                 parser.toxic_stage[slot] = 0
+        snapshot_zero_after_upkeep = getattr(snapshot, "toxic_stage_zero_after_upkeep", {})
+        parser.toxic_stage_zero_after_upkeep = {
+            slot: bool(snapshot_zero_after_upkeep.get(slot, False))
+            for slot in ("p1", "p2")
+        }
         parser.confusion_elapsed = {
             slot: int(snapshot.confusion_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
@@ -1576,6 +1588,15 @@ class _ReplayParser:
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 self.toxic_stage_known[pokemon.showdown_slot] = True
+                # A normal switch-in will take this turn's residual before its
+                # next action. Only a forced switch/drag after ``|upkeep|``
+                # missed that residual, so only that public chronology proves
+                # an active Toxic pre-tick counter of zero at materialization.
+                self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot] = bool(
+                    event_type in {"switch", "drag"}
+                    and self._post_upkeep_window
+                    and _condition_has_status(pokemon.condition, "tox")
+                )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
                 # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
                 # flag too so no stale stall move carries onto the replacement.
@@ -2386,6 +2407,7 @@ class _ReplayParser:
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
             toxic_stage_known=dict(self.toxic_stage_known),
+            toxic_stage_zero_after_upkeep=dict(self.toxic_stage_zero_after_upkeep),
             hp_visibility={
                 slot: self._hp_visibility_for_slot(slot) for slot in ("p1", "p2")
             },
