@@ -264,6 +264,185 @@ def main(argv=None) -> int:
                     help="offline/dry use only; never for a scored shard")
     args = ap.parse_args(argv)
 
+    # REFUSED, deliberately: the MAPPING is fixed, the CRATE-SIDE GATHER is not.
+    #
+    # The opponent request order is computed by
+    # `engine_search.opponent_request_order`, which reuses
+    # `determinization._public_opponent_team_index_walk` -- the code that
+    # already maintained that permutation while decoding recorded opponent
+    # switch actions. Two independent review rounds measured it against the
+    # live Showdown request order: 13,614 and 7,267 decisions, zero wrong,
+    # ~0.7% fail-closed, with three known-wrong reference implementations
+    # scoring 81-96% wrong on the identical rows (see
+    # scripts/measure_opponent_request_order.py for those controls).
+    #
+    # What is still unverified is everything downstream of the map:
+    #   - the crate's gather/apply path has zero Rust tests;
+    #   - the flag-on native-slot pin cannot run without libtorch;
+    #   - no in-image gate has confirmed APPLIED priors end to end against a
+    #     real checkpoint;
+    #   - and when no order can be supplied, the crate falls back to a
+    #     one-swap approximation that is ~91% wrong -- fail-closed in Python is
+    #     fail-OPEN in the crate.
+    #
+    # A wrong gather does not fail. It returns a confident paired delta and the
+    # campaign reads "opponent priors do not help" off a permutation. So cells
+    # B and E stay refused until the section 8 in-image gate trio clears them.
+    if args.opponent_priors:
+        base = f"{base}+opp-priors"
+    return f"{base}@{tag}"
+
+
+def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
+    argv = [
+        sys.executable, "-m", "pokezero.foulplay_bridge",
+        "--checkpoint", str(args.checkpoint),
+        "--showdown-root", str(args.showdown_root),
+        "--games", str(args.pairs),
+        "--seed-start", str(args.seed_start),
+        "--pokezero-player", seat,
+        "--search-time-ms", str(FOULPLAY_SEARCH_TIME_MS),
+        "--policy-mode", "raw" if args.arm == "raw" else "engine-mcts",
+        "--summary-out", str(seat_summary_path(args, seat)),
+    ]
+    if args.arm != "raw":
+        argv += [
+            "--engine-depth", str(args.depth),
+            "--engine-sims", str(args.sims),
+            "--engine-batch", str(args.batch),
+            "--engine-worlds", str(args.worlds),
+        ]
+        if args.engine_model_path:
+            argv += ["--engine-model-path", str(args.engine_model_path)]
+        if args.engine_tables_path:
+            argv += ["--engine-tables-path", str(args.engine_tables_path)]
+        if args.opponent_priors:
+            argv.append("--engine-opponent-priors")
+    if args.device:
+        argv += ["--device", args.device]
+    return argv
+
+
+def seat_summary_path(args: argparse.Namespace, seat: str) -> Path:
+    out = Path(args.out)
+    return out.parent / f"{out.stem}-{seat}.json"
+
+
+def run_seat(args: argparse.Namespace, seat: str) -> dict:
+    """One bridge invocation. Non-zero exit is terminal -- never a partial shard."""
+    argv = bridge_argv(args, seat=seat)
+    env = dict(os.environ)
+    env.update(THREAD_PIN_ENV)
+    print(f"[{seat}] {' '.join(argv)}", flush=True)
+    started = time.perf_counter()
+    completed = subprocess.run(argv, env=env, cwd=str(REPO_ROOT))
+    if completed.returncode != 0:
+        raise SystemExit(
+            f"bridge exited {completed.returncode} for seat {seat}; refusing to "
+            "write a partial shard (a short arm silently biases the paired delta)"
+        )
+    summary_path = seat_summary_path(args, seat)
+    if not summary_path.exists():
+        raise SystemExit(f"bridge wrote no summary at {summary_path}")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["_seat_wall_s"] = round(time.perf_counter() - started, 1)
+    return summary
+
+
+def per_seed_outcomes(summary: dict, seat: str) -> dict[int, dict]:
+    """Map battle seed -> the row the pairing joins on.
+
+    Keyed by seed rather than by position: a bridge that skipped or reordered a
+    game must produce a MISSING pair, not a silently mis-joined one.
+    """
+    rows: dict[int, dict] = {}
+    for game in summary.get("game_results", []) or []:
+        seed = game.get("seed")
+        if seed is None:
+            continue
+        # `pokezero_score` is the bridge's name for the capstone score (win 1.0,
+        # tie/cap 0.5). Read strictly: a `.get(..., 0.0)` here would turn a
+        # renamed key into a silent all-losses arm, which reads as a real and
+        # very large paired delta rather than as a broken shard.
+        if "pokezero_score" not in game:
+            raise SystemExit(
+                f"game_results row for seed {seed} has no 'pokezero_score'; the "
+                "bridge summary schema changed -- refusing to score this shard"
+            )
+        rows[int(seed)] = {
+            "seed": int(seed),
+            "seat": seat,
+            "won": bool(game.get("pokezero_won")),
+            "tied": bool(game.get("tied")),
+            "capped": bool(game.get("capped")),
+            "score": float(game["pokezero_score"]),
+        }
+    return rows
+
+
+def seat_block(summary: dict, seat: str) -> dict:
+    """Per-seat reporting is mandatory: seat asymmetry is the #937 bug class."""
+    engine = summary.get("engine_mcts") or {}
+    timing = summary.get("policy_timing") or {}
+    return {
+        "seat": seat,
+        "games": summary.get("completed_games"),
+        "complete": summary.get("complete"),
+        "wins": summary.get("wins"),
+        "win_rate": summary.get("win_rate"),
+        "score": summary.get("score"),
+        "score_rate": summary.get("score_rate"),
+        "ties": summary.get("ties"),
+        "capped_games": summary.get("capped_games"),
+        # Both walls, deliberately. The first is the 20 s/turn gate's field; the
+        # second includes non-searched decisions and reads LOW when fallback is
+        # high, so reporting only it would hide a contaminated cell.
+        "search_wall_per_searched_decision": engine.get(
+            "search_wall_per_searched_decision"
+        ),
+        "wall_per_decision_mean": timing.get("average_elapsed_seconds"),
+        "wall_per_decision_p95": timing.get("p95_elapsed_seconds"),
+        "fallback_rate": engine.get("fallback_rate"),
+        "fallback_reasons": engine.get("fallback_reasons"),
+        "world_failure_reasons": (engine.get("policy_stats") or {}).get(
+            "world_failure_reasons"
+        ),
+        "depth_reached_mean": (engine.get("policy_stats") or {}).get(
+            "depth_reached_mean"
+        ),
+        "depth_reached_max": (engine.get("policy_stats") or {}).get("depth_reached_max"),
+        "policy_stats": engine.get("policy_stats"),
+        "seat_wall_s": summary.get("_seat_wall_s"),
+    }
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--showdown-root", required=True)
+    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--arm", choices=("search", "raw"), required=True)
+    ap.add_argument("--seed-start", type=int, required=True,
+                    help="first BATTLE seed of this shard's band")
+    ap.add_argument("--pairs", type=int, required=True,
+                    help="battle seeds in this shard (games = 2 x pairs, one per seat)")
+    ap.add_argument("--depth", type=int, default=4)
+    ap.add_argument("--sims", type=int, default=1024)
+    ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--worlds", type=int, default=4)
+    ap.add_argument("--opponent-priors", action="store_true",
+                    help="engine-mcts opponent-side model priors (cells B/E)")
+    ap.add_argument("--checkpoint-tag", default=None,
+                    help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
+                         "distinct when two checkpoints share a filename, which the "
+                         "campaign copies do.")
+    ap.add_argument("--engine-model-path", default=None)
+    ap.add_argument("--engine-tables-path", default=None)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--skip-build-check", action="store_true",
+                    help="offline/dry use only; never for a scored shard")
+    args = ap.parse_args(argv)
+
     # REFUSED, deliberately, until the opponent action map's ordering is
     # verified against a real checkpoint.
     #

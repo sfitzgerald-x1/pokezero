@@ -32,7 +32,7 @@
     "required_behavioral_probe_passes": 9,
     "required_source_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
     "required_image_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
-    "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
+    "required_engine_fingerprint": "a35e37a2bfed01de79f1d7caac67e497f249b3568b63a971b0c1fc0a8c2fe1a1",
     "required_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
     "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
   },
