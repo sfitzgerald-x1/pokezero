@@ -362,6 +362,46 @@ fn survival_branch_announces_confusion_before_the_move() {
 }
 
 #[test]
+fn confusion_survives_then_attract_blocks_without_a_move_window() {
+    let mut state = confused_state(Choices::SUBSTITUTE);
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::ATTRACT);
+    let branches = generate(&mut state);
+    let attract_blocked = branches
+        .iter()
+        .find(|branch| {
+            branch.instruction_list.iter().any(|instruction| {
+                matches!(instruction, Instruction::ChangeVolatileStatusDuration(change)
+                    if change.side_ref == SideReference::SideTwo
+                        && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                        && change.amount == 1)
+            }) && !branch.instruction_list.iter().any(|instruction| {
+                matches!(instruction, Instruction::Damage(damage)
+                    if damage.side_ref == SideReference::SideTwo)
+                    || matches!(instruction, Instruction::ApplyVolatileStatus(apply)
+                        if apply.side_ref == SideReference::SideTwo
+                            && apply.volatile_status == PokemonVolatileStatus::SUBSTITUTE)
+            })
+        })
+        .expect("expected confusion-survives Attract immobilization branch");
+    let rendered = rendered(&mut state, attract_blocked);
+    let events = rendered.lines.join("\n");
+    assert!(events.contains("|-activate|p2a: Opponent|confusion"), "{events}");
+    assert!(events.contains("|cant|p2a: Opponent|Attract"), "{events}");
+    assert!(!events.contains("|-activate|p2a: Opponent|move: Attract"), "{events}");
+    assert!(!events.contains("|move|p2a: Opponent|substitute"), "{events}");
+    assert!(
+        rendered
+            .lossy
+            .iter()
+            .any(|reason| reason == "attract_immobilization_source_unknown"),
+        "{rendered:?}"
+    );
+}
+
+#[test]
 fn still_asleep_sleep_talk_runs_confusion_before_the_called_move() {
     let mut state = confused_state(Choices::SLEEPTALK);
     state.side_two.get_active().status = PokemonStatus::SLEEP;

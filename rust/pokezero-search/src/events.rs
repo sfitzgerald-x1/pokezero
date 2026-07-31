@@ -1617,6 +1617,28 @@ fn render_move_phase(
         };
         s.get_active_immutable().status == PokemonStatus::PARALYZE
     };
+    let attacker_attracted = {
+        let s = match side {
+            SideReference::SideOne => &sim.state.side_one,
+            SideReference::SideTwo => &sim.state.side_two,
+        };
+        s.volatile_statuses
+            .contains(&PokemonVolatileStatus::ATTRACT)
+            && s.get_active_immutable().ability != Abilities::OBLIVIOUS
+    };
+
+    // Attract's immobilized branch is an empty tail, including after the
+    // higher-priority confusion handler has already incremented its duration.
+    // The engine does not retain Attract's source, so do not invent the
+    // preceding `-activate ... [of]` line; `cant` closes the public action
+    // window and the lossy marker makes that omitted attribution explicit.
+    if attacker_attracted && !has_any_effect && called_tag.is_none() {
+        out.lossy
+            .push("attract_immobilization_source_unknown".to_string());
+        out.lines.push(format!("|cant|{attacker_ident}|Attract"));
+        return;
+    }
+
     if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
         let deterministic_noop = (defender_protected && choice.flags.protect)
             || (is_damaging && effectiveness == 0.0)

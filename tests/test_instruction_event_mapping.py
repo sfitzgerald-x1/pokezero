@@ -328,6 +328,45 @@ class BranchEventsTest(unittest.TestCase):
         )
         self.assertTrue(splash["confusion_selfhit"])
 
+    def test_confusion_survives_attract_block_without_a_move_action(self) -> None:
+        state = _build_state(
+            ("splash",),
+            ("substitute",),
+            s1_speed=500,
+            s2_speed=1,
+            s2_volatile_statuses=("confusion", "attract"),
+        )
+        branches = json.loads(
+            pokezero_search.branch_events(state, "splash", "substitute", CTX, True, False)
+        )["branches"]
+        blocked = next(
+            branch
+            for branch in branches
+            if "|cant|p2a: Chansey|Attract" in branch["events"]
+        )
+        self.assertIn("|-activate|p2a: Chansey|confusion", blocked["events"])
+        self.assertIn("attract_immobilization_source_unknown", blocked["lossy"], blocked)
+        self.assertFalse(
+            any(line.startswith("|move|p2a: Chansey|substitute") for line in blocked["events"]),
+            blocked,
+        )
+
+        fold = pokezero_search.FoldState.initial("p1")
+        fold.advance_in_place(LEAD_LINES)
+        fold.advance_in_place(blocked["events"])
+        tokens = fold.products_payload()["transition_tokens"]
+        self.assertTrue(
+            any(token["kind"] == "cant" and token["action"] == "attract" for token in tokens),
+            tokens,
+        )
+        self.assertFalse(
+            any(
+                token["kind"] == "move" and token["action"] == "substitute"
+                for token in tokens
+            ),
+            tokens,
+        )
+
     def test_confusion_crash_recoil_and_explosion_do_not_fake_self_hit(self) -> None:
         crash_state = _build_state(
             ("splash",),
