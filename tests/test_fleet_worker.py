@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import errno
+import hashlib
 import os
 import subprocess
 import sys
@@ -666,6 +667,17 @@ class FanInTests(unittest.TestCase):
             handle.flush()
             os.fsync(handle.fileno())
 
+    def _replace_cache_payload_identically(self, cache: Path) -> None:
+        """Keep bytes stable while replacing the accepted payload inode."""
+        payload = next(cache.glob("*.npy"))
+        replacement = payload.with_name(f".{payload.name}.replacement")
+        with replacement.open("xb") as handle:
+            handle.write(payload.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(replacement, payload)
+        fleet_worker._fsync_directory(payload.parent)
+
     def _contract(self, *, tasks: int, games: int, seed_start: int = 100) -> FanInQueueContract:
         return FanInQueueContract(
             iteration=1,
@@ -694,6 +706,39 @@ class FanInTests(unittest.TestCase):
             seed,
             str(out or self.cache_dir / f"route-{task_id}"),
             policy,
+        )
+
+    def _route_witness(self, task: FanInTask) -> fleet_worker._FanInRouteResolution:
+        """Create the same immutable route record production acceptance retains."""
+        record = fleet_worker._fanin_route_record(self.queue, task.task_id)
+        payload = {
+            "schema_version": 1,
+            "cache_dir": str(self.cache_dir),
+            "task": fleet_worker._fanin_task_payload(task),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        try:
+            with record.open("xb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            fleet_worker._fsync_directory(record.parent)
+        except FileExistsError:
+            self.assertEqual(record.read_bytes(), encoded)
+        contents, observed, parent_identity = fleet_worker._read_fanin_file_with_parent_snapshot(
+            record, "route provenance record",
+        )
+        self.assertEqual(contents, encoded)
+        self.assertIsNotNone(observed)
+        root = fleet_worker._fanin_authoritative_directory_stat(self.cache_dir, "fan-in cache root")
+        return fleet_worker._FanInRouteResolution(
+            root=self.cache_dir,
+            root_identity=fleet_worker._fanin_directory_identity(root),
+            record=record,
+            record_parent_identity=parent_identity,
+            record_identity=fleet_worker._fanin_stat_snapshot(observed),
+            record_sha256=hashlib.sha256(encoded).hexdigest(),
+            task=task,
         )
 
     def _write_version(self, name: str, tasks: list[FanInTask]) -> Path:
@@ -742,6 +787,8 @@ class FanInTests(unittest.TestCase):
                     metadata_sha256=fleet_worker._sha256_file(target / "metadata.json"),
                     content_sha256=fleet_worker._fanin_content_sha256(target),
                     record_count=fleet_worker._cache_record_count(target),
+                    payload_files=fleet_worker._snapshot_fanin_payload_files(target),
+                    route=self._route_witness(task),
                 )
                 self.assertTrue(
                     fleet_worker._publish_initialized_fanin_acceptance(
@@ -869,6 +916,47 @@ class FanInTests(unittest.TestCase):
         self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
         self.assertEqual(self._read_meta(self.cache_dir / "shard-ww1-v1")["record_count"], 1)
         self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
+
+    def test_target_first_recovery_rejects_identical_route_record_replacement(self) -> None:
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def crash_after_target(boundary: str, _task) -> None:
+            if boundary == "fanin-after-target-publication":
+                raise SystemExit("simulated target-first crash")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash_after_target,
+            )
+        target = self.cache_dir / "shard-ww1-v1"
+        self.assertTrue(target.exists())
+        record = fleet_worker._fanin_route_record(self.queue, "i1-s0.env")
+        previous = record.with_name("route-before-target-recovery.json")
+        record.rename(previous)
+        record.write_bytes(previous.read_bytes())
+        fleet_worker._fsync_directory(record.parent)
+        self._requeue_claim("w1", "i1-s0.env")
+
+        rc = run_worker(
+            self.queue, worker_id="w2", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self._claim("w2", "i1-s0.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, "i1-s0.env")
+        current = fleet_worker._read_current_fanin_fence(root)
+        self.assertIsNotNone(current)
+        self.assertIsNone(current.acceptance)
 
     def test_post_publication_policy_change_is_terminal_without_recollection(self) -> None:
         out = self.cache_dir / "slice-0"
@@ -1503,32 +1591,91 @@ class FanInTests(unittest.TestCase):
             ["i1-s0.env"],
         )
 
-    def test_task_fence_heartbeat_keeps_foreign_cleanup_off_long_concat(self) -> None:
+    def test_task_fence_heartbeat_keeps_real_long_concat_and_publication_live(self) -> None:
+        from unittest.mock import patch
+        from pokezero.dataset import concat_training_caches as real_concat
+
+        prior = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [prior])
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-1", iteration=1,
+            offset=1, count=1, seed=101,
+        )
+        task_fence = fleet_worker._fanin_task_fence_path(self.cache_dir, "i1-s1.env")
+        original_write = fleet_worker._write_fanin_fence
+        renewals = 0
+
+        def record_renewal(path, *args):
+            nonlocal renewals
+            original_write(path, *args)
+            if path == task_fence:
+                renewals += 1
+
+        def slow_concat(parts, staging):
+            # Keep real path-based concat active long enough for many owner
+            # replacements, rather than exercising only the liveness helper.
+            for _ in range(16):
+                time.sleep(0.01)
+            return real_concat(parts, staging)
+
+        with (
+            patch.object(fleet_worker, "_FANIN_PRODUCER_LEASE_SECONDS", 0.04),
+            patch.object(fleet_worker, "_FANIN_HEARTBEAT_INTERVAL_SECONDS", 0.005),
+            patch.object(fleet_worker, "_write_fanin_fence", new=record_renewal),
+            patch("pokezero.dataset.concat_training_caches", new=slow_concat),
+        ):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(renewals, 2)
+        self.assertTrue((self.queue / "done" / "i1-s1.env").exists())
+        self.assertEqual(
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2)).total_games, 2,
+        )
+
+    def test_heartbeat_guard_directory_replacement_fails_closed(self) -> None:
+        import shutil
         from unittest.mock import patch
 
         _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
         task = claim_next_task(self.queue, "w1")
         self.assertIsNotNone(task)
         fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
-        staging = self.cache_dir / ".shard-ww1-v1.tmp.heartbeat"
-        staging.mkdir()
-        fleet_worker._write_fanin_staging_owner(staging, fanin_task, producer_token=task.claim_token)
+        original_write = fleet_worker._write_fanin_fence
+        renewals = 0
+
+        def record_renewal(path, *args):
+            nonlocal renewals
+            original_write(path, *args)
+            if path == fleet_worker._fanin_task_fence_path(self.cache_dir, task.base):
+                renewals += 1
+
         with (
             patch.object(fleet_worker, "_FANIN_PRODUCER_LEASE_SECONDS", 0.04),
             patch.object(fleet_worker, "_FANIN_HEARTBEAT_INTERVAL_SECONDS", 0.005),
+            patch.object(fleet_worker, "_write_fanin_fence", new=record_renewal),
         ):
             lease = fleet_worker._acquire_fanin_task_publication_lease(self.cache_dir, task, fanin_task)
             try:
-                task.claim_path.unlink()
-                for _ in range(30):
-                    time.sleep(0.004)
-                    self.assertTrue(fleet_worker._fanin_fence_is_current(lease.guard))
-                fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
-                self.assertTrue(staging.exists())
+                time.sleep(0.03)
+                lease.guard.stop.set()
+                lease.guard.heartbeat.join(timeout=1)
+                replacement = lease.guard.path.with_name(f"replacement-{lease.guard.path.name}")
+                saved = lease.guard.path.with_name(f"saved-{lease.guard.path.name}")
+                shutil.copytree(lease.guard.path, replacement)
+                lease.guard.path.rename(saved)
+                replacement.rename(lease.guard.path)
+                self.assertGreaterEqual(renewals, 1)
+                self.assertFalse(fleet_worker._fanin_fence_is_current(lease.guard))
+                with self.assertRaises(FanInValidationError):
+                    fleet_worker._verify_fanin_directory_identity(
+                        lease.guard.path, lease.guard.identity, "publication fence directory",
+                    )
             finally:
                 fleet_worker._release_fanin_task_publication_lease(lease)
-            fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
-        self.assertFalse(staging.exists())
 
     def test_initial_guard_acquirers_never_observe_uninitialized_guard(self) -> None:
         from unittest.mock import patch
@@ -2227,6 +2374,27 @@ class FanInTests(unittest.TestCase):
                 fleet_worker._select_accepted_fanin_shards(self.cache_dir)
         self.assertTrue(mutated)
 
+    def test_identical_payload_replacement_after_acceptance_is_terminal_before_training(self) -> None:
+        prior = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        accepted = self._write_version("shard-ww1-v1", [prior])
+        self._replace_cache_payload_identically(accepted)
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-1", iteration=1,
+            offset=1, count=1, seed=101,
+        )
+        calls: list[list[str]] = []
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=calls.append,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [])
+        self.assertTrue(self._claim("w1", "i1-s1.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s1.env").exists())
+        self.assertFalse((self.cache_dir / "shard-ww1-v2").exists())
+
     def test_recovery_ack_rejects_cache_root_replacement_after_lookup(self) -> None:
         from unittest.mock import patch
         import shutil
@@ -2392,6 +2560,70 @@ class FanInTests(unittest.TestCase):
         self.assertTrue(self._claim("w1", "i1-s1.env").exists())
         self.assertFalse((self.queue / "done" / "i1-s1.env").exists())
         self.assertFalse((self.cache_dir / "shard-ww1-v2").exists())
+
+    def test_staging_mutation_after_fence_check_never_becomes_visible_or_accepted(self) -> None:
+        self._manifests(1)
+        calls: list[list[str]] = []
+        mutated = False
+
+        def mutate_staging_after_fence(boundary: str, _task) -> None:
+            nonlocal mutated
+            if boundary != "fanin-after-publication-fence-check":
+                return
+            staging = next(
+                path for path in self.cache_dir.glob(".shard-ww1-v1.tmp.*") if path.is_dir()
+            )
+            self._mutate_cache_payload_in_place(staging)
+            mutated = True
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            crash_inject=mutate_staging_after_fence,
+        )
+
+        self.assertTrue(mutated)
+        self.assertEqual(rc, 2)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+        self.assertFalse((self.cache_dir / "shard-ww1-v1").exists())
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, "i1-s0.env")
+        current = fleet_worker._read_current_fanin_fence(root)
+        self.assertIsNotNone(current)
+        self.assertIsNone(current.acceptance)
+
+    def test_finalization_mutation_removes_its_done_marker_and_invalidates_publication(self) -> None:
+        from unittest.mock import patch
+
+        self._manifests(1)
+        original_write_done = fleet_worker._write_done_marker
+        mutated = False
+
+        def write_done_then_mutate(task, done):
+            nonlocal mutated
+            created = original_write_done(task, done)
+            if created and not mutated:
+                self._mutate_cache_payload_in_place(self.cache_dir / "shard-ww1-v1")
+                mutated = True
+            return created
+
+        with patch.object(fleet_worker, "_write_done_marker", new=write_done_then_mutate):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+
+        self.assertTrue(mutated)
+        self.assertEqual(rc, 2)
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+        with self.assertRaises(FanInValidationError):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
 
     def test_target_validation_rejects_entry_replacement_during_hashing(self) -> None:
         from unittest.mock import patch

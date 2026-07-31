@@ -99,6 +99,17 @@ class TaskManifest:
     claim_contents_sha256: str | None = None
 
 
+@dataclass(frozen=True)
+class _DoneMarkerWrite:
+    """The exact marker generation installed by one acknowledgement attempt."""
+
+    created: bool
+    identity: tuple[int, int, int, int, int] | None = None
+
+    def __bool__(self) -> bool:
+        return self.created
+
+
 FANIN_MANIFEST_NAME = "fanin-manifest.json"
 FANIN_PUBLICATION_NAME = "fanin-publication.json"
 FANIN_MANIFEST_SCHEMA_VERSION = 2
@@ -190,6 +201,8 @@ class _FanInAcceptance:
     metadata_sha256: str
     content_sha256: str
     record_count: int
+    payload_files: tuple["_FanInPayloadFile", ...]
+    route: "_FanInRouteResolution"
 
 
 @dataclass(frozen=True)
@@ -1354,7 +1367,7 @@ def _is_sha256(value: Any) -> bool:
 
 def _fanin_acceptance_payload(acceptance: _FanInAcceptance) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "task": _fanin_task_payload(acceptance.task),
         "guard_root": acceptance.guard_root,
         "guard_generation": acceptance.guard_generation,
@@ -1369,6 +1382,15 @@ def _fanin_acceptance_payload(acceptance: _FanInAcceptance) -> dict[str, Any]:
         "metadata_sha256": acceptance.metadata_sha256,
         "content_sha256": acceptance.content_sha256,
         "record_count": acceptance.record_count,
+        "payload_files": [
+            {
+                "relative": list(payload.relative),
+                "identity": list(payload.identity),
+                "sha256": payload.sha256,
+            }
+            for payload in acceptance.payload_files
+        ],
+        "route": _fanin_route_resolution_payload(acceptance.route),
     }
 
 
@@ -1376,9 +1398,10 @@ def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
     expected = {
         "schema_version", "task", "guard_root", "guard_generation", "claim_name",
         "claim_token", "lineage", "target", "version", "task_index", "prefix_sha256",
-        "manifest_sha256", "metadata_sha256", "content_sha256", "record_count",
+        "manifest_sha256", "metadata_sha256", "content_sha256", "record_count", "payload_files",
+        "route",
     }
-    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 2:
         return None
     task = _fanin_task_from_payload(payload["task"])
     string_fields = (
@@ -1401,6 +1424,10 @@ def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
         or payload["target"] != f"{payload['lineage']}-v{payload['version']}"
     ):
         return None
+    payload_files = _fanin_payload_files_from_payload(payload["payload_files"])
+    route = _fanin_route_resolution_from_payload(payload["route"], task)
+    if payload_files is None or route is None:
+        return None
     return _FanInAcceptance(
         task=task,
         guard_root=payload["guard_root"],
@@ -1416,6 +1443,8 @@ def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
         metadata_sha256=payload["metadata_sha256"],
         content_sha256=payload["content_sha256"],
         record_count=payload["record_count"],
+        payload_files=payload_files,
+        route=route,
     )
 
 
@@ -2314,6 +2343,10 @@ def _resolve_fanin_route(queue: Path, task: TaskManifest) -> _FanInRouteResoluti
                     raise FanInRouteConflictError(
                         f"fan-in task {task.base!r} has different output, policy, or cache root route"
                     )
+                if established_task != candidate:
+                    raise FanInTaskConflictError(
+                        f"fan-in route provenance conflicts with {task.base!r}"
+                    )
                 raise FanInInventoryValidationError(
                     f"fan-in route provenance has non-canonical record content: {record}"
                 )
@@ -2454,6 +2487,70 @@ def _verify_fanin_route_resolution(
         )
 
 
+def _fanin_route_resolution_payload(resolution: _FanInRouteResolution) -> dict[str, Any]:
+    """Serialize the exact append-only route record generation in an acceptance."""
+    return {
+        "root": str(resolution.root),
+        "root_identity": None if resolution.root_identity is None else list(resolution.root_identity),
+        "record": str(resolution.record),
+        "record_parent_identity": list(resolution.record_parent_identity),
+        "record_identity": list(resolution.record_identity),
+        "record_sha256": resolution.record_sha256,
+    }
+
+
+def _fanin_identity_tuple(value: Any, size: int) -> tuple[int, ...] | None:
+    if not isinstance(value, list) or len(value) != size or not all(_is_int(item) for item in value):
+        return None
+    return tuple(value)
+
+
+def _fanin_route_resolution_from_payload(
+    payload: Any,
+    task: FanInTask | None,
+) -> _FanInRouteResolution | None:
+    """Parse a durable route witness without resolving it again by pathname."""
+    expected = {
+        "root", "root_identity", "record", "record_parent_identity", "record_identity",
+        "record_sha256",
+    }
+    if (
+        task is None
+        or not isinstance(payload, dict)
+        or set(payload) != expected
+        or not isinstance(payload["root"], str)
+        or not isinstance(payload["record"], str)
+        or not _is_sha256(payload["record_sha256"])
+    ):
+        return None
+    try:
+        root = _canonical_fanin_physical_path(payload["root"], "accepted cache route")
+        record = _canonical_fanin_physical_path(payload["record"], "accepted route record")
+    except FanInInventoryValidationError:
+        return None
+    root_identity = payload["root_identity"]
+    if root_identity is not None:
+        root_identity = _fanin_identity_tuple(root_identity, 2)
+        if root_identity is None:
+            return None
+    else:
+        # A terminal acceptance must carry the cache-root generation too.
+        return None
+    record_parent_identity = _fanin_identity_tuple(payload["record_parent_identity"], 2)
+    record_identity = _fanin_identity_tuple(payload["record_identity"], 6)
+    if record_parent_identity is None or record_identity is None:
+        return None
+    return _FanInRouteResolution(
+        root=root,
+        root_identity=root_identity,
+        record=record,
+        record_parent_identity=record_parent_identity,
+        record_identity=record_identity,
+        record_sha256=payload["record_sha256"],
+        task=task,
+    )
+
+
 def _fanin_tasks_from_manifest_contents(contents: bytes, path: Path) -> tuple[FanInTask, ...]:
     """Parse one already-validated immutable manifest generation."""
     try:
@@ -2577,11 +2674,48 @@ def _verify_selected_fanin_shard(selected: _SelectedFanInShard) -> None:
             f"selected fan-in shard publication identity changed after selection: {selected.path}"
         )
     _verify_fanin_payload_files(selected.path, selected.payload_files)
+    if not selected.acceptances or selected.acceptances[-1].acceptance is None:
+        raise FanInInventoryValidationError(
+            f"selected fan-in shard has no terminal acceptance: {selected.path}"
+        )
+    terminal = selected.acceptances[-1].acceptance
+    if selected.payload_files != terminal.payload_files:
+        raise FanInInventoryValidationError(
+            f"selected fan-in shard payload witness disagrees with terminal acceptance: {selected.path}"
+        )
     for acceptance in selected.acceptances:
         _verify_fanin_fence_generation_identity(acceptance)
+        if acceptance.acceptance is None:
+            raise FanInInventoryValidationError(
+                f"selected fan-in shard has incomplete acceptance evidence: {selected.path}"
+            )
+        _verify_fanin_route_resolution(acceptance.acceptance.route, acceptance.acceptance.task)
     _verify_fanin_directory_identity(
         selected.path.parent, selected.cache_root_identity, "fan-in cache root",
     )
+
+
+def _verify_selected_fanin_task_route(
+    selected: _SelectedFanInShard,
+    candidate: FanInTask,
+    route: _FanInRouteResolution | None,
+) -> None:
+    """Bind acknowledgement to the exact route witness that accepted this task."""
+    matches = [
+        generation.acceptance
+        for generation in selected.acceptances
+        if generation.acceptance is not None and generation.acceptance.task == candidate
+    ]
+    if len(matches) != 1:
+        raise FanInInventoryValidationError(
+            f"selected fan-in shard has ambiguous route acceptance for {candidate.task_id!r}"
+        )
+    accepted = matches[0]
+    _verify_fanin_route_resolution(accepted.route, candidate)
+    if route is not None and accepted.route != route:
+        raise FanInInventoryValidationError(
+            f"fan-in route witness changed after acceptance for {candidate.task_id!r}"
+        )
 
 
 def _cache_record_count(path: Path) -> int:
@@ -3174,6 +3308,11 @@ def _snapshot_fanin_payload_files(path: Path) -> tuple[_FanInPayloadFile, ...]:
                 continue
             if not stat.S_ISREG(observed.st_mode):
                 raise FanInValidationError(f"fan-in shard has unsupported cache entry {'/'.join(relative)!r}")
+            # The acceptance is written after this snapshot. It is protocol
+            # metadata, not a cache payload a concat/training consumer opens.
+            if relative == (FANIN_PUBLICATION_NAME,):
+                _verify_fanin_entry_unchanged(name, observed, dir_fd=directory)
+                continue
             file_descriptor = _open_fanin_entry(name, observed, directory=False, dir_fd=directory)
             digest = hashlib.sha256()
             try:
@@ -3207,6 +3346,36 @@ def _verify_fanin_payload_files(
         raise FanInInventoryValidationError(
             f"selected fan-in shard payload changed after selection: {path}"
         )
+
+
+def _fanin_payload_files_from_payload(value: Any) -> tuple[_FanInPayloadFile, ...] | None:
+    """Parse one acceptance's exact regular-file payload generations."""
+    if not isinstance(value, list) or not value:
+        return None
+    files: list[_FanInPayloadFile] = []
+    previous: tuple[str, ...] | None = None
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != {"relative", "identity", "sha256"}:
+            return None
+        relative = entry["relative"]
+        identity = _fanin_identity_tuple(entry["identity"], 6)
+        if (
+            not isinstance(relative, list)
+            or not relative
+            or any(
+                not isinstance(part, str) or not part or part in {".", ".."} or "/" in part
+                for part in relative
+            )
+            or identity is None
+            or not _is_sha256(entry["sha256"])
+        ):
+            return None
+        parsed = _FanInPayloadFile(tuple(relative), identity, entry["sha256"])
+        if previous is not None and parsed.relative <= previous:
+            return None
+        previous = parsed.relative
+        files.append(parsed)
+    return tuple(files)
 
 
 def _fanin_hash_directory(
@@ -3284,7 +3453,13 @@ def _build_fanin_acceptance(
     tasks: Sequence[FanInTask],
     task_index: int,
     fence: _FanInFilesystemFence,
+    route: _FanInRouteResolution,
 ) -> _FanInAcceptance:
+    _verify_fanin_route_resolution(route, tasks[task_index])
+    if route.root_identity is None or route.root != target.parent or path.parent != target.parent:
+        raise FanInInventoryValidationError(
+            f"fan-in acceptance route disagrees with target parent: {target}"
+        )
     return _FanInAcceptance(
         task=tasks[task_index],
         guard_root=fence.root.name,
@@ -3300,6 +3475,8 @@ def _build_fanin_acceptance(
         metadata_sha256=_sha256_file(path / "metadata.json"),
         content_sha256=_fanin_content_sha256(path),
         record_count=_cache_record_count(path),
+        payload_files=_snapshot_fanin_payload_files(path),
+        route=route,
     )
 
 
@@ -3310,13 +3487,18 @@ def _write_fanin_publication(path: Path, acceptance: _FanInAcceptance) -> None:
     )
 
 
-def _validate_fanin_target_acceptance(
+def _validate_fanin_staging_acceptance(
     path: Path,
     tasks: Sequence[FanInTask],
     acceptance: _FanInAcceptance,
 ) -> None:
+    """Recheck an acceptance proof while its payload still resides in staging."""
     root = _fanin_real_directory_stat(path)
     try:
+        if acceptance.route.root != path.parent:
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} route disagrees with its cache root"
+            )
         publication = _read_fanin_publication(path)
         if publication is None:
             raise FanInInventoryValidationError(
@@ -3327,8 +3509,7 @@ def _validate_fanin_target_acceptance(
                 f"fan-in shard {path} publication provenance conflicts with acceptance"
             )
         if (
-            acceptance.target != path.name
-            or acceptance.task_index != len(tasks) - 1
+            acceptance.task_index != len(tasks) - 1
             or tasks[acceptance.task_index] != acceptance.task
             or acceptance.prefix_sha256 != _fanin_manifest_prefix_sha256(tasks, acceptance.task_index)
             or acceptance.manifest_sha256 != _sha256_file(path / FANIN_MANIFEST_NAME)
@@ -3339,6 +3520,9 @@ def _validate_fanin_target_acceptance(
             raise FanInInventoryValidationError(
                 f"fan-in shard {path} content or lineage disagrees with its acceptance"
             )
+        _verify_fanin_root_unchanged(path, root)
+        _verify_fanin_payload_files(path, acceptance.payload_files)
+        _verify_fanin_route_resolution(acceptance.route, acceptance.task)
     except Exception:
         # An entry-level rejection remains more actionable than the parent
         # directory timestamp it also changes, while both checks still run.
@@ -3348,6 +3532,18 @@ def _validate_fanin_target_acceptance(
             pass
         raise
     _verify_fanin_root_unchanged(path, root)
+
+
+def _validate_fanin_target_acceptance(
+    path: Path,
+    tasks: Sequence[FanInTask],
+    acceptance: _FanInAcceptance,
+) -> None:
+    if acceptance.target != path.name:
+        raise FanInInventoryValidationError(
+            f"fan-in shard {path} content or lineage disagrees with its acceptance"
+        )
+    _validate_fanin_staging_acceptance(path, tasks, acceptance)
 
 
 def _accept_fanin_publication(
@@ -3364,6 +3560,7 @@ def _accept_fanin_publication(
             )
         with fence.owner_lock:
             return _accept_fanin_publication(root, publication)
+    _verify_fanin_route_resolution(publication.route, publication.task)
     current = _read_current_fanin_fence(root)
     if current is None:
         raise FanInInventoryValidationError(
@@ -3371,6 +3568,7 @@ def _accept_fanin_publication(
         )
     _verify_fanin_fence_generation_identity(current)
     if current.acceptance is not None:
+        _verify_fanin_route_resolution(current.acceptance.route, current.acceptance.task)
         return current.acceptance
     if (
         publication.guard_root != root.name
@@ -3390,6 +3588,7 @@ def _accept_fanin_publication(
             f"fan-in publication generation lost its acceptance race: {publication.task.task_id}"
         )
     _verify_fanin_fence_generation_identity(resolved)
+    _verify_fanin_route_resolution(resolved.acceptance.route, resolved.acceptance.task)
     return resolved.acceptance
 
 
@@ -3579,12 +3778,12 @@ def _fanin_route_conflicts(existing: FanInTask, candidate: FanInTask) -> bool:
     )
 
 
-def _write_done_marker(task: TaskManifest, done: Path) -> bool:
+def _write_done_marker(task: TaskManifest, done: Path) -> _DoneMarkerWrite:
     """Create a canonical done marker without overwriting a concurrent marker.
 
-    Returns ``True`` if this call created the marker. A completed fan-in shard
-    is already accepted input, so this fallback also handles a reaper that
-    removed the original claim between version publication and acknowledgement.
+    A completed fan-in shard is already accepted input, so this fallback also
+    handles a reaper that removed the original claim between version
+    publication and acknowledgement.
     """
     temporary = done.parent / f".{task.base}.done.tmp.{os.getpid()}.{time.monotonic_ns()}"
     try:
@@ -3592,14 +3791,17 @@ def _write_done_marker(task: TaskManifest, done: Path) -> bool:
             handle.write(_task_manifest_text(task))
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(temporary, done)
-        except FileExistsError:
-            if not _done_marker_matches_task(done, task):
-                raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
-            return False
+            try:
+                os.link(temporary, done)
+            except FileExistsError:
+                if not _done_marker_matches_task(done, task):
+                    raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
+                return _DoneMarkerWrite(False)
+            # ``temporary`` is still our open hard link, so this snapshot is
+            # the installed inode even if the done pathname is raced later.
+            identity = _fanin_done_marker_identity(os.fstat(handle.fileno()))
         _fsync_directory(done.parent)
-        return True
+        return _DoneMarkerWrite(True, identity)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -3616,6 +3818,38 @@ def _reject_prepublication_done_marker(task: TaskManifest, queue: Path) -> None:
     raise FanInInventoryValidationError(f"done marker conflicts with current task {task.base}")
 
 
+def _fanin_done_marker_identity(observed: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Identify a done marker despite the expected temporary-link ctime change."""
+    snapshot = _fanin_stat_snapshot(observed)
+    return snapshot[:-1]
+
+
+def _fanin_done_marker_snapshot(path: Path) -> tuple[int, int, int, int, int]:
+    try:
+        observed = os.lstat(path)
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in done marker vanished after acknowledgement: {path}"
+        ) from exc
+    if stat.S_ISLNK(observed.st_mode) or not stat.S_ISREG(observed.st_mode):
+        raise FanInInventoryValidationError(f"fan-in done marker is not a regular file: {path}")
+    return _fanin_done_marker_identity(observed)
+
+
+def _remove_fanin_done_marker_generation(
+    path: Path,
+    expected: tuple[int, int, int, int, int],
+) -> None:
+    """Undo only the marker this acknowledgement wrote after its proof failed."""
+    try:
+        if _fanin_done_marker_snapshot(path) != expected:
+            return
+        path.unlink()
+    except FileNotFoundError:
+        return
+    _fsync_directory(path.parent)
+
+
 def _complete_claim(
     task: TaskManifest,
     queue: Path,
@@ -3630,22 +3864,31 @@ def _complete_claim(
     after acceptance cannot discard output: if the old claim vanished, recreate
     a matching done marker from the parsed task metadata instead.
     """
-    if route is not None:
-        _verify_fanin_route_resolution(route, task)
-    if accepted_shard is not None:
-        _verify_selected_fanin_shard(accepted_shard)
+    candidate = _fanin_task_from_task_manifest(task) if accepted_shard is not None else None
+
+    def verify_completion_proof() -> None:
+        if route is not None:
+            _verify_fanin_route_resolution(route, task)
+        if accepted_shard is not None:
+            _verify_selected_fanin_shard(accepted_shard)
+            assert candidate is not None
+            _verify_selected_fanin_task_route(accepted_shard, candidate, route)
+
+    verify_completion_proof()
     done = queue / "done" / task.base
-    created = False
+    write = _DoneMarkerWrite(False)
     owns_claim = (
         _fanin_claim_manifest_is_current(task)
         if task.claim_identity is not None else _claim_token_is_current(task)
     )
+    # Keep the pre-write proof adjacent to the durable acknowledgement.
+    verify_completion_proof()
     if not owns_claim:
-        created = _write_done_marker(task, done)
+        write = _write_done_marker(task, done)
     elif task.claim_identity is not None:
         # Never hard-link a mutable pathname into done/. The parsed manifest
         # bound into the lease is the only acknowledgement payload we accept.
-        created = _write_done_marker(task, done)
+        write = _write_done_marker(task, done)
     else:
         try:
             os.link(task.claim_path, done)
@@ -3653,23 +3896,27 @@ def _complete_claim(
             if not _done_marker_matches_task(done, task):
                 raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
         except FileNotFoundError:
-            created = _write_done_marker(task, done)
+            write = _write_done_marker(task, done)
         except OSError as exc:
             raise FanInInventoryValidationError(
                 f"could not acknowledge accepted fan-in task {task.base}: {exc}"
             ) from exc
         else:
-            created = True
+            write = _DoneMarkerWrite(True, _fanin_done_marker_snapshot(done))
             _fsync_directory(done.parent)
-    if created:
+    done_identity = write.identity if write else None
+    try:
+        # A mutation in the narrow write-to-acknowledgement interval must not
+        # leave our success marker behind. The generation snapshot prevents a
+        # failed worker from unlinking a concurrent repair's replacement.
+        verify_completion_proof()
+    except Exception:
+        if done_identity is not None:
+            _remove_fanin_done_marker_generation(done, done_identity)
+        raise
+    if write:
         _inject_crash(crash_inject, "fanin-after-done-link", task)
-    if route is not None:
-        _verify_fanin_route_resolution(route, task)
     if owns_claim:
-        if task.claim_identity is not None:
-            _fanin_claim_manifest_is_current(task)
-        if accepted_shard is not None:
-            _verify_selected_fanin_shard(accepted_shard)
         try:
             task.claim_path.unlink()
         except OSError:
@@ -3733,6 +3980,11 @@ def _recover_pending_fanin_publication(
             raise FanInTaskConflictError(
                 f"accepted fan-in task {candidate.task_id!r} conflicts with retried metadata"
             )
+        _verify_fanin_route_resolution(current.acceptance.route, candidate)
+        if current.acceptance.route != route:
+            raise FanInInventoryValidationError(
+                f"fan-in route witness changed after acceptance for {candidate.task_id!r}"
+            )
         return current.acceptance
     pending: list[
         tuple[Path, tuple[FanInTask, ...], _FanInAcceptance, tuple[_FanInPayloadFile, ...]]
@@ -3756,6 +4008,11 @@ def _recover_pending_fanin_publication(
                 )
             raise FanInTaskConflictError(
                 f"pending fan-in task {candidate.task_id!r} conflicts with retried metadata"
+            )
+        _verify_fanin_route_resolution(publication.route, candidate)
+        if publication.route != route:
+            raise FanInInventoryValidationError(
+                f"fan-in route witness changed after target publication for {candidate.task_id!r}"
             )
         if (
             publication.guard_root != root.name
@@ -3995,16 +4252,24 @@ def _publish_fanin_task(
             _write_fanin_manifest(staging, version_tasks)
             acceptance = _build_fanin_acceptance(
                 staging, target, base, version + 1, version_tasks,
-                len(version_tasks) - 1, task_lease.guard,
+                len(version_tasks) - 1, task_lease.guard, route,
             )
             _write_fanin_publication(staging, acceptance)
             _inject_crash(crash_inject, "fanin-before-target-publication", task)
-            _verify_fanin_route_resolution(route, fanin_task)
             if not _fanin_claim_manifest_is_current(task) or not _fanin_fence_is_current(task_lease.guard):
                 raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
             if _read_fanin_staging_owner_record(staging) != (fanin_task, task.claim_token):
                 raise _FanInTransientError(f"fan-in staging ownership changed before publishing {task.base}")
             _inject_crash(crash_inject, "fanin-after-publication-fence-check", task)
+            _verify_fanin_route_resolution(route, fanin_task)
+            if acceptance.route != route:
+                raise FanInInventoryValidationError(
+                    f"fan-in acceptance route witness changed before publishing {task.base}"
+                )
+            # The proof was captured before writing the publication record;
+            # re-open every payload generation after the final fence check and
+            # immediately before moving the staging tree into public view.
+            _validate_fanin_staging_acceptance(staging, version_tasks, acceptance)
             try:
                 os.rename(staging, target)
             except OSError as exc:
@@ -4037,6 +4302,11 @@ def _publish_fanin_task(
             _fsync_directory(target.parent)
             _inject_crash(crash_inject, "fanin-after-target-publication", task)
             _verify_fanin_route_resolution(route, fanin_task)
+            if acceptance.route != route:
+                raise FanInInventoryValidationError(
+                    f"fan-in acceptance route witness changed before accepting {task.base}"
+                )
+            _validate_fanin_target_acceptance(target, version_tasks, acceptance)
             accepted = _accept_fanin_publication(
                 task_lease.guard.root, acceptance, fence=task_lease.guard,
             )
