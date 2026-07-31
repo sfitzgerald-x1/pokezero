@@ -27,7 +27,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "049207205e5f41888836f139d554946cf8fbff55f0448b81bab6e087d7829448",
+    "src/gen3/generate_instructions.rs": "a6dd983ea477c684c611ce593a6d9c86eaf8fff110f83e9a97ac618df3633d89",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
@@ -85,11 +85,15 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             )
             self.assertEqual(
                 [entry.backend for entry in applied[46:]],
-                ["patch-fallback", "patch-fallback", "git-apply"],
+                ["patch-fallback", "patch-fallback", "git-apply", "git-apply"],
             )
             self.assertEqual(
                 applied[-1].name,
                 "poke-engine-gen3-wrap-substitute-lifecycle.patch",
+            )
+            self.assertEqual(
+                applied[-2].name,
+                "poke-engine-gen3-terminal-toxic-roll-split.patch",
             )
             self.assertEqual(applied[43].name, "poke-engine-gen3-public-noop-branches.patch")
             generated = (source / "src/gen3/generate_instructions.rs").read_text(
