@@ -11,8 +11,10 @@ residuals.
 The retained identities use an absolute maximum HP of 239. Percentage-form
 Showdown conditions use a `/100` denominator and round the hidden HP delta, so
 they cannot recover an exact Gen 3 stage. They may preserve a stage already
-established by public status/switch/turn history, but they must not synthesize
-one for an incomplete prefix.
+established by public status/switch/turn history. A public switch/drag reset
+does prove that the next rounded Toxic residual is stage 1; an incomplete prefix
+without that reset must not synthesize one. The denominator alone is not a
+representation marker because a real Pokemon can have exactly 100 maximum HP.
 
 ## Hypothesis
 
@@ -20,7 +22,7 @@ Gen 3 Toxic damage is `max(1, floor(max_hp / 16)) * stage`. The replay parser
 currently reconstructs the stage with `round(16 * damage / max_hp)`, which is
 wrong whenever the maximum HP is not divisible by 16. Recovering a surviving
 residual as `damage // max(1, max_hp // 16)` should preserve the public stage
-that `engine_world` later seeds as `stage - 1`.
+that `engine_world` later seeds as `stage - 1` at an ordinary action request.
 
 ## Predicted affected evidence
 
@@ -48,17 +50,20 @@ be stages 9, 10, and 11.
 4. A re-entered `tox` Pokemon continues to re-seed from the first surviving
    residual after switch-in, using the floored unit rather than proportional
    rounding.
-5. A capped, percentage-only, or lethal residual must remain fail-closed: when
-   the prior HP is unavailable, the current HP is zero, or an exact-HP observed
-   difference is not a positive multiple of the Gen 3 unit, this change must
-   not invent a stage.
+5. Percentage-form residuals may recover only stage 1 after a public reset;
+   later stage progression comes from public turn chronology, not reverse
+   rounding.
+6. A real exact-100 HP Pokemon uses the exact Gen 3 unit of 6, established by
+   private-request or omniscient-stream provenance rather than its denominator.
+7. A capped or lethal residual remains fail-closed. A non-integral exact-HP
+   difference after re-entry makes the zero-stage provenance unknown.
 
 ## Acceptance evidence
 
 The implementation must add tests that fail before this change for the
 239-HP sequence and controls above, preserve regular-poison and pivot behavior,
-reject percentage-only recovery, and leave the public confidentiality invariant
-validation green.
+bound percentage recovery to a publicly reset stage 1, and leave the public
+confidentiality invariant validation green.
 
 ## Recovery hardening result
 
@@ -66,14 +71,30 @@ The first implementation corrected the floor-before-multiply arithmetic but
 still accepted three invalid provenance paths: it reverse-rounded `/100` public
 HP into a hidden stage, allowed a benched `-curestatus` line to clear the
 active counter, and kept a fainted active's counter until the replacement
-switch. The recovery records explicit public-counter provenance in replay
-snapshots. Legacy snapshots with active `tox` but no provenance, percentage-only
-residuals, and condition-only residuals now fail closed at world construction.
+switch. The recovery records explicit public-counter and HP-representation
+provenance in replay snapshots. Legacy snapshots with active `tox` but no
+provenance, condition-only residuals, and rounded residuals without a public
+reset now fail closed at world construction. A percentage stream may establish
+only the mechanically certain post-reset stage 1; an exact 100-HP stream remains
+exact.
 
-The parser feature remains one residual ahead of the world request boundary;
-materialization emits `stage - 1` exactly once, and the Rust engine applies
-`toxic_count + 1` at its next residual. The real 316-HP capture control pins
-Leftovers before stages 1 and 2, while lifecycle controls cover switch/drag,
-Baton Pass, status overwrite/Rest, Natural Cure, reapplication, faint, and
-checkpoint resume. This result is parser/world provenance recovery only; it
-does not claim an engine-rule correction.
+At an ordinary action request the parser feature is one residual ahead, so
+materialization emits `stage - 1`. At a post-upkeep, pre-next-turn forced-switch
+boundary it is the just-applied multiplier and materialization emits the stage
+unchanged. Showdown caps the current stage at 15; internal parser value 16
+preserves the distinction between "current 14, next 15" and "current 15,
+remains 15", while the observation still clamps both to its public stage-15
+maximum. The Rust engine then applies `min(15, toxic_count + 1)` at its next residual.
+The real 316-HP capture and exact-100 HP scenario controls pin those conventions,
+while lifecycle controls cover switch/drag, Baton Pass, status overwrite/Rest,
+Natural Cure, reapplication, faint, and checkpoint resume. This result is
+parser/world provenance recovery only; it does not claim an engine-rule
+correction.
+
+Caller provenance is explicit. Local Showdown and the controlled FoulPlay bridge
+own full omniscient streams and mark both sides exact. The online client owns its
+room buffer from battle start; its private request identifies exact own HP and
+percentage opponent HP. The read-only sidecar strips requests and may reconnect
+mid-battle, so it cannot prove either fact and deliberately keeps Toxic stage
+unknown until public reset/status chronology establishes it; the sidecar does
+not construct engine worlds from that value.

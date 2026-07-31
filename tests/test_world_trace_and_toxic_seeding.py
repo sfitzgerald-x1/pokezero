@@ -25,6 +25,7 @@ ignored it.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 import unittest
 
 from pokezero.local_showdown import (
@@ -46,7 +47,11 @@ class ToxicStageParserTest(unittest.TestCase):
         public reset therefore proves stage one; the second proves stage two.
         """
 
-        parser = _ReplayParser(f"toxic-percentage-{event}")
+        parser = _ReplayParser(
+            f"toxic-percentage-{event}",
+            complete_prefix=True,
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
+        )
         parser.feed(
             [
                 "|switch|p1a: Tauros|Tauros, L80, M|100/100",
@@ -100,33 +105,6 @@ class ToxicStageParserTest(unittest.TestCase):
                 parser.feed(["|upkeep", "|turn|5"])
                 self.assertEqual(parser.toxic_stage["p1"], 3)
                 self.assertEqual(_materialization_toxic_stage(parser.snapshot(), "p1"), 2)
-
-    def test_percentage_fresh_status_and_reset_controls_do_not_overreach(self) -> None:
-        # A freshly applied Toxic already has stage one before its first tick;
-        # rounded damage must not advance it early.
-        fresh = _ReplayParser("toxic-percentage-fresh")
-        fresh.feed(
-            [
-                "|switch|p1a: Tauros|Tauros, L80, M|100/100",
-                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
-                "|turn|1",
-                "|-status|p1a: Tauros|tox",
-                "|-damage|p1a: Tauros|95/100 tox|[from] psn",
-            ]
-        )
-        self.assertEqual(fresh.toxic_stage["p1"], 1)
-
-        # Cure and an ordinary switch retire the old counter; the incoming
-        # non-Toxic Pokemon remains a known public zero.
-        fresh.feed(
-            [
-                "|-curestatus|p1a: Tauros|tox",
-                "|switch|p1a: Zapdos|Zapdos, L78, M|100/100",
-            ]
-        )
-        self.assertEqual(fresh.toxic_stage["p1"], 0)
-        self.assertTrue(fresh.toxic_stage_known["p1"])
-        self.assertEqual(_materialization_toxic_stage(fresh.snapshot(), "p1"), 0)
 
     def test_a_replacing_status_ends_the_ramp(self) -> None:
         # THE FIX. Rest is the reachable case: `|-status|<mon>|slp|[from] move: Rest` on an
@@ -216,26 +194,75 @@ class ToxicStageParserTest(unittest.TestCase):
 
 
 class ToxicStageWorldTest(unittest.TestCase):
-    """W2, world half — deliberately unchanged, and pinned as such."""
+    """W2, world half — translate public chronology at the exact boundary."""
 
-    def test_the_boundary_offset_is_untouched(self) -> None:
-        # `_materialization_toxic_stage` is a pure max(0, stage - 1): the parser's feature
-        # runs one residual ahead of the simulator's request-boundary convention. That was
-        # NOT the bug -- the world faithfully reported a stale input -- so this pin exists to
-        # stop a future reader "fixing" the offset while chasing the same symptom.
-        class _R:
-            toxic_stage = {"p1": 0, "p2": 6}
-            toxic_stage_known = {"p1": True, "p2": True}
+    def test_turn_and_post_upkeep_boundaries_use_the_simulators_current_stage(self) -> None:
+        parser = _ReplayParser(
+            "toxic-boundary",
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
+        parser.feed(
+            [
+                "|switch|p1a: Diglett|Diglett, L60, M|100/100",
+                "|switch|p2a: Magikarp|Magikarp, L100, M|181/181",
+                "|turn|1",
+                "|-status|p1a: Diglett|tox",
+                "|-damage|p1a: Diglett|94/100 tox|[from] psn",
+                "|upkeep",
+            ]
+        )
 
-        self.assertEqual(_materialization_toxic_stage(_R(), "p2"), 5)
-        self.assertEqual(_materialization_toxic_stage(_R(), "p1"), 0)
+        post_upkeep = parser.snapshot()
+        self.assertTrue(post_upkeep.post_upkeep_window)
+        self.assertEqual(post_upkeep.toxic_stage["p1"], 1)
+        self.assertEqual(_materialization_toxic_stage(post_upkeep, "p1"), 1)
+
+        parser.feed(["|turn|2"])
+        ordinary = parser.snapshot()
+        self.assertFalse(ordinary.post_upkeep_window)
+        self.assertEqual(ordinary.toxic_stage["p1"], 2)
+        self.assertEqual(_materialization_toxic_stage(ordinary, "p1"), 1)
+        self.assertEqual(_materialization_toxic_stage(ordinary, "p2"), 0)
+
+    def test_stage_fifteen_saturation_survives_both_boundaries(self) -> None:
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 16},
+            toxic_stage_known={"p1": True},
+            public_active={"p1": SimpleNamespace(condition="1/100 tox")},
+            post_upkeep_window=False,
+        )
+
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 15)
+        replay.post_upkeep_window = True
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 15)
 
     def test_unknown_counter_never_materializes_as_zero(self) -> None:
-        class _R:
-            toxic_stage = {"p1": 0, "p2": 0}
-            toxic_stage_known = {"p1": True, "p2": False}
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 0, "p2": 0},
+            toxic_stage_known={"p1": True, "p2": False},
+            public_active={
+                "p1": SimpleNamespace(condition="100/100"),
+                "p2": SimpleNamespace(condition="85/100 tox"),
+            },
+            post_upkeep_window=False,
+        )
 
-        self.assertIsNone(_materialization_toxic_stage(_R(), "p2"))
+        self.assertIsNone(_materialization_toxic_stage(replay, "p2"))
+
+    def test_missing_provenance_blocks_only_an_active_toxic_side(self) -> None:
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 0, "p2": 0},
+            toxic_stage_known={},
+            public_active={
+                "p1": SimpleNamespace(condition="100/100"),
+                "p2": SimpleNamespace(condition="85/100 tox"),
+            },
+            post_upkeep_window=False,
+        )
+
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 0)
+        self.assertIsNone(_materialization_toxic_stage(replay, "p2"))
 
 
 class TracedAbilityParserTest(unittest.TestCase):

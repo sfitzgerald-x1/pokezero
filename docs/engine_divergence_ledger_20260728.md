@@ -6514,12 +6514,18 @@ conditions were reverse-engineered into a hidden stage, a benched cure line
 could clear the active counter, and a fainted active retained its counter until
 a replacement arrived.
 
-The replay now records whether each counter is known from public protocol. A
-legacy snapshot with active `tox` but no provenance, a percentage-only
-residual, or a condition-only residual cannot seed a world; materialization
-fails closed rather than asserting `toxic_count = 0`. Exact surviving residuals
-remain sufficient public evidence, and the request-boundary handoff subtracts
-one stage exactly once. Controls cover the 316-HP real capture with
-Leftovers-before-Toxic ordering, repeated ticks, switch/drag, Baton Pass,
-Rest/status replacement, Natural Cure, failed/reapplied Toxic, faint, and
-resume. This is a parser/world construction correction, not an engine defect.
+The replay now records whether each counter is known from public protocol and
+whether each side's HP stream is exact, percentage-form, or unknown. A legacy
+snapshot with active `tox` but no provenance, a rounded residual without a
+public reset, or a condition-only residual cannot seed a world; materialization
+fails closed rather than asserting `toxic_count = 0`. A switch/drag reset plus
+the first percentage-form residual proves stage 1, while an exact 100-HP Pokemon
+still uses its real six-HP Toxic unit. At ordinary request boundaries the
+handoff subtracts one; at post-upkeep/pre-turn forced-switch boundaries the
+just-applied stage passes through unchanged. Internal parser value 16 preserves
+an already-saturated Showdown stage 15 across the ordinary-boundary subtraction,
+while observation encoding remains capped at 15. Controls cover the exact-100
+scenario, the 316-HP real capture with Leftovers-before-Toxic ordering,
+repeated ticks, switch/drag, Baton Pass, Rest/status replacement, Natural Cure,
+failed/reapplied Toxic, faint, and resume. This is a parser/world construction
+correction, not an engine defect.

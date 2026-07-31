@@ -1828,16 +1828,74 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|-damage|p1a: Tauros|95/100 tox|[from] psn",
                 "|upkeep",
                 "|turn|2",
-            ]
+            ],
+            complete_prefix=True,
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
         )
         self.assertEqual(state.toxic_stage["p1"], 2)
         self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_exact_100_hp_uses_request_provenance_not_denominator(self) -> None:
+        request = "|request|" + json.dumps(
+            {"side": {"id": "p1", "name": "Exact", "pokemon": []}},
+            separators=(",", ":"),
+        )
+        state = parse_showdown_replay(
+            [
+                request,
+                "|switch|p1a: Diglett|Diglett, L60, M|100/100 tox",
+                "|switch|p2a: Magikarp|Magikarp, L100, M|180/180",
+                "|turn|1",
+                "|-damage|p1a: Diglett|94/100 tox|[from] psn",
+            ],
+            complete_prefix=True,
+        )
+
+        # A real exact-100 HP mon has a floor(100/16) == 6 Toxic unit.
+        self.assertEqual(state.hp_visibility, {"p1": "exact", "p2": "percentage"})
+        self.assertEqual(state.toxic_stage["p1"], 1)
+        self.assertTrue(state.toxic_stage_known["p1"])
+        resumed = _ReplayParser.from_snapshot(state).snapshot()
+        self.assertEqual(resumed.hp_visibility, state.hp_visibility)
+
+    def test_nonintegral_exact_damage_after_reentry_fails_closed(self) -> None:
+        request = "|request|" + json.dumps(
+            {"side": {"id": "p1", "name": "Exact", "pokemon": []}},
+            separators=(",", ":"),
+        )
+        state = parse_showdown_replay(
+            [
+                request,
+                "|switch|p1a: Diglett|Diglett, L60, M|100/100 tox",
+                "|switch|p2a: Magikarp|Magikarp, L100, M|180/180",
+                "|turn|1",
+                "|-damage|p1a: Diglett|95/100 tox|[from] psn",
+            ],
+            complete_prefix=True,
+        )
+
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertFalse(state.toxic_stage_known["p1"])
+
+    def test_parser_prefix_completeness_is_explicit_and_public_resets_recover_it(self) -> None:
+        attached = _ReplayParser("attached-midstream")
+        full = _ReplayParser("full-from-reset", complete_prefix=True)
+
+        self.assertEqual(attached.toxic_stage_known, {"p1": False, "p2": False})
+        self.assertEqual(full.toxic_stage_known, {"p1": True, "p2": True})
+
+        attached.feed(["|switch|p1a: Tauros|Tauros, L80, M|100/100 tox"])
+        self.assertTrue(attached.toxic_stage_known["p1"])
+        self.assertFalse(attached.toxic_stage_known["p2"])
 
     def test_toxic_percentage_or_missing_hp_never_invents_a_legacy_counter(self) -> None:
         # A legacy checkpoint can expose a public tox condition without the
         # counter provenance added by this recovery. Neither rounded /100 HP
         # nor a condition-only residual can manufacture private stage data.
-        parser = _ReplayParser("toxic-legacy-percentage")
+        parser = _ReplayParser(
+            "toxic-legacy-percentage",
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
+        )
         parser.feed(
             [
                 "|switch|p1a: Tauros|Tauros, L80, M|100/100 tox",

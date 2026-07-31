@@ -930,6 +930,10 @@ class ShowdownReplayState:
     volatiles: Mapping[str, tuple[str, ...]]
     direct_materialization_blockers: Mapping[str, tuple[str, ...]]
     future_sight: Mapping[str, int]
+    # Public Toxic chronology for the active slot. Values 0..15 are the
+    # model-facing multiplier; 16 is an internal saturation sentinel meaning
+    # Showdown's current stage is already capped at 15 at an ordinary request.
+    # Observation encoding still clamps this to the public maximum of 15.
     toxic_stage: Mapping[str, int]
     # Confusion turns-so-far per slot (spec v3 change 4, docs/observation_v3_spec.md): the
     # public elapsed-duration counter of the active mon's ``confusion`` volatile. Advances by 1
@@ -1123,6 +1127,12 @@ class ShowdownReplayState:
     # its legacy zero encoding, but direct world construction must reject the
     # latter rather than silently seed a false ``toxic_count = 0``.
     toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
+    # Provenance for HP numerators/denominators in this protocol stream. ``exact`` means the
+    # denominator is the Pokemon's real max HP; ``percentage`` means Showdown's rounded /100
+    # player view; absent/``unknown`` means residual magnitude must not distinguish the two.
+    # Persisting this prevents a resumed incremental parser from reinterpreting an exact
+    # 100-HP Pokemon as percentage-form (or vice versa).
+    hp_visibility: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1265,7 +1275,13 @@ class _ReplayParser:
     mutable accumulators, so a snapshot is unaffected by later ``feed()`` calls.
     """
 
-    def __init__(self, battle_id: str = "replay") -> None:
+    def __init__(
+        self,
+        battle_id: str = "replay",
+        *,
+        complete_prefix: bool = False,
+        hp_visibility: Mapping[str, str] | None = None,
+    ) -> None:
         self.battle_id = battle_id
         self.players: dict[str, str] = {}
         self.requests: dict[str, Mapping[str, Any]] = {}
@@ -1279,7 +1295,19 @@ class _ReplayParser:
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
-        self.toxic_stage_known: dict[str, bool] = {"p1": True, "p2": True}
+        # A fresh parser is safe for attach-midstream use: zero is not public proof of an
+        # active Toxic counter unless the caller attests that the prefix starts at reset.
+        self.toxic_stage_known: dict[str, bool] = {
+            "p1": bool(complete_prefix),
+            "p2": bool(complete_prefix),
+        }
+        self.hp_visibility: dict[str, str] = {"p1": "unknown", "p2": "unknown"}
+        for slot, visibility in (hp_visibility or {}).items():
+            if slot not in self.hp_visibility:
+                raise ValueError(f"unknown Showdown slot in hp_visibility: {slot!r}")
+            if visibility not in {"exact", "percentage", "unknown"}:
+                raise ValueError(f"invalid HP visibility for {slot}: {visibility!r}")
+            self.hp_visibility[slot] = visibility
         # Confusion turns-so-far per slot (spec v3 change 4). See ShowdownReplayState.confusion_elapsed.
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
@@ -1335,7 +1363,10 @@ class _ReplayParser:
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
         """Hydrate parser state directly, without replaying its protocol prefix."""
 
-        parser = cls(snapshot.battle_id)
+        parser = cls(
+            snapshot.battle_id,
+            hp_visibility=getattr(snapshot, "hp_visibility", {}),
+        )
         parser.players = dict(snapshot.players)
         parser.requests = dict(snapshot.requests)
         parser.public_active = dict(snapshot.public_active)
@@ -1615,10 +1646,13 @@ class _ReplayParser:
             # pending at a fresh turn belongs to a failed or truncated protocol sequence.
             self.pending_baton_pass.clear()
             self._settle_pending_rest_sleep_attempts()
-            # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
+            # Each turn a badly-poisoned mon stays in, its toxic damage escalates
+            # through 15/16. Preserve 16 as an internal sentinel after the
+            # simulator has already reached its stage-15 cap: raw 15 otherwise
+            # ambiguously means either "current 14, next 15" or "current 15".
             for slot, stage in self.toxic_stage.items():
                 if self.toxic_stage_known[slot] and stage:
-                    self.toxic_stage[slot] = min(15, stage + 1)
+                    self.toxic_stage[slot] = min(16, stage + 1)
             # gen3 Truant: `onResidual` flips the bit every turn UNCONDITIONALLY. It is
             # deliberately NOT gated on the mon having moved, having a volatile, or anything
             # else -- that gating is exactly the proxy this replaces.
@@ -1771,15 +1805,12 @@ class _ReplayParser:
         per-``|turn|`` escalation (gated on ``if stage``) can never lift it off 0 — the encoder
         would emit the contradictory ``status:tox`` + ``toxic_stage == 0`` for the whole stint.
 
-        The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
-        ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
-        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …). Recover the stage using
-        the same floored Gen 3 damage unit, not proportional rounding: that distinction matters
-        whenever max HP is not divisible by 16. Re-deriving here fixes the pivot, the forced
-        re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox`` (replay
-        import / mid-battle observe start) uniformly, for both seats. Regular (non-badly) poison
-        also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the residual's
-        own status token, which is ``tox`` only for badly-poisoned mons.
+        Exact-HP streams can derive the counter from Gen 3's floored damage unit. Percentage
+        streams cannot reverse-round an arbitrary stage, but a public switch/drag reset proves
+        that the first subsequent Toxic residual is stage one. Unknown stream provenance fails
+        closed instead of treating a /100 denominator as either representation. Regular
+        (non-badly) poison also emits ``[from] psn`` but is gated out by the residual's ``tox``
+        status token.
         """
 
         if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
@@ -1804,33 +1835,47 @@ class _ReplayParser:
         damage = prev_hp - cur_hp
         if damage <= 0:
             return
-        # Showdown's percentage public form always uses a /100 denominator. Its damage delta is
-        # rounded from hidden absolute HP, so it cannot prove an arbitrary Toxic stage. Every other
-        # denominator is exact HP and must be an integral Gen 3 Toxic unit.
-        if max_hp == 100:
-            # `/100` is the player-visible percentage form, not a Gen 3 HP
-            # denominator. Do not round it back into a hidden toxic stage.
-            #
-            # There is one public fact that survives that ambiguity: a Toxic
-            # mon with a publicly established reset counter (switch/drag,
-            # cure, or status replacement) starts its next residual at stage
-            # one. Gen 3 resets ``statusState.stage`` to zero on entry, then
-            # increments before applying the first Toxic tick. Promoting only
-            # this exact 0 -> 1 transition repairs rounded re-entry without
-            # inventing a stage for a legacy/incomplete prefix.
+        # Percentage-form protocol always uses /100. Any other denominator is therefore exact;
+        # only /100 needs stream/request provenance to distinguish representation from a real
+        # exact-100 HP Pokemon.
+        visibility = "exact" if max_hp != 100 else self._hp_visibility_for_slot(slot)
+        if visibility == "percentage":
             if self.toxic_stage_known[slot] and self.toxic_stage[slot] == 0:
                 self.toxic_stage[slot] = 1
+            return
+        if visibility != "exact":
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
             return
         unit = max(1, max_hp // 16)
         # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
         # hidden stage from capped or otherwise non-exact public damage.
         if damage % unit:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
             return
         stage = damage // unit
         if not 1 <= stage <= 15:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
             return
         self.toxic_stage[slot] = stage
         self.toxic_stage_known[slot] = True
+
+    def _hp_visibility_for_slot(self, slot: str) -> str:
+        """Resolve HP representation from explicit stream provenance or private requests."""
+
+        explicit = self.hp_visibility.get(slot, "unknown")
+        if explicit != "unknown":
+            return explicit
+        request_slots = {side for side in self.requests if side in {"p1", "p2"}}
+        if len(request_slots) == 2 or slot in request_slots:
+            return "exact"
+        if len(request_slots) == 1:
+            # A single private request identifies a player-perspective stream: own HP is exact,
+            # while the opposing side's public HP is rounded to /100.
+            return "percentage"
+        return "unknown"
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -2341,6 +2386,9 @@ class _ReplayParser:
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
             toxic_stage_known=dict(self.toxic_stage_known),
+            hp_visibility={
+                slot: self._hp_visibility_for_slot(slot) for slot in ("p1", "p2")
+            },
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
             wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
@@ -2381,9 +2429,24 @@ class _ReplayParser:
         )
 
 
-def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") -> ShowdownReplayState:
-    """Parse compact Showdown protocol lines into transport-level state."""
-    parser = _ReplayParser(battle_id=battle_id)
+def parse_showdown_replay(
+    lines: Sequence[str],
+    *,
+    battle_id: str = "replay",
+    complete_prefix: bool = False,
+    hp_visibility: Mapping[str, str] | None = None,
+) -> ShowdownReplayState:
+    """Parse compact Showdown protocol lines into transport-level state.
+
+    ``complete_prefix`` must be asserted only when the caller owns a stream that starts at battle
+    reset. Attach-midstream callers should keep the fail-closed default. ``hp_visibility`` records
+    whether each side's HP condition is exact or Showdown's rounded player-view percentage.
+    """
+    parser = _ReplayParser(
+        battle_id=battle_id,
+        complete_prefix=complete_prefix,
+        hp_visibility=hp_visibility,
+    )
     parser.feed(lines)
     return parser.snapshot()
 

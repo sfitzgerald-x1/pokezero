@@ -404,7 +404,11 @@ class LocalShowdownEnv:
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         # Shared, immutable candidate-set source (built once per process, cached). None when the
         # belief set source is disabled, in which case only protocol-revealed facts populate.
         self._belief_set_source = (
@@ -509,7 +513,11 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal = None
         self._last_step_had_error = False
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         self._belief_engine = PublicBattleBeliefEngine(
             format_id=self._observation_format_id, set_source=self._belief_set_source
         )
@@ -740,7 +748,11 @@ class LocalShowdownEnv:
         if set(direct_requests) != set(PLAYER_IDS):
             raise LocalShowdownError("Scenario materialization did not produce both player requests.")
         synthetic_lines = scenario_public_protocol_lines(state, direct_requests)
-        synthetic_parser = _ReplayParser(self._battle_id)
+        synthetic_parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         synthetic_parser.feed(synthetic_lines)
         _seed_scenario_parser_state(synthetic_parser, state)
         synthetic_replay = synthetic_parser.snapshot()
@@ -1998,11 +2010,14 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
             raise LocalShowdownError(
                 f"Scenario materialization returned malformed {player} active status."
             )
-        parser.toxic_stage[player] = (
-            int(status.get("toxicStage") or 0)
-            if normalize_id(str(status.get("id") or "")) == "tox"
-            else 0
-        )
+        toxic = normalize_id(str(status.get("id") or "")) == "tox"
+        engine_stage = int(status.get("toxicStage") or 0) if toxic else 0
+        # Scenario materialization returns an ordinary action-request boundary. The parser's
+        # observation convention at that boundary is one ahead of Showdown's current
+        # statusState.stage. Internal value 16 preserves "current stage is already capped at
+        # 15"; the model-facing feature remains clamped to 15.
+        parser.toxic_stage[player] = min(16, engine_stage + 1) if toxic else 0
+        parser.toxic_stage_known[player] = True
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:
@@ -2116,8 +2131,9 @@ def _public_materialization_payload(
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
             "substituteDepletion": replay.substitute_depletion.get(player),
             "materializationBlockers": sorted(blockers),
-            # The parser's observation feature advances the toxic value at a new turn. The
-            # simulator state at the request boundary is one residual behind that feature.
+            # At an ordinary request the observation feature names the next residual; at the
+            # post-upkeep forced-switch boundary it names the residual just paid. The helper
+            # converts both public boundaries into Showdown's current statusState.stage.
             "toxicStage": toxic_stage,
             # Consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3
             # shares one `stall` volatile). The parser already derives this from
@@ -2227,16 +2243,32 @@ def _public_materialization_payload(
 
 
 def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
-    """Return the public toxic counter in the simulator's request-boundary convention.
+    """Return the public Toxic counter in the simulator's current-stage convention.
 
     ``None`` is intentional: a snapshot that lacks the public provenance for
     an active Toxic counter is not allowed to silently materialize as stage 0.
+    Missing provenance on a clean active side is a harmless zero, which keeps
+    legacy snapshots from blocking worlds that have no Toxic counter.
     """
 
-    if not bool(replay.toxic_stage_known.get(player, False)):
-        return None
+    active = replay.public_active.get(player)
+    active_is_toxic = bool(
+        active is not None
+        and "tox" in str(active.condition or "").split()
+    )
+    known = replay.toxic_stage_known.get(player)
+    if not bool(known):
+        return None if active_is_toxic else 0
     tracked_stage = int(replay.toxic_stage.get(player, 0))
-    return max(0, tracked_stage - 1)
+    if replay.post_upkeep_window:
+        # Residuals have run but the next |turn| line has not. The raw public stage is therefore
+        # the just-applied multiplier. Clamp the internal saturation sentinel back to
+        # Showdown's valid stage-15 maximum.
+        return min(15, max(0, tracked_stage))
+    # At an ordinary action request, |turn| has advanced the public feature to the multiplier
+    # that will be charged at the next residual; the simulator still holds the prior count.
+    # Sentinel 16 distinguishes an already-saturated current stage from raw 15's current 14.
+    return min(15, max(0, tracked_stage - 1))
 
 
 def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
