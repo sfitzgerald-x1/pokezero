@@ -535,83 +535,53 @@ def opponent_request_order(context, party_species) -> list[str] | None:
     Showdown keeps a player's active at request slot 0 and swaps the incoming
     mon into slot 0 on every switch-in (`sim/battle-actions.ts` `switchIn`, an
     unconditional slot swap that also fires for forced replacements and for
-    `dragIn`). So the request order is the party order with one slot-0 swap
-    accumulated per switch-in from battle start, and that order is the label
-    space of the model's opponent action head.
+    `dragIn`). The resulting order is the label space of the model's opponent
+    action head, so the crate needs it to gather opponent priors onto the right
+    arms -- and the crate cannot derive it, having no pre-root protocol lines.
 
-    Detection is the hard part, and it is why this fails closed aggressively.
-    The obvious approach -- diff the opponent's public active across OUR
-    decision rounds -- UNDER-COUNTS: the opponent also switches at rounds where
-    we were not requested, most commonly a forced replacement after a faint,
-    and those rounds carry no observation on our side. Measured against live
-    Showdown over 12 gen3 randbat games, that approach was wrong on 170 of 811
-    decisions (21%, 6 of 12 games) and never once detected its own error --
-    once a swap is missed the permutation stays broken for the rest of the
-    battle.
+    This REUSES `determinization._public_opponent_team_index_walk`, which
+    already maintains exactly this permutation as `current_order` while
+    decoding recorded opponent switch actions. Reuse is the point: five
+    hand-rolled reconstructions were each wrong, and the fifth -- diffing the
+    opponent's public active across OUR decision rounds -- was wrong on 170 of
+    811 decisions across 12 live games because the opponent also acts at rounds
+    we are not requested at (a forced replacement after a faint), which that
+    diff cannot see. The walk consumes the opponent's trajectory steps directly
+    and reconciles them against the next observed active, so it sees those
+    rounds; it is also the code that already handles Roar/Whirlwind drags and
+    same-chunk faint replacements.
 
-    A wrong order silently permutes opponent switch priors, which is strictly
-    worse than the crate's documented one-swap fallback, so this returns None
-    whenever the history cannot be reconstructed with confidence -- including
-    the case above, which is detectable: the opponent has trajectory steps at
-    rounds absent from our observations.
-
-    NOTE: returning None is currently the COMMON case in real battles, not an
-    edge case. Making this correct means reconciling opponent trajectory steps
-    against public switch/drag lines the way
-    `determinization._public_opponent_team_index_constraints` already does; it
-    maintains exactly this permutation internally as `current_order`. Reuse
-    that rather than writing a third implementation.
+    Fails closed rather than guessing: the walk returns None when the public
+    data is inconsistent, and sets `active_position` to None when it loses
+    track of the permutation. Either means no order. A wrong order silently
+    permutes opponent switch priors, which is strictly worse than the crate's
+    documented one-swap fallback.
     """
-    from .determinization import (
-        _own_observations_by_decision_round,
-        _public_opponent_active_species,
-    )
+    from .determinization import _public_opponent_team_index_walk
 
-    try:
-        observations = _own_observations_by_decision_round(context)
-    except Exception:  # noqa: BLE001 - never break search over telemetry
+    party = [normalize_id(str(name)) for name in party_species]
+    if not party:
         return None
-    if not observations:
+    if len(set(party)) != len(party):
+        # Slot swaps are resolved by species name downstream, so a duplicated
+        # species makes the mapping ambiguous.
         return None
-
-    # FAIL CLOSED on the dominant real failure: any opponent action at a round
-    # we did not observe may have moved its party invisibly.
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
-        steps = getattr(getattr(context, "trajectory", None), "steps", None) or ()
-        unobserved = sorted(
-            step.turn_index
-            for step in steps
-            if step.player_id == opponent_slot
-            and step.turn_index < getattr(context, "decision_round_index", 1 << 30)
-            and step.turn_index not in observations
+        walk = _public_opponent_team_index_walk(
+            context, opponent_slot=opponent_slot, team_size=len(party)
         )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - never break search over telemetry
         return None
-    if unobserved:
+    if walk is None:
         return None
-
-    order = [normalize_id(str(name)) for name in party_species]
-    if len(set(order)) != len(order):
-        # Duplicate species: slot-0 swaps are ambiguous by species name.
+    _constraints, current_order, active_position = walk
+    if active_position is None:
+        # The walk stopped trusting its own permutation.
         return None
-    seen_active: Optional[str] = None
-    for turn in sorted(observations):
-        active = _public_opponent_active_species(observations[turn])
-        if active is None:
-            continue
-        active = normalize_id(str(active))
-        if active == seen_active:
-            continue
-        seen_active = active
-        if active not in order:
-            return None
-        index = order.index(active)
-        if index:
-            order[0], order[index] = order[index], order[0]
-    if seen_active is None:
+    if sorted(current_order) != list(range(len(party))):
         return None
-    return order
+    return [party[index] for index in current_order]
 
 
 class EngineMctsPolicy:
