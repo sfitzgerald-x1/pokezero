@@ -6,7 +6,7 @@
     "boundaries_full_round": 810125,
     "boundaries_measured": 791757,
     "coverage_measured_fraction": 0.9773,
-    "current_classifier_source_commit": "4aa8e92d2076f4bc6711d8ccee58bdb691719df3",
+    "current_classifier_source_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
     "current_classifier_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
     "fresh_sweep2_measurements_inspected": 0
   },
