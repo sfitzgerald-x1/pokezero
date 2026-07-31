@@ -2,11 +2,10 @@
 
 ## Scope
 
-The C26 materialization attestation established that all 21 candidate worlds for
-the seven retained boundaries carry the same stored stats, active boosts, HP,
-ability, item, status, type, weather, side conditions, and active volatiles at
-the Python-to-Rust construction seam. This investigation begins downstream of
-that seam.
+The earlier C26 materialization claim is historical context only in this
+checkout: the seven replay inputs needed to inspect it independently are not
+committed here. This investigation makes no clearance claim and can only begin
+downstream of that seam once those inputs are restored with hashes.
 
 The targets are `2800700/20`, `3301036/26`, `3401017/55`, `3500021/19`,
 `3300207/69`, `3001000/57`, and `3300122/21`.
@@ -38,4 +37,5 @@ following from the same pre-action state:
 
 Absent those conditions, no production arithmetic patch is justified. The
 result should instead preserve a reusable replay attestation with its explicit
-comparison limits.
+comparison limits. Until the seven inputs are available, every target remains
+an intentional comparison limit rather than evidence for clearance.

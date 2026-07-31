@@ -37,16 +37,19 @@ hashed evidence before they can be relied upon as non-modifying context.
 
 **Not independently attested at this commit.** The original seven replay input
 rows are not committed in this checkout, and the prior JSON lacked their
-hashes, command, source commit, and native-build fingerprint. The table below
+hashes, command, source commit, native-build fingerprint, and Showdown
+source-content identity. The table below
 is retained only as an unverified historical transcription; it is not evidence
-for a production change or for a conclusion about the current engine.
+for a production change or for a conclusion about the current engine. No
+clearance is claimed.
 
 The executable attestation now refuses stale native consumers and dirty or
 unprovenanced source, hashes every supplied input report, records its command,
-source commit, producer hash, and engine fingerprint, and emits a
-machine-readable v2 result. A reviewer may rely on the five-direct-row scope
-only after that v2 artifact is regenerated from the missing retained reports
-and committed alongside this document. The two confusion rows remain
+source commit, producer hash, engine fingerprint, and hashes the Showdown
+files consumed by the oracle. It emits a machine-readable v3 result. A reviewer
+may rely on the five-direct-row scope only after that v3 artifact is regenerated
+from the missing retained reports and committed alongside this document. The two
+confusion rows remain
 comparison limits in all cases.
 
 ## Historical Transcription (Unverified)
@@ -61,7 +64,12 @@ comparison limits in all cases.
 | `3001000/57` | n/a | n/a | n/a | n/a | confusion self-hit | comparison limit |
 | `3300122/21` | n/a | n/a | n/a | n/a | confusion self-hit | comparison limit |
 
-If regenerated v2 evidence shows all five direct rows have a Showdown legal
+The `3300207/69` representative entry is internally inconsistent even as a
+historical transcription: `floor(156 * 0.925)` is `144`, not the table's `143`.
+It is therefore explicitly unverified and cannot support a branch-composition
+claim.
+
+If regenerated v3 evidence shows all five direct rows have a Showdown legal
 roll and matching current native maximum, that evidence can support the narrow
 statement that these five rows do not establish a shared native
 max-arithmetic defect. It cannot derive worlds, establish branch composition
@@ -74,7 +82,7 @@ No production arithmetic or event-component-mapping claim is supported by the
 currently committed material. In particular, this document does not establish
 that the native chance tree's branch composition is fixed, that a world was
 derived correctly, or that any historical composition mechanism remains true.
-Those questions require the missing hashed reports and a fresh v2 replay.
+Those questions require the missing hashed reports and a fresh v3 replay.
 
 This lane deliberately does not alter the terminal/KO or strict-matcher lanes.
 The reusable script records this distinction for later retained rows and fails

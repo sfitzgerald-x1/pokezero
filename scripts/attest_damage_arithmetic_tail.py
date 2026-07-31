@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import subprocess
 import sys
@@ -34,9 +35,6 @@ from typing import Any, Iterable, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
-import poke_engine  # noqa: E402
-import pokezero_search  # noqa: E402
 
 from engine_build_fingerprint import assert_fresh, compute_fingerprint  # noqa: E402
 from pokezero.dex import (  # noqa: E402
@@ -71,6 +69,31 @@ def _has_from(parts: Sequence[str]) -> bool:
     return any(part.strip().startswith("[from]") for part in parts[4:])
 
 
+def _native_modules() -> tuple[Any | None, Any | None, str | None]:
+    """Load optional native consumers only when a native comparison is needed."""
+
+    try:
+        return importlib.import_module("poke_engine"), importlib.import_module("pokezero_search"), None
+    except BaseException as error:  # pyo3 panics and missing wheels must fail closed
+        return None, None, f"native_modules_unavailable:{type(error).__name__}"
+
+
+def _validated_slot_sides(row: Mapping[str, Any]) -> tuple[dict[str, str] | None, str | None]:
+    raw = row.get("slot_sides")
+    if not isinstance(raw, Mapping):
+        return None, "missing_slot_sides"
+    slot_sides = {slot: raw.get(slot) for slot in ("p1", "p2")}
+    if set(slot_sides.values()) != {"side_one", "side_two"}:
+        return None, "invalid_slot_sides"
+    return {slot: str(side) for slot, side in slot_sides.items()}, None
+
+
+def _engine_label(slot_sides: Mapping[str, str], slot: str) -> str:
+    """Return the event-mapper p1/p2 label for a recorded player slot."""
+
+    return "p1" if slot_sides[slot] == "side_one" else "p2"
+
+
 @dataclass(frozen=True)
 class DirectHit:
     actor: str
@@ -79,6 +102,7 @@ class DirectHit:
     damage: int
     critical: bool
     secondary_status: str | None
+    ko_clamped: bool = False
 
 
 def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
@@ -124,7 +148,7 @@ def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
         if tag == "-crit" and len(parts) > 2:
             critical_targets.add(_slot(parts[2]))
             continue
-        if tag == "-status" and len(parts) > 3 and first_direct is not None:
+        if tag == "-status" and len(parts) > 3 and not _has_from(parts) and first_direct is not None:
             if _slot(parts[2]) == first_direct.target:
                 return DirectHit(
                     actor=first_direct.actor,
@@ -133,6 +157,7 @@ def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
                     damage=first_direct.damage,
                     critical=first_direct.critical,
                     secondary_status=normalize_id(parts[3]),
+                    ko_clamped=first_direct.ko_clamped,
                 )
             continue
         if tag != "-damage" or len(parts) < 4 or _has_from(parts):
@@ -154,6 +179,9 @@ def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
             damage=before - new_hp,
             critical=target in critical_targets,
             secondary_status=None,
+            # Showdown reports only the target's remaining HP, so a fainted
+            # target hides the pre-clamp arithmetic damage.
+            ko_clamped=new_hp == 0,
         )
     return first_direct
 
@@ -177,7 +205,7 @@ def _native_member(member: Any) -> dict[str, object]:
 
 
 def _side_snapshot(state: Any, side: str) -> dict[str, object]:
-    native_side = getattr(state, "side_one" if side == "p1" else "side_two")
+    native_side = getattr(state, side)
     member = native_side.pokemon[int(native_side.active_index)]
     conditions = native_side.side_conditions
     return {
@@ -216,14 +244,19 @@ def _basic_oracle(
     state: Any,
     direct: DirectHit,
     dex: ShowdownDex,
+    slot_sides: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, object], tuple[int, ...] | None, str | None]:
     """Build the exact simple-case Showdown oracle or return its limit reason."""
 
     info = dex.move_info(direct.move)
     if info is None or info.gen3_category not in {"Physical", "Special"}:
         return {}, None, "move_not_a_standard_damaging_move"
-    attacker_side = _side_snapshot(state, direct.actor)
-    defender_side = _side_snapshot(state, direct.target)
+    if slot_sides is None:
+        slot_sides = {"p1": "side_one", "p2": "side_two"}
+    if set(slot_sides.values()) != {"side_one", "side_two"}:
+        return {}, None, "invalid_slot_sides"
+    attacker_side = _side_snapshot(state, slot_sides[direct.actor])
+    defender_side = _side_snapshot(state, slot_sides[direct.target])
     attacker = attacker_side["active"]
     defender = defender_side["active"]
     assert isinstance(attacker, Mapping) and isinstance(defender, Mapping)
@@ -246,41 +279,56 @@ def _basic_oracle(
         "attacker_volatiles": list(attacker_side["volatiles"]),
         "defender_volatiles": list(defender_side["volatiles"]),
     }
-    relevant_abilities = {
-        "guts", "hustle", "hugepower", "purepower", "marvelscale", "thickfat",
-        "blaze", "overgrow", "torrent", "swarm", "airlock", "cloudnine",
-    }
-    type_boost_items = {
-        "blackbelt", "blackglasses", "charcoal", "dragonfang", "hardstone", "magnet",
-        "metalcoat", "miracleseed", "mysticwater", "nevermeltice", "pinkbow",
-        "poisonbarb", "sharpbeak", "silkscarf", "silverpowder", "softsand", "spelltag",
-        "twistedspoon",
-    }
     reasons: list[str] = []
     attacker_ability = str(attacker["ability"])
     defender_ability = str(defender["ability"])
     attacker_item = str(attacker["item"])
     defender_item = str(defender["item"])
-    if attacker_ability in relevant_abilities:
+    # This is deliberately a whitelist. An ability or item that appears benign
+    # can still alter a Gen 3 damage event through a condition this small oracle
+    # does not transcribe (for example DeepSeaTooth, Metal Powder, or an active
+    # weather/ability interaction).
+    if attacker_ability not in {"", "none"}:
         reasons.append(f"attacker_ability:{attacker_ability}")
-    if defender_ability in {"marvelscale", "thickfat", "airlock", "cloudnine"}:
+    if defender_ability not in {"", "none"}:
         reasons.append(f"defender_ability:{defender_ability}")
-    if attacker_item in type_boost_items:
+    if attacker_item not in {"", "none", "leftovers", "choiceband"}:
         reasons.append(f"attacker_item:{attacker_item}")
-    if defender_item == "souldew":
-        reasons.append("defender_item:souldew")
-    if attacker_item in {"thickclub", "lightball", "souldew"}:
-        reasons.append(f"attacker_item:{attacker_item}")
-    if category == "Physical" and str(attacker["status"]) == "burn":
-        reasons.append("attacker_burn")
-    if int(defender_side["screens"]["reflect" if category == "Physical" else "lightscreen"]):
+    if defender_item not in {"", "none", "leftovers"}:
+        reasons.append(f"defender_item:{defender_item}")
+    if str(attacker["status"]) not in {"", "none"}:
+        reasons.append(f"attacker_status:{attacker['status']}")
+    if str(defender["status"]) not in {"", "none"}:
+        reasons.append(f"defender_status:{defender['status']}")
+    if weather not in {"", "none"}:
+        reasons.append(f"weather:{weather}")
+    if attacker_side["volatiles"]:
+        reasons.append("attacker_volatiles")
+    if defender_side["volatiles"]:
+        reasons.append("defender_volatiles")
+    if any(int(value) for value in defender_side["screens"].values()):
         reasons.append("defender_screen")
-    if "flashfire" in attacker_side["volatiles"]:
-        reasons.append("attacker_flashfire")
-    if direct.move in {"solarbeam", "facade", "flail", "reversal", "eruption", "waterspout"}:
-        reasons.append(f"variable_or_conditioned_move:{direct.move}")
+    if attacker_item == "choiceband" and category != "Physical":
+        reasons.append("attacker_item:choiceband_nonphysical")
+    if direct.move.startswith("hiddenpower"):
+        reasons.append(f"hidden_power_variant:{direct.move}")
+    untranscribed_moves = {
+        "return", "frustration", "rollout", "furycutter", "weatherball",
+        "explosion", "selfdestruct", "charge", "mudsport", "watersport", "helpinghand",
+        "solarbeam", "facade", "flail", "reversal", "eruption", "waterspout", "magnitude",
+        "present", "spitup", "lowkick", "revenge", "pursuit", "beatup", "bide",
+        "counter", "mirrorcoat", "endeavor", "dragonrage", "nightshade", "seismictoss",
+        "sonicboom", "psywave", "superfang", "fissure", "guillotine", "horndrill",
+        "sheercold", "armthrust", "barrage", "bonerush", "bonemerang", "bulletseed", "cometpunch", "doublekick",
+        "doubleslap", "furyattack", "furyswipes", "iciclespear", "pinmissile", "rockblast",
+        "spikecannon", "triplekick", "twineedle",
+    }
+    if direct.move in untranscribed_moves:
+        reasons.append(f"untranscribed_move:{direct.move}")
+    if info.base_power <= 0:
+        reasons.append("fixed_or_variable_power_move")
     if reasons:
-        return context, None, ",".join(reasons)
+        return context, None, ",".join(sorted(set(reasons)))
 
     attack_key = "attack" if category == "Physical" else "special_attack"
     defense_key = "defense" if category == "Physical" else "special_defense"
@@ -306,8 +354,12 @@ def _basic_oracle(
     return context, gen3_damage_rolls(oracle), None
 
 
-def _branch_direct_damage(events: Sequence[object], target: str) -> int | None:
-    running: int | None = None
+def _branch_direct_damage(
+    events: Sequence[object], target: str, *, pre_hit_hp: int | None
+) -> int | None:
+    """Extract the first direct delta, seeded from the recorded pre-hit HP."""
+
+    running = pre_hit_hp
     for event in events:
         if not isinstance(event, str):
             continue
@@ -329,9 +381,10 @@ def _branch_has_status(events: Sequence[object], target: str, status: str) -> bo
     return any(
         isinstance(event, str)
         and event.startswith("|-status|")
-        and len(event.split("|")) > 3
-        and _slot(event.split("|")[2]) == target
-        and normalize_id(event.split("|")[3]) == status
+        and len((parts := event.split("|"))) > 3
+        and not _has_from(parts)
+        and _slot(parts[2]) == target
+        and normalize_id(parts[3]) == status
         for event in events
     )
 
@@ -352,6 +405,7 @@ def _classify_branch_verdict(
     oracle_limit: str | None,
     native_max: int | None,
     observed_damage: int,
+    observed_ko_clamped: bool = False,
     nonterminal_damage: Sequence[int],
     secondary_status: str | None,
     secondary_branch_has_observed_damage: bool,
@@ -366,6 +420,10 @@ def _classify_branch_verdict(
 
     if oracle_rolls is None:
         return "comparison_limit", f"oracle_unavailable:{oracle_limit or 'unknown'}"
+    if not oracle_rolls:
+        return "comparison_limit", "oracle_empty_roll_support"
+    if observed_ko_clamped:
+        return "comparison_limit", "observed_damage_ko_clamped"
     if native_max is None:
         return "comparison_limit", "native_damage_binding_unavailable"
     if oracle_rolls[-1] != native_max:
@@ -382,96 +440,270 @@ def _classify_branch_verdict(
     return "no_arithmetic_disagreement", None
 
 
+def _native_rolls(
+    *, native_engine: Any, state: Any, side_one_choice: str, side_two_choice: str, actor_side: str
+) -> tuple[dict[bool, tuple[int, int]] | None, str | None]:
+    """Return the selected actor's normal/critical pair for both legal orders."""
+
+    actor_index = 0 if actor_side == "side_one" else 1
+    by_order: dict[bool, tuple[int, int]] = {}
+    for side_one_moves_first in (True, False):
+        try:
+            raw = native_engine.calculate_damage(
+                state, side_one_choice, side_two_choice, side_one_moves_first
+            )
+        except BaseException as error:  # pyo3 panics do not derive from Exception
+            return None, f"native_damage_call_failed:{type(error).__name__}"
+        if (
+            not isinstance(raw, Sequence)
+            or isinstance(raw, (str, bytes))
+            or len(raw) != 2
+            or not isinstance(raw[actor_index], Sequence)
+            or isinstance(raw[actor_index], (str, bytes))
+            or len(raw[actor_index]) != 2
+        ):
+            return None, "native_damage_binding_missing_singles_normal_critical_pairs"
+        try:
+            by_order[side_one_moves_first] = tuple(int(value) for value in raw[actor_index])
+        except (TypeError, ValueError):
+            return None, "native_damage_binding_noninteger_rolls"
+    return by_order, None
+
+
+def _candidate_report(
+    *,
+    candidate_index: int,
+    candidate_state: str,
+    native_engine: Any,
+    native_search: Any,
+    side_one_choice: str,
+    side_two_choice: str,
+    mapper_context: str,
+    direct: DirectHit,
+    dex: ShowdownDex,
+    slot_sides: Mapping[str, str],
+    pre_hit_hp: int,
+) -> dict[str, object]:
+    """Compare one hidden-counter candidate without borrowing another's context."""
+
+    try:
+        rendered = json.loads(
+            native_search.branch_events(
+                candidate_state, side_one_choice, side_two_choice, mapper_context, True, True
+            )
+        )
+    except BaseException as error:
+        return {
+            "candidate_index": candidate_index,
+            "verdict": "comparison_limit",
+            "reason": f"branch_events_failed:{type(error).__name__}",
+        }
+    branches = rendered.get("branches") if isinstance(rendered, Mapping) else None
+    if not isinstance(branches, Sequence) or isinstance(branches, (str, bytes)):
+        return {"candidate_index": candidate_index, "verdict": "comparison_limit", "reason": "invalid_branch_events_payload"}
+
+    target_label = _engine_label(slot_sides, direct.target)
+    branch_rows: list[dict[str, object]] = []
+    comparisons: list[dict[str, object]] = []
+    for branch in branches:
+        if not isinstance(branch, Mapping):
+            continue
+        events = branch.get("events")
+        legal_state = branch.get("legal_roll_state")
+        if not isinstance(events, Sequence) or isinstance(events, (str, bytes)) or not isinstance(legal_state, str):
+            continue
+        direct_damage = _branch_direct_damage(events, target_label, pre_hit_hp=pre_hit_hp)
+        if direct_damage is None:
+            continue
+        try:
+            state = native_engine.State.from_string(legal_state)
+        except BaseException as error:
+            return {
+                "candidate_index": candidate_index,
+                "verdict": "comparison_limit",
+                "reason": f"native_state_parse_failed:{type(error).__name__}",
+            }
+        oracle_context, oracle_rolls, oracle_limit = _basic_oracle(
+            state=state, direct=direct, dex=dex, slot_sides=slot_sides
+        )
+        native_by_order, native_reason = _native_rolls(
+            native_engine=native_engine,
+            state=state,
+            side_one_choice=side_one_choice,
+            side_two_choice=side_two_choice,
+            actor_side=slot_sides[direct.actor],
+        )
+        native_maxes = (
+            {rolls[1] if direct.critical else rolls[0] for rolls in native_by_order.values()}
+            if native_by_order is not None
+            else set()
+        )
+        native_max = next(iter(native_maxes)) if len(native_maxes) == 1 else None
+        verdict, reason = _classify_branch_verdict(
+            oracle_rolls=oracle_rolls,
+            oracle_limit=oracle_limit,
+            native_max=native_max,
+            observed_damage=direct.damage,
+            observed_ko_clamped=direct.ko_clamped,
+            nonterminal_damage=(),
+            secondary_status=None,
+            secondary_branch_has_observed_damage=False,
+        )
+        if native_reason is not None:
+            verdict, reason = "comparison_limit", native_reason
+        elif len(native_maxes) > 1:
+            verdict, reason = "comparison_limit", "native_damage_order_dependent"
+        comparisons.append(
+            {
+                "oracle_context": oracle_context,
+                "oracle_rolls": list(oracle_rolls) if oracle_rolls is not None else None,
+                "oracle_limit": oracle_limit,
+                "native_rolls_by_order": (
+                    {str(order).lower(): list(rolls) for order, rolls in native_by_order.items()}
+                    if native_by_order is not None else None
+                ),
+                "native_max": native_max,
+                "native_limit": native_reason or (
+                    "native_damage_order_dependent" if len(native_maxes) > 1 else None
+                ),
+                "verdict": verdict,
+                "reason": reason,
+            }
+        )
+        branch_rows.append(
+            {
+                "percentage": float(branch.get("percentage") or 0.0),
+                "direct_damage": direct_damage,
+                "target_fainted": _branch_target_fainted(events, target_label),
+                "has_observed_secondary": bool(
+                    direct.secondary_status
+                    and _branch_has_status(events, target_label, direct.secondary_status)
+                ),
+                "lossy": list(branch.get("lossy") or []),
+            }
+        )
+    if not branch_rows:
+        return {"candidate_index": candidate_index, "verdict": "comparison_limit", "reason": "no_rendered_direct_damage_branch"}
+
+    # Each rendered branch may carry a distinct legal pre-hit state. Aggregating
+    # it is valid only after its oracle/native evidence is byte-for-byte alike.
+    comparison_keys = {
+        json.dumps(comparison, sort_keys=True) for comparison in comparisons
+    }
+    if len(comparison_keys) != 1:
+        return {
+            "candidate_index": candidate_index,
+            "verdict": "comparison_limit",
+            "reason": "candidate_branch_contexts_differ",
+            "branches": branch_rows,
+        }
+    comparison = comparisons[0]
+    nonterminal_damage = sorted(
+        {int(item["direct_damage"]) for item in branch_rows if not item["target_fainted"]}
+    )
+    secondary_rows = [item for item in branch_rows if item["has_observed_secondary"]]
+    native_limit = comparison["native_limit"]
+    if native_limit is not None:
+        verdict, reason = "comparison_limit", str(native_limit)
+    else:
+        raw_oracle_rolls = comparison["oracle_rolls"]
+        verdict, reason = _classify_branch_verdict(
+            oracle_rolls=(tuple(raw_oracle_rolls) if raw_oracle_rolls is not None else None),
+            oracle_limit=str(comparison["oracle_limit"] or "") or None,
+            native_max=(int(comparison["native_max"]) if comparison["native_max"] is not None else None),
+            observed_damage=direct.damage,
+            observed_ko_clamped=direct.ko_clamped,
+            nonterminal_damage=nonterminal_damage,
+            secondary_status=direct.secondary_status,
+            secondary_branch_has_observed_damage=any(
+                int(item["direct_damage"]) == direct.damage for item in secondary_rows
+            ),
+        )
+    comparison.update({"verdict": verdict, "reason": reason})
+    return {
+        "candidate_index": candidate_index,
+        **comparison,
+        "rendered_direct_damages": sorted({int(item["direct_damage"]) for item in branch_rows}),
+        "rendered_nonterminal_direct_damages": nonterminal_damage,
+        "secondary_branch_count": len(secondary_rows),
+        "secondary_branch_has_observed_damage": (
+            any(int(item["direct_damage"]) == direct.damage for item in secondary_rows)
+            if direct.secondary_status else None
+        ),
+        "branches": branch_rows,
+    }
+
+
 def _branch_report(row: Mapping[str, Any], direct: DirectHit, dex: ShowdownDex) -> dict[str, object]:
     state_text = row.get("engine_state")
     choices = row.get("choices")
     if not isinstance(state_text, str) or not isinstance(choices, Mapping):
         return {"verdict": "comparison_limit", "reason": "missing_repro_engine_state_or_choices"}
-    side_one_choice = choices.get("p1")
-    side_two_choice = choices.get("p2")
+    slot_sides, slot_reason = _validated_slot_sides(row)
+    if slot_sides is None:
+        return {"verdict": "comparison_limit", "reason": slot_reason}
+    if direct.actor not in slot_sides or direct.target not in slot_sides:
+        return {"verdict": "comparison_limit", "reason": "unsupported_non_singles_slot"}
+    party_display = row.get("party_display")
+    if not isinstance(party_display, Mapping) or any(
+        not isinstance(party_display.get(slot), Sequence) or isinstance(party_display.get(slot), (str, bytes))
+        for slot in ("p1", "p2")
+    ):
+        return {"verdict": "comparison_limit", "reason": "missing_or_invalid_party_display"}
+    side_one_slot = next(slot for slot, side in slot_sides.items() if side == "side_one")
+    side_two_slot = next(slot for slot, side in slot_sides.items() if side == "side_two")
+    side_one_choice = choices.get(side_one_slot)
+    side_two_choice = choices.get(side_two_slot)
     if not isinstance(side_one_choice, str) or not isinstance(side_two_choice, str):
         return {"verdict": "comparison_limit", "reason": "invalid_repro_choices"}
-    context = json.dumps({"p1": [], "p2": [], "turn": 0})
+    native_engine, native_search, native_reason = _native_modules()
+    if native_reason is not None:
+        return {"verdict": "comparison_limit", "reason": native_reason}
+    context = json.dumps({
+        "p1": list(party_display[side_one_slot]),
+        "p2": list(party_display[side_two_slot]),
+        "turn": int(row.get("turn") or 0),
+    })
+    pre_features = row.get("pre_features")
+    if not isinstance(pre_features, Mapping):
+        return {"verdict": "comparison_limit", "reason": "missing_pre_features"}
+    try:
+        pre_hit_hp = int(pre_features[f"{direct.target}_hp"])
+    except (KeyError, TypeError, ValueError):
+        return {"verdict": "comparison_limit", "reason": "missing_target_pre_hit_hp"}
     state_texts = row.get("engine_states")
     if not isinstance(state_texts, Sequence) or isinstance(state_texts, (str, bytes)):
         state_texts = [state_text]
-    branch_rows: list[dict[str, object]] = []
-    native_rolls: tuple[int, int] | None = None
-    oracle_context: dict[str, object] = {}
-    oracle_rolls: tuple[int, ...] | None = None
-    oracle_limit: str | None = None
+    candidate_rows: list[dict[str, object]] = []
     for candidate_index, candidate_state in enumerate(state_texts):
         if not isinstance(candidate_state, str):
+            candidate_rows.append({"candidate_index": candidate_index, "verdict": "comparison_limit", "reason": "invalid_candidate_state"})
             continue
-        rendered = json.loads(
-            pokezero_search.branch_events(candidate_state, side_one_choice, side_two_choice, context, True, True)
-        )
-        branches = rendered.get("branches") if isinstance(rendered, Mapping) else None
-        if not isinstance(branches, Sequence):
-            continue
-        for branch in branches:
-            if not isinstance(branch, Mapping):
-                continue
-            events = branch.get("events")
-            legal_state = branch.get("legal_roll_state")
-            if not isinstance(events, Sequence) or not isinstance(legal_state, str):
-                continue
-            direct_damage = _branch_direct_damage(events, direct.target)
-            if direct_damage is None:
-                continue
-            if native_rolls is None:
-                state = poke_engine.State.from_string(legal_state)
-                raw = poke_engine.calculate_damage(state, side_one_choice, side_two_choice, True)
-                # The binding returns one ``[normal, critical]`` pair per acting
-                # side.  The direct protocol event identifies which choice actually
-                # landed, so never flatten both sides into an ambiguous pair.
-                actor_index = 0 if direct.actor == "p1" else 1
-                actor_rolls = raw[actor_index]
-                if len(actor_rolls) != 2:
-                    return {
-                        "verdict": "comparison_limit",
-                        "reason": "native_damage_binding_missing_normal_critical_pair",
-                    }
-                native_rolls = tuple(int(value) for value in actor_rolls)
-                oracle_context, oracle_rolls, oracle_limit = _basic_oracle(
-                    state=state, direct=direct, dex=dex
-                )
-            branch_rows.append(
-                {
-                    "candidate_index": candidate_index,
-                    "percentage": float(branch.get("percentage") or 0.0),
-                    "direct_damage": direct_damage,
-                    "target_fainted": _branch_target_fainted(events, direct.target),
-                    "has_observed_secondary": bool(
-                        direct.secondary_status
-                        and _branch_has_status(events, direct.target, direct.secondary_status)
-                    ),
-                    "lossy": list(branch.get("lossy") or []),
-                }
-            )
-    if not branch_rows:
-        return {"verdict": "comparison_limit", "reason": "no_rendered_direct_damage_branch"}
-    observed_in_oracle = bool(oracle_rolls and direct.damage in oracle_rolls)
-    native_max = None
-    native_representative = None
-    if native_rolls is not None:
-        native_max = native_rolls[1] if direct.critical else native_rolls[0]
-        native_representative = int(native_max * 0.925)
-    all_branch_damage = sorted({int(item["direct_damage"]) for item in branch_rows})
-    nonterminal_damage = sorted(
-        {int(item["direct_damage"]) for item in branch_rows if not item["target_fainted"]}
-    )
-    secondary_rows = [row for row in branch_rows if row["has_observed_secondary"]]
-    coupled_observed_damage = any(int(row["direct_damage"]) == direct.damage for row in secondary_rows)
-    verdict, verdict_reason = _classify_branch_verdict(
-        oracle_rolls=oracle_rolls,
-        oracle_limit=oracle_limit,
-        native_max=native_max,
-        observed_damage=direct.damage,
-        nonterminal_damage=nonterminal_damage,
-        secondary_status=direct.secondary_status,
-        secondary_branch_has_observed_damage=coupled_observed_damage,
-    )
+        candidate_rows.append(_candidate_report(
+            candidate_index=candidate_index,
+            candidate_state=candidate_state,
+            native_engine=native_engine,
+            native_search=native_search,
+            side_one_choice=side_one_choice,
+            side_two_choice=side_two_choice,
+            mapper_context=context,
+            direct=direct,
+            dex=dex,
+            slot_sides=slot_sides,
+            pre_hit_hp=pre_hit_hp,
+        ))
+    if not candidate_rows:
+        return {"verdict": "comparison_limit", "reason": "no_candidate_states"}
+    candidate_keys = {json.dumps({key: value for key, value in item.items() if key != "candidate_index"}, sort_keys=True) for item in candidate_rows}
+    if len(candidate_keys) != 1:
+        verdict, verdict_reason = "comparison_limit", "candidate_contexts_or_results_differ"
+    else:
+        verdict = str(candidate_rows[0]["verdict"])
+        verdict_reason = candidate_rows[0].get("reason")
+    representative = None
+    native_max = candidate_rows[0].get("native_max") if len(candidate_keys) == 1 else None
+    if isinstance(native_max, int):
+        representative = {"value": int(native_max * 0.925), "derived": True, "formula": "floor(native_max * 0.925)"}
     return {
         "verdict": verdict,
         "verdict_reason": verdict_reason,
@@ -482,21 +714,10 @@ def _branch_report(row: Mapping[str, Any], direct: DirectHit, dex: ShowdownDex) 
             "damage": direct.damage,
             "critical": direct.critical,
             "secondary_status": direct.secondary_status,
+            "ko_clamped": direct.ko_clamped,
         },
-        "oracle_context": oracle_context,
-        "oracle_rolls": list(oracle_rolls) if oracle_rolls is not None else None,
-        "oracle_limit": oracle_limit,
-        "observed_in_oracle": observed_in_oracle if oracle_rolls is not None else None,
-        "native_rolls": list(native_rolls) if native_rolls is not None else None,
-        "native_representative_damage": native_representative,
-        "native_max_equals_oracle_max": (
-            tuple(oracle_rolls)[-1] == native_max if oracle_rolls is not None and native_max is not None else None
-        ),
-        "rendered_direct_damages": all_branch_damage,
-        "rendered_nonterminal_direct_damages": nonterminal_damage,
-        "secondary_branch_count": len(secondary_rows),
-        "secondary_branch_has_observed_damage": coupled_observed_damage if direct.secondary_status else None,
-        "branches": branch_rows,
+        "native_representative_damage": representative,
+        "candidate_evidence": candidate_rows,
     }
 
 
@@ -505,9 +726,15 @@ def _rows(paths: Iterable[Path], targets: set[tuple[int, int]]) -> list[Mapping[
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
         for row in payload.get("repros") or []:
-            if not isinstance(row, Mapping):
+            # This diagnostic is defined only for the strict differential's
+            # retained transition shape. Engine errors and broad summary rows do
+            # not contain one observed action transition to compare.
+            if not isinstance(row, Mapping) or row.get("kind") != "transition_diverged":
                 continue
-            identity = (int(row.get("seed") or -1), int(row.get("step") or -1))
+            try:
+                identity = (int(row.get("seed") or -1), int(row.get("step") or -1))
+            except (TypeError, ValueError):
+                continue
             if identity in targets:
                 matches.append(row)
     return matches
@@ -574,6 +801,52 @@ def _source_provenance() -> dict[str, object]:
     }
 
 
+def _showdown_source_provenance(showdown_root: str) -> dict[str, object]:
+    """Bind the oracle to the Showdown bytes the dex loader actually executes."""
+
+    root = Path(showdown_root).expanduser().resolve()
+    inputs = [
+        root / "dist" / "sim" / "index.js",
+        root / "dist" / "data" / "moves.js",
+        root / "dist" / "data" / "pokedex.js",
+    ]
+    if any(not path.is_file() for path in inputs):
+        missing = next(path for path in inputs if not path.is_file())
+        raise SystemExit(f"cannot record Showdown oracle provenance: missing {_path_label(missing)}")
+    digest = hashlib.sha256()
+    records: list[dict[str, str]] = []
+    for path in inputs:
+        file_hash = _sha256(path)
+        label = str(path.relative_to(root))
+        digest.update(label.encode("utf-8"))
+        digest.update(bytes.fromhex(file_hash))
+        records.append({"path": label, "sha256": file_hash})
+    commit: str | None = None
+    clean: bool | None = None
+    try:
+        commit_result = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=root, check=True,
+            capture_output=True, text=True,
+        )
+        candidate = commit_result.stdout.strip()
+        if len(candidate) == 40 and all(char in "0123456789abcdef" for char in candidate):
+            commit = candidate
+            clean = not bool(subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
+                check=True, capture_output=True, text=True,
+            ).stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        # Built releases need not be Git checkouts; their byte hash remains the
+        # content identity used by the oracle.
+        pass
+    return {
+        "content_sha256": digest.hexdigest(),
+        "inputs": records,
+        "git_commit": commit,
+        "git_clean": clean,
+    }
+
+
 def _command_provenance(
     *,
     reports: Sequence[Mapping[str, str]],
@@ -599,6 +872,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert_fresh()
     targets = set(args.target)
     source = _source_provenance()
+    showdown_source = _showdown_source_provenance(args.showdown_root)
     input_reports = _input_report_provenance(args.report)
     rows = _rows(args.report, targets)
     by_identity: dict[tuple[int, int], Mapping[str, Any]] = {}
@@ -622,11 +896,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result.update({"seed": identity[0], "step": identity[1]})
         results.append(result)
     payload = {
-        "schema_version": "pokezero.damage-arithmetic-tail-attestation/v2",
+        "schema_version": "pokezero.damage-arithmetic-tail-attestation/v3",
         "command": _command_provenance(
             reports=input_reports, targets=targets, showdown_root=args.showdown_root
         ),
         "source": source,
+        "showdown_source": showdown_source,
         "engine": compute_fingerprint(),
         "input_reports": input_reports,
         "targets": results,

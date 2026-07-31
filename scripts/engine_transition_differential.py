@@ -1684,6 +1684,12 @@ def run_game(
                     # than only the first sweep rung.
                     "engine_states": [st.to_string() for st in prepared["states"]],
                     "gating": prepared["gating"],
+                    # Keep the mapper input and slot orientation with the repro;
+                    # downstream diagnostics must never reconstruct either from
+                    # a presumed p1=side_one identity mapping.
+                    "party_display": prepared["party_display"],
+                    "slot_sides": prepared["slot_sides"],
+                    "turn": prepared["turn"],
                     "pre_features": _features_payload(prepared["pre_features"]),
                     "observed": _features_payload(observed),
                     "observed_boost_deltas": observed_boost_deltas(step_lines),
