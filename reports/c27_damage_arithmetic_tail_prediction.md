@@ -15,27 +15,31 @@ The targets are `2800700/20`, `3301036/26`, `3401017/55`, `3500021/19`,
 The retained magnitude differences will not establish one shared native Gen 3
 damage-arithmetic defect. For each reproducible target, either:
 
-1. the exact Showdown HP delta belongs to an instruction branch generated from
-   the same fully attested state, making the mismatch an event-component
-   attribution or branch-selection issue; or
-2. the target cannot be compared exactly because the public step leaves a
-   bounded hidden counter unresolved, which is recorded as a comparison limit,
-   not evidence of arithmetic divergence.
+1. every native-rendered damage-bearing branch has an exact pre-hit state and
+   known criticality, the observed-criticality partition has one identical
+   oracle/native context, and the observed Showdown damage is a legal oracle
+   roll; or
+2. the target is recorded as a comparison limit. Missing branch-local state,
+   unknown criticality, KO clamping, unsupported modifiers or moves, candidate
+   disagreement, empty oracle support, native failures, and dirty provenance
+   are limits rather than evidence of arithmetic divergence.
 
 ## Falsification criteria
 
-A native arithmetic defect is proven only if one target supplies all of the
-following from the same pre-action state:
+A `native_arithmetic_disagreement` row is attainable only if one target supplies
+all of the following:
 
-1. a transcribed Showdown oracle input including move, category, base power,
-   attack and defense stats, boosts, ability, item, status, types, weather,
-   side conditions, and relevant volatiles;
-2. a concrete Showdown HP result within the oracle's legal Gen 3 roll support;
-3. no native instruction branch with the same visible transition and any legal
-   roll value; and
-4. a common implementation mechanism shared by at least two targets.
+1. an explicitly supported fixed-power move and a role-specific classification
+   for every ability, item, weather, status, screen, and volatile in its exact
+   Showdown oracle context;
+2. every rendered damage-bearing branch preserved in the artifact, with exact
+   state and a known critical/noncritical label;
+3. identical branch-local oracle/native evidence inside the observed
+   criticality partition and order-independent native damage pairs; and
+4. a native maximum that differs from the exact Showdown-derived Gen 3 oracle
+   maximum.
 
-Absent those conditions, no production arithmetic patch is justified. The
-result should instead preserve a reusable replay attestation with its explicit
-comparison limits. Until the seven inputs are available, every target remains
+Even such a row would establish only that row's arithmetic discrepancy. A
+shared production defect would still require a separately demonstrated common
+mechanism. Until the seven inputs are restored and hashed, every target remains
 an intentional comparison limit rather than evidence for clearance.

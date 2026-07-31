@@ -10,9 +10,12 @@ a two-consumer, fingerprint-checked native build. For every standard direct move
 2. the pure Python Gen 3 damage oracle transcribed from Showdown; and
 3. the Rust `calculate_damage` maximum and all rendered instruction branches.
 
-The current executable oracle only admits a verdict where its complete visible
-modifier context is implemented. The two confusion-only targets remain explicit
-comparison limits, not guessed direct-move results.
+The repaired executable admits a comparison only when every damage-bearing
+native branch is represented, its exact pre-hit state and criticality are
+known, and all branches in the observed criticality partition independently
+produce identical oracle/native evidence. Opposite-criticality branches remain
+visible but are not mixed into that comparison. The two confusion-only targets
+remain explicit comparison limits, not guessed direct-move results.
 
 ## Historical Public Context (Unverified)
 
@@ -29,9 +32,18 @@ special moves.
 | `3401017/55` | Fire Blast | Weezing, Levitate, Leftovers, healthy, Poison | Medicham, Pure Power, Leftovers, healthy, Fighting/Psychic | none | 184 / 168 |
 | `3500021/19` | Sludge Bomb | Nidoking, Poison Point, Choice Band, healthy, Poison/Ground | Fearow, Keen Eye, Choice Band, healthy, Normal/Flying | sand | 198 / 152 |
 
-The historical transcription says Choice Band is included in the final
-Nidoking physical oracle. The other listed abilities/items require fresh,
-hashed evidence before they can be relied upon as non-modifying context.
+The executable has a positive exact-support allowlist for only Sludge Bomb and
+Fire Blast. For these five historical contexts it classifies Poison Point,
+Liquid Ooze, Shield Dust, Static, Effect Spore, Rough Skin on a non-contact
+Sludge Bomb, Keen Eye, Levitate, and defender Pure Power as irrelevant to the
+direct formula. It likewise classifies healthy Salac Berry, Leftovers, defender
+Choice Band, and sand on Poison damage as irrelevant. Attacker Choice Band is
+modeled only for physical damage.
+
+Gen 3 damage category is type-based: Poison-type Sludge Bomb is **Physical**, so
+the Nidoking attack uses Attack/Defense and Choice Band applies. Fire-type Fire
+Blast is **Special**, so Choice Band would not modify it. This is also asserted
+against the loaded Gen 3 dex in the executable tests.
 
 ## Result Status
 
@@ -43,33 +55,40 @@ is retained only as an unverified historical transcription; it is not evidence
 for a production change or for a conclusion about the current engine. No
 clearance is claimed.
 
+The configured Showdown checkout was dirty during this repair, and the v4
+provenance gate refused measurement as designed. It was not modified here. No
+fresh attestation JSON is committed.
+
 The executable attestation now refuses stale native consumers and dirty or
 unprovenanced source, hashes every supplied input report, records its command,
-source commit, producer hash, engine fingerprint, and hashes the Showdown
-files consumed by the oracle. It emits a machine-readable v3 result. A reviewer
-may rely on the five-direct-row scope only after that v3 artifact is regenerated
-from the missing retained reports and committed alongside this document. The two
-confusion rows remain
-comparison limits in all cases.
+source commit, producer hash, engine fingerprint, and every built Showdown
+JavaScript input plus the Gen 3 randbat set source. It emits a machine-readable
+v4 result with the full branch population, explicit reported/dropped/unsupported
+counts, branch state source, and criticality partition. A reviewer may rely on
+the five-direct-row scope only after that v4 artifact is regenerated from the
+missing retained reports and committed alongside this document. The two
+confusion rows remain comparison limits in all cases.
 
 ## Historical Transcription (Unverified)
 
-| Target | Showdown damage | Oracle legal rolls | Rust maximum | Rendered nonterminal damage | Secondary | Verdict |
-| --- | ---: | --- | ---: | ---: | --- | --- |
-| `2800700/20` | 122 | 117-138 | 138 | 127 | poison | fixed single-roll composition |
-| `3300207/69` | 137 | 132-156 | 156 | 143 | poison | fixed single-roll composition |
-| `3301036/26` | 121 | 117-138 | 138 | 127 | poison | fixed single-roll composition |
-| `3401017/55` | 79 | 77-91 | 91 | 84 | burn | fixed single-roll composition |
-| `3500021/19` | 159 | 153-181 | 181 | 167 | poison | fixed single-roll composition |
-| `3001000/57` | n/a | n/a | n/a | n/a | confusion self-hit | comparison limit |
-| `3300122/21` | n/a | n/a | n/a | n/a | confusion self-hit | comparison limit |
+| Target | Showdown damage | Oracle legal rolls | Rust maximum | Secondary |
+| --- | ---: | --- | ---: | --- |
+| `2800700/20` | 122 | 117-138 | 138 | poison |
+| `3300207/69` | 137 | 132-156 | 156 | poison |
+| `3301036/26` | 121 | 117-138 | 138 | poison |
+| `3401017/55` | 79 | 77-91 | 91 | burn |
+| `3500021/19` | 159 | 153-181 | 181 | poison |
+| `3001000/57` | n/a | n/a | n/a | confusion self-hit |
+| `3300122/21` | n/a | n/a | n/a | confusion self-hit |
 
-The `3300207/69` representative entry is internally inconsistent even as a
-historical transcription: `floor(156 * 0.925)` is `144`, not the table's `143`.
-It is therefore explicitly unverified and cannot support a branch-composition
-claim.
+The prior `3300207/69` representative entry is internally inconsistent even as
+a historical transcription: it paired a maximum of `156` with `143`, although
+the previously claimed unconditional `0.925` rule yields `144`. The
+representative values are therefore omitted from evidence. The executable
+neither applies that rule nor emits a representative-damage field; only actual
+rendered branch damage is recorded.
 
-If regenerated v3 evidence shows all five direct rows have a Showdown legal
+If regenerated v4 evidence shows all five direct rows have a Showdown legal
 roll and matching current native maximum, that evidence can support the narrow
 statement that these five rows do not establish a shared native
 max-arithmetic defect. It cannot derive worlds, establish branch composition
@@ -82,7 +101,8 @@ No production arithmetic or event-component-mapping claim is supported by the
 currently committed material. In particular, this document does not establish
 that the native chance tree's branch composition is fixed, that a world was
 derived correctly, or that any historical composition mechanism remains true.
-Those questions require the missing hashed reports and a fresh v3 replay.
+Those questions require the missing hashed reports, a clean Showdown checkout,
+and a fresh v4 replay.
 
 This lane deliberately does not alter the terminal/KO or strict-matcher lanes.
 The reusable script records this distinction for later retained rows and fails

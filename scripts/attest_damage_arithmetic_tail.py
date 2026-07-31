@@ -28,7 +28,7 @@ import importlib
 import json
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -41,9 +41,43 @@ from pokezero.dex import (  # noqa: E402
     ShowdownDex,
     load_showdown_dex,
     normalize_id,
-    resolve_move_base_power,
 )
 from pokezero.gen3_damage import Gen3DamageContext, gen3_damage_rolls  # noqa: E402
+
+
+EXACT_SUPPORTED_MOVE_SPECS: Mapping[str, Mapping[str, object]] = {
+    # Positive allowlist audited against the 125-move Gen 3 randbat universe.
+    # These are the only moves in the seven C27 rows with ordinary one-hit
+    # fixed-power arithmetic.
+    "sludgebomb": {"type": "poison", "category": "Physical", "base_power": 90},
+    "fireblast": {"type": "fire", "category": "Special", "base_power": 120},
+}
+
+_EXACT_CONTEXT_ALLOWLIST: Mapping[str, Mapping[str, frozenset[str]]] = {
+    "sludgebomb": {
+        "attacker_abilities": frozenset(
+            {"none", "poisonpoint", "liquidooze", "shielddust"}
+        ),
+        "defender_abilities": frozenset(
+            {"none", "static", "effectspore", "roughskin", "keeneye"}
+        ),
+        "attacker_items": frozenset(
+            {"none", "salacberry", "leftovers", "choiceband"}
+        ),
+        "defender_items": frozenset({"none", "leftovers", "choiceband"}),
+        # Sand has no Gen 3 direct-damage modifier for Poison moves.
+        "weather": frozenset({"none", "sand", "sandstorm"}),
+    },
+    "fireblast": {
+        "attacker_abilities": frozenset({"none", "levitate"}),
+        "defender_abilities": frozenset({"none", "purepower"}),
+        "attacker_items": frozenset({"none", "leftovers", "choiceband"}),
+        "defender_items": frozenset({"none", "leftovers"}),
+        "weather": frozenset(
+            {"none", "sun", "sunnyday", "rain", "raindance", "sand", "sandstorm"}
+        ),
+    },
+}
 
 
 def _target(value: str) -> tuple[int, int]:
@@ -239,6 +273,11 @@ def _weather_modifier(weather: str, move_type: str) -> tuple[float, float] | Non
     return None
 
 
+def _normalized_none(value: object) -> str:
+    normalized = normalize_id(str(value))
+    return normalized or "none"
+
+
 def _basic_oracle(
     *,
     state: Any,
@@ -249,8 +288,9 @@ def _basic_oracle(
     """Build the exact simple-case Showdown oracle or return its limit reason."""
 
     info = dex.move_info(direct.move)
-    if info is None or info.gen3_category not in {"Physical", "Special"}:
-        return {}, None, "move_not_a_standard_damaging_move"
+    spec = EXACT_SUPPORTED_MOVE_SPECS.get(direct.move)
+    if info is None or spec is None:
+        return {}, None, f"move_not_exact_supported:{direct.move}"
     if slot_sides is None:
         slot_sides = {"p1": "side_one", "p2": "side_two"}
     if set(slot_sides.values()) != {"side_one", "side_two"}:
@@ -262,12 +302,10 @@ def _basic_oracle(
     assert isinstance(attacker, Mapping) and isinstance(defender, Mapping)
     category = info.gen3_category
     move_type = normalize_id(info.type)
-    weather = normalize_id(str(state.weather))
+    weather = _normalized_none(state.weather)
     context = {
         "move": direct.move,
-        "base_power": resolve_move_base_power(
-            info, int(attacker["hp"]) / max(1, int(attacker["maxhp"]))
-        ),
+        "base_power": int(info.base_power),
         "category": category,
         "move_type": move_type,
         "weather": weather,
@@ -280,53 +318,106 @@ def _basic_oracle(
         "defender_volatiles": list(defender_side["volatiles"]),
     }
     reasons: list[str] = []
-    attacker_ability = str(attacker["ability"])
-    defender_ability = str(defender["ability"])
-    attacker_item = str(attacker["item"])
-    defender_item = str(defender["item"])
-    # This is deliberately a whitelist. An ability or item that appears benign
-    # can still alter a Gen 3 damage event through a condition this small oracle
-    # does not transcribe (for example DeepSeaTooth, Metal Powder, or an active
-    # weather/ability interaction).
-    if attacker_ability not in {"", "none"}:
-        reasons.append(f"attacker_ability:{attacker_ability}")
-    if defender_ability not in {"", "none"}:
-        reasons.append(f"defender_ability:{defender_ability}")
-    if attacker_item not in {"", "none", "leftovers", "choiceband"}:
-        reasons.append(f"attacker_item:{attacker_item}")
-    if defender_item not in {"", "none", "leftovers"}:
-        reasons.append(f"defender_item:{defender_item}")
-    if str(attacker["status"]) not in {"", "none"}:
+    expected_type = str(spec["type"])
+    expected_category = str(spec["category"])
+    expected_base_power = int(spec["base_power"])
+    if move_type != expected_type:
+        reasons.append(f"move_type:{move_type}:expected:{expected_type}")
+    if category != expected_category:
+        reasons.append(f"move_category:{category}:expected:{expected_category}")
+    if int(info.base_power) != expected_base_power:
+        reasons.append(
+            f"move_base_power:{int(info.base_power)}:expected:{expected_base_power}"
+        )
+
+    allowlist = _EXACT_CONTEXT_ALLOWLIST[direct.move]
+    attacker_ability = _normalized_none(attacker["ability"])
+    defender_ability = _normalized_none(defender["ability"])
+    attacker_item = _normalized_none(attacker["item"])
+    defender_item = _normalized_none(defender["item"])
+    if attacker_ability not in allowlist["attacker_abilities"]:
+        reasons.append(f"attacker_ability_not_classified:{attacker_ability}")
+    if defender_ability not in allowlist["defender_abilities"]:
+        reasons.append(f"defender_ability_not_classified:{defender_ability}")
+    if attacker_item not in allowlist["attacker_items"]:
+        reasons.append(f"attacker_item_not_classified:{attacker_item}")
+    if defender_item not in allowlist["defender_items"]:
+        reasons.append(f"defender_item_not_classified:{defender_item}")
+    if weather not in allowlist["weather"]:
+        reasons.append(f"weather_not_classified:{weather}")
+    if _normalized_none(attacker["status"]) != "none":
         reasons.append(f"attacker_status:{attacker['status']}")
-    if str(defender["status"]) not in {"", "none"}:
+    if _normalized_none(defender["status"]) != "none":
         reasons.append(f"defender_status:{defender['status']}")
-    if weather not in {"", "none"}:
-        reasons.append(f"weather:{weather}")
     if attacker_side["volatiles"]:
         reasons.append("attacker_volatiles")
     if defender_side["volatiles"]:
         reasons.append("defender_volatiles")
     if any(int(value) for value in defender_side["screens"].values()):
         reasons.append("defender_screen")
-    if attacker_item == "choiceband" and category != "Physical":
-        reasons.append("attacker_item:choiceband_nonphysical")
-    if direct.move.startswith("hiddenpower"):
-        reasons.append(f"hidden_power_variant:{direct.move}")
-    untranscribed_moves = {
-        "return", "frustration", "rollout", "furycutter", "weatherball",
-        "explosion", "selfdestruct", "charge", "mudsport", "watersport", "helpinghand",
-        "solarbeam", "facade", "flail", "reversal", "eruption", "waterspout", "magnitude",
-        "present", "spitup", "lowkick", "revenge", "pursuit", "beatup", "bide",
-        "counter", "mirrorcoat", "endeavor", "dragonrage", "nightshade", "seismictoss",
-        "sonicboom", "psywave", "superfang", "fissure", "guillotine", "horndrill",
-        "sheercold", "armthrust", "barrage", "bonerush", "bonemerang", "bulletseed", "cometpunch", "doublekick",
-        "doubleslap", "furyattack", "furyswipes", "iciclespear", "pinmissile", "rockblast",
-        "spikecannon", "triplekick", "twineedle",
+
+    context["modifier_classification"] = {
+        "move": "exact_fixed_power_allowlist",
+        "attacker_ability": (
+            "proven_irrelevant"
+            if attacker_ability in allowlist["attacker_abilities"]
+            else "not_classified"
+        ),
+        "defender_ability": (
+            "proven_irrelevant"
+            if defender_ability in allowlist["defender_abilities"]
+            else "not_classified"
+        ),
+        "attacker_item": (
+            "modeled_choice_band_attack"
+            if (
+                attacker_item in allowlist["attacker_items"]
+                and attacker_item == "choiceband"
+                and category == "Physical"
+            )
+            else (
+                "proven_irrelevant"
+                if attacker_item in allowlist["attacker_items"]
+                else "not_classified"
+            )
+        ),
+        "defender_item": (
+            "proven_irrelevant"
+            if defender_item in allowlist["defender_items"]
+            else "not_classified"
+        ),
+        "weather": (
+            "modeled_fire_weather_modifier"
+            if (
+                weather in allowlist["weather"]
+                and direct.move == "fireblast"
+                and weather in {"sun", "sunnyday", "rain", "raindance"}
+            )
+            else (
+                "proven_irrelevant"
+                if weather in allowlist["weather"]
+                else "not_classified"
+            )
+        ),
+        "statuses": (
+            "none"
+            if (
+                _normalized_none(attacker["status"]) == "none"
+                and _normalized_none(defender["status"]) == "none"
+            )
+            else "not_classified"
+        ),
+        "volatiles": (
+            "none"
+            if not attacker_side["volatiles"] and not defender_side["volatiles"]
+            else "not_classified"
+        ),
+        "screens": (
+            "none"
+            if not any(int(value) for value in defender_side["screens"].values())
+            else "not_classified"
+        ),
     }
-    if direct.move in untranscribed_moves:
-        reasons.append(f"untranscribed_move:{direct.move}")
-    if info.base_power <= 0:
-        reasons.append("fixed_or_variable_power_move")
     if reasons:
         return context, None, ",".join(sorted(set(reasons)))
 
@@ -337,6 +428,19 @@ def _basic_oracle(
     attack_mods: list[tuple[float, float]] = []
     if attacker_item == "choiceband" and category == "Physical":
         attack_mods.append((1.5, 1))
+    stab = move_type in set(attacker["types"])
+    effectiveness = dex.effectiveness(
+        info.type, tuple(str(value) for value in defender["types"])
+    )
+    weather_mod = _weather_modifier(weather, move_type)
+    context.update(
+        {
+            "stab": stab,
+            "effectiveness": effectiveness,
+            "weather_mod": list(weather_mod) if weather_mod is not None else None,
+            "attack_mods": [list(modifier) for modifier in attack_mods],
+        }
+    )
     oracle = Gen3DamageContext(
         level=int(attacker["level"]),
         base_power=int(context["base_power"]),
@@ -346,21 +450,28 @@ def _basic_oracle(
         attack_boost=int(attacker_side["boosts"][attack_boost_key]),
         defense_boost=int(defender_side["boosts"][defense_boost_key]),
         attack_mods=tuple(attack_mods),
-        stab=move_type in set(attacker["types"]),
-        effectiveness=dex.effectiveness(info.type, tuple(str(value) for value in defender["types"])),
-        weather_mod=_weather_modifier(weather, move_type),
+        stab=stab,
+        effectiveness=effectiveness,
+        weather_mod=weather_mod,
         crit=direct.critical,
     )
     return context, gen3_damage_rolls(oracle), None
 
 
-def _branch_direct_damage(
+@dataclass(frozen=True)
+class NativeDirectHit:
+    damage: int
+    event_index: int
+    ko_clamped: bool
+
+
+def _branch_direct_hit(
     events: Sequence[object], target: str, *, pre_hit_hp: int | None
-) -> int | None:
-    """Extract the first direct delta, seeded from the recorded pre-hit HP."""
+) -> NativeDirectHit | None:
+    """Extract the first target direct hit while maintaining its running HP."""
 
     running = pre_hit_hp
-    for event in events:
+    for event_index, event in enumerate(events):
         if not isinstance(event, str):
             continue
         parts = event.split("|")
@@ -369,12 +480,116 @@ def _branch_direct_damage(
         if parts[1] in {"switch", "drag", "replace"} and len(parts) > 4 and _slot(parts[2]) == target:
             running = _hp(parts[4])
             continue
-        if parts[1] != "-damage" or len(parts) < 4 or _has_from(parts) or _slot(parts[2]) != target:
+        if parts[1] != "-damage" or len(parts) < 4 or _slot(parts[2]) != target:
             continue
         new_hp = _hp(parts[3])
-        if running is not None:
-            return running - new_hp
+        if running is None:
+            running = new_hp
+            continue
+        damage = running - new_hp
+        running = new_hp
+        if not _has_from(parts):
+            return NativeDirectHit(
+                damage=damage,
+                event_index=event_index,
+                ko_clamped=new_hp == 0,
+            )
     return None
+
+
+def _branch_direct_damage(
+    events: Sequence[object], target: str, *, pre_hit_hp: int | None
+) -> int | None:
+    hit = _branch_direct_hit(events, target, pre_hit_hp=pre_hit_hp)
+    return hit.damage if hit is not None else None
+
+
+def _event_changes_damage_state(event: object) -> bool:
+    if not isinstance(event, str):
+        return False
+    fields = event.split("|")
+    tag = fields[1] if len(fields) > 1 else ""
+    if tag in {"-boost", "-unboost"}:
+        try:
+            return int(fields[4]) != 0
+        except (IndexError, ValueError):
+            return True
+    if tag in {
+        "switch",
+        "drag",
+        "replace",
+        "-setboost",
+        "-swapboost",
+        "-copyboost",
+        "-clearboost",
+        "-clearallboost",
+        "-clearpositiveboost",
+        "-clearnegativeboost",
+        "-invertboost",
+        "-damage",
+        "-heal",
+        "-sethp",
+        "-status",
+        "-curestatus",
+        "-cureteam",
+        "-item",
+        "-enditem",
+        "-ability",
+        "-endability",
+        "-weather",
+        "-fieldstart",
+        "-fieldend",
+        "-sidestart",
+        "-sideend",
+        "-start",
+        "-end",
+        "-singleturn",
+        "-singlemove",
+        "-activate",
+        "-transform",
+        "-formechange",
+        "detailschange",
+    }:
+        return True
+    return False
+
+
+def _branch_criticality(
+    events: Sequence[object],
+    *,
+    hit: NativeDirectHit,
+    target: str,
+    lossy: Sequence[object],
+) -> str:
+    """Return critical/noncritical only when the rendered protocol is decisive."""
+
+    segment_start = -1
+    for index in range(hit.event_index - 1, -1, -1):
+        event = events[index]
+        if isinstance(event, str) and event.startswith(("|move|", "|-damage|")):
+            segment_start = index
+            break
+    markers: list[str] = []
+    for event in events[segment_start + 1:hit.event_index]:
+        if not isinstance(event, str) or not event.startswith("|-crit|"):
+            continue
+        fields = event.split("|")
+        markers.append(_slot(fields[2]) if len(fields) > 2 else "")
+    if markers == [target]:
+        return "critical"
+    if markers or hit.ko_clamped or lossy:
+        return "unknown"
+    # In Showdown protocol an unclamped hit with no preceding |-crit| marker is
+    # explicitly the noncritical arm. The mapper suppresses the marker on
+    # KO-clamped/ambiguous output, which was handled above.
+    return "noncritical"
+
+
+def _damage_event_count(events: Sequence[object]) -> int:
+    return sum(
+        isinstance(event, str) and event.startswith("|-damage|")
+        for event in events
+    )
 
 
 def _branch_has_status(events: Sequence[object], target: str, status: str) -> bool:
@@ -484,7 +699,7 @@ def _candidate_report(
     slot_sides: Mapping[str, str],
     pre_hit_hp: int,
 ) -> dict[str, object]:
-    """Compare one hidden-counter candidate without borrowing another's context."""
+    """Inspect one candidate's full branch population and compare one crit partition."""
 
     try:
         rendered = json.loads(
@@ -504,28 +719,143 @@ def _candidate_report(
 
     target_label = _engine_label(slot_sides, direct.target)
     branch_rows: list[dict[str, object]] = []
-    comparisons: list[dict[str, object]] = []
-    for branch in branches:
+    matching_comparisons: list[dict[str, object]] = []
+    expected_criticality = "critical" if direct.critical else "noncritical"
+    for branch_index, branch in enumerate(branches):
         if not isinstance(branch, Mapping):
+            branch_rows.append(
+                {
+                    "branch_index": branch_index,
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "malformed_branch",
+                    "damage_event_count": None,
+                }
+            )
             continue
         events = branch.get("events")
-        legal_state = branch.get("legal_roll_state")
-        if not isinstance(events, Sequence) or isinstance(events, (str, bytes)) or not isinstance(legal_state, str):
+        lossy = list(branch.get("lossy") or [])
+        branch_row: dict[str, object] = {
+            "branch_index": branch_index,
+            "percentage": float(branch.get("percentage") or 0.0),
+            "lossy": lossy,
+            "legal_roll_state_present": "legal_roll_state" in branch,
+        }
+        if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "malformed_branch_events",
+                    "damage_event_count": None,
+                }
+            )
+            branch_rows.append(branch_row)
             continue
-        direct_damage = _branch_direct_damage(events, target_label, pre_hit_hp=pre_hit_hp)
-        if direct_damage is None:
+        branch_row["damage_event_count"] = _damage_event_count(events)
+        hit = _branch_direct_hit(events, target_label, pre_hit_hp=pre_hit_hp)
+        if hit is None:
+            damage_bearing = int(branch_row["damage_event_count"]) > 0
+            branch_row.update(
+                {
+                    "comparison_status": (
+                        "unsupported"
+                        if damage_bearing
+                        else "no_observed_target_direct_damage"
+                    ),
+                    "criticality": "not_applicable",
+                    "direct_damage": None,
+                }
+            )
+            if damage_bearing:
+                branch_row["unsupported_reason"] = (
+                    "damage_bearing_branch_without_observed_target_direct_damage"
+                )
+            branch_rows.append(branch_row)
             continue
-        try:
-            state = native_engine.State.from_string(legal_state)
-        except BaseException as error:
-            return {
-                "candidate_index": candidate_index,
-                "verdict": "comparison_limit",
-                "reason": f"native_state_parse_failed:{type(error).__name__}",
-            }
-        oracle_context, oracle_rolls, oracle_limit = _basic_oracle(
-            state=state, direct=direct, dex=dex, slot_sides=slot_sides
+        target_fainted = _branch_target_fainted(events, target_label)
+        criticality = _branch_criticality(
+            events, hit=hit, target=target_label, lossy=lossy
         )
+        branch_row.update(
+            {
+                "direct_damage": hit.damage,
+                "target_fainted": target_fainted,
+                "ko_clamped": hit.ko_clamped,
+                "criticality": criticality,
+                "has_observed_secondary": bool(
+                    direct.secondary_status
+                    and _branch_has_status(events, target_label, direct.secondary_status)
+                ),
+            }
+        )
+        if criticality == "unknown":
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "unknown_or_unlabeled_criticality",
+                }
+            )
+            branch_rows.append(branch_row)
+            continue
+
+        state_changed = any(
+            _event_changes_damage_state(event) for event in events[:hit.event_index]
+        )
+        legal_state = branch.get("legal_roll_state")
+        if "legal_roll_state" in branch:
+            if not isinstance(legal_state, str) or not legal_state:
+                branch_row.update(
+                    {
+                        "comparison_status": "unsupported",
+                        "unsupported_reason": "invalid_legal_roll_state",
+                        "state_source": "invalid_branch_local",
+                    }
+                )
+                branch_rows.append(branch_row)
+                continue
+            comparison_state = legal_state
+            branch_row["state_source"] = "branch_local"
+        elif state_changed:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "missing_required_legal_roll_state",
+                    "state_source": "missing_branch_local",
+                }
+            )
+            branch_rows.append(branch_row)
+            continue
+        else:
+            comparison_state = candidate_state
+            branch_row["state_source"] = "candidate_prestate"
+        try:
+            state = native_engine.State.from_string(comparison_state)
+        except BaseException as error:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": (
+                        f"native_state_parse_failed:{type(error).__name__}"
+                    ),
+                }
+            )
+            branch_rows.append(branch_row)
+            continue
+        branch_direct = replace(direct, critical=criticality == "critical")
+        try:
+            oracle_context, oracle_rolls, oracle_limit = _basic_oracle(
+                state=state, direct=branch_direct, dex=dex, slot_sides=slot_sides
+            )
+        except BaseException as error:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": (
+                        f"oracle_context_failed:{type(error).__name__}"
+                    ),
+                }
+            )
+            branch_rows.append(branch_row)
+            continue
         native_by_order, native_reason = _native_rolls(
             native_engine=native_engine,
             state=state,
@@ -534,74 +864,178 @@ def _candidate_report(
             actor_side=slot_sides[direct.actor],
         )
         native_maxes = (
-            {rolls[1] if direct.critical else rolls[0] for rolls in native_by_order.values()}
+            {
+                rolls[1] if branch_direct.critical else rolls[0]
+                for rolls in native_by_order.values()
+            }
             if native_by_order is not None
             else set()
         )
         native_max = next(iter(native_maxes)) if len(native_maxes) == 1 else None
-        verdict, reason = _classify_branch_verdict(
-            oracle_rolls=oracle_rolls,
-            oracle_limit=oracle_limit,
-            native_max=native_max,
-            observed_damage=direct.damage,
-            observed_ko_clamped=direct.ko_clamped,
-            nonterminal_damage=(),
-            secondary_status=None,
-            secondary_branch_has_observed_damage=False,
+        native_limit = native_reason or (
+            "native_damage_order_dependent" if len(native_maxes) > 1 else None
         )
-        if native_reason is not None:
-            verdict, reason = "comparison_limit", native_reason
-        elif len(native_maxes) > 1:
-            verdict, reason = "comparison_limit", "native_damage_order_dependent"
-        comparisons.append(
-            {
-                "oracle_context": oracle_context,
-                "oracle_rolls": list(oracle_rolls) if oracle_rolls is not None else None,
-                "oracle_limit": oracle_limit,
-                "native_rolls_by_order": (
-                    {str(order).lower(): list(rolls) for order, rolls in native_by_order.items()}
-                    if native_by_order is not None else None
-                ),
-                "native_max": native_max,
-                "native_limit": native_reason or (
-                    "native_damage_order_dependent" if len(native_maxes) > 1 else None
-                ),
-                "verdict": verdict,
-                "reason": reason,
-            }
-        )
-        branch_rows.append(
-            {
-                "percentage": float(branch.get("percentage") or 0.0),
-                "direct_damage": direct_damage,
-                "target_fainted": _branch_target_fainted(events, target_label),
-                "has_observed_secondary": bool(
-                    direct.secondary_status
-                    and _branch_has_status(events, target_label, direct.secondary_status)
-                ),
-                "lossy": list(branch.get("lossy") or []),
-            }
-        )
-    if not branch_rows:
-        return {"candidate_index": candidate_index, "verdict": "comparison_limit", "reason": "no_rendered_direct_damage_branch"}
+        comparison = {
+            "oracle_context": oracle_context,
+            "oracle_rolls": list(oracle_rolls) if oracle_rolls is not None else None,
+            "oracle_limit": oracle_limit,
+            "native_rolls_by_order": (
+                {
+                    str(order).lower(): list(rolls)
+                    for order, rolls in native_by_order.items()
+                }
+                if native_by_order is not None
+                else None
+            ),
+            "native_max": native_max,
+            "native_limit": native_limit,
+        }
+        branch_row["comparison_evidence"] = comparison
+        if oracle_rolls is None:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": (
+                        f"oracle_unavailable:{oracle_limit or 'unknown'}"
+                    ),
+                }
+            )
+        elif not oracle_rolls:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "oracle_empty_roll_support",
+                }
+            )
+        elif native_limit is not None:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": native_limit,
+                }
+            )
+        elif criticality != expected_criticality:
+            branch_row["comparison_status"] = "excluded_criticality_mismatch"
+        else:
+            branch_row["comparison_status"] = "comparable"
+            matching_comparisons.append(comparison)
+        branch_rows.append(branch_row)
 
-    # Each rendered branch may carry a distinct legal pre-hit state. Aggregating
-    # it is valid only after its oracle/native evidence is byte-for-byte alike.
+    population = {
+        "total_rendered": len(branches),
+        "reported": len(branch_rows),
+        "dropped": len(branches) - len(branch_rows),
+        "damage_bearing": sum(
+            isinstance(row.get("damage_event_count"), int)
+            and int(row["damage_event_count"]) > 0
+            for row in branch_rows
+        ),
+        "no_damage": sum(
+            row.get("damage_event_count") == 0 for row in branch_rows
+        ),
+        "damage_bearing_unsupported": sum(
+            row.get("comparison_status") == "unsupported"
+            and isinstance(row.get("damage_event_count"), int)
+            and int(row["damage_event_count"]) > 0
+            for row in branch_rows
+        ),
+        "observed_target_direct_damage": sum(
+            row.get("direct_damage") is not None for row in branch_rows
+        ),
+        "without_observed_target_direct_damage": sum(
+            row.get("direct_damage") is None
+            for row in branch_rows
+        ),
+        "comparable_observed_criticality": sum(
+            row.get("comparison_status") == "comparable" for row in branch_rows
+        ),
+        "excluded_criticality_mismatch": sum(
+            row.get("comparison_status") == "excluded_criticality_mismatch"
+            for row in branch_rows
+        ),
+        "unsupported": sum(
+            row.get("comparison_status") == "unsupported" for row in branch_rows
+        ),
+        "state_source_candidate_prestate": sum(
+            row.get("state_source") == "candidate_prestate" for row in branch_rows
+        ),
+        "state_source_branch_local": sum(
+            row.get("state_source") == "branch_local" for row in branch_rows
+        ),
+        "criticality": {
+            label: sum(row.get("criticality") == label for row in branch_rows)
+            for label in ("critical", "noncritical", "unknown")
+        },
+    }
+    all_direct_rows = [
+        row for row in branch_rows if isinstance(row.get("direct_damage"), int)
+    ]
+    rendered_by_criticality = {
+        label: sorted(
+            [
+                int(row["direct_damage"])
+                for row in all_direct_rows
+                if row.get("criticality") == label
+            ]
+        )
+        for label in ("critical", "noncritical", "unknown")
+    }
+    base_result: dict[str, object] = {
+        "candidate_index": candidate_index,
+        "observed_criticality_partition": expected_criticality,
+        "branch_population": population,
+        "rendered_direct_damages": sorted(
+            int(row["direct_damage"]) for row in all_direct_rows
+        ),
+        "rendered_direct_damages_by_criticality": rendered_by_criticality,
+        "branches": branch_rows,
+    }
+    if population["unsupported"]:
+        return {
+            **base_result,
+            "verdict": "comparison_limit",
+            "reason": "unsupported_rendered_branch_population",
+        }
+    if not all_direct_rows:
+        return {
+            **base_result,
+            "verdict": "comparison_limit",
+            "reason": "no_rendered_direct_damage_branch",
+        }
+    if not matching_comparisons:
+        return {
+            **base_result,
+            "verdict": "comparison_limit",
+            "reason": "no_branch_for_observed_criticality",
+        }
+
+    # Branches are compared only inside the observed crit partition, and only
+    # after each branch independently produced identical exact evidence.
     comparison_keys = {
-        json.dumps(comparison, sort_keys=True) for comparison in comparisons
+        json.dumps(comparison, sort_keys=True) for comparison in matching_comparisons
     }
     if len(comparison_keys) != 1:
         return {
-            "candidate_index": candidate_index,
+            **base_result,
             "verdict": "comparison_limit",
-            "reason": "candidate_branch_contexts_differ",
-            "branches": branch_rows,
+            "reason": "observed_criticality_branch_contexts_differ",
         }
-    comparison = comparisons[0]
+    comparison = matching_comparisons[0]
+    selected_rows = [
+        row
+        for row in all_direct_rows
+        if row.get("criticality") == expected_criticality
+    ]
     nonterminal_damage = sorted(
-        {int(item["direct_damage"]) for item in branch_rows if not item["target_fainted"]}
+        {
+            int(row["direct_damage"])
+            for row in selected_rows
+            if not row.get("target_fainted")
+        }
     )
-    secondary_rows = [item for item in branch_rows if item["has_observed_secondary"]]
+    secondary_rows = [
+        row for row in selected_rows if row.get("has_observed_secondary")
+    ]
     native_limit = comparison["native_limit"]
     if native_limit is not None:
         verdict, reason = "comparison_limit", str(native_limit)
@@ -616,21 +1050,19 @@ def _candidate_report(
             nonterminal_damage=nonterminal_damage,
             secondary_status=direct.secondary_status,
             secondary_branch_has_observed_damage=any(
-                int(item["direct_damage"]) == direct.damage for item in secondary_rows
+                int(row["direct_damage"]) == direct.damage for row in secondary_rows
             ),
         )
     comparison.update({"verdict": verdict, "reason": reason})
     return {
-        "candidate_index": candidate_index,
+        **base_result,
         **comparison,
-        "rendered_direct_damages": sorted({int(item["direct_damage"]) for item in branch_rows}),
-        "rendered_nonterminal_direct_damages": nonterminal_damage,
+        "comparison_partition_nonterminal_direct_damages": nonterminal_damage,
         "secondary_branch_count": len(secondary_rows),
         "secondary_branch_has_observed_damage": (
-            any(int(item["direct_damage"]) == direct.damage for item in secondary_rows)
+            any(int(row["direct_damage"]) == direct.damage for row in secondary_rows)
             if direct.secondary_status else None
         ),
-        "branches": branch_rows,
     }
 
 
@@ -700,10 +1132,6 @@ def _branch_report(row: Mapping[str, Any], direct: DirectHit, dex: ShowdownDex) 
     else:
         verdict = str(candidate_rows[0]["verdict"])
         verdict_reason = candidate_rows[0].get("reason")
-    representative = None
-    native_max = candidate_rows[0].get("native_max") if len(candidate_keys) == 1 else None
-    if isinstance(native_max, int):
-        representative = {"value": int(native_max * 0.925), "derived": True, "formula": "floor(native_max * 0.925)"}
     return {
         "verdict": verdict,
         "verdict_reason": verdict_reason,
@@ -716,7 +1144,6 @@ def _branch_report(row: Mapping[str, Any], direct: DirectHit, dex: ShowdownDex) 
             "secondary_status": direct.secondary_status,
             "ko_clamped": direct.ko_clamped,
         },
-        "native_representative_damage": representative,
         "candidate_evidence": candidate_rows,
     }
 
@@ -801,18 +1228,86 @@ def _source_provenance() -> dict[str, object]:
     }
 
 
-def _showdown_source_provenance(showdown_root: str) -> dict[str, object]:
-    """Bind the oracle to the Showdown bytes the dex loader actually executes."""
+def _showdown_dependency_paths(root: Path) -> list[Path]:
+    """All Showdown bytes loaded by Gen 3 dex/randbat resolution."""
 
-    root = Path(showdown_root).expanduser().resolve()
-    inputs = [
+    required = [
         root / "dist" / "sim" / "index.js",
+        root / "dist" / "sim" / "dex.js",
+        root / "dist" / "sim" / "dex-data.js",
         root / "dist" / "data" / "moves.js",
         root / "dist" / "data" / "pokedex.js",
+        root / "dist" / "data" / "typechart.js",
+        root / "dist" / "data" / "abilities.js",
+        root / "dist" / "data" / "items.js",
+        root / "dist" / "data" / "mods" / "gen3" / "moves.js",
+        root / "dist" / "data" / "mods" / "gen3" / "scripts.js",
+        root / "dist" / "data" / "mods" / "gen3" / "abilities.js",
+        root / "dist" / "data" / "mods" / "gen3" / "items.js",
+        root / "data" / "random-battles" / "gen3" / "sets.json",
+        root / "dist" / "data" / "random-battles" / "gen3" / "teams.js",
     ]
-    if any(not path.is_file() for path in inputs):
-        missing = next(path for path in inputs if not path.is_file())
-        raise SystemExit(f"cannot record Showdown oracle provenance: missing {_path_label(missing)}")
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        raise SystemExit(
+            "cannot record Showdown oracle provenance: missing "
+            + str(missing[0].relative_to(root))
+        )
+    paths = set(required)
+    # Dex.forGen(3) loads inherited mod layers through the compiled simulator.
+    # Hash all built JavaScript rather than maintaining another transitive-load
+    # denylist that could miss a parent mod or helper introduced upstream.
+    paths.update((root / "dist").rglob("*.js"))
+    return sorted(path for path in paths if path.is_file())
+
+
+def _showdown_source_provenance(showdown_root: str) -> dict[str, object]:
+    """Bind the oracle to a clean commit and every relevant Showdown byte."""
+
+    root = Path(showdown_root).expanduser().resolve()
+    try:
+        top_level = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        ).resolve()
+        commit = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(
+            f"cannot record Showdown oracle provenance: Git identity unavailable: {error}"
+        ) from error
+    if top_level != root:
+        raise SystemExit(
+            "cannot record Showdown oracle provenance: --showdown-root is not "
+            "the Showdown Git worktree root"
+        )
+    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+        raise SystemExit(
+            "cannot record Showdown oracle provenance: HEAD is not a full commit id"
+        )
+    if dirty:
+        raise SystemExit(
+            "Showdown checkout is dirty; commit or restore it before measuring"
+        )
+
+    inputs = _showdown_dependency_paths(root)
     digest = hashlib.sha256()
     records: list[dict[str, str]] = []
     for path in inputs:
@@ -821,29 +1316,11 @@ def _showdown_source_provenance(showdown_root: str) -> dict[str, object]:
         digest.update(label.encode("utf-8"))
         digest.update(bytes.fromhex(file_hash))
         records.append({"path": label, "sha256": file_hash})
-    commit: str | None = None
-    clean: bool | None = None
-    try:
-        commit_result = subprocess.run(
-            ["git", "rev-parse", "--verify", "HEAD"], cwd=root, check=True,
-            capture_output=True, text=True,
-        )
-        candidate = commit_result.stdout.strip()
-        if len(candidate) == 40 and all(char in "0123456789abcdef" for char in candidate):
-            commit = candidate
-            clean = not bool(subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
-                check=True, capture_output=True, text=True,
-            ).stdout.strip())
-    except (OSError, subprocess.CalledProcessError):
-        # Built releases need not be Git checkouts; their byte hash remains the
-        # content identity used by the oracle.
-        pass
     return {
         "content_sha256": digest.hexdigest(),
         "inputs": records,
         "git_commit": commit,
-        "git_clean": clean,
+        "git_clean": True,
     }
 
 
@@ -896,7 +1373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result.update({"seed": identity[0], "step": identity[1]})
         results.append(result)
     payload = {
-        "schema_version": "pokezero.damage-arithmetic-tail-attestation/v3",
+        "schema_version": "pokezero.damage-arithmetic-tail-attestation/v4",
         "command": _command_provenance(
             reports=input_reports, targets=targets, showdown_root=args.showdown_root
         ),
