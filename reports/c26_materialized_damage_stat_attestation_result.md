@@ -1,39 +1,39 @@
-# C26 result: materialized damage-stat ownership
+# C26 result: bounded BattleSpec-to-native transport diagnostic
 
-## Method
+## Evidence Boundary
 
-Replayed each target with the same deterministic legal-action stream and
-production world constructor used by `engine_transition_differential.py`.
-Before branch generation, compared every Python `PokemonSpec` against the
-constructed Rust `State`:
+This artifact documents the diagnostic's scope, not a retained-row clearance.
+The historical row identities previously listed here cannot be authoritatively
+recovered from a tracked reproduction archive on this branch. They are therefore
+not evidence that any current certification-tail boundary still diverges, nor
+that any particular row has passed transport attestation.
 
-- stored Attack, Defense, Special Attack, Special Defense, and Speed for all
-  party members on both sides;
-- HP/max HP thresholds, global weather, side conditions, and active volatiles;
-- active-side boost stages; and
-- damage-relevant ability, item, status, and type inputs.
+When run, `scripts/attest_materialized_damage_stats.py` writes a machine-readable
+JSON artifact containing its exact command, current source commit, engine
+fingerprint/image provenance, target boundary verdict, candidate construction
+status, and one attestation per constructed comparison state. A target is
+eligible for a transport statement only when its current strict matcher verdict
+is `diverged`; a matched, skipped, or construction-dropped target is reported as
+ineligible rather than silently cleared.
 
-The replay used a current, two-consumer fingerprint-checked native build.
+`comparison_states` counts the constructed native states actually compared.
+`hidden_counter_candidate_worlds` separately records the support-world count
+when hidden-counter recovery was in use; it is zero for an exact world.
 
-| Target | Public turn | Gating | Candidate worlds | Mismatches |
-| --- | ---: | --- | ---: | ---: |
-| `2800700/20` | 18 | exact | 1 | 0 |
-| `3301036/26` | 26 | exact | 1 | 0 |
-| `3401017/55` | 49 | exact | 1 | 0 |
-| `3500021/19` | 17 | exact | 1 | 0 |
-| `3300207/69` | 62 | support | 7 | 0 |
-| `3001000/57` | 53 | support | 5 | 0 |
-| `3300122/21` | 20 | support | 5 | 0 |
+## What A Passing Result Establishes
 
-## Finding
+For each constructed candidate world, the adapter forwarded the selected
+`BattleSpec` values faithfully into the native `State`, including party stats,
+level, HP, current/base types and abilities, item/status, move IDs/PP, active
+index, boost stages, weather, and all exposed nonzero side conditions.
 
-The pre-registered construction-seam prediction held: all 21 materialized
-candidate worlds had exact base-stat and active-stage agreement with the Rust
-states passed to branch generation. This rules out a shared Python
-materialization ownership bug for these retained rows.
+It does **not** establish either of the following:
 
-No production patch is justified by this evidence. The remaining owners are
-downstream: Gen 3 engine damage arithmetic and/or the component mapper's
-attribution of the realized protocol event. The reusable diagnostic remains
-available for future retained identities and fails visibly on either stored-stat
-or active-stage corruption.
+- The belief-world builder derived the correct `BattleSpec` values from public
+  and hidden game information.
+- The native engine generated correct branches or applied correct Gen 3 damage
+  arithmetic after state construction.
+
+Accordingly this diagnostic can narrow a surviving divergence away from the
+adapter transport seam only. It cannot clear a retained divergence's world
+derivation or arithmetic owner.

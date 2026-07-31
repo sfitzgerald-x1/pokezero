@@ -1,39 +1,36 @@
-# C26 prediction: materialized damage-stat ownership
+# C26 prediction: bounded BattleSpec-to-native transport diagnostic
 
 ## Scope
 
-This diagnostic investigates retained certification-tail rows labelled as status
-or direct-damage magnitude mismatches. It does not change a production default
-until a replay demonstrates one shared construction defect.
+This diagnostic is a reusable transport check for a *currently reproducible*
+strict-matcher divergence. It takes a seed/step target, recreates its deterministic
+action stream, and refuses to call the target transport-attested unless the same
+boundary still diverges under the current build.
 
-The target identities are `2800700/20`, `3301036/26`, `3401017/55`,
-`3500021/19`, `3300207/69`, and, when retained evidence is available,
-`3001000/57` and `3300122/21`.
+The public result records distinct constructed comparison states separately from
+hidden-counter variants. If a support variant cannot be constructed, the result
+is `dropped_variant_construction`; it is not zipped to another source spec and
+does not receive a transport clearance.
 
 ## Prediction
 
-For every materialized world that reaches a native engine state:
+For a current divergence whose native state was built successfully, each
+`BattleSpec` field the adapter forwards will agree exactly with the native state:
 
-1. The Python `PokemonSpec` values for `attack`, `defense`,
-   `special_attack`, and `special_defense` will exactly equal the corresponding
-   fields in the constructed Rust `State`.
-2. The active side's public boost stages will exactly equal the constructed
-   Rust side boost fields.
-3. Both sides and every party member will be attested; a match for only the
-   active combatants is not sufficient.
+- party identity, level, HP/max HP, five stored stats, current/base types,
+  current/base ability, item, status, weight, and move ID/PP/disabled slots;
+- active party index, active boosts, active volatiles, and every exposed nonzero
+  side condition on both sides; and
+- weather and weather duration.
 
-The reason is structural: `engine_world._build_pokemon_spec` calculates the
-five Gen 3 stats once, `PokemonSpec` carries those integers, and
-`poke_engine_adapter._build_pokemon` forwards them verbatim. Boosts are a
-separate `SideSpec` to `Side` mapping. A disagreement would therefore identify
-a concrete Python-to-Rust construction defect. If all fields agree, this lane
-will report that the outstanding magnitude ownership is downstream of that
-seam rather than invent a stat patch.
+Native enum display values are normalized with the adapter's production
+lowercase-ID convention before comparison. An extra native side condition is a
+mismatch, not an ignored unknown.
 
-## Evidence boundary
+## Falsification
 
-The historical target rows are not present in the locally retained public
-reproduction archive at the time of this commit. The diagnostic must therefore
-be run against a retained repro or a fresh replay before it can make a
-row-level finding. Its tests prove only that it detects base-stat and
-active-boost corruption at the materialization boundary.
+A mismatch is a concrete adapter transport defect candidate. A clean result
+rules out only that transport seam for the observed `BattleSpec`; it leaves
+belief-world derivation, native branch generation, and Gen 3 damage arithmetic
+open. No historical row-specific conclusion is claimed without a current JSON
+artifact carrying reproducible target and build provenance.
