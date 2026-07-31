@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Check that C26 is superseded by the public confusion implementation.
+"""Verify C26's immutable public provenance and current regression surface.
 
-This is intentionally an immutable source-and-fixture comparison. C26 retained
-only the three public identity labels, not its replay payloads or checkpoint
-shard. It therefore proves the public merge's renderer contract without
-manufacturing a classifier result from unavailable inputs.
+C26 retained no replay rows or classifier output. This checker keeps the
+original public merge as immutable provenance while exercising the current
+checkout's switch-prefixed renderer contract. It cannot prove a fresh result
+for any historical identity or grant certification clearance.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 import subprocess
+import sys
+import tomllib
 from pathlib import Path
 
 
@@ -20,54 +22,80 @@ EVENTS = "rust/pokezero-search/src/events.rs"
 NATIVE_TEST = "rust/pokezero-search/tests/gen3_confusion_event_renderer.rs"
 PREDICTION = "reports/c26_switch_confusion_event_attribution_prediction.md"
 SUPERSESSION = "reports/c26_switch_confusion_event_attribution_supersession.md"
-EXPECTED_IDENTITIES = ("3001000/57", "3300017/60", "3300122/21")
+PATCH_LIST_SHA256 = "690b9407059c4a9322b9bee2a7dc59f3a5ea8477c5c7b493c8243b3157c903ea"
+ENGINE_SOURCE_SPEC = {
+    "schema": "pokezero-engine-upstream-source/1",
+    "distribution": "poke-engine",
+    "version": "0.0.47",
+    "archive": "poke_engine-0.0.47.tar.gz",
+    "sha256": "84a7dfad5ce4650a2cb9250999597c594385069eb33622c6a14bb1279694b434",
+}
+CURRENT_REGRESSION = "switch_prefixed_exact_self_hit_is_untagged_and_safe"
+CURRENT_PUBLIC_INPUTS = (
+    EVENTS,
+    "rust/pokezero-search/Cargo.toml",
+    "third_party/poke-engine-base-source.json",
+    "third_party/poke-engine-gen3-patches.txt",
+)
+
+
+def command(
+    repo: Path,
+    label: str,
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    forbid_skip: bool = False,
+) -> str:
+    """Run a required command and surface all failures rather than skipping a gate."""
+
+    try:
+        result = subprocess.run(
+            args,
+            cwd=cwd or repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as error:
+        raise RuntimeError(f"{label} could not start: {error}") from error
+    if result.returncode:
+        raise RuntimeError(
+            f"{label} failed with exit code {result.returncode}: {' '.join(args)}\n"
+            f"{result.stdout}"
+        )
+    if forbid_skip and "skipped" in result.stdout.lower():
+        raise RuntimeError(f"{label} skipped required coverage:\n{result.stdout}")
+    return result.stdout
 
 
 def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout
+    return command(repo, f"git {' '.join(args)}", ["git", "-C", str(repo), *args])
 
 
 def require(source: str, fragment: str, label: str) -> None:
     if fragment not in source:
-        raise RuntimeError(f"missing {label}: {fragment!r}")
+        raise RuntimeError(f"missing historical {label}: {fragment!r}")
 
 
-def forbid(source: str, fragment: str, label: str) -> None:
-    if fragment in source:
-        raise RuntimeError(f"unexpected {label}: {fragment!r}")
+def require_equal(actual: object, expected: object, label: str) -> None:
+    if actual != expected:
+        raise RuntimeError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
-def identities_in(source: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"\b\d{7}/\d+\b", source))
+def verify_historical_public_merge(repo: Path) -> dict[str, object]:
+    """Keep the original merge proof immutable and anchored to current main."""
 
-
-def main() -> int:
-    repo = Path(__file__).resolve().parents[1]
-    prediction = (repo / PREDICTION).read_text(encoding="utf-8")
-    supersession = (repo / SUPERSESSION).read_text(encoding="utf-8")
-    for label, document in (("prediction", prediction), ("supersession", supersession)):
-        mentioned_identities = identities_in(document)
-        if set(mentioned_identities) != set(EXPECTED_IDENTITIES):
-            raise RuntimeError(f"C26 {label} ledger changed: {mentioned_identities!r}")
-
-    # Read the immutable, publicly merged implementation rather than a moving
-    # branch or a feature-lane hash.
+    git(repo, "rev-parse", "--verify", "origin/main^{commit}")
     git(repo, "cat-file", "-e", f"{PUBLIC_MERGE}^{{commit}}")
+    git(repo, "merge-base", "--is-ancestor", PUBLIC_MERGE, "origin/main")
     parents = git(repo, "show", "-s", "--format=%P", PUBLIC_MERGE).split()
     if len(parents) != 2:
         raise RuntimeError(f"public implementation is not a merge commit: {parents!r}")
+
     public_events = git(repo, "show", f"{PUBLIC_MERGE}:{EVENTS}")
     public_tests = git(repo, "show", f"{PUBLIC_MERGE}:{NATIVE_TEST}")
-
-    # Switch handling completes before the common move phase. The merged
-    # classifier consumes the real prelude, proves the fixed 40-power identity,
-    # emits canonical untagged self-hit damage, and fails closed on collisions.
     require(public_events, "fn confusion_self_hit_damage(", "damage derivation")
     require(public_events, "fn classify_confusion_self_hit(", "fail-closed classifier")
     require(
@@ -77,44 +105,133 @@ def main() -> int:
     )
     require(
         public_events,
-        'out.lines.push(format!("|-activate|{ident}|confusion"));',
-        "confusion activation",
-    )
-    require(
-        public_events,
-        "out.lines.push(format!(\"|-damage|{ident}|{condition}\"));",
+        'out.lines.push(format!("|-damage|{ident}|{condition}"));',
         "untagged exact self-hit output",
-    )
-    forbid(public_events, "|[from] confusion", "tagged confusion output")
-    require(public_tests, "fn exact_self_hit_renders_activation_and_cancels_substitute()", "exact self-hit test")
-    require(public_tests, "fn crash_miss_remains_a_move_not_a_confusion_self_hit()", "crash control")
-    require(
-        public_tests,
-        "fn explosion_behind_protect_is_not_misrendered_as_confusion()",
-        "self-faint control",
     )
     require(
         public_tests,
         "fn recoil_after_an_executed_move_is_not_confusion_damage()",
-        "ordinary-damage negative control",
+        "ordinary-damage control",
     )
-    require(public_tests, "[from] Recoil", "ordinary-damage source assertion")
+    return {"public_merge": PUBLIC_MERGE, "public_merge_parents": parents}
 
-    evidence = {
-        "verdict": "superseded_by_public_merge_renderer_contract",
-        "public_merge": PUBLIC_MERGE,
-        "public_merge_parents": parents,
-        "identities": [
-            {
-                "identity": identity,
-                "documented_shape": "voluntary switch, then opposing exact confusion self-hit",
-                "replacement_path": "post-switch render_move_phase -> exact confusion classifier",
-            }
-            for identity in EXPECTED_IDENTITIES
+
+def verify_current_engine_inputs(repo: Path) -> dict[str, object]:
+    """Authenticate tracked engine inputs and the Rust test's vendor target tree."""
+
+    sys.path.insert(0, str(repo / "scripts"))
+    import apply_poke_engine_patches as patch_stack
+    import engine_build_fingerprint as engine_fingerprint
+    import verify_poke_engine_source as source_verifier
+
+    source_spec = source_verifier.source_pin()
+    require_equal(source_spec, ENGINE_SOURCE_SPEC, "pinned engine source specification")
+    patch_list_digest = hashlib.sha256(patch_stack.PATCH_LIST.read_bytes()).hexdigest()
+    require_equal(patch_list_digest, PATCH_LIST_SHA256, "patch-list digest")
+
+    fingerprint = engine_fingerprint.compute_fingerprint()
+    require_equal(
+        fingerprint["base_source"], ENGINE_SOURCE_SPEC, "engine fingerprint source specification"
+    )
+    patch_names = patch_stack.patch_names()
+    require_equal(fingerprint["patches"], patch_names, "engine fingerprint patch order")
+    patch_stack.patch_target_paths()
+
+    vendored = engine_fingerprint.VENDORED
+    if not vendored.is_dir():
+        raise RuntimeError(f"missing vendored engine source required by Rust test: {vendored}")
+    manifest = tomllib.loads((vendored / "Cargo.toml").read_text(encoding="utf-8"))
+    require_equal(
+        manifest.get("package", {}).get("version"),
+        ENGINE_SOURCE_SPEC["version"],
+        "vendored engine package version",
+    )
+    require_equal(
+        patch_stack.patched_target_tree_sha256(vendored),
+        patch_stack.PATCHED_TARGET_TREE_SHA256,
+        "vendored patched target-tree digest",
+    )
+    return {
+        "engine_version": ENGINE_SOURCE_SPEC["version"],
+        "patch_count": len(patch_names),
+        "patch_list_sha256": patch_list_digest,
+        "patched_target_tree_sha256": patch_stack.PATCHED_TARGET_TREE_SHA256,
+    }
+
+
+def verify_current_regression_surface(repo: Path) -> list[str]:
+    """Exercise current-main-equivalent renderer behavior, not frozen source text."""
+
+    git(repo, "merge-base", "--is-ancestor", "origin/main", "HEAD")
+    command(
+        repo,
+        "current checkout public-input comparison",
+        ["git", "-C", str(repo), "diff", "--quiet", "origin/main", "--", *CURRENT_PUBLIC_INPUTS],
+    )
+    command(
+        repo,
+        "current switch-prefixed confusion renderer regression",
+        [
+            "cargo",
+            "test",
+            "--test",
+            "gen3_confusion_event_renderer",
         ],
-        "v2_v3_contract": "public merge emits untagged self-hit damage; V2 remains folded and V3 corrects its own damage column",
-        "ordinary_damage_control": "merged native Recoil test preserves [from] Recoil rather than confusion attribution",
+        cwd=repo / "rust" / "pokezero-search",
+        forbid_skip=True,
+    )
+    command(
+        repo,
+        "pinned poke-engine patch-stack test",
+        [
+            "uv",
+            "run",
+            "--isolated",
+            "--python",
+            "3.12",
+            "python",
+            "tests/test_poke_engine_patch_stack.py",
+        ],
+        forbid_skip=True,
+    )
+    command(
+        repo,
+        "public invariant test",
+        [
+            "uv",
+            "run",
+            "--isolated",
+            "--python",
+            "3.12",
+            "python",
+            "tests/test_public_invariant.py",
+        ],
+        forbid_skip=True,
+    )
+    return [
+        CURRENT_REGRESSION,
+        "tests/test_poke_engine_patch_stack.py",
+        "tests/test_public_invariant.py",
+    ]
+
+
+def main() -> int:
+    repo = Path(__file__).resolve().parents[1]
+    for path in (PREDICTION, SUPERSESSION):
+        if not (repo / path).is_file():
+            raise RuntimeError(f"missing C26 evidence record: {path}")
+
+    historical = verify_historical_public_merge(repo)
+    engine = verify_current_engine_inputs(repo)
+    current_checks = verify_current_regression_surface(repo)
+    evidence = {
+        "verdict": "historical_public_merge_and_current_regression_verified",
+        **historical,
+        "current_checks": current_checks,
+        "engine": engine,
+        "identity_ledger": "not verified: retained labels are not independent provenance",
         "row_replay": "not asserted: no C26 row payload, checkpoint shard, or result artifact is retained in this repository",
+        "clearance": "not granted: this is renderer-contract coverage, not a certification classifier replay",
     }
     print(json.dumps(evidence, indent=2, sort_keys=True))
     return 0
