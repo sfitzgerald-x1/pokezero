@@ -1810,13 +1810,28 @@ def _prepare_boundary(
         return None
 
     states: list[Any] = []
-    for spec in specs:
+    constructed_specs: list[Any] = []
+    variant_construction: list[dict[str, object]] = []
+    for variant_index, spec in enumerate(specs):
         try:
-            states.append(build_poke_engine_state(spec, module=poke_engine))
+            state = build_poke_engine_state(spec, module=poke_engine)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except BaseException:  # noqa: BLE001 — an illegal counter combination
+        except BaseException as error:  # noqa: BLE001 — an illegal counter combination
+            # Hidden-counter support deliberately drops an illegal candidate for
+            # transition comparison.  Keep the drop explicit so diagnostics do
+            # not zip the surviving state against the wrong source spec.
+            variant_construction.append(
+                {
+                    "variant_index": variant_index,
+                    "status": "dropped",
+                    "error_type": type(error).__name__,
+                }
+            )
             continue
+        states.append(state)
+        constructed_specs.append(spec)
+        variant_construction.append({"variant_index": variant_index, "status": "constructed"})
     if not states:
         counts["skip:world_error:no_constructible_candidate"] += 1
         return None
@@ -1856,6 +1871,13 @@ def _prepare_boundary(
         },
         "turn": turn,
         "states": states,
+        # Diagnostic callers may attest the exact Python materialization
+        # payload against these native branch inputs before asking the engine
+        # to enumerate a transition. The game differential itself ignores it.
+        # Aligned one-to-one with ``states``.  ``variant_construction`` retains
+        # any support candidate the native constructor rejected.
+        "specs": constructed_specs,
+        "variant_construction": variant_construction,
         "slot_sides": world.slot_sides,
         "choices": choices,
         "pre_features": pre_features,
