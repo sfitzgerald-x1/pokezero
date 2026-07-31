@@ -7,6 +7,8 @@ on:
       - "pyproject.toml"
       - "src/pokezero/fleet_worker.py"
       - "src/pokezero/rollout_cli.py"
+      - "src/pokezero/collection.py"
+      - "src/pokezero/selfplay.py"
       - "src/pokezero/dataset.py"
       - "tests/test_fleet_worker.py"
       - "tests/test_cache_concat.py"
@@ -23,8 +25,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install NumPy-backed cache dependencies
-        run: python -m pip install -e '.[neural]'
+      - name: Install base worker plus NumPy cache dependency
+        run: python -m pip install -e . numpy
+
+      - name: Assert NumPy-backed cache dependency
+        run: python -c "import numpy; print(numpy.__version__)"
 
       - name: Run fan-in crash matrix
-        run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout
+        run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant
