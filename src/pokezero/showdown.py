@@ -915,6 +915,16 @@ class ShowdownPokemon:
     live_type_source: Optional[str] = None
 
 
+def _is_current_public_active(pokemon: object | None) -> bool:
+    """Whether a public record is explicitly the current active Pokemon.
+
+    Toxic proof latches authorize simulator-private state, so truthiness is not
+    sufficient here: snapshots can contain stale, partial, or malformed rows.
+    """
+
+    return getattr(pokemon, "active", None) is True
+
+
 @dataclass(frozen=True)
 class ShowdownReplayState:
     battle_id: str
@@ -928,6 +938,10 @@ class ShowdownReplayState:
     volatiles: Mapping[str, tuple[str, ...]]
     direct_materialization_blockers: Mapping[str, tuple[str, ...]]
     future_sight: Mapping[str, int]
+    # Public Toxic chronology for the active slot. Values 0..15 are the
+    # model-facing multiplier; 16 is an internal saturation sentinel meaning
+    # Showdown's current stage is already capped at 15 at an ordinary request.
+    # Observation encoding still clamps this to the public maximum of 15.
     toxic_stage: Mapping[str, int]
     # Confusion turns-so-far per slot (spec v3 change 4, docs/observation_v3_spec.md): the
     # public elapsed-duration counter of the active mon's ``confusion`` volatile. Advances by 1
@@ -1030,7 +1044,7 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
-    # Public parser chronology needed across snapshots taken after ``|upkeep|`` but before a
+    # Public parser chronology needed across snapshots taken after ``|upkeep`` but before a
     # forced replacement and the following ``|turn|``. A replacement entered after that
     # residual, so its next turn-boundary flip must be skipped.
     post_upkeep_window: bool = False
@@ -1115,6 +1129,51 @@ class ShowdownReplayState:
     # Cumulative exact depletion since creation when public fixed-damage
     # chronology derives it. This invariant is portable across sampled max HP.
     substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
+    # Whether ``toxic_stage`` is known from the public protocol. A zero alone is
+    # ambiguous: it can mean a fresh Toxic/Switch-in counter, or an incomplete
+    # prefix whose live toxic counter was never observed. The observation keeps
+    # its legacy zero encoding, but direct world construction must reject the
+    # latter rather than silently seed a false ``toxic_count = 0``.
+    toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
+    # A known stage-0 active ``tox`` counter is normally ambiguous at an
+    # action boundary. This proof is set only when a non-Baton-Pass ``switch``
+    # introduced the poisoned Pokemon after ``|upkeep``, after that turn's
+    # residual had already run. It permits the engine's legitimate pre-tick
+    # counter 0 without relaxing the fail-closed rule for every other stage-0
+    # snapshot. It is retired by the first Toxic residual and every active
+    # status/faint transition.
+    toxic_stage_zero_after_upkeep: Mapping[str, bool] = field(default_factory=dict)
+    # The next turn whose residual phase must contain the first Toxic tick for
+    # a post-upkeep replacement proof. Keeping this deadline in the snapshot
+    # makes a resumed parser reject a skipped residual just like a live fold.
+    toxic_stage_zero_after_upkeep_expires_after_turn: Mapping[str, int | None] = field(
+        default_factory=dict
+    )
+    # Exact active ident that entered under the bounded stage-zero proof. A
+    # boolean alone cannot survive a snapshot safely: the proof belongs to one
+    # canonical p1a/p2a occupant, not merely its side.
+    toxic_stage_zero_after_upkeep_ident: Mapping[str, str | None] = field(default_factory=dict)
+    # A public active faint is eligible to authorize exactly one same-seat
+    # post-upkeep replacement. This stays distinct from the materialization
+    # proof: a post-upkeep switch without a preceding same-seat faint is not
+    # known to be a forced replacement.
+    toxic_faint_replacement_pending: Mapping[str, bool] = field(default_factory=dict)
+    # Exact active ident that fainted to open a replacement window. This is
+    # separate from the pending bit so a restored parser can verify the same
+    # outgoing occupant before accepting a replacement.
+    toxic_faint_replacement_expected_ident: Mapping[str, str | None] = field(
+        default_factory=dict
+    )
+    # Malformed faint/turn chronology is terminal until the next clean turn.
+    # Retaining it across snapshots prevents a later duplicate faint from
+    # re-arming a cleared boolean latch.
+    toxic_faint_replacement_invalid: Mapping[str, bool] = field(default_factory=dict)
+    # Provenance for HP numerators/denominators in this protocol stream. ``exact`` means the
+    # denominator is the Pokemon's real max HP; ``percentage`` means Showdown's rounded /100
+    # player view; absent/``unknown`` means residual magnitude must not distinguish the two.
+    # Persisting this prevents a resumed incremental parser from reinterpreting an exact
+    # 100-HP Pokemon as percentage-form (or vice versa).
+    hp_visibility: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1257,7 +1316,13 @@ class _ReplayParser:
     mutable accumulators, so a snapshot is unaffected by later ``feed()`` calls.
     """
 
-    def __init__(self, battle_id: str = "replay") -> None:
+    def __init__(
+        self,
+        battle_id: str = "replay",
+        *,
+        complete_prefix: bool = False,
+        hp_visibility: Mapping[str, str] | None = None,
+    ) -> None:
         self.battle_id = battle_id
         self.players: dict[str, str] = {}
         self.requests: dict[str, Mapping[str, Any]] = {}
@@ -1271,6 +1336,35 @@ class _ReplayParser:
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
+        # A fresh parser is safe for attach-midstream use: zero is not public proof of an
+        # active Toxic counter unless the caller attests that the prefix starts at reset.
+        complete_prefix_is_true = type(complete_prefix) is bool and complete_prefix
+        self.toxic_stage_known: dict[str, bool] = {
+            "p1": complete_prefix_is_true,
+            "p2": complete_prefix_is_true,
+        }
+        self.toxic_stage_zero_after_upkeep: dict[str, bool] = {"p1": False, "p2": False}
+        self.toxic_stage_zero_after_upkeep_expires_after_turn: dict[str, int | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_stage_zero_after_upkeep_ident: dict[str, str | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_faint_replacement_pending: dict[str, bool] = {"p1": False, "p2": False}
+        self.toxic_faint_replacement_expected_ident: dict[str, str | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_faint_replacement_invalid: dict[str, bool] = {"p1": False, "p2": False}
+        self.hp_visibility: dict[str, str] = {"p1": "unknown", "p2": "unknown"}
+        for slot, visibility in (hp_visibility or {}).items():
+            if slot not in self.hp_visibility:
+                raise ValueError(f"unknown Showdown slot in hp_visibility: {slot!r}")
+            if visibility not in {"exact", "percentage", "unknown"}:
+                raise ValueError(f"invalid HP visibility for {slot}: {visibility!r}")
+            self.hp_visibility[slot] = visibility
         # Confusion turns-so-far per slot (spec v3 change 4). See ShowdownReplayState.confusion_elapsed.
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
@@ -1301,7 +1395,7 @@ class _ReplayParser:
         self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # See ShowdownReplayState.truant_phase. None = no holder / phase unknown.
         self.truant_phase: dict[str, Optional[bool]] = {"p1": None, "p2": None}
-        # True between |upkeep| and the next |turn| -- the window in which a faint
+        # True between |upkeep and the next |turn| -- the window in which a faint
         # replacement enters AFTER that turn's residual has already run.
         self._post_upkeep_window: bool = False
         # Slots whose next |turn| flip must be skipped (see _TRUANT replacement guard).
@@ -1326,7 +1420,12 @@ class _ReplayParser:
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
         """Hydrate parser state directly, without replaying its protocol prefix."""
 
-        parser = cls(snapshot.battle_id)
+        snapshot_post_upkeep_window = getattr(snapshot, "post_upkeep_window", None)
+        post_upkeep_window_is_valid = type(snapshot_post_upkeep_window) is bool
+        parser = cls(
+            snapshot.battle_id,
+            hp_visibility=getattr(snapshot, "hp_visibility", {}),
+        )
         parser.players = dict(snapshot.players)
         parser.requests = dict(snapshot.requests)
         parser.public_active = dict(snapshot.public_active)
@@ -1353,6 +1452,125 @@ class _ReplayParser:
         }
         parser.future_sight = dict(snapshot.future_sight)
         parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
+        snapshot_stage_known = getattr(snapshot, "toxic_stage_known", {})
+        parser.toxic_stage_known = {}
+        for slot in ("p1", "p2"):
+            if isinstance(snapshot_stage_known, Mapping) and slot in snapshot_stage_known:
+                parser.toxic_stage_known[slot] = snapshot_stage_known[slot] is True
+                continue
+            # Old snapshots did not preserve this provenance. A non-toxic active
+            # has no counter to reconstruct; an active tox mon must fail closed.
+            active = snapshot.public_active.get(slot)
+            parser.toxic_stage_known[slot] = (
+                _is_current_public_active(active)
+                and not _condition_has_status(getattr(active, "condition", None), "tox")
+            )
+        for slot, known in parser.toxic_stage_known.items():
+            if not known:
+                parser.toxic_stage[slot] = 0
+        snapshot_zero_after_upkeep = getattr(snapshot, "toxic_stage_zero_after_upkeep", {})
+        snapshot_faint_replacement_pending = getattr(
+            snapshot, "toxic_faint_replacement_pending", {}
+        )
+        snapshot_expected_ident = getattr(snapshot, "toxic_faint_replacement_expected_ident", {})
+        snapshot_invalid = getattr(snapshot, "toxic_faint_replacement_invalid", None)
+        authorization_maps_are_valid = all(
+            isinstance(values, Mapping)
+            and all(type(values.get(slot)) is bool for slot in ("p1", "p2"))
+            for values in (
+                snapshot_zero_after_upkeep,
+                snapshot_faint_replacement_pending,
+                snapshot_invalid,
+            )
+        )
+        parser.toxic_stage_zero_after_upkeep = {
+            slot: (
+                post_upkeep_window_is_valid
+                and authorization_maps_are_valid
+                and snapshot_zero_after_upkeep.get(slot) is True
+                if isinstance(snapshot_zero_after_upkeep, Mapping)
+                else False
+            )
+            for slot in ("p1", "p2")
+        }
+        snapshot_zero_after_upkeep_deadline = getattr(
+            snapshot, "toxic_stage_zero_after_upkeep_expires_after_turn", {}
+        )
+        if not isinstance(snapshot_zero_after_upkeep_deadline, Mapping):
+            snapshot_zero_after_upkeep_deadline = {}
+        parser.toxic_stage_zero_after_upkeep_expires_after_turn = {}
+        snapshot_zero_after_upkeep_ident = getattr(snapshot, "toxic_stage_zero_after_upkeep_ident", {})
+        if not isinstance(snapshot_zero_after_upkeep_ident, Mapping):
+            snapshot_zero_after_upkeep_ident = {}
+        for slot in ("p1", "p2"):
+            deadline = snapshot_zero_after_upkeep_deadline.get(slot)
+            proof_ident = snapshot_zero_after_upkeep_ident.get(slot)
+            active = parser.public_active.get(slot)
+            if (
+                parser.toxic_stage_zero_after_upkeep[slot] is True
+                and type(deadline) is int
+                and isinstance(proof_ident, str)
+                and _is_active_protocol_ident(proof_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == proof_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
+                and parser.toxic_stage_known[slot]
+                and parser.toxic_stage[slot] == 0
+            ):
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = deadline
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = proof_ident
+            else:
+                # Older snapshots lack the deadline, so their proof cannot be
+                # bounded to a single residual opportunity.
+                parser.toxic_stage_zero_after_upkeep[slot] = False
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = None
+        if not isinstance(snapshot_faint_replacement_pending, Mapping):
+            snapshot_faint_replacement_pending = {}
+        if not isinstance(snapshot_expected_ident, Mapping):
+            snapshot_expected_ident = {}
+        if not isinstance(snapshot_invalid, Mapping):
+            snapshot_invalid = {}
+        for slot in ("p1", "p2"):
+            expected_ident = snapshot_expected_ident.get(slot)
+            active = parser.public_active.get(slot)
+            parser.toxic_faint_replacement_invalid[slot] = (
+                True
+                if (
+                    not post_upkeep_window_is_valid
+                    or not authorization_maps_are_valid
+                    or not isinstance(snapshot_invalid, Mapping)
+                    or slot not in snapshot_invalid
+                    or slot not in snapshot_expected_ident
+                )
+                else snapshot_invalid.get(slot) is not False
+            )
+            parser.toxic_faint_replacement_pending[slot] = (
+                snapshot_faint_replacement_pending.get(slot) is True
+                and parser.toxic_faint_replacement_invalid[slot] is False
+                and snapshot_post_upkeep_window is False
+                and isinstance(expected_ident, str)
+                and _is_active_protocol_ident(expected_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == expected_ident
+            )
+            parser.toxic_faint_replacement_expected_ident[slot] = (
+                expected_ident if parser.toxic_faint_replacement_pending[slot] else None
+            )
+            if parser.toxic_stage_zero_after_upkeep[slot] is True and (
+                snapshot_faint_replacement_pending.get(slot) is not False
+                or snapshot_invalid.get(slot) is not False
+                or snapshot_expected_ident.get(slot) is not None
+            ):
+                # A materializable zero is the state *after* its one pending
+                # replacement has been consumed.  Never repair a conflicting
+                # snapshot by silently dropping the conflicting latch.
+                parser.toxic_stage_zero_after_upkeep[slot] = False
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = None
+                parser.toxic_faint_replacement_pending[slot] = False
+                parser.toxic_faint_replacement_expected_ident[slot] = None
+                parser.toxic_faint_replacement_invalid[slot] = True
         parser.confusion_elapsed = {
             slot: int(snapshot.confusion_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
@@ -1389,7 +1607,11 @@ class _ReplayParser:
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
         }
-        parser._post_upkeep_window = bool(snapshot.post_upkeep_window)
+        # Toxic replacement proof is valid only at an exact protocol boundary.
+        # Never coerce malformed snapshot data into a boundary authorization.
+        parser._post_upkeep_window = (
+            snapshot_post_upkeep_window if post_upkeep_window_is_valid else False
+        )
         parser._truant_skip_next_flip = {
             slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
         }
@@ -1423,19 +1645,122 @@ class _ReplayParser:
         for raw_line in lines:
             self._feed_line(raw_line)
 
+    def _sanitize_toxic_replacement_provenance(self) -> None:
+        """Fail closed before a mutable proof latch can authorize a world zero.
+
+        These maps are parser internals, but live callers can retain and mutate a
+        parser between lines.  Do not let Python truthiness turn a forged ``1``
+        or ``0`` into an authorization bit while a replacement is in flight.
+        """
+
+        sentinel = object()
+        fields = (
+            "toxic_stage_zero_after_upkeep",
+            "toxic_faint_replacement_pending",
+            "toxic_faint_replacement_invalid",
+            "toxic_stage_zero_after_upkeep_expires_after_turn",
+            "toxic_stage_zero_after_upkeep_ident",
+            "toxic_faint_replacement_expected_ident",
+        )
+        values: dict[str, dict[str, object]] = {}
+        for field_name in fields:
+            source = getattr(self, field_name, None)
+            values[field_name] = {
+                slot: source.get(slot, sentinel) if isinstance(source, Mapping) else sentinel
+                for slot in ("p1", "p2")
+            }
+            setattr(self, field_name, values[field_name])
+
+        post_upkeep_window_is_valid = type(self._post_upkeep_window) is bool
+        if not post_upkeep_window_is_valid:
+            self._post_upkeep_window = False
+
+        for slot in ("p1", "p2"):
+            proof = values["toxic_stage_zero_after_upkeep"][slot]
+            pending = values["toxic_faint_replacement_pending"][slot]
+            invalid = values["toxic_faint_replacement_invalid"][slot]
+            deadline = values["toxic_stage_zero_after_upkeep_expires_after_turn"][slot]
+            proof_ident = values["toxic_stage_zero_after_upkeep_ident"][slot]
+            expected_ident = values["toxic_faint_replacement_expected_ident"][slot]
+            active = self.public_active.get(slot)
+            proof_is_complete = (
+                proof is True
+                and type(deadline) is int
+                and deadline >= 1
+                and isinstance(proof_ident, str)
+                and _is_active_protocol_ident(proof_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == proof_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
+                and isinstance(self.toxic_stage_known, Mapping)
+                and self.toxic_stage_known.get(slot) is True
+                and isinstance(self.toxic_stage, Mapping)
+                and type(self.toxic_stage.get(slot)) is int
+                and self.toxic_stage.get(slot) == 0
+                and type(self.turn_number) is int
+                and self.turn_number >= 0
+                and deadline
+                == self.turn_number + (1 if self._post_upkeep_window is True else 0)
+            )
+            pending_is_complete = (
+                pending is True
+                and isinstance(expected_ident, str)
+                and _is_active_protocol_ident(expected_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == expected_ident
+            )
+            clean_empty_proof = proof is False and deadline is None and proof_ident is None
+            clean_empty_pending = pending is False and expected_ident is None
+            authorization_bits_are_valid = all(
+                type(values[field_name][slot]) is bool
+                for field_name in (
+                    "toxic_stage_zero_after_upkeep",
+                    "toxic_faint_replacement_pending",
+                    "toxic_faint_replacement_invalid",
+                )
+            )
+            if (
+                post_upkeep_window_is_valid
+                and authorization_bits_are_valid
+                and (proof_is_complete or clean_empty_proof)
+                and (pending_is_complete or clean_empty_pending)
+                and not (proof is True and pending is True)
+                and not (invalid is True and (proof is True or pending is True))
+            ):
+                continue
+            self.toxic_stage_zero_after_upkeep[slot] = False
+            self.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+            self.toxic_stage_zero_after_upkeep_ident[slot] = None
+            self.toxic_faint_replacement_pending[slot] = False
+            self.toxic_faint_replacement_expected_ident[slot] = None
+            self.toxic_faint_replacement_invalid[slot] = True
+
     def _feed_line(self, raw_line: str) -> None:
         line = raw_line.strip()
         if not line:
             return
         if line.startswith(">"):
             return
+        self._sanitize_toxic_replacement_provenance()
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
+        canonical_turn = _canonical_turn_number(raw_line) if event_type == "turn" else None
+        canonical_upkeep = _canonical_upkeep_marker(raw_line)
+        canonical_faint = _canonical_faint_marker(raw_line, parts)
+        canonical_replacement = _canonical_replacement_marker(raw_line, event_type, parts)
         # BattleStream emits wall-clock timestamp lines (``|t:|...``). They are useful for raw
         # protocol debugging but are not battle state and would make replay-from-root observations
         # differ across otherwise identical deterministic simulations.
         if event_type == "t:":
             return
+        self._update_toxic_faint_replacement_latch(
+            event_type,
+            parts,
+            canonical_turn=canonical_turn,
+            canonical_upkeep=canonical_upkeep,
+            canonical_faint=canonical_faint,
+            canonical_replacement=canonical_replacement,
+        )
         if event_type == "player" and len(parts) >= 4:
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:
@@ -1451,7 +1776,32 @@ class _ReplayParser:
                 self.requests[showdown_slot] = payload
             return
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
-            pokemon = _pokemon_from_public_line(parts)
+            replacement_slot = _slot_from_ident(parts[2])
+            pending_faint_replacement = (
+                self.toxic_faint_replacement_pending.get(replacement_slot) is True
+            )
+            expected_fainted_ident = self.toxic_faint_replacement_expected_ident.get(
+                replacement_slot
+            )
+            replacement_is_canonical = canonical_replacement
+            replacement_active = self.public_active.get(replacement_slot)
+            replacement_matches_pending = (
+                pending_faint_replacement
+                and self.toxic_faint_replacement_invalid.get(replacement_slot) is False
+                and replacement_is_canonical
+                and isinstance(expected_fainted_ident, str)
+                and _is_current_public_active(replacement_active)
+                and getattr(replacement_active, "ident", None) == expected_fainted_ident
+            )
+            # Consume before parsing: malformed or duplicate replacement
+            # lines must never leave a faint proof reusable later.
+            if replacement_slot in self.toxic_faint_replacement_pending:
+                self.toxic_faint_replacement_pending[replacement_slot] = False
+                self.toxic_faint_replacement_expected_ident[replacement_slot] = None
+            # Switch, drag, and replace protocol lines name the active singles
+            # seat as p1a/p2a. Do not fold a malformed bench ident as a new
+            # active Pokemon, even though its side prefix is recognizable.
+            pokemon = _pokemon_from_public_line(parts) if replacement_is_canonical else None
             if pokemon is not None:
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
@@ -1465,7 +1815,7 @@ class _ReplayParser:
                 # traced Truant UNKNOWN until a public move or Truant `cant` anchors it.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
-                    if self._post_upkeep_window:
+                    if self._post_upkeep_window is True:
                         self._truant_skip_next_flip.add(pokemon.showdown_slot)
                     else:
                         self._truant_skip_next_flip.discard(pokemon.showdown_slot)
@@ -1519,6 +1869,35 @@ class _ReplayParser:
                 self.substitute_depletion[pokemon.showdown_slot] = None
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
+                self.toxic_stage_known[pokemon.showdown_slot] = True
+                # A normal switch-in will take this turn's residual before its
+                # next action. Gen 3 writes ``|upkeep`` only after the residual
+                # phase, then emits the faint replacement as ``|switch|``. That
+                # replacement missed the just-finished residual, so its next
+                # Toxic tick has the legitimate pre-tick counter zero. A
+                # ``|drag|`` is an action-phase phaze, and Baton Pass is not a
+                # faint replacement; neither may manufacture this narrow proof.
+                self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot] = (
+                    event_type == "switch"
+                    and self._post_upkeep_window is True
+                    and replacement_matches_pending
+                    and not is_baton_pass
+                    and pokemon.ident == parts[2]
+                    and pokemon.showdown_slot == replacement_slot
+                    and _condition_has_status(pokemon.condition, "tox")
+                )
+                self.toxic_stage_zero_after_upkeep_expires_after_turn[
+                    pokemon.showdown_slot
+                ] = (
+                    self.turn_number + 1
+                    if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
+                self.toxic_stage_zero_after_upkeep_ident[pokemon.showdown_slot] = (
+                    pokemon.ident
+                    if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
                 # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
                 # flag too so no stale stall move carries onto the replacement.
@@ -1576,23 +1955,43 @@ class _ReplayParser:
             self.public_lines.append(line)
             return
         if event_type == "upkeep":
+            if not canonical_upkeep:
+                return
             # Residuals for this turn are done; anything switching in from here until the
             # next |turn| is a post-residual faint replacement.
             self._post_upkeep_window = True
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
-            try:
-                self.turn_number = int(parts[2])
-            except (TypeError, ValueError):
-                pass
+            next_turn = canonical_turn
+            turn_is_ordered = bool(
+                isinstance(next_turn, int)
+                and next_turn >= 1
+                and (
+                    (
+                        self.turn_number == 0
+                        and not any(self.toxic_stage_zero_after_upkeep.values())
+                        and not any(self.toxic_faint_replacement_pending.values())
+                    )
+                    or next_turn == self.turn_number + 1
+                )
+            )
+            if not turn_is_ordered:
+                # The latch already discarded proof provenance. Do not let an
+                # unordered marker mutate the parser's turn chronology.
+                return
+            self.turn_number = next_turn
             # A successful Baton Pass is consumed by its same-turn forced switch. Anything still
             # pending at a fresh turn belongs to a failed or truncated protocol sequence.
             self.pending_baton_pass.clear()
+            self.toxic_faint_replacement_pending = {"p1": False, "p2": False}
             self._settle_pending_rest_sleep_attempts()
-            # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
+            # Each turn a badly-poisoned mon stays in, its toxic damage escalates
+            # through 15/16. Preserve 16 as an internal sentinel after the
+            # simulator has already reached its stage-15 cap: raw 15 otherwise
+            # ambiguously means either "current 14, next 15" or "current 15".
             for slot, stage in self.toxic_stage.items():
-                if stage:
-                    self.toxic_stage[slot] = min(15, stage + 1)
+                if self.toxic_stage_known[slot] and stage:
+                    self.toxic_stage[slot] = min(16, stage + 1)
             # gen3 Truant: `onResidual` flips the bit every turn UNCONDITIONALLY. It is
             # deliberately NOT gated on the mon having moved, having a volatile, or anything
             # else -- that gating is exactly the proxy this replaces.
@@ -1660,7 +2059,12 @@ class _ReplayParser:
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
-        _update_toxic_stage(parts, self.toxic_stage)
+        _update_toxic_stage(
+            parts,
+            self.toxic_stage,
+            self.toxic_stage_known,
+            self.toxic_stage_zero_after_upkeep,
+        )
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
         _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
@@ -1670,6 +2074,144 @@ class _ReplayParser:
         self._update_stall_counter(parts)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _update_toxic_faint_replacement_latch(
+        self,
+        event_type: str,
+        parts: Sequence[str],
+        *,
+        canonical_turn: int | None = None,
+        canonical_upkeep: bool = False,
+        canonical_faint: bool = False,
+        canonical_replacement: bool = False,
+    ) -> None:
+        """Bind the stage-zero exception to one exact, ordered forced replacement."""
+
+        def clear_zero_proof(slot: str) -> None:
+            self.toxic_stage_zero_after_upkeep[slot] = False
+            self.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+            self.toxic_stage_zero_after_upkeep_ident[slot] = None
+
+        def clear_pending(slot: str) -> None:
+            self.toxic_faint_replacement_pending[slot] = False
+            self.toxic_faint_replacement_expected_ident[slot] = None
+
+        def invalidate_window(slot: str) -> None:
+            clear_pending(slot)
+            clear_zero_proof(slot)
+            self.toxic_faint_replacement_invalid[slot] = True
+
+        def clear_all_pending() -> None:
+            for slot in self.toxic_faint_replacement_pending:
+                clear_pending(slot)
+
+        def invalidate_all_windows() -> None:
+            for slot in ("p1", "p2"):
+                invalidate_window(slot)
+
+        if event_type == "turn":
+            # A missing replacement is a truncated/terminal sequence, not
+            # evidence for an ordinary switch on a later turn.
+            clear_all_pending()
+            next_turn = canonical_turn
+            if next_turn is None:
+                # Without an ordered turn boundary, a durable proof cannot be
+                # bounded to its one expected residual opportunity.
+                for slot in self.toxic_stage_zero_after_upkeep:
+                    invalidate_window(slot)
+                return
+            turn_is_ordered = bool(
+                next_turn >= 1
+                and (
+                    (
+                        self.turn_number == 0
+                        and not any(
+                            proof is True
+                            for proof in self.toxic_stage_zero_after_upkeep.values()
+                        )
+                        and not any(
+                            pending is True
+                            for pending in self.toxic_faint_replacement_pending.values()
+                        )
+                    )
+                    or next_turn == self.turn_number + 1
+                )
+            )
+            if not turn_is_ordered:
+                for slot in self.toxic_stage_zero_after_upkeep:
+                    invalidate_window(slot)
+                return
+            # A strictly ordered turn starts a clean replacement window. An
+            # earlier malformed faint cannot poison subsequent real history.
+            self.toxic_faint_replacement_invalid = {"p1": False, "p2": False}
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                deadline = self.toxic_stage_zero_after_upkeep_expires_after_turn.get(slot)
+                if proof is True and (type(deadline) is not int or next_turn != deadline):
+                    clear_zero_proof(slot)
+            return
+        if event_type == "upkeep":
+            if not canonical_upkeep:
+                # A look-alike marker has no residual chronology.  It also
+                # cannot coexist with a one-shot proof for either seat.
+                invalidate_all_windows()
+                return
+            # A proof created after the prior upkeep expects its first Toxic
+            # residual immediately before this marker. If it is still live,
+            # that residual was absent and the proof is spent.
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                if proof is True:
+                    clear_zero_proof(slot)
+            if self._post_upkeep_window is True:
+                # A second upkeep cannot follow the one faint that is still
+                # awaiting its replacement; reject the malformed chronology.
+                for slot in self.toxic_faint_replacement_pending:
+                    invalidate_window(slot)
+            return
+        if event_type == "faint":
+            if not canonical_faint:
+                invalidate_all_windows()
+                return
+            slot = _slot_from_ident(parts[2])
+            if slot not in self.toxic_faint_replacement_pending:
+                return
+            active = self.public_active.get(slot)
+            if (
+                self._post_upkeep_window is False
+                and _is_active_protocol_ident(parts[2])
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == parts[2]
+                and self.toxic_faint_replacement_pending[slot] is False
+                and self.toxic_faint_replacement_invalid[slot] is False
+            ):
+                self.toxic_faint_replacement_pending[slot] = True
+                self.toxic_faint_replacement_expected_ident[slot] = parts[2]
+            else:
+                # Reversed, repeated, or forged active idents are not proof
+                # that this seat is awaiting a forced replacement. Keep the
+                # invalidity until a clean turn so a third duplicate cannot
+                # re-arm this replacement window.
+                invalidate_all_windows()
+            return
+        if event_type in {"switch", "drag", "replace"}:
+            # The replacement branch consumes this before parsing its payload,
+            # including malformed lines.
+            if not canonical_replacement:
+                invalidate_all_windows()
+            return
+        if event_type == "win":
+            clear_all_pending()
+            for slot in self.toxic_stage_zero_after_upkeep:
+                clear_zero_proof(slot)
+            return
+        if len(parts) >= 3:
+            slot = _slot_from_ident(parts[2])
+            if (
+                slot in self.toxic_faint_replacement_pending
+                and self.toxic_faint_replacement_pending[slot] is True
+            ):
+                # A same-seat state transition cannot belong to a pending
+                # forced replacement; fail closed rather than retain history.
+                invalidate_window(slot)
 
     def _update_substitute_health_state(self, parts: Sequence[str]) -> None:
         """Track canonical Substitute provenance and public exact HP cases."""
@@ -1745,14 +2287,12 @@ class _ReplayParser:
         per-``|turn|`` escalation (gated on ``if stage``) can never lift it off 0 — the encoder
         would emit the contradictory ``status:tox`` + ``toxic_stage == 0`` for the whole stint.
 
-        The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
-        ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
-        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …), so the observed residual
-        fraction gives ``stage = round(16 * damage / maxhp)``. Re-deriving here fixes the pivot,
-        the forced re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox``
-        (replay import / mid-battle observe start) uniformly, for both seats. Regular (non-badly)
-        poison also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the
-        residual's own status token, which is ``tox`` only for badly-poisoned mons.
+        Exact-HP streams can derive the counter from Gen 3's floored damage unit. Percentage
+        streams cannot reverse-round an arbitrary stage, but a public switch/drag reset proves
+        that the first subsequent Toxic residual is stage one. Unknown stream provenance fails
+        closed instead of treating a /100 denominator as either representation. Regular
+        (non-badly) poison also emits ``[from] psn`` but is gated out by the residual's ``tox``
+        status token.
         """
 
         if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
@@ -1767,19 +2307,65 @@ class _ReplayParser:
         # Only a BADLY-poisoned residual ramps; a plain ``psn`` residual carries no ``tox`` token.
         if "tox" not in new_condition.split():
             return
+        # This public residual consumes the one deferred first tick of a
+        # post-upkeep replacement. It is no longer evidence for materializing
+        # a stage-zero world, even if later exact recovery is impossible.
+        self.toxic_stage_zero_after_upkeep[slot] = False
         active = self.public_active.get(slot)
-        prev_condition = active.condition if active is not None and active.ident == parts[2] else None
+        prev_condition = (
+            getattr(active, "condition", None)
+            if _is_current_public_active(active) and getattr(active, "ident", None) == parts[2]
+            else None
+        )
         prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
         cur_hp, cur_max = _hp_numerator_denominator(new_condition)
         max_hp = prev_max or cur_max
-        if prev_hp is None or cur_hp is None or not max_hp:
+        if prev_hp is None or cur_hp is None or cur_hp <= 0 or not max_hp:
             return
         damage = prev_hp - cur_hp
         if damage <= 0:
             return
-        # round(16 * damage_fraction) recovers the sim's stage for every reachable stage (1..14;
-        # a mon never survives to stage 15). Clamp to [1, 15]: a tox residual is always >= stage 1.
-        self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
+        # Percentage-form protocol always uses /100. Any other denominator is therefore exact;
+        # only /100 needs stream/request provenance to distinguish representation from a real
+        # exact-100 HP Pokemon.
+        visibility = "exact" if max_hp != 100 else self._hp_visibility_for_slot(slot)
+        if visibility == "percentage":
+            if self.toxic_stage_known[slot] and self.toxic_stage[slot] == 0:
+                self.toxic_stage[slot] = 1
+            return
+        if visibility != "exact":
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        unit = max(1, max_hp // 16)
+        # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
+        # hidden stage from capped or otherwise non-exact public damage.
+        if damage % unit:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        stage = damage // unit
+        if not 1 <= stage <= 15:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        self.toxic_stage[slot] = stage
+        self.toxic_stage_known[slot] = True
+
+    def _hp_visibility_for_slot(self, slot: str) -> str:
+        """Resolve HP representation from explicit stream provenance or private requests."""
+
+        explicit = self.hp_visibility.get(slot, "unknown")
+        if explicit != "unknown":
+            return explicit
+        request_slots = {side for side in self.requests if side in {"p1", "p2"}}
+        if len(request_slots) == 2 or slot in request_slots:
+            return "exact"
+        if len(request_slots) == 1:
+            # A single private request identifies a player-perspective stream: own HP is exact,
+            # while the opposing side's public HP is rounded to /100.
+            return "percentage"
+        return "unknown"
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -2268,6 +2854,8 @@ class _ReplayParser:
                 self.stall_move_pending[slot] = False
 
     def snapshot(self) -> ShowdownReplayState:
+        # Do not serialize a malformed mutable latch as a future authorization.
+        self._sanitize_toxic_replacement_provenance()
         return ShowdownReplayState(
             battle_id=self.battle_id,
             players=dict(self.players),
@@ -2289,6 +2877,20 @@ class _ReplayParser:
             },
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
+            toxic_stage_known=dict(self.toxic_stage_known),
+            toxic_stage_zero_after_upkeep=dict(self.toxic_stage_zero_after_upkeep),
+            toxic_stage_zero_after_upkeep_expires_after_turn=dict(
+                self.toxic_stage_zero_after_upkeep_expires_after_turn
+            ),
+            toxic_stage_zero_after_upkeep_ident=dict(self.toxic_stage_zero_after_upkeep_ident),
+            toxic_faint_replacement_pending=dict(self.toxic_faint_replacement_pending),
+            toxic_faint_replacement_expected_ident=dict(
+                self.toxic_faint_replacement_expected_ident
+            ),
+            toxic_faint_replacement_invalid=dict(self.toxic_faint_replacement_invalid),
+            hp_visibility={
+                slot: self._hp_visibility_for_slot(slot) for slot in ("p1", "p2")
+            },
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
             wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
@@ -2329,9 +2931,24 @@ class _ReplayParser:
         )
 
 
-def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") -> ShowdownReplayState:
-    """Parse compact Showdown protocol lines into transport-level state."""
-    parser = _ReplayParser(battle_id=battle_id)
+def parse_showdown_replay(
+    lines: Sequence[str],
+    *,
+    battle_id: str = "replay",
+    complete_prefix: bool = False,
+    hp_visibility: Mapping[str, str] | None = None,
+) -> ShowdownReplayState:
+    """Parse compact Showdown protocol lines into transport-level state.
+
+    ``complete_prefix`` must be asserted only when the caller owns a stream that starts at battle
+    reset. Attach-midstream callers should keep the fail-closed default. ``hp_visibility`` records
+    whether each side's HP condition is exact or Showdown's rounded player-view percentage.
+    """
+    parser = _ReplayParser(
+        battle_id=battle_id,
+        complete_prefix=complete_prefix,
+        hp_visibility=hp_visibility,
+    )
     parser.feed(lines)
     return parser.snapshot()
 
@@ -3287,13 +3904,93 @@ def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], tur
         future_sight.pop(slot, None)
 
 
-def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
+def _is_active_protocol_ident(ident: str) -> bool:
+    """Whether a protocol ident names the current singles active slot.
+
+    Per-mon cure lines can name a benched team member as ``p1: Name``. A
+    Toxic counter belongs only to the active Pokemon, so treating every same-
+    side cure as a reset corrupts the live active counter.
+    """
+
+    return bool(re.fullmatch(r"p[12]a: \S(?:.*\S)?", ident))
+
+
+def _canonical_turn_number(line: str) -> int | None:
+    """Return a strictly canonical positive ``|turn|N`` marker."""
+
+    match = re.fullmatch(r"\|turn\|([1-9][0-9]*)", line)
+    return int(match.group(1)) if match is not None else None
+
+
+def _canonical_upkeep_marker(line: str) -> bool:
+    """Whether ``line`` is the unique no-payload Showdown upkeep boundary."""
+
+    return line == "|upkeep"
+
+
+def _canonical_faint_marker(line: str, parts: Sequence[str]) -> bool:
+    """Whether a faint line can open the one-seat replacement proof."""
+
+    return (
+        line == "|".join(parts)
+        and len(parts) == 3
+        and parts[0] == ""
+        and parts[1] == "faint"
+        and _is_active_protocol_ident(parts[2])
+    )
+
+
+def _canonical_replacement_marker(
+    line: str,
+    event_type: str,
+    parts: Sequence[str],
+) -> bool:
+    """Whether a switch-family line has a canonical active-slot payload.
+
+    Baton Pass is the only optional switch suffix accepted by this parser
+    boundary.  It remains ineligible for the Toxic proof, but accepting its
+    canonical wire form keeps ordinary switch accounting intact.
+    """
+
+    has_baton_pass_suffix = (
+        event_type == "switch"
+        and len(parts) == 6
+        and parts[5] == "[from] Baton Pass"
+    )
+    if len(parts) != 5 and not has_baton_pass_suffix:
+        return False
+    return (
+        line == "|".join(parts)
+        and parts[0] == ""
+        and parts[1] == event_type
+        and event_type in {"switch", "drag", "replace"}
+        and _is_active_protocol_ident(parts[2])
+        and all(parts[index] for index in (3, 4))
+    )
+
+
+def _condition_has_status(condition: str | None, status: str) -> bool:
+    return bool(condition and _normalize_identifier(status) in condition.split())
+
+
+def _update_toxic_stage(
+    parts: Sequence[str],
+    toxic_stage: dict[str, int],
+    toxic_stage_known: dict[str, bool] | None = None,
+    toxic_stage_zero_after_upkeep: dict[str, bool] | None = None,
+) -> None:
     """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
     |-cureteam| lines.
 
-    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
-    status — per-mon (`-curestatus`) or team-wide (`-cureteam`/Aromatherapy) — clears it. The
-    counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); a status
+    replacement or cure on the ACTIVE mon clears it. Team-wide ``-cureteam`` clears the active
+    mon too. The counter is also reset on switch and faint (Gen 3 behavior) in the parse loop.
+
+    Every transition here is public protocol evidence. ``toxic_stage_known`` is optional for
+    direct unit callers; when supplied it distinguishes a real public zero from an incomplete
+    prefix that must never be materialized as a synthetic zero counter. The optional
+    ``toxic_stage_zero_after_upkeep`` carries the still-pending, post-upkeep replacement proof;
+    every active status/cure/faint transition retires it before changing the regular stage.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -3301,8 +3998,23 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
     slot = _slot_from_ident(parts[2])
     if slot not in toxic_stage:
         return
-    if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+    active_target = _is_active_protocol_ident(parts[2])
+    if event_type == "faint" and active_target:
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
+        toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
+    elif not active_target and event_type != "-cureteam":
+        # E.g. Heal Bell's ``|-curestatus|p1: Bench|...|[silent]``. It cannot
+        # alter the current active mon's statusState.stage.
+        return
+    elif event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 1
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type == "-status" and len(parts) >= 4:
         # Any OTHER status replaces tox, and the ramp dies with it. `Pokemon.setStatus`
         # does `this.statusState = this.battle.initEffectState(...)` (sim/pokemon.ts:1733),
@@ -3314,11 +4026,19 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
         # Rest` on an already-toxed mon left the ramp standing at its old value, so a LATER
         # re-tox in the same stint was priced from a stage that no longer existed. Observed
         # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type in {"-curestatus", "-cureteam"}:
         # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
 
 
 def _update_confusion_elapsed(parts: Sequence[str], confusion_elapsed: dict[str, int]) -> None:
@@ -3717,8 +4437,9 @@ def _max_hp_from_condition(condition: str | None) -> int | None:
 def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | None]:
     """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
 
-    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``); the
-    caller derives the toxic-residual fraction from the pair, so either scale recovers the stage.
+    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``).
+    The latter is recognizable by its `/100` denominator; callers needing an exact Gen 3 damage
+    unit must handle its rounded deltas separately.
     """
     if not condition:
         return None, None

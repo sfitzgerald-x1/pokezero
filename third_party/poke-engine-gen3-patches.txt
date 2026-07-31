@@ -1168,3 +1168,4 @@ poke-engine-gen3-review-compositions.patch
 # review-compositions tree above. No upstream fixture patch changes, so the
 # frozen fixture-refresh entry remains unmodified.
 poke-engine-gen3-wrap-substitute-lifecycle.patch
+poke-engine-gen3-toxic-stage-cap.patch

@@ -105,5 +105,41 @@ class OriginMainRefreshTests(unittest.TestCase):
         self.assertEqual(command.call_count, 1)
 
 
+class PostMergeLifecycleTests(unittest.TestCase):
+    def test_branch_head_is_rejected_before_historical_or_expensive_verifier_work(self) -> None:
+        with patch.object(
+            VERIFIER, "refresh_authoritative_origin_main", return_value="public-main"
+        ) as refresh, patch.object(VERIFIER, "git", return_value="branch-head\n") as git, patch.object(
+            VERIFIER, "verify_historical_public_merge"
+        ) as historical, patch.object(VERIFIER, "verify_current_engine_inputs") as engine, patch.object(
+            VERIFIER, "verify_current_regression_surface"
+        ) as regression:
+            with self.assertRaisesRegex(RuntimeError, "post-merge only"):
+                VERIFIER.main()
+
+        refresh.assert_called_once_with(REPO_ROOT)
+        git.assert_called_once_with(REPO_ROOT, "rev-parse", "--verify", "HEAD^{commit}")
+        historical.assert_not_called()
+        engine.assert_not_called()
+        regression.assert_not_called()
+
+    def test_full_verifier_retains_the_exact_public_input_equality_gate(self) -> None:
+        def command_output(_repo, label, _args, **_kwargs):
+            return cargo_output(test_line=f"test {TEST_NAME} ... ok") if label.startswith(
+                "current switch-prefixed"
+            ) else ""
+
+        with patch.object(VERIFIER, "command", side_effect=command_output) as command:
+            VERIFIER.verify_current_regression_surface(REPO_ROOT, "public-main")
+
+        equality_calls = [
+            call for call in command.call_args_list
+            if call.args[1] == "post-merge public-input equality with origin/main"
+        ]
+        self.assertEqual(len(equality_calls), 1)
+        self.assertEqual(equality_calls[0].args[2][0:3], ["git", "-C", str(REPO_ROOT)])
+        self.assertEqual(equality_calls[0].args[2][3:6], ["diff", "--quiet", "public-main"])
+
+
 if __name__ == "__main__":
     unittest.main()

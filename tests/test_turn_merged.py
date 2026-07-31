@@ -360,7 +360,7 @@ class PendingSubBlockTest(unittest.TestCase):
 class ReplacementPhaseTest(unittest.TestCase):
     def _explosion_lines(self) -> list[str]:
         # Engine-verified cold pair: both faints, then both replacements back-to-back
-        # in ONE forceSwitch cycle, before |upkeep|.
+        # in ONE forceSwitch cycle, before |upkeep.
         return _leads("Golem", "Abra") + [
             "|move|p1a: Golem|Explosion|p2a: Abra",
             "|-damage|p2a: Abra|0 fnt",

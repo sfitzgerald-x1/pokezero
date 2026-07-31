@@ -26,7 +26,7 @@ Emission rules implemented (corrections item 11 + 14):
   ``|-activate|<target>|move: Pursuit`` (emitted on every interception — through a
   Substitute and on Baton Pass switch-outs included). Still protocol-tautological, no
   mechanics model. Residual-phase ordering heuristics are deliberately NOT used: real
-  faint-replacements arrive BEFORE ``|upkeep|``, so any pre-upkeep ordering rule would
+  faint-replacements arrive BEFORE ``|upkeep``, so any pre-upkeep ordering rule would
   misread plain Pursuit KOs as intercepts.
 
 Attribution rules:
@@ -36,7 +36,7 @@ Attribution rules:
   vetoes KO attribution to the move (a chip faint is not a move KO).
 - Side effects attach only within the acting move's own contiguous event chunk: a
   window closes at the next action line, at the blank ``|`` chunk separator the engine
-  emits between action chunks and the residual phase, and at ``|upkeep|`` — so
+  emits between action chunks and the residual phase, and at ``|upkeep`` — so
   residual-phase events (Leech Seed transfers, Yawn's delayed sleep) can never stamp a
   category onto an unrelated action token. ``[silent]``-tagged heals are excluded from
   attribution entirely (Leech Seed's recipient heal is ``[silent]``; Rest's heal is too,
@@ -402,7 +402,7 @@ class _FoldResult:
     turn_start_occupants: dict[int, dict[str, str]] = field(default_factory=dict)
     # Consumption-confirmation signals for the turn-merged NEGATED gate (review MED-1):
     # a missing declared action is only provably CONSUMED once its turn reached the
-    # residual boundary (|upkeep| / a later |turn| / |win|) or a mid-turn faint occurred
+    # residual boundary (|upkeep / a later |turn| / |win|) or a mid-turn faint occurred
     # (engine-verified: any mid-turn faint cancels every remaining action). A replay
     # prefix cut at a mid-turn forceSwitch boundary (Baton Pass completion choice)
     # satisfies neither -> the pending opponent action must NOT read as negated.
@@ -573,17 +573,18 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         parts = raw_line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
 
-        # Blank ``|`` chunk separators and ``|upkeep|`` bound the acting move's own
+        # Blank ``|`` chunk separators and exact ``|upkeep`` boundaries bound the acting move's
         # contiguous event chunk: nothing in the residual phase may attach to a window.
-        if event_type in {"", "upkeep"}:
+        canonical_upkeep = raw_line == "|upkeep"
+        if event_type == "" or canonical_upkeep:
             close_window()
-            if event_type == "upkeep":
+            if canonical_upkeep:
                 completed_turns.add(turn_number)
             continue
 
         if event_type == "turn":
             close_window()
-            completed_turns.add(turn_number)  # |turn|N+1 closes turn N even sans |upkeep|
+            completed_turns.add(turn_number)  # |turn|N+1 closes turn N even sans |upkeep
             try:
                 turn_number = int(parts[2])
             except (IndexError, TypeError, ValueError):
@@ -1001,7 +1002,13 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
 # Line types that end the backward scan for the interception marker: the marker is
 # emitted by the engine immediately before the Pursuit move executes, so any earlier
 # action line means there was no interception of THIS Pursuit.
-_PURSUIT_SCAN_BOUNDARY = frozenset({"move", "switch", "drag", "replace", "cant", "turn", "upkeep"})
+_PURSUIT_SCAN_BOUNDARY = frozenset({"move", "switch", "drag", "replace", "cant", "turn"})
+
+
+def _is_pursuit_scan_boundary(raw_line: str, event_type: str) -> bool:
+    """Whether this line delimits the exact Protocol pursuit lookback window."""
+
+    return event_type in _PURSUIT_SCAN_BOUNDARY or raw_line == "|upkeep"
 
 
 def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -> None:
@@ -1013,7 +1020,7 @@ def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -
     and of Baton Pass switch-outs. A Pursuit move token is an intercept iff that marker
     for its defender directly precedes it (scanning back past non-action lines only).
     Plain Pursuit KOs never emit the marker, so faint-replacements — which the engine
-    places BEFORE ``|upkeep|`` — can never false-positive; ordering heuristics are
+    places BEFORE ``|upkeep`` — can never false-positive; ordering heuristics are
     deliberately not used.
     """
     for window in windows:
@@ -1025,7 +1032,7 @@ def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -
         for raw_line in reversed(raw_lines[: window.event_index]):
             parts = raw_line.split("|")
             event_type = parts[1] if len(parts) > 1 else ""
-            if event_type in _PURSUIT_SCAN_BOUNDARY:
+            if _is_pursuit_scan_boundary(raw_line, event_type):
                 break
             if (
                 event_type == "-activate"

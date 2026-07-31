@@ -1225,9 +1225,28 @@ def _build_side_spec(
             side_conditions[mapped] = remaining
         else:
             side_conditions[mapped] = int(value)
+    # `toxicStage` is a bridge-only pre-tick counter, not the public multiplier.  The engine
+    # charges `toxic_count + 1`; 15 would therefore create an illegal stage-16 residual.
     toxic_stage = side_payload.get("toxicStage")
-    if isinstance(toxic_stage, int) and toxic_stage > 0:
-        side_conditions["toxic_count"] = toxic_stage
+    if party[active_index].status == "toxic":
+        if (
+            isinstance(toxic_stage, bool)
+            or not isinstance(toxic_stage, int)
+            or not 0 <= toxic_stage <= 14
+        ):
+            raise EngineWorldUnsupported(
+                "toxic_stage_unknown",
+                f"side {slot!r} has active Toxic without a public toxicStage",
+            )
+        if toxic_stage > 0:
+            side_conditions["toxic_count"] = toxic_stage
+    elif toxic_stage is not None and (
+        isinstance(toxic_stage, bool) or not isinstance(toxic_stage, int) or toxic_stage != 0
+    ):
+        raise EngineWorldUnsupported(
+            "toxic_stage_inconsistent",
+            f"side {slot!r} has toxicStage {toxic_stage!r} without active Toxic",
+        )
     # Consecutive-Protect decay. The engine prices the NEXT stall attempt at
     # CONSECUTIVE_PROTECT_CHANCE ** side_conditions.protect (0.5 ** k), and only
     # branches at all when k > 0 — so an unseeded world says "this is a first

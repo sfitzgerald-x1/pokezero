@@ -105,7 +105,7 @@ from .transitions import (
     TransitionToken,
     _CANT_NO_CHOICE_REASONS,
     _MonCounters,
-    _PURSUIT_SCAN_BOUNDARY,
+    _is_pursuit_scan_boundary,
     _SELF_COST_FROM_TAGS,
     _SELF_FAINT_COST_MOVES,
     _StayRecord,
@@ -286,7 +286,7 @@ class FoldState:
             # Pursuit ring buffer maintenance AFTER processing: boundary-type lines
             # clear it (they stop the batch backward scan); everything else — blank
             # separators included — joins the scan set.
-            if event_type in _PURSUIT_SCAN_BOUNDARY:
+            if _is_pursuit_scan_boundary(raw_line, event_type):
                 self.pursuit_buffer.clear()
             else:
                 self.pursuit_buffer.append(raw_line)
@@ -414,9 +414,10 @@ class FoldState:
         perspective = self.perspective_slot
         opponent = self.opponent_slot
 
-        if event_type in {"", "upkeep"}:
+        canonical_upkeep = raw_line == "|upkeep"
+        if event_type == "" or canonical_upkeep:
             self._close_window()
-            if event_type == "upkeep":
+            if canonical_upkeep:
                 self.completed_turns.add(self.turn_number)
             return
 

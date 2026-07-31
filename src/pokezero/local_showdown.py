@@ -37,6 +37,8 @@ from .showdown import (
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
+    _is_active_protocol_ident,
+    _is_current_public_active,
     _normalize_identifier,
     _ReplayParser,
     normalize_for_player,
@@ -404,7 +406,11 @@ class LocalShowdownEnv:
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         # Shared, immutable candidate-set source (built once per process, cached). None when the
         # belief set source is disabled, in which case only protocol-revealed facts populate.
         self._belief_set_source = (
@@ -509,7 +515,11 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal = None
         self._last_step_had_error = False
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         self._belief_engine = PublicBattleBeliefEngine(
             format_id=self._observation_format_id, set_source=self._belief_set_source
         )
@@ -740,7 +750,11 @@ class LocalShowdownEnv:
         if set(direct_requests) != set(PLAYER_IDS):
             raise LocalShowdownError("Scenario materialization did not produce both player requests.")
         synthetic_lines = scenario_public_protocol_lines(state, direct_requests)
-        synthetic_parser = _ReplayParser(self._battle_id)
+        synthetic_parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         synthetic_parser.feed(synthetic_lines)
         _seed_scenario_parser_state(synthetic_parser, state)
         synthetic_replay = synthetic_parser.snapshot()
@@ -1998,11 +2012,23 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
             raise LocalShowdownError(
                 f"Scenario materialization returned malformed {player} active status."
             )
-        parser.toxic_stage[player] = (
-            int(status.get("toxicStage") or 0)
-            if normalize_id(str(status.get("id") or "")) == "tox"
-            else 0
-        )
+        toxic = normalize_id(str(status.get("id") or "")) == "tox"
+        engine_stage = int(status.get("toxicStage") or 0) if toxic else 0
+        # Scenario materialization returns an ordinary action-request boundary. The parser's
+        # observation convention at that boundary is one ahead of Showdown's current
+        # statusState.stage. Internal value 16 preserves "current stage is already capped at
+        # 15"; the model-facing feature remains clamped to 15.
+        parser.toxic_stage[player] = min(16, engine_stage + 1) if toxic else 0
+        parser.toxic_stage_known[player] = True
+        # Scenario materialization always returns an ordinary action-request boundary. It
+        # cannot carry the replay-only proof for a replacement that arrived after a prior
+        # upkeep, so ensure a reused parser never retains one.
+        parser.toxic_stage_zero_after_upkeep[player] = False
+        parser.toxic_stage_zero_after_upkeep_expires_after_turn[player] = None
+        parser.toxic_stage_zero_after_upkeep_ident[player] = None
+        parser.toxic_faint_replacement_pending[player] = False
+        parser.toxic_faint_replacement_expected_ident[player] = None
+        parser.toxic_faint_replacement_invalid[player] = False
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:
@@ -2100,6 +2126,12 @@ def _public_materialization_payload(
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
+        toxic_stage = _materialization_toxic_stage(replay, player)
+        if toxic_stage is None:
+            # The policy can still observe status:tox with its legacy zero
+            # feature, but a sampled engine world may not turn an incomplete
+            # public prefix into a claimed ToxicCount=0.
+            blockers.add("toxic-stage-unknown")
         sides[player] = {
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
@@ -2110,9 +2142,10 @@ def _public_materialization_payload(
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
             "substituteDepletion": replay.substitute_depletion.get(player),
             "materializationBlockers": sorted(blockers),
-            # The parser's observation feature advances the toxic value at a new turn. The
-            # simulator state at the request boundary is one residual behind that feature.
-            "toxicStage": _materialization_toxic_stage(replay, player),
+            # At an ordinary request the observation feature names the next residual; at the
+            # post-upkeep forced-switch boundary it names the residual just paid. The helper
+            # converts both public boundaries into Showdown's current statusState.stage.
+            "toxicStage": toxic_stage,
             # Consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3
             # shares one `stall` volatile). The parser already derives this from
             # public protocol alone; the engine prices the NEXT attempt at
@@ -2220,11 +2253,96 @@ def _public_materialization_payload(
     }
 
 
-def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int:
-    """Return the public toxic counter in the simulator's request-boundary convention."""
+def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
+    """Return the engine's pre-tick Toxic counter for the next residual.
 
-    tracked_stage = int(replay.toxic_stage.get(player, 0))
-    return max(0, tracked_stage - 1)
+    ``None`` is intentional: a snapshot that lacks the public provenance for
+    an active Toxic counter is not allowed to silently materialize as stage 0.
+    Missing provenance on a clean active side is a harmless zero, which keeps
+    legacy snapshots from blocking worlds that have no Toxic counter.
+    """
+
+    def provenance_value(name: str, default: Any = None) -> tuple[bool, Any]:
+        values = getattr(replay, name, None)
+        if not isinstance(values, Mapping) or player not in values:
+            return False, default
+        return True, values[player]
+
+    active = replay.public_active.get(player)
+    proof_present, zero_after_upkeep = provenance_value("toxic_stage_zero_after_upkeep")
+    if proof_present and type(zero_after_upkeep) is not bool:
+        return None
+    if not _is_current_public_active(active):
+        return None
+    condition = getattr(active, "condition", None)
+    if not isinstance(condition, str):
+        return None
+    active_is_toxic = "tox" in condition.split()
+    if not active_is_toxic:
+        return None if zero_after_upkeep is True else 0
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    if type(post_upkeep_window) is not bool:
+        return None
+    known_present, known = provenance_value("toxic_stage_known")
+    if not known_present or known is not True:
+        return None
+    stage_present, tracked_stage = provenance_value("toxic_stage")
+    if not stage_present or type(tracked_stage) is not int:
+        return None
+    if tracked_stage == 0:
+        # A poisoned replacement that entered after upkeep missed the residual
+        # that just ran. Its next Toxic tick is stage 1, so the engine's
+        # pre-tick counter is correctly zero. No other active-Toxic zero has
+        # enough public chronology to distinguish that fact from an incomplete
+        # prefix, and therefore remains fail-closed.
+        if not proof_present or zero_after_upkeep is not True:
+            return None
+        ident_present, proof_ident = provenance_value("toxic_stage_zero_after_upkeep_ident")
+        deadline_present, deadline = provenance_value(
+            "toxic_stage_zero_after_upkeep_expires_after_turn"
+        )
+        invalid_present, invalid = provenance_value("toxic_faint_replacement_invalid")
+        pending_present, pending = provenance_value("toxic_faint_replacement_pending")
+        expected_present, expected_ident = provenance_value(
+            "toxic_faint_replacement_expected_ident"
+        )
+        active_ident = getattr(active, "ident", None)
+        turn_number = getattr(replay, "turn_number", None)
+        if (
+            not ident_present
+            or not isinstance(proof_ident, str)
+            or not _is_active_protocol_ident(proof_ident)
+            or not proof_ident.startswith(f"{player}a: ")
+            or active_ident != proof_ident
+            or not deadline_present
+            or type(deadline) is not int
+            or deadline < 1
+            or type(turn_number) is not int
+            or turn_number < 0
+            or deadline != turn_number + (1 if post_upkeep_window else 0)
+            or not invalid_present
+            or invalid is not False
+            or not pending_present
+            or pending is not False
+            or not expected_present
+            or expected_ident is not None
+        ):
+            return None
+        return 0
+    if zero_after_upkeep is True:
+        return None
+    if not 1 <= tracked_stage <= 16:
+        return None
+    if post_upkeep_window is True:
+        # Residuals have run but the next |turn| line has not. The raw public stage is the
+        # multiplier just paid, which is the counter needed for the NEXT tick. The engine's
+        # counter is pre-tick and must stay at 14 once Showdown's stage has saturated at 15.
+        return min(14, max(0, tracked_stage))
+    # At an ordinary action request, |turn| has advanced the public feature to the multiplier
+    # that will be charged at the next residual; the simulator still holds the prior count.
+    # Sentinel 16 distinguishes an already-saturated current stage from raw 15's current 14.
+    # Both produce pre-tick counter 14: the vendored engine computes stage = counter + 1.
+    return min(14, max(0, tracked_stage - 1))
 
 
 def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:

@@ -894,6 +894,7 @@ mod tests {
             turn_completed: false,
             lossy: vec!["synthetic_test_ambiguity".to_string()],
             attribution_unsafe: vec!["synthetic_test_ambiguity".to_string()],
+            active_status_transitions: Vec::new(),
         };
         let error = seam
             .reject_attribution_unsafe(&rendered)

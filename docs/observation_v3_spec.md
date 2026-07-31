@@ -109,6 +109,17 @@ consecutive successful stall-move uses by that side's currently-active mon:
   by its `-singleturn`/`-fail`) distinguishes reset cause (1) from an unrelated
   `-fail`; it is snapshot-carried too so a mid-window resume converges.
 
+**Toxic-stage provenance note.** The raw observation counter is the latest
+publicly established Toxic multiplier. At an ordinary request after `|turn|`,
+it names the next residual (`statusState.stage + 1`); in the post-`|upkeep|`,
+pre-next-`|turn|` forced-switch window it names the just-applied residual
+(`statusState.stage`). Replay snapshots separately retain whether that value is
+known and whether HP is exact or percentage-form. `/100` alone is not a
+representation discriminator because exact-100 HP Pokemon exist. Showdown caps
+Toxic at stage 15, so raw parser value 16 is reserved as an internal
+"current stage already saturated" sentinel; encoding clamps it to the same
+model-facing stage-15 value.
+
 - **Encoding:** one new numeric feature on each side's ACTIVE pokemon token
   (like `NUMERIC_TOXIC_STAGE`), schema >= v3 only, value `min(1.0, count / 8.0)`.
   Derived only from public protocol lines, so both players compute both

@@ -56,7 +56,7 @@ use poke_engine::engine::generate_instructions::{
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
-use poke_engine::instruction::{Instruction, StateInstructions};
+use poke_engine::instruction::{ChangeStatusInstruction, Instruction, StateInstructions};
 use poke_engine::state::{
     PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
     PokemonType, SideReference, State,
@@ -205,6 +205,30 @@ pub struct RenderedEvents {
     /// reject these branches before fold/encoder advancement instead of
     /// silently inventing action evidence or dropping chance mass.
     pub attribution_unsafe: Vec<String>,
+    /// Internal status transitions for the leaf's line-driven ledgers. These
+    /// deliberately do not add protocol text for fold-ignored cure events.
+    pub(crate) active_status_transitions: Vec<ActiveStatusTransition>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveStatusTransition {
+    /// Apply after this many rendered lines, preserving instruction order.
+    pub(crate) line_offset: usize,
+    pub(crate) side: usize,
+    pub(crate) new_status: PokemonStatus,
+}
+
+fn active_status_transition(
+    state: &State,
+    change: &ChangeStatusInstruction,
+) -> Option<ActiveStatusTransition> {
+    (state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index).then_some(
+        ActiveStatusTransition {
+            line_offset: 0,
+            side: side_usize(change.side_ref),
+            new_status: change.new_status,
+        },
+    )
 }
 
 impl RenderedEvents {
@@ -799,7 +823,7 @@ pub fn render_branch_events(
             );
         }
         // A pivot in flight (U-turn/Baton Pass chose to switch, the engine
-        // skipped residuals): the turn is not over — no |upkeep| yet.
+        // skipped residuals): the turn is not over — no |upkeep yet.
         if !(sim.state.side_one.force_switch || sim.state.side_two.force_switch) {
             out.lines.push("|upkeep".to_string());
         }
@@ -862,7 +886,7 @@ fn finish_ply(
             out.lines.push("|upkeep".to_string());
         }
         // Faint replacement: the faint ply already carried residuals +
-        // |upkeep|; the real protocol places the replacement switch before
+        // |upkeep; the real protocol places the replacement switch before
         // |turn|, which is exactly where we are now.
         out.lines.push(format!("|turn|{}", ctx.turn + 1));
         out.turn_completed = true;
@@ -1191,22 +1215,32 @@ fn consume_move_prelude(
                     && change.old_status == PokemonStatus::SLEEP
                     && change.new_status == PokemonStatus::NONE =>
             {
+                let transition = active_status_transition(sim.state, change);
                 // Natural / Rest wake. Real protocol: |-curestatus| (ignored
                 // by the fold — omitted).
                 sim.apply(ins);
                 *cursor += 1;
                 prelude.woke_up = true;
                 sleep_gate_seen = true;
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
                     && change.old_status == PokemonStatus::FREEZE
                     && change.new_status == PokemonStatus::NONE =>
             {
+                let transition = active_status_transition(sim.state, change);
                 // Thaw (real: |-curestatus|..|frz| — fold-ignored).
                 sim.apply(ins);
                 *cursor += 1;
                 sleep_gate_seen = true;
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::SetSleepTurns(set) if set.side_ref == side => {
                 sim.apply(ins);
@@ -2166,6 +2200,7 @@ fn render_move_phase(
                 }
             }
             Instruction::ChangeStatus(change) => {
+                let transition = active_status_transition(sim.state, change);
                 sim.apply(ins);
                 let target_ident = ctx.active_ident(sim.state, change.side_ref);
                 if change.old_status == PokemonStatus::NONE {
@@ -2180,6 +2215,10 @@ fn render_move_phase(
                 }
                 // Status cures (Heal Bell / Refresh / lum): |-curestatus| is
                 // fold-ignored — omitted.
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::Boost(boost) => {
                 sim.apply(ins);
@@ -2552,6 +2591,7 @@ fn render_residual_instruction(
             render_side_condition_change(change, sim, ctx, out, None);
         }
         Instruction::ChangeStatus(change) => {
+            let transition = active_status_transition(sim.state, change);
             // Yawn falling asleep at end of turn.
             sim.apply(ins);
             if change.old_status == PokemonStatus::NONE {
@@ -2559,6 +2599,10 @@ fn render_residual_instruction(
                     let ident = ctx.active_ident(sim.state, change.side_ref);
                     out.lines.push(format!("|-status|{ident}|{code}"));
                 }
+            }
+            if let Some(mut transition) = transition {
+                transition.line_offset = out.lines.len();
+                out.active_status_transitions.push(transition);
             }
         }
         Instruction::Boost(boost) => {

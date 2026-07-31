@@ -485,7 +485,7 @@ class PursuitInterceptTest(unittest.TestCase):
 
     def test_no_intercept_on_plain_ko_with_real_engine_ordering(self) -> None:
         # Adversarial case from review: the REAL engine places faint-replacements
-        # BEFORE |upkeep| (faint -> | -> switch -> residuals -> upkeep). A plain
+        # BEFORE |upkeep (faint -> | -> switch -> residuals -> upkeep). A plain
         # Pursuit KO (no -activate marker) must NOT flag, and must NOT count as a
         # switch-predict observation.
         lines = _leads() + [

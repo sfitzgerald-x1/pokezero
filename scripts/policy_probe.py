@@ -182,7 +182,11 @@ def capture_base_state(
 def engineer_toxic(state, stage: int | None):
     """Return a copy of `state` with the active mon badly poisoned at the given ramp `stage`
     (status:tox categorical + the NUMERIC_TOXIC_STAGE ramp + belief status), HP held fixed.
-    `stage=None` returns the healthy baseline (status cleared, ramp 0)."""
+    `stage=None` returns the healthy baseline (status cleared, ramp 0).
+
+    This probe edits observation-only ``PlayerRelativeBattleState``; it has no replay provenance
+    and is not an engine-world materialization input.
+    """
     active = state.self_active
     hp = _hp_token(active.condition)
     status_word = "tox" if stage is not None else ""

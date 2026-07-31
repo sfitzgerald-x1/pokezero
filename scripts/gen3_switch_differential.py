@@ -1014,7 +1014,7 @@ def _spec(name):
         # Measured on the FAINT ply: `runAction` sees the pending switch flag,
         # issues a `switch` request and returns with the queued `residual`
         # action untouched, so the protocol block ends at `|faint|` — no
-        # `-weather ... [upkeep]`, no `|upkeep|`, no `|turn|`.
+        # `-weather ... [upkeep]`, no `|upkeep`, no `|turn|`.
         return dict(
             p1=_faint_p1, p2=_faint_p2, turns=_faint_turns,
             measured=1, setup_step=None, setup_landed=None,

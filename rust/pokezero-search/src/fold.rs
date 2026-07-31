@@ -528,11 +528,11 @@ fn is_caller_move(id: &str) -> bool {
     )
 }
 
-fn is_pursuit_scan_boundary(event_type: &str) -> bool {
+fn is_pursuit_scan_boundary(raw_line: &str, event_type: &str) -> bool {
     matches!(
         event_type,
-        "move" | "switch" | "drag" | "replace" | "cant" | "turn" | "upkeep"
-    )
+        "move" | "switch" | "drag" | "replace" | "cant" | "turn"
+    ) || raw_line == "|upkeep"
 }
 
 fn is_cant_no_choice_reason(action: &str) -> bool {
@@ -1352,7 +1352,7 @@ impl FoldStateInner {
             self.event_index += 1;
             // Pursuit ring buffer maintenance AFTER processing: boundary-type lines
             // clear it; everything else — blank separators included — joins the scan set.
-            if is_pursuit_scan_boundary(event_type) {
+            if is_pursuit_scan_boundary(raw_line, event_type) {
                 self.pursuit_buffer.clear();
             } else {
                 self.pursuit_buffer.push(raw_line.clone());
@@ -1399,9 +1399,10 @@ impl FoldStateInner {
 
     /// One line of the reference `_process_line`, against carried state.
     fn process_line(&mut self, raw_line: &str, parts: &[&str], event_type: &str) -> PyResult<()> {
-        if event_type.is_empty() || event_type == "upkeep" {
+        let canonical_upkeep = raw_line == "|upkeep";
+        if event_type.is_empty() || canonical_upkeep {
             self.close_window();
-            if event_type == "upkeep" {
+            if canonical_upkeep {
                 self.completed_turns.insert(self.turn_number);
             }
             return Ok(());

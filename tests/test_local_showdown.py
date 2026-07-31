@@ -566,13 +566,125 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(p1_state.weather, "sandstorm")
             self.assertEqual(p1_state.self_side_condition_counts["spikes"], 2)
             self.assertEqual(p1_state.self_timed_condition_turns["reflect"], 3)
-            self.assertEqual(p1_state.opponent_toxic_stage, 3)
+            # Scenario toxicStage is Showdown's current count; the ordinary request-boundary
+            # observation names the next residual multiplier.
+            self.assertEqual(p1_state.opponent_toxic_stage, 4)
+            self.assertTrue(env._parser.snapshot().toxic_stage_known["p2"])
             self.assertEqual(p1_state.opponent_confusion_elapsed, 1)
             self.assertIn("substitute", p1_state.self_active_volatiles)
             self.assertIn("leechseed", p1_state.opponent_active_volatiles)
 
             result = env.step({"p1": 1, "p2": 1})
             self.assertIsNone(result.terminal)
+
+    def test_exact_100_hp_scenario_round_trips_toxic_stage_four(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                # Base HP 10, level 60, IV 31, EV 0 => exactly 100 max HP.
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Diglett",
+                            ability="Arena Trap",
+                            moves=("Protect",),
+                            level=60,
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Splash",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=83, start_override=start_override)
+            before = env.snapshot().bridge_snapshot["battle"]
+            p1 = before["sides"][0]["pokemon"][0]
+            p2 = before["sides"][1]["pokemon"][0]
+            self.assertEqual(p1["maxhp"], 100)
+            state = {
+                "turn": 9,
+                "field": {"weather": "", "turnsRemaining": 0, "permanent": False},
+                "sides": {
+                    "p1": {
+                        "activeSlot": 0,
+                        "sideConditions": {},
+                        "activeVolatiles": [],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": 100,
+                                "status": {
+                                    "id": "tox",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": 4,
+                                },
+                                "moves": [
+                                    {"id": move["id"], "pp": move["pp"]}
+                                    for move in p1["moveSlots"]
+                                ],
+                            }
+                        ],
+                    },
+                    "p2": {
+                        "activeSlot": 0,
+                        "sideConditions": {},
+                        "activeVolatiles": [],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": p2["maxhp"],
+                                "status": {
+                                    "id": "",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": None,
+                                },
+                                "moves": [
+                                    {"id": move["id"], "pp": move["pp"]}
+                                    for move in p2["moveSlots"]
+                                ],
+                            }
+                        ],
+                    },
+                },
+            }
+
+            env.materialize_scenario_state(scenario_state=state)
+            bridge = env.snapshot().bridge_snapshot["battle"]
+            replay = env._parser.snapshot()
+            materialization = env.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            self.assertEqual(bridge["sides"][0]["pokemon"][0]["statusState"]["stage"], 4)
+            self.assertEqual(replay.toxic_stage["p1"], 5)
+            self.assertTrue(replay.toxic_stage_known["p1"])
+            self.assertEqual(payload["sides"]["p1"]["toxicStage"], 4)
+
+            env.step({"p1": 0, "p2": 0})
+            after = env.snapshot().bridge_snapshot["battle"]
+            next_replay = env._parser.snapshot()
+            next_payload = _public_materialization_payload(
+                env.public_materialization_state("p1")
+            )
+
+            self.assertEqual(after["sides"][0]["pokemon"][0]["hp"], 70)
+            self.assertEqual(after["sides"][0]["pokemon"][0]["statusState"]["stage"], 5)
+            self.assertEqual(next_replay.toxic_stage["p1"], 6)
+            self.assertEqual(next_payload["sides"]["p1"]["toxicStage"], 5)
+
+            # Showdown caps Toxic at stage 15. The parser keeps an internal 16 sentinel at an
+            # ordinary request; world materialization converts it to the engine's pre-tick 14.
+            state["sides"]["p1"]["pokemon"][0]["status"]["toxicStage"] = 15
+            env.materialize_scenario_state(scenario_state=state)
+            capped_replay = env._parser.snapshot()
+            capped_payload = _public_materialization_payload(
+                env.public_materialization_state("p1")
+            )
+            self.assertEqual(capped_replay.toxic_stage["p1"], 16)
+            self.assertEqual(capped_payload["sides"]["p1"]["toxicStage"], 14)
 
     def test_reset_with_start_override_runs_custom_game_with_injected_teams(self) -> None:
         config = integration_config()
@@ -1334,6 +1446,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             expected_branch = source.step({"p1": 1, "p2": 0})
 
             self.assertEqual(materialization.replay.toxic_stage["p2"], 2)
+            payload = _public_materialization_payload(materialization)
+            self.assertEqual(payload["sides"]["p2"]["toxicStage"], 1)
 
             search_env.materialize_public_world(
                 state=materialization,
@@ -1348,6 +1462,42 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
         self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
+
+    def test_public_materialization_rejects_unknown_toxic_stage_after_resume(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Toxic", "Protect")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Harden",)),)
+                ),
+            },
+        )
+        with LocalShowdownEnv(config) as source:
+            source.reset_with_start_override(seed=37, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+
+        unknown_replay = replace(
+            materialization.replay,
+            toxic_stage={**materialization.replay.toxic_stage, "p2": 0},
+            toxic_stage_known={**materialization.replay.toxic_stage_known, "p2": False},
+        )
+        unknown = replace(materialization, replay=unknown_replay)
+        payload = _public_materialization_payload(unknown)
+        self.assertIsNone(payload["sides"]["p2"]["toxicStage"])
+        self.assertIn("toxic-stage-unknown", payload["sides"]["p2"]["materializationBlockers"])
+
+        with LocalShowdownEnv(config) as search_env:
+            with self.assertRaisesRegex(LocalShowdownError, "toxic-stage-unknown"):
+                search_env.materialize_public_world(
+                    state=unknown,
+                    start_override=start_override,
+                    seed=37,
+                )
 
     def test_public_materialization_preserves_static_public_volatiles(self) -> None:
         config = integration_config()

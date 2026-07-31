@@ -34,7 +34,7 @@ Probe results the pins encode:
 The Trace rows prove that line position alone is insufficient: event-queue membership changes
 whether copied Truant receives the residual. Traced holders therefore remain UNKNOWN until an
 own move or Truant ``cant`` line publicly anchors the phase. The last row is the native
-replacement guard: a holder entering between `|upkeep|` and `|turn|` missed that turn's
+replacement guard: a holder entering between `|upkeep` and `|turn|` missed that turn's
 residual, so the following turn marker must not double-count it.
 """
 
