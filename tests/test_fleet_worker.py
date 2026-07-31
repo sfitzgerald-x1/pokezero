@@ -8,9 +8,11 @@ the shell fleet worker) and the OOM/task recycle bounds.
 from __future__ import annotations
 
 import json
+import errno
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -85,6 +87,17 @@ class ClaimTests(unittest.TestCase):
         self.assertEqual(task.out, out)
         self.assertEqual(task.policy, policy)
         self.assertFalse(sentinel.exists())
+
+    def test_reused_claim_path_does_not_revive_the_prior_generation(self) -> None:
+        _manifest(self.queue, "i7-s0.env", out=self.root / "out")
+        first = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(first)
+        first.claim_path.rename(self.queue / "pending" / first.base)
+        second = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.claim_token, second.claim_token)
+        self.assertFalse(fleet_worker._claim_token_is_current(first))
+        self.assertTrue(fleet_worker._claim_token_is_current(second))
 
     def test_empty_queue_returns_none(self) -> None:
         self.assertIsNone(claim_next_task(self.queue, "w1"))
@@ -1008,6 +1021,109 @@ class FanInTests(unittest.TestCase):
             [task.task_id for task in fleet_worker._read_fanin_manifest(target)],
             ["i1-s0.env"],
         )
+
+    def test_task_fence_heartbeat_keeps_foreign_cleanup_off_long_concat(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        staging = self.cache_dir / ".shard-ww1-v1.tmp.heartbeat"
+        staging.mkdir()
+        fleet_worker._write_fanin_staging_owner(staging, fanin_task, producer_token=task.claim_token)
+        with (
+            patch.object(fleet_worker, "_FANIN_PRODUCER_LEASE_SECONDS", 0.04),
+            patch.object(fleet_worker, "_FANIN_HEARTBEAT_INTERVAL_SECONDS", 0.005),
+        ):
+            lease = fleet_worker._acquire_fanin_task_publication_lease(self.cache_dir, task, fanin_task)
+            try:
+                task.claim_path.unlink()
+                time.sleep(0.12)  # Longer than the old one-shot 60 s-equivalent lease.
+                fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
+                self.assertTrue(staging.exists())
+            finally:
+                fleet_worker._release_fanin_task_publication_lease(lease)
+            fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
+        self.assertFalse(staging.exists())
+
+    def test_stale_fence_releaser_cannot_remove_new_reclaimer_fence(self) -> None:
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        first = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(first)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(first)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, first.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        first_fence = fleet_worker._acquire_fanin_guard(fence_path, first, fanin_task)
+
+        def expire(fence) -> None:
+            fence.stop.set()
+            fence.heartbeat.join(timeout=1)
+            payload = json.loads((fence.path / "owner.json").read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            (fence.path / "owner.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        try:
+            expire(first_fence)
+            first.claim_path.unlink()
+            _manifest(self.queue, first.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+            second = claim_next_task(self.queue, "w2")
+            self.assertIsNotNone(second)
+            second_fence = fleet_worker._acquire_fanin_guard(fence_path, second, fanin_task)
+            try:
+                expire(second_fence)
+                second.claim_path.unlink()
+                _manifest(self.queue, first.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+                third = claim_next_task(self.queue, "w3")
+                self.assertIsNotNone(third)
+                third_fence = fleet_worker._acquire_fanin_guard(fence_path, third, fanin_task)
+                try:
+                    fleet_worker._release_fanin_guard(second_fence)
+                    self.assertTrue(fleet_worker._fanin_fence_is_current(third_fence))
+                finally:
+                    fleet_worker._release_fanin_guard(third_fence)
+            finally:
+                fleet_worker._release_fanin_guard(second_fence)
+        finally:
+            fleet_worker._release_fanin_guard(first_fence)
+
+    def test_same_task_retry_reclaims_stale_task_and_publish_records(self) -> None:
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        first = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(first)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(first)
+        first_lease = fleet_worker._acquire_fanin_task_publication_lease(self.cache_dir, first, fanin_task)
+        base = self.cache_dir / "shard-ww1"
+        first_lock, first_identity = fleet_worker._acquire_fanin_publish_lock(base, first, fanin_task)
+        try:
+            first_lease.guard.stop.set()
+            first_lease.guard.heartbeat.join(timeout=1)
+            payload = json.loads((first_lease.guard.path / "owner.json").read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            (first_lease.guard.path / "owner.json").write_text(json.dumps(payload), encoding="utf-8")
+            first.claim_path.unlink()
+
+            _manifest(self.queue, first.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+            second = claim_next_task(self.queue, "w2")
+            self.assertIsNotNone(second)
+            second_lease = fleet_worker._acquire_fanin_task_publication_lease(self.cache_dir, second, fanin_task)
+            try:
+                second_lock, second_identity = fleet_worker._acquire_fanin_publish_lock(base, second, fanin_task)
+                self.assertNotEqual(first_identity, second_identity)
+                self.assertEqual(fleet_worker._read_fanin_task_lock(second_lease.record)[2], second.claim_token)
+                fleet_worker._release_fanin_publish_lock(first_lock, first_identity)
+                self.assertEqual(second_lock.stat().st_ino, second_identity[1])
+            finally:
+                fleet_worker._release_fanin_publish_lock(second_lock, second_identity)
+                fleet_worker._release_fanin_task_publication_lease(second_lease)
+        finally:
+            fleet_worker._release_fanin_publish_lock(first_lock, first_identity)
+            fleet_worker._release_fanin_task_publication_lease(first_lease)
+
+    def test_target_collision_classifies_enotempty_oserror(self) -> None:
+        self.assertTrue(fleet_worker._is_fanin_target_collision(OSError(errno.ENOTEMPTY, "target not empty")))
+        self.assertTrue(fleet_worker._is_fanin_target_collision(FileExistsError(errno.EEXIST, "target exists")))
+        self.assertFalse(fleet_worker._is_fanin_target_collision(OSError(errno.EIO, "I/O error")))
 
     def test_cleanup_keeps_concurrently_published_higher_cumulative_version(self) -> None:
         self._manifests(1)

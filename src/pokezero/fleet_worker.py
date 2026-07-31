@@ -74,15 +74,13 @@ import os
 import shlex
 import shutil
 import socket
+import threading
 import time
 import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
-
-import fcntl
-
 
 @dataclass(frozen=True)
 class TaskManifest:
@@ -109,6 +107,7 @@ _SELECTED_FANIN_READ_ATTEMPTS = 3
 _SELECTED_FANIN_RETRY_SECONDS = 0.01
 _FANIN_PUBLISH_LOCK_ATTEMPTS = 3
 _FANIN_PRODUCER_LEASE_SECONDS = 60.0
+_FANIN_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 
 class FanInValidationError(ValueError):
@@ -270,36 +269,61 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
     return None
 
 
-def _claim_token_path(claim: Path) -> Path:
-    return claim.parent / f".{claim.name}.lease.json"
+def _claim_token_path(claim: Path, token: str) -> Path:
+    """Return a generation-specific sidecar; claim names are intentionally reusable."""
+    return claim.parent / f".{claim.name}.lease.{token}.json"
 
 
 def _sweep_orphaned_claim_tokens(claimed: Path, task_id: str) -> None:
-    for lease in claimed.glob(f".{task_id}.*.lease.json"):
-        claim_name = lease.name.removeprefix(".").removesuffix(".lease.json")
-        if not (claimed / claim_name).exists():
+    for lease in claimed.glob(f".{task_id}.*.lease.*.json"):
+        try:
+            payload = json.loads(lease.read_text(encoding="utf-8"))
+            claim_name = payload["claim"]
+            identity = (payload["claim_dev"], payload["claim_ino"], payload["claim_ctime_ns"])
+            stat = (claimed / claim_name).stat()
+        except FileNotFoundError:
+            lease.unlink(missing_ok=True)
+            continue
+        except (KeyError, OSError, TypeError, json.JSONDecodeError):
+            # A malformed token is not evidence that a live claimant is dead.
+            continue
+        if (stat.st_dev, stat.st_ino, stat.st_ctime_ns) != identity:
             lease.unlink(missing_ok=True)
 
 
 def _write_claim_token(claim: Path) -> str:
     """Record a fresh claimant generation so path reuse cannot revive a publisher."""
     token = uuid.uuid4().hex
-    lease = _claim_token_path(claim)
+    stat = claim.stat()
+    identity = (stat.st_dev, stat.st_ino, stat.st_ctime_ns)
+    lease = _claim_token_path(claim, token)
     temporary = lease.parent / f".{lease.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
-    payload = {"schema_version": 1, "claim": claim.name, "token": token}
+    payload = {
+        "schema_version": 2,
+        "claim": claim.name,
+        "claim_dev": identity[0],
+        "claim_ino": identity[1],
+        "claim_ctime_ns": identity[2],
+        "token": token,
+    }
     try:
         with temporary.open("x", encoding="utf-8") as handle:
             json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, lease)
+        os.link(temporary, lease)
         _fsync_directory(lease.parent)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-    if not claim.exists():
+    temporary.unlink(missing_ok=True)
+    try:
+        current = claim.stat()
+    except FileNotFoundError as exc:
         raise ValueError(f"claim disappeared before its lease was recorded: {claim}")
+    if (current.st_dev, current.st_ino, current.st_ctime_ns) != identity:
+        raise ValueError(f"claim was reused before its lease was recorded: {claim}")
     return token
 
 
@@ -308,26 +332,39 @@ def _claim_token_is_current(task: TaskManifest) -> bool:
 
 
 def _claim_token_is_live(claim: Path, token: str) -> bool:
-    if not token or not claim.exists():
+    if not token:
         return False
     try:
-        payload = json.loads(_claim_token_path(claim).read_text(encoding="utf-8"))
+        stat = claim.stat()
+        payload = json.loads(_claim_token_path(claim, token).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
     return (
         isinstance(payload, dict)
-        and payload == {"schema_version": 1, "claim": claim.name, "token": token}
+        and payload == {
+            "schema_version": 2,
+            "claim": claim.name,
+            "claim_dev": stat.st_dev,
+            "claim_ino": stat.st_ino,
+            "claim_ctime_ns": stat.st_ctime_ns,
+            "token": token,
+        }
     )
 
 
 def _remove_claim_token(task: TaskManifest) -> None:
     """Remove only this claimant generation's sidecar after terminal handling."""
-    lease = _claim_token_path(task.claim_path)
+    lease = _claim_token_path(task.claim_path, task.claim_token)
     try:
         payload = json.loads(lease.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
-    if payload == {"schema_version": 1, "claim": task.claim_path.name, "token": task.claim_token}:
+    if (
+        isinstance(payload, dict)
+        and payload.get("schema_version") == 2
+        and payload.get("claim") == task.claim_path.name
+        and payload.get("token") == task.claim_token
+    ):
         lease.unlink(missing_ok=True)
 
 
@@ -491,7 +528,7 @@ def _has_live_claim(queue: Path, task_id: str) -> bool:
 
 
 def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
-    """Reclaim only inactive producer leases whose owners no longer have claims.
+    """Reclaim only staging whose producer fence and claim are both dead.
 
     Staging with no valid owner record is deliberately retained: a different
     worker must never guess that an in-progress producer is dead.
@@ -503,14 +540,27 @@ def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
         if record is None:
             continue
         owner, producer_token = record
-        if _fanin_staging_lease_is_active(candidate, producer_token) or _has_live_claim(queue, owner.task_id):
+        fence = _fanin_task_fence_path(Path(cache_dir), owner.task_id)
+        if (
+            _fanin_fence_is_active(fence, queue / "claimed")
+            or _fanin_staging_lease_is_active(candidate, producer_token)
+            or _has_live_claim(queue, owner.task_id)
+        ):
             continue
-        # The missing claim proves this is not a live producer. A new retry
-        # creates a distinct staging path before doing any materialization.
+        # Move the sidecar out of the shared name first. Concurrent sweepers
+        # then observe a missing sidecar instead of deleting a new producer's.
+        tombstone = sidecar.parent / f".{sidecar.name}.gc.{os.getpid()}.{time.monotonic_ns()}"
+        try:
+            os.rename(sidecar, tombstone)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
         if candidate.is_dir():
             shutil.rmtree(candidate, ignore_errors=True)
-        sidecar.unlink(missing_ok=True)
         _fanin_staging_lease_path(candidate).unlink(missing_ok=True)
+        tombstone.unlink(missing_ok=True)
+        _fsync_directory(candidate.parent)
 
 
 def _fanin_publish_lock_path(base: Path) -> Path:
@@ -521,26 +571,187 @@ def _fanin_publish_guard_path(base: Path) -> Path:
     return base.parent / f".{base.name}{_FANIN_PUBLISH_GUARD_SUFFIX}"
 
 
-def _acquire_fanin_guard(path: Path, *, nonblocking: bool = False) -> Any:
-    """Serialize lock-record mutation; flock releases automatically on pod death."""
-    handle = path.open("a+", encoding="utf-8")
-    try:
-        mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-        fcntl.flock(handle.fileno(), mode)
-    except BlockingIOError as exc:
-        handle.close()
-        raise _FanInTransientError(f"fan-in publication fence is held: {path.name}") from exc
-    except Exception:
-        handle.close()
-        raise
-    return handle
+def _fanin_fence_owner_path(path: Path) -> Path:
+    return path / "owner.json"
 
 
-def _release_fanin_guard(handle: Any) -> None:
+@dataclass
+class _FanInFilesystemFence:
+    """An mkdir-owned fence whose owner record is renewed while work is live.
+
+    The shared cache volume must provide POSIX atomic directory creation and
+    rename within one directory. Unlike advisory ``flock``, those operations
+    are part of the cross-node filesystem protocol and are preflighted below.
+    """
+
+    path: Path
+    identity: tuple[int, int]
+    task: FanInTask
+    claim_name: str
+    claim_token: str
+    stop: threading.Event
+    heartbeat: threading.Thread
+
+
+def _fanin_fence_payload(task: FanInTask, claim_name: str, claim_token: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "task": _fanin_task_payload(task),
+        "claim_name": claim_name,
+        "claim_token": claim_token,
+        "renewed_at": time.time(),
+    }
+
+
+def _read_fanin_fence(path: Path) -> tuple[FanInTask, str, str, float] | None:
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        payload = json.loads(_fanin_fence_owner_path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version", "task", "claim_name", "claim_token", "renewed_at",
+    }:
+        return None
+    if (
+        payload["schema_version"] != 1
+        or not isinstance(payload["claim_name"], str)
+        or not payload["claim_name"]
+        or not isinstance(payload["claim_token"], str)
+        or not payload["claim_token"]
+        or not isinstance(payload["renewed_at"], (int, float))
+        or isinstance(payload["renewed_at"], bool)
+    ):
+        return None
+    raw_task = payload["task"]
+    if not isinstance(raw_task, dict) or set(raw_task) != {
+        "task_id", "iteration", "offset", "count", "seed", "out", "policy",
+    }:
+        return None
+    numeric = (raw_task["iteration"], raw_task["offset"], raw_task["count"], raw_task["seed"])
+    if (
+        not isinstance(raw_task["task_id"], str)
+        or not raw_task["task_id"]
+        or not all(_is_int(value) for value in numeric)
+        or not isinstance(raw_task["out"], str)
+        or not raw_task["out"]
+        or not isinstance(raw_task["policy"], str)
+        or not raw_task["policy"]
+    ):
+        return None
+    task = FanInTask(raw_task["task_id"], *numeric, raw_task["out"], raw_task["policy"])
+    if task.iteration < 0 or task.offset < 0 or task.count <= 0 or task.seed < 0:
+        return None
+    return task, payload["claim_name"], payload["claim_token"], float(payload["renewed_at"])
+
+
+def _write_fanin_fence(path: Path, task: FanInTask, claim_name: str, claim_token: str) -> None:
+    owner = _fanin_fence_owner_path(path)
+    temporary = path / f".owner.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(_fanin_fence_payload(task, claim_name, claim_token), handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, owner)
+        _fsync_directory(path)
     finally:
-        handle.close()
+        temporary.unlink(missing_ok=True)
+
+
+def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
+    try:
+        stat = fence.path.stat()
+    except OSError:
+        return False
+    record = _read_fanin_fence(fence.path)
+    return (
+        (stat.st_dev, stat.st_ino) == fence.identity
+        and record is not None
+        and record[0] == fence.task
+        and record[1] == fence.claim_name
+        and record[2] == fence.claim_token
+    )
+
+
+def _fanin_fence_is_active(path: Path, claimed: Path) -> bool:
+    record = _read_fanin_fence(path)
+    if record is None:
+        return False
+    _task, claim_name, claim_token, renewed_at = record
+    return (
+        time.time() - renewed_at <= _FANIN_PRODUCER_LEASE_SECONDS
+        or _claim_token_is_live(claimed / claim_name, claim_token)
+    )
+
+
+def _acquire_fanin_guard(
+    path: Path,
+    task: TaskManifest,
+    fanin_task: FanInTask,
+    *,
+    nonblocking: bool = False,
+) -> _FanInFilesystemFence:
+    """Acquire a cross-node mkdir fence, reclaiming only a dead owner.
+
+    A stale fence is first renamed out of the shared name, so concurrent
+    reclaimers can never remove a newly created fence. Malformed records are
+    deliberately terminal rather than guessed stale.
+    """
+    del nonblocking  # Every fence acquisition is a bounded single attempt.
+    while True:
+        try:
+            path.mkdir()
+        except FileExistsError:
+            if _read_fanin_fence(path) is None:
+                raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
+            if _fanin_fence_is_active(path, task.claim_path.parent):
+                raise _FanInTransientError(f"fan-in publication fence is held: {path.name}")
+            tombstone = path.parent / f".{path.name}.stale.{os.getpid()}.{time.monotonic_ns()}"
+            try:
+                os.rename(path, tombstone)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise _FanInTransientError(f"fan-in publication fence changed while reclaiming: {path.name}") from exc
+            shutil.rmtree(tombstone, ignore_errors=True)
+            _fsync_directory(path.parent)
+            continue
+        _write_fanin_fence(path, fanin_task, task.claim_path.name, task.claim_token)
+        stat = path.stat()
+        stop = threading.Event()
+        fence = _FanInFilesystemFence(
+            path, (stat.st_dev, stat.st_ino), fanin_task, task.claim_path.name, task.claim_token,
+            stop, threading.Thread(),
+        )
+
+        def renew() -> None:
+            interval = min(_FANIN_HEARTBEAT_INTERVAL_SECONDS, _FANIN_PRODUCER_LEASE_SECONDS / 3)
+            while not stop.wait(max(interval, 0.001)):
+                if not _fanin_fence_is_current(fence):
+                    return
+                try:
+                    _write_fanin_fence(path, fanin_task, task.claim_path.name, task.claim_token)
+                except OSError:
+                    return
+
+        fence.heartbeat = threading.Thread(target=renew, name="fanin-fence-heartbeat", daemon=True)
+        fence.heartbeat.start()
+        return fence
+
+
+def _release_fanin_guard(fence: _FanInFilesystemFence) -> None:
+    fence.stop.set()
+    fence.heartbeat.join(timeout=max(_FANIN_HEARTBEAT_INTERVAL_SECONDS, 0.1) + 0.1)
+    if not _fanin_fence_is_current(fence):
+        return
+    tombstone = fence.path.parent / f".{fence.path.name}.released.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        os.rename(fence.path, tombstone)
+    except FileNotFoundError:
+        return
+    shutil.rmtree(tombstone, ignore_errors=True)
+    _fsync_directory(fence.path.parent)
 
 
 def _read_fanin_publish_lock(base: Path) -> tuple[FanInTask, str, str] | None:
@@ -598,7 +809,7 @@ def _acquire_fanin_publish_lock(
         "claim_name": task.claim_path.name,
         "claim_token": task.claim_token,
     }
-    guard = _acquire_fanin_guard(_fanin_publish_guard_path(base))
+    guard = _acquire_fanin_guard(_fanin_publish_guard_path(base), task, fanin_task)
     try:
         owner = _read_fanin_publish_lock(base) if lock.exists() else None
         if lock.exists() and owner is None:
@@ -629,20 +840,18 @@ def _acquire_fanin_publish_lock(
 
 
 def _release_fanin_publish_lock(lock: Path, identity: tuple[int, int]) -> None:
-    """Release only the exact lock inode this publisher acquired."""
-    try:
-        stat = lock.stat()
-    except FileNotFoundError:
-        return
-    if (stat.st_dev, stat.st_ino) != identity:
-        return
-    lock.unlink(missing_ok=True)
-    _fsync_directory(lock.parent)
+    """Release only the exact lock inode this publisher acquired.
+
+    Publication normally removes the claim before this cleanup, so an orphaned
+    lock is intentionally left for the next acquirer to reclaim under its
+    filesystem fence. This avoids a stale publisher's check-then-unlink race.
+    """
+    del lock, identity
 
 
 @dataclass
 class _FanInTaskPublicationLease:
-    guard: Any
+    guard: _FanInFilesystemFence
     record: Path
     claim_token: str
 
@@ -652,6 +861,11 @@ def _fanin_task_lock_record(cache_dir: Path, task_id: str) -> Path:
     directory = cache_dir / _FANIN_TASK_LOCK_DIRECTORY
     directory.mkdir(parents=True, exist_ok=True)
     return directory / f"{digest}.json"
+
+
+def _fanin_task_fence_path(cache_dir: Path, task_id: str) -> Path:
+    digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+    return cache_dir / _FANIN_TASK_LOCK_DIRECTORY / f"{digest}.guard"
 
 
 def _read_fanin_task_lock(record: Path) -> tuple[FanInTask, str, str] | None:
@@ -718,7 +932,7 @@ def _acquire_fanin_task_publication_lease(
 ) -> _FanInTaskPublicationLease:
     """Fence one task across every worker base until its target rename completes."""
     record = _fanin_task_lock_record(cache_dir, fanin_task.task_id)
-    guard = _acquire_fanin_guard(record.with_suffix(".guard"), nonblocking=True)
+    guard = _acquire_fanin_guard(_fanin_task_fence_path(cache_dir, fanin_task.task_id), task, fanin_task, nonblocking=True)
     try:
         previous = _read_fanin_task_lock(record) if record.exists() else None
         if record.exists() and previous is None:
@@ -744,7 +958,7 @@ def _release_fanin_task_publication_lease(lease: _FanInTaskPublicationLease) -> 
     """Drop a task lock record only while its stable guard still fences replacement."""
     try:
         current = _read_fanin_task_lock(lease.record)
-        if current is not None and current[2] == lease.claim_token:
+        if _fanin_fence_is_current(lease.guard) and current is not None and current[2] == lease.claim_token:
             lease.record.unlink(missing_ok=True)
             _fsync_directory(lease.record.parent)
     finally:
@@ -1082,6 +1296,32 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _preflight_fanin_filesystem(cache_dir: Path) -> None:
+    """Verify the atomic directory operations required on the shared cache mount.
+
+    Fan-in deliberately does not use ``flock``: all workers that share this
+    cache directory must instead see POSIX-atomic ``mkdir`` and same-directory
+    ``rename`` operations. Deployments must mount the cache on a filesystem
+    with those cross-node semantics (for example a POSIX NFS/CephFS mount), not
+    an object-store FUSE layer. This probe fails closed when those primitives
+    are unavailable; the race tests exercise the same directory protocol.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    probe = cache_dir / f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
+    moved = probe.with_name(f".{probe.name}.moved")
+    try:
+        probe.mkdir()
+        os.rename(probe, moved)
+        probe.mkdir()
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in cache filesystem lacks required atomic mkdir/rename support: {cache_dir}: {exc}"
+        ) from exc
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+        shutil.rmtree(moved, ignore_errors=True)
+
+
 def _task_manifest_text(task: TaskManifest) -> str:
     """Canonical queue metadata for a done marker that a reaper can recreate."""
     return (
@@ -1279,6 +1519,11 @@ def _recover_current_worker_task(
     return False
 
 
+def _is_fanin_target_collision(exc: OSError) -> bool:
+    """Whether a shared filesystem reported an already-published target."""
+    return isinstance(exc, FileExistsError) or exc.errno in (errno.EEXIST, errno.ENOTEMPTY)
+
+
 def _publish_fanin_task(
     task: TaskManifest,
     temporary_cache: Path,
@@ -1373,12 +1618,14 @@ def _publish_fanin_task(
                 raise FanInTaskValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
             _write_fanin_manifest(staging, version_tasks)
             _inject_crash(crash_inject, "fanin-before-target-publication", task)
-            if not _claim_token_is_current(task):
+            if not _claim_token_is_current(task) or not _fanin_fence_is_current(task_lease.guard):
                 raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
+            if _read_fanin_staging_owner_record(staging) != (fanin_task, task.claim_token):
+                raise _FanInTransientError(f"fan-in staging ownership changed before publishing {task.base}")
             try:
                 os.rename(staging, target)
             except OSError as exc:
-                if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                if not _is_fanin_target_collision(exc):
                     raise
                 existing = _find_committed_fanin_task(cache_dir, fanin_task)
                 if existing == fanin_task:
@@ -1516,7 +1763,12 @@ def run_worker(
             continue
         idle_since = None
         if shard_fanin:
-            _sweep_abandoned_fanin_staging(task.out.parent, queue)
+            try:
+                _preflight_fanin_filesystem(task.out.parent)
+                _sweep_abandoned_fanin_staging(task.out.parent, queue)
+            except (FanInInventoryValidationError, OSError) as exc:
+                log(f"TERMINAL fan-in filesystem preflight failed for {task.base}; preserving claim: {exc}")
+                return finish(2)
             try:
                 if _recover_fanin_task(task, queue, crash_inject=crash_inject):
                     log(f"recover-fanin {task.base}; durable version already selected")
