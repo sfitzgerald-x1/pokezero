@@ -62,18 +62,7 @@ fn damages(list: &[Instruction], side_ref: SideReference) -> Vec<i16> {
         .collect()
 }
 
-fn first_damage_to(list: &[Instruction], side_ref: SideReference) -> i16 {
-    damages(list, side_ref)
-        .into_iter()
-        .next()
-        .expect("expected move damage")
-}
-
-/// A regular Earthquake roll is never a direct KO here, but rolls 116..123
-/// leave side two within its next stage-three Toxic tick (66). Side two is the
-/// last faster Pokemon, so those rolls end the battle before side one's
-/// Leftovers runs; rolls 104..115 do not.
-fn terminal_toxic_roll_state(reserve_alive: bool) -> State {
+fn terminal_residual_roll_limit_state() -> State {
     let mut state = State::default();
 
     let attacker = state.side_one.get_active();
@@ -110,18 +99,17 @@ fn terminal_toxic_roll_state(reserve_alive: bool) -> State {
         PokemonIndex::P5,
     ] {
         state.side_one.pokemon[index].hp = 0;
-        state.side_two.pokemon[index].hp = if reserve_alive { 100 } else { 0 };
+        state.side_two.pokemon[index].hp = 0;
     }
     state
 }
 
-/// The ordinary representative roll (113) crosses neither direct-KO nor
-/// residual-lethality boundaries. The terminal residual boundary is different:
-/// all sixteen regular Gen 3 rolls must survive to preserve the half that end
-/// the battle before the winner's queued Leftovers.
+/// This is an ablation pin, not a fidelity assertion. The compact result below
+/// demonstrates why the withdrawn Toxic-only splitter cannot be restored: a
+/// correct comparison must evaluate the complete move pair and residual queue.
 #[test]
-fn terminal_toxic_lethality_splits_only_the_crossing_regular_rolls() {
-    let mut state = terminal_toxic_roll_state(false);
+fn terminal_residual_roll_split_remains_an_explicit_comparison_limit() {
+    let mut state = terminal_residual_roll_limit_state();
     let before = format!("{:?}", state);
     let branches = poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
         &mut state,
@@ -129,107 +117,17 @@ fn terminal_toxic_lethality_splits_only_the_crossing_regular_rolls() {
         &MoveChoice::Move(PokemonMoveIndex::M0),
         true,
     );
-    assert_eq!(
-        before,
-        format!("{:?}", state),
-        "branch generation mutated state"
-    );
 
-    let mut regular: Vec<_> = branches
-        .iter()
-        .filter(|branch| first_damage_to(&branch.instruction_list, SideReference::SideTwo) < 182)
-        .collect();
-    regular.sort_by_key(|branch| first_damage_to(&branch.instruction_list, SideReference::SideTwo));
-
-    assert_eq!(
-        branches.len(),
-        17,
-        "16 regular rolls plus the existing crit branch"
-    );
+    assert_eq!(before, format!("{:?}", state), "branch generation mutated state");
     assert!(
         (branches.iter().map(|branch| branch.percentage).sum::<f32>() - 100.0).abs() < 1e-6,
-        "the exact regular split must preserve total probability mass"
+        "the compact ablation must preserve probability mass"
     );
-    assert_eq!(
-        regular
-            .iter()
-            .map(|branch| first_damage_to(&branch.instruction_list, SideReference::SideTwo))
-            .collect::<Vec<_>>(),
-        vec![104, 105, 107, 108, 109, 110, 111, 113, 114, 115, 116, 118, 119, 120, 121, 123],
-        "the regular Gen 3 85..100 roll range is preserved exactly"
-    );
-
-    for branch in regular {
-        let damage = first_damage_to(&branch.instruction_list, SideReference::SideTwo);
-        let winner_heals = heals(&branch.instruction_list, SideReference::SideOne);
-        if damage <= 115 {
-            assert_eq!(winner_heals, vec![19], "roll {damage} survives Toxic");
-        } else {
-            assert!(
-                winner_heals.is_empty(),
-                "roll {damage} dies to Toxic before Leftovers: {:?}",
-                branch.instruction_list
-            );
-        }
-    }
-}
-
-/// The split is not a generic Toxic accuracy expansion. With a living reserve,
-/// the same residual faint does not end the battle, so the compact regular
-/// representative remains correct.
-#[test]
-fn terminal_toxic_roll_split_does_not_expand_nonterminal_poison() {
-    let mut state = terminal_toxic_roll_state(true);
-    let branches = poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
-        &mut state,
-        &MoveChoice::Move(PokemonMoveIndex::M0),
-        &MoveChoice::Move(PokemonMoveIndex::M0),
-        true,
-    );
-    assert_eq!(
-        branches.len(),
-        2,
-        "normal representative plus existing crit branch"
-    );
+    assert_eq!(branches.len(), 2, "no production residual roll splitter is installed");
     assert!(branches.iter().any(|branch| {
-        first_damage_to(&branch.instruction_list, SideReference::SideTwo) == 113
+        damages(&branch.instruction_list, SideReference::SideTwo).first() == Some(&113)
             && heals(&branch.instruction_list, SideReference::SideOne) == vec![19]
     }));
-}
-
-/// Direct KOs already have their own roll brancher, and a residual-free target
-/// has no terminal-boundary reason to enumerate regular rolls.
-#[test]
-fn terminal_toxic_roll_split_leaves_direct_kos_and_no_status_compact() {
-    let mut direct_ko = terminal_toxic_roll_state(false);
-    direct_ko.side_two.get_active().hp = 120;
-    let direct_ko_branches =
-        poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
-            &mut direct_ko,
-            &MoveChoice::Move(PokemonMoveIndex::M0),
-            &MoveChoice::Move(PokemonMoveIndex::M0),
-            true,
-        );
-    assert_eq!(
-        direct_ko_branches.len(),
-        2,
-        "direct-KO roll handling stays compact"
-    );
-
-    let mut no_status = terminal_toxic_roll_state(false);
-    no_status.side_two.get_active().status = poke_engine::state::PokemonStatus::NONE;
-    let no_status_branches =
-        poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
-            &mut no_status,
-            &MoveChoice::Move(PokemonMoveIndex::M0),
-            &MoveChoice::Move(PokemonMoveIndex::M0),
-            true,
-        );
-    assert_eq!(
-        no_status_branches.len(),
-        2,
-        "no-status damage stays compact"
-    );
 }
 
 /// Side two's active is poisoned on 1 HP, so the residual block kills it — and it is

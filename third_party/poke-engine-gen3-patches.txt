@@ -1157,12 +1157,6 @@ poke-engine-gen3-forecast-suppressor-handoff.patch
 # deferred Color Change so zero-damage Endure branches never retype.
 poke-engine-gen3-review-compositions.patch
 
-# A final faster Toxic target can be killed by some non-direct-KO regular damage
-# rolls, which truncates the residual block before the winner's queued effects.
-# Preserve the exact roll set only across that terminal boundary. Authored
-# against the review-compositions tree above.
-poke-engine-gen3-terminal-toxic-roll-split.patch
-
 # Gen 3 successful Substitute ends an existing partial-trap volatile. Showdown
 # silently ends Wrap / Bind / Fire Spin / Clamp / Whirlpool after the Substitute
 # is created, before end-of-turn residuals. Upstream leaves PARTIALLYTRAPPED in

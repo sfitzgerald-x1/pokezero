@@ -22,10 +22,10 @@ PATCH_LIST = REPO_ROOT / "third_party" / "poke-engine-gen3-patches.txt"
 PATCH_ROOT = REPO_ROOT / "third_party"
 
 # This is the canonical post-patch tree for every file touched by the frozen
-# 50-patch stack. It deliberately hashes only paths named by ``+++`` patch
+# 49-patch stack. It deliberately hashes only paths named by ``+++`` patch
 # headers, rather than globbing the source tree: upstream has case-colliding
 # README files which are not build inputs for this patch stack.
-PATCHED_TARGET_TREE_SHA256 = "a700267de899df7309dad95d3533398ab71813719a564e0216b131f1042f8f27"
+PATCHED_TARGET_TREE_SHA256 = "3dac419244f0b093d5ad6ec48575504de9db9df763dd256471c7125507faeebd"
 _TARGET_TREE_DOMAIN = b"pokezero.poke-engine.patched-target-tree/v1\0"
 
 # GNU and BSD patch both consult these variables when deciding whether to keep
