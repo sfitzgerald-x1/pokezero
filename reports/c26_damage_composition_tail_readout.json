@@ -1,0 +1,155 @@
+{
+  "schema": "c26-damage-composition-tail-readout/1",
+  "purpose": "Row-identity ownership and replay boundary for the C26 matcher tail.",
+  "source_population": {
+    "report": "reports/c15_why_magnitude_statgap_report.md",
+    "identities": [
+      "2000261/31",
+      "2000298/23",
+      "2000431/32",
+      "2000561/67",
+      "2100079/7",
+      "2400156/29",
+      "2401127/54",
+      "2500120/60",
+      "2500576/7",
+      "2600657/49",
+      "2601196/46"
+    ]
+  },
+  "current_replay": {
+    "archive": "cert-sweep-20260730",
+    "engine_fingerprint": "51eda3177f324dcc",
+    "command": "PYTHONPATH=src:scripts .venv/bin/python -c '<select the listed archive rows and call cert_sweep_reread.reread_row>'",
+    "rows": [
+      {
+        "identity": "2000261/31",
+        "verdict": "skip_lossy",
+        "disposition": "unresolved_engine_candidate",
+        "evidence": "Calm Mind precedes Ice Beam, but the required branch render is lossy; no matcher acceptance was inferred."
+      },
+      {
+        "identity": "2000298/23",
+        "verdict": "skip_lossy",
+        "disposition": "switch_matcher_scope_not_cleared",
+        "evidence": "Dewgong switches before Ice Beam. The active prefix-state matcher is relevant in shape, but this exact render is lossy and did not clear."
+      },
+      {
+        "identity": "2000431/32",
+        "verdict": "diverged",
+        "disposition": "unresolved_engine_candidate",
+        "evidence": "The retained direct Ice Beam component remains observed -5 versus engine -7/-14."
+      },
+      {
+        "identity": "2000561/67",
+        "verdict": "diverged",
+        "disposition": "switch_matcher_scope_not_cleared",
+        "evidence": "Dewgong switches before Fire Punch, but the current matcher still has no engine direct component for observed -20."
+      },
+      {
+        "identity": "2100079/7",
+        "verdict": "skip_lossy",
+        "disposition": "unresolved_engine_candidate",
+        "evidence": "Calm Mind precedes Ice Beam, but the required branch render is lossy; no matcher acceptance was inferred."
+      },
+      {
+        "identity": "2400156/29",
+        "verdict": "diverged",
+        "disposition": "unresolved_engine_candidate",
+        "evidence": "The retained Flamethrower component remains observed -31 versus engine -35/-70."
+      },
+      {
+        "identity": "2401127/54",
+        "verdict": "diverged",
+        "disposition": "unresolved_dynamic_type_candidate",
+        "evidence": "The Color Change branch still prices the observed -45 outside every engine direct component."
+      },
+      {
+        "identity": "2500120/60",
+        "verdict": "skip_lossy",
+        "disposition": "misbucketed_switch_in_not_c26",
+        "evidence": "Grumpig switches before Flamethrower and burn follows the hit; this is not a same-turn stat or C26 composition tail."
+      },
+      {
+        "identity": "2500576/7",
+        "verdict": "diverged",
+        "disposition": "unresolved_engine_candidate",
+        "evidence": "The retained Ice Punch component remains observed -32 versus engine -36/-72."
+      },
+      {
+        "identity": "2600657/49",
+        "verdict": "diverged",
+        "disposition": "misbucketed_static_magnitude_not_c26",
+        "evidence": "Flamethrower precedes Dragon Claw with no qualifying composition event; observed -41 remains outside -46/-92."
+      },
+      {
+        "identity": "2601196/46",
+        "verdict": "diverged",
+        "disposition": "poison_row_not_capped_tail",
+        "evidence": "The observed poison tick is ordinary, while the mismatch is Ice Beam -6 versus engine -8/-16; C26's matching-source terminal-cap rule does not apply."
+      }
+    ]
+  },
+  "ownership_matrix": {
+    "closed_by_pr_980_or_current_main": [],
+    "active_matcher_scope_but_not_exactly_cleared": [
+      "2000298/23",
+      "2000561/67"
+    ],
+    "active_matcher_poison_tail_exactly_cleared": [],
+    "c27_rest": [],
+    "genuinely_unresolved_or_refused": [
+      "2000261/31",
+      "2000298/23",
+      "2000431/32",
+      "2000561/67",
+      "2100079/7",
+      "2400156/29",
+      "2401127/54",
+      "2500120/60",
+      "2500576/7",
+      "2600657/49",
+      "2601196/46"
+    ]
+  },
+  "c26_historical_targets": [
+    {
+      "identity": "2900889/126",
+      "mechanism_tested": "named Sleep Talk callee plus same-source terminal poison cap",
+      "current_replay_status": "refused_missing_pinned_protocol",
+      "available_run": {
+        "command": "PYTHONPATH=src:scripts .venv/bin/python scripts/engine_transition_differential.py --showdown-root <built-showdown-root> --games 1 --seed-start 2900889 --max-steps 127 --keep-repro 300 --repros-per-game 300 --json /tmp/c26-2900889.json",
+        "boundaries_full_round": 119,
+        "required_step": 126,
+        "identity_observed": false
+      }
+    },
+    {
+      "identity": "3400914/75",
+      "mechanism_tested": "direct damage, recoil, then capped Rest full-heal composition",
+      "current_replay_status": "refused_missing_pinned_protocol",
+      "available_run": {
+        "command": "PYTHONPATH=src:scripts .venv/bin/python scripts/engine_transition_differential.py --showdown-root <built-showdown-root> --games 1 --seed-start 3400914 --max-steps 76 --keep-repro 300 --repros-per-game 300 --json /tmp/c26-3400914.json",
+        "boundaries_full_round": 66,
+        "required_step": 75,
+        "identity_observed": false
+      }
+    },
+    {
+      "identity": "1500037/28",
+      "current_replay_status": "refused_not_in_c15_retained_archive",
+      "reason": "The historical negative control is not present in the retained C15 archive."
+    },
+    {
+      "identity": "1500174/72",
+      "current_replay_status": "refused_not_in_c15_retained_archive",
+      "reason": "The historical negative control is not present in the retained C15 archive."
+    }
+  ],
+  "invariants": {
+    "all_c15_identities_are_accounted_for": true,
+    "no_family_name_is_used_as_ownership_evidence": true,
+    "no_c26_historical_target_is_claimed_matched_without_a_retained_identity_replay": true,
+    "c26_code_scope": "identified called move, ordered direct-damage/recoil/full-heal tail, and same-source terminal residual only"
+  }
+}
