@@ -183,10 +183,11 @@ fn surviving_rest_turn_orders_leftovers_before_toxic_tail() {
     assert_eq!(state.battle_is_over(), 0.0, "both sides remain in battle");
 }
 
-/// The terminal half of the same shape is intentionally the opposite: when
-/// damage faints the last opposing Pokemon before it can Rest, no residual tail
-/// may follow. This is why the capped-lethal retained branches cannot be repaired
-/// by changing residual scheduling.
+/// In this constructed control, fixed damage KOs side two's last Pokemon before
+/// its selected Rest can execute, so no Rest or residual tail may follow. This
+/// pins the observable truncation, not one particular internal battle-end guard.
+/// Whatever damage/composition the unreplayable retained rows contained remains
+/// unknown.
 #[test]
 fn terminal_rest_turn_never_readds_residual_tail() {
     let mut state = State::default();

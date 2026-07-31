@@ -108,10 +108,29 @@ class RestResidualCompositionLimitTests(unittest.TestCase):
             self.assertIn("not_production", result["clearance_effect"])
             self.assertTrue(result["clearance_effect"].endswith("clearance"))
 
+        self.assertEqual(
+            results["sibling_residual_rest_regressions"]["commands"],
+            [
+                "cargo test --test gen3_rest_fidelity",
+                "cargo test --test gen3_rest_sleep_clause",
+                "cargo test --test gen3_battle_end_residuals",
+                "cargo test --test gen3_hazard_residual_fidelity",
+                "cargo test --test gen3_residual_rounding_fidelity",
+                "cargo test --test gen3_residual_speed_order",
+            ],
+        )
+        self.assertNotIn("command", results["sibling_residual_rest_regressions"])
+        self.assertEqual(
+            results["showdown_rest_residual_oracle"]["command"],
+            "PYTHONPATH=src python scripts/gen3_switch_differential.py "
+            "--showdown-root <showdown-root> --only restresidualtail",
+        )
+
     def test_limit_requires_scheduler_controls_and_reprovenance_to_reopen(self) -> None:
         contract = LIMIT.read_text(encoding="utf-8")
         rust_pin = RUST_PIN.read_text(encoding="utf-8")
         showdown_oracle = SHOWDOWN_ORACLE.read_text(encoding="utf-8")
+        report = json.loads(REPORT.read_text(encoding="utf-8"))
 
         self.assertIn("No production change is licensed", contract)
         self.assertIn("must not be laundered", contract)
@@ -120,6 +139,13 @@ class RestResidualCompositionLimitTests(unittest.TestCase):
         self.assertIn("fn surviving_rest_turn_orders_leftovers_before_toxic_tail", rust_pin)
         self.assertIn("fn terminal_rest_turn_never_readds_residual_tail", rust_pin)
         self.assertIn("leftovers < toxic", rust_pin)
+        self.assertIn("pins the observable truncation", rust_pin)
+        self.assertIn("not one particular internal battle-end guard", rust_pin)
+        self.assertIn("unreplayable retained rows", rust_pin)
+        self.assertIn("remains\n/// unknown", rust_pin)
+        self.assertEqual(report["historical_claim"]["status"], "unverified")
+        self.assertIn("prior unverified", report["historical_claim"]["summary"])
+        self.assertIn("do not identify any retained-row mechanism", report["stop_rule"])
         self.assertIn('if name == "restresidualtail"', showdown_oracle)
 
 

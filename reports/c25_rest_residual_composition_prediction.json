@@ -17,14 +17,14 @@
   },
   "historical_claim": {
     "status": "unverified",
-    "summary": "The prior pre-implementation note described a surviving Rest branch with a residual tail beside a capped-lethal terminal branch. The retained source reports required to replay that claim are not tracked in this checkout or its reachable local Git history."
+    "summary": "The prior unverified pre-implementation note described a surviving Rest branch with a residual tail beside a capped-lethal terminal branch. The retained source reports required to replay that claim are not tracked in this checkout or its reachable local Git history."
   },
   "prediction": {
     "survivor": "For a Rest turn that leaves both sides alive, every resulting branch must retain all eligible end-of-turn residual instructions in Gen 3 order, including Leftovers before poison for the same Pokemon.",
     "terminal": "For a Rest turn whose damage branch ends the battle before Rest can execute, no later residual instruction may be emitted.",
     "retained_rows": "No row-level outcome is asserted without the retained reports. The focused controls establish only the scheduler boundary, not an attribution for these identities."
   },
-  "stop_rule": "Do not change residual scheduling unless a focused Rest fixture shows a surviving branch missing an otherwise eligible residual instruction, or a terminal branch emitting one. If both controls hold, fail closed and hand the shared damage-lattice defect to its dedicated lane.",
+  "stop_rule": "Do not change residual scheduling unless a focused Rest fixture shows a surviving branch missing an otherwise eligible residual instruction, or a terminal branch emitting one. If both controls hold, fail closed: they do not identify any retained-row mechanism, and any damage-lattice investigation remains outside this lane until replay evidence exists.",
   "verification_plan": {
     "focused_pins": [
       {
@@ -201,12 +201,19 @@
       "sibling_residual_rest_regressions": {
         "status": "passed",
         "clearance_effect": "regression_control_not_production_clearance",
-        "command": "focused sibling residual and Rest test suites"
+        "commands": [
+          "cargo test --test gen3_rest_fidelity",
+          "cargo test --test gen3_rest_sleep_clause",
+          "cargo test --test gen3_battle_end_residuals",
+          "cargo test --test gen3_hazard_residual_fidelity",
+          "cargo test --test gen3_residual_rounding_fidelity",
+          "cargo test --test gen3_residual_speed_order"
+        ]
       },
       "showdown_rest_residual_oracle": {
         "status": "passed",
         "clearance_effect": "independent_control_not_production_or_row_replay_clearance",
-        "command": "PYTHONPATH=src python scripts/gen3_switch_differential.py --only restresidualtail",
+        "command": "PYTHONPATH=src python scripts/gen3_switch_differential.py --showdown-root <showdown-root> --only restresidualtail",
         "result": "3 of 4 seeds asserted; one Toxic setup miss was skipped by the scenario gate."
       },
       "closure_limit_invariant": {
