@@ -15,7 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pokezero import fleet_worker  # noqa: E402
-from pokezero.fleet_worker import claim_next_task, run_worker  # noqa: E402
+from pokezero.fleet_worker import (  # noqa: E402
+    FanInQueueContract,
+    FanInTask,
+    FanInValidationError,
+    claim_next_task,
+    read_fanin_inventory,
+    run_worker,
+)
 
 
 def _make_queue(root: Path) -> Path:
@@ -25,11 +32,11 @@ def _make_queue(root: Path) -> Path:
     return queue
 
 
-def _manifest(queue: Path, base: str, *, out: Path, iteration: int = 7,
+def _manifest(queue: Path, base: str, *, out: Path, iteration: int = 7, offset: int = 0,
               count: int = 2, seed: int = 4321, policy: str = "remote:http://svc:8600") -> Path:
     path = queue / "pending" / base
     path.write_text(
-        f'a_iter={iteration}\na_offset=0\na_count={count}\n'
+        f'a_iter={iteration}\na_offset={offset}\na_count={count}\n'
         f'a_seed={seed}\na_out="{out}"\na_policy={policy}\n',
         encoding="utf-8",
     )
@@ -220,13 +227,45 @@ class FanInTests(unittest.TestCase):
         for index in range(count):
             _manifest(
                 self.queue, f"i1-s{index}.env",
-                out=self.cache_dir / f"slice-{index}", count=1, seed=100 + index,
+                out=self.cache_dir / f"slice-{index}", iteration=1, offset=index,
+                count=1, seed=100 + index,
             )
 
     def _read_meta(self, cache: Path) -> dict:
         import json
 
         return json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
+
+    def _contract(self, *, tasks: int, games: int, seed_start: int = 100) -> FanInQueueContract:
+        return FanInQueueContract(
+            iteration=1,
+            expected_task_count=tasks,
+            expected_game_count=games,
+            offset_start=0,
+            seed_start=seed_start,
+        )
+
+    def _write_version(self, name: str, tasks: list[FanInTask]) -> Path:
+        from pokezero.dataset import TrajectoryDatasetConfig
+        from tests.test_cache_concat import rollout_record, write_cache
+
+        staging = self.root / f"staging-{len(list(self.root.glob('staging-*')))}-{name}"
+        staging.mkdir()
+        cache = write_cache(
+            staging, name, [rollout_record(task.seed) for task in tasks],
+            config=TrajectoryDatasetConfig(window_size=1),
+        )
+        import shutil
+
+        target = self.cache_dir / name
+        shutil.move(str(cache), str(target))
+        fleet_worker._write_fanin_manifest(target, tasks)
+        return target
+
+    def _requeue_claim(self, worker: str, base: str) -> None:
+        claim = self.queue / "claimed" / f"{base}.{worker}"
+        self.assertTrue(claim.exists())
+        claim.rename(self.queue / "pending" / base)
 
     def test_tasks_fan_into_one_versioned_shard(self) -> None:
         self._manifests(3)
@@ -255,6 +294,166 @@ class FanInTests(unittest.TestCase):
         selected = select_fanin_shards(self.cache_dir)
         self.assertEqual([p.name for p in selected], ["shard-ww1-v2"])
 
+    def test_strict_inventory_uses_only_selected_highest_versions(self) -> None:
+        self._manifests(2)
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        # A legacy lower version is stale evidence and must neither be selected
+        # nor make a valid selected cumulative version unsafe.
+        (self.cache_dir / "shard-ww1-v1").mkdir()
+        inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
+        self.assertEqual([shard.path.name for shard in inventory.shards], ["shard-ww1-v2"])
+        self.assertEqual([task.task_id for task in inventory.tasks], ["i1-s0.env", "i1-s1.env"])
+
+    def test_crash_before_target_publication_leaves_no_visible_version(self) -> None:
+        self._manifests(1)
+
+        def crash(boundary: str, _task) -> None:
+            if boundary == "fanin-before-target-publication":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash,
+            )
+        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        self._requeue_claim("w1", "i1-s0.env")
+        run_worker(
+            self.queue, worker_id="w2", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+        self.assertEqual(inventory.total_games, 1)
+
+    def test_crash_after_target_publication_recovers_on_another_worker_without_duplication(self) -> None:
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def crash(boundary: str, _task) -> None:
+            if boundary == "fanin-after-target-publication":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash,
+            )
+        self.assertTrue((self.cache_dir / "shard-ww1-v1").exists())
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+        self._requeue_claim("w1", "i1-s0.env")
+        run_worker(
+            self.queue, worker_id="w2", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+        self.assertEqual(self._read_meta(self.cache_dir / "shard-ww1-v1")["record_count"], 1)
+        self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
+
+    def test_crash_after_recovery_keeps_done_and_output_once(self) -> None:
+        self._manifests(1)
+
+        def crash_after_publish(boundary: str, _task) -> None:
+            if boundary == "fanin-after-target-publication":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash_after_publish,
+            )
+        self._requeue_claim("w1", "i1-s0.env")
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def crash_after_recovery(boundary: str, _task) -> None:
+            if boundary == "fanin-after-recovery":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w2", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash_after_recovery,
+            )
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+        self.assertEqual(calls, [])
+        self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
+
+    def test_revoked_claim_cannot_publish_a_target(self) -> None:
+        self._manifests(1)
+
+        def revoke(boundary: str, task) -> None:
+            if boundary == "fanin-before-target-publication":
+                task.claim_path.unlink()
+
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            crash_inject=revoke,
+        )
+        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+
+    def test_strict_inventory_rejects_malformed_or_missing_manifest(self) -> None:
+        missing = self._write_version("shard-ww1-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])
+        (missing / "fanin-manifest.json").unlink()
+        with self.assertRaisesRegex(FanInValidationError, "no valid"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+        (missing / "fanin-manifest.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(FanInValidationError, "malformed manifest envelope"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_strict_inventory_rejects_cache_game_count_mismatch(self) -> None:
+        # _write_version writes one record; the manifest's two-game claim must
+        # be rejected before a launcher can include it in training.
+        self._write_version("shard-ww1-v1", [FanInTask("i1-s0.env", 1, 0, 2, 100)])
+        with self.assertRaisesRegex(FanInValidationError, "cache games disagree"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=2))
+
+    def test_strict_inventory_rejects_conflicts_ranges_and_contract_totals(self) -> None:
+        self._write_version("shard-ww1-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])
+        self._write_version("shard-ww2-v1", [FanInTask("i1-s0.env", 1, 1, 1, 101)])
+        with self.assertRaisesRegex(FanInValidationError, "conflicting metadata"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
+
+        import shutil
+
+        shutil.rmtree(self.cache_dir / "shard-ww2-v1")
+        self._write_version("shard-ww2-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])
+        with self.assertRaisesRegex(FanInValidationError, "repeats task id"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
+
+        shutil.rmtree(self.cache_dir / "shard-ww2-v1")
+        self._write_version("shard-ww2-v1", [FanInTask("i1-s2.env", 1, 2, 1, 102)])
+        with self.assertRaisesRegex(FanInValidationError, "gap or overlap in queue offsets"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
+
+        shutil.rmtree(self.cache_dir / "shard-ww2-v1")
+        self._write_version("shard-ww2-v1", [FanInTask("i1-s1.env", 1, 1, 1, 102)])
+        with self.assertRaisesRegex(FanInValidationError, "gap or overlap in queue seed ranges"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
+        with self.assertRaisesRegex(FanInValidationError, "expected 3"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=3))
+        with self.assertRaisesRegex(FanInValidationError, "wrong iteration"):
+            read_fanin_inventory(
+                self.cache_dir,
+                FanInQueueContract(2, expected_task_count=2, expected_game_count=2, seed_start=100),
+            )
+
     def test_adopts_existing_version_and_sweeps_stale(self) -> None:
         from pokezero.dataset import TrajectoryDatasetConfig
         from tests.test_cache_concat import rollout_record, write_cache
@@ -267,6 +466,13 @@ class FanInTests(unittest.TestCase):
 
         shutil.move(str(v1), str(self.cache_dir / "shard-ww1-v1"))
         shutil.move(str(v2), str(self.cache_dir / "shard-ww1-v2"))
+        fleet_worker._write_fanin_manifest(
+            self.cache_dir / "shard-ww1-v2",
+            [
+                FanInTask("prior-s0.env", 1, 0, 1, 98),
+                FanInTask("prior-s1.env", 1, 1, 1, 99),
+            ],
+        )
         self._manifests(1)
         run_worker(
             self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
