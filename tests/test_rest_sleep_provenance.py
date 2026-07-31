@@ -82,6 +82,8 @@ def _dex() -> ShowdownDex:
                                 {"hp": 65, "atk": 80, "def": 140, "spa": 40, "spd": 70, "spe": 70}, 50.5),
             "starmie": species("starmie", "Starmie", ("water", "psychic"),
                                {"hp": 60, "atk": 75, "def": 85, "spa": 100, "spd": 85, "spe": 115}, 80.0),
+            "unown": species("unown", "Unown-Z", ("psychic",),
+                               {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}, 5.0),
         },
         type_chart={},
     )
@@ -96,6 +98,9 @@ _SKARMORY = FixturePokemon(species="Skarmory", moves=("rest",), ability="Keen Ey
 _SKARMORY_EARLY_BIRD = FixturePokemon(species="Skarmory", moves=("rest",), ability="Early Bird",
                                       item="Leftovers", level=76,
                                       evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+_UNOWN_Z = FixturePokemon(species="Unown-Z", moves=("rest",), ability="Levitate",
+                          item="Leftovers", level=76,
+                          evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
 _STARMIE = FixturePokemon(species="Starmie", moves=("surf",), ability="Natural Cure",
                           item="Leftovers", level=79,
                           evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
@@ -579,6 +584,41 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
         self.assertEqual(dict(replay.rest_sleep_refunded_turns), {"p2:skarmory": 1})
 
+    def test_two_public_sleep_talk_pivots_accumulate_refunds_and_rebuild_exactly(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|3",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="two-sleep-talk-refunds")
+        self.assertEqual(dict(replay.rest_sleep_counts), {"p2:skarmory": 2})
+        self.assertEqual(dict(replay.rest_sleep_refunded_turns), {"p2:skarmory": 2})
+        self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
+
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 2)
+        self.assertEqual(rows[0]["restSleepRefundedTime"], 2)
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with _stubbed_capability_probe():
+            world = battle_spec_from_payload(payload, _override(), dex=_dex())
+        self.assertEqual(world.spec.side_two.pokemon[0].rest_turns, 3)
+
     def test_plain_sleep_turn_after_sleep_talk_cancels_the_refund(self) -> None:
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
@@ -739,6 +779,57 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         _apply_rest_sleep_provenance(rows, replay, "p2")
 
         self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_cosmetic_forme_rest_key_rebuilds_instead_of_approximating_sleep(self) -> None:
+        lines = [
+            "|player|p1|Alice|",
+            "|player|p2|Bob|",
+            "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+            "|switch|p2a: Unown|Unown-Z, L76|100/100",
+            "|move|p2a: Unown|Rest|p2a: Unown",
+            "|-status|p2a: Unown|slp|[from] move: Rest",
+            "|cant|p2a: Unown|slp",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="unown-rest-forme")
+        rows = [
+            {"species": "Unown-Z", "condition": "88/100 slp", "active": False},
+            {"species": "Starmie", "condition": "100/100", "active": True},
+        ]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertNotIn("restSleepProvenanceUnrepresentable", rows[0])
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with _stubbed_capability_probe():
+            world = battle_spec_from_payload(
+                payload,
+                _override(sleeper=_UNOWN_Z),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(world.spec.side_two.pokemon[0].rest_turns, 2)
+
+    def test_unmatched_rest_tracker_refuses_generic_sleep_approximation(self) -> None:
+        replay = parse_showdown_replay(self._RESTED, battle_id="unmatched-rest-tracker")
+        rows = [
+            {"species": "Starmie", "condition": "88/100 slp", "active": False},
+            {"species": "Skarmory", "condition": "100/100", "active": True},
+        ]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+
         payload = _payload(_dex())
         payload["sides"]["p2"]["pokemon"] = rows
         with self.assertRaises(EngineWorldUnsupported) as caught:

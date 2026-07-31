@@ -2394,14 +2394,44 @@ def _apply_rest_sleep_provenance(
     pending_attempts = replay.rest_sleep_pending_attempt
     if not (counts or refunded_turns or skipped_turns or pending_attempts):
         return
+    tracker_keys = {
+        key
+        for tracker in (counts, refunded_turns, skipped_turns, pending_attempts)
+        for key in tracker
+        if isinstance(key, str) and key.startswith(f"{player}:")
+    }
+
+    def _tracker_key_for_species(species: str) -> str | None:
+        normalized = _normalize_identifier(species)
+        exact = f"{player}:{normalized}"
+        if exact in tracker_keys:
+            return exact
+
+        # Gen 3 cosmetic formes can use a base-form protocol ident (for example
+        # ``Unown``) while the materialized row retains ``Unown-Z``. Match that
+        # sibling parser surface only when the base-form key is unambiguous.
+        base = _normalize_identifier(species.split("-", 1)[0])
+        matches = [
+            key
+            for key in tracker_keys
+            if base != normalized and key.partition(":")[2] == base
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
     # therefore recorded under its opponent.
     induced = set(replay.induced_sleep_victims.get(opponent_showdown_slot(player), ()))
+    matched_tracker_keys: set[str] = set()
     for row in rows:
         species = row.get("species")
         if not isinstance(species, str):
             continue
-        key = f"{player}:{_normalize_identifier(species)}"
+        key = _tracker_key_for_species(species)
+        if key is None:
+            continue
+        if "slp" not in str(row.get("condition") or "").split():
+            continue
+        matched_tracker_keys.add(key)
         if key not in counts:
             if key in refunded_turns or key in skipped_turns or key in pending_attempts:
                 row["restSleepProvenanceUnrepresentable"] = True
@@ -2447,6 +2477,16 @@ def _apply_rest_sleep_provenance(
             row["restSleepRefundedTime"] = refunded
         if skipped:
             row["restSleepSkippedTime"] = skipped
+
+    if tracker_keys - matched_tracker_keys:
+        # A public Rest tracker that cannot be tied to a revealed row must not let any
+        # same-side sleeper pass through the generic approximation path.
+        for row in rows:
+            if (
+                isinstance(row.get("species"), str)
+                and "slp" in str(row.get("condition") or "").split()
+            ):
+                row["restSleepProvenanceUnrepresentable"] = True
 
 
 def _materialization_identifier(value: str) -> str:

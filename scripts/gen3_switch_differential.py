@@ -1863,13 +1863,12 @@ def _spec(name):
             landmark=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
             landmark_desc="Rest landed and started the clock")
     if name == "restsleeptalkrefund":
-        # Why the tracker RETIRES a Rest once a sleepUsable move is selected. Sleep Talk
-        # emits |cant| like any other sleeping turn and THEN acts, and gen3 banks that
-        # turn as `skippedTime`, refunding it on the next switch-in
-        # (slp.onSwitchIn: time += skippedTime). So the public |cant| count keeps rising
-        # while the sim hands the clock back, and ONE Rest emits FOUR cants instead of
-        # two -- at which point k no longer means "attempts elapsed" and 3 - k would
-        # build a mon that is awake in the world and asleep in the battle.
+        # Sleep Talk emits |cant| like any other sleeping turn and THEN acts. Gen 3 banks
+        # that turn as `skippedTime`, refunding it on the next switch-in
+        # (slp.onSwitchIn: time += skippedTime). The public |cant| count therefore rises
+        # while the sim hands timer units back: ONE Rest emits FOUR cants instead of two.
+        # The tracker retains both the public attempt count and its skipped/refunded units;
+        # rebuilding from 3 - k alone would build an awake world mon for this sleeper.
         return dict(
             p1=[_clause_hypnotist()], p2=[_rest_talker(), _clause_second_target()],
             turns=[("move seismictoss", "move splash"),   # chip, so Rest can land
