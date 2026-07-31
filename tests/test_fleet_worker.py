@@ -1247,6 +1247,103 @@ class FanInTests(unittest.TestCase):
         finally:
             fleet_worker._release_fanin_guard(first_fence)
 
+    def test_two_reclaimers_publish_only_one_deterministic_successor(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        predecessor_task = claim_next_task(self.queue, "w0")
+        self.assertIsNotNone(predecessor_task)
+        predecessor_fanin = fleet_worker._fanin_task_from_task_manifest(predecessor_task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, predecessor_task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        predecessor = fleet_worker._acquire_fanin_guard(fence_path, predecessor_task, predecessor_fanin)
+        winner = None
+        interleaved = False
+        try:
+            predecessor.stop.set()
+            predecessor.heartbeat.join(timeout=1)
+            payload = json.loads((predecessor.path / "owner.json").read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            (predecessor.path / "owner.json").write_text(json.dumps(payload), encoding="utf-8")
+            predecessor_task.claim_path.unlink()
+
+            _manifest(self.queue, "i1-s1.env", out=self.cache_dir / "slice-1", iteration=1, offset=1, count=1, seed=101)
+            _manifest(self.queue, "i1-s2.env", out=self.cache_dir / "slice-2", iteration=1, offset=2, count=1, seed=102)
+            task_a = claim_next_task(self.queue, "a")
+            task_b = claim_next_task(self.queue, "b")
+            self.assertIsNotNone(task_a)
+            self.assertIsNotNone(task_b)
+            fanin_a = fleet_worker._fanin_task_from_task_manifest(task_a)
+            fanin_b = fleet_worker._fanin_task_from_task_manifest(task_b)
+            original_publish = fleet_worker._publish_initialized_fanin_generation
+
+            def publish_a_after_b_authorizes(target: Path, task, fanin_task):
+                nonlocal winner, interleaved
+                if task.claim_token == task_b.claim_token and not interleaved:
+                    interleaved = True
+                    winner = fleet_worker._acquire_fanin_guard(fence_path, task_a, fanin_a)
+                return original_publish(target, task, fanin_task)
+
+            with patch.object(
+                fleet_worker, "_publish_initialized_fanin_generation", new=publish_a_after_b_authorizes,
+            ):
+                with self.assertRaises(fleet_worker._FanInTransientError):
+                    fleet_worker._acquire_fanin_guard(fence_path, task_b, fanin_b)
+
+            self.assertTrue(interleaved)
+            self.assertIsNotNone(winner)
+            current = fleet_worker._read_current_fanin_fence(fence_path)
+            self.assertIsNotNone(current)
+            self.assertEqual(current.path, winner.path)
+            self.assertTrue(fleet_worker._fanin_fence_is_current(winner))
+            self.assertFalse(fleet_worker._fanin_fence_is_current(predecessor))
+        finally:
+            if winner is not None:
+                fleet_worker._release_fanin_guard(winner)
+            fleet_worker._release_fanin_guard(predecessor)
+
+    def test_malformed_successor_generation_fails_closed(self) -> None:
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        fence = fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+        try:
+            fleet_worker._release_fanin_guard(fence)
+            current = fleet_worker._read_current_fanin_fence(fence_path)
+            successor = fleet_worker._fanin_fence_successor_path(fence_path, current)
+            successor.mkdir()
+            (successor / "owner.json").write_text("{", encoding="utf-8")
+            with self.assertRaises(fleet_worker.FanInInventoryValidationError):
+                fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+            self.assertTrue(successor.exists())
+        finally:
+            fleet_worker._release_fanin_guard(fence)
+
+    def test_guard_chain_traversal_is_bounded(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        first = fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+        second = None
+        try:
+            fleet_worker._release_fanin_guard(first)
+            second = fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+            with patch.object(fleet_worker, "_FANIN_GUARD_CHAIN_MAX_GENERATIONS", 1):
+                with self.assertRaises(fleet_worker.FanInInventoryValidationError):
+                    fleet_worker._read_current_fanin_fence(fence_path)
+        finally:
+            if second is not None:
+                fleet_worker._release_fanin_guard(second)
+            fleet_worker._release_fanin_guard(first)
+
     def test_same_task_retry_reclaims_stale_task_and_publish_records(self) -> None:
         _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
         first = claim_next_task(self.queue, "w1")

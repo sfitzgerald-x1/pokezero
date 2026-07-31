@@ -18,11 +18,19 @@ preserved for repair rather than guessed stale.
 
 Claim filenames are generation-unique capabilities. Acknowledgement and failed
 quarantine therefore operate only on the generation that acquired the task,
-never on a same-worker retry. Guard release likewise writes an immutable marker
-keyed by the guard inode and claim generation; it never unlinks or renames the
-reusable guard path.
-The next acquirer performs the only shared-name handoff by atomically moving an
-expired marked guard aside before publishing its initialized successor.
+never on a same-worker retry.
+
+Guard directories form an append-only generation chain. Generation zero uses
+the stable guard name; every later pathname is deterministically derived from
+the predecessor pathname and claim token. Contenders for the same expired
+generation therefore race to publish the same initialized successor directory.
+The winner's non-empty directory makes every other atomic rename collide. No
+installed generation is renamed, unlinked, or reused, and the existence of a
+successor immediately revokes predecessor ownership. Release writes a separate
+immutable marker keyed by the never-reused generation pathname and claim token.
+Workers follow the deterministic chain to find its current tail, fail closed on
+malformed or unreadable generations, and reject chains beyond the traversal
+bound of 4,096 generations per guard root.
 
 Before collecting, each task ID is bound by an append-only queue-local route
 record to its complete output route and fan-in root. Recovery always consults

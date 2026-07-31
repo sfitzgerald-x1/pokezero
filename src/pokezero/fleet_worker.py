@@ -109,6 +109,8 @@ _SELECTED_FANIN_RETRY_SECONDS = 0.01
 _FANIN_PUBLISH_LOCK_ATTEMPTS = 3
 _FANIN_PRODUCER_LEASE_SECONDS = 60.0
 _FANIN_HEARTBEAT_INTERVAL_SECONDS = 10.0
+_FANIN_GUARD_CHAIN_MAX_GENERATIONS = 4096
+_FANIN_GUARD_ACQUIRE_ATTEMPTS = 8
 
 
 class FanInValidationError(ValueError):
@@ -578,10 +580,16 @@ def _fanin_fence_owner_path(path: Path) -> Path:
     return path / "owner.json"
 
 
-def _fanin_fence_release_marker(path: Path, identity: tuple[int, int], claim_token: str) -> Path:
-    """Return an immutable release marker keyed by inode and claim generation."""
-    device, inode = identity
-    return path.parent / f".{path.name}.released.{device}.{inode}.{claim_token}"
+def _fanin_fence_release_marker(path: Path, claim_token: str) -> Path:
+    """Return an immutable marker for one never-reused guard generation."""
+    return path.parent / f".{path.name}.released.{claim_token}"
+
+
+@dataclass(frozen=True)
+class _FanInFenceGeneration:
+    path: Path
+    identity: tuple[int, int]
+    record: tuple[FanInTask, str, str, float]
 
 
 @dataclass
@@ -594,6 +602,7 @@ class _FanInFilesystemFence:
     is preflighted below; deployment must test contention from multiple nodes.
     """
 
+    root: Path
     path: Path
     identity: tuple[int, int]
     task: FanInTask
@@ -669,37 +678,146 @@ def _write_fanin_fence(path: Path, task: FanInTask, claim_name: str, claim_token
         temporary.unlink(missing_ok=True)
 
 
+def _fanin_fence_successor_path(root: Path, generation: _FanInFenceGeneration) -> Path:
+    """Derive the only valid child name from immutable predecessor provenance."""
+    claim_token = generation.record[2]
+    digest = hashlib.sha256(
+        f"{root.name}\0{generation.path.name}\0{claim_token}".encode("utf-8")
+    ).hexdigest()
+    return root.parent / f".{root.name}.generation.{digest}"
+
+
+def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
+    """Follow the append-only guard chain, failing closed on malformed state."""
+    path = root
+    path_was_observed = False
+    for _depth in range(_FANIN_GUARD_CHAIN_MAX_GENERATIONS):
+        try:
+            stat = path.stat()
+        except FileNotFoundError as exc:
+            if not path_was_observed:
+                return None
+            raise FanInInventoryValidationError(f"fan-in publication fence chain is broken: {path}") from exc
+        except OSError as exc:
+            raise FanInInventoryValidationError(f"fan-in publication fence is unreadable: {path}") from exc
+        record = _read_fanin_fence(path)
+        if record is None:
+            raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
+        generation = _FanInFenceGeneration(path, (stat.st_dev, stat.st_ino), record)
+        successor = _fanin_fence_successor_path(root, generation)
+        try:
+            successor.stat()
+        except FileNotFoundError:
+            return generation
+        except OSError as exc:
+            raise FanInInventoryValidationError(
+                f"fan-in publication fence successor is unreadable: {successor}"
+            ) from exc
+        path = successor
+        path_was_observed = True
+    raise FanInInventoryValidationError(
+        f"fan-in publication fence chain exceeds {_FANIN_GUARD_CHAIN_MAX_GENERATIONS} generations: {root}"
+    )
+
+
+def _fanin_generation_is_active(generation: _FanInFenceGeneration, claimed: Path) -> bool:
+    _task, claim_name, claim_token, renewed_at = generation.record
+    if _fanin_fence_release_marker(generation.path, claim_token).exists():
+        return False
+    return (
+        time.time() - renewed_at <= _FANIN_PRODUCER_LEASE_SECONDS
+        or _claim_token_is_live(claimed / claim_name, claim_token)
+    )
+
+
 def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
     try:
         stat = fence.path.stat()
     except OSError:
         return False
     record = _read_fanin_fence(fence.path)
-    return (
+    if not (
         (stat.st_dev, stat.st_ino) == fence.identity
-        and not _fanin_fence_release_marker(fence.path, fence.identity, fence.claim_token).exists()
+        and not _fanin_fence_release_marker(fence.path, fence.claim_token).exists()
         and record is not None
         and record[0] == fence.task
         and record[1] == fence.claim_name
         and record[2] == fence.claim_token
-    )
+    ):
+        return False
+    generation = _FanInFenceGeneration(fence.path, fence.identity, record)
+    try:
+        _fanin_fence_successor_path(fence.root, generation).stat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _fanin_fence_is_active(path: Path, claimed: Path) -> bool:
+    generation = _read_current_fanin_fence(path)
+    if generation is None:
+        return False
+    return _fanin_generation_is_active(generation, claimed)
+
+
+def _publish_initialized_fanin_generation(
+    target: Path,
+    task: TaskManifest,
+    fanin_task: FanInTask,
+) -> bool:
+    """Atomically publish one initialized, never-reused generation directory."""
+    temporary = target.parent / f".{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    published = False
     try:
-        stat = path.stat()
-    except OSError:
-        return False
+        temporary.mkdir()
+        _write_fanin_fence(temporary, fanin_task, task.claim_path.name, task.claim_token)
+        try:
+            os.rename(temporary, target)
+        except OSError as exc:
+            if not _is_fanin_target_collision(exc):
+                raise
+            return False
+        published = True
+        _fsync_directory(target.parent)
+        return True
+    finally:
+        if not published:
+            shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _start_fanin_guard_heartbeat(
+    root: Path,
+    path: Path,
+    task: TaskManifest,
+    fanin_task: FanInTask,
+) -> _FanInFilesystemFence:
+    """Validate ownership of a newly published generation and start renewal."""
+    stat = path.stat()
     record = _read_fanin_fence(path)
-    if record is None:
-        return False
-    if _fanin_fence_release_marker(path, (stat.st_dev, stat.st_ino), record[2]).exists():
-        return False
-    _task, claim_name, claim_token, renewed_at = record
-    return (
-        time.time() - renewed_at <= _FANIN_PRODUCER_LEASE_SECONDS
-        or _claim_token_is_live(claimed / claim_name, claim_token)
+    expected = (fanin_task, task.claim_path.name, task.claim_token)
+    if record is None or record[:3] != expected:
+        raise FanInInventoryValidationError(f"new fan-in publication fence is malformed: {path}")
+    stop = threading.Event()
+    fence = _FanInFilesystemFence(
+        root, path, (stat.st_dev, stat.st_ino), fanin_task, task.claim_path.name,
+        task.claim_token, stop, threading.Thread(),
     )
+
+    def renew() -> None:
+        interval = min(_FANIN_HEARTBEAT_INTERVAL_SECONDS, _FANIN_PRODUCER_LEASE_SECONDS / 3)
+        while not stop.wait(max(interval, 0.001)):
+            if not _fanin_fence_is_current(fence):
+                return
+            try:
+                _write_fanin_fence(fence.path, fanin_task, task.claim_path.name, task.claim_token)
+            except OSError:
+                return
+
+    fence.heartbeat = threading.Thread(target=renew, name="fanin-fence-heartbeat", daemon=True)
+    fence.heartbeat.start()
+    return fence
 
 
 def _acquire_fanin_guard(
@@ -709,88 +827,26 @@ def _acquire_fanin_guard(
     *,
     nonblocking: bool = False,
 ) -> _FanInFilesystemFence:
-    """Publish an initialized directory fence, reclaiming only a dead owner.
-
-    A stale fence is first renamed out of the shared name, so concurrent
-    reclaimers can never remove a newly created fence. Malformed records are
-    deliberately terminal rather than guessed stale.
-    """
-    del nonblocking  # Every fence acquisition is a bounded single attempt.
-    while True:
-        temporary = path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
-        published = False
-        try:
-            temporary.mkdir()
-            _write_fanin_fence(temporary, fanin_task, task.claim_path.name, task.claim_token)
-            if path.exists():
-                collision = True
-            else:
-                try:
-                    os.rename(temporary, path)
-                except OSError as exc:
-                    if not _is_fanin_target_collision(exc):
-                        raise
-                    collision = True
-                else:
-                    collision = False
-                    published = True
-                    _fsync_directory(path.parent)
-        finally:
-            if not published:
-                shutil.rmtree(temporary, ignore_errors=True)
-        if not published:
-            if not collision:
-                raise RuntimeError("fan-in guard publication returned no result")
-            existing = _read_fanin_fence(path)
-            if existing is None and not path.exists():
-                continue
-            if existing is None:
-                raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
-            if _fanin_fence_is_active(path, task.claim_path.parent):
-                raise _FanInTransientError(f"fan-in publication fence is held: {path.name}")
-            tombstone = path.parent / f".{path.name}.stale.{os.getpid()}.{time.monotonic_ns()}"
-            try:
-                os.rename(path, tombstone)
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                raise _FanInTransientError(f"fan-in publication fence changed while reclaiming: {path.name}") from exc
-            shutil.rmtree(tombstone, ignore_errors=True)
-            _fsync_directory(path.parent)
-            continue
-        stat = path.stat()
-        stop = threading.Event()
-        fence = _FanInFilesystemFence(
-            path, (stat.st_dev, stat.st_ino), fanin_task, task.claim_path.name, task.claim_token,
-            stop, threading.Thread(),
-        )
-
-        def renew() -> None:
-            interval = min(_FANIN_HEARTBEAT_INTERVAL_SECONDS, _FANIN_PRODUCER_LEASE_SECONDS / 3)
-            while not stop.wait(max(interval, 0.001)):
-                if not _fanin_fence_is_current(fence):
-                    return
-                try:
-                    _write_fanin_fence(path, fanin_task, task.claim_path.name, task.claim_token)
-                except OSError:
-                    return
-
-        fence.heartbeat = threading.Thread(target=renew, name="fanin-fence-heartbeat", daemon=True)
-        fence.heartbeat.start()
-        return fence
+    """Append an initialized guard generation after the current inactive owner."""
+    del nonblocking  # Every acquisition uses the same bounded, non-waiting loop.
+    for _attempt in range(_FANIN_GUARD_ACQUIRE_ATTEMPTS):
+        current = _read_current_fanin_fence(path)
+        if current is None:
+            target = path
+        else:
+            if _fanin_generation_is_active(current, task.claim_path.parent):
+                raise _FanInTransientError(f"fan-in publication fence is held: {current.path.name}")
+            target = _fanin_fence_successor_path(path, current)
+        if _publish_initialized_fanin_generation(target, task, fanin_task):
+            return _start_fanin_guard_heartbeat(path, target, task, fanin_task)
+    raise _FanInTransientError(f"fan-in publication fence kept advancing: {path.name}")
 
 
 def _release_fanin_guard(fence: _FanInFilesystemFence) -> None:
-    """Publish a generation-specific release marker without touching the guard path.
-
-    A portable POSIX rename cannot conditionally replace a reusable pathname by
-    inode, so a stale releaser must never rename or unlink that pathname. The
-    next acquirer observes this immutable marker, atomically moves the stale
-    guard aside, and installs its initialized successor.
-    """
+    """Publish a generation-specific release marker without mutating its directory."""
     fence.stop.set()
     fence.heartbeat.join(timeout=max(_FANIN_HEARTBEAT_INTERVAL_SECONDS, 0.1) + 0.1)
-    marker = _fanin_fence_release_marker(fence.path, fence.identity, fence.claim_token)
+    marker = _fanin_fence_release_marker(fence.path, fence.claim_token)
     try:
         with marker.open("x", encoding="utf-8"):
             pass
