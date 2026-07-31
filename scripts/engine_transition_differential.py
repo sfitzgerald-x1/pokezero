@@ -1856,6 +1856,10 @@ def _prepare_boundary(
         },
         "turn": turn,
         "states": states,
+        # Diagnostic callers may attest the exact Python materialization
+        # payload against these native branch inputs before asking the engine
+        # to enumerate a transition. The game differential itself ignores it.
+        "specs": specs,
         "slot_sides": world.slot_sides,
         "choices": choices,
         "pre_features": pre_features,
