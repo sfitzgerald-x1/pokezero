@@ -50,6 +50,15 @@ def _damage_to(branch, side: str) -> list[int]:
     ]
 
 
+def _heals_to(branch, side: str) -> list[int]:
+    prefix = f"Heal {side}:"
+    return [
+        int(str(instruction).rsplit(":", 1)[1])
+        for instruction in branch.instruction_list
+        if str(instruction).startswith(prefix)
+    ]
+
+
 @unittest.skipIf(poke_engine is None, "poke-engine wheel not installed")
 class TerminalResidualRollComparisonLimitTests(unittest.TestCase):
     def test_withdrawn_split_is_an_explicit_unpatched_ablation(self) -> None:
@@ -62,8 +71,8 @@ class TerminalResidualRollComparisonLimitTests(unittest.TestCase):
         self.assertEqual(len(branches), 2, "no production residual roll splitter is installed")
         self.assertTrue(
             any(
-                _damage_to(branch, "SideTwo")[0] == 113
-                and any(str(item) == "Heal SideOne: 19" for item in branch.instruction_list)
+                _damage_to(branch, "SideTwo")[:1] == [113]
+                and _heals_to(branch, "SideOne") == [19]
                 for branch in branches
             )
         )

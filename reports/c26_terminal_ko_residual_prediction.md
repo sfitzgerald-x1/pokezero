@@ -44,3 +44,16 @@ Negative controls:
 If the native state cannot distinguish the residual's exact lethal amount from
 public information, or if the split changes an unrelated ordinary-damage
 fixture, this prediction is falsified and no broad roll expansion is allowed.
+
+## Outcome Amendment
+
+**Prediction falsified and withdrawn. No production terminal-residual roll
+split is retained.**
+
+The attempted local split could not soundly isolate Toxic from the complete
+ordered residual queue, normal and critical roll lattices, reserve-dependent
+replacement behavior, and earlier healing. The final branch therefore restores
+the canonical engine patch stack and records this as a comparison limit rather
+than weakening branch fidelity. See
+`docs/terminal_residual_roll_branching_limit.md` for the verified compact
+behavior and the requirements for any future general solution.
