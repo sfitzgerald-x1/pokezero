@@ -2,17 +2,6 @@ name: Fleet worker
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/fleet-worker.yml"
-      - "pyproject.toml"
-      - "src/pokezero/fleet_worker.py"
-      - "src/pokezero/rollout_cli.py"
-      - "src/pokezero/collection.py"
-      - "src/pokezero/selfplay.py"
-      - "src/pokezero/dataset.py"
-      - "tests/test_fleet_worker.py"
-      - "tests/test_cache_concat.py"
-      - "tests/test_rollout.py"
 
 jobs:
   fanin-crash-matrix:

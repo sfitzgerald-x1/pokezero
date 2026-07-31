@@ -103,6 +103,7 @@ _FANIN_STAGING_LEASE_SUFFIX = ".producer-lease.json"
 _FANIN_PUBLISH_LOCK_SUFFIX = ".publish-lock.json"
 _FANIN_PUBLISH_GUARD_SUFFIX = ".publish-guard"
 _FANIN_TASK_LOCK_DIRECTORY = ".fanin-task-locks"
+_FANIN_ROUTE_DIRECTORY = ".fanin-routes"
 _SELECTED_FANIN_READ_ATTEMPTS = 3
 _SELECTED_FANIN_RETRY_SECONDS = 0.01
 _FANIN_PUBLISH_LOCK_ATTEMPTS = 3
@@ -247,7 +248,9 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
     except OSError:
         return None
     for candidate in candidates:
-        claim = queue / "claimed" / f"{candidate.name}.{worker_id}"
+        # A claim pathname is a generation capability, not a reusable worker
+        # slot. Terminal actions can therefore never target a later retry.
+        claim = queue / "claimed" / f"{candidate.name}.{worker_id}.{uuid.uuid4().hex}"
         try:
             os.rename(candidate, claim)
         except OSError:
@@ -260,7 +263,7 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
         except ValueError:
             # Malformed manifest: park it in failed/ so the controller's attempt
             # bound decides, rather than looping on it forever.
-            failed = queue / "failed" / f"{candidate.name}.{worker_id}.failed"
+            failed = queue / "failed" / f"{claim.name}.failed"
             try:
                 os.rename(claim, failed)
             except OSError:
@@ -575,6 +578,12 @@ def _fanin_fence_owner_path(path: Path) -> Path:
     return path / "owner.json"
 
 
+def _fanin_fence_release_marker(path: Path, identity: tuple[int, int], claim_token: str) -> Path:
+    """Return an immutable release marker keyed by inode and claim generation."""
+    device, inode = identity
+    return path.parent / f".{path.name}.released.{device}.{inode}.{claim_token}"
+
+
 @dataclass
 class _FanInFilesystemFence:
     """An mkdir-owned fence whose owner record is renewed while work is live.
@@ -668,6 +677,7 @@ def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
     record = _read_fanin_fence(fence.path)
     return (
         (stat.st_dev, stat.st_ino) == fence.identity
+        and not _fanin_fence_release_marker(fence.path, fence.identity, fence.claim_token).exists()
         and record is not None
         and record[0] == fence.task
         and record[1] == fence.claim_name
@@ -676,8 +686,14 @@ def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
 
 
 def _fanin_fence_is_active(path: Path, claimed: Path) -> bool:
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
     record = _read_fanin_fence(path)
     if record is None:
+        return False
+    if _fanin_fence_release_marker(path, (stat.st_dev, stat.st_ino), record[2]).exists():
         return False
     _task, claim_name, claim_token, renewed_at = record
     return (
@@ -765,16 +781,21 @@ def _acquire_fanin_guard(
 
 
 def _release_fanin_guard(fence: _FanInFilesystemFence) -> None:
+    """Publish a generation-specific release marker without touching the guard path.
+
+    A portable POSIX rename cannot conditionally replace a reusable pathname by
+    inode, so a stale releaser must never rename or unlink that pathname. The
+    next acquirer observes this immutable marker, atomically moves the stale
+    guard aside, and installs its initialized successor.
+    """
     fence.stop.set()
     fence.heartbeat.join(timeout=max(_FANIN_HEARTBEAT_INTERVAL_SECONDS, 0.1) + 0.1)
-    if not _fanin_fence_is_current(fence):
-        return
-    tombstone = fence.path.parent / f".{fence.path.name}.released.{os.getpid()}.{time.monotonic_ns()}"
+    marker = _fanin_fence_release_marker(fence.path, fence.identity, fence.claim_token)
     try:
-        os.rename(fence.path, tombstone)
-    except FileNotFoundError:
-        return
-    shutil.rmtree(tombstone, ignore_errors=True)
+        with marker.open("x", encoding="utf-8"):
+            pass
+    except FileExistsError:
+        pass
     _fsync_directory(fence.path.parent)
 
 
@@ -979,14 +1000,13 @@ def _acquire_fanin_task_publication_lease(
 
 
 def _release_fanin_task_publication_lease(lease: _FanInTaskPublicationLease) -> None:
-    """Drop a task lock record only while its stable guard still fences replacement."""
-    try:
-        current = _read_fanin_task_lock(lease.record)
-        if _fanin_fence_is_current(lease.guard) and current is not None and current[2] == lease.claim_token:
-            lease.record.unlink(missing_ok=True)
-            _fsync_directory(lease.record.parent)
-    finally:
-        _release_fanin_guard(lease.guard)
+    """Retire the guard without deleting a reusable shared lock record.
+
+    The next generation owns replacement under the guard handoff. Leaving the
+    record behind is intentional: a stale owner has no portable conditional
+    unlink primitive for a pathname a successor may already have replaced.
+    """
+    _release_fanin_guard(lease.guard)
 
 
 def _adopt_shard(base: Path) -> tuple[Path | None, int]:
@@ -1053,6 +1073,97 @@ def _fanin_task_payload(task: FanInTask) -> dict[str, Any]:
         "out": task.out,
         "policy": task.policy,
     }
+
+
+def _fanin_route_record(queue: Path, task_id: str) -> Path:
+    """Return this task's append-only, queue-local route provenance record."""
+    directory = queue / _FANIN_ROUTE_DIRECTORY
+    directory.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+    return directory / f"{digest}.json"
+
+
+def _fanin_task_from_payload(payload: Any) -> FanInTask | None:
+    if not isinstance(payload, dict) or set(payload) != {
+        "task_id", "iteration", "offset", "count", "seed", "out", "policy",
+    }:
+        return None
+    task_id = payload["task_id"]
+    numeric = (payload["iteration"], payload["offset"], payload["count"], payload["seed"])
+    out = payload["out"]
+    policy = payload["policy"]
+    if (
+        not isinstance(task_id, str)
+        or not task_id
+        or not all(_is_int(value) for value in numeric)
+        or not isinstance(out, str)
+        or not out
+        or not isinstance(policy, str)
+        or not policy
+    ):
+        return None
+    task = FanInTask(task_id, *numeric, out, policy)
+    if task.iteration < 0 or task.offset < 0 or task.count <= 0 or task.seed < 0:
+        return None
+    return task
+
+
+def _read_fanin_route(record: Path) -> tuple[Path, FanInTask] | None:
+    try:
+        payload = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "cache_dir", "task"}:
+        return None
+    if payload["schema_version"] != 1 or not isinstance(payload["cache_dir"], str) or not payload["cache_dir"]:
+        return None
+    task = _fanin_task_from_payload(payload["task"])
+    if task is None:
+        return None
+    return Path(payload["cache_dir"]), task
+
+
+def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
+    """Bind one task ID to its first fan-in root and route, or reject divergence.
+
+    The record is created with ``link`` and never replaced. Recovery therefore
+    searches the original root even when a retry's caller-supplied destination
+    changes, and malformed provenance is terminal rather than guessed.
+    """
+    candidate = _fanin_task_from_task_manifest(task)
+    cache_dir = task.out.parent
+    record = _fanin_route_record(queue, candidate.task_id)
+    payload = {
+        "schema_version": 1,
+        "cache_dir": str(cache_dir),
+        "task": _fanin_task_payload(candidate),
+    }
+    temporary = record.parent / f".{record.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, record)
+        except FileExistsError:
+            pass
+        else:
+            _fsync_directory(record.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+    existing = _read_fanin_route(record)
+    if existing is None:
+        raise FanInInventoryValidationError(f"fan-in route provenance is malformed: {record}")
+    established_root, established_task = existing
+    if established_task != candidate or established_root != cache_dir:
+        if _fanin_route_conflicts(established_task, candidate) or established_root != cache_dir:
+            raise FanInRouteConflictError(
+                f"fan-in task {task.base!r} has different output, policy, or cache root route"
+            )
+        raise FanInTaskConflictError(f"fan-in route provenance conflicts with {task.base!r}")
+    return established_root
 
 
 def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
@@ -1441,33 +1552,39 @@ def _complete_claim(
     """
     done = queue / "done" / task.base
     created = False
-    try:
-        os.link(task.claim_path, done)
-    except FileExistsError:
-        if not _done_marker_matches_task(done, task):
-            raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
-    except FileNotFoundError:
+    owns_claim = _claim_token_is_current(task)
+    if not owns_claim:
         created = _write_done_marker(task, done)
-    except OSError as exc:
-        raise FanInInventoryValidationError(
-            f"could not acknowledge accepted fan-in task {task.base}: {exc}"
-        ) from exc
     else:
-        created = True
-        _fsync_directory(done.parent)
+        try:
+            os.link(task.claim_path, done)
+        except FileExistsError:
+            if not _done_marker_matches_task(done, task):
+                raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
+        except FileNotFoundError:
+            created = _write_done_marker(task, done)
+        except OSError as exc:
+            raise FanInInventoryValidationError(
+                f"could not acknowledge accepted fan-in task {task.base}: {exc}"
+            ) from exc
+        else:
+            created = True
+            _fsync_directory(done.parent)
     if created:
         _inject_crash(crash_inject, "fanin-after-done-link", task)
-    try:
-        task.claim_path.unlink()
-    except OSError:
-        # The durable done marker wins; a stale-claim cleanup is harmless.
-        pass
+    if owns_claim:
+        try:
+            task.claim_path.unlink()
+        except OSError:
+            # The durable done marker wins; a stale-claim cleanup is harmless.
+            pass
     _remove_claim_token(task)
 
 
 def _fail_claim(task: TaskManifest, queue: Path, worker: str) -> None:
+    del worker  # The claim generation already carries the worker identity.
     try:
-        os.rename(task.claim_path, queue / "failed" / f"{task.base}.{worker}.failed")
+        os.rename(task.claim_path, queue / "failed" / f"{task.claim_path.name}.failed")
     except OSError:
         pass
     _remove_claim_token(task)
@@ -1500,7 +1617,7 @@ def _recover_fanin_task(
 ) -> bool:
     """Finalize a claim whose task is already durably selected, without collecting."""
     candidate = _fanin_task_from_task_manifest(task)
-    existing = _find_committed_fanin_task(task.out.parent, candidate)
+    existing = _find_committed_fanin_task(_resolve_fanin_route(queue, task), candidate)
     if existing is None:
         return False
     if existing != candidate:
@@ -1559,7 +1676,7 @@ def _publish_fanin_task(
     crash_inject: Callable[[str, TaskManifest], None] | None,
 ) -> tuple[Path | None, bool]:
     """Atomically publish one manifest-bearing version, fenced across workers."""
-    cache_dir = task.out.parent
+    cache_dir = _resolve_fanin_route(queue, task)
     fanin_task = _fanin_task_from_task_manifest(task)
     if _temporary_cache_record_count(temporary_cache, task) != fanin_task.count:
         raise FanInTaskValidationError(
@@ -1790,8 +1907,14 @@ def run_worker(
         idle_since = None
         if shard_fanin:
             try:
-                _preflight_fanin_filesystem(task.out.parent)
-                _sweep_abandoned_fanin_staging(task.out.parent, queue)
+                try:
+                    cache_dir = _resolve_fanin_route(queue, task)
+                except FanInTaskValidationError:
+                    # Preserve the established per-task failure classification;
+                    # recovery below will reject malformed queue metadata.
+                    cache_dir = task.out.parent
+                _preflight_fanin_filesystem(cache_dir)
+                _sweep_abandoned_fanin_staging(cache_dir, queue)
             except (FanInInventoryValidationError, OSError) as exc:
                 log(f"TERMINAL fan-in filesystem preflight failed for {task.base}; preserving claim: {exc}")
                 return finish(2)

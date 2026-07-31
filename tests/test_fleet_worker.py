@@ -105,7 +105,57 @@ class ClaimTests(unittest.TestCase):
     def test_malformed_manifest_parks_in_failed(self) -> None:
         (self.queue / "pending" / "i7-s9.env").write_text("garbage\n", encoding="utf-8")
         self.assertIsNone(claim_next_task(self.queue, "w1"))
-        self.assertTrue((self.queue / "failed" / "i7-s9.env.w1.failed").exists())
+        self.assertEqual(len(list((self.queue / "failed").glob("i7-s9.env.w1.*.failed"))), 1)
+
+    def test_claim_initialization_cannot_quarantine_a_successor_generation(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i7-s0.env", out=self.root / "out")
+        original = fleet_worker._write_claim_token
+        successor = None
+        interleaved = False
+
+        def replace_then_fail(claim: Path) -> str:
+            nonlocal successor, interleaved
+            if not interleaved:
+                interleaved = True
+                claim.rename(self.queue / "pending" / "i7-s0.env")
+                successor = claim_next_task(self.queue, "w1")
+                raise ValueError("simulated lease initialization failure")
+            return original(claim)
+
+        with patch.object(fleet_worker, "_write_claim_token", new=replace_then_fail):
+            self.assertIsNone(claim_next_task(self.queue, "w1"))
+        self.assertTrue(interleaved)
+        self.assertIsNotNone(successor)
+        self.assertTrue(successor.claim_path.exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_prior_generation_completion_cannot_acknowledge_or_delete_successor(self) -> None:
+        _manifest(self.queue, "i7-s0.env", out=self.root / "route-a", policy="policy-a")
+        prior = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(prior)
+        prior.claim_path.rename(self.queue / "pending" / prior.base)
+        _manifest(self.queue, prior.base, out=self.root / "route-b", policy="policy-b")
+        successor = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(successor)
+
+        fleet_worker._complete_claim(prior, self.queue, crash_inject=None)
+
+        done = self.queue / "done" / prior.base
+        self.assertTrue(successor.claim_path.exists())
+        self.assertTrue(fleet_worker._done_marker_matches_task(done, prior))
+        self.assertFalse(fleet_worker._done_marker_matches_task(done, successor))
+
+    def test_malformed_fanin_route_provenance_fails_closed(self) -> None:
+        _manifest(self.queue, "i7-s0.env", out=self.root / "route-a")
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        record = fleet_worker._fanin_route_record(self.queue, task.base)
+        record.write_text("{", encoding="utf-8")
+
+        with self.assertRaises(FanInValidationError):
+            fleet_worker._resolve_fanin_route(self.queue, task)
 
 
 class WorkerLoopTests(unittest.TestCase):
@@ -180,7 +230,7 @@ class WorkerLoopTests(unittest.TestCase):
         rc = self._run(self._stub(returncode=1))
         self.assertEqual(rc, 0)
         self.assertFalse(out.exists())
-        self.assertTrue((self.queue / "failed" / "i7-s0.env.w1.failed").exists())
+        self.assertEqual(len(list((self.queue / "failed").glob("i7-s0.env.w1.*.failed"))), 1)
 
     def test_exception_is_a_failure_not_a_crash(self) -> None:
         _manifest(self.queue, "i7-s0.env", out=self.root / "cache" / "shard-f0")
@@ -190,7 +240,7 @@ class WorkerLoopTests(unittest.TestCase):
 
         rc = self._run(boom)
         self.assertEqual(rc, 0)
-        self.assertTrue((self.queue / "failed" / "i7-s0.env.w1.failed").exists())
+        self.assertEqual(len(list((self.queue / "failed").glob("i7-s0.env.w1.*.failed"))), 1)
 
     def test_max_tasks_recycles_cleanly(self) -> None:
         _manifest(self.queue, "i7-s0.env", out=self.root / "cache" / "shard-f0")
@@ -317,9 +367,16 @@ class FanInTests(unittest.TestCase):
         return target
 
     def _requeue_claim(self, worker: str, base: str) -> None:
-        claim = self.queue / "claimed" / f"{base}.{worker}"
-        self.assertTrue(claim.exists())
+        claim = self._claim(worker, base)
         claim.rename(self.queue / "pending" / base)
+
+    def _claim(self, worker: str, base: str) -> Path:
+        claims = list((self.queue / "claimed").glob(f"{base}.{worker}.*"))
+        self.assertEqual(len(claims), 1)
+        return claims[0]
+
+    def _failed_claims(self, worker: str, base: str) -> list[Path]:
+        return list((self.queue / "failed").glob(f"{base}.{worker}.*.failed"))
 
     def test_tasks_fan_into_one_versioned_shard(self) -> None:
         self._manifests(3)
@@ -439,13 +496,13 @@ class FanInTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run_worker(self.queue, worker_id="w1", static_argv=[], collect_fn=collect, max_rss_mb=None,
                        idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True, crash_inject=crash)
-        (self.queue / "claimed" / "i1-s0.env.w1").unlink()
+        self._claim("w1", "i1-s0.env").unlink()
         _manifest(self.queue, "i1-s0.env", out=out, iteration=1, offset=0, count=1, seed=100, policy="policy-b")
         rc = run_worker(self.queue, worker_id="w2", static_argv=[], collect_fn=collect, max_rss_mb=None,
                         idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True)
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w2").exists())
+        self.assertTrue(self._claim("w2", "i1-s0.env").exists())
         self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
         self.assertEqual(fleet_worker._read_fanin_manifest(self.cache_dir / "shard-ww1-v1")[0].policy, "policy-a")
 
@@ -464,15 +521,42 @@ class FanInTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run_worker(self.queue, worker_id="w1", static_argv=[], collect_fn=collect, max_rss_mb=None,
                        idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True, crash_inject=crash)
-        (self.queue / "claimed" / "i1-s0.env.w1").unlink()
+        self._claim("w1", "i1-s0.env").unlink()
         _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-b", iteration=1, offset=0, count=1, seed=100)
         rc = run_worker(self.queue, worker_id="w2", static_argv=[], collect_fn=collect, max_rss_mb=None,
                         idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True)
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w2").exists())
+        self.assertTrue(self._claim("w2", "i1-s0.env").exists())
         self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
         self.assertEqual(fleet_worker._read_fanin_manifest(self.cache_dir / "shard-ww1-v1")[0].out, str(self.cache_dir / "slice-a"))
+
+    def test_post_publication_output_parent_change_is_terminal_without_recollection(self) -> None:
+        first_out = self.cache_dir / "slice-a"
+        other_root = self.root / "other-cache" / "iteration-0001"
+        _manifest(self.queue, "i1-s0.env", out=first_out, iteration=1, offset=0, count=1, seed=100)
+        calls: list[list[str]] = []
+
+        def collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def crash(boundary: str, _task) -> None:
+            if boundary == "fanin-after-target-publication":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(self.queue, worker_id="w1", static_argv=[], collect_fn=collect, max_rss_mb=None,
+                       idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True, crash_inject=crash)
+        self._claim("w1", "i1-s0.env").unlink()
+        _manifest(self.queue, "i1-s0.env", out=other_root / "slice-b", iteration=1, offset=0, count=1, seed=100)
+        rc = run_worker(self.queue, worker_id="w2", static_argv=[], collect_fn=collect, max_rss_mb=None,
+                        idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True)
+        self.assertEqual(rc, 2)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self._claim("w2", "i1-s0.env").exists())
+        self.assertFalse(other_root.exists())
+        self.assertEqual([path.name for path in fleet_worker.select_fanin_shards(self.cache_dir)], ["shard-ww1-v1"])
 
     def test_crash_after_recovery_keeps_done_and_output_once(self) -> None:
         self._manifests(1)
@@ -571,7 +655,7 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
         self.assertFalse(list((self.queue / "done").iterdir()))
@@ -593,7 +677,7 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
     def test_inventory_becoming_malformed_after_collection_preserves_claim_and_fails_terminally(self) -> None:
@@ -612,7 +696,7 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
         self.assertFalse(list((self.queue / "done").iterdir()))
@@ -631,7 +715,7 @@ class FanInTests(unittest.TestCase):
             max_rss_mb=None, max_tasks=1, idle_exit_seconds=None, sleep_seconds=0.0, shard_fanin=True,
         )
         self.assertEqual(calls, [])
-        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertEqual(len(self._failed_claims("w1", "i1-s0.env")), 1)
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
 
     def test_duplicate_selected_task_is_terminal_and_preserves_claim(self) -> None:
@@ -651,7 +735,7 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
     def test_invalid_task_metadata_fails_only_each_claim_and_drains_following_task(self) -> None:
@@ -679,8 +763,8 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 1)
-        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
-        self.assertTrue((self.queue / "failed" / "i1-s1.env.w1.failed").exists())
+        self.assertEqual(len(self._failed_claims("w1", "i1-s0.env")), 1)
+        self.assertEqual(len(self._failed_claims("w1", "i1-s1.env")), 1)
         self.assertTrue((self.queue / "done" / "i1-s2.env").exists())
 
     def test_short_collection_fails_only_that_claim_and_drains_following_task(self) -> None:
@@ -704,7 +788,7 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 2)
-        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertEqual(len(self._failed_claims("w1", "i1-s0.env")), 1)
         self.assertTrue((self.queue / "done" / "i1-s1.env").exists())
 
     def test_missing_or_garbled_temporary_metadata_fails_only_that_claim(self) -> None:
@@ -730,8 +814,8 @@ class FanInTests(unittest.TestCase):
         )
         self.assertEqual(rc, 0)
         self.assertEqual(calls, [100, 101, 102])
-        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
-        self.assertTrue((self.queue / "failed" / "i1-s1.env.w1.failed").exists())
+        self.assertEqual(len(self._failed_claims("w1", "i1-s0.env")), 1)
+        self.assertEqual(len(self._failed_claims("w1", "i1-s1.env")), 1)
         self.assertTrue((self.queue / "done" / "i1-s2.env").exists())
         self.assertFalse(list((self.queue / "claimed").iterdir()))
 
@@ -757,7 +841,7 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
         self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
         self.assertFalse(list(self.cache_dir.glob("shard-w*")))
 
@@ -812,7 +896,7 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
         self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
-        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
     def test_revoked_claim_cannot_publish_a_target(self) -> None:
@@ -935,8 +1019,8 @@ class FanInTests(unittest.TestCase):
             fleet_worker._read_fanin_staging_owner(staging),
             self._fanin_task("i1-s1.env", 1, 1, 1, 101, out=self.cache_dir / "slice-1"),
         )
-        stale_claim = self.queue / "claimed" / "i1-s1.env.w1"
-        stale_claim.rename(self.queue / "failed" / "i1-s1.env.w1.failed")
+        stale_claim = self._claim("w1", "i1-s1.env")
+        stale_claim.rename(self.queue / "failed" / f"{stale_claim.name}.failed")
         _manifest(
             self.queue, "i1-s2.env", out=self.cache_dir / "slice-2", iteration=1,
             offset=2, count=1, seed=102,
@@ -1129,6 +1213,35 @@ class FanInTests(unittest.TestCase):
                     self.assertTrue(fleet_worker._fanin_fence_is_current(third_fence))
                 finally:
                     fleet_worker._release_fanin_guard(third_fence)
+            finally:
+                fleet_worker._release_fanin_guard(second_fence)
+        finally:
+            fleet_worker._release_fanin_guard(first_fence)
+
+    def test_guard_release_marker_cannot_remove_a_successor_between_check_and_mutation(self) -> None:
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        first = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(first)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(first)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, first.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        first_fence = fleet_worker._acquire_fanin_guard(fence_path, first, fanin_task)
+        try:
+            first_fence.stop.set()
+            first_fence.heartbeat.join(timeout=1)
+            payload = json.loads((fence_path / "owner.json").read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            (fence_path / "owner.json").write_text(json.dumps(payload), encoding="utf-8")
+            first.claim_path.unlink()
+            _manifest(self.queue, first.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+            second = claim_next_task(self.queue, "w2")
+            self.assertIsNotNone(second)
+            second_fence = fleet_worker._acquire_fanin_guard(fence_path, second, fanin_task)
+            try:
+                # This is the former check-then-rename interleaving: the old
+                # generation releases only its inode-keyed marker.
+                fleet_worker._release_fanin_guard(first_fence)
+                self.assertTrue(fleet_worker._fanin_fence_is_current(second_fence))
             finally:
                 fleet_worker._release_fanin_guard(second_fence)
         finally:
