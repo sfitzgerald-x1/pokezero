@@ -22,15 +22,24 @@ The discarded experiment produced 3,514 `diverged`, 306 `matched`, and 1
 `skip_lossy`: 88 apparent clearances and three regressions. The clearance
 classes and hook-isolation observations are recorded exactly in the
 [C26 readout](c26_damage_composition_tail_readout.json). The generic
-capped-source promotion is present in 87 of the 88 apparent clearances and,
-under ablation, removes all three regressions. The cumulative-tail scale
-accounts for one further apparent clearance. The pre-state/called-move change
-has overlapping effects and is deliberately not assigned a separable benefit.
+capped-source promotion is associated with 87 of the 88 apparent clearances,
+but removing it leaves all three regressions divergent. The cumulative-tail
+scale accounts for one further apparent clearance. Removing the
+pre-state/named-callee support hook restores all three regressions to matched;
+its broader clearance effects overlap the other hooks and are deliberately not
+assigned a separable benefit.
+
+Across the full-population one-hook ablations (experiment to ablation), removing
+pre-state/named-callee support changes 62 `matched -> diverged` and 10
+`diverged -> matched`; removing capped promotion changes 87
+`matched -> diverged`; removing cumulative-tail scale changes 1
+`matched -> diverged`.
 
 The regressions are `2200760/86`, `2300983/40`, and `2700145/92`. Each matched
-on the baseline and diverged with the experiment; this is sufficient to reject
-the experiment. These rows do not establish engine defects, and this lane makes
-no engine-defect claim.
+on the baseline, diverged with the full and no-promotion configurations, and
+returned to matched without pre-state/named-callee support. This is sufficient
+to reject that support widening. These rows do not establish engine defects,
+and this lane makes no engine-defect claim.
 
 ## Ownership And Refusals
 

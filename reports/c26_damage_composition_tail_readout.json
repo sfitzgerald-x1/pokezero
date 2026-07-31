@@ -3,6 +3,7 @@
   "purpose": "Evidence-only disposition of the rejected C26 damage-composition matcher experiment.",
   "pinned_baseline": {
     "commit": "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd",
+    "matcher_source_sha256": "12fe80c5b77235d87b19d78edb47e6f8e2db3502670b27047ad457c1e2163e8d",
     "engine_fingerprint": "992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e",
     "retained_archive": {
       "population": 3821,
@@ -38,6 +39,8 @@
   },
   "rejected_experiment": {
     "commit": "761fc647a1c1a9ee57f09d44d2675d66c6d649b3",
+    "matcher_path": "scripts/engine_transition_differential.py",
+    "matcher_source_sha256": "56ca68576587ad5a7fda64e28a1479d01a48d69374f13f440060b0bf32126f24",
     "status": "rejected",
     "production_code_survives": false,
     "tally": {"diverged": 3514, "matched": 306, "skip_lossy": 1},
@@ -55,13 +58,14 @@
       "pre_state_and_named_callee_support": {
         "status": "discarded",
         "ablation_vs_experiment": {"diverged_to_matched": 10, "matched_to_diverged": 62},
-        "note": "Its effects overlap the other hooks; this is not a separable clearance attribution."
+        "regression_identity_replay": {"full_experiment": "diverged_all_3", "without_hook": "matched_all_3"},
+        "note": "Removing this hook restores all three regressions to matched. Its broader clearance effects overlap the other hooks and are not a separable clearance attribution."
       },
       "generic_capped_source_promotion": {
         "status": "discarded",
         "ablation_vs_experiment": {"matched_to_diverged": 87},
-        "regressions_removed_by_ablation": 3,
-        "note": "The generic promotion was present in 87 of the experiment's 88 clearances and caused every observed regression."
+        "regression_identity_replay": {"full_experiment": "diverged_all_3", "without_hook": "diverged_all_3"},
+        "note": "Removing this hook loses 87 apparent clearances but does not restore any of the three regressions; it is not their cause."
       },
       "cumulative_tail_scale": {
         "status": "discarded",
@@ -75,21 +79,21 @@
         "recorded_class": "limit:roll_divergent_lethality",
         "experiment_class": "limit:roll_divergent_lethality",
         "shape": "critical direct damage followed by Leftovers and lethal poison",
-        "adjudication": "Baseline matched; generic capped-source promotion made it diverge. No engine defect is claimed."
+        "adjudication": "Full experiment and no-promotion configurations diverged; removing pre-state/named-callee support restored matched. No engine defect is claimed."
       },
       {
         "identity": "2300983/40",
         "recorded_class": "component_extra_in_engine:itemleftovers",
         "experiment_class": "roll_scaled_component",
         "shape": "Double-Edge damage and recoil followed by a later lethal direct hit",
-        "adjudication": "Baseline matched; generic capped-source promotion made it diverge. No engine defect is claimed."
+        "adjudication": "Full experiment and no-promotion configurations diverged; removing pre-state/named-callee support restored matched. No engine defect is claimed."
       },
       {
         "identity": "2700145/92",
         "recorded_class": "component_missing_in_engine:psn",
         "experiment_class": "component_missing_in_engine:psn",
         "shape": "direct damage, Toxic, and two residual sequences ending in lethal poison",
-        "adjudication": "Baseline matched; generic capped-source promotion made it diverge. No engine defect is claimed."
+        "adjudication": "Full experiment and no-promotion configurations diverged; removing pre-state/named-callee support restored matched. No engine defect is claimed."
       }
     ],
     "rejection_reason": "The experiment regresses three exact retained rows, while the retained C15 WHAT population already matches on the immutable baseline. The 88 clearances therefore do not license a matcher change."

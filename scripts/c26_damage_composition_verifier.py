@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 READOUT_PATH = REPO_ROOT / "reports" / "c26_damage_composition_tail_readout.json"
 MATCHER_PATH = "scripts/engine_transition_differential.py"
+REGRESSION_IDENTITIES = ("2200760/86", "2300983/40", "2700145/92")
 
 
 def _readout() -> dict[str, Any]:
@@ -124,12 +125,89 @@ def _verdict_delta(
     return dict(delta)
 
 
+def _source_sha256(source: str) -> str:
+    return hashlib.sha256(source.encode()).hexdigest()
+
+
+def _regression_ablation_check(
+    rows: list[Mapping[str, Any]],
+    *,
+    baseline_matcher: types.ModuleType,
+    experiment_source: str,
+) -> dict[str, dict[str, str]]:
+    selected = [row for row in rows if f"{row['seed']}/{row['step']}" in REGRESSION_IDENTITIES]
+    selected_identities = {f"{row['seed']}/{row['step']}" for row in selected}
+    if selected_identities != set(REGRESSION_IDENTITIES):
+        raise ValueError("retained archive does not contain every rejected-experiment regression")
+
+    full_matcher = _module_from_source("c26_rejected_experiment_full", experiment_source)
+    no_promotion_matcher = _module_from_source(
+        "c26_rejected_experiment_no_promotion", experiment_source
+    )
+    if not hasattr(no_promotion_matcher, "_promote_capped_tail_counterparts"):
+        raise ValueError("rejected experiment omits the capped-source promotion hook")
+
+    def no_promotion(observed, engine, *, support, target_side):
+        return no_promotion_matcher._split_component_events(observed)
+
+    no_promotion_matcher._promote_capped_tail_counterparts = no_promotion
+
+    no_pre_support_matcher = _module_from_source(
+        "c26_rejected_experiment_no_pre_support", experiment_source
+    )
+    if not hasattr(no_pre_support_matcher, "branch_event_legal_rolls"):
+        raise ValueError("rejected experiment omits the pre-state support hook")
+
+    def baseline_support(
+        branch,
+        *,
+        side_one_choice,
+        side_two_choice,
+        pre_state=None,
+    ):
+        _ = pre_state
+        return baseline_matcher.branch_event_legal_rolls(
+            branch,
+            side_one_choice=side_one_choice,
+            side_two_choice=side_two_choice,
+        )
+
+    no_pre_support_matcher.branch_event_legal_rolls = baseline_support
+
+    configurations = {
+        "full_experiment": full_matcher,
+        "without_capped_source_promotion": no_promotion_matcher,
+        "without_pre_state_and_named_callee_support": no_pre_support_matcher,
+    }
+    actual: dict[str, dict[str, str]] = {}
+    for name, matcher in configurations.items():
+        _tally, results = _reread(selected, matcher)
+        actual[name] = {
+            identity: str(results[identity]["verdict"])
+            for identity in REGRESSION_IDENTITIES
+        }
+
+    expected = {
+        "full_experiment": {identity: "diverged" for identity in REGRESSION_IDENTITIES},
+        "without_capped_source_promotion": {
+            identity: "diverged" for identity in REGRESSION_IDENTITIES
+        },
+        "without_pre_state_and_named_callee_support": {
+            identity: "matched" for identity in REGRESSION_IDENTITIES
+        },
+    }
+    if actual != expected:
+        raise ValueError("rejected-experiment regression ablation pattern changed")
+    return actual
+
+
 def verify(shard_glob: str) -> dict[str, Any]:
     from engine_build_fingerprint import assert_fresh, compute_fingerprint
 
     readout = _readout()
     baseline = readout["pinned_baseline"]
     control = readout["current_main_control"]
+    experiment = readout["rejected_experiment"]
     equivalence = readout["final_main_equivalence"]
     commit = baseline["commit"]
 
@@ -143,6 +221,8 @@ def verify(shard_glob: str) -> dict[str, Any]:
         raise ValueError("final-equivalence contract names the wrong matcher path")
 
     baseline_source = _source_at_commit(commit)
+    if _source_sha256(baseline_source) != baseline["matcher_source_sha256"]:
+        raise ValueError("pinned baseline matcher source SHA-256 does not match the evidence")
     final_source = (REPO_ROOT / MATCHER_PATH).read_text()
     if final_source != baseline_source:
         raise ValueError("final matcher source differs from the pinned baseline")
@@ -179,6 +259,17 @@ def verify(shard_glob: str) -> dict[str, Any]:
     if observed_delta != expected_delta or len(delta) != 0:
         raise ValueError("final matcher has a nonzero retained-archive verdict delta")
 
+    if experiment["matcher_path"] != MATCHER_PATH:
+        raise ValueError("rejected experiment names the wrong matcher path")
+    experiment_source = _source_at_commit(experiment["commit"])
+    if _source_sha256(experiment_source) != experiment["matcher_source_sha256"]:
+        raise ValueError("rejected experiment matcher SHA-256 does not match the evidence")
+    regression_ablations = _regression_ablation_check(
+        rows,
+        baseline_matcher=baseline_matcher,
+        experiment_source=experiment_source,
+    )
+
     return {
         "schema": "c26-damage-composition-verifier/1",
         "status": "verified",
@@ -187,6 +278,7 @@ def verify(shard_glob: str) -> dict[str, Any]:
         "pinned_main_tally": baseline_tally,
         "final_tally": final_tally,
         "verdict_delta": observed_delta,
+        "rejected_experiment_regression_ablations": regression_ablations,
         "baseline_repro_provenance_fields": provenance["fields"],
         "archive_shards": [shard["label"] for shard in baseline["retained_archive"]["shards"]],
     }

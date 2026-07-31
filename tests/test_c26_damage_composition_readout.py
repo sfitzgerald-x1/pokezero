@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,9 @@ PREDICTION = REPO_ROOT / "reports" / "c26_damage_composition_tail_prediction.md"
 VERIFIER = REPO_ROOT / "scripts" / "c26_damage_composition_verifier.py"
 PINNED_MAIN = "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd"
 ENGINE_FINGERPRINT = "992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e"
+BASELINE_MATCHER_SHA256 = "12fe80c5b77235d87b19d78edb47e6f8e2db3502670b27047ad457c1e2163e8d"
+EXPERIMENT_MATCHER_SHA256 = "56ca68576587ad5a7fda64e28a1479d01a48d69374f13f440060b0bf32126f24"
+REGRESSION_IDENTITIES = ("2200760/86", "2300983/40", "2700145/92")
 WHAT_IDENTITIES = {
     "2000261/31": 4,
     "2000298/23": 2,
@@ -54,6 +58,7 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         self.assertEqual(self.readout["schema"], "c26-damage-composition-tail-readout/2")
         self.assertEqual(baseline["commit"], PINNED_MAIN)
         self.assertRegex(baseline["commit"], r"^[0-9a-f]{40}$")
+        self.assertEqual(baseline["matcher_source_sha256"], BASELINE_MATCHER_SHA256)
         self.assertEqual(baseline["engine_fingerprint"], ENGINE_FINGERPRINT)
         self.assertRegex(baseline["engine_fingerprint"], r"^[0-9a-f]{64}$")
         self.assertEqual(archive["population"], 3821)
@@ -90,6 +95,8 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
 
         self.assertEqual(experiment["status"], "rejected")
         self.assertFalse(experiment["production_code_survives"])
+        self.assertEqual(experiment["matcher_path"], "scripts/engine_transition_differential.py")
+        self.assertEqual(experiment["matcher_source_sha256"], EXPERIMENT_MATCHER_SHA256)
         self.assertEqual(experiment["tally"], {"diverged": 3514, "matched": 306, "skip_lossy": 1})
         self.assertEqual(experiment["verdict_delta"], {"diverged_to_matched": 88, "matched_to_diverged": 3})
         self.assertEqual(
@@ -105,21 +112,51 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
             },
         )
         self.assertEqual(sum(experiment["clearances_by_recorded_class"].values()), 88)
+        mechanisms = experiment["mechanism_isolation"]
         self.assertEqual(
-            experiment["mechanism_isolation"]["generic_capped_source_promotion"]["regressions_removed_by_ablation"],
-            3,
+            mechanisms["pre_state_and_named_callee_support"]["ablation_vs_experiment"],
+            {"diverged_to_matched": 10, "matched_to_diverged": 62},
         )
         self.assertEqual(
-            experiment["mechanism_isolation"]["cumulative_tail_scale"]["identity"],
+            mechanisms["pre_state_and_named_callee_support"]["regression_identity_replay"],
+            {"full_experiment": "diverged_all_3", "without_hook": "matched_all_3"},
+        )
+        self.assertEqual(
+            mechanisms["generic_capped_source_promotion"]["ablation_vs_experiment"],
+            {"matched_to_diverged": 87},
+        )
+        self.assertEqual(
+            mechanisms["generic_capped_source_promotion"]["regression_identity_replay"],
+            {"full_experiment": "diverged_all_3", "without_hook": "diverged_all_3"},
+        )
+        self.assertEqual(
+            mechanisms["cumulative_tail_scale"]["ablation_vs_experiment"],
+            {"matched_to_diverged": 1},
+        )
+        self.assertEqual(
+            mechanisms["cumulative_tail_scale"]["identity"],
             "2201132/57",
         )
 
         regressions = {row["identity"]: row for row in experiment["regressions"]}
-        self.assertEqual(set(regressions), {"2200760/86", "2300983/40", "2700145/92"})
+        self.assertEqual(set(regressions), set(REGRESSION_IDENTITIES))
         self.assertEqual(regressions["2200760/86"]["experiment_class"], "limit:roll_divergent_lethality")
         self.assertEqual(regressions["2300983/40"]["experiment_class"], "roll_scaled_component")
         self.assertEqual(regressions["2700145/92"]["experiment_class"], "component_missing_in_engine:psn")
         self.assertTrue(all("No engine defect is claimed." in row["adjudication"] for row in regressions.values()))
+
+    def test_matcher_sources_match_their_pinned_sha256(self) -> None:
+        for commit, expected in (
+            (PINNED_MAIN, BASELINE_MATCHER_SHA256),
+            (self.readout["rejected_experiment"]["commit"], EXPERIMENT_MATCHER_SHA256),
+        ):
+            source = subprocess.run(
+                ["git", "show", f"{commit}:scripts/engine_transition_differential.py"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(hashlib.sha256(source).hexdigest(), expected)
 
     def test_historical_rows_are_uniformly_refused_and_bounded_runs_fail_closed(self) -> None:
         rows = {row["identity"]: row for row in self.readout["historical_control_rows"]}
@@ -229,6 +266,19 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
             ["party_display", "slot_sides", "turn"],
         )
         self.assertEqual(payload["verdict_delta"], {"diverged_to_matched": 0, "matched_to_diverged": 0})
+        expected_ablations = {
+            "full_experiment": {identity: "diverged" for identity in REGRESSION_IDENTITIES},
+            "without_capped_source_promotion": {
+                identity: "diverged" for identity in REGRESSION_IDENTITIES
+            },
+            "without_pre_state_and_named_callee_support": {
+                identity: "matched" for identity in REGRESSION_IDENTITIES
+            },
+        }
+        self.assertEqual(
+            payload["rejected_experiment_regression_ablations"],
+            expected_ablations,
+        )
 
 
 if __name__ == "__main__":
