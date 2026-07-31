@@ -357,6 +357,53 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
                 self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
 
+    def test_faint_latch_rejects_malformed_order_and_forged_active_idents(self) -> None:
+        cases = {
+            "reversed-upkeep-faint": [
+                "|upkeep",
+                "|faint|p1a: LeadOne",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "duplicate-faint": [
+                "|faint|p1a: LeadOne",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "duplicate-upkeep": [
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "forged-active-ident": [
+                "|faint|p1a: NotTheActive",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "unrelated-seat": [
+                "|faint|p2a: LeadTwo",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+        }
+        for label, suffix in cases.items():
+            with self.subTest(label=label):
+                parser = _ReplayParser(f"toxic-zero-malformed-{label}", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        *suffix,
+                        "|turn|2",
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_faint_replacement_pending["p1"])
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
     def test_faint_latch_snapshot_truncation_and_scenario_reuse_fail_closed(self) -> None:
         parser = _ReplayParser("toxic-zero-truncated", complete_prefix=True)
         parser.feed(
@@ -439,6 +486,33 @@ class ToxicStageWorldTest(unittest.TestCase):
         self.assertEqual(replay.toxic_stage["p1"], 1)
         self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
         self.assertEqual(_materialization_toxic_stage(replay, "p1"), 0)
+
+    def test_post_upkeep_zero_proof_expires_when_its_first_tick_is_missing(self) -> None:
+        cases = {
+            "upkeep": ["|upkeep", "|turn|3"],
+            "turn": ["|turn|3"],
+        }
+        for label, suffix in cases.items():
+            with self.subTest(label=label):
+                parser = _ReplayParser(
+                    f"toxic-post-upkeep-missing-first-tick-{label}", complete_prefix=True
+                )
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        "|upkeep",
+                        "|switch|p1a: Replacement|Replacement, L80, M|100/100 tox",
+                        "|turn|2",
+                    ]
+                )
+                parser = _ReplayParser.from_snapshot(parser.snapshot())
+                parser.feed(suffix)
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
 
     def test_active_toxic_zero_without_post_upkeep_replacement_proof_fails_closed(self) -> None:
         replay = SimpleNamespace(

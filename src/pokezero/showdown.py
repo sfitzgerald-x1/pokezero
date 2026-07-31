@@ -1133,6 +1133,12 @@ class ShowdownReplayState:
     # snapshot. It is retired by the first Toxic residual and every active
     # status/faint transition.
     toxic_stage_zero_after_upkeep: Mapping[str, bool] = field(default_factory=dict)
+    # The next turn whose residual phase must contain the first Toxic tick for
+    # a post-upkeep replacement proof. Keeping this deadline in the snapshot
+    # makes a resumed parser reject a skipped residual just like a live fold.
+    toxic_stage_zero_after_upkeep_expires_after_turn: Mapping[str, int | None] = field(
+        default_factory=dict
+    )
     # A public active faint is eligible to authorize exactly one same-seat
     # post-upkeep replacement. This stays distinct from the materialization
     # proof: a post-upkeep switch without a preceding same-seat faint is not
@@ -1313,6 +1319,10 @@ class _ReplayParser:
             "p2": bool(complete_prefix),
         }
         self.toxic_stage_zero_after_upkeep: dict[str, bool] = {"p1": False, "p2": False}
+        self.toxic_stage_zero_after_upkeep_expires_after_turn: dict[str, int | None] = {
+            "p1": None,
+            "p2": None,
+        }
         self.toxic_faint_replacement_pending: dict[str, bool] = {"p1": False, "p2": False}
         self.hp_visibility: dict[str, str] = {"p1": "unknown", "p2": "unknown"}
         for slot, visibility in (hp_visibility or {}).items():
@@ -1427,6 +1437,19 @@ class _ReplayParser:
             slot: bool(snapshot_zero_after_upkeep.get(slot, False))
             for slot in ("p1", "p2")
         }
+        snapshot_zero_after_upkeep_deadline = getattr(
+            snapshot, "toxic_stage_zero_after_upkeep_expires_after_turn", {}
+        )
+        parser.toxic_stage_zero_after_upkeep_expires_after_turn = {}
+        for slot in ("p1", "p2"):
+            deadline = snapshot_zero_after_upkeep_deadline.get(slot)
+            if parser.toxic_stage_zero_after_upkeep[slot] and isinstance(deadline, int):
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = deadline
+            else:
+                # Older snapshots lack the deadline, so their proof cannot be
+                # bounded to a single residual opportunity.
+                parser.toxic_stage_zero_after_upkeep[slot] = False
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
         snapshot_faint_replacement_pending = getattr(
             snapshot, "toxic_faint_replacement_pending", {}
         )
@@ -1624,6 +1647,13 @@ class _ReplayParser:
                     and not is_baton_pass
                     and _condition_has_status(pokemon.condition, "tox")
                 )
+                self.toxic_stage_zero_after_upkeep_expires_after_turn[
+                    pokemon.showdown_slot
+                ] = (
+                    self.turn_number + 1
+                    if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
                 # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
                 # flag too so no stale stall move carries onto the replacement.
@@ -1788,20 +1818,64 @@ class _ReplayParser:
     def _update_toxic_faint_replacement_latch(
         self, event_type: str, parts: Sequence[str]
     ) -> None:
-        """Bind the stage-zero exception to one same-seat forced replacement."""
+        """Bind the stage-zero exception to one exact, ordered forced replacement."""
+
+        def clear_zero_proof(slot: str) -> None:
+            self.toxic_stage_zero_after_upkeep[slot] = False
+            self.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+
+        def clear_pending(slot: str) -> None:
+            self.toxic_faint_replacement_pending[slot] = False
 
         if event_type == "turn":
             # A missing replacement is a truncated/terminal sequence, not
             # evidence for an ordinary switch on a later turn.
             self.toxic_faint_replacement_pending = {"p1": False, "p2": False}
+            try:
+                next_turn = int(parts[2])
+            except (IndexError, TypeError, ValueError):
+                # Without an ordered turn boundary, a durable proof cannot be
+                # bounded to its one expected residual opportunity.
+                for slot in self.toxic_stage_zero_after_upkeep:
+                    clear_zero_proof(slot)
+                return
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                deadline = self.toxic_stage_zero_after_upkeep_expires_after_turn.get(slot)
+                if proof and (not isinstance(deadline, int) or next_turn > deadline):
+                    clear_zero_proof(slot)
             return
         if event_type == "upkeep":
+            # A proof created after the prior upkeep expects its first Toxic
+            # residual immediately before this marker. If it is still live,
+            # that residual was absent and the proof is spent.
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                if proof:
+                    clear_zero_proof(slot)
+            if self._post_upkeep_window:
+                # A second upkeep cannot follow the one faint that is still
+                # awaiting its replacement; reject the malformed chronology.
+                self.toxic_faint_replacement_pending = {"p1": False, "p2": False}
             return
         if event_type == "faint":
-            if len(parts) >= 3 and _is_active_protocol_ident(parts[2]):
-                slot = _slot_from_ident(parts[2])
-                if slot in self.toxic_faint_replacement_pending:
-                    self.toxic_faint_replacement_pending[slot] = True
+            if len(parts) < 3:
+                return
+            slot = _slot_from_ident(parts[2])
+            if slot not in self.toxic_faint_replacement_pending:
+                return
+            active = self.public_active.get(slot)
+            if (
+                not self._post_upkeep_window
+                and _is_active_protocol_ident(parts[2])
+                and active is not None
+                and active.ident == parts[2]
+                and not self.toxic_faint_replacement_pending[slot]
+            ):
+                self.toxic_faint_replacement_pending[slot] = True
+            else:
+                # Reversed, repeated, or forged active idents are not proof
+                # that this seat is awaiting a forced replacement.
+                clear_pending(slot)
+                clear_zero_proof(slot)
             return
         if event_type in {"switch", "drag", "replace"}:
             # The replacement branch consumes this before parsing its payload,
@@ -1809,17 +1883,20 @@ class _ReplayParser:
             if len(parts) < 4 and len(parts) >= 3:
                 slot = _slot_from_ident(parts[2])
                 if slot in self.toxic_faint_replacement_pending:
-                    self.toxic_faint_replacement_pending[slot] = False
+                    clear_pending(slot)
+                    clear_zero_proof(slot)
             return
         if event_type == "win":
             self.toxic_faint_replacement_pending = {"p1": False, "p2": False}
+            for slot in self.toxic_stage_zero_after_upkeep:
+                clear_zero_proof(slot)
             return
         if len(parts) >= 3:
             slot = _slot_from_ident(parts[2])
             if slot in self.toxic_faint_replacement_pending:
                 # A same-seat state transition cannot belong to a pending
                 # forced replacement; fail closed rather than retain history.
-                self.toxic_faint_replacement_pending[slot] = False
+                clear_pending(slot)
 
     def _update_substitute_health_state(self, parts: Sequence[str]) -> None:
         """Track canonical Substitute provenance and public exact HP cases."""
@@ -2481,6 +2558,9 @@ class _ReplayParser:
             toxic_stage=dict(self.toxic_stage),
             toxic_stage_known=dict(self.toxic_stage_known),
             toxic_stage_zero_after_upkeep=dict(self.toxic_stage_zero_after_upkeep),
+            toxic_stage_zero_after_upkeep_expires_after_turn=dict(
+                self.toxic_stage_zero_after_upkeep_expires_after_turn
+            ),
             toxic_faint_replacement_pending=dict(self.toxic_faint_replacement_pending),
             hp_visibility={
                 slot: self._hp_visibility_for_slot(slot) for slot in ("p1", "p2")
