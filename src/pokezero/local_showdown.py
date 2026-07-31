@@ -2358,10 +2358,11 @@ def _apply_rest_sleep_provenance(
     with the resolved world's ability, because Early Bird burns two timer units per attempt
     while each skippedTime refund restores one.
 
-    An ACTIVE sleeper with a nonzero skipped run, or an attempt whose direct outcome is absent
-    in a truncated protocol prefix, cannot be represented by the Rust world (which has no
-    ``skippedTime`` field). Its row carries an explicit pending-refund marker so the downstream
-    constructor fails closed before approximate sleep handling can invent a generic timer.
+    An ACTIVE sleeper with a nonzero skipped run, an attempt whose direct outcome is absent in a
+    truncated protocol prefix, or malformed/inconsistent public Rest state cannot be represented
+    by the Rust world (which has no ``skippedTime`` field). Its row carries an explicit marker so
+    the downstream constructor fails closed before approximate sleep handling can invent a
+    generic timer.
 
     Until this the only sleep provenance crossing into world construction was the pair of
     aggregate booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``),
@@ -2391,7 +2392,7 @@ def _apply_rest_sleep_provenance(
     refunded_turns = replay.rest_sleep_refunded_turns
     skipped_turns = replay.rest_sleep_skipped_turns
     pending_attempts = replay.rest_sleep_pending_attempt
-    if not counts:
+    if not (counts or refunded_turns or skipped_turns or pending_attempts):
         return
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
     # therefore recorded under its opponent.
@@ -2401,10 +2402,19 @@ def _apply_rest_sleep_provenance(
         if not isinstance(species, str):
             continue
         key = f"{player}:{_normalize_identifier(species)}"
-        count = counts.get(key)
-        if count is None or key in induced:
+        if key not in counts:
+            if key in refunded_turns or key in skipped_turns or key in pending_attempts:
+                row["restSleepProvenanceUnrepresentable"] = True
             continue
-        if pending_attempts.get(key, False):
+        count = counts[key]
+        if key in induced:
+            row["restSleepProvenanceUnrepresentable"] = True
+            continue
+        pending = pending_attempts.get(key, False)
+        if not isinstance(pending, bool):
+            row["restSleepProvenanceUnrepresentable"] = True
+            continue
+        if pending:
             row["restSleepRefundPending"] = True
             continue
         skipped = skipped_turns.get(key, 0)
@@ -2419,6 +2429,7 @@ def _apply_rest_sleep_provenance(
             or refunded < 0
             or skipped < 0
         ):
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         if skipped:
             if bool(row.get("active")):
@@ -2428,7 +2439,8 @@ def _apply_rest_sleep_provenance(
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible
-            # Rest counter. Leave the row unannotated so construction follows its fail-closed path.
+            # Rest counter. Mark it so construction cannot approximate it as induced sleep.
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         row["restSleepAttempts"] = count
         if refunded:

@@ -358,6 +358,18 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         self.assertEqual(induced.rest_turns, 0)
         self.assertEqual(induced.sleep_turns, 0)
 
+    def test_unrepresentable_rest_marker_refuses_approximation(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["restSleepProvenanceUnrepresentable"] = True
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=self.dex,
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
     def test_the_exemption_rides_the_bench(self) -> None:
         # The population this exists to serve. An ACTIVE Rest-sleeper reveals itself
         # next turn either way; a BENCHED one is visible to nothing but the clause.
@@ -685,6 +697,58 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         rows = [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}]
         _apply_rest_sleep_provenance(rows, replay, "p2")
         self.assertEqual(rows, [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}])
+
+    def test_malformed_rest_maps_refuse_approximate_sleep_materialization(self) -> None:
+        cases = {
+            "count": ("rest_sleep_counts", "not-an-int"),
+            "refunded": ("rest_sleep_refunded_turns", "not-an-int"),
+            "skipped": ("rest_sleep_skipped_turns", "not-an-int"),
+            "pending": ("rest_sleep_pending_attempt", "not-a-bool"),
+            "inconsistent_refund": ("rest_sleep_refunded_turns", 2),
+            "orphan_refund": ("rest_sleep_refunded_turns", 1),
+            "orphan_skipped": ("rest_sleep_skipped_turns", 1),
+            "orphan_pending": ("rest_sleep_pending_attempt", True),
+        }
+        for name, (attribute, value) in cases.items():
+            with self.subTest(case=name):
+                replay = parse_showdown_replay(self._RESTED, battle_id=f"rest-invalid-{name}")
+                if name.startswith("orphan_"):
+                    replay.rest_sleep_counts.clear()
+                getattr(replay, attribute)["p2:skarmory"] = value
+                rows = self._rows()
+                _apply_rest_sleep_provenance(rows, replay, "p2")
+
+                self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+                self.assertNotIn("restSleepAttempts", rows[0])
+
+                payload = _payload(_dex())
+                payload["sides"]["p2"]["pokemon"] = rows
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=_dex(),
+                        approximate_sleep_turns=True,
+                )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_conflicting_induced_and_rest_provenance_refuses_approximation(self) -> None:
+        replay = parse_showdown_replay(self._RESTED, battle_id="rest-induced-conflict")
+        replay.induced_sleep_victims["p1"] = ("p2:skarmory",)
+        rows = self._rows()
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+
+        self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
     @classmethod
     def _all_rest_maps_live_lines(cls):
