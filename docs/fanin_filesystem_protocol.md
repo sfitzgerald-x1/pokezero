@@ -8,12 +8,16 @@ volume. Object-store FUSE mounts and filesystems that only coordinate locks
 within one node are unsupported.
 
 Before a pending task is renamed into `claimed/` or any route record is bound,
-the worker probes both that task's queue and cache locations. Two probe files
-race to hard-link onto one initially absent name: exactly one link must succeed,
-the other must report `EEXIST`, and the visible destination must be the winning
-source inode. The probe also creates a directory, renames it within that same
-location, and confirms the moved directory remains visible. Any failure is a
-terminal validation error before a claim or route CAS is touched.
+the worker probes that task's queue and cache locations plus the exact
+`<queue>/.fanin-routes` directory that hosts route-record CAS. A newly created
+empty route directory is removed after its probe, including on failure, so a
+failed preflight leaves pending, claimed, and route provenance state untouched.
+Two probe files race to hard-link onto one initially absent name: exactly one
+link must succeed, the other must report `EEXIST`, and the visible destination
+must be the winning source inode. The probe also creates a directory, renames
+it within that same location, and confirms the moved directory remains visible.
+Any failure is a terminal validation error before a claim or route CAS is
+touched.
 
 The probe establishes only one-node behavior. Before launch, deployment
 validation must make workers on every participating node contend for one guard
@@ -75,8 +79,27 @@ whose final append authenticates that exact target and whose complete manifest
 prefix belongs to the accepted lineage. Missing or malformed target/acceptance
 provenance fails closed.
 
-Before collecting, each task ID is bound by an append-only queue-local route
-record to its complete output route and fan-in root. Recovery always consults
-that root; a retry that changes a basename, parent, or policy is terminal
-rather than permitted to publish a second copy. Missing, malformed, or
-ambiguous route provenance fails closed.
+Before collecting, fan-in requires `a_out` to be an already canonical,
+absolute physical path: relative paths, `..` normalization, and symlinked
+aliases are rejected before the task is claimed. The same form is required in
+every fan-in manifest task and route record, and a route record's cache root
+must exactly equal the output route's parent. This prevents workers started in
+different working directories from binding one task ID to different cache
+roots.
+
+Each task ID is bound by an append-only queue-local route record to that
+complete output route and fan-in root. Route records must be regular,
+non-symlink files; readers open them with `O_NOFOLLOW` through a stable route
+directory descriptor and verify file identity before and after reading. An
+`EEXIST` hard-link collision is accepted only when that stable record has the
+exact canonical bytes expected for the task. Recovery always consults the
+bound root; a retry that changes a basename, parent, or policy is terminal
+rather than permitted to publish a second copy. Missing, malformed, special,
+replaced, or ambiguous route provenance fails closed.
+
+Guard generations, their owner records, terminal acceptance records, and
+release markers use the same no-follow regular-file rule. Traversal opens every
+generation and outcome as a real directory, keeps its identity stable while
+reading, and rejects symlink, special-file, or replacement races. A renamed
+guard or outcome replaced by a symlink is therefore terminal rather than a
+redirect to another generation.

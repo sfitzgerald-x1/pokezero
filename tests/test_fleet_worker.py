@@ -148,7 +148,7 @@ class ClaimTests(unittest.TestCase):
         self.assertFalse(fleet_worker._done_marker_matches_task(done, successor))
 
     def test_malformed_fanin_route_provenance_fails_closed(self) -> None:
-        _manifest(self.queue, "i7-s0.env", out=self.root / "route-a")
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "route-a")
         task = claim_next_task(self.queue, "w1")
         self.assertIsNotNone(task)
         record = fleet_worker._fanin_route_record(self.queue, task.base)
@@ -156,6 +156,201 @@ class ClaimTests(unittest.TestCase):
 
         with self.assertRaises(FanInValidationError):
             fleet_worker._resolve_fanin_route(self.queue, task)
+
+    def test_fanin_relative_route_fails_before_claim_from_every_working_directory(self) -> None:
+        _manifest(self.queue, "i7-s0.env", out=Path("cache") / "slice")
+        original_cwd = Path.cwd()
+        try:
+            for name in ("worker-a", "worker-b"):
+                cwd = self.root / name
+                cwd.mkdir()
+                os.chdir(cwd)
+                rc = run_worker(
+                    self.queue, worker_id=name, static_argv=[], collect_fn=lambda _argv: 0,
+                    max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                )
+                self.assertEqual(rc, 2)
+        finally:
+            os.chdir(original_cwd)
+        self.assertTrue((self.queue / "pending" / "i7-s0.env").exists())
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+        self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
+
+    def test_persisted_fanin_manifest_rejects_relative_output_route(self) -> None:
+        shard = self.root.resolve() / "cache" / "shard-wtest-v1"
+        shard.mkdir(parents=True)
+        (shard / fleet_worker.FANIN_MANIFEST_NAME).write_text(
+            json.dumps(
+                {
+                    "schema_version": fleet_worker.FANIN_MANIFEST_SCHEMA_VERSION,
+                    "kind": "pokezero-fanin-shard",
+                    "tasks": [
+                        {
+                            "task_id": "i7-s0.env",
+                            "iteration": 7,
+                            "offset": 0,
+                            "count": 1,
+                            "seed": 100,
+                            "out": "relative-cache/slice",
+                            "policy": "policy",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(FanInValidationError, "non-canonical output route"):
+            fleet_worker._read_fanin_manifest(shard)
+
+    def test_guard_generation_symlink_and_owner_replacement_fail_closed(self) -> None:
+        from unittest.mock import patch
+
+        cache_dir = self.root.resolve() / "cache"
+        guard = fleet_worker._fanin_task_fence_path(cache_dir, "i7-s0.env")
+        guard.parent.mkdir(parents=True)
+        guard.mkdir()
+        task = FanInTask("i7-s0.env", 7, 0, 1, 100, str(cache_dir / "slice"), "policy")
+        fleet_worker._write_fanin_fence(guard, task, "i7-s0.env.w1", "guard-token")
+        current = fleet_worker._read_current_fanin_fence(guard)
+        self.assertIsNotNone(current)
+
+        saved_guard = guard.with_name(f"saved-{guard.name}")
+        guard.rename(saved_guard)
+        guard.symlink_to(saved_guard, target_is_directory=True)
+        with self.assertRaisesRegex(FanInValidationError, "not a real directory"):
+            fleet_worker._read_current_fanin_fence(guard)
+
+        guard.unlink()
+        saved_guard.rename(guard)
+        original_open = fleet_worker.os.open
+        replaced = False
+
+        def replace_owner_after_open(name, flags, mode=0o777, *, dir_fd=None):
+            nonlocal replaced
+            descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+            if (
+                name == "owner.json"
+                and dir_fd is not None
+                and flags & os.O_ACCMODE == os.O_RDONLY
+                and not replaced
+            ):
+                replaced = True
+                owner = guard / "owner.json"
+                prior = guard / ".owner.prior"
+                owner.rename(prior)
+                owner.write_bytes(prior.read_bytes())
+            return descriptor
+
+        with patch.object(fleet_worker.os, "open", new=replace_owner_after_open):
+            with self.assertRaisesRegex(FanInValidationError, "changed (while opening|during read)"):
+                fleet_worker._read_current_fanin_fence(guard)
+        self.assertTrue(replaced)
+
+    def test_route_record_rejects_symlink_special_file_and_replacement_race(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fleet_worker._resolve_fanin_route(self.queue, task)
+        record = fleet_worker._fanin_route_record(self.queue, task.base)
+        backing = record.with_name("route-backing.json")
+        record.rename(backing)
+        record.symlink_to(backing)
+        with self.assertRaisesRegex(FanInValidationError, "regular non-symlink"):
+            fleet_worker._resolve_fanin_route(self.queue, task)
+
+        record.unlink()
+        alternate = record.with_name("route-alternate.json")
+        alternate.write_text('{"replaced":true}\n', encoding="utf-8")
+        record.symlink_to(alternate)
+        with self.assertRaisesRegex(FanInValidationError, "regular non-symlink"):
+            fleet_worker._resolve_fanin_route(self.queue, task)
+
+        record.unlink()
+        os.mkfifo(record)
+        with self.assertRaisesRegex(FanInValidationError, "regular non-symlink"):
+            fleet_worker._resolve_fanin_route(self.queue, task)
+
+        record.unlink()
+        record.write_bytes(backing.read_bytes())
+        original_open = fleet_worker.os.open
+        replaced = False
+
+        def replace_after_open(name, flags, mode=0o777, *, dir_fd=None):
+            nonlocal replaced
+            descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+            if (
+                name == record.name
+                and dir_fd is not None
+                and flags & os.O_ACCMODE == os.O_RDONLY
+                and not replaced
+            ):
+                replaced = True
+                previous = record.with_name("route-prior.json")
+                record.rename(previous)
+                record.write_bytes(previous.read_bytes())
+            return descriptor
+
+        with patch.object(fleet_worker.os, "open", new=replace_after_open):
+            with self.assertRaisesRegex(FanInValidationError, "changed (while opening|during read)"):
+                fleet_worker._resolve_fanin_route(self.queue, task)
+        self.assertTrue(replaced)
+
+    def test_fanin_post_preflight_manifest_replacement_is_terminal_and_retains_claim(self) -> None:
+        from unittest.mock import patch
+
+        pending = _manifest(
+            self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice", policy="policy-a",
+        )
+        original_preflight = fleet_worker._preflight_fanin_filesystems
+        calls: list[list[str]] = []
+
+        def replace_after_preflight(queue: Path, cache_dir: Path) -> None:
+            original_preflight(queue, cache_dir)
+            pending.write_text(
+                pending.read_text(encoding="utf-8").replace("policy-a", "policy-b"),
+                encoding="utf-8",
+            )
+
+        with patch.object(fleet_worker, "_preflight_fanin_filesystems", new=replace_after_preflight):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=calls.append,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [])
+        self.assertFalse((self.queue / "pending" / "i7-s0.env").exists())
+        self.assertEqual(
+            len(list((self.queue / "claimed").glob("i7-s0.env.w1.*"))),
+            1,
+        )
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+        self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
+
+    def test_route_directory_preflight_failure_leaves_queue_and_route_state_untouched(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        route_directory = self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY
+        original_link = fleet_worker.os.link
+
+        def unsupported_route_link(source, destination, *args, **kwargs):
+            if Path(destination).parent == route_directory:
+                raise OSError(errno.EOPNOTSUPP, "route CAS unsupported")
+            return original_link(source, destination, *args, **kwargs)
+
+        with patch.object(fleet_worker.os, "link", new=unsupported_route_link):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=lambda _argv: 0,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(rc, 2)
+        self.assertTrue((self.queue / "pending" / "i7-s0.env").exists())
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+        self.assertFalse(route_directory.exists())
 
 
 class WorkerLoopTests(unittest.TestCase):
@@ -282,7 +477,7 @@ class FanInTests(unittest.TestCase):
         if not NUMPY:
             self.skipTest("requires numpy")
         self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+        self.root = Path(self._tmp.name).resolve()
         self.queue = _make_queue(self.root)
         self.cache_dir = self.root / "cache" / "iteration-0001"
         self.cache_dir.mkdir(parents=True)
@@ -1657,6 +1852,63 @@ class FanInTests(unittest.TestCase):
 
         with self.assertRaisesRegex(FanInValidationError, "not a real directory"):
             read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_renamed_guard_and_outcome_symlink_substitutions_fail_closed(self) -> None:
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, task.task_id)
+        saved_root = root.with_name(f"saved-{root.name}")
+        root.rename(saved_root)
+        root.symlink_to(saved_root, target_is_directory=True)
+        with self.assertRaisesRegex(FanInValidationError, "not a real directory"):
+            fleet_worker._read_current_fanin_fence(root)
+
+        root.unlink()
+        saved_root.rename(root)
+        current = fleet_worker._read_current_fanin_fence(root)
+        self.assertIsNotNone(current)
+        outcome = fleet_worker._fanin_fence_successor_path(root, current)
+        saved_outcome = outcome.with_name(f"saved-{outcome.name}")
+        outcome.rename(saved_outcome)
+        outcome.symlink_to(saved_outcome, target_is_directory=True)
+        with self.assertRaisesRegex(FanInValidationError, "not a real directory"):
+            fleet_worker._read_current_fanin_fence(root)
+
+    def test_guard_owner_and_acceptance_replacement_races_fail_closed(self) -> None:
+        from unittest.mock import patch
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, task.task_id)
+        current = fleet_worker._read_current_fanin_fence(root)
+        self.assertIsNotNone(current)
+        outcome = fleet_worker._fanin_fence_successor_path(root, current)
+
+        for name, parent in (("owner.json", root), (fleet_worker._FANIN_ACCEPTANCE_NAME, outcome)):
+            with self.subTest(name=name):
+                original_open = fleet_worker.os.open
+                replaced = False
+
+                def replace_after_open(opened_name, flags, mode=0o777, *, dir_fd=None):
+                    nonlocal replaced
+                    descriptor = original_open(opened_name, flags, mode, dir_fd=dir_fd)
+                    if (
+                        opened_name == name
+                        and dir_fd is not None
+                        and flags & os.O_ACCMODE == os.O_RDONLY
+                        and not replaced
+                    ):
+                        replaced = True
+                        record = parent / name
+                        prior = parent / f".{name}.prior"
+                        record.rename(prior)
+                        record.write_bytes(prior.read_bytes())
+                    return descriptor
+
+                with patch.object(fleet_worker.os, "open", new=replace_after_open):
+                    with self.assertRaisesRegex(FanInValidationError, "changed during read"):
+                        fleet_worker._read_current_fanin_fence(root)
+                self.assertTrue(replaced)
 
     def test_target_validation_rejects_entry_replacement_during_hashing(self) -> None:
         from unittest.mock import patch

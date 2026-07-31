@@ -236,7 +236,37 @@ def _log(worker_id: str, message: str, *, log_handle: Any | None = None) -> None
             pass  # durable logging is best-effort; never fail a task over it
 
 
-def _parse_manifest(path: Path, base: str) -> TaskManifest:
+def _canonical_fanin_physical_path(value: Path | str, label: str) -> Path:
+    """Require a fan-in protocol path to be absolute and symlink-resolved."""
+    route = Path(value)
+    if not route.is_absolute():
+        raise FanInInventoryValidationError(
+            f"fan-in {label} must be an absolute canonical physical path: {route}"
+        )
+    try:
+        physical = route.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} cannot be resolved physically: {route}"
+        ) from exc
+    if route != physical:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is not a canonical physical path: {route}"
+        )
+    return physical
+
+
+def _canonical_fanin_output_path(value: Path | str) -> Path:
+    """Require the queue route to name one absolute, symlink-resolved output."""
+    return _canonical_fanin_physical_path(value, "output route")
+
+
+def _canonical_fanin_task_manifest(task: TaskManifest) -> TaskManifest:
+    """Canonicalize the route before it can become fan-in provenance."""
+    return TaskManifest(**{**task.__dict__, "out": _canonical_fanin_output_path(task.out)})
+
+
+def _parse_manifest(path: Path, base: str, *, fanin: bool = False) -> TaskManifest:
     fields: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -251,7 +281,7 @@ def _parse_manifest(path: Path, base: str) -> TaskManifest:
             raise ValueError(f"task manifest {base} has non-scalar value for {key.strip()!r}")
         fields[key.strip()] = values[0]
     try:
-        return TaskManifest(
+        task = TaskManifest(
             base=base,
             claim_path=path,
             iteration=int(fields["a_iter"]),
@@ -261,6 +291,7 @@ def _parse_manifest(path: Path, base: str) -> TaskManifest:
             out=Path(fields["a_out"]),
             policy=fields["a_policy"],
         )
+        return _canonical_fanin_task_manifest(task) if fanin else task
     except KeyError as exc:
         raise ValueError(f"task manifest {base} missing key {exc}") from exc
 
@@ -283,6 +314,7 @@ def claim_next_task(
     worker_id: str,
     *,
     before_claim: Callable[[Path, TaskManifest | None], None] | None = None,
+    fanin: bool = False,
 ) -> TaskManifest | None:
     """Claim the first available pending manifest via atomic rename (or None)."""
     pending = queue / "pending"
@@ -292,9 +324,14 @@ def claim_next_task(
         return None
     for candidate in candidates:
         try:
-            preview = _parse_manifest(candidate, candidate.name)
+            preview = _parse_manifest(candidate, candidate.name, fanin=fanin)
         except FileNotFoundError:
             continue
+        except FanInInventoryValidationError:
+            # Fan-in route provenance is a trust-boundary failure. Do not move
+            # the manifest into claimed/ merely to quarantine it as a routine
+            # task error.
+            raise
         except ValueError:
             preview = None
         if before_claim is not None:
@@ -307,7 +344,7 @@ def claim_next_task(
         except OSError:
             continue  # lost the race; try the next manifest
         try:
-            task = _parse_manifest(claim, candidate.name)
+            task = _parse_manifest(claim, candidate.name, fanin=fanin)
             if before_claim is not None:
                 if preview is None or not _same_task_manifest_route(preview, task):
                     raise FanInInventoryValidationError(
@@ -316,6 +353,10 @@ def claim_next_task(
             _sweep_orphaned_claim_tokens(claim.parent, candidate.name)
             token = _write_claim_token(claim)
             return TaskManifest(**{**task.__dict__, "claim_token": token})
+        except FanInInventoryValidationError:
+            # A manifest changed after preflight. Retain this exact claimed
+            # generation for diagnosis instead of silently quarantining it.
+            raise
         except ValueError:
             # Malformed manifest: park it in failed/ so the controller's attempt
             # bound decides, rather than looping on it forever.
@@ -464,33 +505,21 @@ def _write_fanin_staging_owner(
     been acknowledged, or a later worker proves the claim is no longer live.
     """
     owner = _fanin_staging_owner_path(staging)
-    temporary = owner.parent / f".{owner.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
     payload = {
         "schema_version": 4,
         "staging": staging.name,
         "task": _fanin_task_payload(task),
         "producer_token": producer_token,
     }
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, owner)
-        _fsync_directory(owner.parent)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
+    _write_fanin_authoritative_json(owner, payload, "staging owner record")
     return owner
 
 
 def _read_fanin_staging_owner_record(staging: Path) -> tuple[FanInTask, str] | None:
     """Return sidecar ownership only when it names this exact staging path."""
-    try:
-        payload = json.loads(_fanin_staging_owner_path(staging).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    payload = _read_fanin_authoritative_json(
+        _fanin_staging_owner_path(staging), "staging owner record",
+    )
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version", "staging", "task", "producer_token",
     }:
@@ -516,8 +545,8 @@ def _read_fanin_staging_owner_record(staging: Path) -> tuple[FanInTask, str] | N
         or not task["policy"]
     ):
         return None
-    candidate = FanInTask(task["task_id"], *values, task["out"], task["policy"])
-    if candidate.iteration < 0 or candidate.offset < 0 or candidate.count <= 0 or candidate.seed < 0:
+    candidate = _fanin_task_from_payload(task)
+    if candidate is None:
         return None
     return candidate, payload["producer_token"]
 
@@ -531,32 +560,21 @@ def _refresh_fanin_staging_lease(staging: Path, producer_token: str) -> None:
     if not producer_token:
         return
     lease = _fanin_staging_lease_path(staging)
-    temporary = lease.parent / f".{lease.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
     payload = {
         "schema_version": 1,
         "staging": staging.name,
         "producer_token": producer_token,
         "renewed_at": time.time(),
     }
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, lease)
-        _fsync_directory(lease.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _write_fanin_authoritative_json(lease, payload, "staging producer lease")
 
 
 def _fanin_staging_lease_is_active(staging: Path, producer_token: str) -> bool:
     if not producer_token:
         return False
-    try:
-        payload = json.loads(_fanin_staging_lease_path(staging).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
+    payload = _read_fanin_authoritative_json(
+        _fanin_staging_lease_path(staging), "staging producer lease",
+    )
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "producer_token", "renewed_at"}:
         return False
     renewed_at = payload["renewed_at"]
@@ -677,11 +695,182 @@ def _fanin_fence_payload(task: FanInTask, claim_name: str, claim_token: str) -> 
     }
 
 
-def _read_fanin_fence(path: Path) -> tuple[FanInTask, str, str, float] | None:
+def _fanin_authoritative_directory_stat(path: Path, label: str) -> os.stat_result:
+    """lstat one protocol directory so symlinks never become capabilities."""
     try:
-        payload = json.loads(_fanin_fence_owner_path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        observed = os.lstat(path)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is unreadable: {path}"
+        ) from exc
+    if stat.S_ISLNK(observed.st_mode) or not stat.S_ISDIR(observed.st_mode):
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is not a real directory: {path}"
+        )
+    return observed
+
+
+def _open_fanin_authoritative_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
+    """Open a real protocol directory and bind it to its lstat identity."""
+    expected = _fanin_authoritative_directory_stat(path, label)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} validation requires O_NOFOLLOW and O_DIRECTORY support"
+        )
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow | directory_flag)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is unreadable: {path}"
+        ) from exc
+    observed = os.fstat(descriptor)
+    if _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected):
+        os.close(descriptor)
+        raise FanInInventoryValidationError(
+            f"fan-in {label} changed while opening: {path}"
+        )
+    return descriptor, expected
+
+
+def _verify_fanin_authoritative_directory_identity(
+    path: Path,
+    expected: os.stat_result,
+    label: str,
+) -> None:
+    observed = _fanin_authoritative_directory_stat(path, label)
+    if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
+        raise FanInInventoryValidationError(
+            f"fan-in {label} identity changed during validation: {path}"
+        )
+
+
+def _read_fanin_authoritative_regular_file(
+    descriptor: int,
+    name: str,
+    label: str,
+) -> bytes | None:
+    """Read one authoritative record without following or racing replacement."""
+    try:
+        expected = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is unreadable: {name}"
+        ) from exc
+    if stat.S_ISLNK(expected.st_mode) or not stat.S_ISREG(expected.st_mode):
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is not a regular non-symlink file: {name}"
+        )
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} validation requires O_NOFOLLOW support"
+        )
+    try:
+        file_descriptor = os.open(name, os.O_RDONLY | no_follow, dir_fd=descriptor)
+    except FileNotFoundError:
+        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from None
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is unreadable: {name}"
+        ) from exc
+    try:
+        if _fanin_stat_snapshot(os.fstat(file_descriptor)) != _fanin_stat_snapshot(expected):
+            raise FanInInventoryValidationError(
+                f"fan-in {label} changed while opening: {name}"
+            )
+        chunks: list[bytes] = []
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        if _fanin_stat_snapshot(os.fstat(file_descriptor)) != _fanin_stat_snapshot(expected):
+            raise FanInInventoryValidationError(
+                f"fan-in {label} changed during read: {name}"
+            )
+    finally:
+        os.close(file_descriptor)
+    try:
+        observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from exc
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {label} is unreadable: {name}"
+        ) from exc
+    if _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected):
+        raise FanInInventoryValidationError(
+            f"fan-in {label} changed during read: {name}"
+        )
+    return b"".join(chunks)
+
+
+def _read_fanin_authoritative_file(path: Path, label: str) -> bytes | None:
+    """Read a protocol file through a no-follow, stable parent descriptor."""
+    descriptor, expected = _open_fanin_authoritative_directory(path.parent, f"{label} directory")
+    try:
+        contents = _read_fanin_authoritative_regular_file(descriptor, path.name, label)
+    finally:
+        os.close(descriptor)
+    _verify_fanin_authoritative_directory_identity(path.parent, expected, f"{label} directory")
+    return contents
+
+
+def _read_fanin_authoritative_json(path: Path, label: str) -> Any | None:
+    contents = _read_fanin_authoritative_file(path, label)
+    if contents is None:
+        return None
+    try:
+        return json.loads(contents.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _write_fanin_authoritative_json(path: Path, payload: Any, label: str) -> None:
+    """Replace one record through a stable, no-follow parent descriptor."""
+    descriptor, expected = _open_fanin_authoritative_directory(path.parent, f"{label} directory")
+    temporary_name = f".{path.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise FanInInventoryValidationError(
+                f"fan-in {label} creation requires O_NOFOLLOW support"
+            )
+        file_descriptor = os.open(
+            temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow, 0o600,
+            dir_fd=descriptor,
+        )
+        try:
+            encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            written = 0
+            while written < len(encoded):
+                written += os.write(file_descriptor, encoded[written:])
+            os.fsync(file_descriptor)
+        finally:
+            os.close(file_descriptor)
+        os.replace(temporary_name, path.name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+        os.fsync(descriptor)
+    finally:
+        try:
+            os.unlink(temporary_name, dir_fd=descriptor)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(descriptor)
+    _verify_fanin_authoritative_directory_identity(path.parent, expected, f"{label} directory")
+
+
+def _fanin_fence_release_marker_is_present(marker: Path) -> bool:
+    """A release marker is authoritative only as a stable regular file."""
+    return _read_fanin_authoritative_file(marker, "publication fence release marker") is not None
+
+
+def _fanin_fence_from_payload(payload: Any) -> tuple[FanInTask, str, str, float] | None:
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version", "task", "claim_name", "claim_token", "renewed_at",
     }:
@@ -712,25 +901,24 @@ def _read_fanin_fence(path: Path) -> tuple[FanInTask, str, str, float] | None:
         or not raw_task["policy"]
     ):
         return None
-    task = FanInTask(raw_task["task_id"], *numeric, raw_task["out"], raw_task["policy"])
-    if task.iteration < 0 or task.offset < 0 or task.count <= 0 or task.seed < 0:
+    task = _fanin_task_from_payload(raw_task)
+    if task is None:
         return None
     return task, payload["claim_name"], payload["claim_token"], float(payload["renewed_at"])
 
 
+def _read_fanin_fence(path: Path) -> tuple[FanInTask, str, str, float] | None:
+    payload = _read_fanin_authoritative_json(
+        _fanin_fence_owner_path(path), "publication fence owner record",
+    )
+    return _fanin_fence_from_payload(payload)
+
+
 def _write_fanin_fence(path: Path, task: FanInTask, claim_name: str, claim_token: str) -> None:
-    owner = _fanin_fence_owner_path(path)
-    temporary = path / f".owner.tmp.{os.getpid()}.{time.monotonic_ns()}"
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(_fanin_fence_payload(task, claim_name, claim_token), handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, owner)
-        _fsync_directory(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _write_fanin_authoritative_json(
+        _fanin_fence_owner_path(path), _fanin_fence_payload(task, claim_name, claim_token),
+        "publication fence owner record",
+    )
 
 
 def _fanin_fence_successor_path(root: Path, generation: _FanInFenceGeneration) -> Path:
@@ -823,20 +1011,59 @@ def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
 
 
 def _read_fanin_acceptance(path: Path) -> _FanInAcceptance | None:
-    try:
-        payload = json.loads(_fanin_acceptance_path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    payload = _read_fanin_authoritative_json(
+        _fanin_acceptance_path(path), "publication fence acceptance record",
+    )
     return _fanin_acceptance_from_payload(payload)
 
 
 def _read_fanin_publication(path: Path) -> _FanInAcceptance | None:
     _fanin_real_directory_stat(path)
-    try:
-        payload = json.loads((path / FANIN_PUBLICATION_NAME).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    payload = _read_fanin_authoritative_json(
+        path / FANIN_PUBLICATION_NAME, "shard publication provenance",
+    )
     return _fanin_acceptance_from_payload(payload)
+
+
+def _read_fanin_guard_directory(
+    path: Path,
+) -> tuple[
+    os.stat_result,
+    bytes | None,
+    tuple[FanInTask, str, str, float] | None,
+    bytes | None,
+    _FanInAcceptance | None,
+]:
+    """Read one guard/outcome directory as a coherent no-follow snapshot."""
+    descriptor, expected = _open_fanin_authoritative_directory(path, "publication fence directory")
+    try:
+        owner_contents = _read_fanin_authoritative_regular_file(
+            descriptor, "owner.json", "publication fence owner record",
+        )
+        acceptance_contents = _read_fanin_authoritative_regular_file(
+            descriptor, _FANIN_ACCEPTANCE_NAME, "publication fence acceptance record",
+        )
+    finally:
+        os.close(descriptor)
+    _verify_fanin_authoritative_directory_identity(path, expected, "publication fence directory")
+    owner_payload: Any | None = None
+    acceptance_payload: Any | None = None
+    try:
+        if owner_contents is not None:
+            owner_payload = json.loads(owner_contents.decode("utf-8"))
+        if acceptance_contents is not None:
+            acceptance_payload = json.loads(acceptance_contents.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        # Keep the raw-presence bits so an otherwise valid sibling cannot make
+        # malformed authoritative state disappear.
+        pass
+    return (
+        expected,
+        owner_contents,
+        _fanin_fence_from_payload(owner_payload),
+        acceptance_contents,
+        _fanin_acceptance_from_payload(acceptance_payload),
+    )
 
 
 def _installed_fanin_generation_paths(root: Path) -> set[Path]:
@@ -844,18 +1071,28 @@ def _installed_fanin_generation_paths(root: Path) -> set[Path]:
     prefix = f".{root.name}.generation."
     installed: set[Path] = set()
     try:
-        for entry in root.parent.iterdir():
-            if not entry.name.startswith(prefix):
-                continue
-            digest = entry.name.removeprefix(prefix)
-            if _is_sha256(digest):
-                installed.add(entry)
+        descriptor, expected = _open_fanin_authoritative_directory(
+            root.parent, "publication fence parent directory",
+        )
     except FileNotFoundError:
         return set()
+    try:
+        with os.scandir(os.dup(descriptor)) as entries:
+            for entry in entries:
+                if not entry.name.startswith(prefix):
+                    continue
+                digest = entry.name.removeprefix(prefix)
+                if _is_sha256(digest):
+                    installed.add(root.parent / entry.name)
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in publication fence directory is unreadable: {root.parent}"
         ) from exc
+    finally:
+        os.close(descriptor)
+    _verify_fanin_authoritative_directory_identity(
+        root.parent, expected, "publication fence parent directory",
+    )
     return installed
 
 
@@ -875,32 +1112,30 @@ def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
     reachable: set[Path] = set()
     for _depth in range(_FANIN_GUARD_CHAIN_MAX_GENERATIONS):
         try:
-            stat = path.stat()
+            observed, owner_contents, record, acceptance_contents, acceptance = _read_fanin_guard_directory(path)
         except FileNotFoundError as exc:
             if not path_was_observed:
                 _reject_unreachable_fanin_generations(root, reachable)
                 return None
             raise FanInInventoryValidationError(f"fan-in publication fence chain is broken: {path}") from exc
-        except OSError as exc:
-            raise FanInInventoryValidationError(f"fan-in publication fence is unreadable: {path}") from exc
-        record = _read_fanin_fence(path)
-        if record is None:
+        if owner_contents is None or record is None or acceptance_contents is not None:
             raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
-        generation = _FanInFenceGeneration(path, (stat.st_dev, stat.st_ino), record)
+        generation = _FanInFenceGeneration(path, (observed.st_dev, observed.st_ino), record)
         outcome = _fanin_fence_successor_path(root, generation)
         try:
-            outcome.stat()
+            _outcome_stat, successor_contents, successor, acceptance_contents, acceptance = (
+                _read_fanin_guard_directory(outcome)
+            )
         except FileNotFoundError:
             _reject_unreachable_fanin_generations(root, reachable)
             return generation
-        except OSError as exc:
-            raise FanInInventoryValidationError(
-                f"fan-in publication fence outcome is unreadable: {outcome}"
-            ) from exc
         reachable.add(outcome)
-        successor = _read_fanin_fence(outcome)
-        acceptance = _read_fanin_acceptance(outcome)
-        if (successor is None) == (acceptance is None):
+        if (
+            (successor_contents is None and acceptance_contents is None)
+            or (successor_contents is not None and acceptance_contents is not None)
+            or (successor_contents is not None and successor is None)
+            or (acceptance_contents is not None and acceptance is None)
+        ):
             raise FanInInventoryValidationError(
                 f"fan-in publication fence outcome is malformed or ambiguous: {outcome}"
             )
@@ -930,7 +1165,9 @@ def _fanin_generation_is_active(generation: _FanInFenceGeneration, claimed: Path
     if generation.acceptance is not None:
         return False
     _task, claim_name, claim_token, renewed_at = generation.record
-    if _fanin_fence_release_marker(generation.path, claim_token).exists():
+    if _fanin_fence_release_marker_is_present(
+        _fanin_fence_release_marker(generation.path, claim_token)
+    ):
         return False
     return (
         time.time() - renewed_at <= _FANIN_PRODUCER_LEASE_SECONDS
@@ -940,13 +1177,19 @@ def _fanin_generation_is_active(generation: _FanInFenceGeneration, claimed: Path
 
 def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
     try:
-        stat = fence.path.stat()
-    except OSError:
+        observed, owner_contents, record, acceptance_contents, _acceptance = _read_fanin_guard_directory(
+            fence.path
+        )
+        released = _fanin_fence_release_marker_is_present(
+            _fanin_fence_release_marker(fence.path, fence.claim_token)
+        )
+    except (OSError, FanInInventoryValidationError):
         return False
-    record = _read_fanin_fence(fence.path)
     if not (
-        (stat.st_dev, stat.st_ino) == fence.identity
-        and not _fanin_fence_release_marker(fence.path, fence.claim_token).exists()
+        (observed.st_dev, observed.st_ino) == fence.identity
+        and owner_contents is not None
+        and acceptance_contents is None
+        and not released
         and record is not None
         and record[0] == fence.task
         and record[1] == fence.claim_name
@@ -955,10 +1198,13 @@ def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
         return False
     generation = _FanInFenceGeneration(fence.path, fence.identity, record)
     try:
-        _fanin_fence_successor_path(fence.root, generation).stat()
+        _fanin_authoritative_directory_stat(
+            _fanin_fence_successor_path(fence.root, generation),
+            "publication fence outcome directory",
+        )
     except FileNotFoundError:
         return True
-    except OSError:
+    except (OSError, FanInInventoryValidationError):
         return False
     return False
 
@@ -1005,15 +1251,10 @@ def _publish_initialized_fanin_acceptance(
     try:
         temporary.mkdir()
         acceptance_path = _fanin_acceptance_path(temporary)
-        with acceptance_path.open("x", encoding="utf-8") as handle:
-            json.dump(
-                _fanin_acceptance_payload(acceptance), handle,
-                sort_keys=True, separators=(",", ":"),
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_directory(temporary)
+        _write_fanin_authoritative_json(
+            acceptance_path, _fanin_acceptance_payload(acceptance),
+            "publication fence acceptance record",
+        )
         try:
             os.rename(temporary, target)
         except OSError as exc:
@@ -1035,14 +1276,18 @@ def _start_fanin_guard_heartbeat(
     fanin_task: FanInTask,
 ) -> _FanInFilesystemFence:
     """Validate ownership of a newly published generation and start renewal."""
-    stat = path.stat()
-    record = _read_fanin_fence(path)
+    observed, owner_contents, record, acceptance_contents, _acceptance = _read_fanin_guard_directory(path)
     expected = (fanin_task, task.claim_path.name, task.claim_token)
-    if record is None or record[:3] != expected:
+    if (
+        owner_contents is None
+        or acceptance_contents is not None
+        or record is None
+        or record[:3] != expected
+    ):
         raise FanInInventoryValidationError(f"new fan-in publication fence is malformed: {path}")
     stop = threading.Event()
     fence = _FanInFilesystemFence(
-        root, path, (stat.st_dev, stat.st_ino), fanin_task, task.claim_path.name,
+        root, path, (observed.st_dev, observed.st_ino), fanin_task, task.claim_path.name,
         task.claim_token, stop, threading.Thread(),
     )
 
@@ -1092,21 +1337,21 @@ def _release_fanin_guard(fence: _FanInFilesystemFence) -> None:
     fence.stop.set()
     fence.heartbeat.join(timeout=max(_FANIN_HEARTBEAT_INTERVAL_SECONDS, 0.1) + 0.1)
     marker = _fanin_fence_release_marker(fence.path, fence.claim_token)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise FanInInventoryValidationError("fan-in release marker creation requires O_NOFOLLOW support")
     try:
-        with marker.open("x", encoding="utf-8"):
-            pass
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow, 0o600)
+        os.close(descriptor)
     except FileExistsError:
-        pass
+        _fanin_fence_release_marker_is_present(marker)
     _fsync_directory(fence.path.parent)
 
 
 def _read_fanin_publish_lock(base: Path) -> tuple[FanInTask, str, str] | None:
     """Return the task owning a well-formed per-worker publish lock."""
     lock = _fanin_publish_lock_path(base)
-    try:
-        payload = json.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    payload = _read_fanin_authoritative_json(lock, "worker publish lock")
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version", "base", "task", "claim_name", "claim_token",
     }:
@@ -1135,8 +1380,8 @@ def _read_fanin_publish_lock(base: Path) -> tuple[FanInTask, str, str] | None:
         or not task["policy"]
     ):
         return None
-    candidate = FanInTask(task["task_id"], *numeric, task["out"], task["policy"])
-    if candidate.iteration < 0 or candidate.offset < 0 or candidate.count <= 0 or candidate.seed < 0:
+    candidate = _fanin_task_from_payload(task)
+    if candidate is None:
         return None
     return candidate, payload["claim_name"], payload["claim_token"]
 
@@ -1157,8 +1402,15 @@ def _acquire_fanin_publish_lock(
     }
     guard = _acquire_fanin_guard(_fanin_publish_guard_path(base), task, fanin_task)
     try:
-        owner = _read_fanin_publish_lock(base) if lock.exists() else None
-        if lock.exists() and owner is None:
+        try:
+            os.lstat(lock)
+        except FileNotFoundError:
+            lock_was_present = False
+            owner = None
+        else:
+            lock_was_present = True
+            owner = _read_fanin_publish_lock(base)
+        if owner is None and lock_was_present:
             raise FanInInventoryValidationError(f"fan-in publish lock is malformed: {lock}")
         if owner is not None:
             owner_task, owner_claim_name, owner_token = owner
@@ -1168,19 +1420,11 @@ def _acquire_fanin_publish_lock(
                 raise _FanInTransientError(
                     f"fan-in worker shard {base.name} is actively publishing {owner_task.task_id!r}"
                 )
-        temporary = lock.parent / f".{lock.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
-        try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, lock)
-            _fsync_directory(lock.parent)
-        finally:
-            temporary.unlink(missing_ok=True)
-        stat = lock.stat()
-        return lock, (stat.st_dev, stat.st_ino)
+        _write_fanin_authoritative_json(lock, payload, "worker publish lock")
+        observed = os.lstat(lock)
+        if stat.S_ISLNK(observed.st_mode) or not stat.S_ISREG(observed.st_mode):
+            raise FanInInventoryValidationError(f"fan-in publish lock is malformed: {lock}")
+        return lock, (observed.st_dev, observed.st_ino)
     finally:
         _release_fanin_guard(guard)
 
@@ -1215,10 +1459,7 @@ def _fanin_task_fence_path(cache_dir: Path, task_id: str) -> Path:
 
 
 def _read_fanin_task_lock(record: Path) -> tuple[FanInTask, str, str] | None:
-    try:
-        payload = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    payload = _read_fanin_authoritative_json(record, "task publication lock")
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "task", "claim_name", "claim_token"}:
         return None
     if (
@@ -1244,11 +1485,10 @@ def _read_fanin_task_lock(record: Path) -> tuple[FanInTask, str, str] | None:
         or not raw_task["policy"]
     ):
         return None
-    return (
-        FanInTask(raw_task["task_id"], *numeric, raw_task["out"], raw_task["policy"]),
-        payload["claim_name"],
-        payload["claim_token"],
-    )
+    task = _fanin_task_from_payload(raw_task)
+    if task is None:
+        return None
+    return task, payload["claim_name"], payload["claim_token"]
 
 
 def _write_fanin_task_lock(record: Path, task: TaskManifest, fanin_task: FanInTask) -> None:
@@ -1258,17 +1498,7 @@ def _write_fanin_task_lock(record: Path, task: TaskManifest, fanin_task: FanInTa
         "claim_name": task.claim_path.name,
         "claim_token": task.claim_token,
     }
-    temporary = record.parent / f".{record.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, record)
-        _fsync_directory(record.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _write_fanin_authoritative_json(record, payload, "task publication lock")
 
 
 def _acquire_fanin_task_publication_lease(
@@ -1280,8 +1510,15 @@ def _acquire_fanin_task_publication_lease(
     record = _fanin_task_lock_record(cache_dir, fanin_task.task_id)
     guard = _acquire_fanin_guard(_fanin_task_fence_path(cache_dir, fanin_task.task_id), task, fanin_task, nonblocking=True)
     try:
-        previous = _read_fanin_task_lock(record) if record.exists() else None
-        if record.exists() and previous is None:
+        try:
+            os.lstat(record)
+        except FileNotFoundError:
+            record_was_present = False
+            previous = None
+        else:
+            record_was_present = True
+            previous = _read_fanin_task_lock(record)
+        if previous is None and record_was_present:
             raise FanInInventoryValidationError(f"fan-in task publication lock is malformed: {record}")
         if previous is not None:
             previous_task, _previous_claim_name, _previous_token = previous
@@ -1342,13 +1579,14 @@ def _is_int(value: Any) -> bool:
 
 
 def _fanin_task_from_task_manifest(task: TaskManifest) -> FanInTask:
+    output = _canonical_fanin_output_path(task.out)
     candidate = FanInTask(
         task.base,
         task.iteration,
         task.offset,
         task.count,
         task.seed,
-        str(task.out),
+        str(output),
         task.policy,
     )
     if (
@@ -1379,7 +1617,13 @@ def _fanin_task_payload(task: FanInTask) -> dict[str, Any]:
 def _fanin_route_record(queue: Path, task_id: str) -> Path:
     """Return this task's append-only, queue-local route provenance record."""
     directory = queue / _FANIN_ROUTE_DIRECTORY
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance directory cannot be created: {directory}"
+        ) from exc
+    _fanin_authoritative_directory_stat(directory, "route provenance directory")
     digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
     return directory / f"{digest}.json"
 
@@ -1403,25 +1647,38 @@ def _fanin_task_from_payload(payload: Any) -> FanInTask | None:
         or not policy
     ):
         return None
-    task = FanInTask(task_id, *numeric, out, policy)
+    try:
+        output = _canonical_fanin_output_path(out)
+    except FanInInventoryValidationError:
+        return None
+    if out != str(output):
+        return None
+    task = FanInTask(task_id, *numeric, str(output), policy)
     if task.iteration < 0 or task.offset < 0 or task.count <= 0 or task.seed < 0:
         return None
     return task
 
 
-def _read_fanin_route(record: Path) -> tuple[Path, FanInTask] | None:
-    try:
-        payload = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+def _fanin_route_from_payload(payload: Any) -> tuple[Path, FanInTask] | None:
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "cache_dir", "task"}:
         return None
     if payload["schema_version"] != 1 or not isinstance(payload["cache_dir"], str) or not payload["cache_dir"]:
         return None
-    task = _fanin_task_from_payload(payload["task"])
-    if task is None:
+    try:
+        cache_dir = _canonical_fanin_physical_path(payload["cache_dir"], "cache route")
+    except FanInInventoryValidationError:
         return None
-    return Path(payload["cache_dir"]), task
+    if payload["cache_dir"] != str(cache_dir):
+        return None
+    task = _fanin_task_from_payload(payload["task"])
+    if task is None or Path(task.out).parent != cache_dir:
+        return None
+    return cache_dir, task
+
+
+def _read_fanin_route(record: Path) -> tuple[Path, FanInTask] | None:
+    payload = _read_fanin_authoritative_json(record, "route provenance record")
+    return _fanin_route_from_payload(payload)
 
 
 def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
@@ -1432,28 +1689,84 @@ def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
     changes, and malformed provenance is terminal rather than guessed.
     """
     candidate = _fanin_task_from_task_manifest(task)
-    cache_dir = task.out.parent
+    cache_dir = _canonical_fanin_physical_path(candidate.out, "output route").parent
     record = _fanin_route_record(queue, candidate.task_id)
     payload = {
         "schema_version": 1,
         "cache_dir": str(cache_dir),
         "task": _fanin_task_payload(candidate),
     }
-    temporary = record.parent / f".{record.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    )
+    descriptor, directory_identity = _open_fanin_authoritative_directory(
+        record.parent, "route provenance directory",
+    )
+    temporary_name = f".{record.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
     try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise FanInInventoryValidationError(
+                "fan-in route provenance creation requires O_NOFOLLOW support"
+            )
+        temporary_descriptor = os.open(
+            temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow, 0o600,
+            dir_fd=descriptor,
+        )
         try:
-            os.link(temporary, record)
+            os.write(temporary_descriptor, encoded)
+            os.fsync(temporary_descriptor)
+            temporary_identity = _fanin_stat_identity(os.fstat(temporary_descriptor))
+        finally:
+            os.close(temporary_descriptor)
+        try:
+            os.link(
+                temporary_name, record.name, src_dir_fd=descriptor, dst_dir_fd=descriptor,
+                follow_symlinks=False,
+            )
         except FileExistsError:
-            pass
+            existing_contents = _read_fanin_authoritative_regular_file(
+                descriptor, record.name, "route provenance record",
+            )
+            if existing_contents != encoded:
+                try:
+                    existing_payload = json.loads((existing_contents or b"").decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    existing_payload = None
+                existing = _fanin_route_from_payload(existing_payload)
+                if existing is None:
+                    raise FanInInventoryValidationError(
+                        f"fan-in route provenance is malformed: {record}"
+                    )
+                established_root, established_task = existing
+                if _fanin_route_conflicts(established_task, candidate) or established_root != cache_dir:
+                    raise FanInRouteConflictError(
+                        f"fan-in task {task.base!r} has different output, policy, or cache root route"
+                    )
+                raise FanInInventoryValidationError(
+                    f"fan-in route provenance has non-canonical record content: {record}"
+                )
         else:
-            _fsync_directory(record.parent)
+            observed = os.stat(record.name, dir_fd=descriptor, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(observed.st_mode)
+                or not stat.S_ISREG(observed.st_mode)
+                or _fanin_stat_identity(observed) != temporary_identity
+            ):
+                raise FanInInventoryValidationError(
+                    f"fan-in route provenance CAS did not create its expected record: {record}"
+                )
+            os.fsync(descriptor)
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            os.unlink(temporary_name, dir_fd=descriptor)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(descriptor)
+    _verify_fanin_authoritative_directory_identity(
+        record.parent, directory_identity, "route provenance directory",
+    )
     existing = _read_fanin_route(record)
     if existing is None:
         raise FanInInventoryValidationError(f"fan-in route provenance is malformed: {record}")
@@ -1471,12 +1784,18 @@ def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
     _fanin_real_directory_stat(path)
     manifest_path = path / FANIN_MANIFEST_NAME
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        contents = _read_fanin_authoritative_file(manifest_path, "shard task manifest")
     except FileNotFoundError as exc:
-        if not path.exists():
-            raise _SelectedFanInVersionVanishedError(f"selected fan-in shard vanished: {path}") from exc
+        try:
+            _fanin_real_directory_stat(path)
+        except _SelectedFanInVersionVanishedError:
+            raise
         raise FanInValidationError(f"fan-in shard {path} has no valid {FANIN_MANIFEST_NAME}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+    if contents is None:
+        raise FanInValidationError(f"fan-in shard {path} has no valid {FANIN_MANIFEST_NAME}")
+    try:
+        payload = json.loads(contents.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise FanInValidationError(f"fan-in shard {path} has no valid {FANIN_MANIFEST_NAME}") from exc
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "kind", "tasks"}:
         raise FanInValidationError(f"fan-in shard {path} has a malformed manifest envelope")
@@ -1509,22 +1828,36 @@ def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
         iteration, offset, count, seed = numeric
         if iteration < 0 or offset < 0 or count <= 0 or seed < 0:
             raise FanInValidationError(f"fan-in shard {path} has out-of-range task metadata")
+        try:
+            output = _canonical_fanin_output_path(out)
+        except FanInInventoryValidationError as exc:
+            raise FanInValidationError(
+                f"fan-in shard {path} has a non-canonical output route"
+            ) from exc
+        if out != str(output):
+            raise FanInValidationError(f"fan-in shard {path} has a non-canonical output route")
         if task_id in seen:
             raise FanInValidationError(f"fan-in shard {path} repeats task id {task_id!r}")
         seen.add(task_id)
-        tasks.append(FanInTask(task_id, iteration, offset, count, seed, out, policy))
+        tasks.append(FanInTask(task_id, iteration, offset, count, seed, str(output), policy))
     return tuple(tasks)
 
 
 def _cache_record_count(path: Path) -> int:
     _fanin_real_directory_stat(path)
     try:
-        metadata = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
+        contents = _read_fanin_authoritative_file(path / "metadata.json", "shard cache metadata")
     except FileNotFoundError as exc:
-        if not path.exists():
-            raise _SelectedFanInVersionVanishedError(f"selected fan-in shard vanished: {path}") from exc
+        try:
+            _fanin_real_directory_stat(path)
+        except _SelectedFanInVersionVanishedError:
+            raise
         raise FanInValidationError(f"fan-in shard {path} has no valid cache metadata") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+    if contents is None:
+        raise FanInValidationError(f"fan-in shard {path} has no valid cache metadata")
+    try:
+        metadata = json.loads(contents.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise FanInValidationError(f"fan-in shard {path} has no valid cache metadata") from exc
     record_count = metadata.get("record_count") if isinstance(metadata, dict) else None
     if not _is_int(record_count) or record_count < 0:
@@ -1800,6 +2133,16 @@ def _write_fanin_manifest(path: Path, tasks: Sequence[FanInTask]) -> None:
     for task in tasks:
         if not task.out or not task.policy:
             raise FanInValidationError("fan-in task manifest requires non-empty output and policy routes")
+        try:
+            output = _canonical_fanin_output_path(task.out)
+        except FanInInventoryValidationError as exc:
+            raise FanInValidationError(
+                "fan-in task manifest requires canonical absolute physical output routes"
+            ) from exc
+        if task.out != str(output):
+            raise FanInValidationError(
+                "fan-in task manifest requires canonical absolute physical output routes"
+            )
     payload = {
         "schema_version": FANIN_MANIFEST_SCHEMA_VERSION,
         "kind": _FANIN_MANIFEST_KIND,
@@ -1824,9 +2167,10 @@ def _write_fanin_manifest(path: Path, tasks: Sequence[FanInTask]) -> None:
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
+    contents = _read_fanin_authoritative_file(path, "shard provenance file")
+    if contents is None:
+        raise FanInValidationError(f"fan-in shard provenance file is missing: {path}")
+    digest.update(contents)
     return digest.hexdigest()
 
 
@@ -2037,21 +2381,10 @@ def _build_fanin_acceptance(
 
 
 def _write_fanin_publication(path: Path, acceptance: _FanInAcceptance) -> None:
-    publication = path / FANIN_PUBLICATION_NAME
-    temporary = path / f".{FANIN_PUBLICATION_NAME}.tmp.{os.getpid()}.{time.monotonic_ns()}"
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(
-                _fanin_acceptance_payload(acceptance), handle,
-                sort_keys=True, separators=(",", ":"),
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, publication)
-        _fsync_directory(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _write_fanin_authoritative_json(
+        path / FANIN_PUBLICATION_NAME, _fanin_acceptance_payload(acceptance),
+        "shard publication provenance",
+    )
 
 
 def _validate_fanin_target_acceptance(
@@ -2135,6 +2468,7 @@ def _fsync_directory(path: Path) -> None:
 def _preflight_fanin_location(path: Path, location: str) -> None:
     """Probe one mount for the local atomic operations fan-in relies on."""
     path.mkdir(parents=True, exist_ok=True)
+    _fanin_authoritative_directory_stat(path, f"{location} filesystem probe directory")
     token = f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
     source_a = path / f"{token}.source-a"
     source_b = path / f"{token}.source-b"
@@ -2219,6 +2553,40 @@ def _preflight_fanin_location(path: Path, location: str) -> None:
         shutil.rmtree(moved, ignore_errors=True)
 
 
+def _preflight_fanin_route_directory(queue: Path) -> None:
+    """Probe the exact directory that will host the route-record link CAS."""
+    directory = queue / _FANIN_ROUTE_DIRECTORY
+    created = False
+    try:
+        directory.mkdir()
+        created = True
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance directory cannot be created: {directory}"
+        ) from exc
+    try:
+        _preflight_fanin_location(directory, "route-CAS")
+    except BaseException:
+        if created:
+            try:
+                directory.rmdir()
+            except OSError as exc:
+                raise FanInInventoryValidationError(
+                    f"fan-in route-CAS probe cleanup failed: {directory}"
+                ) from exc
+        raise
+    if created:
+        try:
+            directory.rmdir()
+            _fsync_directory(queue)
+        except OSError as exc:
+            raise FanInInventoryValidationError(
+                f"fan-in route-CAS probe cleanup failed: {directory}"
+            ) from exc
+
+
 def _preflight_fanin_filesystems(queue: Path, cache_dir: Path) -> None:
     """Verify queue and cache mounts before a fan-in route CAS or queue claim.
 
@@ -2229,6 +2597,7 @@ def _preflight_fanin_filesystems(queue: Path, cache_dir: Path) -> None:
     """
     _preflight_fanin_location(queue, "queue")
     _preflight_fanin_location(cache_dir, "cache")
+    _preflight_fanin_route_directory(queue)
 
 
 def _task_manifest_text(task: TaskManifest) -> str:
@@ -2402,8 +2771,10 @@ def _recover_pending_fanin_publication(
         return current.acceptance
     pending: list[tuple[Path, tuple[FanInTask, ...], _FanInAcceptance]] = []
     for target in Path(cache_dir).glob("shard-w*-v*"):
-        publication_path = target / FANIN_PUBLICATION_NAME
-        if not publication_path.exists():
+        publication_contents = _read_fanin_authoritative_file(
+            target / FANIN_PUBLICATION_NAME, "shard publication provenance",
+        )
+        if publication_contents is None:
             continue
         publication = _read_fanin_publication(target)
         if publication is None:
@@ -2756,6 +3127,7 @@ def run_worker(
                 queue,
                 worker,
                 before_claim=preflight_fanin_claim if shard_fanin else None,
+                fanin=shard_fanin,
             )
         except (FanInInventoryValidationError, OSError) as exc:
             log(f"TERMINAL fan-in filesystem preflight failed before claim or route binding: {exc}")
