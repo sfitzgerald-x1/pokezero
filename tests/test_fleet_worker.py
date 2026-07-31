@@ -397,7 +397,7 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
 
-    def test_crash_after_done_link_recovers_same_inode_without_failed_marker(self) -> None:
+    def test_recreated_done_marker_with_matching_metadata_is_idempotent(self) -> None:
         self._manifests(1)
         calls: list[list[str]] = []
 
@@ -427,9 +427,13 @@ class FanInTests(unittest.TestCase):
                 max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
                 crash_inject=crash_after_link,
             )
-        claim = self.queue / "claimed" / "i1-s0.env.w2"
         done = self.queue / "done" / "i1-s0.env"
-        self.assertTrue(os.path.samestat(claim.stat(), done.stat()))
+        # A reaper may copy/recreate this marker rather than preserve the
+        # link inode. Canonical queue metadata, not inode identity, is the
+        # idempotence contract.
+        copied = done.read_text(encoding="utf-8")
+        done.unlink()
+        done.write_text(copied, encoding="utf-8")
 
         self._requeue_claim("w2", "i1-s0.env")
         run_worker(
@@ -441,7 +445,7 @@ class FanInTests(unittest.TestCase):
         self.assertFalse(list((self.queue / "claimed").iterdir()))
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
-    def test_unrelated_legacy_shard_preserves_untried_claim_and_stops(self) -> None:
+    def test_unrelated_legacy_shard_preserves_claim_and_returns_terminal_status(self) -> None:
         (self.cache_dir / "shard-wlegacy-v1").mkdir()
         self._manifests(2)
         calls: list[list[str]] = []
@@ -454,14 +458,14 @@ class FanInTests(unittest.TestCase):
             self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
         )
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
         self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
         self.assertFalse(list((self.queue / "done").iterdir()))
 
-    def test_unrelated_malformed_shard_preserves_untried_claim_and_stops(self) -> None:
+    def test_unrelated_malformed_shard_preserves_claim_and_returns_terminal_status(self) -> None:
         malformed = self.cache_dir / "shard-wmalformed-v1"
         malformed.mkdir()
         (malformed / "fanin-manifest.json").write_text("{", encoding="utf-8")
@@ -472,15 +476,16 @@ class FanInTests(unittest.TestCase):
             calls.append(argv)
             return self._real_collect(argv)
 
-        run_worker(
+        rc = run_worker(
             self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
         )
+        self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
         self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
-    def test_inventory_becoming_malformed_after_collection_preserves_claim(self) -> None:
+    def test_inventory_becoming_malformed_after_collection_preserves_claim_and_fails_terminally(self) -> None:
         self._manifests(2)
         calls: list[list[str]] = []
 
@@ -490,10 +495,11 @@ class FanInTests(unittest.TestCase):
             (self.cache_dir / "shard-wmalformed-v1").mkdir()
             return result
 
-        run_worker(
+        rc = run_worker(
             self.queue, worker_id="w1", static_argv=[], collect_fn=collect_then_add_malformed_shard,
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
         )
+        self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)
         self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
@@ -517,7 +523,80 @@ class FanInTests(unittest.TestCase):
         self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
 
-    def test_different_inode_done_marker_is_a_task_conflict(self) -> None:
+    def test_duplicate_selected_task_is_terminal_and_preserves_claim(self) -> None:
+        task = FanInTask("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-wother-v1", [task])
+        self._write_version("shard-wother2-v1", [task])
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [])
+        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_invalid_task_metadata_fails_only_each_claim_and_drains_following_task(self) -> None:
+        _manifest(
+            self.queue, "i1-s0.env", out=self.cache_dir / "slice-invalid", iteration=1,
+            offset=-1, count=1, seed=100,
+        )
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-zero", iteration=1,
+            offset=0, count=0, seed=101,
+        )
+        _manifest(
+            self.queue, "i1-s2.env", out=self.cache_dir / "slice-healthy", iteration=1,
+            offset=2, count=1, seed=102,
+        )
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertTrue((self.queue / "failed" / "i1-s1.env.w1.failed").exists())
+        self.assertTrue((self.queue / "done" / "i1-s2.env").exists())
+
+    def test_short_collection_fails_only_that_claim_and_drains_following_task(self) -> None:
+        _manifest(
+            self.queue, "i1-s0.env", out=self.cache_dir / "slice-short", iteration=1,
+            offset=0, count=2, seed=100,
+        )
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-healthy", iteration=1,
+            offset=2, count=1, seed=102,
+        )
+        calls: list[list[str]] = []
+
+        def short_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)  # intentionally writes one record for both tasks
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=short_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertTrue((self.queue / "done" / "i1-s1.env").exists())
+
+    def test_conflicting_done_marker_is_a_task_conflict(self) -> None:
         self._write_version("shard-wother-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])
         self._manifests(1)
         (self.queue / "done" / "i1-s0.env").write_text("different claim", encoding="utf-8")
@@ -527,13 +606,15 @@ class FanInTests(unittest.TestCase):
             calls.append(argv)
             return self._real_collect(argv)
 
-        run_worker(
+        rc = run_worker(
             self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
             max_rss_mb=None, max_tasks=1, idle_exit_seconds=None, sleep_seconds=0.0, shard_fanin=True,
         )
+        self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
         self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
-        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
 
     def test_revoked_claim_cannot_publish_a_target(self) -> None:
         self._manifests(1)
@@ -549,6 +630,109 @@ class FanInTests(unittest.TestCase):
         )
         self.assertFalse(list(self.cache_dir.iterdir()))
         self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+
+    def test_post_publication_revocation_recovers_done_marker_without_discarding_input(self) -> None:
+        self._manifests(1)
+
+        def revoke_after_publication(boundary: str, task) -> None:
+            if boundary == "fanin-after-target-publication":
+                task.claim_path.unlink()
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            crash_inject=revoke_after_publication,
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.cache_dir / "shard-ww1-v1").exists())
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+        self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
+
+    def test_post_publication_crash_after_revocation_recovers_done_on_recreated_claim(self) -> None:
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def revoke_then_crash(boundary: str, task) -> None:
+            if boundary == "fanin-after-target-publication":
+                task.claim_path.unlink()
+                raise SystemExit("simulated pod death after accepted publication")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=revoke_then_crash,
+            )
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        rc = run_worker(
+            self.queue, worker_id="w2", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+
+    def test_changed_worker_reclaims_only_staging_whose_owner_claim_is_gone(self) -> None:
+        abandoned = self.cache_dir / ".shard-wold-v1.tmp.123.456"
+        abandoned.mkdir()
+        fleet_worker._write_fanin_staging_owner(
+            abandoned, FanInTask("i1-sstale.env", 1, 9, 1, 109),
+        )
+        self._manifests(1)
+        rc = run_worker(
+            self.queue, worker_id="new", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertFalse(abandoned.exists())
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+
+    def test_changed_worker_never_reclaims_staging_with_a_live_owner_claim(self) -> None:
+        abandoned = self.cache_dir / ".shard-wold-v1.tmp.123.456"
+        abandoned.mkdir()
+        owner = FanInTask("i1-sstale.env", 1, 9, 1, 109)
+        fleet_worker._write_fanin_staging_owner(abandoned, owner)
+        _manifest(
+            self.queue, owner.task_id, out=self.cache_dir / "slice-stale", iteration=1,
+            offset=owner.offset, count=owner.count, seed=owner.seed,
+        )
+        self.assertIsNotNone(claim_next_task(self.queue, "old"))
+        self._manifests(1)
+        rc = run_worker(
+            self.queue, worker_id="new", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(abandoned.exists())
+
+    def test_task_lookup_tolerates_unrelated_selected_publish(self) -> None:
+        from unittest.mock import patch
+
+        self._write_version("shard-wother-v1", [FanInTask("prior-s0.env", 1, 10, 1, 110)])
+        self._manifests(1)
+        original_read = fleet_worker._read_fanin_manifest
+        published = False
+
+        def publish_unrelated(path: Path):
+            nonlocal published
+            if path.name == "shard-wother-v1" and not published:
+                published = True
+                self._write_version("shard-wother2-v1", [FanInTask("prior-s1.env", 1, 11, 1, 111)])
+            return original_read(path)
+
+        with patch.object(fleet_worker, "_read_fanin_manifest", new=publish_unrelated):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(rc, 0)
+        self.assertTrue(published)
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
 
     def test_strict_inventory_rejects_malformed_or_missing_manifest(self) -> None:
         missing = self._write_version("shard-ww1-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])

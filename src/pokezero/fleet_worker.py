@@ -8,7 +8,7 @@ byte-compatible with the shell fleet worker:
 
     pending/i<N>-s<K>.env  --atomic rename-->  claimed/<base>.<worker>
         success + claim still present  -> out committed, claim -> done/<base>
-        claim revoked mid-task         -> work discarded (revocation-discard)
+        claim revoked before fan-in publish -> work discarded (revocation-discard)
         failure                        -> claim -> failed/<base>.<worker>.failed
 
 Shard fan-in mode (``shard_fanin=True``): tasks stay micro (1-2 games) but the
@@ -28,8 +28,11 @@ before the done marker.
 Strict fan-in rollout precondition: start from a fresh cache directory, or a
 fully drained directory whose selected versions all have fan-in manifests.
 Legacy manifest-less selected versions are not safe to extend and make the
-worker stop with its current claim intact; the final strict validator rejects
-them as well.
+worker fail nonzero with its current claim intact; the final strict validator
+rejects them as well. Strict inventory is a trainer handoff operation and
+requires queue quiescence: workers use a task-specific lookup instead, so an
+unrelated worker publishing does not make every live task retry. The seed
+contract validates manifest declarations; it does not inspect ``seeds.npy``.
 
 Manifest keys (shell-sourceable ``a_key=value`` lines): ``a_iter``,
 ``a_offset``, ``a_count``, ``a_seed``, ``a_out``, ``a_policy``.
@@ -49,6 +52,14 @@ Death/OOM posture (the two operational risks of persistence):
 Every claim/commit/failure line is timestamped, which doubles as the
 collect-queue plan's Step-0 instrumentation (task-duration histogram and the
 startup-vs-compute split come straight from these logs).
+
+Fan-in failure classification is intentionally narrow: invalid current-task
+metadata and a short collected cache move only that claim to ``failed/``;
+vanishing selected versions are transient and trigger a clean recycle with the
+claim retained; selected legacy/malformed/duplicate inventory and accepted
+input versus queue-acknowledgement conflicts are terminal (nonzero) with the
+claim retained. Power-loss durability beyond the explicit fsyncs below remains
+out of scope.
 """
 
 from __future__ import annotations
@@ -79,6 +90,7 @@ class TaskManifest:
 FANIN_MANIFEST_NAME = "fanin-manifest.json"
 FANIN_MANIFEST_SCHEMA_VERSION = 1
 _FANIN_MANIFEST_KIND = "pokezero-fanin-shard"
+_FANIN_STAGING_OWNER_NAME = ".fanin-staging-owner.json"
 _SELECTED_FANIN_READ_ATTEMPTS = 3
 
 
@@ -86,7 +98,15 @@ class FanInValidationError(ValueError):
     """A fan-in version or its global task inventory is not safe to train from."""
 
 
-class FanInTaskConflictError(FanInValidationError):
+class FanInTaskValidationError(FanInValidationError):
+    """The current queue task or its collected cache is invalid and can fail alone."""
+
+
+class FanInInventoryValidationError(FanInValidationError):
+    """A selected published shard is permanently unsafe; preserve the claim and stop."""
+
+
+class FanInTaskConflictError(FanInTaskValidationError):
     """The claimed task contradicts metadata already committed for that task ID."""
 
 
@@ -94,8 +114,12 @@ class _SelectedFanInVersionVanishedError(RuntimeError):
     """A selected immutable version vanished while its files were being read."""
 
 
+class _FanInTransientError(RuntimeError):
+    """Selected versions changed during a task-local lookup; recycle and retry later."""
+
+
 class _ClaimRevokedError(RuntimeError):
-    """The controller revoked a claim before it crossed the publication boundary."""
+    """The controller revoked a claim before it crossed fan-in's commit boundary."""
 
 
 @dataclass(frozen=True)
@@ -232,19 +256,71 @@ def _shard_versions(base: Path) -> list[tuple[int, Path]]:
     return sorted(versions)
 
 
-def _sweep_abandoned_fanin_staging(base: Path) -> None:
-    """Remove only complete staging-name matches for this sanitized worker base."""
-    prefix = f".{base.name}-v"
-    for candidate in base.parent.glob(f".{base.name}-v*.tmp.*"):
-        suffix = candidate.name[len(prefix):]
-        version_text, separator, process_text = suffix.partition(".tmp.")
-        if separator and version_text.isdigit() and process_text.isdigit():
+def _write_fanin_staging_owner(path: Path, task: FanInTask) -> None:
+    """Persist the only evidence that permits a later worker to reclaim staging."""
+    owner = path / _FANIN_STAGING_OWNER_NAME
+    temporary = path / f".{_FANIN_STAGING_OWNER_NAME}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    payload = {"schema_version": 1, "task": _fanin_task_payload(task)}
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, owner)
+        _fsync_directory(path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _read_fanin_staging_owner(path: Path) -> FanInTask | None:
+    """Return recoverable owner metadata, or ``None`` for untrusted staging."""
+    try:
+        payload = json.loads((path / _FANIN_STAGING_OWNER_NAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "task"}:
+        return None
+    if payload["schema_version"] != 1 or not isinstance(payload["task"], dict):
+        return None
+    task = payload["task"]
+    if set(task) != {"task_id", "iteration", "offset", "count", "seed"}:
+        return None
+    values = (task["iteration"], task["offset"], task["count"], task["seed"])
+    if not isinstance(task["task_id"], str) or not task["task_id"] or not all(_is_int(value) for value in values):
+        return None
+    candidate = FanInTask(task["task_id"], *values)
+    if candidate.iteration < 0 or candidate.offset < 0 or candidate.count <= 0 or candidate.seed < 0:
+        return None
+    return candidate
+
+
+def _has_live_claim(queue: Path, task_id: str) -> bool:
+    claimed = queue / "claimed"
+    try:
+        return any(path.name.startswith(f"{task_id}.") for path in claimed.iterdir())
+    except OSError:
+        # An unreadable queue is not proof that a staging owner is dead.
+        return True
+
+
+def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
+    """Reclaim only staging whose durable owner no longer has a live claim.
+
+    Staging with no valid owner record is deliberately retained: a different
+    worker must never guess that an in-progress producer is dead.
+    """
+    for candidate in Path(cache_dir).glob(".shard-w*-v*.tmp.*"):
+        if not candidate.is_dir():
+            continue
+        owner = _read_fanin_staging_owner(candidate)
+        if owner is not None and not _has_live_claim(queue, owner.task_id):
             shutil.rmtree(candidate, ignore_errors=True)
 
 
 def _adopt_shard(base: Path) -> tuple[Path | None, int]:
     """Return the highest shard version without mutating recovery evidence."""
-    _sweep_abandoned_fanin_staging(base)
     versions = _shard_versions(base)
     if not versions:
         return None, 0
@@ -283,7 +359,7 @@ def _fanin_task_from_task_manifest(task: TaskManifest) -> FanInTask:
         or candidate.count <= 0
         or candidate.seed < 0
     ):
-        raise FanInValidationError(f"task {task.base!r} has invalid fan-in queue metadata")
+        raise FanInTaskValidationError(f"task {task.base!r} has invalid fan-in queue metadata")
     return candidate
 
 
@@ -387,6 +463,77 @@ def _read_selected_fanin_shards(
     ) from vanished
 
 
+def _find_committed_fanin_task(cache_dir: Path, candidate: FanInTask) -> FanInTask | None:
+    """Find one task across selected versions without demanding global quiescence.
+
+    A worker needs only one answer: whether *its* task was already accepted.
+    It still validates every selected version it observes and rejects duplicate
+    or conflicting entries for that task, but intentionally does not require a
+    second identical all-worker snapshot. The trainer-facing strict reader is
+    the place that requires that stronger quiescent invariant.
+    """
+    vanished: _SelectedFanInVersionVanishedError | None = None
+    for _attempt in range(_SELECTED_FANIN_READ_ATTEMPTS):
+        matches: list[FanInTask] = []
+        try:
+            for path in select_fanin_shards(cache_dir):
+                tasks = _read_fanin_manifest(path)
+                if _cache_record_count(path) != sum(task.count for task in tasks):
+                    raise FanInInventoryValidationError(
+                        f"fan-in shard {path} cache games disagree with its task manifest"
+                    )
+                for entry in tasks:
+                    if entry.task_id == candidate.task_id:
+                        matches.append(entry)
+        except _SelectedFanInVersionVanishedError as exc:
+            vanished = exc
+            continue
+        except FanInInventoryValidationError:
+            raise
+        except FanInValidationError as exc:
+            raise FanInInventoryValidationError(
+                f"selected fan-in inventory is corrupt: {exc}"
+            ) from exc
+        if not matches:
+            return None
+        if len(matches) != 1:
+            if any(entry != matches[0] for entry in matches[1:]):
+                raise FanInInventoryValidationError(
+                    f"fan-in inventory has conflicting metadata for {candidate.task_id!r}"
+                )
+            raise FanInInventoryValidationError(
+                f"fan-in inventory repeats task id {candidate.task_id!r}"
+            )
+        return matches[0]
+    raise _FanInTransientError(
+        f"selected fan-in version for task {candidate.task_id!r} kept vanishing"
+    ) from vanished
+
+
+def _read_current_worker_shard(base: Path, expected_iteration: int) -> tuple[Path | None, int, tuple[FanInTask, ...]]:
+    """Read only this worker's cumulative shard before publishing its next version."""
+    current, version = _adopt_shard(base)
+    if current is None:
+        return None, version, ()
+    try:
+        tasks = _read_fanin_manifest(current)
+        if _cache_record_count(current) != sum(task.count for task in tasks):
+            raise FanInInventoryValidationError(
+                f"fan-in shard {current} cache games disagree with its task manifest"
+            )
+        if any(task.iteration != expected_iteration for task in tasks):
+            raise FanInInventoryValidationError(f"fan-in shard {current} has a task from the wrong iteration")
+    except _SelectedFanInVersionVanishedError as exc:
+        raise _FanInTransientError(f"current worker shard vanished: {current}") from exc
+    except FanInInventoryValidationError:
+        raise
+    except FanInValidationError as exc:
+        raise FanInInventoryValidationError(
+            f"selected worker shard is corrupt: {exc}"
+        ) from exc
+    return current, version, tasks
+
+
 def _validate_fanin_contract(tasks: Sequence[FanInTask], contract: FanInQueueContract) -> None:
     if (
         not _is_int(contract.iteration)
@@ -430,7 +577,10 @@ def read_fanin_inventory(cache_dir: Path, contract: FanInQueueContract) -> FanIn
 
     ``contract`` lets a launcher require, for example, 800 distinct tasks and
     1,600 games before it trains. Selected legacy shards without
-    ``fanin-manifest.json`` are intentionally rejected.
+    ``fanin-manifest.json`` are intentionally rejected. Call only after queue
+    quiescence: unlike task-local recovery, this reader deliberately requires
+    a stable all-worker selected-version snapshot. It validates declared seed
+    ranges in manifests, not the contents of ``seeds.npy``.
     """
     shards, by_task_id = _read_selected_fanin_shards(cache_dir, expected_iteration=contract.iteration)
     tasks = tuple(sorted(by_task_id.values(), key=lambda item: (item.offset, item.seed, item.task_id)))
@@ -470,35 +620,96 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _task_manifest_text(task: TaskManifest) -> str:
+    """Canonical queue metadata for a done marker that a reaper can recreate."""
+    return (
+        f"a_iter={task.iteration}\n"
+        f"a_offset={task.offset}\n"
+        f"a_count={task.count}\n"
+        f"a_seed={task.seed}\n"
+        f'a_out="{task.out}"\n'
+        f"a_policy={task.policy}\n"
+    )
+
+
+def _done_marker_matches_task(done: Path, task: TaskManifest) -> bool:
+    try:
+        return _fanin_task_from_task_manifest(_parse_manifest(done, task.base)) == _fanin_task_from_task_manifest(task)
+    except (OSError, ValueError, FanInValidationError):
+        return False
+
+
+def _write_done_marker(task: TaskManifest, done: Path) -> bool:
+    """Create a canonical done marker without overwriting a concurrent marker.
+
+    Returns ``True`` if this call created the marker. A completed fan-in shard
+    is already accepted input, so this fallback also handles a reaper that
+    removed the original claim between version publication and acknowledgement.
+    """
+    temporary = done.parent / f".{task.base}.done.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(_task_manifest_text(task))
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, done)
+        except FileExistsError:
+            if not _done_marker_matches_task(done, task):
+                raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
+            return False
+        _fsync_directory(done.parent)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _reject_prepublication_done_marker(task: TaskManifest, queue: Path) -> None:
+    """Refuse to publish when queue state already claims this task is terminal."""
+    done = queue / "done" / task.base
+    if not done.exists():
+        return
+    if _done_marker_matches_task(done, task):
+        raise FanInTaskConflictError(
+            f"done marker already exists without accepted fan-in input for {task.base}"
+        )
+    raise FanInTaskConflictError(f"done marker conflicts with current task {task.base}")
+
+
 def _complete_claim(
     task: TaskManifest,
     queue: Path,
     *,
     crash_inject: Callable[[str, TaskManifest], None] | None,
 ) -> None:
-    """Publish a done marker, recovering an interrupted link-then-unlink."""
+    """Publish a canonical done marker after an accepted fan-in task.
+
+    Publication is fan-in's input commit point. Therefore revocation after the
+    version rename cannot discard output: if the old claim vanished, recreate a
+    matching done marker from the parsed task metadata instead.
+    """
     done = queue / "done" / task.base
+    created = False
     try:
         os.link(task.claim_path, done)
-    except FileExistsError as exc:
-        try:
-            claim_stat = task.claim_path.stat()
-        except FileNotFoundError as stat_exc:
-            raise _ClaimRevokedError(f"claim was revoked before done marker for {task.base}") from stat_exc
-        try:
-            done_stat = done.stat()
-        except OSError as stat_exc:
-            raise FanInValidationError(f"done marker for {task.base} became unreadable") from stat_exc
-        if not os.path.samestat(claim_stat, done_stat):
-            raise FanInTaskConflictError(f"done marker conflicts with the current claim for {task.base}") from exc
+    except FileExistsError:
+        if not _done_marker_matches_task(done, task):
+            raise FanInTaskConflictError(f"done marker conflicts with accepted task {task.base}")
+    except FileNotFoundError:
+        created = _write_done_marker(task, done)
     except OSError as exc:
-        raise _ClaimRevokedError(f"claim was revoked before done marker for {task.base}") from exc
+        raise FanInInventoryValidationError(
+            f"could not acknowledge accepted fan-in task {task.base}: {exc}"
+        ) from exc
     else:
+        created = True
+        _fsync_directory(done.parent)
+    if created:
         _inject_crash(crash_inject, "fanin-after-done-link", task)
     try:
         task.claim_path.unlink()
     except OSError:
-        # The durable done marker wins; a later stale-claim cleanup is harmless.
+        # The durable done marker wins; a stale-claim cleanup is harmless.
         pass
 
 
@@ -526,13 +737,17 @@ def _recover_fanin_task(
 ) -> bool:
     """Finalize a claim whose task is already durably selected, without collecting."""
     candidate = _fanin_task_from_task_manifest(task)
-    _, committed = _read_selected_fanin_shards(task.out.parent, expected_iteration=task.iteration)
-    existing = committed.get(task.base)
+    existing = _find_committed_fanin_task(task.out.parent, candidate)
     if existing is None:
         return False
     if existing != candidate:
         raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
-    _complete_claim(task, queue, crash_inject=crash_inject)
+    try:
+        _complete_claim(task, queue, crash_inject=crash_inject)
+    except FanInTaskConflictError as exc:
+        raise FanInInventoryValidationError(
+            f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
+        ) from exc
     _inject_crash(crash_inject, "fanin-after-recovery", task)
     return True
 
@@ -549,29 +764,30 @@ def _publish_fanin_task(
     cache_dir = task.out.parent
     fanin_task = _fanin_task_from_task_manifest(task)
     if _cache_record_count(temporary_cache) != fanin_task.count:
-        raise FanInValidationError(
+        raise FanInTaskValidationError(
             f"task {task.base} cache games do not match queue count {fanin_task.count}"
         )
-    _, committed = _read_selected_fanin_shards(cache_dir, expected_iteration=task.iteration)
-    existing = committed.get(task.base)
+    existing = _find_committed_fanin_task(cache_dir, fanin_task)
     if existing is not None:
         if existing != fanin_task:
             raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
-        _complete_claim(task, queue, crash_inject=crash_inject)
+        try:
+            _complete_claim(task, queue, crash_inject=crash_inject)
+        except FanInTaskConflictError as exc:
+            raise FanInInventoryValidationError(
+                f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
+            ) from exc
         shutil.rmtree(temporary_cache, ignore_errors=True)
         _inject_crash(crash_inject, "fanin-after-recovery", task)
         return None, True
     if not task.claim_path.exists():
         raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
+    _reject_prepublication_done_marker(task, queue)
 
     base = cache_dir / f"shard-w{_sanitize_worker_id(worker)}"
-    current, version = _adopt_shard(base)
-    current_tasks: tuple[FanInTask, ...] = ()
-    if current is not None:
-        current_tasks = _read_fanin_manifest(current)
+    current, version, current_tasks = _read_current_worker_shard(base, task.iteration)
     target = base.parent / f"{base.name}-v{version + 1}"
-    staging = base.parent / f".{target.name}.tmp.{os.getpid()}"
-    shutil.rmtree(staging, ignore_errors=True)
+    staging = base.parent / f".{target.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
     try:
         if current is None:
             os.rename(temporary_cache, staging)
@@ -580,6 +796,7 @@ def _publish_fanin_task(
 
             concat_training_caches((current, temporary_cache), staging)
             shutil.rmtree(temporary_cache, ignore_errors=True)
+        _write_fanin_staging_owner(staging, fanin_task)
         version_tasks = (*current_tasks, fanin_task)
         if _cache_record_count(staging) != sum(entry.count for entry in version_tasks):
             raise FanInValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
@@ -587,10 +804,16 @@ def _publish_fanin_task(
         _inject_crash(crash_inject, "fanin-before-target-publication", task)
         if not task.claim_path.exists():
             raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
+        (staging / _FANIN_STAGING_OWNER_NAME).unlink(missing_ok=True)
         os.rename(staging, target)
         _fsync_directory(target.parent)
         _inject_crash(crash_inject, "fanin-after-target-publication", task)
-        _complete_claim(task, queue, crash_inject=crash_inject)
+        try:
+            _complete_claim(task, queue, crash_inject=crash_inject)
+        except FanInTaskConflictError as exc:
+            raise FanInInventoryValidationError(
+                f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
+            ) from exc
         # A selected higher version is cumulative. Delete only after its done
         # marker exists, so a crash always leaves recoverable evidence.
         for _, stale in _shard_versions(base):
@@ -654,10 +877,10 @@ def run_worker(
     def log(message: str) -> None:
         _log(worker, message, log_handle=log_handle)
 
-    def finish() -> int:
+    def finish(code: int = 0) -> int:
         if log_handle is not None:
             log_handle.close()
-        return 0
+        return code
 
     log(
         f"persistent worker up; queue={queue} rss_limit_mb={max_rss_mb} "
@@ -689,6 +912,7 @@ def run_worker(
             continue
         idle_since = None
         if shard_fanin:
+            _sweep_abandoned_fanin_staging(task.out.parent, queue)
             try:
                 if _recover_fanin_task(task, queue, crash_inject=crash_inject):
                     log(f"recover-fanin {task.base}; durable version already selected")
@@ -702,16 +926,19 @@ def run_worker(
                 if recycle_due():
                     return finish()
                 continue
-            except FanInTaskConflictError as exc:
-                log(f"fan-in recovery found a task conflict for {task.base}: {exc}")
+            except FanInTaskValidationError as exc:
+                log(f"fan-in recovery rejected only {task.base}: {exc}")
                 _fail_claim(task, queue, worker)
                 tasks_done += 1
                 if recycle_due():
                     return finish()
                 continue
-            except (FanInValidationError, OSError) as exc:
-                log(f"fan-in inventory unavailable for {task.base}; preserving claim and recycling: {exc}")
+            except _FanInTransientError as exc:
+                log(f"fan-in task lookup transient for {task.base}; preserving claim and recycling: {exc}")
                 return finish()
+            except (FanInInventoryValidationError, OSError) as exc:
+                log(f"TERMINAL fan-in selected inventory corruption for {task.base}; preserving claim: {exc}")
+                return finish(2)
         if not task.claim_path.exists():
             log(f"revoked {task.base}; discarding before collection")
             tasks_done += 1
@@ -747,21 +974,25 @@ def run_worker(
             except _ClaimRevokedError:
                 log(f"revoked {task.base}; discarding {elapsed:.1f}s of work")
                 shutil.rmtree(tmp, ignore_errors=True)
-            except FanInTaskConflictError:
-                log(f"fan-in commit found a task conflict for {task.base}:\n{traceback.format_exc()}")
+            except FanInTaskValidationError:
+                log(f"fan-in commit rejected only {task.base}:\n{traceback.format_exc()}")
                 shutil.rmtree(tmp, ignore_errors=True)
                 _fail_claim(task, queue, worker)
-            except (FanInValidationError, OSError) as exc:
-                log(f"fan-in inventory unavailable for {task.base}; preserving claim and recycling: {exc}")
+            except _FanInTransientError as exc:
+                log(f"fan-in task lookup transient for {task.base}; preserving claim and recycling: {exc}")
                 shutil.rmtree(tmp, ignore_errors=True)
                 return finish()
+            except (FanInInventoryValidationError, OSError) as exc:
+                log(f"TERMINAL fan-in selected inventory corruption for {task.base}; preserving claim: {exc}")
+                shutil.rmtree(tmp, ignore_errors=True)
+                return finish(2)
             except Exception:
                 log(
-                    f"fan-in commit unavailable for {task.base}; preserving claim and recycling:\n"
+                    f"TERMINAL fan-in commit failure for {task.base}; preserving claim:\n"
                     f"{traceback.format_exc()}"
                 )
                 shutil.rmtree(tmp, ignore_errors=True)
-                return finish()
+                return finish(2)
             else:
                 concat_elapsed = time.monotonic() - concat_started
                 if recovered:
@@ -788,6 +1019,11 @@ def run_worker(
             log(f"FAILED {task.base} elapsed={elapsed:.1f}s")
             shutil.rmtree(tmp, ignore_errors=True)
             _fail_claim(task, queue, worker)
+        if shard_fanin:
+            # A retry may have completed a task whose earlier crashed staging
+            # used the same task id. Once this claim is done/failed, no live
+            # owner remains and the ownership sweep can reclaim it safely.
+            _sweep_abandoned_fanin_staging(task.out.parent, queue)
         tasks_done += 1
         if recycle_due():
             return finish()
