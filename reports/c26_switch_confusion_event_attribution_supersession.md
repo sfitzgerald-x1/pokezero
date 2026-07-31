@@ -45,9 +45,14 @@ git diff --check
 ```
 
 The checker separates two claims. It reads immutable historical provenance from
-public merge `8af4f42` with `git show`, and proves that merge is an ancestor of
-`origin/main`. It then validates the current tracked engine source pin and
+public merge `8af4f42` with `git show`, first force-refreshes `origin/main`
+from the authoritative remote, and then proves that merge is an ancestor of the
+freshly fetched commit. The same fetched commit is the base for the current
+ancestry and public-input-diff checks, so a stale tracking ref cannot satisfy
+either claim. It then validates the current tracked engine source pin and
 patch-list digest, checks the vendored patch target digest, and runs the current
 switch-prefixed Rust regression alongside the patch-stack and public-invariant
-tests. The ordinary Recoil control remains in the same renderer integration
-suite. None of these commands reruns a C26 classifier or clears certification.
+tests. Cargo output must contain the exact named regression with `... ok`, a
+nonzero runnable-test count, zero ignored tests, and zero filtered-out tests.
+The ordinary Recoil control remains in the same renderer integration suite.
+None of these commands reruns a C26 classifier or clears certification.

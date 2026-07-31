@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -36,6 +37,12 @@ CURRENT_PUBLIC_INPUTS = (
     "rust/pokezero-search/Cargo.toml",
     "third_party/poke-engine-base-source.json",
     "third_party/poke-engine-gen3-patches.txt",
+)
+_CARGO_RUNNING_TESTS = re.compile(r"(?m)^running (?P<count>\d+) tests$")
+_CARGO_RESULT = re.compile(
+    r"(?m)^test result: ok\. (?P<passed>\d+) passed; (?P<failed>\d+) failed; "
+    r"(?P<ignored>\d+) ignored; (?P<measured>\d+) measured; "
+    r"(?P<filtered>\d+) filtered out;.*$"
 )
 
 
@@ -84,12 +91,67 @@ def require_equal(actual: object, expected: object, label: str) -> None:
         raise RuntimeError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
 
-def verify_historical_public_merge(repo: Path) -> dict[str, object]:
+def refresh_authoritative_origin_main(repo: Path) -> str:
+    """Fetch origin/main and return the exact commit used for public claims."""
+
+    command(
+        repo,
+        "authoritative origin/main refresh",
+        [
+            "git",
+            "-C",
+            str(repo),
+            "fetch",
+            "--no-tags",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    )
+    return git(repo, "rev-parse", "--verify", "origin/main^{commit}").strip()
+
+
+def require_cargo_regression_evidence(stdout: str, test_name: str) -> dict[str, int | str]:
+    """Require Cargo output proving the named regression ran without exclusions."""
+
+    test_line = re.compile(rf"(?m)^test {re.escape(test_name)} \.\.\. ok$")
+    if not test_line.search(stdout):
+        raise RuntimeError(
+            f"cargo output does not prove required regression {test_name!r} executed and passed:\n"
+            f"{stdout}"
+        )
+
+    running = _CARGO_RUNNING_TESTS.findall(stdout)
+    results = list(_CARGO_RESULT.finditer(stdout))
+    if len(running) != 1 or len(results) != 1:
+        raise RuntimeError(
+            "cargo output must contain exactly one integration-test count and result summary:\n"
+            f"{stdout}"
+        )
+
+    expected_count = int(running[0])
+    summary = {name: int(value) for name, value in results[0].groupdict().items()}
+    if expected_count <= 0:
+        raise RuntimeError(f"cargo reported no runnable tests for required regression {test_name!r}")
+    if summary["failed"] != 0:
+        raise RuntimeError(f"cargo reported failed tests for required regression {test_name!r}")
+    if summary["ignored"] != 0:
+        raise RuntimeError(f"cargo reported ignored tests for required regression {test_name!r}")
+    if summary["filtered"] != 0:
+        raise RuntimeError(f"cargo filtered tests for required regression {test_name!r}")
+    if summary["passed"] != expected_count:
+        raise RuntimeError(
+            "cargo passed-test count does not match the runnable integration-test count "
+            f"for required regression {test_name!r}: {summary['passed']} != {expected_count}"
+        )
+
+    return {"test": test_name, "expected_count": expected_count, **summary}
+
+
+def verify_historical_public_merge(repo: Path, authoritative_main: str) -> dict[str, object]:
     """Keep the original merge proof immutable and anchored to current main."""
 
-    git(repo, "rev-parse", "--verify", "origin/main^{commit}")
     git(repo, "cat-file", "-e", f"{PUBLIC_MERGE}^{{commit}}")
-    git(repo, "merge-base", "--is-ancestor", PUBLIC_MERGE, "origin/main")
+    git(repo, "merge-base", "--is-ancestor", PUBLIC_MERGE, authoritative_main)
     parents = git(repo, "show", "-s", "--format=%P", PUBLIC_MERGE).split()
     if len(parents) != 2:
         raise RuntimeError(f"public implementation is not a merge commit: {parents!r}")
@@ -159,16 +221,25 @@ def verify_current_engine_inputs(repo: Path) -> dict[str, object]:
     }
 
 
-def verify_current_regression_surface(repo: Path) -> list[str]:
+def verify_current_regression_surface(repo: Path, authoritative_main: str) -> list[object]:
     """Exercise current-main-equivalent renderer behavior, not frozen source text."""
 
-    git(repo, "merge-base", "--is-ancestor", "origin/main", "HEAD")
+    git(repo, "merge-base", "--is-ancestor", authoritative_main, "HEAD")
     command(
         repo,
         "current checkout public-input comparison",
-        ["git", "-C", str(repo), "diff", "--quiet", "origin/main", "--", *CURRENT_PUBLIC_INPUTS],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "--quiet",
+            authoritative_main,
+            "--",
+            *CURRENT_PUBLIC_INPUTS,
+        ],
     )
-    command(
+    cargo_stdout = command(
         repo,
         "current switch-prefixed confusion renderer regression",
         [
@@ -178,8 +249,8 @@ def verify_current_regression_surface(repo: Path) -> list[str]:
             "gen3_confusion_event_renderer",
         ],
         cwd=repo / "rust" / "pokezero-search",
-        forbid_skip=True,
     )
+    cargo_evidence = require_cargo_regression_evidence(cargo_stdout, CURRENT_REGRESSION)
     command(
         repo,
         "pinned poke-engine patch-stack test",
@@ -209,7 +280,7 @@ def verify_current_regression_surface(repo: Path) -> list[str]:
         forbid_skip=True,
     )
     return [
-        CURRENT_REGRESSION,
+        {"cargo_renderer": cargo_evidence},
         "tests/test_poke_engine_patch_stack.py",
         "tests/test_public_invariant.py",
     ]
@@ -221,12 +292,14 @@ def main() -> int:
         if not (repo / path).is_file():
             raise RuntimeError(f"missing C26 evidence record: {path}")
 
-    historical = verify_historical_public_merge(repo)
+    authoritative_main = refresh_authoritative_origin_main(repo)
+    historical = verify_historical_public_merge(repo, authoritative_main)
     engine = verify_current_engine_inputs(repo)
-    current_checks = verify_current_regression_surface(repo)
+    current_checks = verify_current_regression_surface(repo, authoritative_main)
     evidence = {
         "verdict": "historical_public_merge_and_current_regression_verified",
         **historical,
+        "authoritative_origin_main": authoritative_main,
         "current_checks": current_checks,
         "engine": engine,
         "identity_ledger": "not verified: retained labels are not independent provenance",
