@@ -139,6 +139,9 @@ class ControlledFoulPlayConfig:
     engine_worlds: int = 4
     engine_c_puct: float = 1.4
     engine_model_priors: bool = True
+    # Opponent-side model priors in the native search (campaign cells B/E).
+    # Default OFF -- flag-off must reproduce the uniform-opponent search.
+    engine_opponent_priors: bool = False
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -772,6 +775,9 @@ class ControlledFoulPlayBenchmarkResult:
                 "sims": self.config.engine_sims,
                 "batch": self.config.engine_batch,
                 "worlds": self.config.engine_worlds,
+                # Part of the cell's identity, not a footnote: cells B and E
+                # are read entirely against whether this was on.
+                "opponent_priors": self.config.engine_opponent_priors,
                 # The searcher's own telemetry. `search_wall_per_searched_decision`
                 # is lifted to the top of this block because it, not
                 # policy_timing.average_elapsed_seconds, is what the 20 s/turn
@@ -2477,6 +2483,7 @@ def _build_policy(
                 search_depth=config.engine_depth,
                 c_puct=config.engine_c_puct,
                 model_priors=config.engine_model_priors,
+                use_opponent_priors=config.engine_opponent_priors,
             ),
         )
 
@@ -3846,6 +3853,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine-c-puct", type=float, default=1.4)
     parser.add_argument("--no-engine-model-priors", action="store_true",
                         help="Disable model priors in the native search (default: enabled).")
+    parser.add_argument("--engine-opponent-priors", action="store_true",
+                        help="Seed the OPPONENT seat's priors from the checkpoint's "
+                             "opponent action head (default: uniform, as every recorded "
+                             "result was produced).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -4141,6 +4152,7 @@ def _config_from_args(
         engine_worlds=getattr(args, "engine_worlds", 4),
         engine_c_puct=getattr(args, "engine_c_puct", 1.4),
         engine_model_priors=not getattr(args, "no_engine_model_priors", False),
+        engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,

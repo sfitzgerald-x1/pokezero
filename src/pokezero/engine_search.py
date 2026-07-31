@@ -296,6 +296,16 @@ class EngineMctsConfig:
     # Self-side model priors in selection (the opponent side stays uniform in
     # this integration; docs/crate_search_design.md "Model priors").
     model_priors: bool = True
+    # Seed the OPPONENT seat's PUCT priors from the checkpoint's opponent
+    # action head instead of leaving them uniform. Default OFF: flag-off is
+    # the uniform-opponent search every recorded result was produced under.
+    #
+    # The opponent head has always been exported and batched (export_model.py
+    # OUTPUT_NAMES) and was discarded in the crate; the uniform-opponent design
+    # is a known modelling gap that findings 13.4 cleared of causing the SEAT
+    # RESIDUAL but did not clear as harmless against an EXTERNAL opponent,
+    # whose non-uniform policy is exactly what uniform play mismodels.
+    use_opponent_priors: bool = False
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -1186,13 +1196,20 @@ class EngineMctsPolicy:
                     config.deep_ko_split,
                     config.model_priors,
                 ]
-                if early_stop_min_sims:
+                if early_stop_min_sims or config.use_opponent_priors:
                     # Preserve the old native call contract while the feature
                     # is disabled, so a stale image cannot break default
                     # full-budget search merely because Python was updated.
                     search_args.extend(
                         [early_stop_min_sims, record["side_key"] == "side_one"]
                     )
+                if config.use_opponent_priors:
+                    # Positional, and it follows the early-stop pair in the
+                    # native signature -- hence the combined guard above: the
+                    # pair must be present for this to land in the right slot.
+                    # Appended ONLY when set, so a flag-off run makes exactly
+                    # the call it always did.
+                    search_args.append(True)
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
@@ -1925,6 +1942,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "batch": args.batch,
             "depth": args.depth,
             "model_priors": config.model_priors,
+            "use_opponent_priors": config.use_opponent_priors,
             "early_stop": config.early_stop,
             "early_stop_min_sims": config.early_stop_min_sims,
         },
