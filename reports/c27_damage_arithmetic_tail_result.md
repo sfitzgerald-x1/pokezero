@@ -62,12 +62,20 @@ fresh attestation JSON is committed.
 The executable attestation now refuses stale native consumers and dirty or
 unprovenanced source, hashes every supplied input report, records its command,
 source commit, producer hash, engine fingerprint, and every built Showdown
-JavaScript input plus the Gen 3 randbat set source. It emits a machine-readable
-v4 result with the full branch population, explicit reported/dropped/unsupported
-counts, branch state source, and criticality partition. A reviewer may rely on
-the five-direct-row scope only after that v4 artifact is regenerated from the
-missing retained reports and committed alongside this document. The two
-confusion rows remain comparison limits in all cases.
+JavaScript and JSON input plus the Gen 3 randbat set source. It emits a
+machine-readable v4 result with the full branch population, explicit
+reported/dropped/unsupported counts, branch state source, and criticality
+partition. A reviewer may rely on the five-direct-row scope only after that v4
+artifact is regenerated from the missing retained reports and committed
+alongside this document. The two confusion rows remain comparison limits in all
+cases.
+
+The executable emits `showdown_outside_transcribed_oracle` when the native
+maximum agrees with the transcribed formula but the observed non-KO Showdown HP
+delta is absent from that formula's legal roll support. That verdict is neither
+a native-arithmetic disagreement nor a clearance: it identifies an incomplete
+transcription or mismatched captured context and requires separate
+investigation.
 
 ## Historical Transcription (Unverified)
 

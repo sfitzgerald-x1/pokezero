@@ -194,12 +194,16 @@ def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
                     ko_clamped=first_direct.ko_clamped,
                 )
             continue
-        if tag != "-damage" or len(parts) < 4 or _has_from(parts):
+        if tag != "-damage" or len(parts) < 4:
             continue
         target = _slot(parts[2])
         new_hp = _hp(parts[3])
         before = running.get(target)
         running[target] = new_hp
+        if _has_from(parts):
+            # Residual and entry-hazard damage are not move hits, but they
+            # still advance the HP ledger used by the next direct hit.
+            continue
         if before is None or active_move is None or target == active_move[0]:
             continue
         if first_direct is not None:
@@ -1255,9 +1259,11 @@ def _showdown_dependency_paths(root: Path) -> list[Path]:
         )
     paths = set(required)
     # Dex.forGen(3) loads inherited mod layers through the compiled simulator.
-    # Hash all built JavaScript rather than maintaining another transitive-load
-    # denylist that could miss a parent mod or helper introduced upstream.
+    # Hash all built JavaScript and JSON rather than maintaining another
+    # transitive-load denylist that could miss a parent mod, helper, or compiled
+    # randbat data file introduced upstream.
     paths.update((root / "dist").rglob("*.js"))
+    paths.update((root / "dist").rglob("*.json"))
     return sorted(path for path in paths if path.is_file())
 
 

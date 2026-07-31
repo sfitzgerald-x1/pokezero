@@ -213,6 +213,23 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
         self.assertEqual(hit.damage, 30)
         self.assertIsNone(hit.secondary_status)
 
+    def test_entry_hazard_advances_hp_ledger_before_direct_hit(self) -> None:
+        row = {
+            "pre_features": {"p1_hp": 300, "p2_hp": 200},
+            "protocol": [
+                "|switch|p1a: Raichu|Raichu, L83|235/235",
+                "|-damage|p1a: Raichu|206/235|[from] Spikes",
+                "|move|p2a: Qwilfish|Sludge Bomb|p1a: Raichu",
+                "|-damage|p1a: Raichu|84/235",
+            ],
+        }
+
+        hit = observed_direct_hit(row)
+
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertEqual(hit.damage, 122)
+
     def test_first_direct_hit_is_not_replaced_or_later_status_mutated(self) -> None:
         row = {
             "pre_features": {"p1_hp": 100, "p2_hp": 100},
@@ -546,6 +563,14 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
                 secondary_branch_has_observed_damage=False,
             ),
             ("comparison_limit", "observed_damage_ko_clamped"),
+        )
+        self.assertEqual(
+            _classify_branch_verdict(
+                oracle_rolls=(85, 90, 100), oracle_limit=None, native_max=100,
+                observed_damage=91, nonterminal_damage=(), secondary_status=None,
+                secondary_branch_has_observed_damage=False,
+            ),
+            ("showdown_outside_transcribed_oracle", None),
         )
 
     def test_native_controls_probe_both_orders_and_fail_closed(self) -> None:
@@ -1038,6 +1063,7 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
                 "dist/data/conditions.js",
                 "dist/data/mods/gen3/conditions.js",
                 "dist/data/mods/gen4/scripts.js",
+                "dist/data/random-battles/gen3/sets.json",
             ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -1061,6 +1087,7 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
             self.assertIn("dist/data/conditions.js", paths)
             self.assertIn("dist/data/mods/gen3/conditions.js", paths)
             self.assertIn("dist/data/mods/gen4/scripts.js", paths)
+            self.assertIn("dist/data/random-battles/gen3/sets.json", paths)
             self.assertEqual(
                 {entry["path"] for entry in provenance["inputs"]}, paths
             )
@@ -1073,6 +1100,28 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SystemExit, "Showdown checkout is dirty"):
                 _showdown_source_provenance(str(root))
+
+    def test_source_provenance_rejects_dirty_producer_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            producer = root / "scripts" / "attest_damage_arithmetic_tail.py"
+            producer.parent.mkdir(parents=True)
+            producer.write_text("# committed producer\n", encoding="utf-8")
+            for command in (
+                ["git", "init", "-q"],
+                ["git", "config", "user.name", "Attestation Test"],
+                ["git", "config", "user.email", "attestation@example.invalid"],
+                ["git", "add", "."],
+                ["git", "commit", "-q", "-m", "fixture"],
+            ):
+                subprocess.run(command, cwd=root, check=True)
+            producer.write_text("# uncommitted producer\n", encoding="utf-8")
+
+            with (
+                patch.object(attestation, "REPO_ROOT", root),
+                self.assertRaisesRegex(SystemExit, "source checkout is dirty"),
+            ):
+                attestation._source_provenance()
 
     def test_emitted_json_has_deterministic_provenance_and_input_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
