@@ -569,6 +569,20 @@ class ControlledFoulPlayOpponentCrash:
         }
 
 
+def _engine_policy_stats(policy: Any, policy_mode: str) -> Mapping[str, Any] | None:
+    """``EngineMctsStats.to_dict()`` for an engine-mcts run, else None.
+
+    Deliberately NOT a ``hasattr`` probe over an arbitrary policy: outside
+    engine-mcts there is no engine searcher and None is the honest answer,
+    while inside it a missing serializer is a contract break that should raise
+    rather than quietly produce an empty telemetry block (the failure mode that
+    left every acceptance shard with ``"policy_stats": {}``).
+    """
+    if policy_mode != "engine-mcts":
+        return None
+    return policy.stats.to_dict()
+
+
 @dataclass(frozen=True)
 class ControlledFoulPlayBenchmarkResult:
     config: ControlledFoulPlayConfig
@@ -577,6 +591,13 @@ class ControlledFoulPlayBenchmarkResult:
     checkpoint_sha256: str | None = None
     foulplay_random_seed_schedule: tuple[int, ...] | None = None
     value_leaf_provenance: Mapping[str, object] | None = None
+    # EngineMctsStats.to_dict() for the run's engine policy, or None outside
+    # engine-mcts mode. This is the ONLY path by which
+    # search_wall_per_searched_decision -- the field the 20 s/turn rejection
+    # rule is defined on -- reaches a shard summary; policy_timing measures the
+    # bridge-level per-decision wall, which is a different quantity (it counts
+    # non-searched decisions too).
+    policy_stats: Mapping[str, Any] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -751,6 +772,16 @@ class ControlledFoulPlayBenchmarkResult:
                 "sims": self.config.engine_sims,
                 "batch": self.config.engine_batch,
                 "worlds": self.config.engine_worlds,
+                # The searcher's own telemetry. `search_wall_per_searched_decision`
+                # is lifted to the top of this block because it, not
+                # policy_timing.average_elapsed_seconds, is what the 20 s/turn
+                # rejection rule is defined on: policy_timing averages over ALL
+                # decisions including un-searched ones, so it reads low exactly
+                # when the fallback rate is high.
+                "search_wall_per_searched_decision": (
+                    (self.policy_stats or {}).get("search_wall_per_searched_decision")
+                ),
+                "policy_stats": self.policy_stats,
             } if self.config.policy_mode == "engine-mcts" else None,
             "root_puct": {
                 "cpuct": self.config.cpuct,
@@ -1730,6 +1761,7 @@ async def _run_controlled_foulplay_games(
                         checkpoint_sha256=checkpoint_sha256,
                         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
                         value_leaf_provenance=value_leaf_provenance,
+                        policy_stats=_engine_policy_stats(policy, config.policy_mode),
                     )
                 )
     finally:
@@ -1743,6 +1775,7 @@ async def _run_controlled_foulplay_games(
         checkpoint_sha256=checkpoint_sha256,
         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
         value_leaf_provenance=value_leaf_provenance,
+        policy_stats=_engine_policy_stats(policy, config.policy_mode),
     )
 
 
