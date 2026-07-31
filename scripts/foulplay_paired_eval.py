@@ -107,6 +107,8 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv += ["--engine-model-path", str(args.engine_model_path)]
         if args.engine_tables_path:
             argv += ["--engine-tables-path", str(args.engine_tables_path)]
+        if args.opponent_priors:
+            argv.append("--engine-opponent-priors")
     if args.device:
         argv += ["--device", args.device]
     return argv
@@ -228,17 +230,24 @@ def main(argv=None) -> int:
                     help="offline/dry use only; never for a scored shard")
     args = ap.parse_args(argv)
 
-    # Fail closed until the opp-priors flag actually exists on the bridge
-    # (campaign step 0.2). Accepting the option today would tag a shard's
-    # config_id '+opp-priors' while the searcher ran uniform opponent priors --
-    # a mislabeled cell is worse than a missing one, because cells B and E are
-    # interpreted against exactly that label.
+    # The label and the behaviour must not be able to drift apart: a shard
+    # tagged '+opp-priors' whose bridge ran uniform opponent priors is worse
+    # than a missing cell, because cells B and E are interpreted entirely
+    # against that label. The flag reaches the bridge in bridge_argv; this
+    # asserts the CLI that will receive it actually has it, rather than
+    # trusting the two files to stay in step.
     if args.opponent_priors:
-        raise SystemExit(
-            "--opponent-priors is reserved: the bridge has no opponent-priors "
-            "flag yet (campaign step 0.2). Refusing to emit a shard labelled "
-            "'+opp-priors' that did not use them."
-        )
+        from pokezero.foulplay_bridge import build_arg_parser  # noqa: PLC0415
+
+        if not hasattr(
+            build_arg_parser().parse_args(["--checkpoint", "/dev/null"]),
+            "engine_opponent_priors",
+        ):
+            raise SystemExit(
+                "--opponent-priors requested but this bridge build has no "
+                "--engine-opponent-priors flag; refusing to emit a shard "
+                "labelled '+opp-priors' that would not use them."
+            )
 
     # HARD STOP before any game. A stale build does not error, it produces a
     # plausible number -- same standing as in mcts_acceptance_h2h.

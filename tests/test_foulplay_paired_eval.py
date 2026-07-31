@@ -7,7 +7,7 @@ rather than an error:
 * the cell identity a shard is merged under (`config_id`);
 * the seed join, which must fail rather than mis-align;
 * the score key, which must fail rather than read every game as a loss;
-* the opponent-priors label, which must refuse rather than lie;
+* the opponent-priors label, which must match what the bridge actually ran;
 * the opponent definition (FoulPlay's own search budget) and the thread pin,
   both of which silently change opponent strength if they drift.
 
@@ -181,17 +181,22 @@ class SeatBlockTest(unittest.TestCase):
 
 
 class OpponentPriorsLabelTest(unittest.TestCase):
-    def test_reserved_flag_refuses_rather_than_mislabelling(self) -> None:
-        # Until step 0.2 lands there is no bridge flag, so a '+opp-priors' shard
-        # would claim a search semantic it did not run. Cells B/E are read
-        # entirely against that label.
-        with self.assertRaises(SystemExit) as caught:
-            _DRIVER.main([
-                "--checkpoint", "/tmp/c.pt", "--showdown-root", "/tmp/s",
-                "--arm", "search", "--seed-start", "1", "--pairs", "2",
-                "--out", "/tmp/o.json", "--opponent-priors", "--skip-build-check",
-            ])
-        self.assertIn("opp-priors", str(caught.exception))
+    def test_flag_reaches_the_bridge_when_the_cell_claims_it(self) -> None:
+        # The label and the behaviour must not drift apart: a shard tagged
+        # '+opp-priors' whose bridge ran uniform opponent priors is worse than
+        # a missing cell, because cells B and E are read against that label.
+        argv = _DRIVER.bridge_argv(args(opponent_priors=True), seat="p1")
+        self.assertIn("--engine-opponent-priors", argv)
+
+    def test_flag_is_absent_by_default(self) -> None:
+        argv = _DRIVER.bridge_argv(args(), seat="p1")
+        self.assertNotIn("--engine-opponent-priors", argv)
+
+    def test_raw_arm_never_carries_the_flag(self) -> None:
+        # Raw is the pairing partner and is search-config-independent; an
+        # opponent-priors raw arm would not be reusable across cells.
+        argv = _DRIVER.bridge_argv(args(arm="raw", opponent_priors=True), seat="p1")
+        self.assertNotIn("--engine-opponent-priors", argv)
 
 
 if __name__ == "__main__":
