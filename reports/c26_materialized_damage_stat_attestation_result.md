@@ -9,6 +9,7 @@ constructed Rust `State`:
 
 - stored Attack, Defense, Special Attack, Special Defense, and Speed for all
   party members on both sides;
+- HP/max HP thresholds, global weather, side conditions, and active volatiles;
 - active-side boost stages; and
 - damage-relevant ability, item, status, and type inputs.
 

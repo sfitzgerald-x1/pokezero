@@ -56,6 +56,22 @@ def attest_damage_stat_inputs(spec: BattleSpec, state: Any) -> DamageStatAttesta
     expected: dict[str, dict[str, object]] = {}
     actual: dict[str, dict[str, object]] = {}
     mismatches: list[str] = []
+    expected["field"] = {
+        "weather": str(spec.weather),
+        # The adapter intentionally omits this keyword for no-weather states;
+        # the native default is 0 rather than BattleSpec's -1 sentinel.
+        "weather_turns_remaining": (
+            0 if str(spec.weather) == "none" else int(spec.weather_turns_remaining)
+        ),
+    }
+    actual["field"] = {
+        "weather": str(state.weather),
+        "weather_turns_remaining": int(state.weather_turns_remaining),
+    }
+    for field, expected_value in expected["field"].items():
+        actual_value = actual["field"][field]
+        if expected_value != actual_value:
+            mismatches.append(f"field.{field}: expected {expected_value!r}, got {actual_value!r}")
     for side_name, side_spec in (("side_one", spec.side_one), ("side_two", spec.side_two)):
         native_side = getattr(state, side_name)
         expected_boosts = {
@@ -71,6 +87,30 @@ def attest_damage_stat_inputs(spec: BattleSpec, state: Any) -> DamageStatAttesta
                     f"{side_name}.{field}: expected {expected_boosts[field]}, got {actual_boosts[field]}"
                 )
 
+        expected_side_modifiers = {
+            "side_conditions": {
+                key: int(value) for key, value in side_spec.side_conditions.items() if int(value)
+            },
+            "volatile_statuses": tuple(sorted(str(value) for value in side_spec.volatile_statuses)),
+        }
+        native_conditions = native_side.side_conditions
+        actual_side_modifiers = {
+            "side_conditions": {
+                key: int(getattr(native_conditions, key))
+                for key in expected_side_modifiers["side_conditions"]
+                if int(getattr(native_conditions, key))
+            },
+            "volatile_statuses": tuple(sorted(str(value) for value in native_side.volatile_statuses)),
+        }
+        expected[f"{side_name}.damage_modifiers"] = expected_side_modifiers
+        actual[f"{side_name}.damage_modifiers"] = actual_side_modifiers
+        for field, expected_value in expected_side_modifiers.items():
+            actual_value = actual_side_modifiers[field]
+            if expected_value != actual_value:
+                mismatches.append(
+                    f"{side_name}.damage_modifiers.{field}: expected {expected_value!r}, got {actual_value!r}"
+                )
+
         native_party = tuple(native_side.pokemon)
         # The adapter pads short fixture parties with inert fainted placeholders.
         # A materialized world supplies all six members, but the diagnostic is
@@ -84,6 +124,8 @@ def attest_damage_stat_inputs(spec: BattleSpec, state: Any) -> DamageStatAttesta
             key = f"{side_name}.pokemon[{index}]"
             expected_member = {
                 "id": member.id,
+                "hp": int(member.hp),
+                "maxhp": int(member.maxhp),
                 **{field: int(getattr(member, field)) for field in _STAT_FIELDS},
                 "ability": member.ability or "none",
                 "item": member.item or "none",
@@ -99,6 +141,8 @@ def attest_damage_stat_inputs(spec: BattleSpec, state: Any) -> DamageStatAttesta
             native_member = native_party[index]
             actual_member = {
                 "id": str(native_member.id),
+                "hp": int(native_member.hp),
+                "maxhp": int(native_member.maxhp),
                 **{field: int(getattr(native_member, field)) for field in _STAT_FIELDS},
                 "ability": str(native_member.ability),
                 "item": str(native_member.item),

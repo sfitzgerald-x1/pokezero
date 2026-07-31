@@ -29,6 +29,8 @@ def _member(*, attack: int = 100) -> PokemonSpec:
 def _native_member(member: PokemonSpec, *, attack: int | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=member.id,
+        hp=member.hp,
+        maxhp=member.maxhp,
         attack=member.attack if attack is None else attack,
         defense=member.defense,
         special_attack=member.special_attack,
@@ -49,6 +51,8 @@ def _native_side(member: PokemonSpec, *, attack: int | None = None, attack_boost
         special_attack_boost=0,
         special_defense_boost=0,
         speed_boost=1,
+        side_conditions=SimpleNamespace(),
+        volatile_statuses=set(),
     )
 
 
@@ -66,6 +70,8 @@ class DamageStatAttestationTests(unittest.TestCase):
         state = SimpleNamespace(
             side_one=_native_side(spec.side_one.pokemon[0]),
             side_two=_native_side(spec.side_two.pokemon[0]),
+            weather="none",
+            weather_turns_remaining=0,
         )
 
         result = attest_damage_stat_inputs(spec, state)
@@ -79,6 +85,8 @@ class DamageStatAttestationTests(unittest.TestCase):
         state = SimpleNamespace(
             side_one=_native_side(spec.side_one.pokemon[0], attack=99, attack_boost=1),
             side_two=_native_side(spec.side_two.pokemon[0]),
+            weather="none",
+            weather_turns_remaining=0,
         )
 
         result = attest_damage_stat_inputs(spec, state)
