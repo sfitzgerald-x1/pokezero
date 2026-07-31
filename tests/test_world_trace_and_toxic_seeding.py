@@ -60,6 +60,45 @@ class ToxicStageParserTest(unittest.TestCase):
             _update_toxic_stage(["", event, "p1a: Zapdos", "tox"], stage)
             self.assertEqual(stage["p1"], 0)
 
+    def test_natural_cure_ends_the_active_ramp(self) -> None:
+        # Natural Cure's switch-out cure is public, but it does not reveal any
+        # private statusState counter. The cure line is enough to retire it.
+        stage = {"p1": 4, "p2": 0}
+        known = {"p1": True, "p2": True}
+        _update_toxic_stage(
+            ["", "-curestatus", "p1a: Zapdos", "tox", "[silent]", "[from] ability: Natural Cure"],
+            stage,
+            known,
+        )
+        self.assertEqual(stage["p1"], 0)
+        self.assertTrue(known["p1"])
+
+    def test_failed_reapplication_does_not_rewrite_the_live_counter(self) -> None:
+        # Re-Toxic into an already-toxic target is a public failure, not a new
+        # statusState. A later cure plus fresh -status is the only re-seed.
+        stage = {"p1": 4, "p2": 0}
+        known = {"p1": True, "p2": True}
+        _update_toxic_stage(["", "-fail", "p1a: Zapdos", "move: Toxic"], stage, known)
+        self.assertEqual(stage["p1"], 4)
+        self.assertTrue(known["p1"])
+        _update_toxic_stage(["", "-curestatus", "p1a: Zapdos", "tox"], stage, known)
+        _update_toxic_stage(["", "-status", "p1a: Zapdos", "tox"], stage, known)
+        self.assertEqual(stage["p1"], 1)
+
+    def test_benched_cure_does_not_reset_the_active_toxic_counter(self) -> None:
+        # Heal Bell emits a position-less ``p1: Name`` cure for a benched ally.
+        # Its statusState is not the active mon's Toxic statusState.
+        stage = {"p1": 5, "p2": 0}
+        _update_toxic_stage(["", "-curestatus", "p1: Blissey", "par", "[silent]"], stage)
+        self.assertEqual(stage["p1"], 5)
+
+    def test_faint_retires_the_counter_before_replacement(self) -> None:
+        stage = {"p1": 5, "p2": 0}
+        known = {"p1": True, "p2": True}
+        _update_toxic_stage(["", "faint", "p1a: Zapdos"], stage, known)
+        self.assertEqual(stage["p1"], 0)
+        self.assertTrue(known["p1"])
+
     def test_the_other_side_is_untouched(self) -> None:
         stage = {"p1": 5, "p2": 3}
         _update_toxic_stage(["", "-status", "p1a: Zapdos", "slp"], stage)
@@ -100,9 +139,17 @@ class ToxicStageWorldTest(unittest.TestCase):
         # stop a future reader "fixing" the offset while chasing the same symptom.
         class _R:
             toxic_stage = {"p1": 0, "p2": 6}
+            toxic_stage_known = {"p1": True, "p2": True}
 
         self.assertEqual(_materialization_toxic_stage(_R(), "p2"), 5)
         self.assertEqual(_materialization_toxic_stage(_R(), "p1"), 0)
+
+    def test_unknown_counter_never_materializes_as_zero(self) -> None:
+        class _R:
+            toxic_stage = {"p1": 0, "p2": 0}
+            toxic_stage_known = {"p1": True, "p2": False}
+
+        self.assertIsNone(_materialization_toxic_stage(_R(), "p2"))
 
 
 class TracedAbilityParserTest(unittest.TestCase):

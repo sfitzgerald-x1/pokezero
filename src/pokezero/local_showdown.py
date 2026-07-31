@@ -2100,6 +2100,12 @@ def _public_materialization_payload(
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
+        toxic_stage = _materialization_toxic_stage(replay, player)
+        if toxic_stage is None:
+            # The policy can still observe status:tox with its legacy zero
+            # feature, but a sampled engine world may not turn an incomplete
+            # public prefix into a claimed ToxicCount=0.
+            blockers.add("toxic-stage-unknown")
         sides[player] = {
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
@@ -2112,7 +2118,7 @@ def _public_materialization_payload(
             "materializationBlockers": sorted(blockers),
             # The parser's observation feature advances the toxic value at a new turn. The
             # simulator state at the request boundary is one residual behind that feature.
-            "toxicStage": _materialization_toxic_stage(replay, player),
+            "toxicStage": toxic_stage,
             # Consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3
             # shares one `stall` volatile). The parser already derives this from
             # public protocol alone; the engine prices the NEXT attempt at
@@ -2220,9 +2226,15 @@ def _public_materialization_payload(
     }
 
 
-def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int:
-    """Return the public toxic counter in the simulator's request-boundary convention."""
+def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
+    """Return the public toxic counter in the simulator's request-boundary convention.
 
+    ``None`` is intentional: a snapshot that lacks the public provenance for
+    an active Toxic counter is not allowed to silently materialize as stage 0.
+    """
+
+    if not bool(replay.toxic_stage_known.get(player, False)):
+        return None
     tracked_stage = int(replay.toxic_stage.get(player, 0))
     return max(0, tracked_stage - 1)
 

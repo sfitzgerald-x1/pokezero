@@ -1334,6 +1334,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             expected_branch = source.step({"p1": 1, "p2": 0})
 
             self.assertEqual(materialization.replay.toxic_stage["p2"], 2)
+            payload = _public_materialization_payload(materialization)
+            self.assertEqual(payload["sides"]["p2"]["toxicStage"], 1)
 
             search_env.materialize_public_world(
                 state=materialization,
@@ -1348,6 +1350,42 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
         self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
+
+    def test_public_materialization_rejects_unknown_toxic_stage_after_resume(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Toxic", "Protect")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Harden",)),)
+                ),
+            },
+        )
+        with LocalShowdownEnv(config) as source:
+            source.reset_with_start_override(seed=37, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+
+        unknown_replay = replace(
+            materialization.replay,
+            toxic_stage={**materialization.replay.toxic_stage, "p2": 0},
+            toxic_stage_known={**materialization.replay.toxic_stage_known, "p2": False},
+        )
+        unknown = replace(materialization, replay=unknown_replay)
+        payload = _public_materialization_payload(unknown)
+        self.assertIsNone(payload["sides"]["p2"]["toxicStage"])
+        self.assertIn("toxic-stage-unknown", payload["sides"]["p2"]["materializationBlockers"])
+
+        with LocalShowdownEnv(config) as search_env:
+            with self.assertRaisesRegex(LocalShowdownError, "toxic-stage-unknown"):
+                search_env.materialize_public_world(
+                    state=unknown,
+                    start_override=start_override,
+                    seed=37,
+                )
 
     def test_public_materialization_preserves_static_public_volatiles(self) -> None:
         config = integration_config()

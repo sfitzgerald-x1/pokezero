@@ -10,8 +10,9 @@ residuals.
 
 The retained identities use an absolute maximum HP of 239. Percentage-form
 Showdown conditions use a `/100` denominator and round the hidden HP delta, so
-they retain the existing proportional recovery rather than applying an exact
-Gen 3 damage-unit assertion.
+they cannot recover an exact Gen 3 stage. They may preserve a stage already
+established by public status/switch/turn history, but they must not synthesize
+one for an incomplete prefix.
 
 ## Hypothesis
 
@@ -47,14 +48,32 @@ be stages 9, 10, and 11.
 4. A re-entered `tox` Pokemon continues to re-seed from the first surviving
    residual after switch-in, using the floored unit rather than proportional
    rounding.
-5. A capped or lethal residual must remain fail-closed: when the prior HP is
-   unavailable, the current HP is zero, or an exact-HP observed difference is
-   not a positive multiple of the Gen 3 unit, this change must not invent a
-   stage.
+5. A capped, percentage-only, or lethal residual must remain fail-closed: when
+   the prior HP is unavailable, the current HP is zero, or an exact-HP observed
+   difference is not a positive multiple of the Gen 3 unit, this change must
+   not invent a stage.
 
 ## Acceptance evidence
 
 The implementation must add tests that fail before this change for the
-239-HP sequence and controls above, preserve the existing regular-poison,
-percentage-stream, and pivot behavior, and leave the public confidentiality
-invariant validation green.
+239-HP sequence and controls above, preserve regular-poison and pivot behavior,
+reject percentage-only recovery, and leave the public confidentiality invariant
+validation green.
+
+## Recovery hardening result
+
+The first implementation corrected the floor-before-multiply arithmetic but
+still accepted three invalid provenance paths: it reverse-rounded `/100` public
+HP into a hidden stage, allowed a benched `-curestatus` line to clear the
+active counter, and kept a fainted active's counter until the replacement
+switch. The recovery records explicit public-counter provenance in replay
+snapshots. Legacy snapshots with active `tox` but no provenance, percentage-only
+residuals, and condition-only residuals now fail closed at world construction.
+
+The parser feature remains one residual ahead of the world request boundary;
+materialization emits `stage - 1` exactly once, and the Rust engine applies
+`toxic_count + 1` at its next residual. The real 316-HP capture control pins
+Leftovers before stages 1 and 2, while lifecycle controls cover switch/drag,
+Baton Pass, status overwrite/Rest, Natural Cure, reapplication, faint, and
+checkpoint resume. This result is parser/world provenance recovery only; it
+does not claim an engine-rule correction.

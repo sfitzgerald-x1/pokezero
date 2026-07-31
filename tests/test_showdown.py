@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 import unittest
 
@@ -1814,9 +1815,10 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(divisible.toxic_stage["p1"], 12)
 
-    def test_toxic_residual_reseed_preserves_percentage_recovery(self) -> None:
-        # The public per-seat stream rounds HP to /100. It cannot recover the hidden exact unit,
-        # so it deliberately keeps proportional recovery for a fresh stage-one residual.
+    def test_toxic_percentage_residual_does_not_reseed_a_known_counter(self) -> None:
+        # The public per-seat stream rounds HP to /100. It cannot recover a hidden exact Toxic
+        # unit, so this must retain the already-public stage from the status/switch/turn history
+        # rather than reverse-rounding a replacement stage from private HP.
         state = parse_showdown_replay(
             [
                 "|switch|p1a: Tauros|Tauros, L80, M|100/100",
@@ -1824,9 +1826,107 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|95/100 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
             ]
         )
-        self.assertEqual(state.toxic_stage["p1"], 1)
+        self.assertEqual(state.toxic_stage["p1"], 2)
+        self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_percentage_or_missing_hp_never_invents_a_legacy_counter(self) -> None:
+        # A legacy checkpoint can expose a public tox condition without the
+        # counter provenance added by this recovery. Neither rounded /100 HP
+        # nor a condition-only residual can manufacture private stage data.
+        parser = _ReplayParser("toxic-legacy-percentage")
+        parser.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100 tox",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+            ]
+        )
+        parser.toxic_stage["p1"] = 0
+        parser.toxic_stage_known["p1"] = False
+        parser.feed(["|-damage|p1a: Tauros|95/100 tox|[from] psn"])
+        parser.feed(["|-damage|p1a: Tauros|tox|[from] psn"])
+        self.assertEqual(parser.toxic_stage["p1"], 0)
+        self.assertFalse(parser.toxic_stage_known["p1"])
+
+    def test_real_capture_leftovers_precedes_exact_toxic_stage(self) -> None:
+        # Real controlled capture 10000: Azumarill takes stage-1 then stage-2
+        # Toxic after its own Leftovers heal. The residual's own absolute delta
+        # is 19 then 38 (316 // 16), so the turn-3 request holds next stage 3.
+        fixture = Path(__file__).parent / "fixtures" / "showdown" / "capture" / (
+            "lines-battle-gen3randombattle-controlled-20260710000.log"
+        )
+        lines = fixture.read_text().splitlines()
+        parser = _ReplayParser("real-capture-leftovers-toxic")
+        for line in lines:
+            parser.feed([line])
+            if line == "|turn|3":
+                break
+        self.assertEqual(parser.toxic_stage["p2"], 3)
+        self.assertTrue(parser.toxic_stage_known["p2"])
+
+    def test_toxic_checkpoint_resume_preserves_known_counter_and_rejects_legacy_unknown(self) -> None:
+        parser = _ReplayParser("toxic-resume")
+        parser.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|225/239 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        snapshot = parser.snapshot()
+        resumed = _ReplayParser.from_snapshot(snapshot)
+        self.assertEqual(resumed.toxic_stage["p1"], 2)
+        self.assertTrue(resumed.toxic_stage_known["p1"])
+
+        # A pre-provenance snapshot cannot prove an active Toxic stage from its
+        # numeric field alone. Resume drops the numeric claim instead of
+        # materializing that legacy value as engine-private truth.
+        legacy = replace(snapshot, toxic_stage_known={})
+        legacy_resumed = _ReplayParser.from_snapshot(legacy)
+        self.assertEqual(legacy_resumed.toxic_stage["p1"], 0)
+        self.assertFalse(legacy_resumed.toxic_stage_known["p1"])
+
+    def test_toxic_counter_does_not_baton_pass_to_the_replacement(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|285/285",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|268/285 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|move|p1a: Tauros|Baton Pass|p1a: Tauros",
+                "|switch|p1a: Snorlax|Snorlax, L80, M|400/400|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_faint_and_forced_replacement_retire_the_counter(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|285/285",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|268/285 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|faint|p1a: Tauros",
+                "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertTrue(state.toxic_stage_known["p1"])
 
     def test_toxic_residual_reseed_rejects_non_surviving_or_ambiguous_damage(self) -> None:
         # Preserve the known stage rather than inventing one from a lethal/capped line or a

@@ -1117,6 +1117,12 @@ class ShowdownReplayState:
     # Cumulative exact depletion since creation when public fixed-damage
     # chronology derives it. This invariant is portable across sampled max HP.
     substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
+    # Whether ``toxic_stage`` is known from the public protocol. A zero alone is
+    # ambiguous: it can mean a fresh Toxic/Switch-in counter, or an incomplete
+    # prefix whose live toxic counter was never observed. The observation keeps
+    # its legacy zero encoding, but direct world construction must reject the
+    # latter rather than silently seed a false ``toxic_count = 0``.
+    toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1273,6 +1279,7 @@ class _ReplayParser:
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
+        self.toxic_stage_known: dict[str, bool] = {"p1": True, "p2": True}
         # Confusion turns-so-far per slot (spec v3 change 4). See ShowdownReplayState.confusion_elapsed.
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
@@ -1355,6 +1362,22 @@ class _ReplayParser:
         }
         parser.future_sight = dict(snapshot.future_sight)
         parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
+        snapshot_stage_known = getattr(snapshot, "toxic_stage_known", {})
+        parser.toxic_stage_known = {}
+        for slot in ("p1", "p2"):
+            if slot in snapshot_stage_known:
+                parser.toxic_stage_known[slot] = bool(snapshot_stage_known[slot])
+                continue
+            # Old snapshots did not preserve this provenance. A non-toxic active
+            # has no counter to reconstruct; an active tox mon must fail closed.
+            active = snapshot.public_active.get(slot)
+            parser.toxic_stage_known[slot] = not _condition_has_status(
+                active.condition if active is not None else None,
+                "tox",
+            )
+        for slot, known in parser.toxic_stage_known.items():
+            if not known:
+                parser.toxic_stage[slot] = 0
         parser.confusion_elapsed = {
             slot: int(snapshot.confusion_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
@@ -1521,6 +1544,7 @@ class _ReplayParser:
                 self.substitute_depletion[pokemon.showdown_slot] = None
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
+                self.toxic_stage_known[pokemon.showdown_slot] = True
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
                 # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
                 # flag too so no stale stall move carries onto the replacement.
@@ -1593,7 +1617,7 @@ class _ReplayParser:
             self._settle_pending_rest_sleep_attempts()
             # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
             for slot, stage in self.toxic_stage.items():
-                if stage:
+                if self.toxic_stage_known[slot] and stage:
                     self.toxic_stage[slot] = min(15, stage + 1)
             # gen3 Truant: `onResidual` flips the bit every turn UNCONDITIONALLY. It is
             # deliberately NOT gated on the mon having moved, having a volatile, or anything
@@ -1662,7 +1686,7 @@ class _ReplayParser:
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
-        _update_toxic_stage(parts, self.toxic_stage)
+        _update_toxic_stage(parts, self.toxic_stage, self.toxic_stage_known)
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
         _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
@@ -1781,10 +1805,13 @@ class _ReplayParser:
         if damage <= 0:
             return
         # Showdown's percentage public form always uses a /100 denominator. Its damage delta is
-        # rounded from hidden absolute HP, so retain proportional recovery there. Every other
+        # rounded from hidden absolute HP, so it cannot prove an exact Toxic stage. Every other
         # denominator is exact HP and must be an integral Gen 3 Toxic unit.
         if max_hp == 100:
-            self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
+            # `/100` is the player-visible percentage form, not a Gen 3 HP
+            # denominator. Do not round it back into a hidden toxic stage. A
+            # continuously observed counter remains known from its public
+            # status/switch/turn history; an incomplete prefix remains unknown.
             return
         unit = max(1, max_hp // 16)
         # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
@@ -1795,6 +1822,7 @@ class _ReplayParser:
         if not 1 <= stage <= 15:
             return
         self.toxic_stage[slot] = stage
+        self.toxic_stage_known[slot] = True
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -2304,6 +2332,7 @@ class _ReplayParser:
             },
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
+            toxic_stage_known=dict(self.toxic_stage_known),
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
             wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
@@ -3302,13 +3331,37 @@ def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], tur
         future_sight.pop(slot, None)
 
 
-def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
+def _is_active_protocol_ident(ident: str) -> bool:
+    """Whether a protocol ident names the current singles active slot.
+
+    Per-mon cure lines can name a benched team member as ``p1: Name``. A
+    Toxic counter belongs only to the active Pokemon, so treating every same-
+    side cure as a reset corrupts the live active counter.
+    """
+
+    position, _, _ = ident.partition(":")
+    return position.strip() in {"p1a", "p2a"}
+
+
+def _condition_has_status(condition: str | None, status: str) -> bool:
+    return bool(condition and _normalize_identifier(status) in condition.split())
+
+
+def _update_toxic_stage(
+    parts: Sequence[str],
+    toxic_stage: dict[str, int],
+    toxic_stage_known: dict[str, bool] | None = None,
+) -> None:
     """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
     |-cureteam| lines.
 
-    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
-    status — per-mon (`-curestatus`) or team-wide (`-cureteam`/Aromatherapy) — clears it. The
-    counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); a status
+    replacement or cure on the ACTIVE mon clears it. Team-wide ``-cureteam`` clears the active
+    mon too. The counter is also reset on switch and faint (Gen 3 behavior) in the parse loop.
+
+    Every transition here is public protocol evidence. ``toxic_stage_known`` is optional for
+    direct unit callers; when supplied it distinguishes a real public zero from an incomplete
+    prefix that must never be materialized as a synthetic zero counter.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -3316,8 +3369,19 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
     slot = _slot_from_ident(parts[2])
     if slot not in toxic_stage:
         return
-    if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+    active_target = _is_active_protocol_ident(parts[2])
+    if event_type == "faint" and active_target:
+        toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
+    elif not active_target and event_type != "-cureteam":
+        # E.g. Heal Bell's ``|-curestatus|p1: Bench|...|[silent]``. It cannot
+        # alter the current active mon's statusState.stage.
+        return
+    elif event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
         toxic_stage[slot] = 1
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type == "-status" and len(parts) >= 4:
         # Any OTHER status replaces tox, and the ramp dies with it. `Pokemon.setStatus`
         # does `this.statusState = this.battle.initEffectState(...)` (sim/pokemon.ts:1733),
@@ -3330,10 +3394,14 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
         # re-tox in the same stint was priced from a stage that no longer existed. Observed
         # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type in {"-curestatus", "-cureteam"}:
         # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
 
 
 def _update_confusion_elapsed(parts: Sequence[str], confusion_elapsed: dict[str, int]) -> None:

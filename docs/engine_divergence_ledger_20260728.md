@@ -6501,3 +6501,25 @@ were identical; the canonical identity/class hash is
 This closes the patches' targeted regression requirement, not the certification program. The
 remaining retained rows still require their documented limit/follow-up dispositions, and the
 binding gate remains a fresh 10,000-game re-sweep with zero unattributed rows.
+
+---
+
+# Appendix Z17 — C25 Toxic residual-stage recovery hardening
+
+The prior parser repair correctly changed the replay residual formula to
+`max(1, floor(maxhp / 16)) * stage`, matching Gen 3 Showdown and the Rust
+engine's next-residual `toxic_count + 1` convention. Recovery review found
+three provenance defects around that otherwise-correct formula: rounded `/100`
+conditions were reverse-engineered into a hidden stage, a benched cure line
+could clear the active counter, and a fainted active retained its counter until
+a replacement arrived.
+
+The replay now records whether each counter is known from public protocol. A
+legacy snapshot with active `tox` but no provenance, a percentage-only
+residual, or a condition-only residual cannot seed a world; materialization
+fails closed rather than asserting `toxic_count = 0`. Exact surviving residuals
+remain sufficient public evidence, and the request-boundary handoff subtracts
+one stage exactly once. Controls cover the 316-HP real capture with
+Leftovers-before-Toxic ordering, repeated ticks, switch/drag, Baton Pass,
+Rest/status replacement, Natural Cure, failed/reapplied Toxic, faint, and
+resume. This is a parser/world construction correction, not an engine defect.
