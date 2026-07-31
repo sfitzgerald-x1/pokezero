@@ -1702,6 +1702,10 @@ fn render_move_phase(
         if deterministic_noop
             || volatile_empty_tail_ambiguous
             || empty_tail_can_be_accuracy_miss
+            // Attract resolves before full paralysis, but the engine merges
+            // their identical empty endpoints. The aggregate branch cannot
+            // prove which immobilizer stopped this action.
+            || attacker_paralyzed
             || !move_could_act
         {
             out.mark_attribution_unsafe("attract_empty_tail_ambiguous");
@@ -2109,6 +2113,20 @@ fn render_move_phase(
                     } else {
                         out.mark_attribution_unsafe("unattributed_noop_heal_marker");
                     }
+                    continue;
+                }
+                if choice.move_id == Choices::MEMENTO
+                    && heal.side_ref == side
+                    && heal.heal_amount < 0
+                {
+                    // Memento is represented as a negative self-Heal so the
+                    // reversible engine can restore the user. It is not
+                    // Liquid Ooze: Showdown first shows the target stat drops
+                    // and then silently faints the user. Deferring the faint
+                    // preserves that order and lets the fold charge the
+                    // action's remaining HP through its Memento rule.
+                    sim.apply(ins);
+                    note_faint!(side);
                     continue;
                 }
                 sim.apply(ins);
@@ -3894,6 +3912,76 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no branch applied the FLASHFIRE volatile");
+    }
+
+    /// Memento's engine-side `Heal(-remaining_hp)` is reversible machinery,
+    /// not a Liquid Ooze drain reversal. The protocol must preserve the target
+    /// stat drops and defer the user faint; the fold then charges the user's
+    /// actual remaining fraction, not a synthetic damage line.
+    #[test]
+    fn memento_negative_heal_preserves_order_and_fold_self_cost() {
+        let fixture = MINIMAL
+            .trim()
+            .replace("EMBER;false;32", "SPLASH;false;32")
+            .replace("WATERGUN;false;32", "MEMENTO;false;32");
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state.side_two.get_active().speed = 1;
+        state.side_two.get_active().maxhp = 100;
+        state.side_two.get_active().hp = 60;
+        let s1 = MoveChoice::from_string("splash", &state.side_one).expect("Splash");
+        let s2 = MoveChoice::from_string("memento", &state.side_two).expect("Memento");
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, false);
+        let branch = branches
+            .iter()
+            .find(|branch| {
+                branch.instruction_list.iter().any(|instruction| {
+                    matches!(instruction, Instruction::Boost(boost)
+                        if boost.side_ref == SideReference::SideOne && boost.amount == -2)
+                })
+            })
+            .expect("successful Memento branch with target stat drops");
+        let rendered = render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branch.instruction_list,
+            false,
+            &ctx(),
+        );
+        assert_eq!(
+            rendered.lines,
+            [
+                "|",
+                "|move|p1a: Charmander|splash||[still]",
+                "|move|p2a: Squirtle|memento|p1a: Charmander",
+                "|-unboost|p1a: Charmander|atk|2",
+                "|-unboost|p1a: Charmander|spa|2",
+                "|faint|p2a: Squirtle",
+                "|",
+                "|upkeep",
+            ],
+            "Memento must not render its self-faint as Liquid Ooze damage"
+        );
+        let mut fold = crate::fold::FoldStateInner::initial(0, 128, 512);
+        let mut lines = vec![
+            "|switch|p1a: Charmander|Charmander, L100|100/100".to_string(),
+            "|switch|p2a: Squirtle|Squirtle, L100|60/100".to_string(),
+            "|turn|4".to_string(),
+        ];
+        lines.extend(rendered.lines);
+        fold.advance_in_place(&lines)
+            .expect("fold advances over the Memento protocol");
+        let memento = fold
+            .products()
+            .transition_tokens
+            .into_iter()
+            .find(|token| token.action == "memento")
+            .expect("Memento token present");
+        assert!(
+            (memento.self_hp_cost - 0.60).abs() < f64::EPSILON,
+            "Memento must charge the user's remaining HP fraction: {memento:?}"
+        );
     }
 
     /// The /100 base reconciliation (ladder streams): the exact Showdown HP

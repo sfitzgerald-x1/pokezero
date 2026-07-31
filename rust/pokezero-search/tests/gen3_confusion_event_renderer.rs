@@ -722,6 +722,24 @@ fn successful_memento_is_not_a_confusion_self_faint_collision() {
         "{events}"
     );
     assert!(events.contains("|faint|p2a: Opponent"), "{events}");
+    assert_eq!(
+        rendered.lines,
+        vec![
+            "|",
+            "|move|p1a: Lead|splash||[still]",
+            "|-activate|p2a: Opponent|confusion",
+            "|move|p2a: Opponent|memento|p1a: Lead",
+            "|-unboost|p1a: Lead|atk|2",
+            "|-unboost|p1a: Lead|spa|2",
+            "|faint|p2a: Opponent",
+            "|",
+        ],
+        "Memento drops the target's stats before silently fainting its user: {rendered:?}"
+    );
+    assert!(
+        !events.contains("Liquid Ooze"),
+        "Memento's reversible negative heal is not drain reversal: {events}"
+    );
     assert!(
         !rendered
             .attribution_unsafe
@@ -729,6 +747,65 @@ fn successful_memento_is_not_a_confusion_self_faint_collision() {
             .any(|reason| reason == "confusion_selfhit_ambiguous_executed_self_damage"),
         "{rendered:?}"
     );
+}
+
+fn attracted_paralyzed_state(confused: bool) -> State {
+    let mut state = confused_state(Choices::TACKLE);
+    if !confused {
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+    }
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::ATTRACT);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    state
+}
+
+#[test]
+fn attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion() {
+    for confused in [false, true] {
+        let mut state = attracted_paralyzed_state(confused);
+        let branches = generate(&mut state);
+        let rendered = branches
+            .iter()
+            .map(|branch| rendered(&mut state, branch))
+            .find(|events| {
+                events
+                    .attribution_unsafe
+                    .iter()
+                    .any(|reason| reason == "attract_empty_tail_ambiguous")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected the combined Attract/paralysis empty tail to fail closed; \\
+                     confused={confused}, branches={branches:?}"
+                )
+            });
+        let text = rendered.lines.join("\n");
+        assert!(
+            !text.contains("|cant|p2a: Opponent|Attract"),
+            "the collapsed branch cannot be attributed wholly to Attract: {text}"
+        );
+        assert!(
+            !text.contains("|cant|p2a: Opponent|par"),
+            "the collapsed branch cannot be attributed wholly to paralysis: {text}"
+        );
+        if confused {
+            assert!(
+                text.contains("|-activate|p2a: Opponent|confusion"),
+                "confusion still precedes the fail-closed mixed tail: {text}"
+            );
+        } else {
+            assert!(
+                !text.contains("|-activate|p2a: Opponent|confusion"),
+                "unexpected confusion activation without the volatile: {text}"
+            );
+        }
+    }
 }
 
 #[test]
