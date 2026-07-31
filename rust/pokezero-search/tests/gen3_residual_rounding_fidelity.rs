@@ -18,7 +18,7 @@
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::instruction::Instruction;
-use poke_engine::state::{PokemonStatus, PokemonType, SideReference, State};
+use poke_engine::state::{PokemonSideCondition, PokemonStatus, PokemonType, SideReference, State};
 
 fn generate(state: &mut State) -> Vec<Instruction> {
     let before = format!("{:?}", state);
@@ -64,6 +64,20 @@ fn damage_to(list: &[Instruction], side_ref: SideReference) -> i16 {
         list
     );
     hits[0]
+}
+
+fn toxic_counter_changes(list: &[Instruction], side_ref: SideReference) -> Vec<i8> {
+    list.iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::ChangeSideCondition(change)
+                if change.side_ref == side_ref
+                    && change.side_condition == PokemonSideCondition::ToxicCount =>
+            {
+                Some(change.amount)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Side one's active carries `status`, at toxic stage `toxic_count + 1`. Side
@@ -162,6 +176,64 @@ fn toxic_stage_fifteen_stays_capped_across_residual_advances() {
     let second = generate(&mut state);
     assert_eq!(damage_to(&second, SideReference::SideOne), 600);
     assert_eq!(state.side_one.side_conditions.toxic_count, 14);
+}
+
+/// Toxic's stored counter is an i8 but only 0 through 14 are valid pre-tick
+/// values. Arithmetic is performed after normalizing that stored value: valid
+/// counters preserve the exact Showdown ladder, while malformed values fail
+/// safe and are repaired by reversible side-condition instructions.
+#[test]
+fn toxic_counter_arithmetic_is_safe_and_normalizes_every_stored_i8_value() {
+    for toxic_count in 0..=14i8 {
+        let mut state = residual_state(PokemonStatus::TOXIC, 640, toxic_count);
+        let list = generate(&mut state);
+        let stage = toxic_count as i16 + 1;
+        assert_eq!(damage_to(&list, SideReference::SideOne), 40 * stage);
+        assert_eq!(
+            toxic_counter_changes(&list, SideReference::SideOne),
+            if toxic_count == 14 { vec![] } else { vec![1] },
+            "valid counter {} must retain normal increment behavior",
+            toxic_count
+        );
+        state.apply_instructions(&list);
+        assert_eq!(
+            state.side_one.side_conditions.toxic_count,
+            toxic_count.min(13) + 1,
+            "valid counter {} must end normalized",
+            toxic_count
+        );
+    }
+
+    for (toxic_count, stage, corrections, final_count) in [
+        (-1, 1, vec![2], 1),
+        (15, 15, vec![-1], 14),
+        (i8::MAX, 15, vec![-113], 14),
+        // i8::MIN needs two bounded deltas because ChangeSideCondition.amount
+        // is i8 and each instruction must still be reversible on its own.
+        (i8::MIN, 1, vec![i8::MAX, 2], 1),
+    ] {
+        let mut state = residual_state(PokemonStatus::TOXIC, 640, toxic_count);
+        let list = generate(&mut state);
+        assert_eq!(
+            damage_to(&list, SideReference::SideOne),
+            40 * stage,
+            "stored counter {} must use fail-safe stage {}",
+            toxic_count,
+            stage
+        );
+        assert_eq!(
+            toxic_counter_changes(&list, SideReference::SideOne),
+            corrections,
+            "stored counter {} must emit its exact reversible correction",
+            toxic_count
+        );
+        state.apply_instructions(&list);
+        assert_eq!(
+            state.side_one.side_conditions.toxic_count, final_count,
+            "stored counter {} must finish normalized",
+            toxic_count
+        );
+    }
 }
 
 /// The tick is still capped by remaining HP, exactly as `Pokemon.damage` caps it.

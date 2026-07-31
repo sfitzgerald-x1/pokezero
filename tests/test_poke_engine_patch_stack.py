@@ -27,7 +27,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "09d05adab680c419658d7bdc63c9355251567cce01f355ad2398e7645657e1e5",
+    "src/gen3/generate_instructions.rs": "535c3fbdc111a8a879458699686bf1907b52096dcd4ffc74c40021ef9db5f483",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
