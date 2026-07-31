@@ -74,14 +74,28 @@ THREAD_PIN_ENV = {
 }
 
 
+def checkpoint_tag(checkpoint: str) -> str:
+    """Short stable label for a checkpoint, used to keep raw arms distinct."""
+    return Path(checkpoint).stem or "ckpt"
+
+
 def config_id_for(args: argparse.Namespace) -> str:
     """The cell identity that provenance and the merger key on."""
+    # EVERY arm is checkpoint-qualified. Two collisions motivate this, and both
+    # would corrupt a delta rather than error:
+    #   - R0 (k0) and R1 (k1) are both "raw", and the raw arm is the DENOMINATOR
+    #     of every paired delta;
+    #   - cells A (k0) and G (k1) run the SAME search config, so an unqualified
+    #     id pools them -- and cell G's entire job is the checkpoint contrast.
+    tag = checkpoint_tag(args.checkpoint)
     if args.arm == "raw":
-        return "raw"
+        return f"raw@{tag}"
     base = f"d{args.depth}-s{args.sims}-b{args.batch}-w{args.worlds}"
     # The flag changes search semantics, so it is part of the cell identity --
     # two cells that differ only by opponent priors must not merge.
-    return f"{base}+opp-priors" if args.opponent_priors else base
+    if args.opponent_priors:
+        base = f"{base}+opp-priors"
+    return f"{base}@{tag}"
 
 
 def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:

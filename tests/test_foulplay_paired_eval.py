@@ -65,21 +65,30 @@ def game(seed: int, *, score: float = 1.0, won: bool = True) -> dict:
 
 class ConfigIdTest(unittest.TestCase):
     def test_search_cell_id_matches_the_campaign_grid(self) -> None:
-        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4")
+        # Checkpoint-qualified: cells A (k0) and G (k1) run the SAME search
+        # config, so an unqualified id would merge them -- and cell G's entire
+        # job is the checkpoint contrast.
+        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4@ckpt")
 
     def test_depth_ladder_cells_are_distinguishable(self) -> None:
         # The Tier-2 ladder differs from Tier 1 only in depth/sims; if those did
         # not reach config_id, a d6 shard would merge into the d4 cell.
         self.assertEqual(
-            _DRIVER.config_id_for(args(depth=6, sims=4096)), "d6-s4096-b64-w4"
+            _DRIVER.config_id_for(args(depth=6, sims=4096)), "d6-s4096-b64-w4@ckpt"
         )
 
-    def test_raw_arm_is_search_config_independent(self) -> None:
-        # One raw arm per checkpoint pairs with every search cell, so its id must
-        # NOT carry search axes -- otherwise it cannot be reused.
-        self.assertEqual(_DRIVER.config_id_for(args(arm="raw")), "raw")
+    def test_raw_arm_is_search_config_independent_but_checkpoint_qualified(self) -> None:
+        # One raw arm PER CHECKPOINT pairs with every search cell on that
+        # checkpoint, so its id must not carry search axes (or it cannot be
+        # reused) but must carry the checkpoint (or R0 and R1 pool, and the raw
+        # arm is the denominator of every paired delta).
+        self.assertEqual(_DRIVER.config_id_for(args(arm="raw")), "raw@ckpt")
         self.assertEqual(
-            _DRIVER.config_id_for(args(arm="raw", depth=6, worlds=16)), "raw"
+            _DRIVER.config_id_for(args(arm="raw", depth=6, worlds=16)), "raw@ckpt"
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k0.pt")),
+            _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k1.pt")),
         )
 
 

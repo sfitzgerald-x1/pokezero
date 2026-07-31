@@ -67,12 +67,15 @@ class DefaultsAreOffTest(unittest.TestCase):
         driver = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(driver)
         base = dict(
-            arm="search", depth=4, sims=1024, batch=64, worlds=4, opponent_priors=False
+            arm="search", depth=4, sims=1024, batch=64, worlds=4,
+            opponent_priors=False, checkpoint="/c/k0.pt",
         )
-        self.assertEqual(driver.config_id_for(argparse.Namespace(**base)), "d4-s1024-b64-w4")
+        self.assertEqual(
+            driver.config_id_for(argparse.Namespace(**base)), "d4-s1024-b64-w4@k0"
+        )
         self.assertEqual(
             driver.config_id_for(argparse.Namespace(**{**base, "opponent_priors": True})),
-            "d4-s1024-b64-w4+opp-priors",
+            "d4-s1024-b64-w4+opp-priors@k0",
         )
 
 
