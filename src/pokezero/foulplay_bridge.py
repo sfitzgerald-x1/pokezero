@@ -3540,7 +3540,12 @@ def _player_state(
     set_source=None,
     include_turn_merged: bool = False,
 ) -> PlayerRelativeBattleState:
-    replay = parse_showdown_replay(state.all_lines(), battle_id=state.battle_id)
+    replay = parse_showdown_replay(
+        state.all_lines(),
+        battle_id=state.battle_id,
+        complete_prefix=True,
+        hp_visibility={"p1": "exact", "p2": "exact"},
+    )
     return normalize_for_player(
         replay,
         player_id=player,
@@ -3580,7 +3585,12 @@ def _public_materialization_state(
         historical_request = json.loads(historical_line[len("|request|") :])
         if isinstance(historical_request, Mapping):
             actor_requests.append(historical_request)
-    public_replay = parse_showdown_replay(state.public_lines, battle_id=state.battle_id)
+    public_replay = parse_showdown_replay(
+        state.public_lines,
+        battle_id=state.battle_id,
+        complete_prefix=True,
+        hp_visibility={"p1": "exact", "p2": "exact"},
+    )
     belief_engine = PublicBattleBeliefEngine.from_events(
         public_replay.public_events,
         format_id=state.format_id,

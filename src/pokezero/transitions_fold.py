@@ -105,7 +105,7 @@ from .transitions import (
     TransitionToken,
     _CANT_NO_CHOICE_REASONS,
     _MonCounters,
-    _PURSUIT_SCAN_BOUNDARY,
+    _is_pursuit_scan_boundary,
     _SELF_COST_FROM_TAGS,
     _SELF_FAINT_COST_MOVES,
     _StayRecord,
@@ -286,7 +286,7 @@ class FoldState:
             # Pursuit ring buffer maintenance AFTER processing: boundary-type lines
             # clear it (they stop the batch backward scan); everything else — blank
             # separators included — joins the scan set.
-            if event_type in _PURSUIT_SCAN_BOUNDARY:
+            if _is_pursuit_scan_boundary(raw_line, event_type):
                 self.pursuit_buffer.clear()
             else:
                 self.pursuit_buffer.append(raw_line)
@@ -414,9 +414,10 @@ class FoldState:
         perspective = self.perspective_slot
         opponent = self.opponent_slot
 
-        if event_type in {"", "upkeep"}:
+        canonical_upkeep = raw_line == "|upkeep"
+        if event_type == "" or canonical_upkeep:
             self._close_window()
-            if event_type == "upkeep":
+            if canonical_upkeep:
                 self.completed_turns.add(self.turn_number)
             return
 
@@ -600,13 +601,16 @@ class FoldState:
                         previous_fraction = self.hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            current.damage_fraction += delta
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
-                        current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = False
+                            else:
+                                current.damage_fraction += delta
+                                current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = True
                 else:
-                    current.defender_hit_by_move = False
+                    current.defender_last_damage_by_move = False
             if (
                 current is not None
                 and target == current.side
@@ -657,7 +661,11 @@ class FoldState:
             self.hp_fraction[target] = 0.0
             self.pending_faint_replacement[target] = True
             self.fainted_turns.add(self.turn_number)
-            if current is not None and target == current.defender_side and current.defender_hit_by_move:
+            if (
+                current is not None
+                and target == current.defender_side
+                and current.defender_last_damage_by_move
+            ):
                 current.ko = True
 
         elif event_type == "-status" and target in {"p1", "p2"}:
@@ -1430,6 +1438,10 @@ def _window_to_payload(window: _Window) -> dict:
     if window.confusion_selfhit:
         payload["confusion_selfhit"] = True
         payload["confusion_selfhit_fraction"] = window.confusion_selfhit_fraction
+    # Old payloads only had the historical hit bit. Persist the distinct KO
+    # guard only where it differs, preserving established clean payload bytes.
+    if window.defender_hit_by_move and not window.defender_last_damage_by_move:
+        payload["defender_last_damage_by_move"] = False
     return payload
 
 
@@ -1462,6 +1474,9 @@ def _window_from_payload(payload: Mapping) -> _Window:
         effectiveness=str(payload["effectiveness"]),
         side_effect=str(payload["side_effect"]),
         defender_hit_by_move=bool(payload["defender_hit_by_move"]),
+        defender_last_damage_by_move=bool(
+            payload.get("defender_last_damage_by_move", payload["defender_hit_by_move"])
+        ),
         voluntary_switch=bool(payload["voluntary_switch"]),
         locked_continuation=bool(payload["locked_continuation"]),
         switch_reason=payload["switch_reason"],

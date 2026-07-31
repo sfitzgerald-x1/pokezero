@@ -6501,3 +6501,73 @@ were identical; the canonical identity/class hash is
 This closes the patches' targeted regression requirement, not the certification program. The
 remaining retained rows still require their documented limit/follow-up dispositions, and the
 binding gate remains a fresh 10,000-game re-sweep with zero unattributed rows.
+
+---
+
+# Appendix Z17 — C25 Toxic residual-stage recovery hardening
+
+The prior parser repair correctly changed the replay residual formula to
+`max(1, floor(maxhp / 16)) * stage`, matching Gen 3 Showdown and the Rust
+engine's next-residual `toxic_count + 1` convention. Recovery review found
+three provenance defects around that otherwise-correct formula: rounded `/100`
+conditions were reverse-engineered into a hidden stage, a benched cure line
+could clear the active counter, and a fainted active retained its counter until
+a replacement arrived.
+
+The replay now records whether each counter is known from public protocol and
+whether each side's HP stream is exact, percentage-form, or unknown. A legacy
+snapshot with active `tox` but no provenance, a rounded residual without a
+public reset, or a condition-only residual cannot seed a world; materialization
+fails closed rather than asserting `toxic_count = 0`. A switch/drag reset plus
+the first percentage-form residual proves stage 1, while an exact 100-HP Pokemon
+still uses its real six-HP Toxic unit. At ordinary request boundaries the
+handoff subtracts one; at post-upkeep/pre-turn forced-switch boundaries the
+just-applied stage passes through unchanged. Internal parser value 16 preserves
+an already-saturated Showdown stage 15 across the ordinary-boundary subtraction,
+while observation encoding remains capped at 15. Controls cover the exact-100
+scenario, the 316-HP real capture with Leftovers-before-Toxic ordering,
+repeated ticks, switch/drag, Baton Pass, Rest/status replacement, Natural Cure,
+failed/reapplied Toxic, faint, and resume. This was the original parser/world
+construction disposition. Independent review later found the separate engine
+stage-cap defect documented in Z17.1; the final disposition includes both fixes.
+
+## Z17.1 Independent-review amendment: saturation and production rendering
+
+The original repair incorrectly assumed the engine capped `toxic_count + 1`.
+It did not: a parser raw saturation sentinel of 16 became engine counter 15,
+then produced an illegal stage-16 residual. The engine now caps the residual
+stage at 15 and stores at most pre-tick counter 14. The construction bridge
+therefore maps ordinary raw 16 and post-upkeep stage 15 to 14, while rejecting
+unrepresentable values. A two-residual 640-HP engine advance proves both ticks
+are 600 HP (15/16), with no stage-16 tick.
+
+The production event renderer intentionally omits public cure lines for some
+status operations. Rather than fabricate protocol, it carries a private ordered
+active-status transition into leaf metadata. Render-to-evolve coverage proves
+that Rest, Refresh, and Heal Bell clear Toxic stage/provenance without changing
+their public output. Clean switch and drag entries also clear stage and active
+provenance before deriving a possible Toxic re-entry.
+
+## Z17.2 Post-upkeep poisoned replacement: the only public stage-zero proof
+
+Gen 3 Showdown's `tox.onSwitchIn` sets `statusState.stage = 0`; its residual
+handler increments that value before applying the first 1/16 tick. The normal
+world bridge therefore correctly represents this first pending tick as engine
+`toxic_count = 0`. Most active-Toxic zero snapshots remain ambiguous and fail
+closed, but one public chronology is exact: a same-seat public active `|faint|`
+is followed by `|upkeep|`, then that seat's non-Baton-Pass `|switch|` is a
+faint replacement whose condition still says `tox`. That Pokemon missed the
+preceding residual, so an ordinary request after the next `|turn|` may
+materialize zero. The prior bare-post-upkeep rule was a proof forgery and is
+not accepted.
+
+The snapshot-carried faint latch is side-local, consumed by its replacement,
+and cleared on next-turn truncation, malformed/duplicate replacement,
+incompatible same-seat transition, or scenario reuse. Its resulting proof
+lasts only until its first Toxic residual. Switch/drag replacement, active
+status application or replacement, cure, faint, and the first Toxic residual
+all clear or replace it; a legacy snapshot without the field stays fail-closed.
+A synthetic post-upkeep `|drag|`
+is deliberately rejected: Gen 3 resolves phazing in the move action before the
+residual action emits `|upkeep|`. The proof is construction-only, so V2, V2.1,
+and V2.2 observation identities remain byte-identical.
