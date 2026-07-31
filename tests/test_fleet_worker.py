@@ -338,14 +338,14 @@ class ClaimTests(unittest.TestCase):
         original_write = fleet_worker._write_claim_token
         replaced = False
 
-        def replace_after_parse(claim: Path) -> str:
+        def replace_after_parse(claim: Path, **kwargs) -> str:
             nonlocal replaced
             replaced = True
             claim.write_text(
                 claim.read_text(encoding="utf-8").replace("policy-a", "policy-b"),
                 encoding="utf-8",
             )
-            return original_write(claim)
+            return original_write(claim, **kwargs)
 
         with patch.object(fleet_worker, "_write_claim_token", new=replace_after_parse):
             with self.assertRaises(FanInValidationError):
@@ -355,6 +355,65 @@ class ClaimTests(unittest.TestCase):
         self.assertEqual(len(list((self.queue / "claimed").glob("i7-s0.env.w1.*"))), 1)
         self.assertFalse(list((self.queue / "done").iterdir()))
         self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_fanin_pending_parent_replacement_after_preflight_is_terminal(self) -> None:
+        import shutil
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        pending = self.queue / "pending"
+        replacement = self.root / "replacement-pending"
+        saved = self.root / "saved-pending"
+
+        def replace_parent(_candidate: Path, _preview) -> None:
+            shutil.copytree(pending, replacement)
+            pending.rename(saved)
+            replacement.rename(pending)
+
+        with self.assertRaises(FanInValidationError):
+            claim_next_task(self.queue, "w1", fanin=True, before_claim=replace_parent)
+        self.assertTrue((pending / "i7-s0.env").exists())
+        self.assertFalse(list((self.queue / "done").iterdir()))
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_fanin_claim_token_requires_leased_manifest_generation(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        original_move = fleet_worker._move_fanin_manifest_into_claim
+        saved = self.root / "saved-claim"
+
+        def move_then_replace(candidate: Path, claim: Path, preview):
+            task = original_move(candidate, claim, preview)
+            claim.rename(saved)
+            shutil.copy2(saved, claim)
+            return task
+
+        with patch.object(
+            fleet_worker, "_move_fanin_manifest_into_claim", new=move_then_replace,
+        ):
+            with self.assertRaises(FanInValidationError):
+                claim_next_task(self.queue, "w1", fanin=True)
+        self.assertTrue(saved.exists())
+        self.assertTrue((self.queue / "claimed").exists())
+        self.assertFalse(list((self.queue / "done").iterdir()))
+
+    def test_fanin_claim_token_rejects_claimed_parent_replacement(self) -> None:
+        import shutil
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(task)
+        claimed = self.queue / "claimed"
+        replacement = self.root / "replacement-claimed"
+        saved = self.root / "saved-claimed"
+        shutil.copytree(claimed, replacement)
+        claimed.rename(saved)
+        replacement.rename(claimed)
+
+        with self.assertRaises(FanInValidationError):
+            fleet_worker._fanin_claim_manifest_is_current(task)
+        self.assertFalse(list((self.queue / "done").iterdir()))
 
     def test_fanin_route_record_replacement_after_snapshot_fails_closed(self) -> None:
         from unittest.mock import patch
@@ -380,6 +439,32 @@ class ClaimTests(unittest.TestCase):
             fleet_worker, "_verify_fanin_authoritative_directory_identity",
             new=replace_after_directory_check,
         ):
+            with self.assertRaises(FanInValidationError):
+                fleet_worker._resolve_fanin_route(self.queue, task)
+        self.assertTrue(replaced)
+
+    def test_fanin_route_record_replacement_after_parse_fails_closed(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(task)
+        fleet_worker._resolve_fanin_route(self.queue, task)
+        record = fleet_worker._fanin_route_record(self.queue, task.base)
+        original_parse = fleet_worker._fanin_route_from_payload
+        replaced = False
+
+        def parse_then_replace(payload):
+            nonlocal replaced
+            result = original_parse(payload)
+            if result is not None and not replaced:
+                replaced = True
+                prior = record.with_name("route-before-return.json")
+                record.rename(prior)
+                record.write_bytes(prior.read_bytes())
+            return result
+
+        with patch.object(fleet_worker, "_fanin_route_from_payload", new=parse_then_replace):
             with self.assertRaises(FanInValidationError):
                 fleet_worker._resolve_fanin_route(self.queue, task)
         self.assertTrue(replaced)
@@ -2016,6 +2101,55 @@ class FanInTests(unittest.TestCase):
                 fleet_worker._release_fanin_guard(second)
             fleet_worker._release_fanin_guard(first)
 
+    def test_guard_chain_carries_successor_identity_to_next_step(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        _manifest(
+            self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1,
+            offset=0, count=1, seed=100,
+        )
+        first_task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(first_task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(first_task)
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, first_task.base)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        first = fleet_worker._acquire_fanin_guard(root, first_task, fanin_task)
+        second = None
+        try:
+            fleet_worker._release_fanin_guard(first)
+            first_task.claim_path.unlink()
+            _manifest(
+                self.queue, first_task.base, out=self.cache_dir / "slice-0", iteration=1,
+                offset=0, count=1, seed=100,
+            )
+            second_task = claim_next_task(self.queue, "w2", fanin=True)
+            self.assertIsNotNone(second_task)
+            second = fleet_worker._acquire_fanin_guard(root, second_task, fanin_task)
+            original_read = fleet_worker._read_fanin_guard_directory
+            replaced = False
+
+            def replace_successor_after_read(path: Path):
+                nonlocal replaced
+                result = original_read(path)
+                if path == second.path and not replaced:
+                    replaced = True
+                    prior = second.path.with_name(f"prior-{second.path.name}")
+                    second.path.rename(prior)
+                    shutil.copytree(prior, second.path)
+                return result
+
+            with patch.object(
+                fleet_worker, "_read_fanin_guard_directory", new=replace_successor_after_read,
+            ):
+                with self.assertRaises(FanInValidationError):
+                    fleet_worker._read_current_fanin_fence(root)
+            self.assertTrue(replaced)
+        finally:
+            if second is not None:
+                fleet_worker._release_fanin_guard(second)
+            fleet_worker._release_fanin_guard(first)
+
     def test_committed_lookup_rejects_manifest_changed_after_selection(self) -> None:
         from unittest.mock import patch
 
@@ -2041,6 +2175,94 @@ class FanInTests(unittest.TestCase):
             with self.assertRaises(FanInValidationError):
                 fleet_worker._find_committed_fanin_task(self.cache_dir, task)
         self.assertTrue(replaced)
+
+    def test_selected_shard_rejects_acceptance_record_replacement_after_selection(self) -> None:
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        selected = fleet_worker._select_accepted_fanin_shards(self.cache_dir)
+        self.assertEqual(len(selected), 1)
+        record = selected[0].acceptances[-1].acceptance_path
+        self.assertIsNotNone(record)
+        contents = record.read_bytes()
+        with record.open("r+b") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        with self.assertRaises(FanInValidationError):
+            fleet_worker._verify_selected_fanin_shard(selected[0])
+
+    def test_recovery_ack_rejects_cache_root_replacement_after_lookup(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        _manifest(
+            self.queue, task.task_id, out=Path(task.out), iteration=1,
+            offset=0, count=1, seed=100, policy=task.policy,
+        )
+        original_find = fleet_worker._find_committed_fanin_task_evidence
+        replacement = self.root / "replacement-cache-root"
+        saved = self.root / "saved-cache-root"
+        replaced = False
+
+        def find_then_replace(cache_dir: Path, candidate: FanInTask):
+            nonlocal replaced
+            result = original_find(cache_dir, candidate)
+            if result is not None and not replaced:
+                replaced = True
+                shutil.copytree(self.cache_dir, replacement)
+                self.cache_dir.rename(saved)
+                replacement.rename(self.cache_dir)
+            return result
+
+        with patch.object(fleet_worker, "_find_committed_fanin_task_evidence", new=find_then_replace):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertTrue(replaced)
+        self.assertEqual(rc, 2)
+        self.assertTrue(self._claim("w1", task.task_id).exists())
+        self.assertFalse((self.queue / "done" / task.task_id).exists())
+
+    def test_concat_rejects_current_shard_cache_root_replacement(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        prior = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [prior])
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-1", iteration=1,
+            offset=1, count=1, seed=101,
+        )
+        from pokezero.dataset import concat_training_caches as real_concat
+
+        replacement = self.root / "replacement-cache-root"
+        saved = self.root / "saved-cache-root"
+        replaced = False
+
+        def concat_then_replace(parts, staging):
+            nonlocal replaced
+            result = real_concat(parts, staging)
+            if not replaced:
+                replaced = True
+                shutil.copytree(self.cache_dir, replacement)
+                self.cache_dir.rename(saved)
+                replacement.rename(self.cache_dir)
+            return result
+
+        with patch("pokezero.dataset.concat_training_caches", new=concat_then_replace):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertTrue(replaced)
+        self.assertEqual(rc, 2)
+        self.assertTrue(self._claim("w1", "i1-s1.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s1.env").exists())
+        self.assertFalse((self.cache_dir / "shard-ww1-v2").exists())
 
     def test_target_validation_rejects_entry_replacement_during_hashing(self) -> None:
         from unittest.mock import patch
