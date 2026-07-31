@@ -2377,11 +2377,12 @@ def _apply_rest_sleep_provenance(
     ``public_active``. A materialization row, by contrast, carries the SPECIES. The two
     coincide here only because gen3 randbats runs under Nickname Clause and never
     nicknames anything: reconstructing the key from the row's species is therefore exact
-    for this format and WRONG the moment nicknames are allowed. A miss is fail-soft in
-    the safe direction — the row simply carries no count, and world construction falls
-    back to its existing sleep handling — and keys are per-side and per-name, so a miss
-    can never collide with a DIFFERENT mon's entry. Do not extend this to a nicknamed
-    format without carrying the ident through the row.
+    for this format and WRONG the moment nicknames are allowed. A cosmetic base-form
+    fallback (``Unown`` -> ``Unown-Z``) is permitted only when it is one tracker key to
+    one sleeping row. A missing or ambiguous correspondence marks the affected known
+    sleeper rows unrepresentable; it must never fall through to generic sleep
+    approximation. Do not extend this to a nicknamed format without carrying the ident
+    through the row.
 
     Only a mon that is in the Rest map AND absent from the opposing side's induced-victim
     set is annotated, so the emitted field means exactly "this sleep is its own Rest's"
@@ -2400,38 +2401,64 @@ def _apply_rest_sleep_provenance(
         for key in tracker
         if isinstance(key, str) and key.startswith(f"{player}:")
     }
+    known_rows = [
+        (index, species)
+        for index, row in enumerate(rows)
+        if isinstance(species := row.get("species"), str)
+    ]
+    sleeping_rows = [
+        (index, species)
+        for index, species in known_rows
+        if "slp" in str(rows[index].get("condition") or "").split()
+    ]
+    exact_known_keys = {f"{player}:{_normalize_identifier(species)}" for _, species in known_rows}
+    exact_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        key = f"{player}:{_normalize_identifier(species)}"
+        if key in tracker_keys:
+            exact_candidates.setdefault(key, []).append(index)
 
-    def _tracker_key_for_species(species: str) -> str | None:
+    row_tracker_keys: dict[int, str] = {}
+    handled_tracker_keys: set[str] = set()
+    for key, candidates in exact_candidates.items():
+        if len(candidates) == 1:
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.add(key)
+
+    # Cosmetic base forms are safe only as a one-to-one reconciliation after exact
+    # matches claim their keys. Multiple sleeping formes for one base are ambiguous.
+    base_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        if index in row_tracker_keys:
+            continue
         normalized = _normalize_identifier(species)
-        exact = f"{player}:{normalized}"
-        if exact in tracker_keys:
-            return exact
-
-        # Gen 3 cosmetic formes can use a base-form protocol ident (for example
-        # ``Unown``) while the materialized row retains ``Unown-Z``. Match that
-        # sibling parser surface only when the base-form key is unambiguous.
         base = _normalize_identifier(species.split("-", 1)[0])
-        matches = [
+        if base != normalized:
+            base_candidates.setdefault(base, []).append(index)
+    for base, candidates in base_candidates.items():
+        matching_keys = [
             key
-            for key in tracker_keys
-            if base != normalized and key.partition(":")[2] == base
+            for key in tracker_keys - handled_tracker_keys
+            if key not in exact_known_keys and key.partition(":")[2] == base
         ]
-        return matches[0] if len(matches) == 1 else None
+        if not matching_keys:
+            continue
+        if len(matching_keys) == 1 and len(candidates) == 1:
+            key = matching_keys[0]
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.update(matching_keys)
 
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
     # therefore recorded under its opponent.
     induced = set(replay.induced_sleep_victims.get(opponent_showdown_slot(player), ()))
-    matched_tracker_keys: set[str] = set()
-    for row in rows:
-        species = row.get("species")
-        if not isinstance(species, str):
-            continue
-        key = _tracker_key_for_species(species)
-        if key is None:
-            continue
-        if "slp" not in str(row.get("condition") or "").split():
-            continue
-        matched_tracker_keys.add(key)
+    for index, key in row_tracker_keys.items():
+        row = rows[index]
         if key not in counts:
             if key in refunded_turns or key in skipped_turns or key in pending_attempts:
                 row["restSleepProvenanceUnrepresentable"] = True
@@ -2478,15 +2505,11 @@ def _apply_rest_sleep_provenance(
         if skipped:
             row["restSleepSkippedTime"] = skipped
 
-    if tracker_keys - matched_tracker_keys:
+    if tracker_keys - handled_tracker_keys:
         # A public Rest tracker that cannot be tied to a revealed row must not let any
         # same-side sleeper pass through the generic approximation path.
-        for row in rows:
-            if (
-                isinstance(row.get("species"), str)
-                and "slp" in str(row.get("condition") or "").split()
-            ):
-                row["restSleepProvenanceUnrepresentable"] = True
+        for index, _ in sleeping_rows:
+            rows[index]["restSleepProvenanceUnrepresentable"] = True
 
 
 def _materialization_identifier(value: str) -> str:
