@@ -598,7 +598,9 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)
         self.assertTrue(self._claim("w2", "i1-s0.env").exists())
-        self.assertFalse(other_root.exists())
+        # The pre-claim cache probe creates the candidate cache root before
+        # route provenance rejects the changed parent.
+        self.assertTrue(other_root.exists())
         self.assertEqual([path.name for path in fleet_worker.select_fanin_shards(self.cache_dir)], ["shard-ww1-v1"])
 
     def test_crash_after_recovery_keeps_done_and_output_once(self) -> None:
@@ -1609,6 +1611,173 @@ class FanInTests(unittest.TestCase):
         (target / fleet_worker.FANIN_PUBLICATION_NAME).unlink()
         with self.assertRaisesRegex(FanInValidationError, "missing or malformed publication"):
             read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_content_hash_accepts_honest_directories_and_files(self) -> None:
+        root = self.root / "honest-cache"
+        nested = root / "nested"
+        nested.mkdir(parents=True)
+        (root / "root.bin").write_bytes(b"root")
+        (nested / "child.bin").write_bytes(b"child")
+
+        first = fleet_worker._fanin_content_sha256(root)
+        self.assertEqual(first, fleet_worker._fanin_content_sha256(root))
+        (nested / "later.bin").write_bytes(b"later")
+        self.assertNotEqual(first, fleet_worker._fanin_content_sha256(root))
+
+    def test_content_hash_rejects_injected_directory_symlink(self) -> None:
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "escaped.bin").write_bytes(b"outside")
+        (target / "directory-link").symlink_to(outside, target_is_directory=True)
+
+        with self.assertRaisesRegex(FanInValidationError, "symlinked cache entry"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_content_hash_rejects_file_symlink(self) -> None:
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        outside = self.root / "outside.bin"
+        outside.write_bytes(b"outside")
+        (target / "file-link").symlink_to(outside)
+
+        with self.assertRaisesRegex(FanInValidationError, "symlinked cache entry"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_selected_root_directory_symlink_fails_closed(self) -> None:
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        replacement = target.with_name("saved-shard-w1-v1")
+        target.rename(replacement)
+        target.symlink_to(replacement, target_is_directory=True)
+
+        with self.assertRaisesRegex(FanInValidationError, "not a real directory"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_target_validation_rejects_entry_replacement_during_hashing(self) -> None:
+        from unittest.mock import patch
+
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        tasks = fleet_worker._read_fanin_manifest(target)
+        acceptance = fleet_worker._read_fanin_publication(target)
+        self.assertIsNotNone(acceptance)
+        original_open = fleet_worker.os.open
+        replaced = False
+
+        def replace_metadata(name, flags, mode=0o777, *, dir_fd=None):
+            nonlocal replaced
+            descriptor = original_open(name, flags, mode, dir_fd=dir_fd)
+            if name == "metadata.json" and dir_fd is not None and not replaced:
+                replaced = True
+                prior = target / ".metadata.prior"
+                metadata = target / "metadata.json"
+                metadata.rename(prior)
+                metadata.write_bytes(prior.read_bytes())
+            return descriptor
+
+        with patch.object(fleet_worker.os, "open", new=replace_metadata):
+            with self.assertRaisesRegex(FanInValidationError, "entry changed during validation"):
+                fleet_worker._validate_fanin_target_acceptance(target, tasks, acceptance)
+        self.assertTrue(replaced)
+
+    def test_target_validation_rejects_root_replacement_during_validation(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        tasks = fleet_worker._read_fanin_manifest(target)
+        acceptance = fleet_worker._read_fanin_publication(target)
+        self.assertIsNotNone(acceptance)
+        replacement = self.root / "replacement-shard"
+        shutil.copytree(target, replacement)
+        original = target.with_name("original-shard-w1-v1")
+        original_record_count = fleet_worker._cache_record_count
+        replaced = False
+
+        def replace_root(path: Path) -> int:
+            nonlocal replaced
+            if path == target and not replaced:
+                replaced = True
+                target.rename(original)
+                replacement.rename(target)
+            return original_record_count(path)
+
+        with patch.object(fleet_worker, "_cache_record_count", new=replace_root):
+            with self.assertRaisesRegex(FanInValidationError, "root identity changed during validation"):
+                fleet_worker._validate_fanin_target_acceptance(target, tasks, acceptance)
+        self.assertTrue(replaced)
+
+    def test_fanin_preflight_runs_before_claim_and_route_binding(self) -> None:
+        from unittest.mock import patch
+
+        self._manifests(1)
+        events: list[str] = []
+        original_preflight = fleet_worker._preflight_fanin_filesystems
+        original_route = fleet_worker._resolve_fanin_route
+
+        def preflight(queue: Path, cache_dir: Path) -> None:
+            self.assertFalse(list((queue / "claimed").iterdir()))
+            self.assertEqual(cache_dir, self.cache_dir)
+            events.append("preflight")
+            original_preflight(queue, cache_dir)
+
+        def resolve(queue: Path, task) -> Path:
+            self.assertIn("preflight", events)
+            events.append("route")
+            return original_route(queue, task)
+
+        with (
+            patch.object(fleet_worker, "_preflight_fanin_filesystems", new=preflight),
+            patch.object(fleet_worker, "_resolve_fanin_route", new=resolve),
+        ):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[0], "preflight")
+        self.assertIn("route", events)
+
+    def test_fanin_preflight_failure_preserves_pending_task_before_route_binding(self) -> None:
+        from unittest.mock import patch
+
+        self._manifests(1)
+        with patch.object(
+            fleet_worker,
+            "_preflight_fanin_filesystems",
+            side_effect=fleet_worker.FanInInventoryValidationError("hard-link probe failed"),
+        ):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(rc, 2)
+        self.assertTrue((self.queue / "pending" / "i1-s0.env").exists())
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+        self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
+
+    def test_fanin_preflight_rejects_nonatomic_hardlink_collision(self) -> None:
+        from unittest.mock import patch
+
+        original_link = fleet_worker.os.link
+
+        def hide_collision(source, destination, *args, **kwargs) -> None:
+            try:
+                original_link(source, destination, *args, **kwargs)
+            except FileExistsError:
+                pass
+
+        with patch.object(fleet_worker.os, "link", new=hide_collision):
+            with self.assertRaisesRegex(FanInValidationError, "atomic hard-link CAS/collision"):
+                fleet_worker._preflight_fanin_filesystems(self.queue, self.cache_dir)
 
     def test_ambiguous_acceptance_and_successor_outcome_fails_closed(self) -> None:
         import shutil

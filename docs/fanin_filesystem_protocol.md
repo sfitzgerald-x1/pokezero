@@ -1,15 +1,29 @@
 # Fan-In Filesystem Protocol
 
-Fan-in workers sharing an iteration cache use atomic directory creation and
-same-directory rename as their distributed fence. The cache mount must provide
-those operations with POSIX cross-node semantics, such as an appropriately
-configured NFS or CephFS volume. Object-store FUSE mounts and filesystems that
-only coordinate locks within one node are unsupported.
+Fan-in workers sharing an iteration cache use atomic hard-link creation,
+directory creation, and same-directory rename as their distributed protocol.
+The queue and every cache mount must provide those operations with POSIX
+cross-node semantics, such as an appropriately configured NFS or CephFS
+volume. Object-store FUSE mounts and filesystems that only coordinate locks
+within one node are unsupported.
 
-Each fan-in worker runs a fail-closed `mkdir`/rename probe before touching a
-claimed task. That probe verifies local mount capability only; it does not prove
-cross-node atomicity. Before launch, the private deployment smoke must make
-workers on multiple nodes contend for one guard on the shared mount.
+Before a pending task is renamed into `claimed/` or any route record is bound,
+the worker probes both that task's queue and cache locations. Two probe files
+race to hard-link onto one initially absent name: exactly one link must succeed,
+the other must report `EEXIST`, and the visible destination must be the winning
+source inode. The probe also creates a directory, renames it within that same
+location, and confirms the moved directory remains visible. Any failure is a
+terminal validation error before a claim or route CAS is touched.
+
+The probe establishes only one-node behavior. Before launch, deployment
+validation must make workers on every participating node contend for one guard
+and one route record on each shared mount. The protocol assumes `link(2)` has
+atomic create-if-absent collision semantics; source and destination of each
+link are on the same filesystem; each `mkdir` collision is atomic; and every
+rename stays within one filesystem and parent directory. Readers also rely on
+directory listings and name lookups becoming mutually visible across workers
+without stale negative results. The local probe cannot prove any of those
+cross-node visibility properties.
 
 A long publication keeps its directory-fence owner record alive with a
 heartbeat; another worker may reclaim the fence only after that record expires
@@ -46,14 +60,20 @@ or over-4,096-generation chains are terminal.
 Before target rename, each staging shard receives a publication proof binding
 the task, claim generation, guard generation, worker lineage, target/version,
 manifest index and prefix, record count, manifest and metadata hashes, and a
-deterministic digest of all cache files. Target rename alone does not accept
-training input. The immutable terminal acceptance copies that proof and is the
-commit point. A target-before-acceptance crash can be resumed without
-recollection by validating the target proof and racing the same acceptance
-outcome. A target that lost to a successor may remain as an orphan, but strict
-inventory selects only a cumulative version whose final append authenticates
-that exact target and whose complete manifest prefix belongs to the accepted
-lineage. Missing or malformed target/acceptance provenance fails closed.
+deterministic digest of all cache entries except the self-describing publication
+proof. The digest uses a no-follow,
+descriptor-based walk of a real (lstat-validated) root, records each directory
+or regular-file type, name, and size, and records regular-file bytes. Symlinks
+and unsupported entry types are rejected before traversal. Root and entry
+identities are rechecked during validation, so a replacement race fails closed.
+Target rename alone does not accept training input. The immutable terminal
+acceptance copies that proof and is the commit point. A target-before-acceptance
+crash can be resumed without recollection by validating the target proof and
+racing the same acceptance outcome. A target that lost to a successor may
+remain as an orphan, but strict inventory selects only a cumulative version
+whose final append authenticates that exact target and whose complete manifest
+prefix belongs to the accepted lineage. Missing or malformed target/acceptance
+provenance fails closed.
 
 Before collecting, each task ID is bound by an append-only queue-local route
 record to its complete output route and fan-in root. Recovery always consults

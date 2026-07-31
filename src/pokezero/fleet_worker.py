@@ -74,6 +74,7 @@ import os
 import shlex
 import shutil
 import socket
+import stat
 import threading
 import time
 import traceback
@@ -264,7 +265,25 @@ def _parse_manifest(path: Path, base: str) -> TaskManifest:
         raise ValueError(f"task manifest {base} missing key {exc}") from exc
 
 
-def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
+def _same_task_manifest_route(left: TaskManifest, right: TaskManifest) -> bool:
+    """Whether pre-claim metadata still describes the claimed manifest."""
+    return (
+        left.base == right.base
+        and left.iteration == right.iteration
+        and left.offset == right.offset
+        and left.count == right.count
+        and left.seed == right.seed
+        and left.out == right.out
+        and left.policy == right.policy
+    )
+
+
+def claim_next_task(
+    queue: Path,
+    worker_id: str,
+    *,
+    before_claim: Callable[[Path, TaskManifest | None], None] | None = None,
+) -> TaskManifest | None:
     """Claim the first available pending manifest via atomic rename (or None)."""
     pending = queue / "pending"
     try:
@@ -272,6 +291,14 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
     except OSError:
         return None
     for candidate in candidates:
+        try:
+            preview = _parse_manifest(candidate, candidate.name)
+        except FileNotFoundError:
+            continue
+        except ValueError:
+            preview = None
+        if before_claim is not None:
+            before_claim(candidate, preview)
         # A claim pathname is a generation capability, not a reusable worker
         # slot. Terminal actions can therefore never target a later retry.
         claim = queue / "claimed" / f"{candidate.name}.{worker_id}.{uuid.uuid4().hex}"
@@ -281,6 +308,11 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
             continue  # lost the race; try the next manifest
         try:
             task = _parse_manifest(claim, candidate.name)
+            if before_claim is not None:
+                if preview is None or not _same_task_manifest_route(preview, task):
+                    raise FanInInventoryValidationError(
+                        f"fan-in task {candidate.name!r} changed after filesystem preflight"
+                    )
             _sweep_orphaned_claim_tokens(claim.parent, candidate.name)
             token = _write_claim_token(claim)
             return TaskManifest(**{**task.__dict__, "claim_token": token})
@@ -799,6 +831,7 @@ def _read_fanin_acceptance(path: Path) -> _FanInAcceptance | None:
 
 
 def _read_fanin_publication(path: Path) -> _FanInAcceptance | None:
+    _fanin_real_directory_stat(path)
     try:
         payload = json.loads((path / FANIN_PUBLICATION_NAME).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1435,6 +1468,7 @@ def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
 
 
 def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
+    _fanin_real_directory_stat(path)
     manifest_path = path / FANIN_MANIFEST_NAME
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1483,6 +1517,7 @@ def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
 
 
 def _cache_record_count(path: Path) -> int:
+    _fanin_real_directory_stat(path)
     try:
         metadata = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -1801,28 +1836,176 @@ def _fanin_manifest_prefix_sha256(tasks: Sequence[FanInTask], task_index: int) -
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _fanin_content_sha256(path: Path) -> str:
-    """Hash all published cache files except the self-describing publication proof."""
-    digest = hashlib.sha256()
+def _fanin_stat_identity(observed: os.stat_result) -> tuple[int, int, int]:
+    return observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode)
+
+
+def _fanin_stat_snapshot(observed: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        observed.st_dev,
+        observed.st_ino,
+        observed.st_mode,
+        observed.st_size,
+        observed.st_mtime_ns,
+        observed.st_ctime_ns,
+    )
+
+
+def _fanin_real_directory_stat(path: Path) -> os.stat_result:
+    """Return an lstat-validated shard root, never following a replacement link."""
     try:
-        entries = sorted(path.rglob("*"), key=lambda entry: entry.relative_to(path).as_posix())
-        for entry in entries:
-            relative = entry.relative_to(path).as_posix()
-            if relative == FANIN_PUBLICATION_NAME or entry.is_dir():
-                continue
-            if entry.is_symlink() or not entry.is_file():
-                raise FanInValidationError(f"fan-in shard {path} has unsupported cache entry {relative!r}")
-            encoded = relative.encode("utf-8")
-            digest.update(len(encoded).to_bytes(8, "big"))
-            digest.update(encoded)
-            digest.update(entry.stat().st_size.to_bytes(8, "big"))
-            with entry.open("rb") as handle:
-                while chunk := handle.read(1024 * 1024):
-                    digest.update(chunk)
+        observed = os.lstat(path)
     except FileNotFoundError as exc:
         raise _SelectedFanInVersionVanishedError(f"selected fan-in shard vanished: {path}") from exc
     except OSError as exc:
-        raise FanInValidationError(f"fan-in shard content is unreadable: {path}") from exc
+        raise FanInValidationError(f"fan-in shard root is unreadable: {path}") from exc
+    if stat.S_ISLNK(observed.st_mode) or not stat.S_ISDIR(observed.st_mode):
+        raise FanInValidationError(f"fan-in shard root is not a real directory: {path}")
+    return observed
+
+
+def _verify_fanin_root_unchanged(path: Path, expected: os.stat_result) -> None:
+    observed = _fanin_real_directory_stat(path)
+    if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
+        raise FanInValidationError(f"fan-in shard root identity changed during validation: {path}")
+    if _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected):
+        raise FanInValidationError(f"fan-in shard root changed during validation: {path}")
+
+
+def _fanin_hash_entry(
+    digest: Any,
+    relative: str,
+    kind: bytes,
+    observed: os.stat_result,
+) -> None:
+    try:
+        encoded = relative.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise FanInValidationError(f"fan-in shard has non-UTF-8 cache entry {relative!r}") from exc
+    if observed.st_size < 0 or observed.st_size >= 2 ** 64:
+        raise FanInValidationError(f"fan-in shard has invalid cache entry size for {relative!r}")
+    digest.update(kind)
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+    digest.update(observed.st_size.to_bytes(8, "big"))
+
+
+def _fanin_no_follow_open_flags(*, directory: bool) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise FanInValidationError("fan-in content validation requires O_NOFOLLOW support")
+    flags = os.O_RDONLY | no_follow
+    if directory:
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if directory_flag is None:
+            raise FanInValidationError("fan-in content validation requires O_DIRECTORY support")
+        flags |= directory_flag
+    return flags
+
+
+def _open_fanin_entry(
+    name: str | Path,
+    expected: os.stat_result,
+    *,
+    directory: bool,
+    dir_fd: int | None = None,
+) -> int:
+    try:
+        descriptor = os.open(name, _fanin_no_follow_open_flags(directory=directory), dir_fd=dir_fd)
+    except FileNotFoundError as exc:
+        raise _SelectedFanInVersionVanishedError(f"selected fan-in shard entry vanished: {name}") from exc
+    except OSError as exc:
+        raise FanInValidationError(f"fan-in shard entry is unreadable: {name}") from exc
+    observed = os.fstat(descriptor)
+    if (
+        _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected)
+        or stat.S_ISDIR(observed.st_mode) != directory
+    ):
+        os.close(descriptor)
+        raise FanInValidationError(f"fan-in shard entry changed during validation: {name}")
+    return descriptor
+
+
+def _verify_fanin_entry_unchanged(
+    name: str,
+    expected: os.stat_result,
+    *,
+    dir_fd: int,
+) -> None:
+    try:
+        observed = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise _SelectedFanInVersionVanishedError(f"selected fan-in shard entry vanished: {name}") from exc
+    except OSError as exc:
+        raise FanInValidationError(f"fan-in shard entry is unreadable: {name}") from exc
+    if _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected):
+        raise FanInValidationError(f"fan-in shard entry changed during validation: {name}")
+
+
+def _fanin_hash_directory(
+    digest: Any,
+    descriptor: int,
+    expected: os.stat_result,
+    relative_parent: str,
+) -> None:
+    try:
+        with os.scandir(descriptor) as entries:
+            children = sorted(
+                ((entry.name, entry.stat(follow_symlinks=False)) for entry in entries),
+                key=lambda item: item[0],
+            )
+    except OSError as exc:
+        raise FanInValidationError("fan-in shard directory is unreadable during validation") from exc
+    for name, observed in children:
+        relative = f"{relative_parent}/{name}" if relative_parent else name
+        if stat.S_ISLNK(observed.st_mode):
+            raise FanInValidationError(f"fan-in shard has symlinked cache entry {relative!r}")
+        if stat.S_ISDIR(observed.st_mode):
+            _fanin_hash_entry(digest, relative, b"D", observed)
+            child = _open_fanin_entry(name, observed, directory=True, dir_fd=descriptor)
+            try:
+                _fanin_hash_directory(digest, child, observed, relative)
+            finally:
+                os.close(child)
+            _verify_fanin_entry_unchanged(name, observed, dir_fd=descriptor)
+            continue
+        if not stat.S_ISREG(observed.st_mode):
+            raise FanInValidationError(f"fan-in shard has unsupported cache entry {relative!r}")
+        if relative == FANIN_PUBLICATION_NAME:
+            _verify_fanin_entry_unchanged(name, observed, dir_fd=descriptor)
+            continue
+        _fanin_hash_entry(digest, relative, b"F", observed)
+        file_descriptor = _open_fanin_entry(name, observed, directory=False, dir_fd=descriptor)
+        try:
+            while chunk := os.read(file_descriptor, 1024 * 1024):
+                digest.update(chunk)
+        finally:
+            os.close(file_descriptor)
+        _verify_fanin_entry_unchanged(name, observed, dir_fd=descriptor)
+    if _fanin_stat_snapshot(os.fstat(descriptor)) != _fanin_stat_snapshot(expected):
+        raise FanInValidationError("fan-in shard directory changed during validation")
+
+
+def _fanin_content_sha256(path: Path) -> str:
+    """Hash an immutable real-directory tree without following symlinked paths."""
+    root = _fanin_real_directory_stat(path)
+    digest = hashlib.sha256()
+    digest.update(b"pokezero-fanin-content-v2\0")
+    descriptor = _open_fanin_entry(path, root, directory=True)
+    try:
+        try:
+            _fanin_hash_directory(digest, descriptor, root, "")
+        except Exception:
+            # Check the root even on an earlier entry failure, but keep that
+            # more specific failure as the reason this validation was rejected.
+            try:
+                _verify_fanin_root_unchanged(path, root)
+            except FanInValidationError:
+                pass
+            raise
+    finally:
+        os.close(descriptor)
+    _verify_fanin_root_unchanged(path, root)
     return digest.hexdigest()
 
 
@@ -1876,28 +2059,39 @@ def _validate_fanin_target_acceptance(
     tasks: Sequence[FanInTask],
     acceptance: _FanInAcceptance,
 ) -> None:
-    publication = _read_fanin_publication(path)
-    if publication is None:
-        raise FanInInventoryValidationError(
-            f"fan-in shard {path} has missing or malformed publication provenance"
-        )
-    if publication != acceptance:
-        raise FanInInventoryValidationError(
-            f"fan-in shard {path} publication provenance conflicts with acceptance"
-        )
-    if (
-        acceptance.target != path.name
-        or acceptance.task_index != len(tasks) - 1
-        or tasks[acceptance.task_index] != acceptance.task
-        or acceptance.prefix_sha256 != _fanin_manifest_prefix_sha256(tasks, acceptance.task_index)
-        or acceptance.manifest_sha256 != _sha256_file(path / FANIN_MANIFEST_NAME)
-        or acceptance.metadata_sha256 != _sha256_file(path / "metadata.json")
-        or acceptance.content_sha256 != _fanin_content_sha256(path)
-        or acceptance.record_count != _cache_record_count(path)
-    ):
-        raise FanInInventoryValidationError(
-            f"fan-in shard {path} content or lineage disagrees with its acceptance"
-        )
+    root = _fanin_real_directory_stat(path)
+    try:
+        publication = _read_fanin_publication(path)
+        if publication is None:
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} has missing or malformed publication provenance"
+            )
+        if publication != acceptance:
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} publication provenance conflicts with acceptance"
+            )
+        if (
+            acceptance.target != path.name
+            or acceptance.task_index != len(tasks) - 1
+            or tasks[acceptance.task_index] != acceptance.task
+            or acceptance.prefix_sha256 != _fanin_manifest_prefix_sha256(tasks, acceptance.task_index)
+            or acceptance.manifest_sha256 != _sha256_file(path / FANIN_MANIFEST_NAME)
+            or acceptance.metadata_sha256 != _sha256_file(path / "metadata.json")
+            or acceptance.content_sha256 != _fanin_content_sha256(path)
+            or acceptance.record_count != _cache_record_count(path)
+        ):
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} content or lineage disagrees with its acceptance"
+            )
+    except Exception:
+        # An entry-level rejection remains more actionable than the parent
+        # directory timestamp it also changes, while both checks still run.
+        try:
+            _verify_fanin_root_unchanged(path, root)
+        except FanInValidationError:
+            pass
+        raise
+    _verify_fanin_root_unchanged(path, root)
 
 
 def _accept_fanin_publication(root: Path, publication: _FanInAcceptance) -> _FanInAcceptance:
@@ -1938,32 +2132,103 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _preflight_fanin_filesystem(cache_dir: Path) -> None:
-    """Verify local support for directory operations required by fan-in.
-
-    Fan-in deliberately does not use ``flock``: all workers that share this
-    cache directory must instead see POSIX-atomic ``mkdir`` and same-directory
-    ``rename`` operations. Deployments must mount the cache on a filesystem
-    with those cross-node semantics (for example a POSIX NFS/CephFS mount), not
-    an object-store FUSE layer. This local probe fails closed when those
-    primitives are unavailable, but cannot establish cross-node atomicity. The
-    private deployment smoke must make workers on multiple nodes contend for
-    one guard on the shared mount before launch.
-    """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    probe = cache_dir / f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
-    moved = probe.with_name(f".{probe.name}.moved")
+def _preflight_fanin_location(path: Path, location: str) -> None:
+    """Probe one mount for the local atomic operations fan-in relies on."""
+    path.mkdir(parents=True, exist_ok=True)
+    token = f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
+    source_a = path / f"{token}.source-a"
+    source_b = path / f"{token}.source-b"
+    collision = path / f"{token}.collision"
+    directory = path / f"{token}.directory"
+    moved = path / f"{token}.moved"
     try:
-        probe.mkdir()
-        os.rename(probe, moved)
-        probe.mkdir()
+        for source, contents in ((source_a, b"a\n"), (source_b, b"b\n")):
+            with source.open("xb") as handle:
+                handle.write(contents)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+        gate = threading.Barrier(3)
+        results: list[tuple[Path, OSError | None]] = []
+        results_lock = threading.Lock()
+
+        def race_link(source: Path) -> None:
+            try:
+                gate.wait(timeout=1.0)
+                os.link(source, collision)
+            except OSError as exc:
+                outcome: OSError | None = exc
+            except threading.BrokenBarrierError:
+                outcome = OSError(errno.ETIMEDOUT, "hard-link probe did not start")
+            else:
+                outcome = None
+            with results_lock:
+                results.append((source, outcome))
+
+        threads = [threading.Thread(target=race_link, args=(source,)) for source in (source_a, source_b)]
+        for thread in threads:
+            thread.start()
+        try:
+            gate.wait(timeout=1.0)
+        except threading.BrokenBarrierError as exc:
+            raise FanInInventoryValidationError(
+                f"fan-in {location} filesystem hard-link probe did not start: {path}"
+            ) from exc
+        for thread in threads:
+            thread.join(timeout=1.0)
+        if any(thread.is_alive() for thread in threads):
+            raise FanInInventoryValidationError(
+                f"fan-in {location} filesystem hard-link probe did not finish: {path}"
+            )
+        winners = [source for source, outcome in results if outcome is None]
+        collisions = [
+            outcome for _source, outcome in results
+            if outcome is not None and outcome.errno == errno.EEXIST
+        ]
+        if len(results) != 2 or len(winners) != 1 or len(collisions) != 1:
+            raise FanInInventoryValidationError(
+                f"fan-in {location} filesystem lacks atomic hard-link CAS/collision support: {path}"
+            )
+        observed = os.lstat(collision)
+        winner = os.lstat(winners[0])
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or _fanin_stat_identity(observed) != _fanin_stat_identity(winner)
+        ):
+            raise FanInInventoryValidationError(
+                f"fan-in {location} filesystem has invalid hard-link visibility: {path}"
+            )
+
+        directory.mkdir()
+        os.rename(directory, moved)
+        if not stat.S_ISDIR(os.lstat(moved).st_mode):
+            raise FanInInventoryValidationError(
+                f"fan-in {location} filesystem lost a same-directory rename: {path}"
+            )
+        directory.mkdir()
+    except FanInInventoryValidationError:
+        raise
     except OSError as exc:
         raise FanInInventoryValidationError(
-            f"fan-in cache filesystem lacks required atomic mkdir/rename support: {cache_dir}: {exc}"
+            f"fan-in {location} filesystem lacks required hard-link, mkdir, or same-directory rename support: {path}: {exc}"
         ) from exc
     finally:
-        shutil.rmtree(probe, ignore_errors=True)
+        for candidate in (collision, source_a, source_b):
+            candidate.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
         shutil.rmtree(moved, ignore_errors=True)
+
+
+def _preflight_fanin_filesystems(queue: Path, cache_dir: Path) -> None:
+    """Verify queue and cache mounts before a fan-in route CAS or queue claim.
+
+    Fan-in requires POSIX-visible, atomic ``link`` collision, ``mkdir``, and
+    same-directory ``rename`` behavior at both locations. This local race only
+    establishes one-node behavior; deployment validation must additionally
+    contend across all worker nodes sharing each mount.
+    """
+    _preflight_fanin_location(queue, "queue")
+    _preflight_fanin_location(cache_dir, "cache")
 
 
 def _task_manifest_text(task: TaskManifest) -> str:
@@ -2477,8 +2742,24 @@ def run_worker(
             return True
         return False
 
+    def preflight_fanin_claim(_candidate: Path, preview: TaskManifest | None) -> None:
+        if preview is None:
+            # A malformed manifest has no cache route to probe, but its queue
+            # claim must still not precede validation of the queue mount.
+            _preflight_fanin_location(queue, "queue")
+            return
+        _preflight_fanin_filesystems(queue, preview.out.parent)
+
     while True:
-        task = claim_next_task(queue, worker)
+        try:
+            task = claim_next_task(
+                queue,
+                worker,
+                before_claim=preflight_fanin_claim if shard_fanin else None,
+            )
+        except (FanInInventoryValidationError, OSError) as exc:
+            log(f"TERMINAL fan-in filesystem preflight failed before claim or route binding: {exc}")
+            return finish(2)
         if task is None:
             now = time.monotonic()
             if idle_since is None:
@@ -2497,10 +2778,9 @@ def run_worker(
                     # Preserve the established per-task failure classification;
                     # recovery below will reject malformed queue metadata.
                     cache_dir = task.out.parent
-                _preflight_fanin_filesystem(cache_dir)
                 _sweep_abandoned_fanin_staging(cache_dir, queue)
             except (FanInInventoryValidationError, OSError) as exc:
-                log(f"TERMINAL fan-in filesystem preflight failed for {task.base}; preserving claim: {exc}")
+                log(f"TERMINAL fan-in selected inventory corruption for {task.base}; preserving claim: {exc}")
                 return finish(2)
             try:
                 if _recover_fanin_task(task, queue, crash_inject=crash_inject):
