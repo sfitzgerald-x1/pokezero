@@ -973,6 +973,13 @@ fn render_none_phase(
 struct MovePrelude {
     used_move: bool,
     woke_up: bool,
+    /// The exact 40-power damage the engine would emit for the pre-move
+    /// confusion self-hit, if this phase actually reached that handler.
+    ///
+    /// This is deliberately recorded from the duration `+1` instruction,
+    /// rather than inferred from PP or last-move bookkeeping. Both of those
+    /// instructions are omitted by the engine in common legal states.
+    confusion_self_hit_damage: Option<i16>,
 }
 
 /// Consume the pre-move bookkeeping (PP, last-used-move, sleep/freeze/rest
@@ -989,6 +996,7 @@ fn consume_move_prelude(
     let mut prelude = MovePrelude {
         used_move: true,
         woke_up: false,
+        confusion_self_hit_damage: None,
     };
     // Attacker already fainted (first mover KO'd it before it could act) or
     // the opponent's pivot (U-turn/Baton Pass) saved this move for after the
@@ -1095,6 +1103,63 @@ fn consume_move_prelude(
             }
             Instruction::RemoveVolatileStatus(remove)
                 if remove.side_ref == side
+                    && remove.volatile_status == PokemonVolatileStatus::DESTINYBOND =>
+            {
+                // Choosing any other move silently clears the previous
+                // Destiny Bond before the status gate. It is real state
+                // bookkeeping, but has no public protocol line.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::DisableMove(disable)
+                if disable.side_ref == side
+                    && (sim
+                        .state
+                        .get_side_immutable(&side)
+                        .get_active_immutable()
+                        .item
+                        == Items::CHOICEBAND
+                        || matches!(
+                            choice.volatile_status.as_ref(),
+                            Some(volatile)
+                                if volatile.volatile_status
+                                    == PokemonVolatileStatus::LOCKEDMOVE
+                                    && volatile.target == MoveTarget::User
+                        )) =>
+            {
+                // Choice Band and locked-move setup disable the unused slots
+                // before confusion runs. The disables are silent and may
+                // legally appear even when confusion cancels the move.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::SetFutureSight(set)
+                if set.side_ref == side && choice.move_id == Choices::FUTURESIGHT =>
+            {
+                // The engine records Future Sight's pending-slot bookkeeping
+                // in choice_before_move. The selected move still has to pass
+                // the later confusion gate before a |move| line is emitted.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            // Confusion's onBeforeMove handler increments its bounded-duration
+            // counter before it chooses the self-hit branch. This is silent
+            // protocol bookkeeping, like PP and last-move updates above. If it
+            // remains in the move segment, the following lone self-damage is
+            // no longer recognized as a cancelled move and can be rendered as
+            // the selected move's self-cost (notably Substitute).
+            Instruction::ChangeVolatileStatusDuration(change)
+                if change.side_ref == side
+                    && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && change.amount == 1 =>
+            {
+                prelude.confusion_self_hit_damage =
+                    Some(confusion_self_hit_damage(sim.state, side));
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::RemoveVolatileStatus(remove)
+                if remove.side_ref == side
                     && charge_volatile_move(remove.volatile_status).is_some() =>
             {
                 // Charge release (Solar Beam turn 2 etc.): consumed silently;
@@ -1128,17 +1193,15 @@ fn consume_move_prelude(
                 sim.apply(ins);
                 *cursor += 1;
                 if set.new_turns > set.previous_turns && !prelude.woke_up {
-                    // Stayed asleep (sleep-turn counter advanced, no wake).
-                    // Sleep Talk still acts through the sleep — the real
-                    // protocol shows |cant|..|slp| AND the Sleep Talk lines.
+                    if choice.move_id == Choices::SLEEPTALK {
+                        // Sleep Talk is sleepUsable: staying asleep does not
+                        // emit |cant| and the lower-priority confusion gate
+                        // still runs before Sleep Talk can call another move.
+                        sleep_gate_seen = true;
+                        continue;
+                    }
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id == Choices::SLEEPTALK {
-                        // Everything after the sleep gate belongs to the
-                        // CALLED move (e.g. a called Refresh's status cure
-                        // must not be mis-read as a natural wake).
-                        return prelude;
-                    }
                     prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
@@ -1147,12 +1210,13 @@ fn consume_move_prelude(
                 sim.apply(ins);
                 *cursor += 1;
                 if !prelude.woke_up {
-                    // Still resting.
+                    if choice.move_id == Choices::SLEEPTALK {
+                        // Rest sleep has the same sleepUsable contract.
+                        sleep_gate_seen = true;
+                        continue;
+                    }
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id == Choices::SLEEPTALK {
-                        return prelude; // see above
-                    }
                     prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
@@ -1188,6 +1252,104 @@ fn consume_move_prelude(
     prelude
 }
 
+/// The Gen 3 confusion self-hit is a deterministic, typeless 40-power
+/// physical hit against the user's own boosted Attack and Defense. This is a
+/// direct mirror of the engine's `generate_instructions_from_existing_status_conditions`
+/// calculation, including burn and the current-HP cap.
+fn confusion_self_hit_damage(state: &State, side: SideReference) -> i16 {
+    let active_side = state.get_side_immutable(&side);
+    let active = active_side.get_active_immutable();
+    let attack = active_side.calculate_boosted_stat(PokemonBoostableStat::Attack);
+    let defense = active_side
+        .calculate_boosted_stat(PokemonBoostableStat::Defense)
+        .max(1);
+
+    let mut damage = 2.0 * active.level as f32;
+    damage = damage.floor() / 5.0;
+    damage = damage.floor() + 2.0;
+    damage = damage.floor() * 40.0;
+    damage = damage * attack as f32 / defense as f32;
+    damage = damage.floor() / 50.0;
+    damage = damage.floor() + 2.0;
+    if active.status == PokemonStatus::BURN {
+        damage /= 2.0;
+    }
+    std::cmp::min(damage as i16, active.hp)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfusionSelfHitEvidence {
+    Exact,
+    AmbiguousExecutedSelfDamage,
+}
+
+/// Decide whether a one-damage action tail is provably a confusion self-hit.
+///
+/// A pre-move duration increment proves the confusion handler ran, but it does
+/// not alone prove that it stopped the chosen move: a missed Jump Kick can
+/// produce the same bare self-damage, and a self-destructing move can do so
+/// behind Protect or immunity. We only render the public `|-activate|...|
+/// confusion` line when the fixed 40-power damage identity is unique. When the
+/// engine has collapsed an executed self-damage branch onto that identity, the
+/// caller must preserve the endpoint behind a stable lossy marker instead.
+fn classify_confusion_self_hit(
+    state: &State,
+    side: SideReference,
+    choice: &Choice,
+    action_tail: &[Instruction],
+    expected_damage: Option<i16>,
+) -> Option<ConfusionSelfHitEvidence> {
+    let expected_damage = expected_damage?;
+    let damage = match action_tail {
+        [Instruction::Damage(damage)] if damage.side_ref == side => damage.damage_amount,
+        _ => return None,
+    };
+    if damage != expected_damage {
+        return None;
+    }
+
+    let active = state.get_side_immutable(&side).get_active_immutable();
+    let crash_matches = choice.crash.map_or(false, |fraction| {
+        let crash = (active.maxhp as f32 * fraction) as i16;
+        damage == std::cmp::min(crash, active.hp)
+    });
+    if crash_matches || self_faint_move_can_be_self_only(state, side, choice, damage) {
+        return Some(ConfusionSelfHitEvidence::AmbiguousExecutedSelfDamage);
+    }
+    Some(ConfusionSelfHitEvidence::Exact)
+}
+
+/// Explosion/Self-Destruct normally leave target damage in their action tail,
+/// which makes a bare user damage impossible to confuse with their execution.
+/// Protect, type/ability immunity are the exceptions: the engine records only
+/// the user's faint, so a lethal confusion self-hit has the same delta.
+fn self_faint_move_can_be_self_only(
+    state: &State,
+    side: SideReference,
+    choice: &Choice,
+    damage: i16,
+) -> bool {
+    if !matches!(choice.move_id, Choices::EXPLOSION | Choices::SELFDESTRUCT) {
+        return false;
+    }
+    let attacker_hp = state.get_side_immutable(&side).get_active_immutable().hp;
+    if damage != attacker_hp {
+        return false;
+    }
+    let defender = other_side(side);
+    let defender_active = state
+        .get_side_immutable(&defender)
+        .get_active_immutable();
+    let protected = state
+        .get_side_immutable(&defender)
+        .volatile_statuses
+        .contains(&PokemonVolatileStatus::PROTECT)
+        && choice.flags.protect;
+    let effectiveness = type_effectiveness_modifier(&choice.move_type, defender_active);
+    let ability_blocks = ability_immunity(defender_active.ability, choice, effectiveness).is_some();
+    protected || effectiveness == 0.0 || ability_blocks
+}
+
 /// A `(move, ...)` action phase. `called_tag` marks a caller-invoked move
 /// (Sleep Talk): the prelude is skipped and the `|move|` line carries the
 /// `[from]` caller attribution (fold: `called` token flag).
@@ -1214,11 +1376,57 @@ fn render_move_phase(
             .contains(&PokemonVolatileStatus::LOCKEDMOVE)
     };
 
+    let mut confusion_self_hit_damage = None;
     if called_tag.is_none() {
         let prelude = consume_move_prelude(sim, side, choice, segment, &mut cursor, ctx, out);
         if !prelude.used_move {
             return;
         }
+        confusion_self_hit_damage = prelude.confusion_self_hit_damage;
+    }
+
+    let tail = &segment[cursor..];
+    match classify_confusion_self_hit(
+        sim.state,
+        side,
+        choice,
+        tail,
+        confusion_self_hit_damage,
+    ) {
+        Some(ConfusionSelfHitEvidence::Exact) => {
+            let ident = ctx.active_ident(sim.state, side);
+            out.lines.push(format!("|-activate|{ident}|confusion"));
+            sim.apply(&tail[0]);
+            let condition = sim.hp_condition(side);
+            out.lines.push(format!("|-damage|{ident}|{condition}"));
+            emit_faint_if_dead(sim, side, ctx, out);
+            return;
+        }
+        Some(ConfusionSelfHitEvidence::AmbiguousExecutedSelfDamage) => {
+            // The native engine combines chance outcomes with equal state
+            // deltas. Do not invent either a confusion activation or a move
+            // line when a crash/self-faint execution shares this exact delta.
+            // The separator ensures the bare HP update cannot be charged to
+            // the previous actor's move window by the fold.
+            out.lossy
+                .push("confusion_selfhit_ambiguous_executed_self_damage".to_string());
+            out.lines.push("|".to_string());
+            let ident = ctx.active_ident(sim.state, side);
+            sim.apply(&tail[0]);
+            let condition = sim.hp_condition(side);
+            out.lines.push(format!("|-damage|{ident}|{condition}"));
+            emit_faint_if_dead(sim, side, ctx, out);
+            return;
+        }
+        None => {}
+    }
+
+    // Showdown announces a surviving confusion check before the selected
+    // move (including Sleep Talk) proceeds. The exact self-hit arm above
+    // already emitted the same activation before returning.
+    if confusion_self_hit_damage.is_some() {
+        let ident = ctx.active_ident(sim.state, side);
+        out.lines.push(format!("|-activate|{ident}|confusion"));
     }
 
     // Sleep Talk while asleep: the instruction list carries the CALLED
@@ -1238,14 +1446,14 @@ fn render_move_phase(
             let attacker_ident = ctx.active_ident(sim.state, side);
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
-            let tail: Vec<Instruction> = segment[cursor..].to_vec();
-            match identify_sleep_talk_called(sim.state, side, &tail, branch_on_damage) {
+            let called_tail: Vec<Instruction> = tail.to_vec();
+            match identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage) {
                 Some(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
                         &called_choice,
-                        &tail,
+                        &called_tail,
                         branch_on_damage,
                         ctx,
                         out,
@@ -1253,23 +1461,13 @@ fn render_move_phase(
                     );
                 }
                 None => {
-                    // Unrecoverable from the delta (documented insufficiency):
-                    // fold-safe fallback — the effects (if any) accrue to
-                    // the Sleep Talk window. ALWAYS flagged, even for an
-                    // empty delta (an ambiguous no-op call still means the
-                    // real stream had a called-move line we cannot emit).
+                    // The called move is not provable from this delta. Keep
+                    // the simulated state exact, but emit no invented called
+                    // move or residual attribution; callers must reject or
+                    // explicitly tolerate the lossy branch.
                     out.lossy.push("sleeptalk_called_unidentified".to_string());
-                    let mut plan = ResidualPlan::default();
-                    for (index, ins) in tail.iter().enumerate() {
-                        render_residual_instruction(
-                            sim,
-                            ins,
-                            tail.get(index + 1),
-                            &mut plan,
-                            ctx,
-                            out,
-                            true,
-                        );
+                    for instruction in &called_tail {
+                        sim.apply(instruction);
                     }
                 }
             }
@@ -1282,32 +1480,6 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             return;
-        }
-    }
-
-    // Confusion self-hit: the residue after the prelude is a single Damage on
-    // the user (the engine's hit-yourself branch).
-    if segment[cursor..].len() == 1 {
-        if let Instruction::Damage(damage) = &segment[cursor] {
-            if damage.side_ref == side {
-                let confused = {
-                    let s = match side {
-                        SideReference::SideOne => &sim.state.side_one,
-                        SideReference::SideTwo => &sim.state.side_two,
-                    };
-                    s.volatile_statuses
-                        .contains(&PokemonVolatileStatus::CONFUSION)
-                };
-                if confused && choice.crash.is_none() {
-                    let ident = ctx.active_ident(sim.state, side);
-                    sim.apply(&segment[cursor]);
-                    let condition = sim.hp_condition(side);
-                    out.lines
-                        .push(format!("|-damage|{ident}|{condition}|[from] confusion"));
-                    emit_faint_if_dead(sim, side, ctx, out);
-                    return;
-                }
-            }
         }
     }
 
@@ -1348,13 +1520,16 @@ fn render_move_phase(
         expected_damage_values(sim.state, side, choice, branch_on_damage);
 
     // Classify the remaining tail.
-    let tail = &segment[cursor..];
     let deals_damage_to_defender = tail.iter().any(|ins| match ins {
         Instruction::Damage(d) => d.side_ref == defender,
         Instruction::DamageSubstitute(d) => d.side_ref == defender,
         _ => false,
     });
     let has_any_effect = !tail.is_empty();
+    let is_self_faint_move = matches!(
+        choice.move_id,
+        Choices::EXPLOSION | Choices::SELFDESTRUCT | Choices::MEMENTO
+    );
 
     // The |move| line. Target rendering (measured against the golden corpus):
     // opponent-target moves always show the target; self-target moves show
@@ -1587,6 +1762,26 @@ fn render_move_phase(
         return;
     }
 
+    // Explosion/Self-Destruct faint the user before the hit check. Their
+    // resulting tail is therefore nonempty even when the target was protected
+    // or immune; render that target outcome before walking the user's faint.
+    let mut self_faint_target_outcome_rendered = false;
+    if is_self_faint_move && has_any_effect && !deals_damage_to_defender {
+        if defender_protected && choice.flags.protect {
+            out.lines
+                .push(format!("|-activate|{defender_ident}|Protect"));
+            self_faint_target_outcome_rendered = true;
+        } else if is_damaging && effectiveness == 0.0 {
+            out.lines.push(format!("|-immune|{defender_ident}"));
+            self_faint_target_outcome_rendered = true;
+        } else if let Some(ability) = ability_immune {
+            out.lines.push(format!(
+                "|-immune|{defender_ident}|[from] ability: {ability}"
+            ));
+            self_faint_target_outcome_rendered = true;
+        }
+    }
+
     // Deterministic no-effect renders.
     if !has_any_effect {
         if capped_boost_move {
@@ -1673,10 +1868,6 @@ fn render_move_phase(
             }
         };
     }
-    let is_self_faint_move = matches!(
-        choice.move_id,
-        Choices::EXPLOSION | Choices::SELFDESTRUCT | Choices::MEMENTO
-    );
     let is_transform = choice.move_id == Choices::TRANSFORM;
     if is_transform {
         out.lines
@@ -1829,7 +2020,9 @@ fn render_move_phase(
             }
             Instruction::Heal(heal) => {
                 if heal.heal_amount == 0 && heal.side_ref == defender {
-                    if defender_protected {
+                    if self_faint_target_outcome_rendered {
+                        continue;
+                    } else if defender_protected {
                         out.lines
                             .push(format!("|-activate|{defender_ident}|Protect"));
                     } else if let Some(ability) = absorb {
@@ -2253,6 +2446,17 @@ fn render_residual_instruction(
                 boost.amount,
                 Some(&item_name),
             ));
+        }
+        Instruction::RemoveVolatileStatus(remove)
+            if remove.volatile_status == PokemonVolatileStatus::CONFUSION =>
+        {
+            // The bounded-duration ladder runs after action segmentation, so
+            // expiry is normally part of the residual segment. Unlike its
+            // internal duration decrement, the public snap-out line must be
+            // retained for the fold's confusion lifecycle.
+            sim.apply(ins);
+            let ident = ctx.active_ident(sim.state, remove.side_ref);
+            out.lines.push(format!("|-end|{ident}|confusion"));
         }
         _ => {
             if lossy_mode {

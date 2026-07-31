@@ -1639,13 +1639,17 @@ impl FoldStateInner {
                             if let Some(new_fraction) = new_fraction {
                                 let delta = previous_fraction - new_fraction;
                                 if delta > 0.0 {
-                                    current.damage_fraction += delta;
                                     if is_confusion_selfhit {
                                         current.confusion_selfhit_fraction += delta;
                                         current.confusion_selfhit = true;
+                                    } else {
+                                        current.damage_fraction += delta;
                                     }
                                 }
-                                current.defender_hit_by_move = true;
+                                // A confusion self-hit occurs between action
+                                // windows. It must not become damage or a KO
+                                // credited to the previous actor's move.
+                                current.defender_hit_by_move = !is_confusion_selfhit;
                             }
                         }
                     } else {

@@ -600,11 +600,12 @@ class FoldState:
                         previous_fraction = self.hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            current.damage_fraction += delta
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
-                        current.defender_hit_by_move = True
+                            else:
+                                current.damage_fraction += delta
+                        current.defender_hit_by_move = not is_confusion_selfhit
                 else:
                     current.defender_hit_by_move = False
             if (
