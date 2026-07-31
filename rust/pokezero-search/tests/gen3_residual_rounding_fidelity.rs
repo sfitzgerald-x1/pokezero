@@ -80,12 +80,26 @@ fn toxic_counter_changes(list: &[Instruction], side_ref: SideReference) -> Vec<i
         .collect()
 }
 
-/// Side one's active carries `status`, at toxic stage `toxic_count + 1`. Side
-/// two is inert, so the only damage in the branch is the residual under test.
+/// The selected side's active carries `status`, at toxic stage `toxic_count +
+/// 1`. The other side is inert, so the only damage in the branch is the
+/// residual under test.
 fn residual_state(status: PokemonStatus, maxhp: i16, toxic_count: i8) -> State {
+    residual_state_for_side(SideReference::SideOne, status, maxhp, toxic_count)
+}
+
+fn residual_state_for_side(
+    side_ref: SideReference,
+    status: PokemonStatus,
+    maxhp: i16,
+    toxic_count: i8,
+) -> State {
     let mut state = State::default();
-    state.side_one.side_conditions.toxic_count = toxic_count;
-    let active = state.side_one.get_active();
+    let side = match side_ref {
+        SideReference::SideOne => &mut state.side_one,
+        SideReference::SideTwo => &mut state.side_two,
+    };
+    side.side_conditions.toxic_count = toxic_count;
+    let active = side.get_active();
     active.maxhp = maxhp;
     active.hp = maxhp;
     active.status = status;
@@ -183,56 +197,62 @@ fn toxic_stage_fifteen_stays_capped_across_residual_advances() {
 /// counters preserve the exact Showdown ladder, while malformed values fail
 /// safe and are repaired by reversible side-condition instructions.
 #[test]
-fn toxic_counter_arithmetic_is_safe_and_normalizes_every_stored_i8_value() {
-    for toxic_count in 0..=14i8 {
-        let mut state = residual_state(PokemonStatus::TOXIC, 640, toxic_count);
-        let list = generate(&mut state);
-        let stage = toxic_count as i16 + 1;
-        assert_eq!(damage_to(&list, SideReference::SideOne), 40 * stage);
-        assert_eq!(
-            toxic_counter_changes(&list, SideReference::SideOne),
-            if toxic_count == 14 { vec![] } else { vec![1] },
-            "valid counter {} must retain normal increment behavior",
-            toxic_count
-        );
-        state.apply_instructions(&list);
-        assert_eq!(
-            state.side_one.side_conditions.toxic_count,
-            toxic_count.min(13) + 1,
-            "valid counter {} must end normalized",
-            toxic_count
-        );
-    }
+fn toxic_counter_arithmetic_is_safe_and_normalizes_every_stored_i8_value_on_both_sides() {
+    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+        for toxic_count in 0..=14i8 {
+            let mut state =
+                residual_state_for_side(side_ref, PokemonStatus::TOXIC, 640, toxic_count);
+            let list = generate(&mut state);
+            let stage = toxic_count as i16 + 1;
+            assert_eq!(damage_to(&list, side_ref), 40 * stage);
+            assert_eq!(
+                toxic_counter_changes(&list, side_ref),
+                if toxic_count == 14 { vec![] } else { vec![1] },
+                "{side_ref:?} valid counter {toxic_count} must retain normal increment behavior"
+            );
+            state.apply_instructions(&list);
+            let final_stored_count = match side_ref {
+                SideReference::SideOne => state.side_one.side_conditions.toxic_count,
+                SideReference::SideTwo => state.side_two.side_conditions.toxic_count,
+            };
+            assert_eq!(
+                final_stored_count,
+                toxic_count.min(13) + 1,
+                "{side_ref:?} valid counter {toxic_count} must end normalized"
+            );
+        }
 
-    for (toxic_count, stage, corrections, final_count) in [
-        (-1, 1, vec![2], 1),
-        (15, 15, vec![-1], 14),
-        (i8::MAX, 15, vec![-113], 14),
-        // i8::MIN needs two bounded deltas because ChangeSideCondition.amount
-        // is i8 and each instruction must still be reversible on its own.
-        (i8::MIN, 1, vec![i8::MAX, 2], 1),
-    ] {
-        let mut state = residual_state(PokemonStatus::TOXIC, 640, toxic_count);
-        let list = generate(&mut state);
-        assert_eq!(
-            damage_to(&list, SideReference::SideOne),
-            40 * stage,
-            "stored counter {} must use fail-safe stage {}",
-            toxic_count,
-            stage
-        );
-        assert_eq!(
-            toxic_counter_changes(&list, SideReference::SideOne),
-            corrections,
-            "stored counter {} must emit its exact reversible correction",
-            toxic_count
-        );
-        state.apply_instructions(&list);
-        assert_eq!(
-            state.side_one.side_conditions.toxic_count, final_count,
-            "stored counter {} must finish normalized",
-            toxic_count
-        );
+        for (toxic_count, stage, corrections, final_count) in [
+            (-1, 1, vec![2], 1),
+            (15, 15, vec![-1], 14),
+            (i8::MAX, 15, vec![-113], 14),
+            // i8::MIN needs two bounded deltas because ChangeSideCondition.amount
+            // is i8 and each instruction must still be reversible on its own.
+            (i8::MIN, 1, vec![i8::MAX, 2], 1),
+        ] {
+            let mut state =
+                residual_state_for_side(side_ref, PokemonStatus::TOXIC, 640, toxic_count);
+            let list = generate(&mut state);
+            assert_eq!(
+                damage_to(&list, side_ref),
+                40 * stage,
+                "{side_ref:?} stored counter {toxic_count} must use fail-safe stage {stage}"
+            );
+            assert_eq!(
+                toxic_counter_changes(&list, side_ref),
+                corrections,
+                "{side_ref:?} stored counter {toxic_count} must emit its exact reversible correction"
+            );
+            state.apply_instructions(&list);
+            let final_stored_count = match side_ref {
+                SideReference::SideOne => state.side_one.side_conditions.toxic_count,
+                SideReference::SideTwo => state.side_two.side_conditions.toxic_count,
+            };
+            assert_eq!(
+                final_stored_count, final_count,
+                "{side_ref:?} stored counter {toxic_count} must finish normalized"
+            );
+        }
     }
 }
 

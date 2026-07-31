@@ -823,7 +823,7 @@ pub fn render_branch_events(
             );
         }
         // A pivot in flight (U-turn/Baton Pass chose to switch, the engine
-        // skipped residuals): the turn is not over — no |upkeep| yet.
+        // skipped residuals): the turn is not over — no |upkeep yet.
         if !(sim.state.side_one.force_switch || sim.state.side_two.force_switch) {
             out.lines.push("|upkeep".to_string());
         }
@@ -886,7 +886,7 @@ fn finish_ply(
             out.lines.push("|upkeep".to_string());
         }
         // Faint replacement: the faint ply already carried residuals +
-        // |upkeep|; the real protocol places the replacement switch before
+        // |upkeep; the real protocol places the replacement switch before
         // |turn|, which is exactly where we are now.
         out.lines.push(format!("|turn|{}", ctx.turn + 1));
         out.turn_completed = true;

@@ -34,7 +34,7 @@ Probe results the pins encode:
 The Trace rows prove that line position alone is insufficient: event-queue membership changes
 whether copied Truant receives the residual. Traced holders therefore remain UNKNOWN until an
 own move or Truant ``cant`` line publicly anchors the phase. The last row is the native
-replacement guard: a holder entering between `|upkeep|` and `|turn|` missed that turn's
+replacement guard: a holder entering between `|upkeep` and `|turn|` missed that turn's
 residual, so the following turn marker must not double-count it.
 """
 
@@ -67,15 +67,15 @@ class NativeTruantPhaseTest(unittest.TestCase):
 
     def test_a_lead_holder_loafs_on_the_second_turn(self) -> None:
         p = _parse([SLAKING, OPP, "|turn|1", "|move|p1a: Slaking|Tackle|p2a: Snorlax",
-                    "|upkeep|", "|turn|2"])
+                    "|upkeep", "|turn|2"])
         self.assertIs(p.truant_phase["p1"], True)
 
     def test_a_mid_battle_switch_in_also_acts_on_its_first_move_turn(self) -> None:
         # Seeded True (turn != 0), then the end-of-turn residual flips it to False. The
         # `turn != 0` term exists precisely to make this case agree with the lead.
         p = _parse(["|switch|p1a: Snorlax|Snorlax, L80, M|400/400", OPP, "|turn|1",
-                    "|move|p1a: Snorlax|Tackle|p2a: Snorlax", "|upkeep|", "|turn|2",
-                    SLAKING, "|upkeep|", "|turn|3"])
+                    "|move|p1a: Snorlax|Tackle|p2a: Snorlax", "|upkeep", "|turn|2",
+                    SLAKING, "|upkeep", "|turn|3"])
         self.assertIs(p.truant_phase["p1"], False)
 
     def test_the_phase_alternates_every_turn_regardless_of_what_happened(self) -> None:
@@ -84,13 +84,13 @@ class NativeTruantPhaseTest(unittest.TestCase):
         lines = [SLAKING, OPP, "|turn|1"]
         seen = []
         for turn in range(2, 7):
-            lines += ["|cant|p1a: Slaking|slp", "|upkeep|", f"|turn|{turn}"]
+            lines += ["|cant|p1a: Slaking|slp", "|upkeep", f"|turn|{turn}"]
             seen.append(_parse(list(lines)).truant_phase["p1"])
         self.assertEqual(seen, [True, False, True, False, True])
 
     def test_a_non_holder_switching_in_clears_the_phase(self) -> None:
         p = _parse([SLAKING, OPP, "|turn|1",
-                    "|switch|p1a: Snorlax|Snorlax, L80, M|400/400", "|upkeep|", "|turn|2"])
+                    "|switch|p1a: Snorlax|Snorlax, L80, M|400/400", "|upkeep", "|turn|2"])
         self.assertIsNone(p.truant_phase["p1"])
 
 
@@ -111,7 +111,7 @@ class TruantAnchorTest(unittest.TestCase):
         drifted = [SLAKING, OPP, "|turn|1", "|cant|p1a: Slaking|ability: Truant"]
         p = _parse(drifted)
         self.assertIs(p.truant_phase["p1"], True)
-        p2 = _parse(drifted + ["|upkeep|", "|turn|2"])
+        p2 = _parse(drifted + ["|upkeep", "|turn|2"])
         self.assertIs(p2.truant_phase["p1"], False)
 
     def test_a_called_move_does_not_anchor(self) -> None:
@@ -147,7 +147,7 @@ class TracedTruantTest(unittest.TestCase):
             "|move|p2a: Slaking|Return|p1a: Porygon2",
             "|-damage|p1a: Porygon2|49/267",
             "|-heal|p1a: Porygon2|65/267|[from] item: Leftovers",
-            "|upkeep|",
+            "|upkeep",
             "|turn|2",
         ])
         snapshot = p.snapshot()
@@ -163,7 +163,7 @@ class TracedTruantTest(unittest.TestCase):
         self.assertIs(p.truant_phase["p1"], True)
         p.feed([
             "|-heal|p1a: Porygon2|81/267|[from] item: Leftovers",
-            "|upkeep|",
+            "|upkeep",
             "|turn|3",
         ])
         self.assertIs(p.truant_phase["p1"], False)
@@ -180,7 +180,7 @@ class TracedTruantTest(unittest.TestCase):
             "|faint|p1a: Moltres",
             self.POR,
             self.TRACE,
-            "|upkeep|",
+            "|upkeep",
             "|turn|59",
         ])
         snapshot = p.snapshot()
@@ -194,7 +194,7 @@ class TracedTruantTest(unittest.TestCase):
             "|cant|p1a: Porygon2|ability: Truant",
         ])
         self.assertIs(p.truant_phase["p1"], True)
-        p.feed(["|upkeep|", "|turn|60"])
+        p.feed(["|upkeep", "|turn|60"])
         self.assertIs(p.truant_phase["p1"], False)
 
     def test_current_source_2200291_step_41_stays_unknown_until_it_acts(self) -> None:
@@ -205,7 +205,7 @@ class TracedTruantTest(unittest.TestCase):
             "|switch|p2a: Slaking|Slaking, L78, F|294/362",
             self.POR,
             self.TRACE,
-            "|upkeep|",
+            "|upkeep",
             "|turn|38",
         ])
         self.assertIsNone(p.truant_phase["p1"])
@@ -218,7 +218,7 @@ class TracedTruantTest(unittest.TestCase):
         self.assertIs(p.truant_phase["p1"], False)
         p.feed([
             "|-heal|p1a: Porygon2|128/267|[from] item: Leftovers",
-            "|upkeep|",
+            "|upkeep",
             "|turn|39",
         ])
         self.assertIs(p.truant_phase["p1"], True)
@@ -227,7 +227,7 @@ class TracedTruantTest(unittest.TestCase):
             "|cant|p1a: Porygon2|ability: Truant",
             "|-heal|p2a: Vaporeon|295/335|[from] item: Leftovers",
             "|-heal|p1a: Porygon2|144/267|[from] item: Leftovers",
-            "|upkeep|",
+            "|upkeep",
             "|turn|40",
         ])
         self.assertIs(p.truant_phase["p1"], False)
@@ -237,7 +237,7 @@ class TracedTruantTest(unittest.TestCase):
             self.POR,
             "|switch|p2a: Slaking|Slaking, L80, M|362/362",
             self.TRACE,
-            "|upkeep|",
+            "|upkeep",
             "|turn|2",
             "|cant|p1a: Porygon2|ability: Truant",
         ])
@@ -279,7 +279,7 @@ class TracedTruantTest(unittest.TestCase):
             self.POR,
             "|switch|p2a: Slaking|Slaking, L80, M|362/362",
             self.TRACE,
-            "|upkeep|",
+            "|upkeep",
         ])
         restored = _ReplayParser.from_snapshot(live.snapshot())
         self.assertEqual(restored.traced_ability["p1"], "truant")
@@ -295,7 +295,7 @@ class ReplacementGuardTest(unittest.TestCase):
         # double-counts and the parity is inverted for the whole stint -- which is what
         # produced the five newly-divergent rows the reviewer found.
         p = _parse(["|switch|p1a: Shedinja|Shedinja, L80|1/1", OPP, "|turn|1",
-                    "|faint|p1a: Shedinja", "|upkeep|",
+                    "|faint|p1a: Shedinja", "|upkeep",
                     SLAKING,          # replacement enters AFTER upkeep
                     "|turn|2"])
         self.assertIs(p.truant_phase["p1"], True)
@@ -305,7 +305,7 @@ class ReplacementGuardTest(unittest.TestCase):
         # and the ONLY difference is which side of the residual the holder entered on.
         p = _parse(["|switch|p1a: Snorlax|Snorlax, L80, M|400/400", OPP, "|turn|1",
                     SLAKING,          # switch as the ACTION, before upkeep
-                    "|upkeep|", "|turn|2"])
+                    "|upkeep", "|turn|2"])
         self.assertIs(p.truant_phase["p1"], False)
 
     def test_post_upkeep_guard_survives_snapshot_restore(self) -> None:
@@ -314,7 +314,7 @@ class ReplacementGuardTest(unittest.TestCase):
             OPP,
             "|turn|1",
             "|faint|p1a: Shedinja",
-            "|upkeep|",
+            "|upkeep",
             SLAKING,
         ])
         snapshot = live.snapshot()
@@ -333,7 +333,7 @@ class ReplacementGuardTest(unittest.TestCase):
             OPP,
             "|turn|1",
             "|faint|p1a: Shedinja",
-            "|upkeep|",
+            "|upkeep",
         ])
         restored = _ReplayParser.from_snapshot(live.snapshot())
         for parser in (live, restored):

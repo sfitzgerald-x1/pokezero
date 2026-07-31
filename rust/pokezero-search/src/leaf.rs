@@ -636,7 +636,7 @@ pub(crate) fn evolve_leaf_meta_with_status_transitions(
             continue;
         }
         if line == "|upkeep" {
-            // `|upkeep|` follows the residual block. A live proof here missed
+            // `|upkeep` follows the residual block. A live proof here missed
             // its first Toxic tick and is terminal for this leaf branch.
             out.toxic_reentry_pending = [false, false];
             continue;

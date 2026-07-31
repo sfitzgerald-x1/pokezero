@@ -1695,17 +1695,17 @@ class Phase2DynamicStateTest(unittest.TestCase):
             "|turn|1",
             f"|-status|{mon}: Tauros|tox",
             f"|-damage|{mon}: Tauros|268/285 tox|[from] psn",  # 17 = stage 1
-            "|upkeep|",
+            "|upkeep",
             "|turn|2",
             f"|-damage|{mon}: Tauros|234/285 tox|[from] psn",  # 34 = stage 2
-            "|upkeep|",
+            "|upkeep",
             "|turn|3",
             f"|switch|{mon}: Zapdos|Zapdos, L78|301/301",  # Tauros leaves: counter reset to 0
-            "|upkeep|",
+            "|upkeep",
             "|turn|4",
             f"|switch|{mon}: Tauros|Tauros, L80, M|234/285 tox",  # RE-ENTRY, no |-status|
             f"|-damage|{mon}: Tauros|217/285 tox|[from] psn",  # 17 = stage 1 RESTART (re-seed)
-            "|upkeep|",
+            "|upkeep",
             "|turn|5",
             *(extra or []),
         ]
@@ -1727,7 +1727,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                         mon,
                         extra=[
                             f"|-damage|{mon}: Tauros|183/285 tox|[from] psn",  # 34 = stage 2
-                            "|upkeep|",
+                            "|upkeep",
                             "|turn|6",
                         ],
                     )
@@ -1764,7 +1764,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|psn",
                 "|-damage|p1a: Tauros|250/285 psn|[from] psn",  # 35 = 1/8, regular poison
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
             ]
         )
@@ -1828,7 +1828,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|95/100 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
             ],
             complete_prefix=True,
@@ -1890,6 +1890,47 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertTrue(attached.toxic_stage_known["p1"])
         self.assertFalse(attached.toxic_stage_known["p2"])
 
+    def test_parser_prefix_completeness_requires_a_literal_boolean(self) -> None:
+        for label, complete_prefix, expected in (
+            ("true", True, True),
+            ("false", False, False),
+            ("int-true", 1, False),
+            ("int-false", 0, False),
+            ("truthy-string", "true", False),
+            ("empty-string", "", False),
+            ("none", None, False),
+        ):
+            with self.subTest(value=label):
+                parser = _ReplayParser("prefix-type", complete_prefix=complete_prefix)
+                self.assertEqual(parser.toxic_stage_known, {"p1": expected, "p2": expected})
+
+    def test_upkeep_grammar_requires_the_exact_bare_protocol_boundary(self) -> None:
+        parser = _ReplayParser("upkeep-grammar", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+            ]
+        )
+        self.assertTrue(parser.snapshot().post_upkeep_window)
+
+        for marker in ("|upkeep|", "|upkeep|payload", "|upkeeppayload", " |upkeep", "|upkeep "):
+            with self.subTest(marker=marker):
+                parser = _ReplayParser("upkeep-grammar", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        marker,
+                    ]
+                )
+                self.assertFalse(parser.snapshot().post_upkeep_window)
+
     def test_toxic_percentage_or_missing_hp_never_invents_a_legacy_counter(self) -> None:
         # A legacy checkpoint can expose a public tox condition without the
         # counter provenance added by this recovery. Neither rounded /100 HP
@@ -1937,7 +1978,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|225/239 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
             ]
         )
@@ -2047,7 +2088,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ],
@@ -2099,7 +2140,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|268/285 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
                 "|move|p1a: Tauros|Baton Pass|p1a: Tauros",
                 "|switch|p1a: Snorlax|Snorlax, L80, M|400/400|[from] Baton Pass",
@@ -2116,7 +2157,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|268/285 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
                 "|faint|p1a: Tauros",
                 "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
@@ -2149,10 +2190,10 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|225/239 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
                 "|switch|p1a: Zapdos|Zapdos, L78|301/301",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|3",
                 "|switch|p1a: Tauros|Tauros, L80, M|225/239 tox",
                 "|-damage|p1a: Tauros|211/239 tox|[from] psn",

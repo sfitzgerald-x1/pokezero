@@ -62,10 +62,10 @@ class ToxicStageParserTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|95/100 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|2",
                 f"|{event}|p1a: Zapdos|Zapdos, L78, M|100/100",
-                "|upkeep|",
+                "|upkeep",
                 "|turn|3",
                 f"|{event}|p1a: Tauros|Tauros, L80, M|90/100 tox",
                 "|-damage|p1a: Tauros|85/100 tox|[from] psn",
@@ -74,7 +74,7 @@ class ToxicStageParserTest(unittest.TestCase):
         if include_second_tick:
             parser.feed(
                 [
-                    "|upkeep|",
+                    "|upkeep",
                     "|turn|4",
                     "|-damage|p1a: Tauros|75/100 tox|[from] psn",
                 ]
@@ -95,7 +95,7 @@ class ToxicStageParserTest(unittest.TestCase):
                 parser = self._percentage_reentry_parser(event)
                 self.assertEqual(parser.toxic_stage["p1"], 1)
                 self.assertTrue(parser.toxic_stage_known["p1"])
-                parser.feed(["|upkeep|", "|turn|4"])
+                parser.feed(["|upkeep", "|turn|4"])
                 self.assertEqual(parser.toxic_stage["p1"], 2)
                 self.assertEqual(_materialization_toxic_stage(parser.snapshot(), "p1"), 1)
 
@@ -105,7 +105,7 @@ class ToxicStageParserTest(unittest.TestCase):
                 parser = self._percentage_reentry_parser(event, include_second_tick=True)
                 self.assertEqual(parser.toxic_stage["p1"], 2)
                 self.assertTrue(parser.toxic_stage_known["p1"])
-                parser.feed(["|upkeep|", "|turn|5"])
+                parser.feed(["|upkeep", "|turn|5"])
                 self.assertEqual(parser.toxic_stage["p1"], 3)
                 self.assertEqual(_materialization_toxic_stage(parser.snapshot(), "p1"), 2)
 
@@ -227,7 +227,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 f"|faint|{replaced_side}a: {lead}",
-                "|upkeep|",
+                "|upkeep",
                 f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ]
@@ -244,7 +244,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 f"|faint|{replaced_side}a: {lead}",
-                "|upkeep|",
+                "|upkeep",
             ]
         )
         return parser
@@ -262,7 +262,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Diglett|tox",
                 "|-damage|p1a: Diglett|94/100 tox|[from] psn",
-                "|upkeep|",
+                "|upkeep",
             ]
         )
 
@@ -294,7 +294,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         f"|faint|{replaced_side}a: {'LeadOne' if replaced_side == 'p1' else 'LeadTwo'}",
-                        "|upkeep|",
+                        "|upkeep",
                         (
                             f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
                             "90/100 tox"
@@ -347,7 +347,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertTrue(parser.toxic_faint_replacement_pending[replaced_side])
                 parser.feed(
                     [
-                        "|upkeep|",
+                        "|upkeep",
                         (
                             f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
                             "90/100 tox"
@@ -385,7 +385,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertTrue(control.toxic_faint_replacement_pending[replaced_side])
                 control.feed(
                     [
-                        "|upkeep|",
+                        "|upkeep",
                         (
                             f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
                             "90/100 tox"
@@ -448,7 +448,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                     lines.append("|faint|p2a: LeadTwo")
                 lines.extend(
                     [
-                        "|upkeep|",
+                        "|upkeep",
                         "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                         "|turn|2",
                     ]
@@ -461,24 +461,24 @@ class ToxicStageWorldTest(unittest.TestCase):
     def test_faint_latch_rejects_drag_baton_action_phase_and_duplicate_replacements(self) -> None:
         cases = {
             "drag": [
-                "|upkeep|",
+                "|upkeep",
                 "|drag|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "baton-pass": [
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox|[from] Baton Pass",
             ],
             "action-phase-switch": [
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
-                "|upkeep|",
+                "|upkeep",
             ],
             "duplicate-switch": [
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: First|First, L80, M|90/100 tox",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "malformed-switch": [
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Broken",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
@@ -504,30 +504,30 @@ class ToxicStageWorldTest(unittest.TestCase):
     def test_faint_latch_rejects_malformed_order_and_forged_active_idents(self) -> None:
         cases = {
             "reversed-upkeep-faint": [
-                "|upkeep|",
+                "|upkeep",
                 "|faint|p1a: LeadOne",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "duplicate-faint": [
                 "|faint|p1a: LeadOne",
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "duplicate-upkeep": [
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
-                "|upkeep|",
+                "|upkeep",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "forged-active-ident": [
                 "|faint|p1a: NotTheActive",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
             "unrelated-seat": [
                 "|faint|p2a: LeadTwo",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
             ],
         }
@@ -569,7 +569,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         *faints,
-                        "|upkeep|",
+                        "|upkeep",
                         "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                         "|turn|2",
                     ]
@@ -586,7 +586,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ]
@@ -606,7 +606,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         f"|faint|{replaced_side}a: {lead}",
-                        "|upkeep|",
+                        "|upkeep",
                         (
                             f"|switch|{replaced_side}a|Replacement, L80, M|"
                             "90/100 tox"
@@ -631,7 +631,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         "|faint|p1a: LeadOne",
-                        "|upkeep|",
+                        "|upkeep",
                         "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                         "|turn|2",
                         marker,
@@ -651,7 +651,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         "|faint|p1a: LeadOne",
-                        "|upkeep|",
+                        "|upkeep",
                         "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                     ]
                 )
@@ -690,7 +690,7 @@ class ToxicStageWorldTest(unittest.TestCase):
         resumed.feed(
             [
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ]
@@ -740,7 +740,7 @@ class ToxicStageWorldTest(unittest.TestCase):
 
     def test_post_upkeep_drag_cannot_claim_the_replacement_zero(self) -> None:
         # In Gen 3 a drag resolves in its move action, before the residual
-        # action emits |upkeep|. Treating a synthetic post-upkeep drag as a
+        # action emits |upkeep. Treating a synthetic post-upkeep drag as a
         # faint replacement would widen the proof beyond real chronology.
         parser = _ReplayParser("toxic-post-upkeep-drag", complete_prefix=True)
         parser.feed(
@@ -748,7 +748,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
-                "|upkeep|",
+                "|upkeep",
                 "|drag|p1a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ]
@@ -770,7 +770,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|100/100 tox",
                 "|turn|2",
             ]
@@ -784,7 +784,7 @@ class ToxicStageWorldTest(unittest.TestCase):
 
     def test_post_upkeep_zero_proof_expires_when_its_first_tick_is_missing(self) -> None:
         cases = {
-            "upkeep": ["|upkeep|", "|turn|3"],
+            "upkeep": ["|upkeep", "|turn|3"],
             "turn": ["|turn|3"],
         }
         for label, suffix in cases.items():
@@ -798,7 +798,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                         "|turn|1",
                         "|faint|p1a: LeadOne",
-                        "|upkeep|",
+                        "|upkeep",
                         "|switch|p1a: Replacement|Replacement, L80, M|100/100 tox",
                         "|turn|2",
                     ]
@@ -943,13 +943,13 @@ class ToxicStageWorldTest(unittest.TestCase):
 
     def test_toxic_zero_boundary_matrix_rejects_malformed_upkeep_faint_and_replacement(self) -> None:
         upkeep_variants = {
-            "canonical": ["|upkeep|"],
-            "bare": ["|upkeep"],
-            "extra": ["|upkeep|extra"],
-            "leading-whitespace": [" |upkeep|"],
-            "trailing-whitespace": ["|upkeep| "],
-            "duplicate": ["|upkeep|", "|upkeep|"],
-            "reversed-faint": ["|upkeep|", "|faint|p1a: LeadOne"],
+            "canonical": ["|upkeep"],
+            "trailing-delimiter": ["|upkeep|"],
+            "payload": ["|upkeep|payload"],
+            "leading-whitespace": [" |upkeep"],
+            "trailing-whitespace": ["|upkeep "],
+            "duplicate": ["|upkeep", "|upkeep"],
+            "reversed-faint": ["|upkeep", "|faint|p1a: LeadOne"],
         }
         faint_variants = {
             "canonical": "|faint|{ident}",
@@ -999,7 +999,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                             "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                             "|turn|1",
                             faint.format(side=replaced_side, lead=lead, ident=ident),
-                            "|upkeep|",
+                            "|upkeep",
                             f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|90/100 tox",
                             "|turn|2",
                         ]
@@ -1019,7 +1019,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                             "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                             "|turn|1",
                             f"|faint|{ident}",
-                            "|upkeep|",
+                            "|upkeep",
                             replacement.format(side=replaced_side),
                             "|turn|2",
                         ]
@@ -1059,7 +1059,7 @@ class ToxicStageWorldTest(unittest.TestCase):
                 "|turn|1",
                 "|-damage|p1a: LeadOne|0 fnt",
                 "|faint|p1a: LeadOne",
-                "|upkeep|",
+                "|upkeep",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ]

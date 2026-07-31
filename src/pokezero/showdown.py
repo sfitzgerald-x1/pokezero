@@ -1044,7 +1044,7 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
-    # Public parser chronology needed across snapshots taken after ``|upkeep|`` but before a
+    # Public parser chronology needed across snapshots taken after ``|upkeep`` but before a
     # forced replacement and the following ``|turn|``. A replacement entered after that
     # residual, so its next turn-boundary flip must be skipped.
     post_upkeep_window: bool = False
@@ -1137,7 +1137,7 @@ class ShowdownReplayState:
     toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
     # A known stage-0 active ``tox`` counter is normally ambiguous at an
     # action boundary. This proof is set only when a non-Baton-Pass ``switch``
-    # introduced the poisoned Pokemon after ``|upkeep|``, after that turn's
+    # introduced the poisoned Pokemon after ``|upkeep``, after that turn's
     # residual had already run. It permits the engine's legitimate pre-tick
     # counter 0 without relaxing the fail-closed rule for every other stage-0
     # snapshot. It is retired by the first Toxic residual and every active
@@ -1338,9 +1338,10 @@ class _ReplayParser:
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
         # A fresh parser is safe for attach-midstream use: zero is not public proof of an
         # active Toxic counter unless the caller attests that the prefix starts at reset.
+        complete_prefix_is_true = type(complete_prefix) is bool and complete_prefix
         self.toxic_stage_known: dict[str, bool] = {
-            "p1": bool(complete_prefix),
-            "p2": bool(complete_prefix),
+            "p1": complete_prefix_is_true,
+            "p2": complete_prefix_is_true,
         }
         self.toxic_stage_zero_after_upkeep: dict[str, bool] = {"p1": False, "p2": False}
         self.toxic_stage_zero_after_upkeep_expires_after_turn: dict[str, int | None] = {
@@ -1394,7 +1395,7 @@ class _ReplayParser:
         self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # See ShowdownReplayState.truant_phase. None = no holder / phase unknown.
         self.truant_phase: dict[str, Optional[bool]] = {"p1": None, "p2": None}
-        # True between |upkeep| and the next |turn| -- the window in which a faint
+        # True between |upkeep and the next |turn| -- the window in which a faint
         # replacement enters AFTER that turn's residual has already run.
         self._post_upkeep_window: bool = False
         # Slots whose next |turn| flip must be skipped (see _TRUANT replacement guard).
@@ -1870,7 +1871,7 @@ class _ReplayParser:
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 self.toxic_stage_known[pokemon.showdown_slot] = True
                 # A normal switch-in will take this turn's residual before its
-                # next action. Gen 3 writes ``|upkeep|`` only after the residual
+                # next action. Gen 3 writes ``|upkeep`` only after the residual
                 # phase, then emits the faint replacement as ``|switch|``. That
                 # replacement missed the just-finished residual, so its next
                 # Toxic tick has the legitimate pre-tick counter zero. A
@@ -3924,7 +3925,7 @@ def _canonical_turn_number(line: str) -> int | None:
 def _canonical_upkeep_marker(line: str) -> bool:
     """Whether ``line`` is the unique no-payload Showdown upkeep boundary."""
 
-    return line == "|upkeep|"
+    return line == "|upkeep"
 
 
 def _canonical_faint_marker(line: str, parts: Sequence[str]) -> bool:
