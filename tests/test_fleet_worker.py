@@ -1047,6 +1047,53 @@ class FanInTests(unittest.TestCase):
             fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
         self.assertFalse(staging.exists())
 
+    def test_initial_guard_acquirers_never_observe_uninitialized_guard(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        original_write = fleet_worker._write_fanin_fence
+        winner = None
+        interleaved = False
+
+        def publish_second_after_first_is_initialized(path, *args):
+            nonlocal interleaved, winner
+            original_write(path, *args)
+            if path != fence_path and not interleaved:
+                interleaved = True
+                winner = fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+
+        with patch.object(fleet_worker, "_write_fanin_fence", new=publish_second_after_first_is_initialized):
+            with self.assertRaises(fleet_worker._FanInTransientError):
+                fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+        self.assertTrue(interleaved)
+        self.assertIsNotNone(winner)
+        try:
+            self.assertIsNotNone(fleet_worker._read_fanin_fence(fence_path))
+            self.assertTrue(fleet_worker._fanin_fence_is_current(winner))
+            self.assertFalse(list(fence_path.parent.glob(f".{fence_path.name}.tmp.*")))
+        finally:
+            fleet_worker._release_fanin_guard(winner)
+
+    def test_guard_owner_write_failure_removes_only_attempt_temporary(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        with patch.object(fleet_worker, "_write_fanin_fence", side_effect=OSError(errno.EIO, "owner write failed")):
+            with self.assertRaises(OSError):
+                fleet_worker._acquire_fanin_guard(fence_path, task, fanin_task)
+        self.assertFalse(fence_path.exists())
+        self.assertFalse(list(fence_path.parent.glob(f".{fence_path.name}.tmp.*")))
+
     def test_stale_fence_releaser_cannot_remove_new_reclaimer_fence(self) -> None:
         _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
         first = claim_next_task(self.queue, "w1")

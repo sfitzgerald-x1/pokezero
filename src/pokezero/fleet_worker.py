@@ -581,7 +581,8 @@ class _FanInFilesystemFence:
 
     The shared cache volume must provide POSIX atomic directory creation and
     rename within one directory. Unlike advisory ``flock``, those operations
-    are part of the cross-node filesystem protocol and are preflighted below.
+    are part of the cross-node filesystem protocol. The local mount capability
+    is preflighted below; deployment must test contention from multiple nodes.
     """
 
     path: Path
@@ -692,7 +693,7 @@ def _acquire_fanin_guard(
     *,
     nonblocking: bool = False,
 ) -> _FanInFilesystemFence:
-    """Acquire a cross-node mkdir fence, reclaiming only a dead owner.
+    """Publish an initialized directory fence, reclaiming only a dead owner.
 
     A stale fence is first renamed out of the shared name, so concurrent
     reclaimers can never remove a newly created fence. Malformed records are
@@ -700,10 +701,34 @@ def _acquire_fanin_guard(
     """
     del nonblocking  # Every fence acquisition is a bounded single attempt.
     while True:
+        temporary = path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+        published = False
         try:
-            path.mkdir()
-        except FileExistsError:
-            if _read_fanin_fence(path) is None:
+            temporary.mkdir()
+            _write_fanin_fence(temporary, fanin_task, task.claim_path.name, task.claim_token)
+            if path.exists():
+                collision = True
+            else:
+                try:
+                    os.rename(temporary, path)
+                except OSError as exc:
+                    if not _is_fanin_target_collision(exc):
+                        raise
+                    collision = True
+                else:
+                    collision = False
+                    published = True
+                    _fsync_directory(path.parent)
+        finally:
+            if not published:
+                shutil.rmtree(temporary, ignore_errors=True)
+        if not published:
+            if not collision:
+                raise RuntimeError("fan-in guard publication returned no result")
+            existing = _read_fanin_fence(path)
+            if existing is None and not path.exists():
+                continue
+            if existing is None:
                 raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
             if _fanin_fence_is_active(path, task.claim_path.parent):
                 raise _FanInTransientError(f"fan-in publication fence is held: {path.name}")
@@ -717,7 +742,6 @@ def _acquire_fanin_guard(
             shutil.rmtree(tombstone, ignore_errors=True)
             _fsync_directory(path.parent)
             continue
-        _write_fanin_fence(path, fanin_task, task.claim_path.name, task.claim_token)
         stat = path.stat()
         stop = threading.Event()
         fence = _FanInFilesystemFence(
@@ -1297,14 +1321,16 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _preflight_fanin_filesystem(cache_dir: Path) -> None:
-    """Verify the atomic directory operations required on the shared cache mount.
+    """Verify local support for directory operations required by fan-in.
 
     Fan-in deliberately does not use ``flock``: all workers that share this
     cache directory must instead see POSIX-atomic ``mkdir`` and same-directory
     ``rename`` operations. Deployments must mount the cache on a filesystem
     with those cross-node semantics (for example a POSIX NFS/CephFS mount), not
-    an object-store FUSE layer. This probe fails closed when those primitives
-    are unavailable; the race tests exercise the same directory protocol.
+    an object-store FUSE layer. This local probe fails closed when those
+    primitives are unavailable, but cannot establish cross-node atomicity. The
+    private deployment smoke must make workers on multiple nodes contend for
+    one guard on the shared mount before launch.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     probe = cache_dir / f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
