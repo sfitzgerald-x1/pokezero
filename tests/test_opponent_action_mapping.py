@@ -194,6 +194,54 @@ class OpponentActionMappingTest(unittest.TestCase):
             "an action slot; the opponent map is reading the wrong seat's team",
         )
 
+    def test_opponent_order_evolves_through_its_own_switches(self) -> None:
+        """The pin for B2: an unevolved opponent order permutes every switch arm.
+
+        Second independent review measured this against the head's training
+        label (`rollout.py::_opponent_action_index`, that seat's own
+        request-order action block): the crate's order agreed with the label
+        until the opponent's FIRST switch, and was rotated by one from then on.
+        In a gen3 randbat that is most of the game, so it silently permutes the
+        opponent priors rather than failing.
+
+        Showdown swaps the incoming mon to slot 0 on switch-in, so after the
+        opponent switches to a benched mon, that mon must own the FIRST switch
+        action slot and the others must shift by one. Asserting the indices
+        move (not the displays -- those are option-ordered and never change).
+        """
+        for encoder, state_str, row in self._cases():
+            before = {
+                display: index
+                for display, index in encoder.opponent_action_map(state_str)
+                if display.startswith("switch")
+            }
+            if len(before) < 2:
+                continue
+            # Switch the opponent to the last mon it could switch to.
+            target = sorted(before, key=before.get)[-1].split(" ", 1)[1]
+            lines = [f"|switch|{self._opponent_prefix()}a: {target}|{target}, L100|100/100"]
+            after = {
+                display: index
+                for display, index in encoder.opponent_action_map(state_str, lines)
+                if display.startswith("switch")
+            }
+            with self.subTest(row=row.battle_id, target=target):
+                self.assertNotEqual(
+                    before,
+                    after,
+                    "opponent switch slots did not move after the opponent switched; "
+                    "the order is not being evolved and every switch prior is permuted",
+                )
+                # The switched-in mon takes the lowest switch slot.
+                self.assertEqual(after[f"switch {target}"], min(after.values()))
+            return
+        self.skipTest("no committed row offers two opponent switch options")
+
+    @staticmethod
+    def _opponent_prefix() -> str:
+        # The committed sample roots every row at p1, so the opponent is p2.
+        return "p2"
+
     def test_mapped_opponent_indices_are_unique(self) -> None:
         # Two options sharing one action slot would double-count that arm's
         # prior mass and starve another.

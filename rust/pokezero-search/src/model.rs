@@ -646,6 +646,11 @@ struct BranchFold {
     fold: crate::fold::FoldStateInner,
     turn: i64,
     self_order: Vec<String>,
+    /// The opponent's party order evolved to this branch. Threaded alongside
+    /// `self_order` rather than recomputed, because switch swaps must
+    /// ACCUMULATE down a line -- an unevolved order is correct only until the
+    /// opponent's first switch, after which every switch prior is permuted.
+    opponent_order: Vec<String>,
     meta: crate::leaf::LeafMeta,
 }
 
@@ -860,9 +865,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     tree.decisions[0].s1_options.clone()
                 };
                 if !is_single_none(&opponent_options) {
+                    // Root: no branch lines yet, so the unevolved party order
+                    // is correct here by construction.
                     let opponent_map = leaf_ctx.opponent_action_map(
                         &state,
                         &opponent_options,
+                        None,
                         None,
                         false,
                     )?;
@@ -916,11 +924,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     // Parent fold prefix: the root fold for root edges, the
                     // ancestor branch's advanced fold otherwise.
                     let clone_started = Instant::now();
-                    let (mut fold, mut turn, parent_order, parent_meta) = match seam.parent {
+                    let (mut fold, mut turn, parent_order, parent_opponent_order, parent_meta) =
+                        match seam.parent {
                         None => (
                             root_fold.clone(),
                             root_turn,
                             leaf_ctx.root_self_order().to_vec(),
+                            leaf_ctx.root_opponent_order().to_vec(),
                             leaf_ctx.root_meta().clone(),
                         ),
                         Some(key) => match fold_by_branch.get(&key) {
@@ -928,6 +938,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 rec.fold.clone(),
                                 rec.turn,
                                 rec.self_order.clone(),
+                                rec.opponent_order.clone(),
                                 rec.meta.clone(),
                             ),
                             None => {
@@ -972,6 +983,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &parent_order,
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
+                    );
+                    let opponent_order = crate::leaf::evolve_self_order(
+                        &parent_opponent_order,
+                        &rendered.lines,
+                        leaf_ctx.opponent_prefix(),
                     );
                     let meta = crate::leaf::evolve_leaf_meta(
                         &parent_meta,
@@ -1035,6 +1051,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 let map_result = leaf_ctx.opponent_action_map(
                                     leaf,
                                     &opponent_options,
+                                    Some(&opponent_order),
                                     Some(&meta),
                                     false,
                                 );
@@ -1058,6 +1075,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         BranchFold {
                             fold,
                             turn,
+                            opponent_order: opponent_order.clone(),
                             self_order,
                             meta,
                         },
