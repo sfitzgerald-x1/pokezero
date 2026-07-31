@@ -37,6 +37,7 @@ from .showdown import (
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
+    _is_active_protocol_ident,
     _normalize_identifier,
     _ReplayParser,
     normalize_for_player,
@@ -2260,25 +2261,72 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
     legacy snapshots from blocking worlds that have no Toxic counter.
     """
 
+    def provenance_value(name: str, default: Any = None) -> tuple[bool, Any]:
+        values = getattr(replay, name, None)
+        if not isinstance(values, Mapping) or player not in values:
+            return False, default
+        return True, values[player]
+
     active = replay.public_active.get(player)
+    proof_present, zero_after_upkeep = provenance_value("toxic_stage_zero_after_upkeep")
+    if proof_present and type(zero_after_upkeep) is not bool:
+        return None
     active_is_toxic = bool(
         active is not None
         and "tox" in str(active.condition or "").split()
     )
     if not active_is_toxic:
-        return 0
-    known = replay.toxic_stage_known.get(player)
-    if not bool(known):
+        return None if zero_after_upkeep is True else 0
+    known_present, known = provenance_value("toxic_stage_known")
+    if not known_present or known is not True:
         return None
-    tracked_stage = int(replay.toxic_stage.get(player, 0))
+    stage_present, tracked_stage = provenance_value("toxic_stage")
+    if not stage_present or type(tracked_stage) is not int:
+        return None
     if tracked_stage == 0:
         # A poisoned replacement that entered after upkeep missed the residual
         # that just ran. Its next Toxic tick is stage 1, so the engine's
         # pre-tick counter is correctly zero. No other active-Toxic zero has
         # enough public chronology to distinguish that fact from an incomplete
         # prefix, and therefore remains fail-closed.
-        zero_after_upkeep = getattr(replay, "toxic_stage_zero_after_upkeep", {})
-        return 0 if bool(zero_after_upkeep.get(player, False)) else None
+        if not proof_present or zero_after_upkeep is not True:
+            return None
+        ident_present, proof_ident = provenance_value("toxic_stage_zero_after_upkeep_ident")
+        deadline_present, deadline = provenance_value(
+            "toxic_stage_zero_after_upkeep_expires_after_turn"
+        )
+        invalid_present, invalid = provenance_value("toxic_faint_replacement_invalid")
+        pending_present, pending = provenance_value("toxic_faint_replacement_pending")
+        expected_present, expected_ident = provenance_value(
+            "toxic_faint_replacement_expected_ident"
+        )
+        active_ident = getattr(active, "ident", None)
+        turn_number = getattr(replay, "turn_number", None)
+        post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+        if (
+            not ident_present
+            or not isinstance(proof_ident, str)
+            or not _is_active_protocol_ident(proof_ident)
+            or not proof_ident.startswith(f"{player}a: ")
+            or active_ident != proof_ident
+            or not deadline_present
+            or type(deadline) is not int
+            or deadline < 1
+            or type(turn_number) is not int
+            or turn_number < 0
+            or type(post_upkeep_window) is not bool
+            or deadline != turn_number + (1 if post_upkeep_window else 0)
+            or not invalid_present
+            or invalid is not False
+            or not pending_present
+            or pending is not False
+            or not expected_present
+            or expected_ident is not None
+        ):
+            return None
+        return 0
+    if zero_after_upkeep is True:
+        return None
     if not 1 <= tracked_stage <= 16:
         return None
     if replay.post_upkeep_window:

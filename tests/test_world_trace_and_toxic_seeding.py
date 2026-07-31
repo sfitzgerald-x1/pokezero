@@ -291,6 +291,37 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertFalse(legacy_resumed.toxic_stage_zero_after_upkeep[replaced_side])
                 self.assertIsNone(_materialization_toxic_stage(legacy_resumed, replaced_side))
 
+    def test_real_damage_faint_replacement_chronology_proves_zero_for_both_sides(self) -> None:
+        for replaced_side in ("p1", "p2"):
+            with self.subTest(replaced_side=replaced_side):
+                lead = "LeadOne" if replaced_side == "p1" else "LeadTwo"
+                ident = f"{replaced_side}a: {lead}"
+                parser = _ReplayParser(
+                    f"toxic-real-ko-{replaced_side}",
+                    complete_prefix=True,
+                    hp_visibility={"p1": "exact", "p2": "exact"},
+                )
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        f"|-damage|{ident}|0 fnt",
+                        f"|faint|{ident}",
+                        "|upkeep",
+                        (
+                            f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
+                            "90/100 tox"
+                        ),
+                        "|turn|2",
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_faint_replacement_invalid[replaced_side])
+                self.assertTrue(replay.toxic_stage_zero_after_upkeep[replaced_side])
+                self.assertEqual(replay.toxic_stage[replaced_side], 0)
+                self.assertEqual(_materialization_toxic_stage(replay, replaced_side), 0)
+
     def test_post_upkeep_zero_requires_the_same_seat_faint(self) -> None:
         for fainted_side in (None, "p2"):
             with self.subTest(fainted_side=fainted_side):
@@ -451,6 +482,32 @@ class ToxicStageWorldTest(unittest.TestCase):
         self.assertEqual(replay.public_active["p1"].ident, "p1a: LeadOne")
         self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
 
+    def test_bare_active_replacement_idents_are_rejected_for_both_sides(self) -> None:
+        for replaced_side in ("p1", "p2"):
+            with self.subTest(replaced_side=replaced_side):
+                lead = "LeadOne" if replaced_side == "p1" else "LeadTwo"
+                parser = _ReplayParser(f"toxic-bare-{replaced_side}", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        f"|faint|{replaced_side}a: {lead}",
+                        "|upkeep",
+                        (
+                            f"|switch|{replaced_side}a|Replacement, L80, M|"
+                            "90/100 tox"
+                        ),
+                        "|turn|2",
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertEqual(
+                    replay.public_active[replaced_side].ident,
+                    f"{replaced_side}a: {lead}",
+                )
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep[replaced_side])
+
     def test_invalid_turn_markers_retire_a_live_replacement_proof(self) -> None:
         for marker in ("|turn|2", "|turn|1", "|turn|3", "|turn|not-a-number"):
             with self.subTest(marker=marker):
@@ -470,6 +527,35 @@ class ToxicStageWorldTest(unittest.TestCase):
                 replay = parser.snapshot()
                 self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
                 self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_noncanonical_expected_turn_syntax_does_not_mutate_chronology(self) -> None:
+        for marker in ("|turn|2|extra", "|turn|+2", "|turn|02", " |turn|2"):
+            with self.subTest(marker=marker):
+                parser = _ReplayParser("toxic-turn-syntax", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        "|upkeep",
+                        "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                    ]
+                )
+                self.assertTrue(parser.toxic_stage_zero_after_upkeep["p1"])
+                parser.feed([marker])
+                malformed = parser.snapshot()
+                self.assertEqual(malformed.turn_number, 1)
+                self.assertTrue(malformed.post_upkeep_window)
+                self.assertTrue(malformed.toxic_faint_replacement_invalid["p1"])
+                self.assertFalse(malformed.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(malformed, "p1"))
+
+                parser.feed(["|turn|2"])
+                recovered = parser.snapshot()
+                self.assertEqual(recovered.turn_number, 2)
+                self.assertFalse(recovered.toxic_faint_replacement_invalid["p1"])
+                self.assertFalse(recovered.toxic_stage_zero_after_upkeep["p1"])
 
     def test_snapshot_without_faint_identity_cannot_restore_or_rearm_pending_proof(self) -> None:
         parser = _ReplayParser("toxic-identity-snapshot", complete_prefix=True)
@@ -629,6 +715,60 @@ class ToxicStageWorldTest(unittest.TestCase):
             post_upkeep_window=False,
         )
         self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_direct_zero_materialization_rejects_incomplete_or_tampered_provenance(self) -> None:
+        parser = _ReplayParser("toxic-direct-proof", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|-damage|p1a: LeadOne|0 fnt",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        replay = parser.snapshot()
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 0)
+        active = replay.public_active["p1"]
+        cases = {
+            "proof-not-boolean": replace(replay, toxic_stage_zero_after_upkeep={"p1": 1}),
+            "proof-ident-missing": replace(replay, toxic_stage_zero_after_upkeep_ident={}),
+            "proof-ident-bare": replace(
+                replay, toxic_stage_zero_after_upkeep_ident={"p1": "p1a"}
+            ),
+            "deadline-missing": replace(
+                replay, toxic_stage_zero_after_upkeep_expires_after_turn={}
+            ),
+            "deadline-mismatch": replace(
+                replay, toxic_stage_zero_after_upkeep_expires_after_turn={"p1": 3}
+            ),
+            "active-ident-mismatch": replace(
+                replay,
+                public_active={**replay.public_active, "p1": replace(active, ident="p1a: Other")},
+            ),
+            "active-status-mismatch": replace(
+                replay,
+                public_active={
+                    **replay.public_active,
+                    "p1": replace(active, condition="90/100"),
+                },
+            ),
+            "stage-unknown": replace(replay, toxic_stage_known={"p1": False}),
+            "stage-nonzero": replace(replay, toxic_stage={"p1": 1}),
+            "invalid-window": replace(replay, toxic_faint_replacement_invalid={"p1": True}),
+            "pending-replacement": replace(
+                replay, toxic_faint_replacement_pending={"p1": True}
+            ),
+            "stale-expected-ident": replace(
+                replay, toxic_faint_replacement_expected_ident={"p1": "p1a: LeadOne"}
+            ),
+        }
+        for label, tampered in cases.items():
+            with self.subTest(label=label):
+                self.assertIsNone(_materialization_toxic_stage(tampered, "p1"))
 
     def test_stage_fifteen_saturation_survives_both_boundaries(self) -> None:
         replay = SimpleNamespace(

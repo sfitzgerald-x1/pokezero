@@ -1595,12 +1595,17 @@ class _ReplayParser:
             return
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
+        canonical_turn = _canonical_turn_number(raw_line) if event_type == "turn" else None
         # BattleStream emits wall-clock timestamp lines (``|t:|...``). They are useful for raw
         # protocol debugging but are not battle state and would make replay-from-root observations
         # differ across otherwise identical deterministic simulations.
         if event_type == "t:":
             return
-        self._update_toxic_faint_replacement_latch(event_type, parts)
+        self._update_toxic_faint_replacement_latch(
+            event_type,
+            parts,
+            canonical_turn=canonical_turn,
+        )
         if event_type == "player" and len(parts) >= 4:
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:
@@ -1799,10 +1804,7 @@ class _ReplayParser:
             self._post_upkeep_window = True
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
-            try:
-                next_turn = int(parts[2])
-            except (TypeError, ValueError):
-                next_turn = None
+            next_turn = canonical_turn
             turn_is_ordered = bool(
                 isinstance(next_turn, int)
                 and next_turn >= 1
@@ -1818,7 +1820,6 @@ class _ReplayParser:
             if not turn_is_ordered:
                 # The latch already discarded proof provenance. Do not let an
                 # unordered marker mutate the parser's turn chronology.
-                self._post_upkeep_window = False
                 return
             self.turn_number = next_turn
             # A successful Baton Pass is consumed by its same-turn forced switch. Anything still
@@ -1917,7 +1918,11 @@ class _ReplayParser:
         self.public_lines.append(line)
 
     def _update_toxic_faint_replacement_latch(
-        self, event_type: str, parts: Sequence[str]
+        self,
+        event_type: str,
+        parts: Sequence[str],
+        *,
+        canonical_turn: int | None = None,
     ) -> None:
         """Bind the stage-zero exception to one exact, ordered forced replacement."""
 
@@ -1943,9 +1948,8 @@ class _ReplayParser:
             # A missing replacement is a truncated/terminal sequence, not
             # evidence for an ordinary switch on a later turn.
             clear_all_pending()
-            try:
-                next_turn = int(parts[2])
-            except (IndexError, TypeError, ValueError):
+            next_turn = canonical_turn
+            if next_turn is None:
                 # Without an ordered turn boundary, a durable proof cannot be
                 # bounded to its one expected residual opportunity.
                 for slot in self.toxic_stage_zero_after_upkeep:
@@ -2026,7 +2030,10 @@ class _ReplayParser:
             return
         if len(parts) >= 3:
             slot = _slot_from_ident(parts[2])
-            if slot in self.toxic_faint_replacement_pending:
+            if (
+                slot in self.toxic_faint_replacement_pending
+                and self.toxic_faint_replacement_pending[slot]
+            ):
                 # A same-seat state transition cannot belong to a pending
                 # forced replacement; fail closed rather than retain history.
                 invalidate_window(slot)
@@ -3724,8 +3731,14 @@ def _is_active_protocol_ident(ident: str) -> bool:
     side cure as a reset corrupts the live active counter.
     """
 
-    position, _, _ = ident.partition(":")
-    return position.strip() in {"p1a", "p2a"}
+    return bool(re.fullmatch(r"p[12]a: \S(?:.*\S)?", ident))
+
+
+def _canonical_turn_number(line: str) -> int | None:
+    """Return a strictly canonical positive ``|turn|N`` marker."""
+
+    match = re.fullmatch(r"\|turn\|([1-9][0-9]*)", line)
+    return int(match.group(1)) if match is not None else None
 
 
 def _condition_has_status(condition: str | None, status: str) -> bool:
