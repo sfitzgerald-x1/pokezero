@@ -331,34 +331,6 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
         self.assertEqual(self.loaded_states, ["post-switch"])
 
-    def test_prices_a_named_sleep_talk_callee_from_the_pre_boundary_state(self):
-        """Called-move damage must not inherit Sleep Talk's zero damage base."""
-
-        seen: list[tuple[str, str]] = []
-
-        def calculate_damage(_state: str, side_one: str, side_two: str, _first: bool):
-            seen.append((side_one, side_two))
-            return [91], []
-
-        differential.poke_engine.calculate_damage = calculate_damage
-        legal = branch_event_legal_rolls(
-            {
-                "events": [
-                    "|move|p1a: Regirock|Sleep Talk|p1a: Regirock",
-                    "|move|p1a: Regirock|Earthquake|p2a: Mr. Mime|[from] Sleep Talk",
-                    "|-damage|p2a: Mr. Mime|120/202 tox",
-                ],
-            },
-            side_one_choice="sleeptalk",
-            side_two_choice="hypnosis",
-            pre_state="pre-sleep-talk",
-        )
-
-        self.assertEqual(seen, [("earthquake", "hypnosis")])
-        self.assertEqual(self.loaded_states, ["pre-sleep-talk"])
-        self.assertEqual(legal.target_side, "p2")
-        self.assertEqual(legal.damages, set(range(77, 92)))
-
     def test_ignores_state_changes_that_follow_direct_damage(self):
         legal = branch_event_legal_rolls(
             {
@@ -591,98 +563,6 @@ class EventAwareBranchLegality(unittest.TestCase):
                     ),
                     pre_legal,
                 )
-
-    def test_full_heal_keeps_the_earlier_direct_roll_scale(self):
-        """Double-Edge -> Rest is one causal tail, not two singleton checks."""
-
-        observed = [
-            differential.DamageComponent("", -98, 1),
-            differential.DamageComponent("heal_to_full", 234, 4),
-        ]
-        engine = [
-            differential.DamageComponent("", -92, 1),
-            differential.DamageComponent("heal_to_full", 228, 4),
-        ]
-        self.assertTrue(
-            roll_component_events_agree(
-                observed,
-                engine,
-                support=None,
-                target_side="p2",
-                pre_legal=set(range(85, 101)),
-            )
-        )
-
-    def test_full_heal_still_rejects_an_incoherent_tail(self):
-        observed = [
-            differential.DamageComponent("", -98, 1),
-            differential.DamageComponent("heal_to_full", 150, 4),
-        ]
-        engine = [
-            differential.DamageComponent("", -92, 1),
-            differential.DamageComponent("heal_to_full", 228, 4),
-        ]
-        self.assertFalse(
-            roll_component_events_agree(
-                observed,
-                engine,
-                support=None,
-                target_side="p2",
-                pre_legal=set(range(85, 101)),
-            )
-        )
-
-    def test_legal_direct_roll_can_uncap_its_matching_status_tail(self):
-        """Sleep Talk -> Earthquake must retain the poison source identity."""
-
-        support = differential.BranchLegalRollSupport(
-            target_side="p2",
-            event_index=6,
-            critical=False,
-            damages=set(range(77, 92)),
-        )
-        observed = [
-            differential.DamageComponent("", -82, 7, False),
-            differential.DamageComponent("itemleftovers", 12, 9),
-            differential.DamageComponent("psn", -24, 10),
-        ]
-        engine = [
-            differential.DamageComponent("", -84, 6),
-            differential.DamageComponent("itemleftovers", 12, 8),
-            differential.DamageComponent("capped_lethal", -23, 9, capped_source="psn"),
-        ]
-
-        exact, rolled = differential._promote_capped_tail_counterparts(
-            observed,
-            engine,
-            support=support,
-            target_side="p2",
-        )
-        self.assertEqual(exact, Counter({("itemleftovers", 12): 1}))
-        self.assertEqual(
-            [(component.source, component.delta) for component in rolled],
-            [("", -82), ("psn", -24)],
-        )
-
-    def test_capped_tail_cannot_borrow_a_different_residual_source(self):
-        support = differential.BranchLegalRollSupport("p2", 6, False, set(range(77, 92)))
-        observed = [
-            differential.DamageComponent("", -82, 7, False),
-            differential.DamageComponent("brn", -24, 10),
-        ]
-        engine = [
-            differential.DamageComponent("", -84, 6),
-            differential.DamageComponent("capped_lethal", -23, 9, capped_source="psn"),
-        ]
-
-        exact, rolled = differential._promote_capped_tail_counterparts(
-            observed,
-            engine,
-            support=support,
-            target_side="p2",
-        )
-        self.assertEqual(exact, Counter({("brn", -24): 1}))
-        self.assertEqual([(component.source, component.delta) for component in rolled], [("", -82)])
 
     def test_observed_critical_cannot_match_a_noncritical_branch(self):
         support = differential.BranchLegalRollSupport("p1", 7, False, {21, 22, 23, 24, 25})

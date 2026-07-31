@@ -367,7 +367,6 @@ class DamageComponent:
     delta: int
     event_index: int
     critical: bool | None = None
-    capped_source: str | None = None
 
 
 def damage_component_events(
@@ -452,7 +451,6 @@ def damage_component_events(
             # The tag is preserved so attribution is still compared; only the
             # magnitude is relaxed, and only in the capped direction.
             source = f"{source}_to_full"
-        capped_source = None
         if fainted_here and tag == "-damage":
             # A residual that KILLS is capped by the HP that happened to be
             # left, so its magnitude inherits the roll of whatever damaged the
@@ -460,7 +458,6 @@ def damage_component_events(
             # tick would be 26. Comparing that exactly against a branch with a
             # different roll is a false divergence (seed 1310000 step 193,
             # exonerated by the engine lane in #893). Bucket it as roll-scaled.
-            capped_source = source
             source = "capped_lethal"
         previous = running.get(slot)
         if previous is not None and new_hp != previous:
@@ -478,13 +475,7 @@ def damage_component_events(
                     target_side=slot,
                 )
             out[slot].append(
-                DamageComponent(
-                    source,
-                    new_hp - previous,
-                    event_index,
-                    critical,
-                    capped_source,
-                )
+                DamageComponent(source, new_hp - previous, event_index, critical)
             )
         running[slot] = new_hp
     return out
@@ -640,9 +631,8 @@ def branch_event_legal_rolls(
     *,
     side_one_choice: str,
     side_two_choice: str,
-    pre_state: str | None = None,
 ) -> BranchLegalRollSupport | None:
-    """Return support for the first rendered direct hit in a branch.
+    """Return support repriced after a pre-damage switch or stat event.
 
     ``calculate_damage`` on the boundary pre-state prices the wrong target when
     a switch resolves first, and the wrong stages when Boost/Unboost resolves
@@ -650,12 +640,9 @@ def branch_event_legal_rolls(
     the exact branch prefix immediately before the first defender damage. The
     completed ``post_state`` is deliberately never accepted here: it may include
     the hit itself and later effects (for example Knock Off's item removal),
-    which cannot affect the hit being compared. When no repricing event precedes
-    the hit, ``pre_state`` is the valid snapshot. Crucially, the selected move
-    comes from the rendered ``|move|`` line rather than the boundary action: a
-    caller such as Sleep Talk has no damage base, while its named callee does.
-    The returned support is scoped to that hit's protocol target, so another
-    same-side HP event cannot borrow it.
+    which cannot affect the hit being compared. The returned support is scoped
+    to that hit's protocol target, so an earlier hit in the same branch keeps
+    ordinary pre-state support.
     """
 
     events = branch.get("events")
@@ -663,12 +650,8 @@ def branch_event_legal_rolls(
         raise BranchLegalRollError("branch events are missing or malformed")
 
     acting_side: str | None = None
-    acting_move: str | None = None
     direct_damage_index: int | None = None
     direct_damage_target: str | None = None
-    direct_damage_actor: str | None = None
-    direct_damage_move: str | None = None
-    direct_damage_state_changed = False
     for index, event in enumerate(events):
         if not isinstance(event, str):
             continue
@@ -677,8 +660,6 @@ def branch_event_legal_rolls(
             actor = fields[2] if len(fields) > 2 else ""
             candidate = actor.split(":", maxsplit=1)[0][:2]
             acting_side = candidate if candidate in {"p1", "p2"} else None
-            move = fields[3] if len(fields) > 3 else ""
-            acting_move = normalize_id(move)
             continue
         if not event.startswith("|-damage|") or "[from]" in event:
             continue
@@ -697,41 +678,22 @@ def branch_event_legal_rolls(
                     "state-changing branch has malformed direct-damage ident"
                 )
             continue
-        # A state-changing prefix must reprice the first hit it affects, even
-        # if an earlier hit in the same turn could use the ordinary pre-state.
-        # Otherwise retain the first direct hit as the no-reprice fallback.
-        if direct_damage_index is None or state_changed:
+        if state_changed:
             direct_damage_index = index
             direct_damage_target = target_side
-            direct_damage_actor = acting_side
-            direct_damage_move = acting_move
-            direct_damage_state_changed = state_changed
-        if state_changed:
             break
     if direct_damage_index is None:
         return None
 
-    if direct_damage_actor not in {"p1", "p2"} or not direct_damage_move:
-        raise BranchLegalRollError("direct hit has no rendered move identity")
-    legal_roll_state = (
-        branch.get("legal_roll_state") if direct_damage_state_changed else pre_state
-    )
+    legal_roll_state = branch.get("legal_roll_state")
     if not isinstance(legal_roll_state, str) or not legal_roll_state:
-        if not direct_damage_state_changed:
-            return None
         raise BranchLegalRollError(
             "state-changing branch omitted pre-damage legal_roll_state"
         )
     try:
         state = poke_engine.State.from_string(legal_roll_state)
-        selected_side_one = (
-            direct_damage_move if direct_damage_actor == "p1" else side_one_choice
-        )
-        selected_side_two = (
-            direct_damage_move if direct_damage_actor == "p2" else side_two_choice
-        )
         side_one_rolls, side_two_rolls = poke_engine.calculate_damage(
-            state, selected_side_one, selected_side_two, True
+            state, side_one_choice, side_two_choice, True
         )
     except (KeyboardInterrupt, SystemExit):
         raise
@@ -798,70 +760,6 @@ def _split_component_events(
     return exact, rolled
 
 
-def _promote_capped_tail_counterparts(
-    observed: Sequence[DamageComponent],
-    engine: Sequence[DamageComponent],
-    *,
-    support: BranchLegalRollSupport | None,
-    target_side: str,
-) -> tuple[Counter, list[DamageComponent]]:
-    """Keep a direct roll and its terminal residual on one comparison path.
-
-    A representative engine roll can leave a poisoned target at zero while a
-    different legal direct-damage roll leaves it alive after the same poison
-    tick. The renderer records the former as ``capped_lethal``; the protocol
-    records the latter under its ordinary residual source. Preserve that source
-    on :class:`DamageComponent` and promote only its matching observed
-    counterpart after an actually legal selected direct hit. This is deliberately
-    narrower than treating arbitrary exact damage as roll-scaled.
-    """
-
-    exact, rolled = _split_component_events(observed)
-    if support is None or support.target_side != target_side:
-        return exact, rolled
-    if not any(
-        component.source == "" and component.event_index == support.event_index
-        for component in engine
-    ):
-        return exact, rolled
-    direct_positions = [
-        index
-        for index, component in enumerate(observed)
-        if (
-            component.source == ""
-            and component.critical is support.critical
-            and abs(component.delta) in support.damages
-        )
-    ]
-    if not direct_positions:
-        return exact, rolled
-    first_direct = direct_positions[0]
-    used_indexes: set[int] = set()
-    for engine_component in engine:
-        if (
-            engine_component.source != "capped_lethal"
-            or not engine_component.capped_source
-        ):
-            continue
-        for index, observed_component in enumerate(
-            observed[first_direct + 1:], first_direct + 1
-        ):
-            if index in used_indexes:
-                continue
-            if (
-                observed_component.source == engine_component.capped_source
-                and observed_component.delta < 0
-                and exact[(observed_component.source, observed_component.delta)]
-            ):
-                exact[(observed_component.source, observed_component.delta)] -= 1
-                if not exact[(observed_component.source, observed_component.delta)]:
-                    del exact[(observed_component.source, observed_component.delta)]
-                rolled.append(observed_component)
-                used_indexes.add(index)
-                break
-    return exact, rolled
-
-
 def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
     """Total roll-scaled DAMAGE on a slot this step (the spread that can move a
     capped heal). Heals are positive and excluded; only damage carries a roll."""
@@ -873,8 +771,6 @@ def roll_components_agree(
     observed: Sequence[tuple[str, int]],
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
-    *,
-    roll_scale: int | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -905,11 +801,7 @@ def roll_components_agree(
             # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
             # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
             # of flooring slack.
-            scale = (
-                roll_scale
-                if roll_scale is not None
-                else max(_roll_damage_scale(observed), _roll_damage_scale(engine))
-            )
+            scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
             if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
                 continue
             return False
@@ -959,9 +851,7 @@ def roll_component_events_agree(
 
     if len(observed) != len(engine):
         return False
-    for component_index, (observed_component, engine_component) in enumerate(
-        zip(observed, engine)
-    ):
+    for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
             and target_side == support.target_side
@@ -983,18 +873,6 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
-            # A capped full heal is priced by damage that happened earlier in
-            # the same ordered tail. Comparing it in a singleton erases that
-            # causal scale and turns a legal random-roll difference into a
-            # false mismatch (Double-Edge -> Rest is the retained shape).
-            roll_scale=max(
-                _roll_damage_scale(
-                    [(item.source, item.delta) for item in observed[:component_index + 1]]
-                ),
-                _roll_damage_scale(
-                    [(item.source, item.delta) for item in engine[:component_index + 1]]
-                ),
-            ),
         ):
             return False
     return True
@@ -1450,6 +1328,11 @@ def evaluate_boundary_strict(
     # HP equal), so both extractions are seeded with it.
     pre_hp = {"p1": pre_features.p1_hp, "p2": pre_features.p2_hp}
     observed_components = damage_component_events(step_lines, pre_hp)
+    observed_split = {
+        slot: _split_component_events(observed_components[slot]) for slot in ("p1", "p2")
+    }
+    obs_exact = {slot: observed_split[slot][0] for slot in ("p1", "p2")}
+    obs_rolled = {slot: observed_split[slot][1] for slot in ("p1", "p2")}
 
     misses: list[tuple[int, str]] = []
     branch_total = 0
@@ -1502,7 +1385,6 @@ def evaluate_boundary_strict(
                     branch,
                     side_one_choice=side_one_choice,
                     side_two_choice=side_two_choice,
-                    pre_state=state.to_string(),
                 )
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
@@ -1518,17 +1400,11 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
-                obs_exact, obs_rolled = _promote_capped_tail_counterparts(
-                    observed_components[slot],
-                    engine_components[label],
-                    support=branch_support,
-                    target_side=label,
-                )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.
                 if not roll_component_events_agree(
-                    obs_rolled,
+                    obs_rolled[slot],
                     eng_rolled,
                     support=branch_support,
                     target_side=label,
@@ -1536,14 +1412,14 @@ def evaluate_boundary_strict(
                 ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={[(c.source, c.delta) for c in obs_rolled]} "
+                        f"observed={[(c.source, c.delta) for c in obs_rolled[slot]]} "
                         f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
-                if eng_exact != obs_exact:
-                    only_obs = obs_exact - eng_exact
-                    only_eng = eng_exact - obs_exact
+                if eng_exact != obs_exact[slot]:
+                    only_obs = obs_exact[slot] - eng_exact
+                    only_eng = eng_exact - obs_exact[slot]
                     reason = (
                         f"{slot} attributed components differ: "
                         f"observed_only={sorted(only_obs.elements())} "

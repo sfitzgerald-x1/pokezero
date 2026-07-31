@@ -1,76 +1,51 @@
 # C26 Damage-Composition Tail Results
 
-## Current Result
+## Final Disposition
 
-The matcher implementation has focused tests for its two intended composition
-rules, but the historical target identities are **not currently replayable as
-identities**. The checked-in C26 prediction names `2900889/126` and
-`3400914/75` without retaining their full protocol/state payload or pinning the
-Showdown revision that generated them. A current gated one-game run reaches
-only 119 full-round boundaries for the former and 66 for the latter, so neither
-named step occurs. A zero-divergence run that never reaches the named boundary
-is not evidence that the row matched.
+This is an evidence-only lane. The final matcher is byte-identical to immutable
+baseline commit `8e81426e98cc9b490020026d455eb653903488c4`; no experimental C26
+production behavior remains. The full engine fingerprint is
+`992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e`.
 
-The machine-readable [C26 readout](c26_damage_composition_tail_readout.json)
-records the commands, boundary counts, every C15 WHAT identity, and the
-fail-closed disposition. This lane changes matcher evidence only; it does not
-change Rust battle mechanics or the Python battle engine.
+The retained population contains 3,821 rows in eight hash-pinned opaque
+shards. The deterministic baseline reread tally is 3,599 `diverged`, 221
+`matched`, and 1 `skip_lossy`. The final matcher rereads the same population
+with exactly zero `diverged -> matched` and zero `matched -> diverged` changes.
 
-## Mechanism
+## Rejected Experiment
 
-The matcher now:
+The discarded experiment produced 3,514 `diverged`, 306 `matched`, and 1
+`skip_lossy`: 88 apparent clearances and three regressions. The clearance
+classes and hook-isolation observations are recorded exactly in the
+[C26 readout](c26_damage_composition_tail_readout.json). The generic
+capped-source promotion is present in 87 of the 88 apparent clearances and,
+under ablation, removes all three regressions. The cumulative-tail scale
+accounts for one further apparent clearance. The pre-state/called-move change
+has overlapping effects and is deliberately not assigned a separable benefit.
 
-1. prices the identified direct move from the rendered `|move|` event, so a
-   named Sleep Talk callee uses its own legal roll support instead of the
-   caller's zero base;
-2. carries preceding ordered-tail damage scale into capped full-heal comparison;
-   and
-3. retains the original source of an engine terminal residual, permitting an
-   observed non-terminal counterpart only after a legal selected direct roll
-   and only when both sources match.
+The regressions are `2200760/86`, `2300983/40`, and `2700145/92`. Each matched
+on the baseline and diverged with the experiment; this is sufficient to reject
+the experiment. These rows do not establish engine defects, and this lane makes
+no engine-defect claim.
 
-The last point was an honest refinement of the pre-registration. The initial
-callee-support prediction explained the observed 82-damage Earthquake but did
-not account for the representative 84-damage branch capping the subsequent
-poison tick. The repair remains narrow because it requires an identified,
-legal direct hit and the same residual source after that hit.
+## Ownership And Refusals
 
-## Tested Matcher Shapes
+All 11 retained C15 WHAT identities match current main with the exact branch
+counts in the readout. They are closed only by current main and have no shared
+ownership with poison-tail, matcher, C27, or Rest lanes.
 
-The focused matcher tests establish only these implementation-level facts:
-
-- a rendered named Sleep Talk callee is priced from the boundary pre-state;
-- a capped full-heal keeps the earlier same-tail direct-damage scale; and
-- a terminal residual can be relaxed only after a legal selected direct hit
-  and only when its original source matches.
-
-They are not substitutes for an exact retained-row replay.
-
-## Identity Boundary
-
-The C15 WHAT matrix is explicit rather than family-derived. On the current
-49-patch engine, every identity replays as `matched` through an in-memory
-`origin/main` matcher control, so C26 owns none of them. PR #980 contains no
-exact-identity closure evidence for this population; the observed clearances
-are current-main results rather than an attribution to that PR.
-
-| Disposition | Exact identities |
-| --- | --- |
-| Closed by PR #980 exact identity evidence | none |
-| Closed by current main | all 11 C15 WHAT identities |
-| Exact poison/matcher tail cleared | none |
-| C27/Rest | none |
-| Still unresolved or refused | none |
-
-`2601196/46` contains poison, but no C26 poison-tail attribution is made: its
-current-main control is simply matched with the rest of the C15 population.
+All four historical/control rows are uniformly
+`refused_archive_row_absent`: `2900889/126`, `3400914/75`, `1500037/28`, and
+`1500174/72`. The two bounded gated runs did not reach their required steps;
+there is no guessed clearance. The Outcome Amendment in the prediction also
+withdraws the unadjudicated `2900889/3` and `2900889/93` assertion.
 
 ## Verification
 
-- `tests/test_transition_differential_matcher.py`: composition and
-  source-isolation pins.
-- `tests/test_c26_damage_composition_readout.py`: public identity-matrix and
-  fail-closed replay contract.
-- `tests/test_public_invariant.py`: public repository invariant guard.
-- Current-main control: all 11 exact C15 identities match on the attested
-  49-patch build.
+- The read-only `scripts/c26_damage_composition_verifier.py` requires the
+  hash-pinned retained inputs, checks the build stamp, rereads both pinned-main
+  and final matcher sources, and rejects any verdict delta.
+- `tests/test_c26_damage_composition_readout.py` pins the complete evidence
+  contract and production-code equivalence. Its optional archive reread skips
+  explicitly when the retained inputs are unavailable; it never converts a
+  missing archive into a passing replay.
