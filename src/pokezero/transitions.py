@@ -227,16 +227,9 @@ class TransitionToken:
     # under spec v2.2; see _SELF_COST_FROM_TAGS for the classification rationale.
     self_hp_cost: float = 0.0
     # Confusion self-hit damage-attribution correction (spec v3 change 10;
-    # docs/observation_v3_spec.md). When a SLOWER confused mon self-hits, the sim emits
-    # ``|-activate|SLOT|confusion`` then an UNTAGGED ``|-damage|SLOT|…`` (no |move|/|cant|),
-    # which the fold — correctly, for the ``damage_fraction`` field the v2.2 encode reads —
-    # folds into the OPEN opponent-move window's ``damage_fraction``. This field records the
-    # self-hit's own fraction so a v3 encode can subtract it back out (``damage_fraction -
-    # confusion_selfhit_fraction``) WITHOUT mutating ``damage_fraction`` (kept frozen for
-    # v2.2 byte-identity). ``confusion_selfhit`` is the companion presence flag the v3 encode
-    # keys on (a 0-delta self-hit is possible in principle). Extracted for every replay (pure
-    # extraction, schema-independent); only a v3 encode reads either — v2/v2.1/v2.2 stay
-    # byte-identical.
+    # docs/observation_v3_spec.md). Schema-agnostic transition semantics keep
+    # self-hit damage separate from ``damage_fraction``. Legacy encoders add
+    # this field back only while serializing their frozen V2/V2.1/V2.2 surface.
     confusion_selfhit_fraction: float = 0.0
     confusion_selfhit: bool = False
     # Context trio (gen3 inventory: the principled derivability exception), captured at
@@ -339,8 +332,8 @@ class _Window:
     weather: Optional[str] = None
     damage_fraction: float = 0.0
     self_hp_cost: float = 0.0
-    # Confusion self-hit fraction folded into this move window's damage_fraction (spec v3
-    # change 10) + its presence flag; recorded additively, damage_fraction stays frozen.
+    # Confusion self-hit fraction observed after this window. It is excluded
+    # from semantic move damage and never grants the window a KO.
     confusion_selfhit_fraction: float = 0.0
     confusion_selfhit: bool = False
     outcome: str = DAMAGE_OUTCOME_NORMAL
@@ -352,9 +345,13 @@ class _Window:
     n_hits: int = 1
     effectiveness: str = EFFECTIVENESS_NEUTRAL
     side_effect: str = SIDE_EFFECT_NONE
-    # KO guard: True while the last damage the defender took in this window was the
-    # move's own (untagged); a tagged (chip) hit flips it back off.
+    # Monotone evidence that this window's declared move dealt defender damage.
+    # This is not the KO causal guard: a later chip/self-hit must not erase the
+    # fact that a real move landed.
     defender_hit_by_move: bool = False
+    # True only while the LAST defender damage was the declared move's own;
+    # tagged chip and confusion self-hit clear this narrower KO causal guard.
+    defender_last_damage_by_move: bool = False
     # Tendency meta (not token fields).
     voluntary_switch: bool = False
     # Locked continuation (Solar Beam release / [from]lockedmove): the |move| line is
@@ -762,18 +759,18 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                         previous_fraction = hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            current.damage_fraction += delta
-                            # Record the self-hit fraction ADDITIVELY (damage_fraction above
-                            # stays frozen — the v2.2 field is unchanged). A v3 encode reads
-                            # this to subtract the self-hit back out of the move's damage.
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
-                        current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = False
+                            else:
+                                current.damage_fraction += delta
+                                current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = True
                 else:
-                    # Chip landed on the defender after the move's own damage: a
-                    # subsequent faint is the chip's, not the move's.
-                    current.defender_hit_by_move = False
+                    # Chip landed on the defender after the move's own damage:
+                    # retain historical hit evidence, but a later faint is chip's.
+                    current.defender_last_damage_by_move = False
             # SELF_HP_COST: HP the actor lost to its own move, inside its own chunk.
             # Untagged actor damage covers the self-target class (Substitute / Belly
             # Drum, where defender == actor and the delta above already fed
@@ -839,7 +836,11 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             hp_fraction[target] = 0.0
             pending_faint_replacement[target] = True
             fainted_turns.add(turn_number)
-            if current is not None and target == current.defender_side and current.defender_hit_by_move:
+            if (
+                current is not None
+                and target == current.defender_side
+                and current.defender_last_damage_by_move
+            ):
                 current.ko = True
 
         elif event_type == "-status" and target in {"p1", "p2"}:

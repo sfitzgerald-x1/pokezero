@@ -1047,9 +1047,7 @@ class FixtureReplayTest(unittest.TestCase):
 
 
 class ConfusionSelfHitTest(unittest.TestCase):
-    """Spec v3 change 10: the SLOWER confused mon's untagged self-hit folds into the
-    opponent's still-open move window's damage_fraction (kept frozen for v2.2), and the
-    fold records the self-hit's own fraction additively so a v3 encode can subtract it."""
+    """A slower defender's confusion self-hit stays outside the prior move's attribution."""
 
     # The exact reproduction from the change brief: p2 Surf (0.17) on p1, then p1 (slower,
     # confused) self-hits for 0.10 with an UNTAGGED -damage and no |move|/|cant| line.
@@ -1067,17 +1065,11 @@ class ConfusionSelfHitTest(unittest.TestCase):
         self.assertEqual(len(surfs), 1)
         return surfs[0]
 
-    def test_self_hit_folds_into_damage_fraction_but_is_recorded_separately(self) -> None:
+    def test_self_hit_is_excluded_from_move_damage_and_recorded_separately(self) -> None:
         surf = self._surf(self._CONFUSION_LINES)
-        # The v2.2 field is FROZEN: the self-hit is still folded into damage_fraction.
-        self.assertAlmostEqual(surf.damage_fraction, 0.27)
-        # The additive v3 metadata isolates the self-hit's own fraction + a presence flag.
+        self.assertAlmostEqual(surf.damage_fraction, 0.17)
         self.assertTrue(surf.confusion_selfhit)
         self.assertAlmostEqual(surf.confusion_selfhit_fraction, 0.10)
-        # The move's own damage (self-hit removed) is the corrected value a v3 encode writes.
-        self.assertAlmostEqual(
-            surf.damage_fraction - surf.confusion_selfhit_fraction, 0.17
-        )
 
     def test_no_confusion_leaves_the_fields_default(self) -> None:
         # Identical log minus the confusion self-hit: damage_fraction is just Surf's 0.17
@@ -1092,6 +1084,25 @@ class ConfusionSelfHitTest(unittest.TestCase):
         self.assertAlmostEqual(surf.damage_fraction, 0.17)
         self.assertFalse(surf.confusion_selfhit)
         self.assertAlmostEqual(surf.confusion_selfhit_fraction, 0.0)
+
+    def test_lethal_self_hit_does_not_credit_previous_move_or_ko(self) -> None:
+        lethal = _leads() + [
+            "|move|p2a: Alakazam|Splash|p1a: Tyranitar",
+            "|-activate|p1a: Tyranitar|confusion",
+            "|-damage|p1a: Tyranitar|0 fnt",
+            "|faint|p1a: Tyranitar",
+            "|upkeep",
+            "|turn|2",
+        ]
+        splash = next(
+            token
+            for token in _moves_only(_tokens(lethal))
+            if token.actor_slot == "p2" and token.action == "splash"
+        )
+        self.assertEqual(splash.damage_fraction, 0.0)
+        self.assertEqual(splash.self_hp_cost, 0.0)
+        self.assertFalse(splash.ko)
+        self.assertTrue(splash.confusion_selfhit)
 
     def test_confused_mon_that_still_moves_does_not_arm_the_latch(self) -> None:
         # |-activate|confusion followed by a real |move| (the mon shook off confusion and
