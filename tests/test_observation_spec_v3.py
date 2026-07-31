@@ -112,19 +112,19 @@ _FAIL_LINES = _LEADS + [
     "|-damage|p2a: Skarmory|70/100",
     "|move|p2a: Skarmory|Toxic|p1a: Snorlax",
     "|-status|p1a: Snorlax|tox",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|move|p2a: Skarmory|Toxic|p1a: Snorlax",
     "|-fail|p1a: Snorlax|tox",
     "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
     "|-damage|p2a: Skarmory|55/100",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
     "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
     "|-damage|p2a: Skarmory|40/100",
     "|move|p2a: Skarmory|Toxic|p1a: Snorlax",
     "|-fail|p1a: Snorlax|tox",
-    "|upkeep",
+    "|upkeep|",
     "|turn|4",
 ]
 
@@ -142,14 +142,14 @@ _CONFUSE_RIDE = _CONFUSE_LEADS + [
     "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
     "|-damage|p2a: Snorlax|80/100",
     "|-start|p2a: Snorlax|confusion",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|-activate|p2a: Snorlax|confusion",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
     "|-activate|p2a: Snorlax|confusion",
     "|-end|p2a: Snorlax|confusion",
-    "|upkeep",
+    "|upkeep|",
     "|turn|4",
 ]
 # p1's OWN mon confused, with a |request| so the confused mon lands on a SELF-side token — the
@@ -163,7 +163,7 @@ _CONFUSE_SELF = [
     "|move|p2a: Venomoth|Signal Beam|p1a: Snorlax",
     "|-damage|p1a: Snorlax|80/100",
     "|-start|p1a: Snorlax|confusion",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
     '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
@@ -186,16 +186,16 @@ _ENCORE_RIDE = _ENCORE_LEADS + [
     "|-damage|p1a: Wobbuffet|80/100",
     "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
     "|-start|p2a: Snorlax|Encore",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
     "|-damage|p1a: Wobbuffet|60/100",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
     "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
     "|-damage|p1a: Wobbuffet|40/100",
     "|-end|p2a: Snorlax|Encore",
-    "|upkeep",
+    "|upkeep|",
     "|turn|4",
 ]
 # p1's OWN mon encored, with a |request| so the encored mon lands on a SELF-side token — the
@@ -210,7 +210,7 @@ _ENCORE_SELF = [
     "|-damage|p2a: Wobbuffet|80/100",
     "|move|p2a: Wobbuffet|Encore|p1a: Snorlax",
     "|-start|p1a: Snorlax|Encore",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
     '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
@@ -233,17 +233,17 @@ _WRAP_RIDE = _WRAP_LEADS + [
     "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
     "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
     "|-damage|p2a: Snorlax|94/100|[from] Wrap",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|move|p2a: Snorlax|Body Slam|p1a: Shuckle",
     "|-damage|p1a: Shuckle|80/100",
     "|-damage|p2a: Snorlax|88/100|[from] Wrap",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
     "|move|p2a: Snorlax|Body Slam|p1a: Shuckle",
     "|-damage|p1a: Shuckle|60/100",
     "|-end|p2a: Snorlax|Wrap|[partiallytrapped]",
-    "|upkeep",
+    "|upkeep|",
     "|turn|4",
 ]
 # p1's OWN mon trapped, with a |request| so the trapped mon lands on a SELF-side token — the
@@ -257,7 +257,7 @@ _WRAP_SELF = [
     "|move|p2a: Shuckle|Wrap|p1a: Snorlax",
     "|-activate|p1a: Snorlax|move: Wrap|[of] p2a: Shuckle",
     "|-damage|p1a: Snorlax|94/100|[from] Wrap",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
     '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
@@ -281,14 +281,14 @@ _WISH_RIDE = _WISH_LEADS + [
     "|move|p1a: Vaporeon|Wish|p1a: Vaporeon",
     "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon",
     "|-damage|p1a: Vaporeon|250/300",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|move|p1a: Vaporeon|Protect|p1a: Vaporeon",
     "|-singleturn|p1a: Vaporeon|Protect",
     "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon",
     "|-activate|p1a: Vaporeon|Protect",
     "|-heal|p1a: Vaporeon|400/300|[from] move: Wish",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
 ]
 # Wish-pass via a FORCED SWITCH on the declaration turn: Vaporeon Wishes turn 1, is KO'd the same
@@ -311,13 +311,13 @@ _WISH_PASS_FAINT = [
 # The turn-2 continuation after the forced switch resolves onto Umbreon.
 _WISH_PASS_RIDE = _WISH_PASS_FAINT[:-1] + [
     "|switch|p1a: Umbreon|Umbreon, L80|400/400",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
     "|move|p1a: Umbreon|Moonlight|p1a: Umbreon",
     "|move|p2a: Snorlax|Body Slam|p1a: Umbreon",
     "|-damage|p1a: Umbreon|300/400",
     "|-heal|p1a: Umbreon|500/400|[from] move: Wish",
-    "|upkeep",
+    "|upkeep|",
     "|turn|3",
 ]
 
@@ -604,7 +604,7 @@ class StallCounterTrackerTest(unittest.TestCase):
     """
 
     def _protect(self, slot: str) -> list[str]:
-        return [f"|move|{slot}a: X|Protect|{slot}a: X", f"|-singleturn|{slot}a: X|Protect", "|upkeep"]
+        return [f"|move|{slot}a: X|Protect|{slot}a: X", f"|-singleturn|{slot}a: X|Protect", "|upkeep|"]
 
     def _counter(self, lines, *, slot="p1"):
         return parse_showdown_replay(lines, battle_id="stall").stall_counter.get(slot, 0)
@@ -663,7 +663,7 @@ class StallCounterTrackerTest(unittest.TestCase):
         lines = _LEADS + [
             "|move|p1a: X|Endure|p1a: X",
             "|-singleturn|p1a: X|move: Endure",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
         ] + self._protect("p1") + ["|turn|3"]
         self.assertEqual(self._counter(lines), 2)
@@ -780,7 +780,7 @@ class V3EncodeTest(unittest.TestCase):
         lines = _LEADS + [
             "|move|p1a: Snorlax|Lovely Kiss|p2a: Skarmory",
             "|-status|p2a: Skarmory|slp",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
         ]
         inducer = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
@@ -854,11 +854,11 @@ class StallCounterEncodeTest(unittest.TestCase):
             "|turn|1",
             f"|move|{staller}a: Skarmory|Protect|{staller}a: Skarmory",
             f"|-singleturn|{staller}a: Skarmory|Protect",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             f"|move|{staller}a: Skarmory|Protect|{staller}a: Skarmory",
             f"|-singleturn|{staller}a: Skarmory|Protect",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
 
@@ -909,11 +909,11 @@ class StallCounterEncodeTest(unittest.TestCase):
             "|turn|1",
             "|move|p1a: Skarmory|Protect|p1a: Skarmory",
             "|-singleturn|p1a: Skarmory|Protect",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|move|p1a: Skarmory|Protect|p1a: Skarmory",
             "|-singleturn|p1a: Skarmory|Protect",
-            "|upkeep",
+            "|upkeep|",
             "|request|" + json.dumps(request, separators=(",", ":")),
             "|turn|3",
         ]
@@ -1040,10 +1040,10 @@ class ConfusionElapsedTrackerTest(unittest.TestCase):
         lines = _CONFUSE_LEADS + [
             "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
             "|-start|p2a: Snorlax|confusion",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|switch|p2a: Skarmory|Skarmory, L76|100/100",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         self.assertEqual(self._replay(lines).confusion_elapsed["p2"], 0)
@@ -1052,10 +1052,10 @@ class ConfusionElapsedTrackerTest(unittest.TestCase):
         lines = _CONFUSE_LEADS + [
             "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
             "|-start|p2a: Snorlax|confusion",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|faint|p2a: Snorlax",
-            "|upkeep",
+            "|upkeep|",
         ]
         self.assertEqual(self._replay(lines).confusion_elapsed["p2"], 0)
 
@@ -1065,11 +1065,11 @@ class ConfusionElapsedTrackerTest(unittest.TestCase):
         lines = _CONFUSE_LEADS + [
             "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
             "|-start|p2a: Snorlax|confusion",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|move|p2a: Snorlax|Baton Pass|p2a: Snorlax",
             "|switch|p2a: Smeargle|Smeargle, L83|100/100|[from] Baton Pass",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         replay = self._replay(lines)
@@ -1160,13 +1160,13 @@ class ConfusionEncodeTest(unittest.TestCase):
 
     def test_switch_out_and_faint_zero_the_column(self) -> None:
         for tail in (
-            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
-            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
         ):
             lines = _CONFUSE_LEADS + [
                 "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
                 "|-start|p2a: Snorlax|confusion",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ] + tail
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
@@ -1213,10 +1213,10 @@ class EncoreElapsedTrackerTest(unittest.TestCase):
             "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
             "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
             "|-start|p2a: Snorlax|Encore",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|switch|p2a: Skarmory|Skarmory, L76|100/100",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
@@ -1227,10 +1227,10 @@ class EncoreElapsedTrackerTest(unittest.TestCase):
             "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
             "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
             "|-start|p2a: Snorlax|Encore",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|drag|p2a: Skarmory|Skarmory, L76|100/100",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
@@ -1240,10 +1240,10 @@ class EncoreElapsedTrackerTest(unittest.TestCase):
             "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
             "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
             "|-start|p2a: Snorlax|Encore",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|faint|p2a: Snorlax",
-            "|upkeep",
+            "|upkeep|",
         ]
         self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
 
@@ -1331,15 +1331,15 @@ class EncoreEncodeTest(unittest.TestCase):
 
     def test_switch_out_drag_and_faint_zero_the_column(self) -> None:
         for tail in (
-            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
-            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
-            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
+            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
         ):
             lines = _ENCORE_LEADS + [
                 "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
                 "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
                 "|-start|p2a: Snorlax|Encore",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ] + tail
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
@@ -1387,10 +1387,10 @@ class WrapTrapElapsedTrackerTest(unittest.TestCase):
         lines = _WRAP_LEADS + [
             "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
             "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|switch|p2a: Skarmory|Skarmory, L76|100/100",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
@@ -1400,10 +1400,10 @@ class WrapTrapElapsedTrackerTest(unittest.TestCase):
         lines = _WRAP_LEADS + [
             "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
             "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|drag|p2a: Skarmory|Skarmory, L76|100/100",
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
         ]
         self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
@@ -1412,10 +1412,10 @@ class WrapTrapElapsedTrackerTest(unittest.TestCase):
         lines = _WRAP_LEADS + [
             "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
             "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             "|faint|p2a: Snorlax",
-            "|upkeep",
+            "|upkeep|",
         ]
         self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
 
@@ -1508,14 +1508,14 @@ class WrapTrapEncodeTest(unittest.TestCase):
 
     def test_switch_out_drag_and_faint_zero_the_column(self) -> None:
         for tail in (
-            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
-            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
-            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
+            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep|", "|turn|3"],
         ):
             lines = _WRAP_LEADS + [
                 "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
                 "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ] + tail
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
@@ -1684,7 +1684,7 @@ _CONFUSE_SELFHIT_LINES = _LEADS + [
     "|-damage|p1a: Snorlax|83/100",  # opponent move = 0.17
     "|-activate|p1a: Snorlax|confusion",
     "|-damage|p1a: Snorlax|73/100",  # confused self-hit = 0.10 (untagged)
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
 ]
 
@@ -1694,7 +1694,7 @@ _LETHAL_CONFUSE_SELFHIT_LINES = _LEADS + [
     "|-activate|p1a: Snorlax|confusion",
     "|-damage|p1a: Snorlax|0 fnt",
     "|faint|p1a: Snorlax",
-    "|upkeep",
+    "|upkeep|",
     "|turn|2",
 ]
 

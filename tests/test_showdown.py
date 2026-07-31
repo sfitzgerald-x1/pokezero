@@ -1695,17 +1695,17 @@ class Phase2DynamicStateTest(unittest.TestCase):
             "|turn|1",
             f"|-status|{mon}: Tauros|tox",
             f"|-damage|{mon}: Tauros|268/285 tox|[from] psn",  # 17 = stage 1
-            "|upkeep",
+            "|upkeep|",
             "|turn|2",
             f"|-damage|{mon}: Tauros|234/285 tox|[from] psn",  # 34 = stage 2
-            "|upkeep",
+            "|upkeep|",
             "|turn|3",
             f"|switch|{mon}: Zapdos|Zapdos, L78|301/301",  # Tauros leaves: counter reset to 0
-            "|upkeep",
+            "|upkeep|",
             "|turn|4",
             f"|switch|{mon}: Tauros|Tauros, L80, M|234/285 tox",  # RE-ENTRY, no |-status|
             f"|-damage|{mon}: Tauros|217/285 tox|[from] psn",  # 17 = stage 1 RESTART (re-seed)
-            "|upkeep",
+            "|upkeep|",
             "|turn|5",
             *(extra or []),
         ]
@@ -1727,7 +1727,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                         mon,
                         extra=[
                             f"|-damage|{mon}: Tauros|183/285 tox|[from] psn",  # 34 = stage 2
-                            "|upkeep",
+                            "|upkeep|",
                             "|turn|6",
                         ],
                     )
@@ -1764,7 +1764,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|psn",
                 "|-damage|p1a: Tauros|250/285 psn|[from] psn",  # 35 = 1/8, regular poison
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ]
         )
@@ -1828,7 +1828,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|95/100 tox|[from] psn",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ],
             complete_prefix=True,
@@ -1937,7 +1937,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|225/239 tox|[from] psn",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
             ]
         )
@@ -1972,8 +1972,8 @@ class Phase2DynamicStateTest(unittest.TestCase):
             toxic_stage_zero_after_upkeep={"p1": True, "p2": True},
             toxic_stage_zero_after_upkeep_expires_after_turn={"p1": 2, "p2": 2},
             toxic_stage_zero_after_upkeep_ident=active_idents,
-            toxic_faint_replacement_pending={"p1": True, "p2": True},
-            toxic_faint_replacement_expected_ident=active_idents,
+            toxic_faint_replacement_pending={"p1": False, "p2": False},
+            toxic_faint_replacement_expected_ident={"p1": None, "p2": None},
             toxic_faint_replacement_invalid={"p1": False, "p2": False},
         )
 
@@ -2002,11 +2002,11 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     restored.toxic_faint_replacement_pending,
-                    {"p1": not window, "p2": not window},
+                    {"p1": False, "p2": False},
                 )
                 self.assertEqual(
                     restored.toxic_faint_replacement_expected_ident,
-                    active_idents if not window else {"p1": None, "p2": None},
+                    {"p1": None, "p2": None},
                 )
 
         for window in (1, "yes", None):
@@ -2047,7 +2047,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
                 "|turn|1",
                 "|faint|p1a: LeadOne",
-                "|upkeep",
+                "|upkeep|",
                 "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
                 "|turn|2",
             ],
@@ -2099,7 +2099,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|268/285 tox|[from] psn",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
                 "|move|p1a: Tauros|Baton Pass|p1a: Tauros",
                 "|switch|p1a: Snorlax|Snorlax, L80, M|400/400|[from] Baton Pass",
@@ -2116,7 +2116,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|268/285 tox|[from] psn",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
                 "|faint|p1a: Tauros",
                 "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
@@ -2149,10 +2149,10 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|turn|1",
                 "|-status|p1a: Tauros|tox",
                 "|-damage|p1a: Tauros|225/239 tox|[from] psn",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|2",
                 "|switch|p1a: Zapdos|Zapdos, L78|301/301",
-                "|upkeep",
+                "|upkeep|",
                 "|turn|3",
                 "|switch|p1a: Tauros|Tauros, L80, M|225/239 tox",
                 "|-damage|p1a: Tauros|211/239 tox|[from] psn",

@@ -97,6 +97,34 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+def _root_toxic_zero_after_upkeep_attestation(replay: object) -> dict[str, dict[str, bool | None]]:
+    """Serialize only exact proof booleans for the Rust root handoff.
+
+    The leaf has no replay snapshot to inspect.  Preserve malformed values as
+    JSON ``null`` rather than coercing them with ``bool(...)`` so its decoder
+    can fail closed before creating a Toxic re-entry latch.
+    """
+
+    def exact_bool_field(name: str, slot: str) -> bool | None:
+        values = getattr(replay, name, None)
+        value = values.get(slot) if isinstance(values, Mapping) else None
+        return value if type(value) is bool else None
+
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    exact_post_upkeep_window = (
+        post_upkeep_window if type(post_upkeep_window) is bool else None
+    )
+    return {
+        slot: {
+            "proof": exact_bool_field("toxic_stage_zero_after_upkeep", slot),
+            "pending": exact_bool_field("toxic_faint_replacement_pending", slot),
+            "invalid": exact_bool_field("toxic_faint_replacement_invalid", slot),
+            "post_upkeep_window": exact_post_upkeep_window,
+        }
+        for slot in ("p1", "p2")
+    }
+
+
 def _checkpoint_feature_masks_payload(model_config: Any) -> dict[str, Any]:
     """Encoder-table mask payload derived from checkpoint provenance."""
 
@@ -1260,12 +1288,9 @@ class EngineMctsPolicy:
                     "turn": turn,
                     # Construction-only provenance for a root Toxic zero.
                     # The leaf context consumes this outside model metadata.
-                    "toxic_stage_zero_after_upkeep": {
-                        slot: bool(
-                            getattr(replay, "toxic_stage_zero_after_upkeep", {}).get(slot, False)
-                        )
-                        for slot in ("p1", "p2")
-                    },
+                    "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
+                        replay
+                    ),
                 }
             )
             world_seed = rng.getrandbits(63)

@@ -373,22 +373,30 @@ pub(crate) struct LeafMetaCtx {
 }
 
 /// Construction-only root proof for the one active-Toxic zero that is public:
-/// a same-seat fainted mon was replaced after upkeep. This lives in `ctx_json`,
-/// not the observation metadata or any frozen model schema.
+/// a same-seat fainted mon was replaced after upkeep. Each seat must carry the
+/// complete exact-boolean Python attestation; this lives in `ctx_json`, not the
+/// observation metadata or any frozen model schema.
 fn root_toxic_zero_after_upkeep(ctx: &Value) -> [bool; 2] {
     let proof = ctx
         .get("toxic_stage_zero_after_upkeep")
         .and_then(Value::as_object);
-    [
-        proof
-            .and_then(|proof| proof.get("p1"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        proof
-            .and_then(|proof| proof.get("p2"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    ]
+    ["p1", "p2"].map(|side| {
+        let attestation = proof
+            .and_then(|proof| proof.get(side))
+            .and_then(Value::as_object);
+        attestation
+            .and_then(|attestation| {
+                (attestation.get("proof").and_then(Value::as_bool) == Some(true)
+                    && attestation.get("pending").and_then(Value::as_bool) == Some(false)
+                    && attestation.get("invalid").and_then(Value::as_bool) == Some(false)
+                    && attestation
+                        .get("post_upkeep_window")
+                        .and_then(Value::as_bool)
+                        .is_some())
+                .then_some(true)
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn seed_root_toxic_reentry_pending(meta: &mut LeafMeta, proof: [bool; 2]) {
@@ -2219,6 +2227,59 @@ mod tests {
         raw.iter().map(|s| s.to_string()).collect()
     }
 
+    fn root_zero_attestation(p1: bool, p2: bool) -> Value {
+        json!({
+            "toxic_stage_zero_after_upkeep": {
+                "p1": {
+                    "proof": p1,
+                    "pending": false,
+                    "invalid": false,
+                    "post_upkeep_window": false,
+                },
+                "p2": {
+                    "proof": p2,
+                    "pending": false,
+                    "invalid": false,
+                    "post_upkeep_window": false,
+                },
+            }
+        })
+    }
+
+    #[test]
+    fn root_zero_proof_requires_complete_exact_boolean_attestation() {
+        for (field, value) in [
+            ("proof", json!(1)),
+            ("proof", json!(0)),
+            ("proof", json!("true")),
+            ("proof", Value::Null),
+            ("proof", json!({"forged": true})),
+            ("pending", json!(1)),
+            ("pending", json!(0)),
+            ("invalid", json!("false")),
+            ("post_upkeep_window", json!({"forged": false})),
+        ] {
+            let mut ctx = root_zero_attestation(true, false);
+            ctx["toxic_stage_zero_after_upkeep"]["p1"][field] = value;
+            assert!(
+                !root_toxic_zero_after_upkeep(&ctx)[0],
+                "{field} must reject a non-boolean root attestation"
+            );
+        }
+
+        for (field, value) in [("pending", json!(true)), ("invalid", json!(true))] {
+            let mut ctx = root_zero_attestation(true, false);
+            ctx["toxic_stage_zero_after_upkeep"]["p1"][field] = value;
+            assert!(
+                !root_toxic_zero_after_upkeep(&ctx)[0],
+                "{field} must reject the wrong exact boolean"
+            );
+        }
+
+        assert!(root_toxic_zero_after_upkeep(&root_zero_attestation(true, false))[0]);
+        assert!(!root_toxic_zero_after_upkeep(&root_zero_attestation(true, false))[1]);
+    }
+
     fn rendered_status_cure(choice: Choices) -> crate::events::RenderedEvents {
         let mut state = State::default();
         let active = state.side_one.get_active();
@@ -2474,12 +2535,7 @@ mod tests {
                 active_hp: [Some((100, 100)), Some((100, 100))],
                 ..Default::default()
             };
-            let proof = root_toxic_zero_after_upkeep(&json!({
-                "toxic_stage_zero_after_upkeep": {
-                    "p1": side == 0,
-                    "p2": side == 1,
-                }
-            }));
+            let proof = root_toxic_zero_after_upkeep(&root_zero_attestation(side == 0, side == 1));
             seed_root_toxic_reentry_pending(&mut root, proof);
             assert!(root.toxic_reentry_pending[side], "root proof lost for side {side}");
             assert!(!root.toxic_reentry_pending[1 - side]);
@@ -2530,9 +2586,7 @@ mod tests {
             let mut proven = root.clone();
             seed_root_toxic_reentry_pending(
                 &mut proven,
-                root_toxic_zero_after_upkeep(&json!({
-                    "toxic_stage_zero_after_upkeep": {"p1": true, "p2": false}
-                })),
+                root_toxic_zero_after_upkeep(&root_zero_attestation(true, false)),
             );
             let expired = evolve_leaf_meta(&proven, &lines(&[line]), &ctx);
             assert!(
@@ -2548,9 +2602,7 @@ mod tests {
         };
         seed_root_toxic_reentry_pending(
             &mut forged,
-            root_toxic_zero_after_upkeep(&json!({
-                "toxic_stage_zero_after_upkeep": {"p1": true, "p2": true}
-            })),
+            root_toxic_zero_after_upkeep(&root_zero_attestation(true, true)),
         );
         assert_eq!(forged.toxic_reentry_pending, [false, false]);
     }
@@ -2564,12 +2616,8 @@ mod tests {
                     active_hp: [Some((100, 100)), Some((100, 100))],
                     ..Default::default()
                 };
-                let proof = root_toxic_zero_after_upkeep(&json!({
-                    "toxic_stage_zero_after_upkeep": {
-                        "p1": side == 0,
-                        "p2": side == 1,
-                    }
-                }));
+                let proof =
+                    root_toxic_zero_after_upkeep(&root_zero_attestation(side == 0, side == 1));
                 seed_root_toxic_reentry_pending(&mut root, proof);
                 let mut ctx = LeafMetaCtx::default();
                 ctx.hp_percent[side] = true;

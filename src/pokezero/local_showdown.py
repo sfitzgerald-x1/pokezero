@@ -2280,6 +2280,9 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
     active_is_toxic = "tox" in condition.split()
     if not active_is_toxic:
         return None if zero_after_upkeep is True else 0
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    if type(post_upkeep_window) is not bool:
+        return None
     known_present, known = provenance_value("toxic_stage_known")
     if not known_present or known is not True:
         return None
@@ -2305,7 +2308,6 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
         )
         active_ident = getattr(active, "ident", None)
         turn_number = getattr(replay, "turn_number", None)
-        post_upkeep_window = getattr(replay, "post_upkeep_window", None)
         if (
             not ident_present
             or not isinstance(proof_ident, str)
@@ -2317,7 +2319,6 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
             or deadline < 1
             or type(turn_number) is not int
             or turn_number < 0
-            or type(post_upkeep_window) is not bool
             or deadline != turn_number + (1 if post_upkeep_window else 0)
             or not invalid_present
             or invalid is not False
@@ -2332,7 +2333,7 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
         return None
     if not 1 <= tracked_stage <= 16:
         return None
-    if replay.post_upkeep_window:
+    if post_upkeep_window is True:
         # Residuals have run but the next |turn| line has not. The raw public stage is the
         # multiplier just paid, which is the counter needed for the NEXT tick. The engine's
         # counter is pre-tick and must stay at 14 once Showdown's stage has saturated at 15.
