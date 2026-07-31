@@ -144,9 +144,8 @@ class TurnSubBlock:
     # Fraction of the ACTOR'S max HP lost to its own action (v2.2 SELF_HP_COST; see
     # transitions._SELF_COST_FROM_TAGS for the source classification).
     self_hp_cost: float = 0.0
-    # Confusion self-hit observed after this move window. The legacy fold keeps
-    # it additive in damage_fraction; only V3 subtracts this field at encode
-    # time and emits the presence flag.
+    # Confusion self-hit observed after this move window. Semantic move damage
+    # excludes it; legacy encoders add it back for frozen V2.2 serialization.
     confusion_selfhit_fraction: float = 0.0
     confusion_selfhit: bool = False
     damage_outcome: str = DAMAGE_OUTCOME_NORMAL

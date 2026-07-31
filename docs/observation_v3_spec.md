@@ -408,45 +408,42 @@ is reachable in the pool via Signal Beam's 10% secondary), the sim emits
 `|-activate|SLOT|confusion` then an **UNTAGGED** `|-damage|SLOT|…` with **no
 intervening `|move|`/`|cant|` line** — the confused mon's turn is spent hurting
 itself. When the confused mon is the **SLOWER** of the two, that untagged
-self-damage lands while the FASTER opponent's move window is still open, and the
-fold — correctly, for the legacy `damage_fraction` field V2/V2.1/V2.2 encode reads — folds
-it into the opponent's move `damage_fraction`. The opponent's move token then
-overstates its own damage by the self-hit amount (e.g. a 0.17 Surf reads 0.27
-after a 0.10 self-hit folds in), polluting damage calibration.
+self-damage lands while the FASTER opponent's move window is still open. The
+protocol segment therefore associates it with that open window, but semantic
+transition state must not attribute it to the opponent's move.
 
-This change corrects the attribution **at encode time under v3 only**, without
-touching the folded `damage_fraction` field:
+This change keeps transition semantics corrected while preserving historical
+serialized observations at the schema boundary:
 
 - **Extraction (schema-agnostic, both fold paths).** The fold latches the slot on
   `|-activate|X|confusion` (`pending_confusion_selfhit_slot`), and when the NEXT
   `-damage` is the untagged self-hit on that slot, records its own fraction into a
-  new additive `confusion_selfhit_fraction` field on the move window it was folded
-  into — **in addition to** the existing (unchanged) `damage_fraction += delta` —
-  plus a companion `confusion_selfhit` presence flag. The latch is armed only by
+  new additive `confusion_selfhit_fraction` field on the open move window, while
+  excluding it from `damage_fraction`, plus a companion `confusion_selfhit`
+  presence flag. The latch is armed only by
   `|-activate|X|confusion` and disarmed by the next action (a real move clears it,
   so a confused mon that shakes off confusion and attacks is unaffected) or the
   next `-damage` (a non-self hit clears without recording; a `[from] confusion`
   TAGGED self-hit never folds into `damage_fraction` in the first place, so it is
   neither corrected nor flagged). These fields ride the per-action `TransitionToken`
   and the turn-merged `TurnSubBlock` and survive the merge/flatten bijection.
-- **v3 encode (schema >= v3 only).** For the move sub-block whose damage absorbed
-  the self-hit, the encode writes the damage-fraction column as
-  `damage_fraction - confusion_selfhit_fraction` (the move's OWN damage, self-hit
-  removed) and sets `NUMERIC_TT_CONFUSION_SELFHIT` at V3 position 154 = 1.0.
+- **v3 encode (schema >= v3 only).** For the move sub-block whose window observed
+  the self-hit, the encode writes corrected `damage_fraction` directly (the
+  move's OWN damage) and sets `NUMERIC_TT_CONFUSION_SELFHIT` at V3 position
+  154 = 1.0.
   Semantics: "the defender self-hit from confusion after this move." It is a SINGLE
   history column (not a first/second pair like the `-fail` bit) because the correction
   always rides the FIRST sub-block in practice — the confused mon must be SLOWER, so
   the opponent moved first; the write is mirrored onto the second sub-block defensively.
   **No new token is synthesized** (that would change the turn-merged stream length/order
   and break v2.2 byte-identity).
-- **V2/V2.1/V2.2 stay FROZEN (explicit).** Change 10 is a V3-only rewrite of the
-  carried `NUMERIC_TT_DAMAGE_FRACTION` semantic field. **Every legacy encoder retains
-  the folded value (0.27 in the example) — existing checkpoints keep exactly the value
-  they were trained on.** V2/V2.1 read their per-action `TransitionToken` aggregate;
-  V2.2 reads the turn-merged sub-block aggregate. None reads
-  `confusion_selfhit_fraction`/`confusion_selfhit`, so all three outputs are byte-
-  identical to their pre-change encoders. The V3 map carries every applicable V2.2
-  semantic field except this intentionally corrected value and documented dead-column drops.
+- **V2/V2.1/V2.2 stay FROZEN (explicit).** Every legacy encoder reconstructs
+  the historical folded value as `damage_fraction +
+  confusion_selfhit_fraction` (0.27 in the example) only while serializing its
+  old damage column. Existing checkpoints therefore receive exactly the bytes
+  they were trained on even though schema-agnostic transition state is
+  corrected. V3 writes `damage_fraction` directly. Cross-schema hashes pin all
+  three legacy surfaces.
 - **Reachability:** confusion is a reachable volatile (Signal Beam 10% in the pool;
   the confusion self-hit is a 50% roll). Encoded per the owner directive (encode
   reachable, do NOT gate on incidence).
@@ -531,14 +528,16 @@ touching the folded `damage_fraction` field:
    (mirrors the #769 pinch-berry class).
 10. Confusion self-hit (change 10): a scripted game where the SLOWER confused mon
     self-hits with an untagged `-damage` (no `|move|`/`|cant|` line) has the
-    opponent's move token read the FOLDED damage (0.27) under V2/V2.1/V2.2 and the
-    CORRECTED damage (0.17) plus `NUMERIC_TT_CONFUSION_SELFHIT = 1` under v3; the
+    internal opponent move token read CORRECTED damage (0.17), while its
+    serialized damage reads the historical FOLDED value (0.27) under
+    V2/V2.1/V2.2 and 0.17 plus `NUMERIC_TT_CONFUSION_SELFHIT = 1` under v3; the
     fold records `confusion_selfhit_fraction`/`confusion_selfhit` on both fold
     paths and they survive the merge/flatten bijection; a `[from] confusion`
     tagged self-hit and a confused-mon-that-still-moves engage neither field; the
     V2/V2.1/V2.2 encodings are byte-identical to before the change (cross-schema freeze
     over a both-seats + normal-game battery), and the change fails without the fix
-    (pristine v3 reads 0.27).
+    (an encoder that fails to dispatch by schema rewrites legacy bytes or
+    credits the self-hit internally).
 11. The raw V3 output has exactly 155 numeric columns. A synthetic projection
     and a real V2.2/V3 encode assert every carried semantic field satisfies
     `v3[v3_numeric_index(old)] == v2_2[old]`, except the documented first- and

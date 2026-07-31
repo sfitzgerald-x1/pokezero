@@ -1641,15 +1641,12 @@ impl FoldStateInner {
                             if let Some(new_fraction) = new_fraction {
                                 let delta = previous_fraction - new_fraction;
                                 if delta > 0.0 {
-                                    // Keep legacy damage_fraction frozen. V3
-                                    // subtracts this additive self-hit marker
-                                    // only at its corrected encoder column.
-                                    current.damage_fraction += delta;
                                     if is_confusion_selfhit {
                                         current.confusion_selfhit_fraction += delta;
                                         current.confusion_selfhit = true;
                                         current.defender_last_damage_by_move = false;
                                     } else {
+                                        current.damage_fraction += delta;
                                         current.defender_hit_by_move = true;
                                         current.defender_last_damage_by_move = true;
                                     }

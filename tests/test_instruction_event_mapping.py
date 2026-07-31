@@ -360,7 +360,7 @@ class BranchEventsTest(unittest.TestCase):
         )
         # The activation plus untagged damage is the fold's exact public
         # confusion contract. It must mark the prior actor's move window so
-        # the v3 encoder can subtract this defender self-hit correctly.
+        # semantic move damage stays separate and V3 can expose the marker.
         fold = pokezero_search.FoldState.initial("p1")
         fold.advance_in_place(LEAD_LINES)
         fold.advance_in_place(self_hit["events"])
@@ -682,7 +682,8 @@ class BranchEventsTest(unittest.TestCase):
                     for token in fold.products_payload()["transition_tokens"]
                     if token["kind"] == "move" and token["action"] == "splash"
                 )
-                self.assertEqual(splash["damage_fraction"], 0.35, splash)
+                self.assertEqual(splash["damage_fraction"], 0.0, splash)
+                self.assertEqual(splash["confusion_selfhit_fraction"], 0.35, splash)
                 self.assertEqual(splash["self_hp_cost"], 0.0, splash)
                 self.assertFalse(splash["ko"], splash)
                 self.assertTrue(splash["confusion_selfhit"], splash)
@@ -733,8 +734,9 @@ class BranchEventsTest(unittest.TestCase):
             if token["kind"] == "move" and token["action"] == "splash"
         )
         # This fold starts from the public lead's 100/100 condition, so the
-        # lethal self-hit contributes the full observed fraction.
-        self.assertEqual(splash["damage_fraction"], 1.0, splash)
+        # separate self-hit fraction is the full observed fraction.
+        self.assertEqual(splash["damage_fraction"], 0.0, splash)
+        self.assertEqual(splash["confusion_selfhit_fraction"], 1.0, splash)
         self.assertEqual(splash["self_hp_cost"], 0.0, splash)
         self.assertFalse(splash["ko"], splash)
         self.assertTrue(splash["confusion_selfhit"], splash)

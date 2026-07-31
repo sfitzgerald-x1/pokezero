@@ -994,7 +994,8 @@ class IncrementalFoldParityTest(unittest.TestCase):
             for token in products.transition_tokens
             if token.kind == "move" and token.action == "spikes"
         )
-        self.assertEqual(spikes.damage_fraction, 1.0)
+        self.assertEqual(spikes.damage_fraction, 0.0)
+        self.assertEqual(spikes.confusion_selfhit_fraction, 1.0)
         self.assertEqual(spikes.self_hp_cost, 0.0)
         self.assertFalse(spikes.ko)
         self.assertTrue(spikes.confusion_selfhit)
@@ -1676,7 +1677,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
 
 # Change 10 fixture: p2 Skarmory (faster) attacks p1 Snorlax for 0.17, then the SLOWER
 # confused Snorlax self-hits for 0.10 with an UNTAGGED -damage and no |move|/|cant| line —
-# the legacy fold keeps the additive self-hit marker/fraction on Skarmory's move window.
+# the semantic fold keeps the self-hit marker/fraction separate from Skarmory's move damage.
 # Skarmory (base speed 70) outspeeds Snorlax (30), so it is the FIRST sub-block.
 _CONFUSE_SELFHIT_LINES = _LEADS + [
     "|move|p2a: Skarmory|Drill Peck|p1a: Snorlax",
@@ -1703,7 +1704,7 @@ _LETHAL_CONFUSE_SELFHIT_LINES = _LEADS + [
     "requires a local Gen 3 Pokemon Showdown checkout",
 )
 class ConfusionSelfHitEncodeTest(unittest.TestCase):
-    """Legacy schemas retain folded bytes; V3 corrects the damage column."""
+    """Internal damage is corrected; legacy schemas reconstruct frozen bytes."""
 
     @staticmethod
     def _vocab():
@@ -1772,9 +1773,16 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
                     self.assertEqual(actual, expected[fixture_name][spec.schema_version])
             self.assertEqual(vocab.observed_oov_tokens, frozenset())
 
-    def test_legacy_schemas_keep_folded_damage_and_v3_sets_the_flag(self) -> None:
+    def test_legacy_schemas_reconstruct_folded_damage_and_v3_sets_the_flag(self) -> None:
         state = self._state(_CONFUSE_SELFHIT_LINES)
         turn1 = TRANSITION_TOKEN_OFFSET + 1  # lead pair at +0, turn 1 at +1
+        drill_peck = next(
+            token
+            for token in state.transition_tokens
+            if token.kind == "move" and token.action == "drillpeck"
+        )
+        self.assertAlmostEqual(drill_peck.damage_fraction, 0.17)
+        self.assertAlmostEqual(drill_peck.confusion_selfhit_fraction, 0.10)
         v2 = self._encode(state, V2_REPLAY_OBSERVATION_SPEC)
         v2_1 = self._encode(state, V2_1_REPLAY_OBSERVATION_SPEC)
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)

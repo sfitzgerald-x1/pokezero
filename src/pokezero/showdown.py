@@ -4829,8 +4829,14 @@ def _encode_transition_tokens(
         if token.weather:
             _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        if token.damage_fraction:
-            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, token.damage_fraction))
+        # Internal transition semantics exclude confusion self-damage. This
+        # writer serves only frozen V2/V2.1, so reconstruct their historical
+        # aggregate at the schema boundary.
+        legacy_damage = token.damage_fraction
+        if token.confusion_selfhit:
+            legacy_damage += token.confusion_selfhit_fraction
+        if legacy_damage:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, legacy_damage))
         if token.kind == _TT_KIND_MOVE:
             # n_hits is a move-token field; switch/cant rows keep 0.0 (not a constant 1/5).
             _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
@@ -4918,11 +4924,11 @@ def _encode_turn_merged_transition_tokens(
         if first.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_FIRST_BP, f"species:{first.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        # V2/V2.1/V2.2 use the frozen aggregate. V3 alone subtracts the
-        # separately tracked confusion self-hit at this first-sub-block column.
+        # Internal transition semantics are corrected. Reconstruct the frozen
+        # V2.2 aggregate only when dispatching the legacy merged layout.
         first_damage = first.damage_fraction
-        if schema_v3 and first.confusion_selfhit:
-            first_damage = max(0.0, first_damage - first.confusion_selfhit_fraction)
+        if not schema_v3 and first.confusion_selfhit:
+            first_damage += first.confusion_selfhit_fraction
         if first_damage:
             _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first_damage))
         if first.kind == _TT_KIND_MOVE:
@@ -4990,10 +4996,10 @@ def _encode_turn_merged_transition_tokens(
         if second.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_SECOND_BP, f"tt2_species:{second.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_TM2_PRESENT, 1.0)
-        # Symmetric V3 correction for the second action sub-block.
+        # Symmetric legacy reconstruction for the second action sub-block.
         second_damage = second.damage_fraction
-        if schema_v3 and second.confusion_selfhit:
-            second_damage = max(0.0, second_damage - second.confusion_selfhit_fraction)
+        if not schema_v3 and second.confusion_selfhit:
+            second_damage += second.confusion_selfhit_fraction
         if second_damage:
             _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second_damage))
         if second.kind == _TT_KIND_MOVE:

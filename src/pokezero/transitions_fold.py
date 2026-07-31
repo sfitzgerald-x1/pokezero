@@ -600,14 +600,12 @@ class FoldState:
                         previous_fraction = self.hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            # Keep the frozen legacy aggregate; V3 subtracts
-                            # the additive self-hit fraction only in encoding.
-                            current.damage_fraction += delta
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
                                 current.defender_last_damage_by_move = False
                             else:
+                                current.damage_fraction += delta
                                 current.defender_hit_by_move = True
                                 current.defender_last_damage_by_move = True
                 else:

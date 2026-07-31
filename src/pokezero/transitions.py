@@ -227,9 +227,9 @@ class TransitionToken:
     # under spec v2.2; see _SELF_COST_FROM_TAGS for the classification rationale.
     self_hp_cost: float = 0.0
     # Confusion self-hit damage-attribution correction (spec v3 change 10;
-    # docs/observation_v3_spec.md). The legacy fold deliberately keeps the
-    # self-hit in ``damage_fraction``; V3 alone subtracts this additive field
-    # in its corrected encoder column, leaving v2/v2.1/v2.2 bytes frozen.
+    # docs/observation_v3_spec.md). Schema-agnostic transition semantics keep
+    # self-hit damage separate from ``damage_fraction``. Legacy encoders add
+    # this field back only while serializing their frozen V2/V2.1/V2.2 surface.
     confusion_selfhit_fraction: float = 0.0
     confusion_selfhit: bool = False
     # Context trio (gen3 inventory: the principled derivability exception), captured at
@@ -332,9 +332,8 @@ class _Window:
     weather: Optional[str] = None
     damage_fraction: float = 0.0
     self_hp_cost: float = 0.0
-    # Confusion self-hit fraction observed after this window. It remains
-    # additive in the frozen legacy damage aggregate, but V3 removes it at
-    # encode time; it never grants the window a KO.
+    # Confusion self-hit fraction observed after this window. It is excluded
+    # from semantic move damage and never grants the window a KO.
     confusion_selfhit_fraction: float = 0.0
     confusion_selfhit: bool = False
     outcome: str = DAMAGE_OUTCOME_NORMAL
@@ -760,14 +759,12 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                         previous_fraction = hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            # Keep the legacy aggregate intact. V3 removes the
-                            # separately recorded self-hit only at encode time.
-                            current.damage_fraction += delta
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
                                 current.defender_last_damage_by_move = False
                             else:
+                                current.damage_fraction += delta
                                 current.defender_hit_by_move = True
                                 current.defender_last_damage_by_move = True
                 else:

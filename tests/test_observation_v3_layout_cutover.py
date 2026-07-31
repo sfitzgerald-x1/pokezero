@@ -266,7 +266,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         )
         rewritten_second = replace(
             token.second,
-            damage_fraction=0.25,
+            damage_fraction=0.15,
             confusion_selfhit=True,
             confusion_selfhit_fraction=0.10,
         )
@@ -282,6 +282,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         v2_2 = self._encode(V2_2_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
         v3 = self._encode(V3_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
         row = TRANSITION_TOKEN_OFFSET + token_index
+        self.assertEqual(rewritten_second.damage_fraction, 0.15)
         self.assertEqual(v2_2.numeric_features[row][NUMERIC_TM2_DAMAGE_FRACTION], 0.25)
         self.assertEqual(
             v3.numeric_features[row][v3_numeric_index(NUMERIC_TM2_DAMAGE_FRACTION)],
