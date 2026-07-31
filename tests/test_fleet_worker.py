@@ -364,6 +364,49 @@ class FanInTests(unittest.TestCase):
         target = self.cache_dir / name
         shutil.move(str(cache), str(target))
         fleet_worker._write_fanin_manifest(target, tasks)
+        lineage, _, version_text = name.rpartition("-v")
+        final_acceptance = None
+        for task_index, task in enumerate(tasks):
+            root = fleet_worker._fanin_task_fence_path(self.cache_dir, task.task_id)
+            root.parent.mkdir(parents=True, exist_ok=True)
+            current = fleet_worker._read_current_fanin_fence(root)
+            if current is None:
+                token = f"fixture-{task.task_id}-{name}"
+                root.mkdir()
+                fleet_worker._write_fanin_fence(root, task, f"{task.task_id}.fixture", token)
+                stat = root.stat()
+                record = fleet_worker._read_fanin_fence(root)
+                self.assertIsNotNone(record)
+                current = fleet_worker._FanInFenceGeneration(
+                    root, (stat.st_dev, stat.st_ino), record,
+                )
+                acceptance = fleet_worker._FanInAcceptance(
+                    task=task,
+                    guard_root=root.name,
+                    guard_generation=root.name,
+                    claim_name=f"{task.task_id}.fixture",
+                    claim_token=token,
+                    lineage=lineage,
+                    target=name,
+                    version=int(version_text),
+                    task_index=task_index,
+                    prefix_sha256=fleet_worker._fanin_manifest_prefix_sha256(tasks, task_index),
+                    manifest_sha256=fleet_worker._sha256_file(target / fleet_worker.FANIN_MANIFEST_NAME),
+                    metadata_sha256=fleet_worker._sha256_file(target / "metadata.json"),
+                    content_sha256=fleet_worker._fanin_content_sha256(target),
+                    record_count=fleet_worker._cache_record_count(target),
+                )
+                self.assertTrue(
+                    fleet_worker._publish_initialized_fanin_acceptance(
+                        fleet_worker._fanin_fence_successor_path(root, current), acceptance,
+                    )
+                )
+                current = fleet_worker._read_current_fanin_fence(root)
+            self.assertIsNotNone(current)
+            self.assertIsNotNone(current.acceptance)
+            final_acceptance = current.acceptance
+        self.assertIsNotNone(final_acceptance)
+        fleet_worker._write_fanin_publication(target, final_acceptance)
         return target
 
     def _requeue_claim(self, worker: str, base: str) -> None:
@@ -702,7 +745,10 @@ class FanInTests(unittest.TestCase):
         self.assertFalse(list((self.queue / "done").iterdir()))
 
     def test_current_task_metadata_conflict_fails_only_that_claim(self) -> None:
-        self._write_version("shard-wother-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 999)])
+        self._write_version(
+            "shard-wother-v1",
+            [self._fanin_task("i1-s0.env", 1, 0, 1, 999, out=self.cache_dir / "slice-0")],
+        )
         self._manifests(2)
         calls: list[list[str]] = []
 
@@ -718,8 +764,10 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(len(self._failed_claims("w1", "i1-s0.env")), 1)
         self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
 
-    def test_duplicate_selected_task_is_terminal_and_preserves_claim(self) -> None:
-        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+    def test_duplicate_target_without_matching_publication_fails_closed(self) -> None:
+        task = self._fanin_task(
+            "i1-s0.env", 1, 0, 1, 100, out=self.cache_dir / "slice-0",
+        )
         self._write_version("shard-wother-v1", [task])
         self._write_version("shard-wother2-v1", [task])
         self._manifests(1)
@@ -1344,6 +1392,119 @@ class FanInTests(unittest.TestCase):
                 fleet_worker._release_fanin_guard(second)
             fleet_worker._release_fanin_guard(first)
 
+    def test_missing_middle_generation_with_surviving_descendant_fails_closed(self) -> None:
+        import shutil
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        first_task = claim_next_task(self.queue, "w1")
+        self.assertIsNotNone(first_task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(first_task)
+        fence_path = fleet_worker._fanin_task_fence_path(self.cache_dir, first_task.base)
+        fence_path.parent.mkdir(parents=True, exist_ok=True)
+        fences = []
+
+        def expire(fence, task) -> None:
+            fence.stop.set()
+            fence.heartbeat.join(timeout=1)
+            payload = json.loads((fence.path / "owner.json").read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            (fence.path / "owner.json").write_text(json.dumps(payload), encoding="utf-8")
+            task.claim_path.unlink()
+
+        try:
+            first = fleet_worker._acquire_fanin_guard(fence_path, first_task, fanin_task)
+            fences.append(first)
+            expire(first, first_task)
+            _manifest(self.queue, first_task.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+            second_task = claim_next_task(self.queue, "w2")
+            self.assertIsNotNone(second_task)
+            second = fleet_worker._acquire_fanin_guard(fence_path, second_task, fanin_task)
+            fences.append(second)
+            expire(second, second_task)
+            _manifest(self.queue, first_task.base, out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+            third_task = claim_next_task(self.queue, "w3")
+            self.assertIsNotNone(third_task)
+            third = fleet_worker._acquire_fanin_guard(fence_path, third_task, fanin_task)
+            fences.append(third)
+
+            shutil.rmtree(second.path)
+            with self.assertRaisesRegex(
+                fleet_worker.FanInInventoryValidationError, "unreachable generations",
+            ):
+                fleet_worker._read_current_fanin_fence(fence_path)
+            with self.assertRaises(fleet_worker.FanInInventoryValidationError):
+                fleet_worker._acquire_fanin_guard(fence_path, third_task, fanin_task)
+            self.assertFalse(second.path.exists())
+            self.assertTrue(third.path.exists())
+        finally:
+            for fence in reversed(fences):
+                fleet_worker._release_fanin_guard(fence)
+
+    def test_successor_acceptance_excludes_predecessor_target_after_stale_check(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
+        predecessor = claim_next_task(self.queue, "predecessor")
+        self.assertIsNotNone(predecessor)
+        predecessor_tmp = self.cache_dir / "predecessor.tmp"
+        self._real_collect(["--out", str(predecessor_tmp), "--seed-start", "100"])
+        task_root = fleet_worker._fanin_task_fence_path(self.cache_dir, predecessor.base)
+        captured_fence = None
+        successor_target = None
+        interleaved = False
+        original_start = fleet_worker._start_fanin_guard_heartbeat
+
+        def capture_task_fence(root, path, task, fanin_task):
+            nonlocal captured_fence
+            fence = original_start(root, path, task, fanin_task)
+            if root == task_root and task.claim_token == predecessor.claim_token:
+                captured_fence = fence
+            return fence
+
+        def publish_successor_after_predecessor_check(boundary: str, _task) -> None:
+            nonlocal interleaved, successor_target
+            if boundary != "fanin-after-publication-fence-check" or interleaved:
+                return
+            interleaved = True
+            self.assertIsNotNone(captured_fence)
+            captured_fence.stop.set()
+            captured_fence.heartbeat.join(timeout=1)
+            owner = captured_fence.path / "owner.json"
+            payload = json.loads(owner.read_text(encoding="utf-8"))
+            payload["renewed_at"] = 0
+            owner.write_text(json.dumps(payload), encoding="utf-8")
+            predecessor.claim_path.unlink()
+            _manifest(
+                self.queue, predecessor.base, out=self.cache_dir / "slice-0",
+                iteration=1, offset=0, count=1, seed=100,
+            )
+            successor = claim_next_task(self.queue, "successor")
+            self.assertIsNotNone(successor)
+            successor_tmp = self.cache_dir / "successor.tmp"
+            self._real_collect(["--out", str(successor_tmp), "--seed-start", "100"])
+            successor_target, recovered = fleet_worker._publish_fanin_task(
+                successor, successor_tmp, self.queue, "successor", crash_inject=None,
+            )
+            self.assertFalse(recovered)
+
+        with patch.object(
+            fleet_worker, "_start_fanin_guard_heartbeat", new=capture_task_fence,
+        ):
+            target, recovered = fleet_worker._publish_fanin_task(
+                predecessor, predecessor_tmp, self.queue, "predecessor",
+                crash_inject=publish_successor_after_predecessor_check,
+            )
+
+        self.assertTrue(interleaved)
+        self.assertIsNone(target)
+        self.assertTrue(recovered)
+        self.assertIsNotNone(successor_target)
+        self.assertTrue((self.cache_dir / "shard-wpredecessor-v1").exists())
+        self.assertTrue((self.cache_dir / "shard-wsuccessor-v1").exists())
+        inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+        self.assertEqual([shard.path.name for shard in inventory.shards], ["shard-wsuccessor-v1"])
+        self.assertEqual([task.task_id for task in inventory.tasks], ["i1-s0.env"])
+
     def test_same_task_retry_reclaims_stale_task_and_publish_records(self) -> None:
         _manifest(self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1, offset=0, count=1, seed=100)
         first = claim_next_task(self.queue, "w1")
@@ -1390,7 +1551,9 @@ class FanInTests(unittest.TestCase):
                 self._write_version(
                     "shard-ww1-v2",
                     [
-                        self._fanin_task("i1-s0.env", 1, 0, 1, 100),
+                        self._fanin_task(
+                            "i1-s0.env", 1, 0, 1, 100, out=self.cache_dir / "slice-0",
+                        ),
                         self._fanin_task("i1-s1.env", 1, 1, 1, 101),
                     ],
                 )
@@ -1439,6 +1602,30 @@ class FanInTests(unittest.TestCase):
         with self.assertRaisesRegex(FanInValidationError, "malformed manifest envelope"):
             read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
 
+    def test_strict_inventory_rejects_missing_publication_provenance(self) -> None:
+        target = self._write_version(
+            "shard-ww1-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)],
+        )
+        (target / fleet_worker.FANIN_PUBLICATION_NAME).unlink()
+        with self.assertRaisesRegex(FanInValidationError, "missing or malformed publication"):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
+    def test_ambiguous_acceptance_and_successor_outcome_fails_closed(self) -> None:
+        import shutil
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, task.task_id)
+        current = fleet_worker._read_current_fanin_fence(root)
+        self.assertIsNotNone(current)
+        self.assertIsNotNone(current.acceptance)
+        outcome = fleet_worker._fanin_fence_successor_path(root, current)
+        shutil.copy2(root / "owner.json", outcome / "owner.json")
+        with self.assertRaisesRegex(
+            FanInValidationError, "outcome is malformed or ambiguous",
+        ):
+            read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+
     def test_manifest_schema_rejects_legacy_partial_and_non_route_writer_entries(self) -> None:
         path = self.cache_dir / "shard-ww1-v1"
         path.mkdir()
@@ -1474,7 +1661,7 @@ class FanInTests(unittest.TestCase):
 
         shutil.rmtree(self.cache_dir / "shard-ww2-v1")
         self._write_version("shard-ww2-v1", [self._fanin_task("i1-s0.env", 1, 0, 1, 100)])
-        with self.assertRaisesRegex(FanInValidationError, "repeats task id"):
+        with self.assertRaisesRegex(FanInValidationError, "content or lineage disagrees"):
             read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
 
         shutil.rmtree(self.cache_dir / "shard-ww2-v1")
@@ -1499,6 +1686,7 @@ class FanInTests(unittest.TestCase):
         import shutil
 
         tasks = [self._fanin_task("i1-s0.env", 1, 0, 1, 100)]
+        next_tasks = [*tasks, self._fanin_task("i1-s1.env", 1, 1, 1, 101)]
         v4 = self._write_version("shard-ww1-v4", tasks)
         original_read = fleet_worker._read_fanin_manifest
         raced = False
@@ -1507,7 +1695,7 @@ class FanInTests(unittest.TestCase):
             nonlocal raced
             if path == v4 and not raced:
                 raced = True
-                self._write_version("shard-ww1-v5", tasks)
+                self._write_version("shard-ww1-v5", next_tasks)
                 shutil.rmtree(v4)
             return original_read(path)
 
@@ -1515,25 +1703,15 @@ class FanInTests(unittest.TestCase):
             patch.object(fleet_worker, "_read_fanin_manifest", new=publish_v5_while_reading),
             patch.object(fleet_worker.time, "sleep") as sleep,
         ):
-            inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+            inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
         self.assertTrue(raced)
         sleep.assert_called_with(fleet_worker._SELECTED_FANIN_RETRY_SECONDS)
         self.assertEqual([shard.path.name for shard in inventory.shards], ["shard-ww1-v5"])
 
     def test_adopts_existing_version_and_sweeps_stale(self) -> None:
-        from pokezero.dataset import TrajectoryDatasetConfig
-        from tests.test_cache_concat import rollout_record, write_cache
-
-        staging = self.root / "staging"
-        staging.mkdir()
-        v1 = write_cache(staging, "v1", [rollout_record(1)], config=TrajectoryDatasetConfig(window_size=1))
-        v2 = write_cache(staging, "v2", [rollout_record(2), rollout_record(3)], config=TrajectoryDatasetConfig(window_size=1))
-        import shutil
-
-        shutil.move(str(v1), str(self.cache_dir / "shard-ww1-v1"))
-        shutil.move(str(v2), str(self.cache_dir / "shard-ww1-v2"))
-        fleet_worker._write_fanin_manifest(
-            self.cache_dir / "shard-ww1-v2",
+        (self.cache_dir / "shard-ww1-v1").mkdir()
+        self._write_version(
+            "shard-ww1-v2",
             [
                 self._fanin_task("prior-s0.env", 1, 0, 1, 98),
                 self._fanin_task("prior-s1.env", 1, 1, 1, 99),

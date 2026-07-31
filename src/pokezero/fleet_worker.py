@@ -18,14 +18,14 @@ serialize on a durable lock; unique worker ids remain the normal deployment
 configuration to avoid unnecessary contention. Each committed task's cache and
 a schema-versioned task manifest are assembled in a new ``-v<k+1>`` version and
 atomically renamed as one unit. The manifest is the persistent commit record
-across process/pod crashes: a retry consults selected highest versions before
-collecting, recognizes an already committed task, and only recovers its done
-marker. This is not a power-loss durability claim; cache payload files are not
-individually fsynced. The strict reader exposes selected versions and a
-deterministic global inventory, so training can require an exact task, game,
-offset, and seed contract. Fan-in is exactly-once for accepted training input,
-including a process/pod crash after version publication and before the done
-marker.
+paired with an immutable per-task acceptance outcome across process/pod
+crashes. A retry validates target provenance before accepting a target-first
+crash or recovering its done marker. This is not a power-loss durability claim;
+cache payload files are not individually fsynced. The strict reader exposes
+only acceptance-authenticated versions and a deterministic global inventory,
+so training can require an exact task, game, offset, and seed contract. Fan-in
+is exactly-once for accepted training input, including a process/pod crash
+after target publication and before acceptance or the done marker.
 
 Strict fan-in rollout precondition: start from a fresh cache directory, or a
 fully drained directory whose selected versions all have fan-in manifests.
@@ -96,8 +96,10 @@ class TaskManifest:
 
 
 FANIN_MANIFEST_NAME = "fanin-manifest.json"
+FANIN_PUBLICATION_NAME = "fanin-publication.json"
 FANIN_MANIFEST_SCHEMA_VERSION = 2
 _FANIN_MANIFEST_KIND = "pokezero-fanin-shard"
+_FANIN_ACCEPTANCE_NAME = "acceptance.json"
 _FANIN_STAGING_OWNER_SUFFIX = ".owner.json"
 _FANIN_STAGING_LEASE_SUFFIX = ".producer-lease.json"
 _FANIN_PUBLISH_LOCK_SUFFIX = ".publish-lock.json"
@@ -164,6 +166,26 @@ class FanInTask:
     @property
     def seed_stop(self) -> int:
         return self.seed + self.count
+
+
+@dataclass(frozen=True)
+class _FanInAcceptance:
+    """Immutable proof that one guard generation accepted one target append."""
+
+    task: FanInTask
+    guard_root: str
+    guard_generation: str
+    claim_name: str
+    claim_token: str
+    lineage: str
+    target: str
+    version: int
+    task_index: int
+    prefix_sha256: str
+    manifest_sha256: str
+    metadata_sha256: str
+    content_sha256: str
+    record_count: int
 
 
 @dataclass(frozen=True)
@@ -590,6 +612,7 @@ class _FanInFenceGeneration:
     path: Path
     identity: tuple[int, int]
     record: tuple[FanInTask, str, str, float]
+    acceptance: _FanInAcceptance | None = None
 
 
 @dataclass
@@ -679,7 +702,7 @@ def _write_fanin_fence(path: Path, task: FanInTask, claim_name: str, claim_token
 
 
 def _fanin_fence_successor_path(root: Path, generation: _FanInFenceGeneration) -> Path:
-    """Derive the only valid child name from immutable predecessor provenance."""
+    """Derive the generation's one successor-or-acceptance outcome pathname."""
     claim_token = generation.record[2]
     digest = hashlib.sha256(
         f"{root.name}\0{generation.path.name}\0{claim_token}".encode("utf-8")
@@ -687,15 +710,142 @@ def _fanin_fence_successor_path(root: Path, generation: _FanInFenceGeneration) -
     return root.parent / f".{root.name}.generation.{digest}"
 
 
+def _fanin_acceptance_path(path: Path) -> Path:
+    return path / _FANIN_ACCEPTANCE_NAME
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and value.isascii()
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _fanin_acceptance_payload(acceptance: _FanInAcceptance) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "task": _fanin_task_payload(acceptance.task),
+        "guard_root": acceptance.guard_root,
+        "guard_generation": acceptance.guard_generation,
+        "claim_name": acceptance.claim_name,
+        "claim_token": acceptance.claim_token,
+        "lineage": acceptance.lineage,
+        "target": acceptance.target,
+        "version": acceptance.version,
+        "task_index": acceptance.task_index,
+        "prefix_sha256": acceptance.prefix_sha256,
+        "manifest_sha256": acceptance.manifest_sha256,
+        "metadata_sha256": acceptance.metadata_sha256,
+        "content_sha256": acceptance.content_sha256,
+        "record_count": acceptance.record_count,
+    }
+
+
+def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
+    expected = {
+        "schema_version", "task", "guard_root", "guard_generation", "claim_name",
+        "claim_token", "lineage", "target", "version", "task_index", "prefix_sha256",
+        "manifest_sha256", "metadata_sha256", "content_sha256", "record_count",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+        return None
+    task = _fanin_task_from_payload(payload["task"])
+    string_fields = (
+        "guard_root", "guard_generation", "claim_name", "claim_token", "lineage", "target",
+    )
+    if (
+        task is None
+        or any(not isinstance(payload[field], str) or not payload[field] for field in string_fields)
+        or any(Path(payload[field]).name != payload[field] for field in ("guard_root", "guard_generation", "lineage", "target"))
+        or not _is_int(payload["version"])
+        or payload["version"] <= 0
+        or not _is_int(payload["task_index"])
+        or payload["task_index"] < 0
+        or not _is_int(payload["record_count"])
+        or payload["record_count"] < 0
+        or any(
+            not _is_sha256(payload[field])
+            for field in ("prefix_sha256", "manifest_sha256", "metadata_sha256", "content_sha256")
+        )
+        or payload["target"] != f"{payload['lineage']}-v{payload['version']}"
+    ):
+        return None
+    return _FanInAcceptance(
+        task=task,
+        guard_root=payload["guard_root"],
+        guard_generation=payload["guard_generation"],
+        claim_name=payload["claim_name"],
+        claim_token=payload["claim_token"],
+        lineage=payload["lineage"],
+        target=payload["target"],
+        version=payload["version"],
+        task_index=payload["task_index"],
+        prefix_sha256=payload["prefix_sha256"],
+        manifest_sha256=payload["manifest_sha256"],
+        metadata_sha256=payload["metadata_sha256"],
+        content_sha256=payload["content_sha256"],
+        record_count=payload["record_count"],
+    )
+
+
+def _read_fanin_acceptance(path: Path) -> _FanInAcceptance | None:
+    try:
+        payload = json.loads(_fanin_acceptance_path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _fanin_acceptance_from_payload(payload)
+
+
+def _read_fanin_publication(path: Path) -> _FanInAcceptance | None:
+    try:
+        payload = json.loads((path / FANIN_PUBLICATION_NAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _fanin_acceptance_from_payload(payload)
+
+
+def _installed_fanin_generation_paths(root: Path) -> set[Path]:
+    """Enumerate only exact immutable outcome names for one guard root."""
+    prefix = f".{root.name}.generation."
+    installed: set[Path] = set()
+    try:
+        for entry in root.parent.iterdir():
+            if not entry.name.startswith(prefix):
+                continue
+            digest = entry.name.removeprefix(prefix)
+            if _is_sha256(digest):
+                installed.add(entry)
+    except FileNotFoundError:
+        return set()
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in publication fence directory is unreadable: {root.parent}"
+        ) from exc
+    return installed
+
+
+def _reject_unreachable_fanin_generations(root: Path, reachable: set[Path]) -> None:
+    unreachable = _installed_fanin_generation_paths(root) - reachable
+    if unreachable:
+        names = ", ".join(sorted(path.name for path in unreachable))
+        raise FanInInventoryValidationError(
+            f"fan-in publication fence has unreachable generations: {names}"
+        )
+
+
 def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
-    """Follow the append-only guard chain, failing closed on malformed state."""
+    """Resolve an immutable successor/acceptance chain and reject orphan state."""
     path = root
     path_was_observed = False
+    reachable: set[Path] = set()
     for _depth in range(_FANIN_GUARD_CHAIN_MAX_GENERATIONS):
         try:
             stat = path.stat()
         except FileNotFoundError as exc:
             if not path_was_observed:
+                _reject_unreachable_fanin_generations(root, reachable)
                 return None
             raise FanInInventoryValidationError(f"fan-in publication fence chain is broken: {path}") from exc
         except OSError as exc:
@@ -704,16 +854,39 @@ def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
         if record is None:
             raise FanInInventoryValidationError(f"fan-in publication fence is malformed: {path}")
         generation = _FanInFenceGeneration(path, (stat.st_dev, stat.st_ino), record)
-        successor = _fanin_fence_successor_path(root, generation)
+        outcome = _fanin_fence_successor_path(root, generation)
         try:
-            successor.stat()
+            outcome.stat()
         except FileNotFoundError:
+            _reject_unreachable_fanin_generations(root, reachable)
             return generation
         except OSError as exc:
             raise FanInInventoryValidationError(
-                f"fan-in publication fence successor is unreadable: {successor}"
+                f"fan-in publication fence outcome is unreadable: {outcome}"
             ) from exc
-        path = successor
+        reachable.add(outcome)
+        successor = _read_fanin_fence(outcome)
+        acceptance = _read_fanin_acceptance(outcome)
+        if (successor is None) == (acceptance is None):
+            raise FanInInventoryValidationError(
+                f"fan-in publication fence outcome is malformed or ambiguous: {outcome}"
+            )
+        if acceptance is not None:
+            if (
+                acceptance.guard_root != root.name
+                or acceptance.guard_generation != generation.path.name
+                or acceptance.task != generation.record[0]
+                or acceptance.claim_name != generation.record[1]
+                or acceptance.claim_token != generation.record[2]
+            ):
+                raise FanInInventoryValidationError(
+                    f"fan-in publication acceptance conflicts with its guard: {outcome}"
+                )
+            _reject_unreachable_fanin_generations(root, reachable)
+            return _FanInFenceGeneration(
+                generation.path, generation.identity, generation.record, acceptance,
+            )
+        path = outcome
         path_was_observed = True
     raise FanInInventoryValidationError(
         f"fan-in publication fence chain exceeds {_FANIN_GUARD_CHAIN_MAX_GENERATIONS} generations: {root}"
@@ -721,6 +894,8 @@ def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
 
 
 def _fanin_generation_is_active(generation: _FanInFenceGeneration, claimed: Path) -> bool:
+    if generation.acceptance is not None:
+        return False
     _task, claim_name, claim_token, renewed_at = generation.record
     if _fanin_fence_release_marker(generation.path, claim_token).exists():
         return False
@@ -787,6 +962,39 @@ def _publish_initialized_fanin_generation(
             shutil.rmtree(temporary, ignore_errors=True)
 
 
+def _publish_initialized_fanin_acceptance(
+    target: Path,
+    acceptance: _FanInAcceptance,
+) -> bool:
+    """Atomically install a terminal acceptance into a generation outcome slot."""
+    temporary = target.parent / f".{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    published = False
+    try:
+        temporary.mkdir()
+        acceptance_path = _fanin_acceptance_path(temporary)
+        with acceptance_path.open("x", encoding="utf-8") as handle:
+            json.dump(
+                _fanin_acceptance_payload(acceptance), handle,
+                sort_keys=True, separators=(",", ":"),
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _fsync_directory(temporary)
+        try:
+            os.rename(temporary, target)
+        except OSError as exc:
+            if not _is_fanin_target_collision(exc):
+                raise
+            return False
+        published = True
+        _fsync_directory(target.parent)
+        return True
+    finally:
+        if not published:
+            shutil.rmtree(temporary, ignore_errors=True)
+
+
 def _start_fanin_guard_heartbeat(
     root: Path,
     path: Path,
@@ -834,6 +1042,10 @@ def _acquire_fanin_guard(
         if current is None:
             target = path
         else:
+            if current.acceptance is not None:
+                raise _FanInTransientError(
+                    f"fan-in publication fence is already accepted: {path.name}"
+                )
             if _fanin_generation_is_active(current, task.claim_path.parent):
                 raise _FanInTransientError(f"fan-in publication fence is held: {current.path.name}")
             target = _fanin_fence_successor_path(path, current)
@@ -1031,7 +1243,7 @@ def _acquire_fanin_task_publication_lease(
     task: TaskManifest,
     fanin_task: FanInTask,
 ) -> _FanInTaskPublicationLease:
-    """Fence one task across every worker base until its target rename completes."""
+    """Fence one task across every worker base until its acceptance is decided."""
     record = _fanin_task_lock_record(cache_dir, fanin_task.task_id)
     guard = _acquire_fanin_guard(_fanin_task_fence_path(cache_dir, fanin_task.task_id), task, fanin_task, nonblocking=True)
     try:
@@ -1285,6 +1497,91 @@ def _cache_record_count(path: Path) -> int:
     return record_count
 
 
+def _read_authoritative_fanin_acceptance(
+    cache_dir: Path,
+    task: FanInTask,
+) -> _FanInAcceptance | None:
+    root = _fanin_task_fence_path(cache_dir, task.task_id)
+    current = _read_current_fanin_fence(root)
+    if current is None or current.acceptance is None:
+        return None
+    if current.acceptance.task.task_id != task.task_id:
+        raise FanInInventoryValidationError(
+            f"fan-in acceptance guard conflicts with task id {task.task_id!r}"
+        )
+    return current.acceptance
+
+
+def _fanin_candidate_is_accepted(path: Path, tasks: Sequence[FanInTask]) -> bool:
+    """Whether one cumulative version is fully authenticated and trainable."""
+    lineage, separator, version_text = path.name.rpartition("-v")
+    if not separator or not version_text.isascii() or not version_text.isdecimal():
+        raise FanInInventoryValidationError(f"fan-in shard has invalid version name: {path}")
+    version = int(version_text)
+    publication = _read_fanin_publication(path)
+    if publication is None:
+        raise FanInInventoryValidationError(
+            f"fan-in shard {path} has missing or malformed publication provenance"
+        )
+    acceptances: list[_FanInAcceptance] = []
+    for task_index, task in enumerate(tasks):
+        acceptance = _read_authoritative_fanin_acceptance(path.parent, task)
+        if acceptance is None:
+            if task_index == len(tasks) - 1 and publication.task == task:
+                current = _read_current_fanin_fence(
+                    _fanin_task_fence_path(path.parent, task.task_id)
+                )
+                if current is not None and current.path.name != publication.guard_generation:
+                    _validate_fanin_target_acceptance(path, tasks, publication)
+                    return False
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} has no immutable acceptance for {task.task_id!r}"
+            )
+        if acceptance.task != task:
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} has conflicting metadata for {task.task_id!r}"
+            )
+        if acceptance.lineage != lineage:
+            _validate_fanin_target_acceptance(path, tasks, publication)
+            return False
+        if (
+            acceptance.task_index != task_index
+            or acceptance.version > version
+            or acceptance.prefix_sha256 != _fanin_manifest_prefix_sha256(tasks, task_index)
+        ):
+            raise FanInInventoryValidationError(
+                f"fan-in shard {path} has ambiguous lineage provenance for {task.task_id!r}"
+            )
+        acceptances.append(acceptance)
+    final = acceptances[-1]
+    if final.target != path.name or final.version != version:
+        _validate_fanin_target_acceptance(path, tasks, publication)
+        return False
+    _validate_fanin_target_acceptance(path, tasks, final)
+    return True
+
+
+def _select_accepted_fanin_shards(cache_dir: Path) -> list[Path]:
+    lineages: set[str] = set()
+    for candidate in Path(cache_dir).glob("shard-w*-v*"):
+        lineage, separator, suffix = candidate.name.rpartition("-v")
+        if separator and suffix.isascii() and suffix.isdecimal():
+            lineages.add(lineage)
+    selected: list[Path] = []
+    for lineage in sorted(lineages):
+        base = Path(cache_dir) / lineage
+        for _version, path in reversed(_shard_versions(base)):
+            tasks = _read_fanin_manifest(path)
+            if _cache_record_count(path) != sum(task.count for task in tasks):
+                raise FanInInventoryValidationError(
+                    f"fan-in shard {path} cache games disagree with its task manifest"
+                )
+            if _fanin_candidate_is_accepted(path, tasks):
+                selected.append(path)
+                break
+    return selected
+
+
 def _read_selected_fanin_shards(
     cache_dir: Path,
     *,
@@ -1294,8 +1591,8 @@ def _read_selected_fanin_shards(
     for _attempt in range(_SELECTED_FANIN_READ_ATTEMPTS):
         shards: list[FanInShard] = []
         by_task_id: dict[str, FanInTask] = {}
-        selected_paths = select_fanin_shards(cache_dir)
         try:
+            selected_paths = _select_accepted_fanin_shards(cache_dir)
             for path in selected_paths:
                 name, _, version_text = path.name.rpartition("-v")
                 tasks = _read_fanin_manifest(path)
@@ -1317,7 +1614,13 @@ def _read_selected_fanin_shards(
             vanished = exc
             time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
             continue
-        if select_fanin_shards(cache_dir) != selected_paths:
+        try:
+            stable_paths = _select_accepted_fanin_shards(cache_dir)
+        except _SelectedFanInVersionVanishedError as exc:
+            vanished = exc
+            time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
+            continue
+        if stable_paths != selected_paths:
             time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
             continue
         return tuple(shards), by_task_id
@@ -1339,7 +1642,7 @@ def _find_committed_fanin_task(cache_dir: Path, candidate: FanInTask) -> FanInTa
     for _attempt in range(_SELECTED_FANIN_READ_ATTEMPTS):
         matches: list[FanInTask] = []
         try:
-            for path in select_fanin_shards(cache_dir):
+            for path in _select_accepted_fanin_shards(cache_dir):
                 tasks = _read_fanin_manifest(path)
                 if _cache_record_count(path) != sum(task.count for task in tasks):
                     raise FanInInventoryValidationError(
@@ -1376,16 +1679,22 @@ def _find_committed_fanin_task(cache_dir: Path, candidate: FanInTask) -> FanInTa
 
 def _read_current_worker_shard(base: Path, expected_iteration: int) -> tuple[Path | None, int, tuple[FanInTask, ...]]:
     """Read only this worker's cumulative shard before publishing its next version."""
-    current, version = _adopt_shard(base)
-    if current is None:
-        return None, version, ()
+    versions = _shard_versions(base)
+    version = versions[-1][0] if versions else 0
+    current: Path | None = None
+    current_tasks: tuple[FanInTask, ...] = ()
     try:
-        tasks = _read_fanin_manifest(current)
-        if _cache_record_count(current) != sum(task.count for task in tasks):
-            raise FanInInventoryValidationError(
-                f"fan-in shard {current} cache games disagree with its task manifest"
-            )
-        if any(task.iteration != expected_iteration for task in tasks):
+        for _candidate_version, candidate in reversed(versions):
+            tasks = _read_fanin_manifest(candidate)
+            if _cache_record_count(candidate) != sum(task.count for task in tasks):
+                raise FanInInventoryValidationError(
+                    f"fan-in shard {candidate} cache games disagree with its task manifest"
+                )
+            if _fanin_candidate_is_accepted(candidate, tasks):
+                current = candidate
+                current_tasks = tasks
+                break
+        if current is not None and any(task.iteration != expected_iteration for task in current_tasks):
             raise FanInInventoryValidationError(f"fan-in shard {current} has a task from the wrong iteration")
     except _SelectedFanInVersionVanishedError as exc:
         raise _FanInTransientError(f"current worker shard vanished: {current}") from exc
@@ -1395,7 +1704,7 @@ def _read_current_worker_shard(base: Path, expected_iteration: int) -> tuple[Pat
         raise FanInInventoryValidationError(
             f"selected worker shard is corrupt: {exc}"
         ) from exc
-    return current, version, tasks
+    return current, version, current_tasks
 
 
 def _validate_fanin_contract(tasks: Sequence[FanInTask], contract: FanInQueueContract) -> None:
@@ -1476,6 +1785,148 @@ def _write_fanin_manifest(path: Path, tasks: Sequence[FanInTask]) -> None:
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fanin_manifest_prefix_sha256(tasks: Sequence[FanInTask], task_index: int) -> str:
+    payload = [_fanin_task_payload(task) for task in tasks[:task_index + 1]]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fanin_content_sha256(path: Path) -> str:
+    """Hash all published cache files except the self-describing publication proof."""
+    digest = hashlib.sha256()
+    try:
+        entries = sorted(path.rglob("*"), key=lambda entry: entry.relative_to(path).as_posix())
+        for entry in entries:
+            relative = entry.relative_to(path).as_posix()
+            if relative == FANIN_PUBLICATION_NAME or entry.is_dir():
+                continue
+            if entry.is_symlink() or not entry.is_file():
+                raise FanInValidationError(f"fan-in shard {path} has unsupported cache entry {relative!r}")
+            encoded = relative.encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+            digest.update(entry.stat().st_size.to_bytes(8, "big"))
+            with entry.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+    except FileNotFoundError as exc:
+        raise _SelectedFanInVersionVanishedError(f"selected fan-in shard vanished: {path}") from exc
+    except OSError as exc:
+        raise FanInValidationError(f"fan-in shard content is unreadable: {path}") from exc
+    return digest.hexdigest()
+
+
+def _build_fanin_acceptance(
+    path: Path,
+    target: Path,
+    lineage: Path,
+    version: int,
+    tasks: Sequence[FanInTask],
+    task_index: int,
+    fence: _FanInFilesystemFence,
+) -> _FanInAcceptance:
+    return _FanInAcceptance(
+        task=tasks[task_index],
+        guard_root=fence.root.name,
+        guard_generation=fence.path.name,
+        claim_name=fence.claim_name,
+        claim_token=fence.claim_token,
+        lineage=lineage.name,
+        target=target.name,
+        version=version,
+        task_index=task_index,
+        prefix_sha256=_fanin_manifest_prefix_sha256(tasks, task_index),
+        manifest_sha256=_sha256_file(path / FANIN_MANIFEST_NAME),
+        metadata_sha256=_sha256_file(path / "metadata.json"),
+        content_sha256=_fanin_content_sha256(path),
+        record_count=_cache_record_count(path),
+    )
+
+
+def _write_fanin_publication(path: Path, acceptance: _FanInAcceptance) -> None:
+    publication = path / FANIN_PUBLICATION_NAME
+    temporary = path / f".{FANIN_PUBLICATION_NAME}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(
+                _fanin_acceptance_payload(acceptance), handle,
+                sort_keys=True, separators=(",", ":"),
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, publication)
+        _fsync_directory(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_fanin_target_acceptance(
+    path: Path,
+    tasks: Sequence[FanInTask],
+    acceptance: _FanInAcceptance,
+) -> None:
+    publication = _read_fanin_publication(path)
+    if publication is None:
+        raise FanInInventoryValidationError(
+            f"fan-in shard {path} has missing or malformed publication provenance"
+        )
+    if publication != acceptance:
+        raise FanInInventoryValidationError(
+            f"fan-in shard {path} publication provenance conflicts with acceptance"
+        )
+    if (
+        acceptance.target != path.name
+        or acceptance.task_index != len(tasks) - 1
+        or tasks[acceptance.task_index] != acceptance.task
+        or acceptance.prefix_sha256 != _fanin_manifest_prefix_sha256(tasks, acceptance.task_index)
+        or acceptance.manifest_sha256 != _sha256_file(path / FANIN_MANIFEST_NAME)
+        or acceptance.metadata_sha256 != _sha256_file(path / "metadata.json")
+        or acceptance.content_sha256 != _fanin_content_sha256(path)
+        or acceptance.record_count != _cache_record_count(path)
+    ):
+        raise FanInInventoryValidationError(
+            f"fan-in shard {path} content or lineage disagrees with its acceptance"
+        )
+
+
+def _accept_fanin_publication(root: Path, publication: _FanInAcceptance) -> _FanInAcceptance:
+    """Race terminal acceptance against successor installation at one atomic slot."""
+    current = _read_current_fanin_fence(root)
+    if current is None:
+        raise FanInInventoryValidationError(
+            f"fan-in publication acceptance has no guard root: {root}"
+        )
+    if current.acceptance is not None:
+        return current.acceptance
+    if (
+        publication.guard_root != root.name
+        or publication.guard_generation != current.path.name
+        or publication.task != current.record[0]
+        or publication.claim_name != current.record[1]
+        or publication.claim_token != current.record[2]
+    ):
+        raise _FanInTransientError(
+            f"fan-in publication generation was revoked before acceptance: {publication.task.task_id}"
+        )
+    outcome = _fanin_fence_successor_path(root, current)
+    _publish_initialized_fanin_acceptance(outcome, publication)
+    resolved = _read_current_fanin_fence(root)
+    if resolved is None or resolved.acceptance is None:
+        raise _FanInTransientError(
+            f"fan-in publication generation lost its acceptance race: {publication.task.task_id}"
+        )
+    return resolved.acceptance
 
 
 def _fsync_directory(path: Path) -> None:
@@ -1602,9 +2053,9 @@ def _complete_claim(
 ) -> None:
     """Publish a canonical done marker after an accepted fan-in task.
 
-    Publication is fan-in's input commit point. Therefore revocation after the
-    version rename cannot discard output: if the old claim vanished, recreate a
-    matching done marker from the parsed task metadata instead.
+    Immutable acceptance is fan-in's input commit point. Therefore revocation
+    after acceptance cannot discard output: if the old claim vanished, recreate
+    a matching done marker from the parsed task metadata instead.
     """
     done = queue / "done" / task.base
     created = False
@@ -1665,6 +2116,63 @@ def _inject_crash(
         crash_inject(boundary, task)
 
 
+def _recover_pending_fanin_publication(
+    cache_dir: Path,
+    candidate: FanInTask,
+) -> _FanInAcceptance | None:
+    """Finish target-before-acceptance recovery without recollecting the task."""
+    root = _fanin_task_fence_path(cache_dir, candidate.task_id)
+    current = _read_current_fanin_fence(root)
+    if current is None:
+        return None
+    if current.acceptance is not None:
+        if current.acceptance.task != candidate:
+            if _fanin_route_conflicts(current.acceptance.task, candidate):
+                raise FanInRouteConflictError(
+                    f"accepted fan-in task {candidate.task_id!r} has different output or policy route"
+                )
+            raise FanInTaskConflictError(
+                f"accepted fan-in task {candidate.task_id!r} conflicts with retried metadata"
+            )
+        return current.acceptance
+    pending: list[tuple[Path, tuple[FanInTask, ...], _FanInAcceptance]] = []
+    for target in Path(cache_dir).glob("shard-w*-v*"):
+        publication_path = target / FANIN_PUBLICATION_NAME
+        if not publication_path.exists():
+            continue
+        publication = _read_fanin_publication(target)
+        if publication is None:
+            raise FanInInventoryValidationError(
+                f"fan-in shard {target} has malformed publication provenance"
+            )
+        if publication.task.task_id != candidate.task_id:
+            continue
+        if publication.task != candidate:
+            if _fanin_route_conflicts(publication.task, candidate):
+                raise FanInRouteConflictError(
+                    f"pending fan-in task {candidate.task_id!r} has different output or policy route"
+                )
+            raise FanInTaskConflictError(
+                f"pending fan-in task {candidate.task_id!r} conflicts with retried metadata"
+            )
+        if (
+            publication.guard_root != root.name
+            or publication.guard_generation != current.path.name
+        ):
+            continue
+        tasks = _read_fanin_manifest(target)
+        _validate_fanin_target_acceptance(target, tasks, publication)
+        pending.append((target, tasks, publication))
+    if not pending:
+        return None
+    if len(pending) != 1:
+        names = ", ".join(sorted(target.name for target, _tasks, _publication in pending))
+        raise FanInInventoryValidationError(
+            f"fan-in task {candidate.task_id!r} has ambiguous pending targets: {names}"
+        )
+    return _accept_fanin_publication(root, pending[0][2])
+
+
 def _recover_fanin_task(
     task: TaskManifest,
     queue: Path,
@@ -1673,7 +2181,9 @@ def _recover_fanin_task(
 ) -> bool:
     """Finalize a claim whose task is already durably selected, without collecting."""
     candidate = _fanin_task_from_task_manifest(task)
-    existing = _find_committed_fanin_task(_resolve_fanin_route(queue, task), candidate)
+    cache_dir = _resolve_fanin_route(queue, task)
+    _recover_pending_fanin_publication(cache_dir, candidate)
+    existing = _find_committed_fanin_task(cache_dir, candidate)
     if existing is None:
         return False
     if existing != candidate:
@@ -1738,6 +2248,7 @@ def _publish_fanin_task(
         raise FanInTaskValidationError(
             f"task {task.base} cache games do not match queue count {fanin_task.count}"
         )
+    _recover_pending_fanin_publication(cache_dir, fanin_task)
     existing = _find_committed_fanin_task(cache_dir, fanin_task)
     if existing is not None:
         if existing != fanin_task:
@@ -1816,11 +2327,17 @@ def _publish_fanin_task(
             if staging_record_count != sum(entry.count for entry in version_tasks):
                 raise FanInTaskValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
             _write_fanin_manifest(staging, version_tasks)
+            acceptance = _build_fanin_acceptance(
+                staging, target, base, version + 1, version_tasks,
+                len(version_tasks) - 1, task_lease.guard,
+            )
+            _write_fanin_publication(staging, acceptance)
             _inject_crash(crash_inject, "fanin-before-target-publication", task)
             if not _claim_token_is_current(task) or not _fanin_fence_is_current(task_lease.guard):
                 raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
             if _read_fanin_staging_owner_record(staging) != (fanin_task, task.claim_token):
                 raise _FanInTransientError(f"fan-in staging ownership changed before publishing {task.base}")
+            _inject_crash(crash_inject, "fanin-after-publication-fence-check", task)
             try:
                 os.rename(staging, target)
             except OSError as exc:
@@ -1847,6 +2364,17 @@ def _publish_fanin_task(
             published = True
             _fsync_directory(target.parent)
             _inject_crash(crash_inject, "fanin-after-target-publication", task)
+            accepted = _accept_fanin_publication(task_lease.guard.root, acceptance)
+            if accepted != acceptance:
+                if accepted.task != fanin_task:
+                    raise FanInInventoryValidationError(
+                        f"fan-in acceptance conflicts with published task {task.base!r}"
+                    )
+                _complete_claim(task, queue, crash_inject=crash_inject)
+                owner_sidecar.unlink(missing_ok=True)
+                _remove_fanin_staging_lease(staging, task.claim_token)
+                _fsync_directory(owner_sidecar.parent)
+                return None, True
             try:
                 _complete_claim(task, queue, crash_inject=crash_inject)
             except FanInTaskConflictError as exc:
