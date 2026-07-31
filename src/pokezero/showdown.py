@@ -1749,12 +1749,13 @@ class _ReplayParser:
 
         The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
         ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
-        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …), so the observed residual
-        fraction gives ``stage = round(16 * damage / maxhp)``. Re-deriving here fixes the pivot,
-        the forced re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox``
-        (replay import / mid-battle observe start) uniformly, for both seats. Regular (non-badly)
-        poison also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the
-        residual's own status token, which is ``tox`` only for badly-poisoned mons.
+        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …). Recover the stage using
+        the same floored Gen 3 damage unit, not proportional rounding: that distinction matters
+        whenever max HP is not divisible by 16. Re-deriving here fixes the pivot, the forced
+        re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox`` (replay
+        import / mid-battle observe start) uniformly, for both seats. Regular (non-badly) poison
+        also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the residual's
+        own status token, which is ``tox`` only for badly-poisoned mons.
         """
 
         if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
@@ -1774,14 +1775,20 @@ class _ReplayParser:
         prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
         cur_hp, cur_max = _hp_numerator_denominator(new_condition)
         max_hp = prev_max or cur_max
-        if prev_hp is None or cur_hp is None or not max_hp:
+        if prev_hp is None or cur_hp is None or cur_hp <= 0 or not max_hp:
             return
         damage = prev_hp - cur_hp
         if damage <= 0:
             return
-        # round(16 * damage_fraction) recovers the sim's stage for every reachable stage (1..14;
-        # a mon never survives to stage 15). Clamp to [1, 15]: a tox residual is always >= stage 1.
-        self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
+        unit = max(1, max_hp // 16)
+        # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
+        # hidden stage from rounded, capped, or otherwise non-exact public damage.
+        if damage % unit:
+            return
+        stage = damage // unit
+        if not 1 <= stage <= 15:
+            return
+        self.toxic_stage[slot] = stage
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""

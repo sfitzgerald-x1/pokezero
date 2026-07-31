@@ -1767,6 +1767,88 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.toxic_stage["p1"], 0)
 
+    def test_toxic_residual_reseed_uses_gen3_floored_damage_unit(self) -> None:
+        # 239 // 16 == 14. Proportional rounding would recover 8/9/10 below;
+        # the simulator's floored unit proves the public stages are 9/10/11.
+        for damage, remaining_hp, expected_stage in (
+            (126, 113, 9),
+            (140, 99, 10),
+            (154, 85, 11),
+        ):
+            with self.subTest(damage=damage):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        "|-status|p1a: Tauros|tox",
+                        f"|-damage|p1a: Tauros|{remaining_hp}/239 tox|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], expected_stage)
+
+    def test_toxic_residual_reseed_preserves_low_hp_flooring_and_divisible_control(self) -> None:
+        # max(1, 15 // 16) is one, so low-HP Toxic still recovers its exact stage.
+        for remaining_hp, expected_stage in ((14, 1), (12, 3)):
+            with self.subTest(max_hp=15, remaining_hp=remaining_hp):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|15/15",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        "|-status|p1a: Tauros|tox",
+                        f"|-damage|p1a: Tauros|{remaining_hp}/15 tox|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], expected_stage)
+
+        # A denominator divisible by 16 is an agreement control for both formulae.
+        divisible = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|240/240",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|60/240 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(divisible.toxic_stage["p1"], 12)
+
+    def test_toxic_residual_reseed_rejects_non_surviving_or_ambiguous_damage(self) -> None:
+        # Preserve the known stage rather than inventing one from a lethal/capped line or a
+        # non-integral number of Gen 3 Toxic units.
+        for condition in ("0/239 tox", "224/239 tox"):
+            with self.subTest(condition=condition):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        "|-status|p1a: Tauros|tox",
+                        f"|-damage|p1a: Tauros|{condition}|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], 1)
+
+    def test_toxic_residual_reseed_uses_floored_unit_after_reentry(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|225/239 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|switch|p1a: Zapdos|Zapdos, L78|301/301",
+                "|upkeep",
+                "|turn|3",
+                "|switch|p1a: Tauros|Tauros, L80, M|225/239 tox",
+                "|-damage|p1a: Tauros|99/239 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 9)
+
     def test_future_sight_cleared_when_it_lands(self) -> None:
         landed = self._replay_with(
             [
