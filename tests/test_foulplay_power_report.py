@@ -406,23 +406,90 @@ class FilterThenRankTest(unittest.TestCase):
 
 
 class IneligibleAnchorTest(unittest.TestCase):
-    def test_a_rejected_anchor_is_not_adopted_as_the_power_config(self) -> None:
-        """Round 5: the anchor fallback skipped the anchor's own eligibility.
+    """Round 5 finding, and round 6 found the first version of this ungated.
 
-        A cell the report itself marks REJECTED for exceeding the latency cap
-        was still published as the adopted config, with an adoption string that
-        never mentioned the rejection.
-        """
+    The earlier fixture had NO eligible cells, so the report exited on the
+    "nothing passed" path and never reached the anchor-eligibility branch --
+    mutating that branch to `elif True:` left the suite green. These fixtures
+    keep a live eligible cell so the branch is actually executed.
+    """
+
+    def _report(self, anchor_gate):
         n = 30
         raw = {(i, "p1"): 0.0 for i in range(n)}
+        # Anchor is strong but (optionally) over the cap.
         anchor = {(i, "p1"): 1.0 for i in range(n)}
-        rep = run([
-            shard("anchor@k0", "search", "/c/k0.pt", anchor, gate=31.0),
+        # A genuinely eligible cell that does NOT beat the anchor, so the
+        # fallback branch is the one under test.
+        weak = {(i, "p1"): 1.0 if i < 5 else 0.0 for i in range(n)}
+        return run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor, gate=anchor_gate),
+            shard("weak@k0", "search", "/c/k0.pt", weak, gate=4.0),
             shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
         ], anchor="anchor@k0")
+
+    def test_over_cap_anchor_is_not_adopted_even_with_an_eligible_cell_present(self) -> None:
+        rep = self._report(anchor_gate=31.0)
+        # The branch is genuinely reached: something IS eligible.
+        self.assertIn("weak@k0", rep["ranking_eligible"])
         self.assertIn("REJECTED", rep["cells"]["anchor@k0"]["cap"])
-        self.assertIsNone(rep["winner"])
+        self.assertIsNone(rep["winner"], "a cap-rejected anchor must not be adopted")
         self.assertIn("NO ADOPTION", rep["adoption_rule"])
+        self.assertIn("ineligible", rep["adoption_rule"])
+
+    def test_healthy_anchor_is_still_adopted_on_the_same_path(self) -> None:
+        # The guard must not reject a healthy anchor, or it is not a guard but
+        # a blanket refusal.
+        rep = self._report(anchor_gate=4.0)
+        self.assertIn("weak@k0", rep["ranking_eligible"])
+        self.assertEqual(rep["winner"], "anchor@k0")
+
+
+class ImprovementOverlapTest(unittest.TestCase):
+    """Round 6: the overlap floor was present but ungated.
+
+    A cell can clear --min-pairs on its OWN delta while overlapping the anchor
+    on far fewer pairs. The improvement CI is computed over the OVERLAP, so a
+    thin overlap yields a spuriously tight interval beside a healthy `pairs`.
+    """
+
+    def _report(self, min_pairs):
+        # anchor covers 0..39. thin covers 0..4 plus a disjoint band 200..239,
+        # so thin's OWN pairs (vs raw) is 45 -- comfortably over any floor --
+        # while its OVERLAP with the anchor is only 5.
+        # Anchor LOSES the five shared seeds, so the improvement over the
+        # overlap is decisive (+1.0) -- that is what makes a thin overlap
+        # dangerous rather than merely noisy.
+        anchor = {(i, "p1"): 0.0 if i < 5 else (1.0 if i < 25 else 0.0) for i in range(40)}
+        thin = {(i, "p1"): 1.0 for i in range(5)}
+        thin.update({(i, "p1"): 1.0 for i in range(200, 240)})
+        raw = {(i, "p1"): 0.0 for i in range(40)}
+        raw.update({(i, "p1"): 0.0 for i in range(200, 240)})
+        return run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor),
+            shard("thin@k0", "search", "/c/k0.pt", thin),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ], anchor="anchor@k0", min_pairs=min_pairs)
+
+    def test_thin_overlap_is_recorded_and_blocks_adoption(self) -> None:
+        rep = self._report(min_pairs=20)
+        imp = rep["cells"]["thin@k0"]["improvement_over_anchor"]
+        # The overlap n must be REPORTED, not just used -- a reader comparing
+        # the CI to the cell's own `pairs` would otherwise be misled.
+        self.assertIn("pairs", imp)
+        # The cell's own n is healthy; only the OVERLAP is thin. That gap is
+        # the whole point -- reporting one while gating on the other is how a
+        # 5-pair CI ends up beside a 45-pair cell.
+        self.assertEqual(imp["pairs"], 5)
+        self.assertEqual(rep["cells"]["thin@k0"]["pairs"], 45)
+        self.assertNotEqual(rep["winner"], "thin@k0")
+        self.assertTrue(
+            any("overlap" in r for r in rep["cells"]["thin@k0"]["ineligible_because"])
+        )
+
+    def test_same_cell_is_adoptable_once_the_floor_admits_the_overlap(self) -> None:
+        rep = self._report(min_pairs=3)
+        self.assertEqual(rep["winner"], "thin@k0")
 
 
 class DepthRuleTest(unittest.TestCase):

@@ -191,8 +191,9 @@ def paired_improvement(candidate: dict, cand_raw: dict, anchor: dict, anchor_raw
     share a raw arm the terms cancel and this reduces to `candidate - anchor`,
     but cell G runs on k1 against R1 while the anchor runs on k0 against R0, so
     they do NOT cancel. An earlier version computed `candidate - anchor`
-    unconditionally and reported a +0.500 improvement where the true difference
-    of deltas was +0.025 -- a 20x overstatement with a tight CI, on the
+    unconditionally. Measured on the committed cross-checkpoint fixture
+    (`CrossCheckpointImprovementTest`), that gives **-0.475** where the true
+    difference of deltas is **+0.025** -- wrong in magnitude AND SIGN, on the
     campaign's designed checkpoint contrast.
     """
     from pokezero.mcts_eval.scoring import bootstrap_mean
