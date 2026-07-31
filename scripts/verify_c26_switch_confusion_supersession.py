@@ -32,6 +32,7 @@ ENGINE_SOURCE_SPEC = {
     "sha256": "84a7dfad5ce4650a2cb9250999597c594385069eb33622c6a14bb1279694b434",
 }
 CURRENT_REGRESSION = "switch_prefixed_exact_self_hit_is_untagged_and_safe"
+EXPECTED_RENDERER_TEST_COUNT = 22
 CURRENT_PUBLIC_INPUTS = (
     EVENTS,
     "rust/pokezero-search/Cargo.toml",
@@ -138,6 +139,11 @@ def require_cargo_regression_evidence(stdout: str, test_name: str) -> dict[str, 
         raise RuntimeError(f"cargo reported ignored tests for required regression {test_name!r}")
     if summary["filtered"] != 0:
         raise RuntimeError(f"cargo filtered tests for required regression {test_name!r}")
+    if expected_count != EXPECTED_RENDERER_TEST_COUNT:
+        raise RuntimeError(
+            "cargo renderer test count changed for required regression "
+            f"{test_name!r}: expected {EXPECTED_RENDERER_TEST_COUNT}, got {expected_count}"
+        )
     if summary["passed"] != expected_count:
         raise RuntimeError(
             "cargo passed-test count does not match the runnable integration-test count "

@@ -36,8 +36,14 @@ class CargoEvidenceTests(unittest.TestCase):
         )
 
         self.assertEqual(evidence["test"], TEST_NAME)
-        self.assertEqual(evidence["expected_count"], 22)
-        self.assertEqual(evidence["passed"], 22)
+        self.assertEqual(evidence["expected_count"], VERIFIER.EXPECTED_RENDERER_TEST_COUNT)
+        self.assertEqual(evidence["passed"], VERIFIER.EXPECTED_RENDERER_TEST_COUNT)
+
+    def test_21_test_suite_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "expected 22, got 21"):
+            VERIFIER.require_cargo_regression_evidence(
+                cargo_output(test_line=f"test {TEST_NAME} ... ok", count=21), TEST_NAME
+            )
 
     def test_missing_named_test_fails_closed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "does not prove required regression"):
