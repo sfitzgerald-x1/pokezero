@@ -3,9 +3,13 @@
 ## Final Disposition
 
 This is an evidence-only lane. The final matcher is byte-identical to immutable
-baseline commit `8e81426e98cc9b490020026d455eb653903488c4`; no experimental C26
+baseline commit `d7a9c1a932366ef4b751dd5894ddfb61b91e58cd`; no experimental C26
 production behavior remains. The full engine fingerprint is
 `992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e`.
+
+Current main's retained-repro producer fields `party_display`, `slot_sides`,
+and `turn` are included in that baseline source. They are provenance added
+before this lane, not C26 branch behavior.
 
 The retained population contains 3,821 rows in eight hash-pinned opaque
 shards. The deterministic baseline reread tally is 3,599 `diverged`, 221

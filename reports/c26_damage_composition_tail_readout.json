@@ -2,7 +2,7 @@
   "schema": "c26-damage-composition-tail-readout/2",
   "purpose": "Evidence-only disposition of the rejected C26 damage-composition matcher experiment.",
   "pinned_baseline": {
-    "commit": "8e81426e98cc9b490020026d455eb653903488c4",
+    "commit": "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd",
     "engine_fingerprint": "992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e",
     "retained_archive": {
       "population": 3821,
@@ -19,7 +19,7 @@
     }
   },
   "current_main_control": {
-    "commit": "8e81426e98cc9b490020026d455eb653903488c4",
+    "commit": "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd",
     "method": "The immutable baseline matcher source and final matcher source are each reread against every retained row; no moving ref is used.",
     "tally": {"diverged": 3599, "matched": 221, "skip_lossy": 1},
     "rows": [
@@ -147,6 +147,11 @@
   "final_main_equivalence": {
     "matcher_path": "scripts/engine_transition_differential.py",
     "source_diff_required": "zero bytes relative to pinned_baseline.commit",
+    "baseline_repro_provenance": {
+      "fields": ["party_display", "slot_sides", "turn"],
+      "classification": "current_main_baseline",
+      "note": "These retained-repro producer fields are part of pinned current main and are not C26 branch behavior."
+    },
     "archive_reread_delta": {"diverged_to_matched": 0, "matched_to_diverged": 0}
   },
   "invariants": {

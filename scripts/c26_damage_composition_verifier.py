@@ -146,6 +146,13 @@ def verify(shard_glob: str) -> dict[str, Any]:
     final_source = (REPO_ROOT / MATCHER_PATH).read_text()
     if final_source != baseline_source:
         raise ValueError("final matcher source differs from the pinned baseline")
+    provenance = equivalence["baseline_repro_provenance"]
+    if provenance["classification"] != "current_main_baseline":
+        raise ValueError("C27 repro provenance is not classified as baseline behavior")
+    for field in provenance["fields"]:
+        assignment = f'"{field}": prepared["{field}"]'
+        if assignment not in baseline_source:
+            raise ValueError(f"pinned baseline omits required repro provenance field {field}")
 
     rows = _verify_archive_inputs(readout, shard_glob)
     baseline_matcher = _module_from_source("c26_pinned_main_matcher", baseline_source)
@@ -180,6 +187,7 @@ def verify(shard_glob: str) -> dict[str, Any]:
         "pinned_main_tally": baseline_tally,
         "final_tally": final_tally,
         "verdict_delta": observed_delta,
+        "baseline_repro_provenance_fields": provenance["fields"],
         "archive_shards": [shard["label"] for shard in baseline["retained_archive"]["shards"]],
     }
 

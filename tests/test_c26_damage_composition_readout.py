@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 READOUT = REPO_ROOT / "reports" / "c26_damage_composition_tail_readout.json"
 PREDICTION = REPO_ROOT / "reports" / "c26_damage_composition_tail_prediction.md"
 VERIFIER = REPO_ROOT / "scripts" / "c26_damage_composition_verifier.py"
-PINNED_MAIN = "8e81426e98cc9b490020026d455eb653903488c4"
+PINNED_MAIN = "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd"
 ENGINE_FINGERPRINT = "992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e"
 WHAT_IDENTITIES = {
     "2000261/31": 4,
@@ -137,7 +137,15 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
 
     def test_final_matcher_has_zero_diff_from_pinned_main(self) -> None:
         completed = subprocess.run(
-            ["git", "diff", "--exit-code", PINNED_MAIN, "--", "scripts/engine_transition_differential.py"],
+            [
+                "git",
+                "diff",
+                "--exit-code",
+                PINNED_MAIN,
+                "--",
+                "scripts/engine_transition_differential.py",
+                "tests/test_transition_differential_matcher.py",
+            ],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -150,6 +158,21 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         )
         self.assertTrue(self.readout["invariants"]["no_production_matcher_change"])
         self.assertTrue(self.readout["invariants"]["baseline_is_immutable_commit_not_moving_ref"])
+
+    def test_c27_repro_provenance_is_current_main_baseline(self) -> None:
+        provenance = self.readout["final_main_equivalence"]["baseline_repro_provenance"]
+
+        self.assertEqual(provenance["fields"], ["party_display", "slot_sides", "turn"])
+        self.assertEqual(provenance["classification"], "current_main_baseline")
+        baseline_source = subprocess.run(
+            ["git", "show", f"{PINNED_MAIN}:scripts/engine_transition_differential.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for field in provenance["fields"]:
+            self.assertIn(f'"{field}": prepared["{field}"]', baseline_source)
 
     def test_prediction_outcome_amendment_withdraws_stale_claims(self) -> None:
         prediction = PREDICTION.read_text()
@@ -201,6 +224,10 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
             payload = json.loads(output.read_text())
         self.assertEqual(payload["status"], "verified")
         self.assertEqual(payload["population"], 3821)
+        self.assertEqual(
+            payload["baseline_repro_provenance_fields"],
+            ["party_display", "slot_sides", "turn"],
+        )
         self.assertEqual(payload["verdict_delta"], {"diverged_to_matched": 0, "matched_to_diverged": 0})
 
 
