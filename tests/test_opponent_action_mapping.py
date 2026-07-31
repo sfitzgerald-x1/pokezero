@@ -159,6 +159,41 @@ class OpponentActionMappingTest(unittest.TestCase):
                 self.assertIsInstance(opp[0][0], str)
                 self.assertIsInstance(own[0][0], str)
 
+    def test_opponent_switch_options_actually_resolve(self) -> None:
+        """The pin that catches a self-side lookup in the opponent path.
+
+        Regression, found in independent review. `action_surface` built
+        `legal_switch_keys` from `engine_side_index(true)` even when mapping the
+        OPPONENT, so opponent switch options were matched against the SELF
+        team's species. Measured on this fixture: 0 of 25 opponent switch
+        options resolved with the bug, 25 of 25 after the fix.
+
+        This is the failure the other pins in this file CANNOT see. When every
+        index is None, "indices are unique" and "root is not wider than
+        interior" are both trivially true, and `gather_self_priors` returns None
+        so the node silently falls back to uniform priors -- meaning cells B and
+        E would measure nothing and the campaign would conclude opponent priors
+        do not help. So assert the map is substantively populated, not merely
+        well-formed.
+        """
+        total = resolved = 0
+        for encoder, state_str, row in self._cases():
+            switches = [
+                (display, index)
+                for display, index in encoder.opponent_action_map(state_str)
+                if display.startswith("switch")
+            ]
+            total += len(switches)
+            resolved += sum(1 for _, index in switches if index is not None)
+        if total == 0:
+            self.skipTest("no opponent switch options in the committed sample")
+        self.assertEqual(
+            resolved,
+            total,
+            f"{total - resolved}/{total} opponent switch options did not resolve to "
+            "an action slot; the opponent map is reading the wrong seat's team",
+        )
+
     def test_mapped_opponent_indices_are_unique(self) -> None:
         # Two options sharing one action slot would double-count that arm's
         # prior mass and starve another.

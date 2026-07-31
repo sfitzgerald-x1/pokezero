@@ -1431,8 +1431,16 @@ impl LeafContext {
                 }
                 MoveChoice::Switch(index) => {
                     let party = index.serialize().parse::<usize>().unwrap_or(0);
-                    let engine_side = self.engine_side_index(true);
-                    if let Some(key) = self.species_keys[engine_side].get(party) {
+                    // `self_engine`, NOT engine_side_index(true). This function
+                    // is seat-generic and is called for the opponent too;
+                    // hardcoding the self side here resolved the OPPONENT's
+                    // switch options against the SELF team's species keys,
+                    // which then failed to match `self_team_order` below --
+                    // silently mapping every opponent switch to None (node
+                    // falls back to uniform, so the cell measures nothing), or
+                    // worse, matching a same-species mon on the other team and
+                    // binding the arm to the wrong physical Pokemon.
+                    if let Some(key) = self.species_keys[self_engine].get(party) {
                         legal_switch_keys.push(key.clone());
                     }
                 }
