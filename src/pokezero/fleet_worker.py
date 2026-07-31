@@ -203,6 +203,15 @@ class FanInShard:
 
 
 @dataclass(frozen=True)
+class _FanInPayloadFile:
+    """One selected cache file's generation and bytes before pathname reuse."""
+
+    relative: tuple[str, ...]
+    identity: tuple[int, int, int, int, int, int]
+    sha256: str
+
+
+@dataclass(frozen=True)
 class _SelectedFanInShard:
     """An accepted shard and the immutable manifest generation that selected it."""
 
@@ -213,6 +222,20 @@ class _SelectedFanInShard:
     publication_snapshot: tuple[int, int, int, int, int, int]
     acceptances: tuple["_FanInFenceGeneration", ...]
     tasks: tuple[FanInTask, ...]
+    payload_files: tuple[_FanInPayloadFile, ...]
+
+
+@dataclass(frozen=True)
+class _FanInRouteResolution:
+    """The append-only route record generation that authorizes one commit."""
+
+    root: Path
+    root_identity: tuple[int, int] | None
+    record: Path
+    record_parent_identity: tuple[int, int]
+    record_identity: tuple[int, int, int, int, int, int]
+    record_sha256: str
+    task: FanInTask
 
 
 @dataclass(frozen=True)
@@ -1014,6 +1037,7 @@ class _FanInFilesystemFence:
     claim_name: str
     claim_token: str
     stop: threading.Event
+    owner_lock: Any
     heartbeat: threading.Thread
 
 
@@ -1062,7 +1086,10 @@ def _open_fanin_authoritative_directory(path: Path, label: str) -> tuple[int, os
             f"fan-in {label} is unreadable: {path}"
         ) from exc
     observed = os.fstat(descriptor)
-    if _fanin_stat_snapshot(observed) != _fanin_stat_snapshot(expected):
+    # Child creation/replacement legitimately updates a directory's mtime and
+    # ctime. Callers bind authoritative child records separately, so opening a
+    # mutable guard directory only needs the stable directory object identity.
+    if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
         os.close(descriptor)
         raise FanInInventoryValidationError(
             f"fan-in {label} changed while opening: {path}"
@@ -1713,6 +1740,12 @@ def _fanin_generation_is_active(generation: _FanInFenceGeneration, claimed: Path
 
 
 def _fanin_fence_is_current(fence: _FanInFilesystemFence) -> bool:
+    with fence.owner_lock:
+        return _fanin_fence_is_current_locked(fence)
+
+
+def _fanin_fence_is_current_locked(fence: _FanInFilesystemFence) -> bool:
+    """Read a local fence while its caller holds its owner renewal lock."""
     try:
         observed, owner_contents, record, acceptance_contents, _acceptance = _read_fanin_guard_directory(
             fence.path
@@ -1825,16 +1858,19 @@ def _start_fanin_guard_heartbeat(
     stop = threading.Event()
     fence = _FanInFilesystemFence(
         root, path, (observed.st_dev, observed.st_ino), fanin_task, task.claim_path.name,
-        task.claim_token, stop, threading.Thread(),
+        task.claim_token, stop, threading.Lock(), threading.Thread(),
     )
 
     def renew() -> None:
         interval = min(_FANIN_HEARTBEAT_INTERVAL_SECONDS, _FANIN_PRODUCER_LEASE_SECONDS / 3)
         while not stop.wait(max(interval, 0.001)):
-            if not _fanin_fence_is_current(fence):
-                return
             try:
-                _write_fanin_fence(fence.path, fanin_task, task.claim_path.name, task.claim_token)
+                # Local liveness and acceptance reads share this lock, so an
+                # expected renewal cannot race their owner-file snapshot.
+                with fence.owner_lock:
+                    if stop.is_set() or not _fanin_fence_is_current_locked(fence):
+                        return
+                    _write_fanin_fence(fence.path, fanin_task, task.claim_path.name, task.claim_token)
             except OSError:
                 return
 
@@ -2214,7 +2250,7 @@ def _fanin_route_from_payload(payload: Any) -> tuple[Path, FanInTask] | None:
     return cache_dir, task
 
 
-def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
+def _resolve_fanin_route(queue: Path, task: TaskManifest) -> _FanInRouteResolution:
     """Bind one task ID to its first fan-in root and route, or reject divergence.
 
     The record is created with ``link`` and never replaced. Recovery therefore
@@ -2341,17 +2377,81 @@ def _resolve_fanin_route(queue: Path, task: TaskManifest) -> Path:
         raise FanInTaskConflictError(f"fan-in route provenance conflicts with {task.base!r}")
     # Parsing used a retained byte string. Recheck both names after parsing so
     # a replacement in the final parse-to-return window cannot become a route.
-    _contents, final_identity, final_parent = _read_fanin_file_with_parent_snapshot(
+    final_contents, final_identity, final_parent = _read_fanin_file_with_parent_snapshot(
         record, "route provenance record", expected_parent=_fanin_directory_identity(directory_identity),
     )
-    if final_identity is None or _fanin_stat_snapshot(final_identity) != _fanin_stat_snapshot(record_identity):
+    if (
+        final_contents is None
+        or final_identity is None
+        or _fanin_stat_snapshot(final_identity) != _fanin_stat_snapshot(record_identity)
+    ):
         raise FanInInventoryValidationError(
             f"fan-in route provenance record identity changed during validation: {record}"
         )
     _verify_fanin_directory_identity(
         record.parent, final_parent, "route provenance directory",
     )
-    return established_root
+    try:
+        root_identity: tuple[int, int] | None = _fanin_directory_identity(
+            _fanin_authoritative_directory_stat(established_root, "fan-in cache root")
+        )
+    except FileNotFoundError:
+        # Direct route-resolution callers may bind provenance before a worker
+        # preflight creates the cache root. Publication requires it later.
+        root_identity = None
+    return _FanInRouteResolution(
+        root=established_root,
+        root_identity=root_identity,
+        record=record,
+        record_parent_identity=final_parent,
+        record_identity=_fanin_stat_snapshot(final_identity),
+        record_sha256=hashlib.sha256(final_contents).hexdigest(),
+        task=established_task,
+    )
+
+
+def _verify_fanin_route_resolution(
+    resolution: _FanInRouteResolution,
+    task: TaskManifest | FanInTask,
+) -> None:
+    """Keep one route record generation live through every commit side effect."""
+    candidate = task if isinstance(task, FanInTask) else _fanin_task_from_task_manifest(task)
+    if candidate != resolution.task:
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance conflicts with {candidate.task_id!r}"
+        )
+    contents, observed, parent_identity = _read_fanin_file_with_parent_snapshot(
+        resolution.record,
+        "route provenance record",
+        expected_parent=resolution.record_parent_identity,
+    )
+    if (
+        contents is None
+        or observed is None
+        or parent_identity != resolution.record_parent_identity
+        or _fanin_stat_snapshot(observed) != resolution.record_identity
+        or hashlib.sha256(contents).hexdigest() != resolution.record_sha256
+    ):
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance record identity changed during validation: {resolution.record}"
+        )
+    try:
+        payload = json.loads(contents.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance became malformed: {resolution.record}"
+        ) from exc
+    if _fanin_route_from_payload(payload) != (resolution.root, resolution.task):
+        raise FanInInventoryValidationError(
+            f"fan-in route provenance changed during validation: {resolution.record}"
+        )
+    _verify_fanin_directory_identity(
+        resolution.record.parent, resolution.record_parent_identity, "route provenance directory",
+    )
+    if resolution.root_identity is not None:
+        _verify_fanin_directory_identity(
+            resolution.root, resolution.root_identity, "fan-in cache root",
+        )
 
 
 def _fanin_tasks_from_manifest_contents(contents: bytes, path: Path) -> tuple[FanInTask, ...]:
@@ -2476,6 +2576,7 @@ def _verify_selected_fanin_shard(selected: _SelectedFanInShard) -> None:
         raise FanInInventoryValidationError(
             f"selected fan-in shard publication identity changed after selection: {selected.path}"
         )
+    _verify_fanin_payload_files(selected.path, selected.payload_files)
     for acceptance in selected.acceptances:
         _verify_fanin_fence_generation_identity(acceptance)
     _verify_fanin_directory_identity(
@@ -2612,6 +2713,7 @@ def _selected_fanin_shard_key(
     tuple[int, int, int, int, int, int],
     tuple[int, int, int, int, int, int],
     tuple[tuple[Path, tuple[int, int]], ...],
+    tuple[_FanInPayloadFile, ...],
 ]:
     return (
         selected.path,
@@ -2623,6 +2725,7 @@ def _selected_fanin_shard_key(
             (acceptance.path, acceptance.identity)
             for acceptance in selected.acceptances
         ),
+        selected.payload_files,
     )
 
 
@@ -2649,9 +2752,13 @@ def _select_accepted_fanin_shards(cache_dir: Path) -> list[_SelectedFanInShard]:
                 _verify_fanin_directory_identity(
                     cache_dir, cache_root_identity, "fan-in cache root",
                 )
+                payload_files = _snapshot_fanin_payload_files(path)
+                final_acceptance = acceptances[-1].acceptance
+                assert final_acceptance is not None
+                _validate_fanin_target_acceptance(path, tasks, final_acceptance)
                 shard = _SelectedFanInShard(
                     path, cache_root_identity, root_snapshot, manifest_snapshot,
-                    publication_snapshot, acceptances, tasks,
+                    publication_snapshot, acceptances, tasks, payload_files,
                 )
                 _verify_selected_fanin_shard(shard)
                 selected.append(shard)
@@ -2797,9 +2904,13 @@ def _read_current_worker_shard(
             acceptance_evidence = _fanin_candidate_acceptance_evidence(candidate, tasks)
             if acceptance_evidence is not None:
                 publication_snapshot, acceptances = acceptance_evidence
+                payload_files = _snapshot_fanin_payload_files(candidate)
+                final_acceptance = acceptances[-1].acceptance
+                assert final_acceptance is not None
+                _validate_fanin_target_acceptance(candidate, tasks, final_acceptance)
                 selected = _SelectedFanInShard(
                     candidate, cache_root_identity, root_snapshot, manifest_snapshot,
-                    publication_snapshot, acceptances, tasks,
+                    publication_snapshot, acceptances, tasks, payload_files,
                 )
                 _verify_selected_fanin_shard(selected)
                 current = selected
@@ -3030,6 +3141,74 @@ def _verify_fanin_entry_unchanged(
         raise FanInValidationError(f"fan-in shard entry changed during validation: {name}")
 
 
+def _snapshot_fanin_payload_files(path: Path) -> tuple[_FanInPayloadFile, ...]:
+    """Capture every regular file a pathname-based cache consumer can reopen."""
+    root = _fanin_real_directory_stat(path)
+    descriptor = _open_fanin_entry(path, root, directory=True)
+    files: list[_FanInPayloadFile] = []
+
+    def snapshot_directory(
+        directory: int,
+        expected: os.stat_result,
+        relative_parent: tuple[str, ...],
+    ) -> None:
+        try:
+            with os.scandir(os.dup(directory)) as entries:
+                children = sorted(
+                    ((entry.name, entry.stat(follow_symlinks=False)) for entry in entries),
+                    key=lambda item: item[0],
+                )
+        except OSError as exc:
+            raise FanInValidationError("fan-in shard directory is unreadable during payload snapshot") from exc
+        for name, observed in children:
+            relative = (*relative_parent, name)
+            if stat.S_ISLNK(observed.st_mode):
+                raise FanInValidationError(f"fan-in shard has symlinked cache entry {'/'.join(relative)!r}")
+            if stat.S_ISDIR(observed.st_mode):
+                child = _open_fanin_entry(name, observed, directory=True, dir_fd=directory)
+                try:
+                    snapshot_directory(child, observed, relative)
+                finally:
+                    os.close(child)
+                _verify_fanin_entry_unchanged(name, observed, dir_fd=directory)
+                continue
+            if not stat.S_ISREG(observed.st_mode):
+                raise FanInValidationError(f"fan-in shard has unsupported cache entry {'/'.join(relative)!r}")
+            file_descriptor = _open_fanin_entry(name, observed, directory=False, dir_fd=directory)
+            digest = hashlib.sha256()
+            try:
+                while chunk := os.read(file_descriptor, 1024 * 1024):
+                    digest.update(chunk)
+                if _fanin_stat_snapshot(os.fstat(file_descriptor)) != _fanin_stat_snapshot(observed):
+                    raise FanInValidationError(
+                        f"fan-in shard entry changed during payload snapshot: {'/'.join(relative)}"
+                    )
+            finally:
+                os.close(file_descriptor)
+            _verify_fanin_entry_unchanged(name, observed, dir_fd=directory)
+            files.append(_FanInPayloadFile(relative, _fanin_stat_snapshot(observed), digest.hexdigest()))
+        if _fanin_stat_snapshot(os.fstat(directory)) != _fanin_stat_snapshot(expected):
+            raise FanInValidationError("fan-in shard directory changed during payload snapshot")
+
+    try:
+        snapshot_directory(descriptor, root, ())
+    finally:
+        os.close(descriptor)
+    _verify_fanin_root_unchanged(path, root)
+    return tuple(files)
+
+
+def _verify_fanin_payload_files(
+    path: Path,
+    expected: tuple[_FanInPayloadFile, ...],
+) -> None:
+    """Reject inode or in-place byte changes before a cache path is consumed."""
+    if _snapshot_fanin_payload_files(path) != expected:
+        raise FanInInventoryValidationError(
+            f"selected fan-in shard payload changed after selection: {path}"
+        )
+
+
 def _fanin_hash_directory(
     digest: Any,
     descriptor: int,
@@ -3171,8 +3350,20 @@ def _validate_fanin_target_acceptance(
     _verify_fanin_root_unchanged(path, root)
 
 
-def _accept_fanin_publication(root: Path, publication: _FanInAcceptance) -> _FanInAcceptance:
+def _accept_fanin_publication(
+    root: Path,
+    publication: _FanInAcceptance,
+    *,
+    fence: _FanInFilesystemFence | None = None,
+) -> _FanInAcceptance:
     """Race terminal acceptance against successor installation at one atomic slot."""
+    if fence is not None:
+        if fence.root != root:
+            raise FanInInventoryValidationError(
+                f"fan-in publication fence root disagrees with acceptance: {root}"
+            )
+        with fence.owner_lock:
+            return _accept_fanin_publication(root, publication)
     current = _read_current_fanin_fence(root)
     if current is None:
         raise FanInInventoryValidationError(
@@ -3431,6 +3622,7 @@ def _complete_claim(
     *,
     crash_inject: Callable[[str, TaskManifest], None] | None,
     accepted_shard: _SelectedFanInShard | None = None,
+    route: _FanInRouteResolution | None = None,
 ) -> None:
     """Publish a canonical done marker after an accepted fan-in task.
 
@@ -3438,6 +3630,8 @@ def _complete_claim(
     after acceptance cannot discard output: if the old claim vanished, recreate
     a matching done marker from the parsed task metadata instead.
     """
+    if route is not None:
+        _verify_fanin_route_resolution(route, task)
     if accepted_shard is not None:
         _verify_selected_fanin_shard(accepted_shard)
     done = queue / "done" / task.base
@@ -3469,6 +3663,8 @@ def _complete_claim(
             _fsync_directory(done.parent)
     if created:
         _inject_crash(crash_inject, "fanin-after-done-link", task)
+    if route is not None:
+        _verify_fanin_route_resolution(route, task)
     if owns_claim:
         if task.claim_identity is not None:
             _fanin_claim_manifest_is_current(task)
@@ -3513,8 +3709,14 @@ def _inject_crash(
 def _recover_pending_fanin_publication(
     cache_dir: Path,
     candidate: FanInTask,
+    route: _FanInRouteResolution,
 ) -> _FanInAcceptance | None:
     """Finish target-before-acceptance recovery without recollecting the task."""
+    if cache_dir != route.root:
+        raise FanInInventoryValidationError(
+            f"fan-in recovery cache root disagrees with route provenance: {cache_dir}"
+        )
+    _verify_fanin_route_resolution(route, candidate)
     cache_root = _fanin_authoritative_directory_stat(cache_dir, "fan-in cache root")
     cache_root_identity = _fanin_directory_identity(cache_root)
     root = _fanin_task_fence_path(cache_dir, candidate.task_id)
@@ -3532,8 +3734,11 @@ def _recover_pending_fanin_publication(
                 f"accepted fan-in task {candidate.task_id!r} conflicts with retried metadata"
             )
         return current.acceptance
-    pending: list[tuple[Path, tuple[FanInTask, ...], _FanInAcceptance]] = []
+    pending: list[
+        tuple[Path, tuple[FanInTask, ...], _FanInAcceptance, tuple[_FanInPayloadFile, ...]]
+    ] = []
     for target in Path(cache_dir).glob("shard-w*-v*"):
+        _verify_fanin_route_resolution(route, candidate)
         _verify_fanin_directory_identity(cache_dir, cache_root_identity, "fan-in cache root")
         publication, publication_snapshot = _read_fanin_publication_snapshot(target)
         if publication is None and publication_snapshot is None:
@@ -3584,29 +3789,37 @@ def _recover_pending_fanin_publication(
             raise FanInInventoryValidationError(
                 f"fan-in recovery publication identity changed during validation: {target}"
             )
-        pending.append((target, tasks, publication))
+        payload_files = _snapshot_fanin_payload_files(target)
+        _validate_fanin_target_acceptance(target, tasks, publication)
+        pending.append((target, tasks, publication, payload_files))
     if not pending:
         return None
     if len(pending) != 1:
-        names = ", ".join(sorted(target.name for target, _tasks, _publication in pending))
+        names = ", ".join(sorted(target.name for target, _tasks, _publication, _payload in pending))
         raise FanInInventoryValidationError(
             f"fan-in task {candidate.task_id!r} has ambiguous pending targets: {names}"
         )
     _verify_fanin_fence_generation_identity(current)
     _verify_fanin_directory_identity(cache_dir, cache_root_identity, "fan-in cache root")
-    return _accept_fanin_publication(root, pending[0][2])
+    target, _tasks, publication, payload_files = pending[0]
+    _verify_fanin_payload_files(target, payload_files)
+    _verify_fanin_route_resolution(route, candidate)
+    return _accept_fanin_publication(root, publication)
 
 
 def _recover_fanin_task(
     task: TaskManifest,
     queue: Path,
     *,
+    route: _FanInRouteResolution | None = None,
     crash_inject: Callable[[str, TaskManifest], None] | None,
 ) -> bool:
     """Finalize a claim whose task is already durably selected, without collecting."""
     candidate = _fanin_task_from_task_manifest(task)
-    cache_dir = _resolve_fanin_route(queue, task)
-    _recover_pending_fanin_publication(cache_dir, candidate)
+    route = route or _resolve_fanin_route(queue, task)
+    _verify_fanin_route_resolution(route, candidate)
+    cache_dir = route.root
+    _recover_pending_fanin_publication(cache_dir, candidate, route)
     committed = _find_committed_fanin_task_evidence(cache_dir, candidate)
     if committed is None:
         return False
@@ -3618,12 +3831,15 @@ def _recover_fanin_task(
             )
         raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
     try:
-        _complete_claim(task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard)
+        _complete_claim(
+            task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard, route=route,
+        )
     except FanInTaskConflictError as exc:
         raise FanInInventoryValidationError(
             f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
         ) from exc
     _inject_crash(crash_inject, "fanin-after-recovery", task)
+    _verify_fanin_route_resolution(route, candidate)
     return True
 
 
@@ -3664,18 +3880,21 @@ def _publish_fanin_task(
     queue: Path,
     worker: str,
     *,
+    route: _FanInRouteResolution | None = None,
     crash_inject: Callable[[str, TaskManifest], None] | None,
 ) -> tuple[Path | None, bool]:
     """Atomically publish one manifest-bearing version, fenced across workers."""
     if task.claim_identity is not None and not _fanin_claim_manifest_is_current(task):
         raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
-    cache_dir = _resolve_fanin_route(queue, task)
+    route = route or _resolve_fanin_route(queue, task)
     fanin_task = _fanin_task_from_task_manifest(task)
+    _verify_fanin_route_resolution(route, fanin_task)
+    cache_dir = route.root
     if _temporary_cache_record_count(temporary_cache, task) != fanin_task.count:
         raise FanInTaskValidationError(
             f"task {task.base} cache games do not match queue count {fanin_task.count}"
         )
-    _recover_pending_fanin_publication(cache_dir, fanin_task)
+    _recover_pending_fanin_publication(cache_dir, fanin_task, route)
     committed = _find_committed_fanin_task_evidence(cache_dir, fanin_task)
     if committed is not None:
         existing, accepted_shard = committed
@@ -3686,18 +3905,22 @@ def _publish_fanin_task(
                 )
             raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
         try:
-            _complete_claim(task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard)
+            _complete_claim(
+                task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard, route=route,
+            )
         except FanInTaskConflictError as exc:
             raise FanInInventoryValidationError(
                 f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
             ) from exc
         shutil.rmtree(temporary_cache, ignore_errors=True)
         _inject_crash(crash_inject, "fanin-after-recovery", task)
+        _verify_fanin_route_resolution(route, fanin_task)
         return None, True
     if not _fanin_claim_manifest_is_current(task):
         raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
     _reject_prepublication_done_marker(task, queue)
 
+    _verify_fanin_route_resolution(route, fanin_task)
     task_lease = _acquire_fanin_task_publication_lease(cache_dir, task, fanin_task)
     try:
         # A stalled predecessor holds this lease. Once it exits or is fenced by
@@ -3713,14 +3936,18 @@ def _publish_fanin_task(
                 raise FanInInventoryValidationError(
                     f"committed task {task.base!r} conflicts with its retried manifest"
                 )
-            _complete_claim(task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard)
+            _complete_claim(
+                task, queue, crash_inject=crash_inject, accepted_shard=accepted_shard, route=route,
+            )
             shutil.rmtree(temporary_cache, ignore_errors=True)
             _inject_crash(crash_inject, "fanin-after-recovery", task)
+            _verify_fanin_route_resolution(route, fanin_task)
             return None, True
         if not _fanin_claim_manifest_is_current(task):
             raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
         _reject_prepublication_done_marker(task, queue)
         base = cache_dir / f"shard-w{_sanitize_worker_id(worker)}"
+        _verify_fanin_route_resolution(route, fanin_task)
         lock, lock_identity = _acquire_fanin_publish_lock(base, task, fanin_task)
         staging: Path | None = None
         owner_sidecar: Path | None = None
@@ -3728,12 +3955,16 @@ def _publish_fanin_task(
         try:
             current, version, current_tasks = _read_current_worker_shard(base, task.iteration)
             if _recover_current_worker_task(current_tasks, fanin_task):
-                _complete_claim(task, queue, crash_inject=crash_inject, accepted_shard=current)
+                _complete_claim(
+                    task, queue, crash_inject=crash_inject, accepted_shard=current, route=route,
+                )
                 shutil.rmtree(temporary_cache, ignore_errors=True)
                 _inject_crash(crash_inject, "fanin-after-recovery", task)
+                _verify_fanin_route_resolution(route, fanin_task)
                 return None, True
             target = base.parent / f"{base.name}-v{version + 1}"
             staging = base.parent / f".{target.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+            _verify_fanin_route_resolution(route, fanin_task)
             owner_sidecar = _write_fanin_staging_owner(
                 staging, fanin_task, producer_token=task.claim_token,
             )
@@ -3760,6 +3991,7 @@ def _publish_fanin_task(
                 ) from exc
             if staging_record_count != sum(entry.count for entry in version_tasks):
                 raise FanInTaskValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
+            _verify_fanin_route_resolution(route, fanin_task)
             _write_fanin_manifest(staging, version_tasks)
             acceptance = _build_fanin_acceptance(
                 staging, target, base, version + 1, version_tasks,
@@ -3767,6 +3999,7 @@ def _publish_fanin_task(
             )
             _write_fanin_publication(staging, acceptance)
             _inject_crash(crash_inject, "fanin-before-target-publication", task)
+            _verify_fanin_route_resolution(route, fanin_task)
             if not _fanin_claim_manifest_is_current(task) or not _fanin_fence_is_current(task_lease.guard):
                 raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
             if _read_fanin_staging_owner_record(staging) != (fanin_task, task.claim_token):
@@ -3782,11 +4015,12 @@ def _publish_fanin_task(
                 if existing == fanin_task:
                     _complete_claim(
                         task, queue, crash_inject=crash_inject,
-                        accepted_shard=committed[1],
+                        accepted_shard=committed[1], route=route,
                     )
                     shutil.rmtree(staging, ignore_errors=True)
                     owner_sidecar.unlink(missing_ok=True)
                     shutil.rmtree(temporary_cache, ignore_errors=True)
+                    _verify_fanin_route_resolution(route, fanin_task)
                     return None, True
                 if existing is not None:
                     if _fanin_route_conflicts(existing, fanin_task):
@@ -3802,7 +4036,10 @@ def _publish_fanin_task(
             published = True
             _fsync_directory(target.parent)
             _inject_crash(crash_inject, "fanin-after-target-publication", task)
-            accepted = _accept_fanin_publication(task_lease.guard.root, acceptance)
+            _verify_fanin_route_resolution(route, fanin_task)
+            accepted = _accept_fanin_publication(
+                task_lease.guard.root, acceptance, fence=task_lease.guard,
+            )
             if accepted != acceptance:
                 if accepted.task != fanin_task:
                     raise FanInInventoryValidationError(
@@ -3814,11 +4051,12 @@ def _publish_fanin_task(
                         f"fan-in accepted task disappeared before acknowledgement: {task.base}"
                     )
                 _complete_claim(
-                    task, queue, crash_inject=crash_inject, accepted_shard=committed[1],
+                    task, queue, crash_inject=crash_inject, accepted_shard=committed[1], route=route,
                 )
                 owner_sidecar.unlink(missing_ok=True)
                 _remove_fanin_staging_lease(staging, task.claim_token)
                 _fsync_directory(owner_sidecar.parent)
+                _verify_fanin_route_resolution(route, fanin_task)
                 return None, True
             try:
                 committed = _find_committed_fanin_task_evidence(cache_dir, fanin_task)
@@ -3827,19 +4065,21 @@ def _publish_fanin_task(
                         f"fan-in accepted task disappeared before acknowledgement: {task.base}"
                     )
                 _complete_claim(
-                    task, queue, crash_inject=crash_inject, accepted_shard=committed[1],
+                    task, queue, crash_inject=crash_inject, accepted_shard=committed[1], route=route,
                 )
             except FanInTaskConflictError as exc:
                 raise FanInInventoryValidationError(
                     f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
                 ) from exc
             _inject_crash(crash_inject, "fanin-before-stale-cleanup", task)
+            _verify_fanin_route_resolution(route, fanin_task)
             for stale_version, stale in _shard_versions(base):
                 if stale_version < version + 1:
                     _remove_stale_fanin_version(stale)
             owner_sidecar.unlink(missing_ok=True)
             _remove_fanin_staging_lease(staging, task.claim_token)
             _fsync_directory(owner_sidecar.parent)
+            _verify_fanin_route_resolution(route, fanin_task)
             return target, False
         except Exception:
             if staging is not None:
@@ -3958,10 +4198,13 @@ def run_worker(
             time.sleep(sleep_seconds)
             continue
         idle_since = None
+        route: _FanInRouteResolution | None = None
         if shard_fanin:
             try:
                 try:
-                    cache_dir = _resolve_fanin_route(queue, task)
+                    route = _resolve_fanin_route(queue, task)
+                    _verify_fanin_route_resolution(route, task)
+                    cache_dir = route.root
                 except FanInTaskValidationError:
                     # Preserve the established per-task failure classification;
                     # recovery below will reject malformed queue metadata.
@@ -3971,7 +4214,7 @@ def run_worker(
                 log(f"TERMINAL fan-in selected inventory corruption for {task.base}; preserving claim: {exc}")
                 return finish(2)
             try:
-                if _recover_fanin_task(task, queue, crash_inject=crash_inject):
+                if _recover_fanin_task(task, queue, route=route, crash_inject=crash_inject):
                     log(f"recover-fanin {task.base}; durable version already selected")
                     tasks_done += 1
                     if recycle_due():
@@ -4036,7 +4279,7 @@ def run_worker(
             concat_started = time.monotonic()
             try:
                 target, recovered = _publish_fanin_task(
-                    task, tmp, queue, worker, crash_inject=crash_inject,
+                    task, tmp, queue, worker, route=route, crash_inject=crash_inject,
                 )
             except _ClaimRevokedError:
                 log(f"revoked {task.base}; discarding {elapsed:.1f}s of work")

@@ -654,6 +654,18 @@ class FanInTests(unittest.TestCase):
 
         return json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
 
+    def _mutate_cache_payload_in_place(self, cache: Path) -> None:
+        """Change array bytes without replacing the accepted payload pathname."""
+        payload = next(cache.glob("*.npy"))
+        with payload.open("r+b") as handle:
+            handle.seek(-1, os.SEEK_END)
+            original = handle.read(1)
+            self.assertEqual(len(original), 1)
+            handle.seek(-1, os.SEEK_END)
+            handle.write(bytes([original[0] ^ 1]))
+            handle.flush()
+            os.fsync(handle.fileno())
+
     def _contract(self, *, tasks: int, games: int, seed_start: int = 100) -> FanInQueueContract:
         return FanInQueueContract(
             iteration=1,
@@ -1508,7 +1520,9 @@ class FanInTests(unittest.TestCase):
             lease = fleet_worker._acquire_fanin_task_publication_lease(self.cache_dir, task, fanin_task)
             try:
                 task.claim_path.unlink()
-                time.sleep(0.12)  # Longer than the old one-shot 60 s-equivalent lease.
+                for _ in range(30):
+                    time.sleep(0.004)
+                    self.assertTrue(fleet_worker._fanin_fence_is_current(lease.guard))
                 fleet_worker._sweep_abandoned_fanin_staging(self.cache_dir, self.queue)
                 self.assertTrue(staging.exists())
             finally:
@@ -2192,6 +2206,27 @@ class FanInTests(unittest.TestCase):
         with self.assertRaises(FanInValidationError):
             fleet_worker._verify_selected_fanin_shard(selected[0])
 
+    def test_selection_rejects_payload_mutation_between_acceptance_and_snapshot(self) -> None:
+        from unittest.mock import patch
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        target = self._write_version("shard-ww1-v1", [task])
+        original_snapshot = fleet_worker._snapshot_fanin_payload_files
+        mutated = False
+
+        def snapshot_then_mutate(path: Path):
+            nonlocal mutated
+            result = original_snapshot(path)
+            if path == target and not mutated:
+                mutated = True
+                self._mutate_cache_payload_in_place(path)
+            return result
+
+        with patch.object(fleet_worker, "_snapshot_fanin_payload_files", new=snapshot_then_mutate):
+            with self.assertRaises(FanInValidationError):
+                fleet_worker._select_accepted_fanin_shards(self.cache_dir)
+        self.assertTrue(mutated)
+
     def test_recovery_ack_rejects_cache_root_replacement_after_lookup(self) -> None:
         from unittest.mock import patch
         import shutil
@@ -2226,6 +2261,100 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertTrue(self._claim("w1", task.task_id).exists())
         self.assertFalse((self.queue / "done" / task.task_id).exists())
+
+    def test_recovery_ack_rejects_in_place_selected_payload_mutation_after_lookup(self) -> None:
+        from unittest.mock import patch
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [task])
+        _manifest(
+            self.queue, task.task_id, out=Path(task.out), iteration=1,
+            offset=0, count=1, seed=100, policy=task.policy,
+        )
+        original_find = fleet_worker._find_committed_fanin_task_evidence
+        mutated = False
+
+        def find_then_mutate(cache_dir: Path, candidate: FanInTask):
+            nonlocal mutated
+            result = original_find(cache_dir, candidate)
+            if result is not None and not mutated:
+                mutated = True
+                self._mutate_cache_payload_in_place(result[1].path)
+            return result
+
+        with patch.object(fleet_worker, "_find_committed_fanin_task_evidence", new=find_then_mutate):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertTrue(mutated)
+        self.assertEqual(rc, 2)
+        self.assertTrue(self._claim("w1", task.task_id).exists())
+        self.assertFalse((self.queue / "done" / task.task_id).exists())
+
+    def test_route_witness_rejects_repeated_identical_record_replacement(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(
+            self.queue, "i1-s0.env", out=self.cache_dir / "slice-0",
+            iteration=1, offset=0, count=1, seed=100,
+        )
+        original_resolve = fleet_worker._resolve_fanin_route
+        replacements = 0
+        calls: list[list[str]] = []
+
+        def resolve_then_replace(queue: Path, task):
+            nonlocal replacements
+            resolved = original_resolve(queue, task)
+            record = fleet_worker._fanin_route_record(queue, task.base)
+            for index in range(3):
+                prior = record.with_name(f"route-prior-{index}.json")
+                record.rename(prior)
+                record.write_bytes(prior.read_bytes())
+                replacements += 1
+            return resolved
+
+        with patch.object(fleet_worker, "_resolve_fanin_route", new=resolve_then_replace):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=calls.append,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertEqual(replacements, 3)
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [])
+        self.assertTrue(self._claim("w1", "i1-s0.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
+        self.assertFalse((self.cache_dir / "shard-ww1-v1").exists())
+
+    def test_concat_rejects_in_place_selected_payload_mutation(self) -> None:
+        from unittest.mock import patch
+
+        prior = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-ww1-v1", [prior])
+        _manifest(
+            self.queue, "i1-s1.env", out=self.cache_dir / "slice-1", iteration=1,
+            offset=1, count=1, seed=101,
+        )
+        from pokezero.dataset import concat_training_caches as real_concat
+
+        mutated = False
+
+        def mutate_then_concat(parts, staging):
+            nonlocal mutated
+            self._mutate_cache_payload_in_place(Path(parts[0]))
+            mutated = True
+            return real_concat(parts, staging)
+
+        with patch("pokezero.dataset.concat_training_caches", new=mutate_then_concat):
+            rc = run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            )
+        self.assertTrue(mutated)
+        self.assertEqual(rc, 2)
+        self.assertTrue(self._claim("w1", "i1-s1.env").exists())
+        self.assertFalse((self.queue / "done" / "i1-s1.env").exists())
+        self.assertFalse((self.cache_dir / "shard-ww1-v2").exists())
 
     def test_concat_rejects_current_shard_cache_root_replacement(self) -> None:
         from unittest.mock import patch
