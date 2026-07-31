@@ -153,6 +153,71 @@ fn exact_self_hit_renders_activation_and_cancels_substitute() {
 }
 
 #[test]
+fn switch_prefixed_exact_self_hit_is_untagged_and_safe() {
+    let mut state = confused_state(Choices::SUBSTITUTE);
+    state.side_one.pokemon[PokemonIndex::P1] = state.side_one.get_active_immutable().clone();
+    state.side_two.get_active().maxhp = 256;
+    state.side_two.get_active().hp = 200;
+    state.side_two.get_active().attack = 108; // exact 38 confusion damage
+
+    let side_one = MoveChoice::Switch(PokemonIndex::P1);
+    let side_two = MoveChoice::Move(PokemonMoveIndex::M0);
+    let before = state.serialize();
+    let branches = generate_instructions_from_move_pair(&mut state, &side_one, &side_two, false);
+    assert_eq!(
+        before,
+        state.serialize(),
+        "generation mutated the source state"
+    );
+    let branch = branches
+        .iter()
+        .find(|branch| {
+            damage_to(branch, SideReference::SideTwo, 38)
+                && branch.instruction_list.iter().any(|instruction| {
+                    matches!(instruction, Instruction::Switch(switch)
+                        if switch.side_ref == SideReference::SideOne
+                            && switch.next_index == PokemonIndex::P1)
+                })
+        })
+        .expect("expected switch-prefixed exact confusion self-hit branch");
+
+    let rendered = render_branch_events(
+        &mut state,
+        &side_one,
+        &side_two,
+        &branch.instruction_list,
+        false,
+        &EventContext {
+            species: [vec!["Lead".into(), "Bench".into()], vec!["Opponent".into()]],
+            turn: 1,
+            hp_percent: [false, false],
+        },
+    );
+    assert_eq!(
+        before,
+        state.serialize(),
+        "rendering mutated the source state"
+    );
+    let events = rendered.lines.join("\n");
+    let activation = "|-activate|p2a: Opponent|confusion";
+    let exact_damage = "|-damage|p2a: Opponent|162/256";
+    assert_in_order(&events, &["|switch|p1a: Bench", activation, exact_damage]);
+    assert!(
+        rendered
+            .lines
+            .windows(2)
+            .any(|pair| pair[0] == activation && pair[1] == exact_damage),
+        "activation and exact damage must share one rendered confusion arm: {events}"
+    );
+    assert!(
+        !events.contains(&format!("{exact_damage}|[from]")),
+        "{events}"
+    );
+    assert!(rendered.attribution_unsafe.is_empty(), "{rendered:?}");
+    assert!(rendered.lossy.is_empty(), "{rendered:?}");
+}
+
+#[test]
 fn destiny_bond_bookkeeping_precedes_confusion_without_phantom_moves() {
     for move_id in [Choices::SUBSTITUTE, Choices::BELLYDRUM, Choices::CURSE] {
         let mut state = confused_state(move_id);
