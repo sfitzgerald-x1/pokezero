@@ -1458,45 +1458,13 @@ class _ReplayParser:
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
-                # gen3 Truant phase for the INCOMING mon. Truant's `onSwitchIn` runs only for
-                # a mon that already has the ability, and sets
-                # `truantTurn = this.turn !== 0` -- so a mid-battle switch-in starts on the
-                # LOAF side of the toggle and a turn-0 lead on the ACT side. Both then take
-                # one `onResidual` flip before their first move opportunity, which is why both
-                # end up ACTING on it. Seeded here rather than inferred from later behaviour
-                # because the switch line is the event the sim itself keys on.
-                #
-                # Species is sufficient and unambiguous: `slakoth` and `slaking` are the only
-                # gen3 Truant lines and both are MONO-ability, so no reveal is needed. A mon
-                # that acquires Truant later by Trace is handled at the `-ability` line, not
-                # here -- at ITS switch-in it did not have the ability, so Truant's onSwitchIn
-                # never ran for it and its `truantTurn` is still the `false` that
-                # `sim/pokemon.ts` resets on entry.
-                # gen3 seeds the phase at switch-in: `truantTurn = this.turn !== 0`. Both a
-                # turn-0 lead (False) and a mid-battle switch-in (True) then take exactly one
-                # `onResidual` flip before their first move opportunity, which is why both end
-                # up ACTING on it -- the `turn !== 0` term is that compensation.
-                #
-                # Reproducing it in a replay needs the flip to land on the same side of the
-                # residual boundary, and the per-`|turn|` flip below is skipped for turn 1
-                # because there is no end-of-turn-0 residual to mirror. Getting that wrong
-                # inverted the lead's parity and produced divergences at the first boundary.
-                #
-                # Species is decisive: `slakoth` and `slaking` are the only gen3 Truant lines
-                # and both are mono-ability. A mon that acquires Truant later by Trace is
-                # seeded at its `-ability` line instead.
-                #
-                # Deriving it was tried and withdrawn. gen3 seeds `truantTurn = this.turn != 0`
-                # at switch-in, which is correct for the sim but depends, in a REPLAY, on the
-                # flip landing on the right side of the residual boundary. It did not for a
-                # turn-0 lead -- there is no "end of turn 0" residual to flip -- and the
-                # resulting inverted parity produced divergences at the very first boundary,
-                # trading rows rather than fixing them.
-                #
-                # Unknown is the honest state and it is not a loss: per the same gen3 rule
-                # BOTH a lead and a mid-battle switch-in act on their first move opportunity,
-                # which is what the downstream proxy already assumes. The phase becomes known
-                # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
+                # Native Slakoth and Slaking are mono-ability, so species proves that Truant's
+                # switch-in hook ran and `truantTurn = this.turn !== 0` is an honest seed. A
+                # post-upkeep forced replacement missed the residual that just ran, so its
+                # first following `|turn|` must not flip the bit again. Trace acquisition is
+                # different: retained current-source cases prove that identical public line
+                # placement can produce opposite first phases, so the `-ability` handler leaves
+                # traced Truant UNKNOWN until a public move or Truant `cant` anchors it.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
                     if self._post_upkeep_window:

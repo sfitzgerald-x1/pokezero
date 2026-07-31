@@ -13,10 +13,10 @@ The bit flips at EVERY residual, unconditionally. The rule it replaced — "move
 OTHER than Truant (sleep, paralysis, flinch, freeze, recharge, a switch) the two disagree and
 the parity stays inverted for the rest of the stint.
 
-**Every expectation below is transcribed from a `gen3customgame` probe, not derived.** That
-distinction earned its place here: the composed derivation for a traced holder predicted it
-loafs on its first move turn, and the probe showed a turn-0 tracer ACTS. Four formulations of
-this fix fought each other before the probes settled it.
+**Every expectation below is measured, not derived.** The general chronology cases come from
+`gen3customgame` probes; the three numbered identities are transcribed from current-source
+differential replays. That distinction earned its place here: publicly similar Trace lines
+produce opposite first phases, so a composed boolean rule cannot represent all retained cases.
 
 Probe results the pins encode:
 
@@ -139,6 +139,9 @@ class TracedTruantTest(unittest.TestCase):
         # then Showdown loafs at the next decision. The acquisition remains unknown; the
         # retained row's own ``cant`` line is the first honest phase anchor.
         p = _parse([
+            "|switch|p1a: Primeape|Primeape, L84, M|246/246",
+            "|switch|p2a: Slaking|Slaking, L78, M|362/362",
+            "|turn|1",
             self.POR,
             self.TRACE,
             "|move|p2a: Slaking|Return|p1a: Porygon2",
@@ -147,19 +150,31 @@ class TracedTruantTest(unittest.TestCase):
             "|upkeep",
             "|turn|2",
         ])
+        snapshot = p.snapshot()
+        self.assertEqual(snapshot.turn_number, 2)
+        self.assertEqual(snapshot.public_active["p1"].condition, "65/267")
+        self.assertEqual(snapshot.public_active["p2"].condition, "362/362")
+        self.assertEqual(snapshot.traced_ability["p1"], "truant")
         self.assertIsNone(p.truant_phase["p1"])
         p.feed([
             "|switch|p2a: Nidoqueen|Nidoqueen, L82, F|282/282",
             "|cant|p1a: Porygon2|ability: Truant",
         ])
         self.assertIs(p.truant_phase["p1"], True)
+        p.feed([
+            "|-heal|p1a: Porygon2|81/267|[from] item: Leftovers",
+            "|upkeep",
+            "|turn|3",
+        ])
+        self.assertIs(p.truant_phase["p1"], False)
 
     def test_retained_identity_3400443_step_69_forced_replacement_anchor(self) -> None:
         # Extracted current-source protocol: a move KO creates a pre-upkeep forced replacement.
         # Trace is still unknown until both holders publicly loaf at the next boundary.
         p = _parse([
-            "|switch|p1a: Moltres|Moltres, L80|300/300",
-            "|switch|p2a: Slaking|Slaking, L80, M|362/362",
+            "|switch|p1a: Moltres|Moltres, L78|201/268 psn",
+            "|switch|p2a: Slaking|Slaking, L78, M|236/362",
+            "|turn|58",
             "|move|p2a: Slaking|Return|p1a: Moltres",
             "|-damage|p1a: Moltres|0 fnt",
             "|faint|p1a: Moltres",
@@ -168,12 +183,19 @@ class TracedTruantTest(unittest.TestCase):
             "|upkeep",
             "|turn|59",
         ])
+        snapshot = p.snapshot()
+        self.assertEqual(snapshot.turn_number, 59)
+        self.assertEqual(snapshot.public_active["p1"].condition, "267/267")
+        self.assertEqual(snapshot.public_active["p2"].condition, "236/362")
+        self.assertEqual(snapshot.traced_ability["p1"], "truant")
         self.assertIsNone(p.truant_phase["p1"])
         p.feed([
             "|cant|p2a: Slaking|ability: Truant",
             "|cant|p1a: Porygon2|ability: Truant",
         ])
         self.assertIs(p.truant_phase["p1"], True)
+        p.feed(["|upkeep", "|turn|60"])
+        self.assertIs(p.truant_phase["p1"], False)
 
     def test_current_source_2200291_step_41_stays_unknown_until_it_acts(self) -> None:
         # Current-source control for the measured Z13.3 withdrawal. Both sides switch in on
@@ -189,11 +211,26 @@ class TracedTruantTest(unittest.TestCase):
         self.assertIsNone(p.truant_phase["p1"])
         p.feed([
             "|move|p2a: Slaking|Earthquake|p1a: Porygon2",
+            "|-damage|p1a: Porygon2|112/267",
             "|move|p1a: Porygon2|Ice Beam|p2a: Slaking",
+            "|-damage|p2a: Slaking|203/362",
         ])
         self.assertIs(p.truant_phase["p1"], False)
-        p.feed(["|upkeep", "|turn|39"])
+        p.feed([
+            "|-heal|p1a: Porygon2|128/267|[from] item: Leftovers",
+            "|upkeep",
+            "|turn|39",
+        ])
         self.assertIs(p.truant_phase["p1"], True)
+        p.feed([
+            "|switch|p2a: Vaporeon|Vaporeon, L79, M|275/335",
+            "|cant|p1a: Porygon2|ability: Truant",
+            "|-heal|p2a: Vaporeon|295/335|[from] item: Leftovers",
+            "|-heal|p1a: Porygon2|144/267|[from] item: Leftovers",
+            "|upkeep",
+            "|turn|40",
+        ])
+        self.assertIs(p.truant_phase["p1"], False)
 
     def test_an_anchor_establishes_the_traced_phase(self) -> None:
         p = _parse([
@@ -236,6 +273,17 @@ class TracedTruantTest(unittest.TestCase):
         self.assertIsNone(p.truant_phase["p1"])
         p.feed([self.POR, self.TRACE])
         self.assertIsNone(p.truant_phase["p1"])
+
+    def test_unknown_trace_phase_survives_snapshot_restore(self) -> None:
+        live = _parse([
+            self.POR,
+            "|switch|p2a: Slaking|Slaking, L80, M|362/362",
+            self.TRACE,
+            "|upkeep",
+        ])
+        restored = _ReplayParser.from_snapshot(live.snapshot())
+        self.assertEqual(restored.traced_ability["p1"], "truant")
+        self.assertIsNone(restored.truant_phase["p1"])
 
 
 class ReplacementGuardTest(unittest.TestCase):
