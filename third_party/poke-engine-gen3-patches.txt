@@ -1156,3 +1156,15 @@ poke-engine-gen3-forecast-suppressor-handoff.patch
 # needed by pending Flail/Reversal, and pass actual post-cap direct damage to
 # deferred Color Change so zero-damage Endure branches never retype.
 poke-engine-gen3-review-compositions.patch
+
+# Gen 3 successful Substitute ends an existing partial-trap volatile. Showdown
+# silently ends Wrap / Bind / Fire Spin / Clamp / Whirlpool after the Substitute
+# is created, before end-of-turn residuals. Upstream leaves PARTIALLYTRAPPED in
+# place, emitting an extra 1/16 chip on that same boundary (retained identity
+# 3101100/29). The removal is strictly inside Substitute's successful-cost arm:
+# failed Substitute attempts, ordinary trapped turns, Rapid Spin, and the
+# source-leaves / Baton Pass lifecycle rules are unchanged. Pinned by
+# rust/pokezero-search/tests/gen3_switch_fidelity.rs; authored against the
+# review-compositions tree above. No upstream fixture patch changes, so the
+# frozen fixture-refresh entry remains unmodified.
+poke-engine-gen3-wrap-substitute-lifecycle.patch

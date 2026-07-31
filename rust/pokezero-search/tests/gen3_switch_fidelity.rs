@@ -65,6 +65,39 @@ fn removes_volatile(
     })
 }
 
+fn applies_volatile(
+    list: &[Instruction],
+    side_ref: SideReference,
+    volatile_status: PokemonVolatileStatus,
+) -> bool {
+    list.iter().any(|instruction| match instruction {
+        Instruction::ApplyVolatileStatus(apply) => {
+            apply.side_ref == side_ref && apply.volatile_status == volatile_status
+        }
+        _ => false,
+    })
+}
+
+fn damages_side(list: &[Instruction], side_ref: SideReference) -> bool {
+    list.iter().any(|instruction| match instruction {
+        Instruction::Damage(damage) => damage.side_ref == side_ref && damage.damage_amount > 0,
+        _ => false,
+    })
+}
+
+/// New lifecycle instructions must preserve tree reversibility just like move
+/// damage does. A one-way volatile removal would corrupt sibling branches.
+fn assert_reverts_cleanly(state: &mut State, list: &Vec<Instruction>) {
+    let before = format!("{:?}", state);
+    state.apply_instructions(list);
+    state.reverse_instructions(list);
+    assert_eq!(
+        before,
+        format!("{:?}", state),
+        "instructions did not reverse cleanly"
+    );
+}
+
 fn changes_side_condition(
     list: &[Instruction],
     side_ref: SideReference,
@@ -263,6 +296,151 @@ fn partial_trap_ends_when_the_trapper_switches_out() {
         "the trapper leaving must free the victim: {:?}",
         list
     );
+}
+
+/// Showdown Gen 3: a target can use Substitute while it is held by Wrap / Bind /
+/// Fire Spin / Clamp / Whirlpool. On a successful Substitute, Showdown ends the
+/// existing `partiallytrapped` volatile before residuals; the target pays its
+/// Substitute cost, but does not take another partial-trap chip that turn.
+///
+/// This is deliberately a target-side lifecycle rule, distinct from the existing
+/// source-leaves release above and the Rapid Spin release pin. The patch must not
+/// clear the volatile until Substitute has actually succeeded.
+#[test]
+fn successful_substitute_ends_the_target_partial_trap_before_residuals() {
+    let mut state = State::default();
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SUBSTITUTE);
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        applies_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::SUBSTITUTE
+        ),
+        "fixture must exercise a successful Substitute: {:?}",
+        list
+    );
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "a successful Substitute must end the target's partial trap: {:?}",
+        list
+    );
+    assert_reverts_cleanly(&mut state, &list);
+}
+
+/// The lifecycle release is conditional on creating the Substitute. A user at
+/// exactly one-quarter HP cannot pay the strict `hp > maxhp / 4` cost, so the
+/// failed attempt leaves the existing partial trap in place and it still ticks.
+#[test]
+fn failed_substitute_keeps_the_existing_partial_trap() {
+    let mut state = State::default();
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SUBSTITUTE);
+    let p2 = state.side_two.get_active();
+    p2.hp = p2.maxhp / 4;
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        !applies_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::SUBSTITUTE
+        ),
+        "fixture must exercise a failed Substitute: {:?}",
+        list
+    );
+    assert!(
+        !removes_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "a failed Substitute must not release the partial trap: {:?}",
+        list
+    );
+    assert!(
+        damages_side(&list, SideReference::SideTwo),
+        "the retained partial trap must still produce its residual chip: {:?}",
+        list
+    );
+    assert_reverts_cleanly(&mut state, &list);
+}
+
+/// Ordinary turns leave a live partial trap alone. This prevents the successful
+/// Substitute release from becoming a blanket volatile clear.
+#[test]
+fn ordinary_trapped_turn_keeps_the_partial_trap_and_its_residual() {
+    let mut state = State::default();
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        !removes_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "an ordinary trapped turn must not release the partial trap: {:?}",
+        list
+    );
+    assert!(
+        damages_side(&list, SideReference::SideTwo),
+        "an ordinary trapped turn must retain the partial-trap residual: {:?}",
+        list
+    );
+    assert_reverts_cleanly(&mut state, &list);
 }
 
 // ---------------------------------------------------------------------------

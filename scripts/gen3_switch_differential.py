@@ -22,6 +22,9 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   partialtrap   : the TRAPPER switches out -> the victim stops taking partial-trap
                   damage (``partiallytrapped.onResidual`` frees it once the source
                   is no longer active); the no-switch control keeps taking it.
+  partialtrapsubstitute : a trapped victim successfully uses Substitute -> the
+                  existing partial trap ends before residuals; the failed-cost
+                  and ordinary-turn controls are pinned natively.
   spikesNlayer(s) : a 461 max HP Snorlax switching into 1/2/3 layers of Spikes
                   lands on exactly 404/385/346 — 1/8, 1/6 and 1/4 of max HP,
                   floored. ``spikesminimum`` is the other end of the same
@@ -342,6 +345,11 @@ def _ninetales():  # partial-trap setter
 def _blissey():  # trap/seed victim
     return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
                           moves=("Splash", "Soft-Boiled"))
+
+
+def _blissey_substitute():  # partial-trap victim that can establish a Substitute
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Substitute", "Splash"))
 
 
 def _spikes_skarmory():  # hazard setter with an inert filler move
@@ -915,6 +923,23 @@ def _spec(name):
             facts=lambda L: {"victim_ticked": _residual_from(L, "Fire Spin", "p2a")},
             expect={"victim_ticked": True},
             landmark=lambda L: True, landmark_desc="")
+    if name == "partialtrapsubstitute":
+        # A successful Substitute explicitly ends the existing partial trap
+        # before the residual phase. The setup remains accuracy-gated, so only
+        # landed Fire Spin seeds assert the measured boundary.
+        return dict(
+            p1=[_ninetales()], p2=[_blissey_substitute()],
+            turns=[("move firespin", "move splash"), ("move splash", "move substitute")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-activate|") and _has(L, "move: Fire Spin")
+                                   and not _has(L, "[miss]"),
+            facts=lambda L: {
+                "substitute_started": _has(L, "|-start|p2a: Blissey|Substitute"),
+                "victim_ticked": _residual_from(L, "Fire Spin", "p2a"),
+            },
+            expect={"substitute_started": True, "victim_ticked": False},
+            landmark=lambda L: _has(L, "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]"),
+            landmark_desc="Substitute ended the partial trap")
     if name in ("spikes1layer", "spikes2layers", "spikes3layers"):
         # p1 Skarmory stacks `layers` of Spikes on p2's side, then p2 sends in a
         # 461 max HP Snorlax. Showdown's gen4 Spikes condition (which gen3
@@ -2176,6 +2201,7 @@ def _spec(name):
 
 SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol",
+             "partialtrapsubstitute",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
