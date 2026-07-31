@@ -2,8 +2,8 @@
 
 ## Decision
 
-The renderer stack in `3ec869c`/`f5b71a4`/`62947e9` is superseded and is
-reverted in this lane. It should not be integrated with the active clean lane.
+The retired renderer stack is superseded. It must not be integrated with the
+public implementation.
 
 The retired implementation recognized a structural
 `ChangeVolatileStatusDuration(confusion, +1), Damage(self)` pair and emitted
@@ -12,13 +12,13 @@ the V2 freeze and V3 corrective path require an untagged self-hit damage line
 after `|-activate|...|confusion`. A tag prevents the fold from recording the
 carried self-hit fraction, which would silently defeat V3's correction.
 
-Committed clean-lane revision `51faf308a8a3bb626b1c3d2e5b12b0491abaea5c`
-supersedes the mechanism. Its renderer consumes the pre-move confusion duration
-increment, derives the Gen 3 fixed 40-power self-hit damage from the live
-state, and emits the untagged canonical pair only when that damage identity is
-unique. It rejects crash and self-faint collisions rather than attributing them
-to confusion. Switch handling has already completed before this common move
-phase, so the classifier is independent of the preceding voluntary switch.
+Public merge `8af4f42e99ef9b6a0b809027976a27a8d135cd3c` (PR #993) supersedes
+the mechanism. Its renderer consumes the pre-move confusion duration increment,
+derives the Gen 3 fixed 40-power self-hit damage from live state, and emits the
+untagged canonical pair only when that identity is unique. It rejects crash and
+self-faint collisions rather than attributing them to confusion. Switch
+handling has already completed before this common move phase, so the classifier
+is independent of the preceding voluntary switch.
 
 ## Identity Ledger
 
@@ -32,20 +32,20 @@ The C26 prediction names these retained identities directly:
 
 The repository retains no C26 row payload, checkpoint JSONL shard, or C26
 result artifact. Consequently, this record does **not** claim a fresh
-classifier outcome or that the independent 2-HP/1-HP residuals clear. It
-proves the committed renderer-contract replacement for each explicitly named
-identity without inventing unavailable inputs.
+classifier outcome or that independent residuals clear. It proves the final
+public renderer-contract replacement for each explicitly named identity without
+inventing unavailable inputs.
 
 ## Reproducible Check
 
 Run from this worktree:
 
 ```bash
-python3 scripts/verify_c26_switch_confusion_supersession.py \
-  --candidate ../pokezero-confusion-before-substitute-clean
+python3 scripts/verify_c26_switch_confusion_supersession.py
 ```
 
-The checker reads the candidate commit with `git show`, so it does not read or
-modify that worktree's uncommitted files. It verifies the exact identity ledger,
-the retired tagged implementation, the clean lane's exact-damage and
-fail-closed collision guards, and its native crash/self-faint controls.
+The checker reads only immutable files from public merge `8af4f42` with
+`git show`; it does not read another worktree or modify files. It verifies the
+exact identity ledger, final exact-damage and untagged-emission behavior,
+fail-closed crash/self-faint controls, and the native Recoil ordinary-damage
+negative control.
