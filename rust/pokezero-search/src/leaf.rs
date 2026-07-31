@@ -1384,7 +1384,17 @@ impl LeafContext {
                 // its base is the belief ledger's public charging count
                 // (maxpp − ledger uses — the same |move|-line rules the
                 // request follows).
-                let ledger_base = if active_party != self.root_active_party[self_engine] {
+                // SELF SIDE ONLY. `self_ledger_uses` is keyed by the self
+                // team's species keys (belief_view.self_pokemon), so an
+                // opponent-side lookup would MISS rather than fail, yielding
+                // `max - 0` = full PP and silently overriding the (correct)
+                // root-snapshot base with a too-generous one. The opponent has
+                // no public charging ledger, so it must fall through to
+                // root_base -- see `opponent_action_map`.
+                let ledger_side_is_self = self_engine == self.engine_side_index(true);
+                let ledger_base = if ledger_side_is_self
+                    && active_party != self.root_active_party[self_engine]
+                {
                     self.tables.move_max_pp(&sd_id).filter(|max| *max > 0).map(|max| {
                         let uses = self
                             .self_ledger_uses
@@ -1607,9 +1617,61 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(state, options, self_order, meta, engine_authoritative, true)
+    }
+
+    /// The OPPONENT seat's option list mapped onto action-block slots.
+    ///
+    /// Exists so the model's `opponent_action_logits` head can be gathered onto
+    /// the arms the opponent actually owns. Orientation (the #937 lesson):
+    /// priors are per-seat action distributions applied to the seat that owns
+    /// the actions and are NEVER reflected — only *values* flip at the seat
+    /// boundary. So this maps the opponent's own `get_all_options()` through
+    /// the opponent's own action block; there is no `1-x` and no index remap
+    /// through the self block anywhere in this path.
+    ///
+    /// Two conventions differ from the self side, both forced by the opponent
+    /// being BELIEF state rather than known state:
+    ///
+    /// * **Display order.** The self side has a Showdown request order
+    ///   (`root_self_order`, active-first with switch-swap semantics). No such
+    ///   request exists for the opponent, so the sampled world's engine party
+    ///   order is used directly — team index == party index on this side.
+    /// * **PP base.** The self side can correct a switched-in mon's stale
+    ///   cached PP from the public charging ledger (`self_ledger_uses`). There
+    ///   is no such ledger for the opponent, so its base falls back to the
+    ///   sampled world's own root-snapshot PP. A disagreement can only make an
+    ///   engine-offered option fail to find a legal action slot, which returns
+    ///   `None` for that option and leaves the whole node uniform — the
+    ///   existing node-level fallback, i.e. it fails safe rather than shaping
+    ///   priors from a wrong surface.
+    pub(crate) fn opponent_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(state, options, None, meta, engine_authoritative, false)
+    }
+
+    /// Seat-generic core of the action map. `slot_is_self` picks which seat's
+    /// side, engine index, party order and snapshot are read; every lookup
+    /// below is already indexed by engine side, so the two seats differ only in
+    /// that index and in the display-order convention documented above.
+    fn seat_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+        slot_is_self: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
         let meta = meta.unwrap_or(&self.root_meta);
-        let self_side = side_ref_for(state, self.self_is_p1);
-        let self_engine = self.engine_side_index(true);
+        let side_is_p1 = if slot_is_self { self.self_is_p1 } else { !self.self_is_p1 };
+        let self_side = side_ref_for(state, side_is_p1);
+        let self_engine = self.engine_side_index(slot_is_self);
         let force_switch_shape =
             self_side.force_switch || self_side.get_active_immutable().hp <= 0;
         let recharging = self_side
@@ -1617,8 +1679,13 @@ impl LeafContext {
             .contains(&PokemonVolatileStatus::MUSTRECHARGE);
         // The (evolved) self-team display order with active flags — the same
         // derivation leaf_row_inputs writes into the md team before
-        // action_surface reads it back.
-        let order: &[String] = self_order.unwrap_or(&self.root_self_order);
+        // action_surface reads it back. The opponent has no request order, so
+        // it uses the sampled world's engine party order.
+        let order: &[String] = if slot_is_self {
+            self_order.unwrap_or(&self.root_self_order)
+        } else {
+            &self.species_keys[self_engine]
+        };
         let active_party = active_index_usize(self_side);
         let team_flags: Vec<(String, bool)> = order
             .iter()
@@ -1930,6 +1997,51 @@ impl PyLeafEncoder {
             meta.as_ref(),
             engine_authoritative,
         )?;
+        Ok(options
+            .iter()
+            .zip(map)
+            .map(|(choice, index)| (crate::move_display(side, choice), index))
+            .collect())
+    }
+
+    /// The OPPONENT seat's option→action-index correspondence, the mirror of
+    /// `self_action_map`. Exposed so the orientation contract can be pinned
+    /// from Python without a libtorch build: the opponent head must be
+    /// gathered onto the arms the opponent owns, never reflected through the
+    /// self block. See [`LeafContext::opponent_action_map`] for the two
+    /// belief-state conventions (display order, PP base) that differ from the
+    /// self side.
+    #[pyo3(signature = (state_str, lines = None, root = false, engine_authoritative = false))]
+    fn opponent_action_map(
+        &self,
+        state_str: &str,
+        lines: Option<Vec<String>>,
+        root: bool,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<(String, Option<usize>)>> {
+        let state = parse_state(state_str)?;
+        let (_order, meta) = self.branch_context(lines.as_deref());
+        let (s1_options, s2_options) = if root || engine_authoritative {
+            state.root_get_all_options()
+        } else {
+            state.get_all_options()
+        };
+        // The OPPONENT's options and the OPPONENT's side -- the whole point of
+        // the mirror. `self_is_side_one()` selects the self seat, so both
+        // picks below are inverted relative to `self_action_map`.
+        let options = if self.ctx.self_is_side_one() {
+            s2_options
+        } else {
+            s1_options
+        };
+        let side = if self.ctx.self_is_side_one() {
+            &state.side_two
+        } else {
+            &state.side_one
+        };
+        let map = self
+            .ctx
+            .opponent_action_map(&state, &options, meta.as_ref(), engine_authoritative)?;
         Ok(options
             .iter()
             .zip(map)
