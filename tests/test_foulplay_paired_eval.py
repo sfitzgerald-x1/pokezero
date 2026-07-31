@@ -223,5 +223,51 @@ class OpponentPriorsRefusalTest(unittest.TestCase):
         self.assertNotIn("--engine-opponent-priors", argv)
 
 
+class NoDuplicateDefinitionsTest(unittest.TestCase):
+    """Catches an editing accident that Python silently tolerates.
+
+    A bad amend spliced a second copy of this module's helpers and `main` into
+    the file. Python keeps the LAST definition, so the module still imported and
+    every test passed -- while the surviving `main` was the stale one and the
+    corrected code sat above it as dead lines. The commit message reported the
+    fix as landed.
+
+    There is no linter configured in this repo and no lint job in CI, so an
+    F811 would not be reported by anything. This asserts it directly, for the
+    two campaign scripts whose `main` is the actual entry point the launcher
+    shells out to.
+    """
+
+    def _duplicate_defs(self, relative):
+        import ast
+        from collections import Counter
+
+        tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        names = [
+            node.name for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]
+        return {name: n for name, n in Counter(names).items() if n > 1}
+
+    def test_paired_eval_defines_each_top_level_name_once(self) -> None:
+        self.assertEqual(self._duplicate_defs("scripts/foulplay_paired_eval.py"), {})
+
+    def test_power_report_defines_each_top_level_name_once(self) -> None:
+        self.assertEqual(self._duplicate_defs("scripts/foulplay_power_report.py"), {})
+
+    def test_the_refusal_comment_agrees_with_the_refusal(self) -> None:
+        # The spliced copy left a comment saying the ordering defect was live
+        # two lines above a SystemExit saying it was fixed. Whichever way that
+        # is resolved, they must not contradict each other.
+        source = (REPO_ROOT / "scripts" / "foulplay_paired_eval.py").read_text(
+            encoding="utf-8"
+        )
+        body = source[source.index("def main("):]
+        guard = body[: body.index("if args.opponent_priors:")]
+        self.assertNotIn("second switch onward", guard,
+                         "stale round-4 rationale is back in the live guard")
+        self.assertIn("CRATE-SIDE GATHER", guard)
+
+
 if __name__ == "__main__":
     unittest.main()
