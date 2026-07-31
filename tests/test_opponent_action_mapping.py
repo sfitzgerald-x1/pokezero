@@ -296,6 +296,99 @@ class OpponentActionMappingTest(unittest.TestCase):
         if not compared:
             self.skipTest("no committed round has rows for both seats")
 
+    def _opponent_party(self, row):
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.env import BattleStartOverride
+        from pokezero.engine_world import battle_spec_from_payload
+
+        game = {g.record.battle_id: g for g in self._corpus().games}[row.battle_id]
+        packed = {s: (game.record.true_teams.get(s) or {}).get("packed") for s in ("p1", "p2")}
+        world = battle_spec_from_payload(
+            row.public_materialization, BattleStartOverride(player_teams=packed),
+            dex=load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT),
+            approximate_sleep_turns=True, approximate_substitute_health=True,
+        )
+        return list(world.party_species["p2"])
+
+    def _switch_slots(self, row, state_str, ctx_extra):
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.env import BattleStartOverride
+        from pokezero.engine_world import battle_spec_from_payload
+
+        game = {g.record.battle_id: g for g in self._corpus().games}[row.battle_id]
+        packed = {s: (game.record.true_teams.get(s) or {}).get("packed") for s in ("p1", "p2")}
+        world = battle_spec_from_payload(
+            row.public_materialization, BattleStartOverride(player_teams=packed),
+            dex=load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT),
+            approximate_sleep_turns=True, approximate_substitute_health=True,
+        )
+        ctx = json.dumps({
+            "p1": list(world.party_species["p1"]),
+            "p2": list(world.party_species["p2"]),
+            "turn": int(row.public_materialization.get("turn") or 0),
+            **ctx_extra,
+        })
+        encoder = pokezero_search.LeafEncoder(
+            _tables_json(), _row_inputs(row), ctx, state_str
+        )
+        return {
+            d.split(" ", 1)[1]: i
+            for d, i in encoder.opponent_action_map(state_str)
+            if d.startswith("switch")
+        }
+
+    def test_multi_switch_request_order_needs_the_ctx_channel(self) -> None:
+        """The pin the committed corpus CANNOT provide, and B2's real gate.
+
+        Showdown's request order keeps the active at slot 0 and accumulates one
+        slot-0 swap per switch-in. The crate never receives pre-root protocol
+        lines, so it cannot replay that history; four attempts approximated it
+        in-crate and all four were wrong beyond a single switch. The golden
+        sample contains at most ONE opponent switch, so every earlier pin
+        passed with the defect present -- which is why this fixture constructs
+        a THREE-switch history instead of reading one.
+
+        `ctx.opponent_request_order` is the channel that fixes it. This asserts
+        both halves: that the in-crate approximation is genuinely wrong here
+        (or the test proves nothing), and that supplying the order corrects it.
+        """
+        cases = self._cases()
+        encoder, state_str, row = cases[0]
+        party = self._opponent_party(row)
+        if len(party) < 6:
+            self.skipTest("need a full opponent party to build a switch history")
+
+        def order_after(history):
+            order = list(party)
+            for species in history:
+                index = order.index(species)
+                if index:
+                    order[0], order[index] = order[index], order[0]
+            return order
+
+        # Ends on the state's real active, so the synthetic history is
+        # consistent with the position being mapped.
+        history = [party[2], party[5], party[0]]
+        expected = order_after(history)
+        bench = [s for s in expected if s != expected[0]]
+        truth = {species: 4 + n for n, species in enumerate(bench)}
+
+        approximated = self._switch_slots(row, state_str, {})
+        corrected = self._switch_slots(
+            row, state_str, {"opponent_request_order": expected}
+        )
+        self.assertNotEqual(
+            approximated, truth,
+            "fixture does not discriminate: the in-crate approximation already "
+            "matches, so this would pass with the defect present",
+        )
+        self.assertEqual(
+            corrected, truth,
+            "supplying the opponent's request order did not correct the mapping",
+        )
+
     def test_opponent_order_evolves_through_its_own_switches(self) -> None:
         """The pin for B2: an unevolved opponent order permutes every switch arm.
 

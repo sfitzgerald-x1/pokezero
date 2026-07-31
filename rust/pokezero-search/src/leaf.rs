@@ -599,6 +599,8 @@ pub(crate) struct LeafContext {
     /// benched mons' cached request-history PP is stale by their last
     /// stint's final action, so their base is the belief ledger below).
     root_active_party: [usize; 2],
+    /// Caller-supplied opponent root request order (empty when absent).
+    root_opponent_request_order: Vec<String>,
     /// The SELF side's belief-ledger PP charges per (species key, move id)
     /// (`belief_view.self_pokemon[*].move_uses` — the parser's public
     /// charging count, exact where the cached request-history PP is stale).
@@ -775,6 +777,24 @@ impl LeafContext {
             }
         }
         let root_turn = ctx.get("turn").and_then(Value::as_i64).unwrap_or(0);
+        // The opponent's ROOT REQUEST ORDER, supplied by the caller when it can
+        // compute it. This is the channel attempts 2 and 3 lacked: the crate
+        // never receives pre-root protocol lines, so it cannot replay the
+        // opponent's switch history itself, and every in-crate approximation
+        // has been wrong beyond one switch. Python already maintains exactly
+        // this permutation (determinization's `current_order`), so it is passed
+        // in rather than guessed.
+        let root_opponent_request_order: Vec<String> = ctx
+            .get("opponent_request_order")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(normalize_identifier)
+                    .collect()
+            })
+            .unwrap_or_default();
         let root_weather = md
             .get("weather")
             .and_then(Value::as_str)
@@ -797,6 +817,7 @@ impl LeafContext {
             root_meta,
             meta_ctx,
             root_active_party,
+            root_opponent_request_order,
             self_ledger_uses,
             root_turn,
             root_weather,
@@ -1697,6 +1718,16 @@ impl LeafContext {
         // whose opponent has already switched -- i.e. from the opponent's first
         // switch onward, which is most of a gen3 randbat. Applying the swap
         // reproduces the label order exactly.
+        // Prefer the caller's explicit order. The fallback below -- packed
+        // party order with the active swapped to slot 0 -- reproduces the
+        // request order only while the opponent has made AT MOST ONE
+        // switch-in, and is transposed from the second onward. Four review
+        // rounds landed on that; it is kept only so ad-hoc callers that cannot
+        // supply the order degrade to a documented approximation rather than
+        // to nothing.
+        if !self.root_opponent_request_order.is_empty() {
+            return self.root_opponent_request_order.clone();
+        }
         let engine_side = self.engine_side_index(false);
         let mut order = self.species_keys[engine_side].clone();
         let active = self.root_active_party[engine_side];

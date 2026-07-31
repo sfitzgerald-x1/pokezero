@@ -529,6 +529,60 @@ class EngineMctsStats:
         return payload
 
 
+def opponent_request_order(context, party_species) -> list[str] | None:
+    """The opponent's Showdown request order at this decision, or None.
+
+    Showdown keeps a player's active at request slot 0 and swaps the incoming
+    mon into slot 0 on every switch-in, so the request order is the party order
+    with one slot-0 swap accumulated per switch-in from battle start. That
+    order is the label space of the model's opponent action head
+    (`rollout._opponent_action_index` is the other seat's own action index), so
+    the crate needs it to gather opponent priors onto the right arms.
+
+    The crate cannot derive this itself: it never receives pre-root protocol
+    lines. Four in-crate approximations were each wrong beyond a single switch.
+    Here the history IS available -- the opponent's public active species per
+    round -- so it is computed once and passed through ctx.
+
+    Returns None rather than a guess whenever the history cannot be resolved
+    cleanly (unknown species, an active not in the sampled party, no
+    observations). A wrong order permutes opponent switch priors silently; the
+    crate's documented fallback is at least a KNOWN approximation.
+    """
+    from .determinization import (
+        _own_observations_by_decision_round,
+        _public_opponent_active_species,
+    )
+
+    try:
+        observations = _own_observations_by_decision_round(context)
+    except Exception:  # noqa: BLE001 - never break search over telemetry
+        return None
+    if not observations:
+        return None
+    order = [normalize_id(str(name)) for name in party_species]
+    if len(set(order)) != len(order):
+        # Duplicate species: slot-0 swaps are ambiguous by species name.
+        return None
+    seen_active: Optional[str] = None
+    for turn in sorted(observations):
+        active = _public_opponent_active_species(observations[turn])
+        if active is None:
+            continue
+        active = normalize_id(str(active))
+        if active == seen_active:
+            continue
+        seen_active = active
+        if active not in order:
+            return None
+        index = order.index(active)
+        if index:
+            order[0], order[index] = order[index], order[0]
+    if seen_active is None:
+        return None
+    return order
+
+
 class EngineMctsPolicy:
     """ContextAwarePolicy running poke-engine MCTS over belief-sampled worlds."""
 
@@ -1264,6 +1318,16 @@ class EngineMctsPolicy:
                     "p1": list(world.party_species["p1"]),
                     "p2": list(world.party_species["p2"]),
                     "turn": turn,
+                    **(
+                        {"opponent_request_order": opponent_order}
+                        if (opponent_order := opponent_request_order(
+                            context,
+                            world.party_species[
+                                "p2" if context.player_id == "p1" else "p1"
+                            ],
+                        ))
+                        else {}
+                    ),
                 }
             )
             world_seed = rng.getrandbits(63)

@@ -293,12 +293,14 @@ def main(argv=None) -> int:
     # switch-ins.
     if args.opponent_priors:
         raise SystemExit(
-            "--opponent-priors is REFUSED: the opponent action map's switch "
-            "ordering is known-wrong from the opponent's second switch onward "
-            "(see scripts/foulplay_paired_eval.py and the plan's section 0). "
-            "Cells B and E cannot be measured until it is verified against a "
-            "real checkpoint; a run now would report a confident delta computed "
-            "from permuted priors."
+            "--opponent-priors is REFUSED pending review. The switch-ordering "
+            "defect is fixed -- the opponent's request order is now computed "
+            "from its switch history and passed through ctx, pinned by a "
+            "three-switch test the golden corpus could not provide -- but the "
+            "fix has not cleared independent review, and nothing has run "
+            "against a real checkpoint. Four prior attempts each looked correct "
+            "under their own tests. Lift this only after review passes and the "
+            "section 8 in-image gate confirms applied priors end to end."
         )
 
     # HARD STOP before any game. A stale build does not error, it produces a

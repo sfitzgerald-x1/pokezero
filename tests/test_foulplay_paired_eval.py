@@ -192,11 +192,12 @@ class SeatBlockTest(unittest.TestCase):
 class OpponentPriorsRefusalTest(unittest.TestCase):
     """Cells B/E are refused until the opponent map's ordering is verified.
 
-    Four review rounds each found the opponent switch mapping still wrong. The
-    current known boundary, measured: correct while the opponent has made at
-    most one switch-in, transposed from the second onward. A run would not
-    fail -- it would report a confident paired delta computed from permuted
-    priors, and the campaign would read that as "opponent priors do not help".
+    The switch-ordering defect is fixed (the request order is computed from the
+    opponent's switch history and passed through ctx), but four prior attempts
+    each looked correct under their own tests, the fix has not cleared
+    independent review, and nothing has run against a real checkpoint. A wrong
+    mapping does not fail -- it reports a confident paired delta from permuted
+    priors, and the campaign reads that as "opponent priors do not help".
     """
 
     def test_opponent_priors_are_refused_not_silently_run(self) -> None:
@@ -208,7 +209,8 @@ class OpponentPriorsRefusalTest(unittest.TestCase):
             ])
         message = str(caught.exception)
         self.assertIn("REFUSED", message)
-        self.assertIn("second switch", message)
+        # The refusal must say what would lift it, not merely that it refused.
+        self.assertIn("review", message)
 
     def test_the_default_path_is_unaffected(self) -> None:
         # The refusal must not touch the nine cells that do not use the flag.
