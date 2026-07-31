@@ -384,9 +384,15 @@ def _acquire_fanin_publish_lock(base: Path, queue: Path, task: FanInTask) -> tup
     """Serialize one worker shard and recover only a proven-dead prior owner."""
     lock = _fanin_publish_lock_path(base)
     payload = {"schema_version": 1, "base": base.name, "task": _fanin_task_payload(task)}
-    for attempt in range(_FANIN_PUBLISH_LOCK_ATTEMPTS):
+    for _attempt in range(_FANIN_PUBLISH_LOCK_ATTEMPTS):
+        temporary = lock.parent / f".{lock.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
         try:
-            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with temporary.open("x", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.link(temporary, lock)
         except FileExistsError:
             owner = _read_fanin_publish_lock(base)
             if owner is None:
@@ -401,18 +407,14 @@ def _acquire_fanin_publish_lock(base: Path, queue: Path, task: FanInTask) -> tup
             _fsync_directory(lock.parent)
             time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
             continue
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            _fsync_directory(lock.parent)
-            stat = lock.stat()
-            return lock, (stat.st_dev, stat.st_ino)
         except Exception:
-            lock.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
             raise
+        finally:
+            temporary.unlink(missing_ok=True)
+        _fsync_directory(lock.parent)
+        stat = lock.stat()
+        return lock, (stat.st_dev, stat.st_ino)
     raise _FanInTransientError(f"fan-in publish lock for {base.name} did not stabilize after retries")
 
 
