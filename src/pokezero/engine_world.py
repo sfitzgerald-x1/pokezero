@@ -764,9 +764,10 @@ def _truant_volatile_decision(
     toggle; `truant_loafs` is the caller-side "acted last round -> loafs now" proxy that this
     replaces, so a payload `False` must OVERRIDE a proxy `True` rather than OR with it.
 
-    `None` means genuinely unknown -- no holder, or a truncated prefix whose switch-in was
-    never observed -- and falls back to the proxy, preserving previous behaviour instead of
-    asserting an acting phase the world cannot support.
+    `None` means no phase assertion: no holder, a truncated prefix, or a full-prefix Trace
+    acquisition whose residual event-queue membership is not public-derivable. It falls back
+    to the legacy proxy; this preserves previous behaviour but is not a fail-closed
+    materialization block.
     """
     phase = side_payload.get("truantPhase")
     if isinstance(phase, bool):
@@ -1107,9 +1108,9 @@ def _build_side_spec(
     # flinch, freeze, recharge, a switch -- after which it is inverted for the rest of the
     # stint. That single failure produced the 48-row loaf-phase family.
     #
-    # `None` means genuinely unknown (no holder, or a truncated prefix whose switch-in was
-    # never seen) and falls back to the caller's value, preserving previous behaviour rather
-    # than asserting an acting phase we cannot support.
+    # `None` means no phase assertion (no holder, a truncated prefix, or a full-prefix Trace
+    # acquisition whose residual event-queue membership is ambiguous). It falls back to the
+    # caller's legacy proxy; this is intentionally compatible, not fail-closed.
     if _truant_volatile_decision(side_payload, truant_loafs):
         volatiles = volatiles + ["truant"]
         supported = supported | {"truant"}

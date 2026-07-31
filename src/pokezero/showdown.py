@@ -1032,6 +1032,11 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
+    # Public parser chronology needed across snapshots taken after ``|upkeep|`` but before a
+    # forced replacement and the following ``|turn|``. A replacement entered after that
+    # residual, so its next turn-boundary flip must be skipped.
+    post_upkeep_window: bool = False
+    truant_skip_next_flip: tuple[str, ...] = ()
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1386,6 +1391,10 @@ class _ReplayParser:
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
         }
+        parser._post_upkeep_window = bool(snapshot.post_upkeep_window)
+        parser._truant_skip_next_flip = {
+            slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
+        }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
         }
@@ -1449,45 +1458,13 @@ class _ReplayParser:
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
-                # gen3 Truant phase for the INCOMING mon. Truant's `onSwitchIn` runs only for
-                # a mon that already has the ability, and sets
-                # `truantTurn = this.turn !== 0` -- so a mid-battle switch-in starts on the
-                # LOAF side of the toggle and a turn-0 lead on the ACT side. Both then take
-                # one `onResidual` flip before their first move opportunity, which is why both
-                # end up ACTING on it. Seeded here rather than inferred from later behaviour
-                # because the switch line is the event the sim itself keys on.
-                #
-                # Species is sufficient and unambiguous: `slakoth` and `slaking` are the only
-                # gen3 Truant lines and both are MONO-ability, so no reveal is needed. A mon
-                # that acquires Truant later by Trace is handled at the `-ability` line, not
-                # here -- at ITS switch-in it did not have the ability, so Truant's onSwitchIn
-                # never ran for it and its `truantTurn` is still the `false` that
-                # `sim/pokemon.ts` resets on entry.
-                # gen3 seeds the phase at switch-in: `truantTurn = this.turn !== 0`. Both a
-                # turn-0 lead (False) and a mid-battle switch-in (True) then take exactly one
-                # `onResidual` flip before their first move opportunity, which is why both end
-                # up ACTING on it -- the `turn !== 0` term is that compensation.
-                #
-                # Reproducing it in a replay needs the flip to land on the same side of the
-                # residual boundary, and the per-`|turn|` flip below is skipped for turn 1
-                # because there is no end-of-turn-0 residual to mirror. Getting that wrong
-                # inverted the lead's parity and produced divergences at the first boundary.
-                #
-                # Species is decisive: `slakoth` and `slaking` are the only gen3 Truant lines
-                # and both are mono-ability. A mon that acquires Truant later by Trace is
-                # seeded at its `-ability` line instead.
-                #
-                # Deriving it was tried and withdrawn. gen3 seeds `truantTurn = this.turn != 0`
-                # at switch-in, which is correct for the sim but depends, in a REPLAY, on the
-                # flip landing on the right side of the residual boundary. It did not for a
-                # turn-0 lead -- there is no "end of turn 0" residual to flip -- and the
-                # resulting inverted parity produced divergences at the very first boundary,
-                # trading rows rather than fixing them.
-                #
-                # Unknown is the honest state and it is not a loss: per the same gen3 rule
-                # BOTH a lead and a mid-battle switch-in act on their first move opportunity,
-                # which is what the downstream proxy already assumes. The phase becomes known
-                # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
+                # Native Slakoth and Slaking are mono-ability, so species proves that Truant's
+                # switch-in hook ran and `truantTurn = this.turn !== 0` is an honest seed. A
+                # post-upkeep forced replacement missed the residual that just ran, so its
+                # first following `|turn|` must not flip the bit again. Trace acquisition is
+                # different: retained current-source cases prove that identical public line
+                # placement can produce opposite first phases, so the `-ability` handler leaves
+                # traced Truant UNKNOWN until a public move or Truant `cant` anchors it.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
                     if self._post_upkeep_window:
@@ -1994,29 +1971,18 @@ class _ReplayParser:
             normalized = _normalize_identifier(copied)
             self.traced_ability[slot] = normalized
             if normalized == "truant":
-                # Traced Truant is deliberately NOT given a derived starting parity, even
-                # though the parity is derivable and was probed. Sim-verified behaviour:
+                # Do not derive a boolean phase from the Trace line. Current-source probes show
+                # that publicly similar pre-upkeep acquisitions can start on opposite phases:
+                # a one-sided action switch (3400443/2) loafs next turn, while a simultaneous
+                # Porygon2/Slaking switch (2200291/41) acts. Event-queue membership, not just
+                # line position, decides whether copied Truant receives that residual.
                 #
-                #   lead (turn 0) acquisition  -> ACTS on its first move turn
-                #   mid-battle acquisition     -> LOAFS on its first move turn
-                #   re-entry re-traces         -> fresh acquisition, parity resets
-                #
-                # which composes from patch 32 (a copied ability's Start event does not fire,
-                # so Truant's `onSwitchIn` never runs for a tracer), `sim/pokemon.ts` leaving
-                # `truantTurn` false on entry, and `onResidual` flipping every turn end.
-                #
-                # Seeding `false` here and counting `|turn|` flips reproduces that in the
-                # common case and MISSES when the acquisition switch-in is a mid-turn
-                # replacement after a faint: there is no `|turn|` boundary between the
-                # acquisition and the next move, so the flip count is short by one and the
-                # parity inverts for the rest of the stint. Measured: it cost one new
-                # divergence (2200291/41) while fixing three.
-                #
-                # The anchors below establish the traced parity from the sim's own published
-                # behaviour instead, which is exact and needs no flip accounting. Marking the
-                # holder is all that is required here.
-                if self.truant_phase.get(slot) is None:
-                    pass  # phase stays UNKNOWN until the first anchor; see _anchor_truant_phase
+                # Preserve only the public holder fact. The first own move or Truant ``cant``
+                # line anchors the phase exactly, after which normal public turn flips apply.
+                # This is the measured Z13.3 withdrawal: seeding here fixed selected rows but
+                # created 2200291/41, while leaving it unknown created no new identity.
+                self.truant_phase[slot] = None
+                self._truant_skip_next_flip.discard(slot)
             elif self.truant_phase.get(slot) is not None:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
@@ -2347,6 +2313,8 @@ class _ReplayParser:
             live_type_override=dict(self.live_type_override),
             traced_ability=dict(self.traced_ability),
             truant_phase=dict(self.truant_phase),
+            post_upkeep_window=self._post_upkeep_window,
+            truant_skip_next_flip=tuple(sorted(self._truant_skip_next_flip)),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
