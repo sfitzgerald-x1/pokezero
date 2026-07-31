@@ -1805,13 +1805,21 @@ class _ReplayParser:
         if damage <= 0:
             return
         # Showdown's percentage public form always uses a /100 denominator. Its damage delta is
-        # rounded from hidden absolute HP, so it cannot prove an exact Toxic stage. Every other
+        # rounded from hidden absolute HP, so it cannot prove an arbitrary Toxic stage. Every other
         # denominator is exact HP and must be an integral Gen 3 Toxic unit.
         if max_hp == 100:
             # `/100` is the player-visible percentage form, not a Gen 3 HP
-            # denominator. Do not round it back into a hidden toxic stage. A
-            # continuously observed counter remains known from its public
-            # status/switch/turn history; an incomplete prefix remains unknown.
+            # denominator. Do not round it back into a hidden toxic stage.
+            #
+            # There is one public fact that survives that ambiguity: a Toxic
+            # mon with a publicly established reset counter (switch/drag,
+            # cure, or status replacement) starts its next residual at stage
+            # one. Gen 3 resets ``statusState.stage`` to zero on entry, then
+            # increments before applying the first Toxic tick. Promoting only
+            # this exact 0 -> 1 transition repairs rounded re-entry without
+            # inventing a stage for a legacy/incomplete prefix.
+            if self.toxic_stage_known[slot] and self.toxic_stage[slot] == 0:
+                self.toxic_stage[slot] = 1
             return
         unit = max(1, max_hp // 16)
         # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a

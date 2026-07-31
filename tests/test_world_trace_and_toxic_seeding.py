@@ -37,10 +37,96 @@ from pokezero.showdown import _ReplayParser, _update_toxic_stage
 class ToxicStageParserTest(unittest.TestCase):
     """W2, parser half — which status lines end the ramp."""
 
+    @staticmethod
+    def _percentage_reentry_parser(event: str, *, include_second_tick: bool = False) -> _ReplayParser:
+        """Return a public `/100` Toxic re-entry through an ordinary or forced switch.
+
+        The rounded stream cannot reveal the exact HP unit, but the switch/drag
+        line proves Gen 3 reset the Toxic counter. The first residual after that
+        public reset therefore proves stage one; the second proves stage two.
+        """
+
+        parser = _ReplayParser(f"toxic-percentage-{event}")
+        parser.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|95/100 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                f"|{event}|p1a: Zapdos|Zapdos, L78, M|100/100",
+                "|upkeep",
+                "|turn|3",
+                f"|{event}|p1a: Tauros|Tauros, L80, M|90/100 tox",
+                "|-damage|p1a: Tauros|85/100 tox|[from] psn",
+            ]
+        )
+        if include_second_tick:
+            parser.feed(
+                [
+                    "|upkeep",
+                    "|turn|4",
+                    "|-damage|p1a: Tauros|75/100 tox|[from] psn",
+                ]
+            )
+        return parser
+
     def test_a_fresh_tox_starts_the_ramp_at_one(self) -> None:
         stage = {"p1": 0, "p2": 0}
         _update_toxic_stage(["", "-status", "p1a: Zapdos", "tox"], stage)
         self.assertEqual(stage["p1"], 1)
+
+    def test_percentage_reentry_first_tick_reseeds_and_materializes_after_switch_or_drag(self) -> None:
+        # The parser stage is the residual-side feature convention. The world
+        # consumes one less at a request boundary, so turn 4's stage 2 becomes
+        # the engine's ToxicCount 1 after the first post-entry residual.
+        for event in ("switch", "drag"):
+            with self.subTest(event=event):
+                parser = self._percentage_reentry_parser(event)
+                self.assertEqual(parser.toxic_stage["p1"], 1)
+                self.assertTrue(parser.toxic_stage_known["p1"])
+                parser.feed(["|upkeep", "|turn|4"])
+                self.assertEqual(parser.toxic_stage["p1"], 2)
+                self.assertEqual(_materialization_toxic_stage(parser.snapshot(), "p1"), 1)
+
+    def test_percentage_reentry_second_tick_preserves_the_public_ramp_after_switch_or_drag(self) -> None:
+        for event in ("switch", "drag"):
+            with self.subTest(event=event):
+                parser = self._percentage_reentry_parser(event, include_second_tick=True)
+                self.assertEqual(parser.toxic_stage["p1"], 2)
+                self.assertTrue(parser.toxic_stage_known["p1"])
+                parser.feed(["|upkeep", "|turn|5"])
+                self.assertEqual(parser.toxic_stage["p1"], 3)
+                self.assertEqual(_materialization_toxic_stage(parser.snapshot(), "p1"), 2)
+
+    def test_percentage_fresh_status_and_reset_controls_do_not_overreach(self) -> None:
+        # A freshly applied Toxic already has stage one before its first tick;
+        # rounded damage must not advance it early.
+        fresh = _ReplayParser("toxic-percentage-fresh")
+        fresh.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|95/100 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(fresh.toxic_stage["p1"], 1)
+
+        # Cure and an ordinary switch retire the old counter; the incoming
+        # non-Toxic Pokemon remains a known public zero.
+        fresh.feed(
+            [
+                "|-curestatus|p1a: Tauros|tox",
+                "|switch|p1a: Zapdos|Zapdos, L78, M|100/100",
+            ]
+        )
+        self.assertEqual(fresh.toxic_stage["p1"], 0)
+        self.assertTrue(fresh.toxic_stage_known["p1"])
+        self.assertEqual(_materialization_toxic_stage(fresh.snapshot(), "p1"), 0)
 
     def test_a_replacing_status_ends_the_ramp(self) -> None:
         # THE FIX. Rest is the reachable case: `|-status|<mon>|slp|[from] move: Rest` on an
