@@ -194,15 +194,16 @@ def observed_direct_hit(row: Mapping[str, Any]) -> DirectHit | None:
                     ko_clamped=first_direct.ko_clamped,
                 )
             continue
-        if tag != "-damage" or len(parts) < 4:
+        if tag not in {"-damage", "-heal", "-sethp"} or len(parts) < 4:
             continue
         target = _slot(parts[2])
         new_hp = _hp(parts[3])
         before = running.get(target)
         running[target] = new_hp
-        if _has_from(parts):
+        if tag != "-damage" or _has_from(parts):
             # Residual and entry-hazard damage are not move hits, but they
-            # still advance the HP ledger used by the next direct hit.
+            # still advance the HP ledger used by the next direct hit. Heals
+            # and Pain Split's -sethp events do the same.
             continue
         if before is None or active_move is None or target == active_move[0]:
             continue
@@ -484,7 +485,12 @@ def _branch_direct_hit(
         if parts[1] in {"switch", "drag", "replace"} and len(parts) > 4 and _slot(parts[2]) == target:
             running = _hp(parts[4])
             continue
-        if parts[1] != "-damage" or len(parts) < 4 or _slot(parts[2]) != target:
+        tag = parts[1]
+        if (
+            tag not in {"-damage", "-heal", "-sethp"}
+            or len(parts) < 4
+            or _slot(parts[2]) != target
+        ):
             continue
         new_hp = _hp(parts[3])
         if running is None:
@@ -492,7 +498,7 @@ def _branch_direct_hit(
             continue
         damage = running - new_hp
         running = new_hp
-        if not _has_from(parts):
+        if tag == "-damage" and not _has_from(parts):
             return NativeDirectHit(
                 damage=damage,
                 event_index=event_index,
@@ -773,6 +779,18 @@ def _candidate_report(
                 branch_row["unsupported_reason"] = (
                     "damage_bearing_branch_without_observed_target_direct_damage"
                 )
+            branch_rows.append(branch_row)
+            continue
+        if hit.damage <= 0:
+            branch_row.update(
+                {
+                    "comparison_status": "unsupported",
+                    "unsupported_reason": "nonpositive_target_direct_damage",
+                    "criticality": "not_applicable",
+                    "direct_damage": None,
+                    "computed_hp_delta": hit.damage,
+                }
+            )
             branch_rows.append(branch_row)
             continue
         target_fainted = _branch_target_fainted(events, target_label)
@@ -1071,6 +1089,11 @@ def _candidate_report(
 
 
 def _branch_report(row: Mapping[str, Any], direct: DirectHit, dex: ShowdownDex) -> dict[str, object]:
+    if direct.damage <= 0:
+        return {
+            "verdict": "comparison_limit",
+            "reason": "nonpositive_observed_direct_damage",
+        }
     state_text = row.get("engine_state")
     choices = row.get("choices")
     if not isinstance(state_text, str) or not isinstance(choices, Mapping):
@@ -1184,7 +1207,7 @@ def _path_label(path: Path) -> str:
     try:
         return str(resolved.relative_to(REPO_ROOT))
     except ValueError:
-        return str(resolved)
+        return f"<external>/{resolved.name}"
 
 
 def _input_report_provenance(paths: Iterable[Path]) -> list[dict[str, str]]:
@@ -1334,14 +1357,13 @@ def _command_provenance(
     *,
     reports: Sequence[Mapping[str, str]],
     targets: Iterable[tuple[int, int]],
-    showdown_root: str,
 ) -> list[str]:
     command = ["python", "scripts/attest_damage_arithmetic_tail.py"]
     for report in reports:
         command.extend(("--report", str(report["path"])))
     for seed, step in sorted(targets):
         command.extend(("--target", f"{seed}/{step}"))
-    command.extend(("--showdown-root", showdown_root))
+    command.extend(("--showdown-root", "<showdown-root>"))
     return command
 
 
@@ -1381,7 +1403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload = {
         "schema_version": "pokezero.damage-arithmetic-tail-attestation/v4",
         "command": _command_provenance(
-            reports=input_reports, targets=targets, showdown_root=args.showdown_root
+            reports=input_reports,
+            targets=targets,
         ),
         "source": source,
         "showdown_source": showdown_source,

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pokezero.dex import normalize_id, showdown_dex_from_payload
+from pokezero.dex import load_showdown_dex, normalize_id, showdown_dex_from_payload
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
 from pokezero.poke_engine_adapter import (
     BattleSpec,
@@ -229,6 +229,40 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
         self.assertIsNotNone(hit)
         assert hit is not None
         self.assertEqual(hit.damage, 122)
+
+    def test_heal_advances_hp_ledger_before_direct_hit(self) -> None:
+        row = {
+            "pre_features": {"p1_hp": 50, "p2_hp": 100},
+            "protocol": [
+                "|move|p1a: Blissey|Soft-Boiled|p1a: Blissey",
+                "|-heal|p1a: Blissey|100/100",
+                "|move|p2a: Medicham|Brick Break|p1a: Blissey",
+                "|-damage|p1a: Blissey|70/100",
+            ],
+        }
+
+        hit = observed_direct_hit(row)
+
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertEqual(hit.damage, 30)
+
+    def test_sethp_advances_hp_ledger_before_direct_hit(self) -> None:
+        row = {
+            "pre_features": {"p1_hp": 50, "p2_hp": 100},
+            "protocol": [
+                "|move|p1a: Blissey|Pain Split|p2a: Medicham",
+                "|-sethp|p1a: Blissey|79/100",
+                "|move|p2a: Medicham|Brick Break|p1a: Blissey",
+                "|-damage|p1a: Blissey|40/100",
+            ],
+        }
+
+        hit = observed_direct_hit(row)
+
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertEqual(hit.damage, 39)
 
     def test_first_direct_hit_is_not_replaced_or_later_status_mutated(self) -> None:
         row = {
@@ -644,6 +678,81 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
             "oracle_context_failed:BaseException",
         )
 
+    def test_native_heal_and_sethp_advance_hp_ledger(self) -> None:
+        heal_hit = attestation._branch_direct_hit(
+            [
+                "|-heal|p2a: Defender|100/100",
+                "|-damage|p2a: Defender|70/100",
+            ],
+            "p2",
+            pre_hit_hp=50,
+        )
+        sethp_hit = attestation._branch_direct_hit(
+            [
+                "|-sethp|p2a: Defender|79/100",
+                "|-damage|p2a: Defender|40/100",
+            ],
+            "p2",
+            pre_hit_hp=50,
+        )
+
+        self.assertIsNotNone(heal_hit)
+        self.assertIsNotNone(sethp_hit)
+        assert heal_hit is not None
+        assert sethp_hit is not None
+        self.assertEqual(heal_hit.damage, 30)
+        self.assertEqual(sethp_hit.damage, 39)
+
+    def test_nonpositive_direct_damage_fails_closed(self) -> None:
+        class Search:
+            @staticmethod
+            def branch_events(*_args: object) -> str:
+                return json.dumps(
+                    {
+                        "branches": [
+                            {
+                                "percentage": 100,
+                                "events": ["|-damage|p2a: Defender|120/100"],
+                                "lossy": [],
+                            }
+                        ]
+                    }
+                )
+
+        report = _candidate_report(
+            candidate_index=0,
+            candidate_state="state",
+            native_engine=object(),
+            native_search=Search(),
+            side_one_choice="sludgebomb",
+            side_two_choice="splash",
+            mapper_context="{}",
+            direct=DirectHit("p1", "p2", "sludgebomb", 30, False, None),
+            dex=self._dex(),
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            pre_hit_hp=100,
+        )
+
+        self.assertEqual(report["verdict"], "comparison_limit")
+        self.assertEqual(report["branch_population"]["unsupported"], 1)
+        self.assertEqual(
+            report["branches"][0]["unsupported_reason"],
+            "nonpositive_target_direct_damage",
+        )
+        self.assertEqual(report["branches"][0]["computed_hp_delta"], -20)
+        self.assertEqual(report["rendered_direct_damages"], [])
+        self.assertEqual(
+            _branch_report(
+                {},
+                DirectHit("p1", "p2", "sludgebomb", 0, False, None),
+                self._dex(),
+            ),
+            {
+                "verdict": "comparison_limit",
+                "reason": "nonpositive_observed_direct_damage",
+            },
+        )
+
     def test_slot_sides_are_required_and_inverted_orientation_reaches_native_correctly(self) -> None:
         self.assertEqual(_validated_slot_sides({}), (None, "missing_slot_sides"))
         self.assertEqual(
@@ -1004,6 +1113,22 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
             "weatherball",
         }.isdisjoint(EXACT_SUPPORTED_MOVE_SPECS))
 
+    def test_supported_move_specs_match_loaded_gen3_dex(self) -> None:
+        showdown_root = Path(
+            os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT
+        )
+        if not (showdown_root / "dist" / "sim" / "index.js").is_file():
+            self.skipTest(f"built Showdown unavailable: {showdown_root}")
+        dex = load_showdown_dex(str(showdown_root))
+
+        for move_id, expected in EXACT_SUPPORTED_MOVE_SPECS.items():
+            move = dex.move_info(move_id)
+            self.assertIsNotNone(move, move_id)
+            assert move is not None
+            self.assertEqual(normalize_id(move.type), expected["type"], move_id)
+            self.assertEqual(move.gen3_category, expected["category"], move_id)
+            self.assertEqual(move.base_power, expected["base_power"], move_id)
+
     def test_target_selection_requires_the_transition_diverged_shape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / "report.json"
@@ -1152,7 +1277,7 @@ class DamageArithmeticTailAttestationTests(unittest.TestCase):
         self.assertEqual(payload["input_reports"], [{"path": report_label, "sha256": report_hash}])
         self.assertEqual(payload["command"], [
             "python", "scripts/attest_damage_arithmetic_tail.py", "--report", report_label,
-            "--target", "1/4", "--target", "2/3", "--showdown-root", "showdown",
+            "--target", "1/4", "--target", "2/3", "--showdown-root", "<showdown-root>",
         ])
         self.assertEqual([row["verdict"] for row in payload["targets"]], ["comparison_limit", "comparison_limit"])
         self.assertEqual(payload["showdown_source"]["content_sha256"], "c" * 64)

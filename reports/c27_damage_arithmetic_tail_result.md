@@ -77,6 +77,13 @@ a native-arithmetic disagreement nor a clearance: it identifies an incomplete
 transcription or mismatched captured context and requires separate
 investigation.
 
+The narrower `fixed_single_roll_composition` verdict requires a recorded
+secondary status, exactly one rendered nonterminal damage value in the observed
+criticality partition, an observed legal direct roll different from that value,
+and no rendered secondary branch carrying the observed roll. It identifies
+fixed branch composition for that retained context only; it does not establish
+a shared arithmetic defect or license a production change by itself.
+
 ## Historical Transcription (Unverified)
 
 | Target | Showdown damage | Oracle legal rolls | Rust maximum | Secondary |
