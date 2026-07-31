@@ -31,5 +31,8 @@ jobs:
       - name: Assert NumPy-backed cache dependency
         run: python -c "import numpy; print(numpy.__version__)"
 
+      - name: Assert worker workflow stays Torch-free
+        run: python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+
       - name: Run fan-in crash matrix
         run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant

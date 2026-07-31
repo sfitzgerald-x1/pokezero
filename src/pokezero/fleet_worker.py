@@ -68,15 +68,20 @@ out of scope.
 from __future__ import annotations
 
 import json
+import hashlib
+import errno
 import os
 import shlex
 import shutil
 import socket
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+import fcntl
 
 
 @dataclass(frozen=True)
@@ -89,16 +94,21 @@ class TaskManifest:
     seed: int
     out: Path
     policy: str
+    claim_token: str = ""
 
 
 FANIN_MANIFEST_NAME = "fanin-manifest.json"
-FANIN_MANIFEST_SCHEMA_VERSION = 1
+FANIN_MANIFEST_SCHEMA_VERSION = 2
 _FANIN_MANIFEST_KIND = "pokezero-fanin-shard"
 _FANIN_STAGING_OWNER_SUFFIX = ".owner.json"
+_FANIN_STAGING_LEASE_SUFFIX = ".producer-lease.json"
 _FANIN_PUBLISH_LOCK_SUFFIX = ".publish-lock.json"
+_FANIN_PUBLISH_GUARD_SUFFIX = ".publish-guard"
+_FANIN_TASK_LOCK_DIRECTORY = ".fanin-task-locks"
 _SELECTED_FANIN_READ_ATTEMPTS = 3
 _SELECTED_FANIN_RETRY_SECONDS = 0.01
 _FANIN_PUBLISH_LOCK_ATTEMPTS = 3
+_FANIN_PRODUCER_LEASE_SECONDS = 60.0
 
 
 class FanInValidationError(ValueError):
@@ -117,6 +127,10 @@ class FanInTaskConflictError(FanInTaskValidationError):
     """The claimed task contradicts metadata already committed for that task ID."""
 
 
+class FanInRouteConflictError(FanInInventoryValidationError):
+    """Accepted input names a different producer route than the current claim."""
+
+
 class _SelectedFanInVersionVanishedError(RuntimeError):
     """A selected immutable version vanished while its files were being read."""
 
@@ -131,17 +145,15 @@ class _ClaimRevokedError(RuntimeError):
 
 @dataclass(frozen=True)
 class FanInTask:
-    """Queue-content identity durably included in a fan-in shard version.
-
-    Output and policy routes are intentionally not part of the cumulative cache
-    identity; canonical done markers validate those producer routes separately.
-    """
+    """Queue identity and producer route durably included in a fan-in shard."""
 
     task_id: str
     iteration: int
     offset: int
     count: int
     seed: int
+    out: str
+    policy: str
 
     @property
     def offset_stop(self) -> int:
@@ -242,7 +254,10 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
         except OSError:
             continue  # lost the race; try the next manifest
         try:
-            return _parse_manifest(claim, candidate.name)
+            task = _parse_manifest(claim, candidate.name)
+            _sweep_orphaned_claim_tokens(claim.parent, candidate.name)
+            token = _write_claim_token(claim)
+            return TaskManifest(**{**task.__dict__, "claim_token": token})
         except ValueError:
             # Malformed manifest: park it in failed/ so the controller's attempt
             # bound decides, rather than looping on it forever.
@@ -253,6 +268,67 @@ def claim_next_task(queue: Path, worker_id: str) -> TaskManifest | None:
                 pass
             continue
     return None
+
+
+def _claim_token_path(claim: Path) -> Path:
+    return claim.parent / f".{claim.name}.lease.json"
+
+
+def _sweep_orphaned_claim_tokens(claimed: Path, task_id: str) -> None:
+    for lease in claimed.glob(f".{task_id}.*.lease.json"):
+        claim_name = lease.name.removeprefix(".").removesuffix(".lease.json")
+        if not (claimed / claim_name).exists():
+            lease.unlink(missing_ok=True)
+
+
+def _write_claim_token(claim: Path) -> str:
+    """Record a fresh claimant generation so path reuse cannot revive a publisher."""
+    token = uuid.uuid4().hex
+    lease = _claim_token_path(claim)
+    temporary = lease.parent / f".{lease.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    payload = {"schema_version": 1, "claim": claim.name, "token": token}
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, lease)
+        _fsync_directory(lease.parent)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    if not claim.exists():
+        raise ValueError(f"claim disappeared before its lease was recorded: {claim}")
+    return token
+
+
+def _claim_token_is_current(task: TaskManifest) -> bool:
+    return _claim_token_is_live(task.claim_path, task.claim_token)
+
+
+def _claim_token_is_live(claim: Path, token: str) -> bool:
+    if not token or not claim.exists():
+        return False
+    try:
+        payload = json.loads(_claim_token_path(claim).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload == {"schema_version": 1, "claim": claim.name, "token": token}
+    )
+
+
+def _remove_claim_token(task: TaskManifest) -> None:
+    """Remove only this claimant generation's sidecar after terminal handling."""
+    lease = _claim_token_path(task.claim_path)
+    try:
+        payload = json.loads(lease.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if payload == {"schema_version": 1, "claim": task.claim_path.name, "token": task.claim_token}:
+        lease.unlink(missing_ok=True)
 
 
 def _sanitize_worker_id(worker: str) -> str:
@@ -274,7 +350,16 @@ def _fanin_staging_owner_path(staging: Path) -> Path:
     return staging.parent / f"{staging.name}{_FANIN_STAGING_OWNER_SUFFIX}"
 
 
-def _write_fanin_staging_owner(staging: Path, task: FanInTask) -> Path:
+def _fanin_staging_lease_path(staging: Path) -> Path:
+    return staging.parent / f"{staging.name}{_FANIN_STAGING_LEASE_SUFFIX}"
+
+
+def _write_fanin_staging_owner(
+    staging: Path,
+    task: FanInTask,
+    *,
+    producer_token: str = "",
+) -> Path:
     """Durably bind an exact staging path to its task before materialization.
 
     The sidecar is adjacent to ``staging`` rather than inside it, so a pod kill
@@ -285,9 +370,10 @@ def _write_fanin_staging_owner(staging: Path, task: FanInTask) -> Path:
     owner = _fanin_staging_owner_path(staging)
     temporary = owner.parent / f".{owner.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
     payload = {
-        "schema_version": 2,
+        "schema_version": 4,
         "staging": staging.name,
         "task": _fanin_task_payload(task),
+        "producer_token": producer_token,
     }
     try:
         with temporary.open("x", encoding="utf-8") as handle:
@@ -303,26 +389,96 @@ def _write_fanin_staging_owner(staging: Path, task: FanInTask) -> Path:
     return owner
 
 
-def _read_fanin_staging_owner(staging: Path) -> FanInTask | None:
-    """Return a sidecar owner only when it names this exact staging path."""
+def _read_fanin_staging_owner_record(staging: Path) -> tuple[FanInTask, str] | None:
+    """Return sidecar ownership only when it names this exact staging path."""
     try:
         payload = json.loads(_fanin_staging_owner_path(staging).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "task"}:
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version", "staging", "task", "producer_token",
+    }:
         return None
-    if payload["schema_version"] != 2 or payload["staging"] != staging.name or not isinstance(payload["task"], dict):
+    if (
+        payload["schema_version"] != 4
+        or payload["staging"] != staging.name
+        or not isinstance(payload["task"], dict)
+        or not isinstance(payload.get("producer_token"), str)
+    ):
         return None
     task = payload["task"]
-    if set(task) != {"task_id", "iteration", "offset", "count", "seed"}:
+    if set(task) != {"task_id", "iteration", "offset", "count", "seed", "out", "policy"}:
         return None
     values = (task["iteration"], task["offset"], task["count"], task["seed"])
-    if not isinstance(task["task_id"], str) or not task["task_id"] or not all(_is_int(value) for value in values):
+    if (
+        not isinstance(task["task_id"], str)
+        or not task["task_id"]
+        or not all(_is_int(value) for value in values)
+        or not isinstance(task["out"], str)
+        or not task["out"]
+        or not isinstance(task["policy"], str)
+        or not task["policy"]
+    ):
         return None
-    candidate = FanInTask(task["task_id"], *values)
+    candidate = FanInTask(task["task_id"], *values, task["out"], task["policy"])
     if candidate.iteration < 0 or candidate.offset < 0 or candidate.count <= 0 or candidate.seed < 0:
         return None
-    return candidate
+    return candidate, payload["producer_token"]
+
+
+def _read_fanin_staging_owner(staging: Path) -> FanInTask | None:
+    record = _read_fanin_staging_owner_record(staging)
+    return record[0] if record is not None else None
+
+
+def _refresh_fanin_staging_lease(staging: Path, producer_token: str) -> None:
+    if not producer_token:
+        return
+    lease = _fanin_staging_lease_path(staging)
+    temporary = lease.parent / f".{lease.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    payload = {
+        "schema_version": 1,
+        "staging": staging.name,
+        "producer_token": producer_token,
+        "renewed_at": time.time(),
+    }
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, lease)
+        _fsync_directory(lease.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _fanin_staging_lease_is_active(staging: Path, producer_token: str) -> bool:
+    if not producer_token:
+        return False
+    try:
+        payload = json.loads(_fanin_staging_lease_path(staging).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "producer_token", "renewed_at"}:
+        return False
+    renewed_at = payload["renewed_at"]
+    return (
+        payload["schema_version"] == 1
+        and payload["staging"] == staging.name
+        and payload["producer_token"] == producer_token
+        and isinstance(renewed_at, (int, float))
+        and not isinstance(renewed_at, bool)
+        and time.time() - renewed_at <= _FANIN_PRODUCER_LEASE_SECONDS
+    )
+
+
+def _remove_fanin_staging_lease(staging: Path, producer_token: str) -> None:
+    if not producer_token:
+        return
+    if _fanin_staging_lease_is_active(staging, producer_token):
+        _fanin_staging_lease_path(staging).unlink(missing_ok=True)
 
 
 def _has_live_claim(queue: Path, task_id: str) -> bool:
@@ -335,7 +491,7 @@ def _has_live_claim(queue: Path, task_id: str) -> bool:
 
 
 def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
-    """Reclaim only staging whose durable owner no longer has a live claim.
+    """Reclaim only inactive producer leases whose owners no longer have claims.
 
     Staging with no valid owner record is deliberately retained: a different
     worker must never guess that an in-progress producer is dead.
@@ -343,48 +499,118 @@ def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
     for sidecar in Path(cache_dir).glob(f".shard-w*-v*.tmp.*{_FANIN_STAGING_OWNER_SUFFIX}"):
         staging_name = sidecar.name.removesuffix(_FANIN_STAGING_OWNER_SUFFIX)
         candidate = sidecar.with_name(staging_name)
-        owner = _read_fanin_staging_owner(candidate)
-        if owner is None or _has_live_claim(queue, owner.task_id):
+        record = _read_fanin_staging_owner_record(candidate)
+        if record is None:
+            continue
+        owner, producer_token = record
+        if _fanin_staging_lease_is_active(candidate, producer_token) or _has_live_claim(queue, owner.task_id):
             continue
         # The missing claim proves this is not a live producer. A new retry
         # creates a distinct staging path before doing any materialization.
         if candidate.is_dir():
             shutil.rmtree(candidate, ignore_errors=True)
         sidecar.unlink(missing_ok=True)
+        _fanin_staging_lease_path(candidate).unlink(missing_ok=True)
 
 
 def _fanin_publish_lock_path(base: Path) -> Path:
     return base.parent / f".{base.name}{_FANIN_PUBLISH_LOCK_SUFFIX}"
 
 
-def _read_fanin_publish_lock(base: Path) -> FanInTask | None:
+def _fanin_publish_guard_path(base: Path) -> Path:
+    return base.parent / f".{base.name}{_FANIN_PUBLISH_GUARD_SUFFIX}"
+
+
+def _acquire_fanin_guard(path: Path, *, nonblocking: bool = False) -> Any:
+    """Serialize lock-record mutation; flock releases automatically on pod death."""
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+        fcntl.flock(handle.fileno(), mode)
+    except BlockingIOError as exc:
+        handle.close()
+        raise _FanInTransientError(f"fan-in publication fence is held: {path.name}") from exc
+    except Exception:
+        handle.close()
+        raise
+    return handle
+
+
+def _release_fanin_guard(handle: Any) -> None:
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _read_fanin_publish_lock(base: Path) -> tuple[FanInTask, str, str] | None:
     """Return the task owning a well-formed per-worker publish lock."""
     lock = _fanin_publish_lock_path(base)
     try:
         payload = json.loads(lock.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "base", "task"}:
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version", "base", "task", "claim_name", "claim_token",
+    }:
         return None
-    if payload["schema_version"] != 1 or payload["base"] != base.name or not isinstance(payload["task"], dict):
+    if (
+        payload["schema_version"] != 3
+        or payload["base"] != base.name
+        or not isinstance(payload["task"], dict)
+        or not isinstance(payload["claim_name"], str)
+        or not payload["claim_name"]
+        or not isinstance(payload["claim_token"], str)
+        or not payload["claim_token"]
+    ):
         return None
     task = payload["task"]
-    if set(task) != {"task_id", "iteration", "offset", "count", "seed"}:
+    if set(task) != {"task_id", "iteration", "offset", "count", "seed", "out", "policy"}:
         return None
     numeric = (task["iteration"], task["offset"], task["count"], task["seed"])
-    if not isinstance(task["task_id"], str) or not task["task_id"] or not all(_is_int(value) for value in numeric):
+    if (
+        not isinstance(task["task_id"], str)
+        or not task["task_id"]
+        or not all(_is_int(value) for value in numeric)
+        or not isinstance(task["out"], str)
+        or not task["out"]
+        or not isinstance(task["policy"], str)
+        or not task["policy"]
+    ):
         return None
-    candidate = FanInTask(task["task_id"], *numeric)
+    candidate = FanInTask(task["task_id"], *numeric, task["out"], task["policy"])
     if candidate.iteration < 0 or candidate.offset < 0 or candidate.count <= 0 or candidate.seed < 0:
         return None
-    return candidate
+    return candidate, payload["claim_name"], payload["claim_token"]
 
 
-def _acquire_fanin_publish_lock(base: Path, queue: Path, task: FanInTask) -> tuple[Path, tuple[int, int]]:
-    """Serialize one worker shard and recover only a proven-dead prior owner."""
+def _acquire_fanin_publish_lock(
+    base: Path,
+    task: TaskManifest,
+    fanin_task: FanInTask,
+) -> tuple[Path, tuple[int, int]]:
+    """Serialize one worker shard and reclaim only an inactive claimant's lock."""
     lock = _fanin_publish_lock_path(base)
-    payload = {"schema_version": 1, "base": base.name, "task": _fanin_task_payload(task)}
-    for _attempt in range(_FANIN_PUBLISH_LOCK_ATTEMPTS):
+    payload = {
+        "schema_version": 3,
+        "base": base.name,
+        "task": _fanin_task_payload(fanin_task),
+        "claim_name": task.claim_path.name,
+        "claim_token": task.claim_token,
+    }
+    guard = _acquire_fanin_guard(_fanin_publish_guard_path(base))
+    try:
+        owner = _read_fanin_publish_lock(base) if lock.exists() else None
+        if lock.exists() and owner is None:
+            raise FanInInventoryValidationError(f"fan-in publish lock is malformed: {lock}")
+        if owner is not None:
+            owner_task, owner_claim_name, owner_token = owner
+            if owner_token != task.claim_token and _claim_token_is_live(
+                task.claim_path.parent / owner_claim_name, owner_token,
+            ):
+                raise _FanInTransientError(
+                    f"fan-in worker shard {base.name} is actively publishing {owner_task.task_id!r}"
+                )
         temporary = lock.parent / f".{lock.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
         try:
             with temporary.open("x", encoding="utf-8") as handle:
@@ -392,30 +618,14 @@ def _acquire_fanin_publish_lock(base: Path, queue: Path, task: FanInTask) -> tup
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.link(temporary, lock)
-        except FileExistsError:
-            owner = _read_fanin_publish_lock(base)
-            if owner is None:
-                raise FanInInventoryValidationError(f"fan-in publish lock is malformed: {lock}")
-            if _has_live_claim(queue, owner.task_id):
-                raise _FanInTransientError(
-                    f"fan-in worker shard {base.name} is actively publishing {owner.task_id!r}"
-                )
-            # Only a missing owner claim proves this lock is abandoned. A new
-            # retry will receive a distinct claim/staging path before publish.
-            lock.unlink(missing_ok=True)
+            os.replace(temporary, lock)
             _fsync_directory(lock.parent)
-            time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
-            continue
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
         finally:
             temporary.unlink(missing_ok=True)
-        _fsync_directory(lock.parent)
         stat = lock.stat()
         return lock, (stat.st_dev, stat.st_ino)
-    raise _FanInTransientError(f"fan-in publish lock for {base.name} did not stabilize after retries")
+    finally:
+        _release_fanin_guard(guard)
 
 
 def _release_fanin_publish_lock(lock: Path, identity: tuple[int, int]) -> None:
@@ -428,6 +638,117 @@ def _release_fanin_publish_lock(lock: Path, identity: tuple[int, int]) -> None:
         return
     lock.unlink(missing_ok=True)
     _fsync_directory(lock.parent)
+
+
+@dataclass
+class _FanInTaskPublicationLease:
+    guard: Any
+    record: Path
+    claim_token: str
+
+
+def _fanin_task_lock_record(cache_dir: Path, task_id: str) -> Path:
+    digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+    directory = cache_dir / _FANIN_TASK_LOCK_DIRECTORY
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{digest}.json"
+
+
+def _read_fanin_task_lock(record: Path) -> tuple[FanInTask, str, str] | None:
+    try:
+        payload = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "task", "claim_name", "claim_token"}:
+        return None
+    if (
+        payload["schema_version"] != 1
+        or not isinstance(payload["task"], dict)
+        or not isinstance(payload["claim_name"], str)
+        or not payload["claim_name"]
+        or not isinstance(payload["claim_token"], str)
+        or not payload["claim_token"]
+    ):
+        return None
+    raw_task = payload["task"]
+    if set(raw_task) != {"task_id", "iteration", "offset", "count", "seed", "out", "policy"}:
+        return None
+    numeric = (raw_task["iteration"], raw_task["offset"], raw_task["count"], raw_task["seed"])
+    if (
+        not isinstance(raw_task["task_id"], str)
+        or not raw_task["task_id"]
+        or not all(_is_int(value) for value in numeric)
+        or not isinstance(raw_task["out"], str)
+        or not raw_task["out"]
+        or not isinstance(raw_task["policy"], str)
+        or not raw_task["policy"]
+    ):
+        return None
+    return (
+        FanInTask(raw_task["task_id"], *numeric, raw_task["out"], raw_task["policy"]),
+        payload["claim_name"],
+        payload["claim_token"],
+    )
+
+
+def _write_fanin_task_lock(record: Path, task: TaskManifest, fanin_task: FanInTask) -> None:
+    payload = {
+        "schema_version": 1,
+        "task": _fanin_task_payload(fanin_task),
+        "claim_name": task.claim_path.name,
+        "claim_token": task.claim_token,
+    }
+    temporary = record.parent / f".{record.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, record)
+        _fsync_directory(record.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _acquire_fanin_task_publication_lease(
+    cache_dir: Path,
+    task: TaskManifest,
+    fanin_task: FanInTask,
+) -> _FanInTaskPublicationLease:
+    """Fence one task across every worker base until its target rename completes."""
+    record = _fanin_task_lock_record(cache_dir, fanin_task.task_id)
+    guard = _acquire_fanin_guard(record.with_suffix(".guard"), nonblocking=True)
+    try:
+        previous = _read_fanin_task_lock(record) if record.exists() else None
+        if record.exists() and previous is None:
+            raise FanInInventoryValidationError(f"fan-in task publication lock is malformed: {record}")
+        if previous is not None:
+            previous_task, _previous_claim_name, _previous_token = previous
+            if previous_task != fanin_task:
+                if _fanin_route_conflicts(previous_task, fanin_task):
+                    raise FanInRouteConflictError(
+                        f"fan-in task {task.base!r} has different output or policy route"
+                    )
+                raise FanInInventoryValidationError(
+                    f"fan-in task publication lock conflicts with {task.base!r}"
+                )
+        _write_fanin_task_lock(record, task, fanin_task)
+    except Exception:
+        _release_fanin_guard(guard)
+        raise
+    return _FanInTaskPublicationLease(guard, record, task.claim_token)
+
+
+def _release_fanin_task_publication_lease(lease: _FanInTaskPublicationLease) -> None:
+    """Drop a task lock record only while its stable guard still fences replacement."""
+    try:
+        current = _read_fanin_task_lock(lease.record)
+        if current is not None and current[2] == lease.claim_token:
+            lease.record.unlink(missing_ok=True)
+            _fsync_directory(lease.record.parent)
+    finally:
+        _release_fanin_guard(lease.guard)
 
 
 def _adopt_shard(base: Path) -> tuple[Path | None, int]:
@@ -462,13 +783,23 @@ def _is_int(value: Any) -> bool:
 
 
 def _fanin_task_from_task_manifest(task: TaskManifest) -> FanInTask:
-    candidate = FanInTask(task.base, task.iteration, task.offset, task.count, task.seed)
+    candidate = FanInTask(
+        task.base,
+        task.iteration,
+        task.offset,
+        task.count,
+        task.seed,
+        str(task.out),
+        task.policy,
+    )
     if (
         not candidate.task_id
         or candidate.iteration < 0
         or candidate.offset < 0
         or candidate.count <= 0
         or candidate.seed < 0
+        or not candidate.out
+        or not candidate.policy
     ):
         raise FanInTaskValidationError(f"task {task.base!r} has invalid fan-in queue metadata")
     return candidate
@@ -481,6 +812,8 @@ def _fanin_task_payload(task: FanInTask) -> dict[str, Any]:
         "offset": task.offset,
         "count": task.count,
         "seed": task.seed,
+        "out": task.out,
+        "policy": task.policy,
     }
 
 
@@ -504,11 +837,23 @@ def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
     tasks: list[FanInTask] = []
     seen: set[str] = set()
     for raw_task in raw_tasks:
-        if not isinstance(raw_task, dict) or set(raw_task) != {"task_id", "iteration", "offset", "count", "seed"}:
+        if not isinstance(raw_task, dict) or set(raw_task) != {
+            "task_id", "iteration", "offset", "count", "seed", "out", "policy",
+        }:
             raise FanInValidationError(f"fan-in shard {path} has a malformed task entry")
         task_id = raw_task["task_id"]
         numeric = (raw_task["iteration"], raw_task["offset"], raw_task["count"], raw_task["seed"])
-        if not isinstance(task_id, str) or not task_id or not all(_is_int(value) for value in numeric):
+        out = raw_task["out"]
+        policy = raw_task["policy"]
+        if (
+            not isinstance(task_id, str)
+            or not task_id
+            or not all(_is_int(value) for value in numeric)
+            or not isinstance(out, str)
+            or not out
+            or not isinstance(policy, str)
+            or not policy
+        ):
             raise FanInValidationError(f"fan-in shard {path} has invalid task metadata")
         iteration, offset, count, seed = numeric
         if iteration < 0 or offset < 0 or count <= 0 or seed < 0:
@@ -516,7 +861,7 @@ def _read_fanin_manifest(path: Path) -> tuple[FanInTask, ...]:
         if task_id in seen:
             raise FanInValidationError(f"fan-in shard {path} repeats task id {task_id!r}")
         seen.add(task_id)
-        tasks.append(FanInTask(task_id, iteration, offset, count, seed))
+        tasks.append(FanInTask(task_id, iteration, offset, count, seed, out, policy))
     return tuple(tasks)
 
 
@@ -703,6 +1048,9 @@ def read_fanin_inventory(cache_dir: Path, contract: FanInQueueContract) -> FanIn
 
 
 def _write_fanin_manifest(path: Path, tasks: Sequence[FanInTask]) -> None:
+    for task in tasks:
+        if not task.out or not task.policy:
+            raise FanInValidationError("fan-in task manifest requires non-empty output and policy routes")
     payload = {
         "schema_version": FANIN_MANIFEST_SCHEMA_VERSION,
         "kind": _FANIN_MANIFEST_KIND,
@@ -761,6 +1109,18 @@ def _done_marker_matches_task(done: Path, task: TaskManifest) -> bool:
         and parsed.seed == task.seed
         and parsed.out == task.out
         and parsed.policy == task.policy
+    )
+
+
+def _fanin_route_conflicts(existing: FanInTask, candidate: FanInTask) -> bool:
+    """Whether matching queue contents were already accepted on another route."""
+    return (
+        existing.task_id == candidate.task_id
+        and existing.iteration == candidate.iteration
+        and existing.offset == candidate.offset
+        and existing.count == candidate.count
+        and existing.seed == candidate.seed
+        and (existing.out != candidate.out or existing.policy != candidate.policy)
     )
 
 
@@ -836,6 +1196,7 @@ def _complete_claim(
     except OSError:
         # The durable done marker wins; a stale-claim cleanup is harmless.
         pass
+    _remove_claim_token(task)
 
 
 def _fail_claim(task: TaskManifest, queue: Path, worker: str) -> None:
@@ -843,6 +1204,17 @@ def _fail_claim(task: TaskManifest, queue: Path, worker: str) -> None:
         os.rename(task.claim_path, queue / "failed" / f"{task.base}.{worker}.failed")
     except OSError:
         pass
+    _remove_claim_token(task)
+
+
+def _remove_stale_fanin_version(stale: Path) -> None:
+    """Unpublish a lower cumulative version before deleting it for race-safe reads."""
+    tombstone = stale.parent / f".{stale.name}.gc.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        os.rename(stale, tombstone)
+    except FileNotFoundError:
+        return
+    shutil.rmtree(tombstone, ignore_errors=True)
 
 
 def _inject_crash(
@@ -866,6 +1238,10 @@ def _recover_fanin_task(
     if existing is None:
         return False
     if existing != candidate:
+        if _fanin_route_conflicts(existing, candidate):
+            raise FanInRouteConflictError(
+                f"accepted fan-in task {task.base!r} has different output or policy route"
+            )
         raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
     try:
         _complete_claim(task, queue, crash_inject=crash_inject)
@@ -911,7 +1287,7 @@ def _publish_fanin_task(
     *,
     crash_inject: Callable[[str, TaskManifest], None] | None,
 ) -> tuple[Path | None, bool]:
-    """Atomically publish one manifest-bearing version, or recover a concurrent commit."""
+    """Atomically publish one manifest-bearing version, fenced across workers."""
     cache_dir = task.out.parent
     fanin_task = _fanin_task_from_task_manifest(task)
     if _temporary_cache_record_count(temporary_cache, task) != fanin_task.count:
@@ -921,6 +1297,10 @@ def _publish_fanin_task(
     existing = _find_committed_fanin_task(cache_dir, fanin_task)
     if existing is not None:
         if existing != fanin_task:
+            if _fanin_route_conflicts(existing, fanin_task):
+                raise FanInRouteConflictError(
+                    f"accepted fan-in task {task.base!r} has different output or policy route"
+                )
             raise FanInTaskConflictError(f"committed task {task.base!r} conflicts with its retried manifest")
         try:
             _complete_claim(task, queue, crash_inject=crash_inject)
@@ -931,21 +1311,21 @@ def _publish_fanin_task(
         shutil.rmtree(temporary_cache, ignore_errors=True)
         _inject_crash(crash_inject, "fanin-after-recovery", task)
         return None, True
-    if not task.claim_path.exists():
+    if not _claim_token_is_current(task):
         raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
     _reject_prepublication_done_marker(task, queue)
 
-    base = cache_dir / f"shard-w{_sanitize_worker_id(worker)}"
-    lock, lock_identity = _acquire_fanin_publish_lock(base, queue, fanin_task)
-    staging: Path | None = None
-    owner_sidecar: Path | None = None
-    published = False
+    task_lease = _acquire_fanin_task_publication_lease(cache_dir, task, fanin_task)
     try:
-        # Re-check under the shard lock so two processes with the same worker
-        # id cannot append the same task to independent stale snapshots.
+        # A stalled predecessor holds this lease. Once it exits or is fenced by
+        # its claim token, a retry rechecks selected input before any append.
         existing = _find_committed_fanin_task(cache_dir, fanin_task)
         if existing is not None:
             if existing != fanin_task:
+                if _fanin_route_conflicts(existing, fanin_task):
+                    raise FanInRouteConflictError(
+                        f"accepted fan-in task {task.base!r} has different output or policy route"
+                    )
                 raise FanInInventoryValidationError(
                     f"committed task {task.base!r} conflicts with its retried manifest"
                 )
@@ -953,83 +1333,100 @@ def _publish_fanin_task(
             shutil.rmtree(temporary_cache, ignore_errors=True)
             _inject_crash(crash_inject, "fanin-after-recovery", task)
             return None, True
-        _reject_prepublication_done_marker(task, queue)
-        current, version, current_tasks = _read_current_worker_shard(base, task.iteration)
-        if _recover_current_worker_task(current_tasks, fanin_task):
-            _complete_claim(task, queue, crash_inject=crash_inject)
-            shutil.rmtree(temporary_cache, ignore_errors=True)
-            _inject_crash(crash_inject, "fanin-after-recovery", task)
-            return None, True
-        target = base.parent / f"{base.name}-v{version + 1}"
-        staging = base.parent / f".{target.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
-        # This sidecar is written before either rename or concat can create
-        # staging, closing the kill-during-concat ownerless-leak window.
-        owner_sidecar = _write_fanin_staging_owner(staging, fanin_task)
-        if current is None:
-            os.rename(temporary_cache, staging)
-        else:
-            from .dataset import concat_training_caches
-
-            concat_training_caches((current, temporary_cache), staging)
-            shutil.rmtree(temporary_cache, ignore_errors=True)
-        version_tasks = (*current_tasks, fanin_task)
-        try:
-            staging_record_count = _cache_record_count(staging)
-        except (FanInValidationError, OSError) as exc:
-            raise FanInTaskValidationError(
-                f"task {task.base} fan-in staging cache has no valid metadata: {exc}"
-            ) from exc
-        if staging_record_count != sum(entry.count for entry in version_tasks):
-            raise FanInTaskValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
-        _write_fanin_manifest(staging, version_tasks)
-        _inject_crash(crash_inject, "fanin-before-target-publication", task)
-        if not task.claim_path.exists():
+        if not _claim_token_is_current(task):
             raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
+        _reject_prepublication_done_marker(task, queue)
+        base = cache_dir / f"shard-w{_sanitize_worker_id(worker)}"
+        lock, lock_identity = _acquire_fanin_publish_lock(base, task, fanin_task)
+        staging: Path | None = None
+        owner_sidecar: Path | None = None
+        published = False
         try:
-            os.rename(staging, target)
-        except FileExistsError as exc:
-            # A legacy or pre-lock publisher may have won this version. It is
-            # safe only if the selected inventory already contains this task.
-            existing = _find_committed_fanin_task(cache_dir, fanin_task)
-            if existing == fanin_task:
+            current, version, current_tasks = _read_current_worker_shard(base, task.iteration)
+            if _recover_current_worker_task(current_tasks, fanin_task):
                 _complete_claim(task, queue, crash_inject=crash_inject)
-                shutil.rmtree(staging, ignore_errors=True)
-                owner_sidecar.unlink(missing_ok=True)
                 shutil.rmtree(temporary_cache, ignore_errors=True)
+                _inject_crash(crash_inject, "fanin-after-recovery", task)
                 return None, True
-            if existing is not None:
-                raise FanInInventoryValidationError(
-                    f"committed task {task.base!r} conflicts with its retried manifest"
+            target = base.parent / f"{base.name}-v{version + 1}"
+            staging = base.parent / f".{target.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+            owner_sidecar = _write_fanin_staging_owner(
+                staging, fanin_task, producer_token=task.claim_token,
+            )
+            _refresh_fanin_staging_lease(staging, task.claim_token)
+            if current is None:
+                os.rename(temporary_cache, staging)
+            else:
+                from .dataset import concat_training_caches
+
+                concat_training_caches((current, temporary_cache), staging)
+                shutil.rmtree(temporary_cache, ignore_errors=True)
+            _refresh_fanin_staging_lease(staging, task.claim_token)
+            version_tasks = (*current_tasks, fanin_task)
+            try:
+                staging_record_count = _cache_record_count(staging)
+            except (FanInValidationError, OSError) as exc:
+                raise FanInTaskValidationError(
+                    f"task {task.base} fan-in staging cache has no valid metadata: {exc}"
                 ) from exc
-            raise _FanInTransientError(
-                f"fan-in worker shard target raced before publishing {task.base}"
-            ) from exc
-        published = True
-        _fsync_directory(target.parent)
-        _inject_crash(crash_inject, "fanin-after-target-publication", task)
-        try:
-            _complete_claim(task, queue, crash_inject=crash_inject)
-        except FanInTaskConflictError as exc:
-            raise FanInInventoryValidationError(
-                f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
-            ) from exc
-        # A selected higher version is cumulative. Never delete a concurrently
-        # published higher version; only lower stale snapshots are safe.
-        _inject_crash(crash_inject, "fanin-before-stale-cleanup", task)
-        for stale_version, stale in _shard_versions(base):
-            if stale_version < version + 1:
-                shutil.rmtree(stale, ignore_errors=True)
-        owner_sidecar.unlink(missing_ok=True)
-        _fsync_directory(owner_sidecar.parent)
-        return target, False
-    except Exception:
-        if staging is not None:
-            shutil.rmtree(staging, ignore_errors=True)
-        if owner_sidecar is not None and not published:
+            if staging_record_count != sum(entry.count for entry in version_tasks):
+                raise FanInTaskValidationError(f"fan-in staging cache does not match task manifest for {task.base}")
+            _write_fanin_manifest(staging, version_tasks)
+            _inject_crash(crash_inject, "fanin-before-target-publication", task)
+            if not _claim_token_is_current(task):
+                raise _ClaimRevokedError(f"claim was revoked before fan-in publication for {task.base}")
+            try:
+                os.rename(staging, target)
+            except OSError as exc:
+                if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                    raise
+                existing = _find_committed_fanin_task(cache_dir, fanin_task)
+                if existing == fanin_task:
+                    _complete_claim(task, queue, crash_inject=crash_inject)
+                    shutil.rmtree(staging, ignore_errors=True)
+                    owner_sidecar.unlink(missing_ok=True)
+                    shutil.rmtree(temporary_cache, ignore_errors=True)
+                    return None, True
+                if existing is not None:
+                    if _fanin_route_conflicts(existing, fanin_task):
+                        raise FanInRouteConflictError(
+                            f"accepted fan-in task {task.base!r} has different output or policy route"
+                        )
+                    raise FanInInventoryValidationError(
+                        f"committed task {task.base!r} conflicts with its retried manifest"
+                    ) from exc
+                raise _FanInTransientError(
+                    f"fan-in worker shard target raced before publishing {task.base}"
+                ) from exc
+            published = True
+            _fsync_directory(target.parent)
+            _inject_crash(crash_inject, "fanin-after-target-publication", task)
+            try:
+                _complete_claim(task, queue, crash_inject=crash_inject)
+            except FanInTaskConflictError as exc:
+                raise FanInInventoryValidationError(
+                    f"accepted fan-in task {task.base} conflicts with queue acknowledgement"
+                ) from exc
+            _inject_crash(crash_inject, "fanin-before-stale-cleanup", task)
+            for stale_version, stale in _shard_versions(base):
+                if stale_version < version + 1:
+                    _remove_stale_fanin_version(stale)
             owner_sidecar.unlink(missing_ok=True)
-        raise
+            _remove_fanin_staging_lease(staging, task.claim_token)
+            _fsync_directory(owner_sidecar.parent)
+            return target, False
+        except Exception:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
+            if owner_sidecar is not None and not published:
+                owner_sidecar.unlink(missing_ok=True)
+            if staging is not None and not published:
+                _remove_fanin_staging_lease(staging, task.claim_token)
+            raise
+        finally:
+            _release_fanin_publish_lock(lock, lock_identity)
     finally:
-        _release_fanin_publish_lock(lock, lock_identity)
+        _release_fanin_task_publication_lease(task_lease)
 
 
 def _rss_mb() -> float:
@@ -1220,6 +1617,7 @@ def run_worker(
                 shutil.rmtree(task.out, ignore_errors=True)
                 os.rename(tmp, task.out)
                 os.rename(task.claim_path, queue / "done" / task.base)
+                _remove_claim_token(task)
                 log(f"commit {task.base} games={task.count} elapsed={elapsed:.1f}s rss={_rss_mb():.0f}MB")
             else:
                 log(f"revoked {task.base}; discarding {elapsed:.1f}s of work")
