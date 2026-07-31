@@ -180,25 +180,32 @@ def health_of(meta_entry: dict) -> dict:
     }
 
 
-def paired_improvement(candidate: dict, anchor: dict, rows: dict, raw_id: str):
-    """CI on (candidate - anchor) over the pairs all three arms share.
+def paired_improvement(candidate: dict, cand_raw: dict, anchor: dict, anchor_raw: dict):
+    """CI on (candidate_delta - anchor_delta), per pair.
 
-    Section 9 Phase 2 (iii). Because every cell plays the SAME seeds against the
-    SAME raw arm, the raw arm cancels out of the improvement -- so this is a
-    far tighter estimate than differencing two independently-bootstrapped
-    deltas, and it is the quantity the plan actually gates adoption on.
+    Section 9 Phase 2 (iii). Each cell's per-pair score is its own delta
+    against ITS OWN raw arm, and the improvement is the paired difference of
+    those deltas.
+
+    Subtracting the raw arms explicitly matters: when candidate and anchor
+    share a raw arm the terms cancel and this reduces to `candidate - anchor`,
+    but cell G runs on k1 against R1 while the anchor runs on k0 against R0, so
+    they do NOT cancel. An earlier version computed `candidate - anchor`
+    unconditionally and reported a +0.500 improvement where the true difference
+    of deltas was +0.025 -- a 20x overstatement with a tight CI, on the
+    campaign's designed checkpoint contrast.
     """
-    from pokezero.mcts_eval.scoring import bootstrap_paired_delta
+    from pokezero.mcts_eval.scoring import bootstrap_mean
 
-    raw = rows.get(raw_id, {})
-    shared = sorted(set(candidate) & set(anchor) & set(raw))
+    shared = sorted(
+        set(candidate) & set(cand_raw) & set(anchor) & set(anchor_raw)
+    )
     if not shared:
         return None
-    # (candidate - raw) - (anchor - raw) == candidate - anchor, but computed
-    # per pair so the bootstrap resamples PAIRS rather than arms.
-    return bootstrap_paired_delta(
-        [candidate[k] for k in shared], [anchor[k] for k in shared], _indices(len(shared))
-    )
+    deltas = [
+        (candidate[k] - cand_raw[k]) - (anchor[k] - anchor_raw[k]) for k in shared
+    ]
+    return bootstrap_mean(deltas, _indices(len(shared)))
 
 
 def score_cell(search: dict, raw: dict, indices) -> dict:
@@ -287,7 +294,12 @@ def main(argv=None) -> int:
         by_cell = {c["cell_id"]: c for c in campaign.get("cells", [])}
 
         def cid_of(cell):
-            tag = Path(campaign["checkpoints"][cell["checkpoint"]]["path"]).stem
+            # The campaign KEY (k0/k1), matching what the launcher passes as
+            # --checkpoint-tag. Deriving it from the checkpoint path instead
+            # silently produced ids that matched no shard, so depth_reference
+            # was populated, `depth_rule_applied` reported true, and the §5
+            # non-starvation rule never fired for any cell.
+            tag = cell["checkpoint"]
             if cell["arm"] == "raw":
                 return f"raw@{tag}"
             base = f"d{cell['depth']}-s{cell['sims']}-b{cell['batch']}-w{cell['worlds']}"
@@ -396,35 +408,43 @@ def main(argv=None) -> int:
                 f"({cells[args.anchor].get('error')}); the adoption rule is undefined."
             )
     if ranked and args.anchor:
-        best_id = ranked[0]
-        if best_id == args.anchor:
-            winner, adoption = args.anchor, "anchor is already the best eligible cell"
-        else:
-            # THE section 9 Phase 2 (iii) test: a paired bootstrap CI on the
-            # IMPROVEMENT (candidate - anchor) excluding 0. Not
-            # candidate.low > anchor.point: every cell shares the seeds AND the
-            # raw arm, so the raw arm cancels in the improvement and it is far
-            # better estimated than either delta on its own. Comparing a CI
-            # against a point estimate throws that pairing away and can err in
-            # both directions.
-            imp = paired_improvement(rows[best_id], rows[args.anchor], rows,
-                                     cells[best_id]["raw_arm"])
+        # Section 9 Phase 2 is FILTER-then-rank: (iii) is a per-cell condition,
+        # not a test applied only to the leader. Testing just ranked[0] and
+        # falling back to the anchor adopts the anchor whenever the largest
+        # delta happens to be noisy, even though a slightly smaller cell
+        # cleanly beats it -- measured on a fixture, that discarded a cell 5pp
+        # better than the adopted one.
+        anchor_rows = rows[args.anchor]
+        anchor_raw = rows[cells[args.anchor]["raw_arm"]]
+        beats_anchor = []
+        for cid in ranked:
+            if cid == args.anchor:
+                beats_anchor.append(cid)
+                continue
+            imp = paired_improvement(
+                rows[cid], rows[cells[cid]["raw_arm"]], anchor_rows, anchor_raw
+            )
             if imp is None:
-                winner = args.anchor
-                adoption = f"{best_id} shares no pairs with the anchor; adopting the anchor"
-            else:
-                cells[best_id]["improvement_over_anchor"] = imp.to_payload()
-                if imp.low > 0.0:
-                    winner, adoption = best_id, (
-                        f"improvement over {args.anchor} is "
-                        f"{imp.point:+.3f} [{imp.low:+.3f}, {imp.high:+.3f}], excludes 0"
-                    )
-                else:
-                    winner, adoption = args.anchor, (
-                        f"{best_id} has the largest delta but its improvement over "
-                        f"{args.anchor} is {imp.point:+.3f} [{imp.low:+.3f}, {imp.high:+.3f}], "
-                        "which includes 0 -- adopting the anchor per section 9 Phase 2"
-                    )
+                cells[cid]["improvement_over_anchor"] = None
+                continue
+            cells[cid]["improvement_over_anchor"] = imp.to_payload()
+            if imp.low > 0.0:
+                beats_anchor.append(cid)
+        # `ranked` is already sorted by delta, so the first survivor is the
+        # largest delta among cells that pass every criterion.
+        if beats_anchor and beats_anchor[0] != args.anchor:
+            winner = beats_anchor[0]
+            imp = cells[winner]["improvement_over_anchor"]
+            adoption = (
+                f"largest eligible delta whose improvement over {args.anchor} excludes 0: "
+                f"{imp['point']:+.3f} [{imp['low']:+.3f}, {imp['high']:+.3f}]"
+            )
+        else:
+            winner = args.anchor
+            adoption = (
+                f"no eligible cell's improvement over {args.anchor} excludes 0; "
+                "adopting the anchor per section 9 Phase 2"
+            )
     elif ranked:
         winner = ranked[0]
         adoption = "no --anchor given; reporting the largest eligible delta only"
@@ -438,7 +458,12 @@ def main(argv=None) -> int:
         "ranking_eligible": ranked,
         "winner": winner,
         "adoption_rule": adoption,
-        "depth_rule_applied": bool(depth_reference),
+        "depth_rule_applied": sorted(
+            c for c in depth_reference if c in cells
+        ),
+        "depth_rule_unmatched": sorted(
+            c for c in depth_reference if c not in cells
+        ),
         "min_pairs": args.min_pairs,
         "winner_note": (
             "Eligibility requires shared pairs, >= the section 8 minimum, a passing "

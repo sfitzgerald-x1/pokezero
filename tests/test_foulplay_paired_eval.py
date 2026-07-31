@@ -189,21 +189,34 @@ class SeatBlockTest(unittest.TestCase):
         self.assertEqual(block["games"], 200)
 
 
-class OpponentPriorsLabelTest(unittest.TestCase):
-    def test_flag_reaches_the_bridge_when_the_cell_claims_it(self) -> None:
-        # The label and the behaviour must not drift apart: a shard tagged
-        # '+opp-priors' whose bridge ran uniform opponent priors is worse than
-        # a missing cell, because cells B and E are read against that label.
-        argv = _DRIVER.bridge_argv(args(opponent_priors=True), seat="p1")
-        self.assertIn("--engine-opponent-priors", argv)
+class OpponentPriorsRefusalTest(unittest.TestCase):
+    """Cells B/E are refused until the opponent map's ordering is verified.
 
-    def test_flag_is_absent_by_default(self) -> None:
+    Four review rounds each found the opponent switch mapping still wrong. The
+    current known boundary, measured: correct while the opponent has made at
+    most one switch-in, transposed from the second onward. A run would not
+    fail -- it would report a confident paired delta computed from permuted
+    priors, and the campaign would read that as "opponent priors do not help".
+    """
+
+    def test_opponent_priors_are_refused_not_silently_run(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            _DRIVER.main([
+                "--checkpoint", "/tmp/c.pt", "--showdown-root", "/tmp/s",
+                "--arm", "search", "--seed-start", "1", "--pairs", "2",
+                "--out", "/tmp/o.json", "--opponent-priors", "--skip-build-check",
+            ])
+        message = str(caught.exception)
+        self.assertIn("REFUSED", message)
+        self.assertIn("second switch", message)
+
+    def test_the_default_path_is_unaffected(self) -> None:
+        # The refusal must not touch the nine cells that do not use the flag.
         argv = _DRIVER.bridge_argv(args(), seat="p1")
         self.assertNotIn("--engine-opponent-priors", argv)
+        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4@ckpt")
 
     def test_raw_arm_never_carries_the_flag(self) -> None:
-        # Raw is the pairing partner and is search-config-independent; an
-        # opponent-priors raw arm would not be reusable across cells.
         argv = _DRIVER.bridge_argv(args(arm="raw", opponent_priors=True), seat="p1")
         self.assertNotIn("--engine-opponent-priors", argv)
 

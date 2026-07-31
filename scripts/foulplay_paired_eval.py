@@ -264,24 +264,42 @@ def main(argv=None) -> int:
                     help="offline/dry use only; never for a scored shard")
     args = ap.parse_args(argv)
 
-    # The label and the behaviour must not be able to drift apart: a shard
-    # tagged '+opp-priors' whose bridge ran uniform opponent priors is worse
-    # than a missing cell, because cells B and E are interpreted entirely
-    # against that label. The flag reaches the bridge in bridge_argv; this
-    # asserts the CLI that will receive it actually has it, rather than
-    # trusting the two files to stay in step.
+    # REFUSED, deliberately, until the opponent action map's ordering is
+    # verified against a real checkpoint.
+    #
+    # Four independent review rounds each found the opponent map still bound
+    # switch priors to the wrong physical Pokemon, and each of the first three
+    # fixes was "verified" by a test written against the fixer's model of the
+    # bug rather than against the head's training label. The current state,
+    # measured: the root order is the packed party order with the active
+    # swapped to slot 0, which reproduces the label order only while the
+    # opponent has made AT MOST ONE switch-in. From its second switch onward --
+    # most of a gen3 randbat -- switch arms are transposed. Reproduced on a
+    # constructed two-switch state; the committed golden sample cannot show it
+    # because it contains at most one opponent switch.
+    #
+    # A wrong mapping here does not fail. It produces a confident, plausible
+    # paired delta for cells B and E, and the campaign would conclude
+    # "opponent priors do not help" from a permutation. Refusing is strictly
+    # better than measuring that.
+    #
+    # To lift this: replay the opponent's FULL switch-in history over the
+    # sampled party order (the crate never receives those lines;
+    # `determinization._public_opponent_team_index_constraints` already does
+    # the equivalent replay in Python), and FIRST verify the prerequisite that
+    # round 4 could not -- that the production sampled opponent party order is
+    # that seat's own team-index order at all for an EXTERNAL opponent. Then
+    # re-run the seat-mirror comparison over a corpus with >= 2 opponent
+    # switch-ins.
     if args.opponent_priors:
-        from pokezero.foulplay_bridge import build_arg_parser  # noqa: PLC0415
-
-        if not hasattr(
-            build_arg_parser().parse_args(["--checkpoint", "/dev/null"]),
-            "engine_opponent_priors",
-        ):
-            raise SystemExit(
-                "--opponent-priors requested but this bridge build has no "
-                "--engine-opponent-priors flag; refusing to emit a shard "
-                "labelled '+opp-priors' that would not use them."
-            )
+        raise SystemExit(
+            "--opponent-priors is REFUSED: the opponent action map's switch "
+            "ordering is known-wrong from the opponent's second switch onward "
+            "(see scripts/foulplay_paired_eval.py and the plan's section 0). "
+            "Cells B and E cannot be measured until it is verified against a "
+            "real checkpoint; a run now would report a confident delta computed "
+            "from permuted priors."
+        )
 
     # HARD STOP before any game. A stale build does not error, it produces a
     # plausible number -- same standing as in mcts_acceptance_h2h.

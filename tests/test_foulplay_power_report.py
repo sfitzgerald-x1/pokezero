@@ -289,7 +289,7 @@ class AdoptionRuleTest(unittest.TestCase):
         self.assertGreater(imp["point"], 0.0)
         self.assertLessEqual(imp["low"], 0.0)
         self.assertEqual(rep["winner"], "anchor@k0")
-        self.assertIn("includes 0", rep["adoption_rule"])
+        self.assertIn("excludes 0", rep["adoption_rule"])  # phrased as "no cell ... excludes 0"
 
     def test_a_mistyped_anchor_is_fatal_not_silently_ignored(self) -> None:
         # Cell ids are checkpoint-qualified, so typos are easy; falling back to
@@ -332,6 +332,122 @@ class HealthGateTest(unittest.TestCase):
         self.assertTrue(
             any("minimum" in r for r in rep["cells"]["c@k0"]["ineligible_because"])
         )
+
+
+class CrossCheckpointImprovementTest(unittest.TestCase):
+    """Cell G (k1/R1) vs anchor A (k0/R0) -- the raw arms do NOT cancel."""
+
+    def test_improvement_subtracts_each_cells_own_raw_arm(self) -> None:
+        # Anchor: k0 search ties its raw arm -> delta 0. Candidate: k1 search
+        # beats its raw arm slightly -> delta small. `candidate - anchor`
+        # ignores that k1's raw arm is strong and reports a huge improvement.
+        n = 40
+        a = {(i, "p1"): 1.0 for i in range(n)}
+        r0 = {(i, "p1"): 1.0 for i in range(n)}          # anchor delta 0.0
+        g = {(i, "p1"): 1.0 if i < 21 else 0.0 for i in range(n)}
+        r1 = {(i, "p1"): 1.0 if i < 20 else 0.0 for i in range(n)}  # G delta +0.025
+        rep = run([
+            shard("anchor@k0", "search", "/c/k0.pt", a),
+            shard("raw@k0", "raw", "/c/k0.pt", r0, gate=None),
+            shard("cand@k1", "search", "/c/k1.pt", g),
+            shard("raw@k1", "raw", "/c/k1.pt", r1, gate=None),
+        ], anchor="anchor@k0")
+        anchor_d = rep["cells"]["anchor@k0"]["paired_delta"]["point"]
+        cand_d = rep["cells"]["cand@k1"]["paired_delta"]["point"]
+        imp = rep["cells"]["cand@k1"]["improvement_over_anchor"]
+        self.assertAlmostEqual(anchor_d, 0.0)
+        self.assertAlmostEqual(cand_d, 0.025)
+        # The improvement must equal the DIFFERENCE OF DELTAS, not
+        # candidate-minus-anchor (which would be about -0.475 here).
+        self.assertAlmostEqual(imp["point"], cand_d - anchor_d, places=6)
+
+
+class FilterThenRankTest(unittest.TestCase):
+    def test_second_place_is_adopted_when_the_leader_fails_the_improvement(self) -> None:
+        # Section 9 Phase 2 (iii) is a per-cell FILTER. Testing only the leader
+        # and falling back to the anchor discards a cell that cleanly beats it.
+        n = 60
+        raw = {(i, "p1"): 0.0 for i in range(n)}
+        anchor = {(i, "p1"): 1.0 if i < 30 else 0.0 for i in range(n)}
+        # Leader: bigger delta but noisy against the anchor (wins and losses).
+        leader = dict(anchor)
+        for i in range(30, 45):
+            leader[(i, "p1")] = 1.0
+        for i in range(0, 12):
+            leader[(i, "p1")] = 0.0
+        # Runner-up: smaller delta, but strictly dominates the anchor.
+        second = dict(anchor)
+        for i in range(30, 38):
+            second[(i, "p1")] = 1.0
+        rep = run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor),
+            shard("leader@k0", "search", "/c/k0.pt", leader),
+            shard("second@k0", "search", "/c/k0.pt", second),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ], anchor="anchor@k0")
+        lead_imp = rep["cells"]["leader@k0"]["improvement_over_anchor"]
+        sec_imp = rep["cells"]["second@k0"]["improvement_over_anchor"]
+        self.assertLessEqual(lead_imp["low"], 0.0, "fixture: leader must be noisy")
+        self.assertGreater(sec_imp["low"], 0.0, "fixture: runner-up must be clean")
+        # The runner-up's improvement is computed at all -- the old code never
+        # looked past ranked[0] -- and it is adopted.
+        self.assertEqual(rep["winner"], "second@k0")
+
+
+class DepthRuleTest(unittest.TestCase):
+    """The section 5 non-starvation rule, and that it reports honestly."""
+
+    CAMPAIGN = {
+        "checkpoints": {"k0": {"path": "/store/k0/transformer-policy.pt"}},
+        "cells": [
+            {"cell_id": "H", "arm": "search", "checkpoint": "k0",
+             "depth": 4, "sims": 2048, "batch": 64, "worlds": 4},
+            {"cell_id": "I", "arm": "search", "checkpoint": "k0",
+             "depth": 6, "sims": 2048, "batch": 64, "worlds": 4,
+             "reads_against": "H"},
+        ],
+    }
+
+    def _run(self, depth_i, depth_h=3.1):
+        n = 20
+        raw = {(i, "p1"): 0.0 for i in range(n)}
+        h = {(i, "p1"): 1.0 if i < 10 else 0.0 for i in range(n)}
+        i_ = {(i, "p1"): 1.0 for i in range(n)}
+        sh_h = shard("d4-s2048-b64-w4@k0", "search", "/c/k0.pt", h)
+        sh_i = shard("d6-s2048-b64-w4@k0", "search", "/c/k0.pt", i_)
+        for seat in sh_h["per_seat"].values():
+            seat["depth_reached_mean"] = depth_h
+        for seat in sh_i["per_seat"].values():
+            seat["depth_reached_mean"] = depth_i
+        with tempfile.TemporaryDirectory() as d:
+            cpath = Path(d) / "campaign.json"
+            cpath.write_text(json.dumps(self.CAMPAIGN), encoding="utf-8")
+            return run([sh_h, sh_i,
+                        shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)],
+                       campaign=str(cpath))
+
+    def test_rule_actually_matches_the_shards_cell_ids(self) -> None:
+        # The regression: config_ids are tagged with the campaign KEY (k0) while
+        # the rule derived them from the checkpoint PATH stem
+        # (transformer-policy), so nothing matched, the rule never fired, and
+        # the report still claimed it had been applied.
+        rep = self._run(depth_i=2.5)
+        self.assertIn("d6-s2048-b64-w4@k0", rep["depth_rule_applied"])
+        self.assertEqual(rep["depth_rule_unmatched"], [])
+
+    def test_starved_depth_cell_is_excluded_despite_the_largest_delta(self) -> None:
+        rep = self._run(depth_i=2.5)
+        cell = rep["cells"]["d6-s2048-b64-w4@k0"]
+        self.assertGreater(cell["paired_delta"]["point"],
+                           rep["cells"]["d4-s2048-b64-w4@k0"]["paired_delta"]["point"])
+        self.assertTrue(any("BUDGET-STARVED" in r for r in cell["ineligible_because"]))
+        self.assertNotIn("d6-s2048-b64-w4@k0", rep["ranking_eligible"])
+
+    def test_depth_cell_that_out_reaches_its_reference_is_eligible(self) -> None:
+        rep = self._run(depth_i=4.0)
+        cell = rep["cells"]["d6-s2048-b64-w4@k0"]
+        self.assertEqual(cell["ineligible_because"], [])
+        self.assertIn("d6-s2048-b64-w4@k0", rep["ranking_eligible"])
 
 
 if __name__ == "__main__":
