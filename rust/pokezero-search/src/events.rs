@@ -3050,6 +3050,33 @@ mod tests {
         sim.finish();
         assert!(out.lines.is_empty());
         assert_eq!(state.serialize(), before);
+
+        // A confused crash move can pass its confusion check and then miss,
+        // leaving the same duration-plus-damage shape. Its crash damage is
+        // deliberately ambiguous in the instruction stream, so the mapper
+        // must retain the existing fail-closed path instead of calling it a
+        // confusion self-hit.
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::CONFUSION);
+        let mut crash_choice = choice;
+        crash_choice.crash = Some(0.5);
+        let mut out = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        assert!(
+            !render_confusion_self_hit(
+                &mut sim,
+                SideReference::SideTwo,
+                &crash_choice,
+                &tail,
+                &ctx(),
+                &mut out,
+            ),
+            "a crash branch must not be mistaken for a confusion self-hit"
+        );
+        sim.finish();
+        assert!(out.lines.is_empty());
     }
 
     /// ONE SIDE's emission order, pinned against the REAL engine.
