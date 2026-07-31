@@ -1032,6 +1032,11 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
+    # Public parser chronology needed across snapshots taken after ``|upkeep|`` but before a
+    # forced replacement and the following ``|turn|``. A replacement entered after that
+    # residual, so its next turn-boundary flip must be skipped.
+    post_upkeep_window: bool = False
+    truant_skip_next_flip: tuple[str, ...] = ()
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1385,6 +1390,10 @@ class _ReplayParser:
         }
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
+        }
+        parser._post_upkeep_window = bool(snapshot.post_upkeep_window)
+        parser._truant_skip_next_flip = {
+            slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
         }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
@@ -1994,21 +2003,18 @@ class _ReplayParser:
             normalized = _normalize_identifier(copied)
             self.traced_ability[slot] = normalized
             if normalized == "truant":
-                # A copied ability does not run Truant's native ``onSwitchIn`` hook. The
-                # simulator consequently retains the Pokemon entry default, ``truantTurn =
-                # false``, at the public Trace event. From that point every residual flips the
-                # bit, so this parser can carry the phase exactly using the same turn boundary
-                # it already uses for native holders.
+                # Do not derive a boolean phase from the Trace line. Current-source probes show
+                # that publicly similar pre-upkeep acquisitions can start on opposite phases:
+                # a one-sided action switch (3400443/2) loafs next turn, while a simultaneous
+                # Porygon2/Slaking switch (2200291/41) acts. Event-queue membership, not just
+                # line position, decides whether copied Truant receives that residual.
                 #
-                # A Trace after ``|upkeep|`` is a replacement that entered after the residual
-                # it would otherwise be charged for. Reuse the native replacement guard so the
-                # following ``|turn|`` does not double-count it. No hidden state is needed: the
-                # Trace line and the parser-visible upkeep window fully determine the case.
-                self.truant_phase[slot] = False
-                if self._post_upkeep_window:
-                    self._truant_skip_next_flip.add(slot)
-                else:
-                    self._truant_skip_next_flip.discard(slot)
+                # Preserve only the public holder fact. The first own move or Truant ``cant``
+                # line anchors the phase exactly, after which normal public turn flips apply.
+                # This is the measured Z13.3 withdrawal: seeding here fixed selected rows but
+                # created 2200291/41, while leaving it unknown created no new identity.
+                self.truant_phase[slot] = None
+                self._truant_skip_next_flip.discard(slot)
             elif self.truant_phase.get(slot) is not None:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
@@ -2339,6 +2345,8 @@ class _ReplayParser:
             live_type_override=dict(self.live_type_override),
             traced_ability=dict(self.traced_ability),
             truant_phase=dict(self.truant_phase),
+            post_upkeep_window=self._post_upkeep_window,
+            truant_skip_next_flip=tuple(sorted(self._truant_skip_next_flip)),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()

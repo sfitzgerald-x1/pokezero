@@ -48,3 +48,30 @@ claim about unrevealed abilities or hidden counters.
 The implementation must add exact protocol-state fixtures for both retained
 identities plus the controls above, run focused parser/world/native tests and
 the public invariant, and keep the worktree free of private deployment data.
+
+## Outcome amendment
+
+**Prediction withdrawn; no production Trace phase seed is retained.**
+
+The current-source replay did not support the proposed chronology rule:
+
+- `3400443/2`: a one-sided action switch copied Truant before upkeep and loafed
+  at the next decision.
+- `3400443/69`: a move-KO forced replacement copied Truant before upkeep and
+  loafed at the next decision.
+- `2200291/41`: Porygon2 and Slaking switched simultaneously, Trace still
+  appeared before upkeep, but Porygon2 acted at the next decision.
+
+The last identity is ledger Z13.3's measured counterexample. On current source,
+untouched `main` has four unrelated divergences in seed `2200291`; the proposed
+boolean seed adds `2200291/41` as a fifth and removes none from that game.
+Therefore the visible `Trace -> upkeep -> turn` ordering does not determine
+whether the copied ability participated in that residual's event queue. A bool
+would overstate public knowledge at exactly the boundary under audit.
+
+Production behavior remains fail-closed: Trace records the current holder but
+leaves `truant_phase=None`. A public own-move or
+`|cant|...|ability: Truant` line anchors the phase, after which public turn
+boundaries maintain it exactly. The native-holder replacement guard remains
+valid and now snapshots/restores its post-upkeep window and pending skipped
+flip.
