@@ -329,6 +329,61 @@ class ClaimTests(unittest.TestCase):
         self.assertFalse(list((self.queue / "failed").iterdir()))
         self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
 
+    def test_fanin_claim_lease_binds_the_manifest_generation_that_was_parsed(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(
+            self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice", policy="policy-a",
+        )
+        original_write = fleet_worker._write_claim_token
+        replaced = False
+
+        def replace_after_parse(claim: Path) -> str:
+            nonlocal replaced
+            replaced = True
+            claim.write_text(
+                claim.read_text(encoding="utf-8").replace("policy-a", "policy-b"),
+                encoding="utf-8",
+            )
+            return original_write(claim)
+
+        with patch.object(fleet_worker, "_write_claim_token", new=replace_after_parse):
+            with self.assertRaises(FanInValidationError):
+                claim_next_task(self.queue, "w1", fanin=True)
+        self.assertTrue(replaced)
+        self.assertFalse((self.queue / "pending" / "i7-s0.env").exists())
+        self.assertEqual(len(list((self.queue / "claimed").glob("i7-s0.env.w1.*"))), 1)
+        self.assertFalse(list((self.queue / "done").iterdir()))
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_fanin_route_record_replacement_after_snapshot_fails_closed(self) -> None:
+        from unittest.mock import patch
+
+        _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")
+        task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(task)
+        fleet_worker._resolve_fanin_route(self.queue, task)
+        record = fleet_worker._fanin_route_record(self.queue, task.base)
+        original_verify = fleet_worker._verify_fanin_authoritative_directory_identity
+        replaced = False
+
+        def replace_after_directory_check(path: Path, expected, label: str) -> None:
+            nonlocal replaced
+            original_verify(path, expected, label)
+            if path == record.parent and label == "route provenance directory" and not replaced:
+                replaced = True
+                prior = record.with_name("route-before-final-check.json")
+                record.rename(prior)
+                record.write_bytes(prior.read_bytes())
+
+        with patch.object(
+            fleet_worker, "_verify_fanin_authoritative_directory_identity",
+            new=replace_after_directory_check,
+        ):
+            with self.assertRaises(FanInValidationError):
+                fleet_worker._resolve_fanin_route(self.queue, task)
+        self.assertTrue(replaced)
+
     def test_route_directory_preflight_failure_leaves_queue_and_route_state_untouched(self) -> None:
         from unittest.mock import patch
 
@@ -1771,7 +1826,7 @@ class FanInTests(unittest.TestCase):
 
         self._write_version("shard-wother-v1", [self._fanin_task("prior-s0.env", 1, 10, 1, 110)])
         self._manifests(1)
-        original_read = fleet_worker._read_fanin_manifest
+        original_read = fleet_worker._read_fanin_manifest_snapshot
         published = False
 
         def publish_unrelated(path: Path):
@@ -1781,7 +1836,7 @@ class FanInTests(unittest.TestCase):
                 self._write_version("shard-wother2-v1", [self._fanin_task("prior-s1.env", 1, 11, 1, 111)])
             return original_read(path)
 
-        with patch.object(fleet_worker, "_read_fanin_manifest", new=publish_unrelated):
+        with patch.object(fleet_worker, "_read_fanin_manifest_snapshot", new=publish_unrelated):
             rc = run_worker(
                 self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
                 max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
@@ -1906,9 +1961,86 @@ class FanInTests(unittest.TestCase):
                     return descriptor
 
                 with patch.object(fleet_worker.os, "open", new=replace_after_open):
-                    with self.assertRaisesRegex(FanInValidationError, "changed during read"):
+                    # Any no-follow identity check may notice this replacement;
+                    # the invariant is rejection, not its exact phase.
+                    with self.assertRaises(FanInValidationError):
                         fleet_worker._read_current_fanin_fence(root)
                 self.assertTrue(replaced)
+
+    def test_guard_chain_rechecks_earlier_generation_identity_before_returning(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        _manifest(
+            self.queue, "i1-s0.env", out=self.cache_dir / "slice-0", iteration=1,
+            offset=0, count=1, seed=100,
+        )
+        task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(task)
+        fanin_task = fleet_worker._fanin_task_from_task_manifest(task)
+        root = fleet_worker._fanin_task_fence_path(self.cache_dir, task.base)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        first = fleet_worker._acquire_fanin_guard(root, task, fanin_task)
+        second = None
+        try:
+            fleet_worker._release_fanin_guard(first)
+            task.claim_path.unlink()
+            _manifest(
+                self.queue, task.base, out=self.cache_dir / "slice-0", iteration=1,
+                offset=0, count=1, seed=100,
+            )
+            retry = claim_next_task(self.queue, "w2", fanin=True)
+            self.assertIsNotNone(retry)
+            second = fleet_worker._acquire_fanin_guard(root, retry, fanin_task)
+            original_read = fleet_worker._read_fanin_guard_directory
+            replaced = False
+
+            def replace_root_after_successor(path: Path):
+                nonlocal replaced
+                result = original_read(path)
+                if path == second.path and not replaced:
+                    replaced = True
+                    prior = root.with_name(f"prior-{root.name}")
+                    root.rename(prior)
+                    shutil.copytree(prior, root)
+                return result
+
+            with patch.object(
+                fleet_worker, "_read_fanin_guard_directory", new=replace_root_after_successor,
+            ):
+                with self.assertRaises(FanInValidationError):
+                    fleet_worker._read_current_fanin_fence(root)
+            self.assertTrue(replaced)
+        finally:
+            if second is not None:
+                fleet_worker._release_fanin_guard(second)
+            fleet_worker._release_fanin_guard(first)
+
+    def test_committed_lookup_rejects_manifest_changed_after_selection(self) -> None:
+        from unittest.mock import patch
+
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        target = self._write_version("shard-ww1-v1", [task])
+        manifest = target / fleet_worker.FANIN_MANIFEST_NAME
+        original_select = fleet_worker._select_accepted_fanin_shards
+        replaced = False
+
+        def select_then_replace(cache_dir: Path):
+            nonlocal replaced
+            selected = original_select(cache_dir)
+            if not replaced:
+                replaced = True
+                contents = manifest.read_bytes()
+                with manifest.open("r+b") as handle:
+                    handle.write(contents)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            return selected
+
+        with patch.object(fleet_worker, "_select_accepted_fanin_shards", new=select_then_replace):
+            with self.assertRaises(FanInValidationError):
+                fleet_worker._find_committed_fanin_task(self.cache_dir, task)
+        self.assertTrue(replaced)
 
     def test_target_validation_rejects_entry_replacement_during_hashing(self) -> None:
         from unittest.mock import patch
@@ -1934,7 +2066,7 @@ class FanInTests(unittest.TestCase):
             return descriptor
 
         with patch.object(fleet_worker.os, "open", new=replace_metadata):
-            with self.assertRaisesRegex(FanInValidationError, "entry changed during validation"):
+            with self.assertRaises(FanInValidationError):
                 fleet_worker._validate_fanin_target_acceptance(target, tasks, acceptance)
         self.assertTrue(replaced)
 
@@ -2109,7 +2241,7 @@ class FanInTests(unittest.TestCase):
         tasks = [self._fanin_task("i1-s0.env", 1, 0, 1, 100)]
         next_tasks = [*tasks, self._fanin_task("i1-s1.env", 1, 1, 1, 101)]
         v4 = self._write_version("shard-ww1-v4", tasks)
-        original_read = fleet_worker._read_fanin_manifest
+        original_read = fleet_worker._read_fanin_manifest_snapshot
         raced = False
 
         def publish_v5_while_reading(path: Path):
@@ -2121,7 +2253,7 @@ class FanInTests(unittest.TestCase):
             return original_read(path)
 
         with (
-            patch.object(fleet_worker, "_read_fanin_manifest", new=publish_v5_while_reading),
+            patch.object(fleet_worker, "_read_fanin_manifest_snapshot", new=publish_v5_while_reading),
             patch.object(fleet_worker.time, "sleep") as sleep,
         ):
             inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=2, games=2))
