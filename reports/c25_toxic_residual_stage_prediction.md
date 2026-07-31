@@ -8,6 +8,11 @@ badly-poisoned (`tox`) residual in
 engine's Toxic implementation or infer hidden stages from capped or lethal
 residuals.
 
+The retained identities use an absolute maximum HP of 239. Percentage-form
+Showdown conditions use a `/100` denominator and round the hidden HP delta, so
+they retain the existing proportional recovery rather than applying an exact
+Gen 3 damage-unit assertion.
+
 ## Hypothesis
 
 Gen 3 Toxic damage is `max(1, floor(max_hp / 16)) * stage`. The replay parser
@@ -43,12 +48,13 @@ be stages 9, 10, and 11.
    residual after switch-in, using the floored unit rather than proportional
    rounding.
 5. A capped or lethal residual must remain fail-closed: when the prior HP is
-   unavailable, the current HP is zero, or the observed difference is not an
-   exact positive multiple of the Gen 3 unit, this change must not invent a
+   unavailable, the current HP is zero, or an exact-HP observed difference is
+   not a positive multiple of the Gen 3 unit, this change must not invent a
    stage.
 
 ## Acceptance evidence
 
 The implementation must add tests that fail before this change for the
-239-HP sequence and controls above, preserve the existing regular-poison and
-pivot behavior, and leave public-invariant validation green.
+239-HP sequence and controls above, preserve the existing regular-poison,
+percentage-stream, and pivot behavior, and leave the public confidentiality
+invariant validation green.

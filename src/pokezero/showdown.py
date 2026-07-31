@@ -1780,9 +1780,15 @@ class _ReplayParser:
         damage = prev_hp - cur_hp
         if damage <= 0:
             return
+        # Showdown's percentage public form always uses a /100 denominator. Its damage delta is
+        # rounded from hidden absolute HP, so retain proportional recovery there. Every other
+        # denominator is exact HP and must be an integral Gen 3 Toxic unit.
+        if max_hp == 100:
+            self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
+            return
         unit = max(1, max_hp // 16)
         # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
-        # hidden stage from rounded, capped, or otherwise non-exact public damage.
+        # hidden stage from capped or otherwise non-exact public damage.
         if damage % unit:
             return
         stage = damage // unit
@@ -3727,8 +3733,8 @@ def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | 
     """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
 
     Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``).
-    Callers that need an exact Gen 3 damage unit must reject rounded percentage deltas rather
-    than infer hidden state from them.
+    The latter is recognizable by its `/100` denominator; callers needing an exact Gen 3 damage
+    unit must handle its rounded deltas separately.
     """
     if not condition:
         return None, None

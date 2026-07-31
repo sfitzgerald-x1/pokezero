@@ -653,7 +653,7 @@ class ExactStateLedgerTest(unittest.TestCase):
             "|turn|1",
             "|move|p1a: Swampert|Toxic|p2a: Aggron",
             "|-status|p2a: Aggron|tox",
-            "|-damage|p2a: Aggron|262/280 tox|[from] psn",
+            "|-damage|p2a: Aggron|263/280 tox|[from] psn",
             "|turn|2",
             "|switch|p2a: Miltank|Miltank, L82|300/300",
             "|move|p2a: Miltank|Heal Bell|p2a: Miltank",

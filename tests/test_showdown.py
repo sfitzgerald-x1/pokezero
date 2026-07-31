@@ -218,10 +218,10 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
                 "|turn|1",
                 "|move|p1a: Swampert|Toxic|p2a: Aggron",
                 "|-status|p2a: Aggron|tox",
-                "|-damage|p2a: Aggron|262/280 tox|[from] psn",
+                "|-damage|p2a: Aggron|263/280 tox|[from] psn",
                 "|move|p2a: Aggron|Toxic|p1a: Swampert",
                 "|-status|p1a: Swampert|tox",
-                "|-damage|p1a: Swampert|283/300 tox|[from] psn",
+                "|-damage|p1a: Swampert|282/300 tox|[from] psn",
                 "|turn|2",
                 "|switch|p2a: Snorlax|Snorlax, L82|400/400",
                 "|turn|3",
@@ -234,16 +234,16 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
                 "|-curestatus|p2: Aggron|tox|[silent]",
             ]
         )
-        # Benched ally (Aggron): tox suffix stripped — the fix (fails on origin/main: "262/280 tox").
+        # Benched ally (Aggron): tox suffix stripped — the fix (fails on origin/main: "263/280 tox").
         aggron = next(p for p in replay.public_revealed["p2"] if p.species == "Aggron")
-        self.assertEqual(aggron.condition, "262/280")
+        self.assertEqual(aggron.condition, "263/280")
         # ACTIVE-target cure (Miltank, position-bearing ident): par stripped on the unchanged path.
         self.assertEqual(replay.public_active["p2"].condition, "300/300")
         # Healthy same-side member (Snorlax): no phantom status, untouched.
         snorlax = next(p for p in replay.public_revealed["p2"] if p.species == "Snorlax")
         self.assertEqual(snorlax.condition, "400/400")
         # NO OVER-CLEARING: the OPPONENT side's genuinely-toxic mon keeps its status suffix.
-        self.assertEqual(replay.public_active["p1"].condition, "283/300 tox")
+        self.assertEqual(replay.public_active["p1"].condition, "282/300 tox")
         # Cured side's toxic ramp reset; the opponent side's ramp is untouched.
         self.assertEqual(replay.toxic_stage["p2"], 0)
         self.assertEqual(replay.toxic_stage["p1"], 4)
@@ -1768,8 +1768,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertEqual(state.toxic_stage["p1"], 0)
 
     def test_toxic_residual_reseed_uses_gen3_floored_damage_unit(self) -> None:
-        # 239 // 16 == 14. Proportional rounding would recover 8/9/10 below;
-        # the simulator's floored unit proves the public stages are 9/10/11.
+        # 239 // 16 == 14. A mid-battle replay import can first see a tox mon after it has
+        # healed back to full HP; proportional rounding recovers 8/9/10 below, but the
+        # simulator's floored unit proves the public stages are 9/10/11.
         for damage, remaining_hp, expected_stage in (
             (126, 113, 9),
             (140, 99, 10),
@@ -1778,10 +1779,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
             with self.subTest(damage=damage):
                 state = parse_showdown_replay(
                     [
-                        "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                        "|switch|p1a: Tauros|Tauros, L80, M|239/239 tox",
                         "|switch|p2a: Milotic|Milotic, L80, F|317/317",
                         "|turn|1",
-                        "|-status|p1a: Tauros|tox",
                         f"|-damage|p1a: Tauros|{remaining_hp}/239 tox|[from] psn",
                     ]
                 )
@@ -1814,10 +1814,24 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(divisible.toxic_stage["p1"], 12)
 
+    def test_toxic_residual_reseed_preserves_percentage_recovery(self) -> None:
+        # The public per-seat stream rounds HP to /100. It cannot recover the hidden exact unit,
+        # so it deliberately keeps proportional recovery for a fresh stage-one residual.
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|95/100 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 1)
+
     def test_toxic_residual_reseed_rejects_non_surviving_or_ambiguous_damage(self) -> None:
         # Preserve the known stage rather than inventing one from a lethal/capped line or a
         # non-integral number of Gen 3 Toxic units.
-        for condition in ("0/239 tox", "224/239 tox", "50/100 tox"):
+        for condition in ("0 fnt", "216/239 tox"):
             with self.subTest(condition=condition):
                 state = parse_showdown_replay(
                     [
@@ -1844,10 +1858,10 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|upkeep",
                 "|turn|3",
                 "|switch|p1a: Tauros|Tauros, L80, M|225/239 tox",
-                "|-damage|p1a: Tauros|99/239 tox|[from] psn",
+                "|-damage|p1a: Tauros|211/239 tox|[from] psn",
             ]
         )
-        self.assertEqual(state.toxic_stage["p1"], 9)
+        self.assertEqual(state.toxic_stage["p1"], 1)
 
     def test_future_sight_cleared_when_it_lands(self) -> None:
         landed = self._replay_with(
