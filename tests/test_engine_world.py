@@ -336,6 +336,16 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.spec.side_two.side_conditions["toxic_count"], 3)
         self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
 
+    def test_toxic_stage_fifteen_materializes_but_internal_sentinel_does_not(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        payload["sides"]["p2"]["toxicStage"] = 15
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertEqual(world.spec.side_two.side_conditions["toxic_count"], 15)
+
+        payload["sides"]["p2"]["toxicStage"] = 16
+        self._assert_reason(payload, "toxic_stage_unknown")
+
     def test_active_toxic_requires_explicit_public_counter(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"

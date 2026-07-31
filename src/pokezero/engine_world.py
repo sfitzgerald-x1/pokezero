@@ -1227,7 +1227,11 @@ def _build_side_spec(
             side_conditions[mapped] = int(value)
     toxic_stage = side_payload.get("toxicStage")
     if party[active_index].status == "toxic":
-        if isinstance(toxic_stage, bool) or not isinstance(toxic_stage, int) or toxic_stage < 0:
+        if (
+            isinstance(toxic_stage, bool)
+            or not isinstance(toxic_stage, int)
+            or not 0 <= toxic_stage <= 15
+        ):
             raise EngineWorldUnsupported(
                 "toxic_stage_unknown",
                 f"side {slot!r} has active Toxic without a public toxicStage",

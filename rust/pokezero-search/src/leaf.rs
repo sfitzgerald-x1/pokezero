@@ -306,6 +306,17 @@ fn snapshot_side(side: &Side) -> SideSnapshot {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LeafMeta {
     pub(crate) toxic: [i64; 2],
+    /// Whether the active mon is publicly known to retain badly poisoned
+    /// status. The event renderer omits an unchanged status from ordinary HP
+    /// lines, so residual recovery carries this fact across those lines.
+    pub(crate) active_toxic: [bool; 2],
+    /// Exact HP condition last announced for each active side. This is only
+    /// used to recover a Toxic multiplier from the next exact residual.
+    pub(crate) active_hp: [Option<(i64, i64)>; 2],
+    /// A switch/drag proves the incoming Toxic mon's simulator counter reset
+    /// to zero. A first `/100` Toxic residual can therefore prove stage one;
+    /// no other rounded residual is safe to invert.
+    pub(crate) toxic_reentry_pending: [bool; 2],
     pub(crate) stint: [i64; 2],
     /// Per-mon sleep bookkeeping keyed by (engine side, species key):
     /// (started, cant_count). `started` marks a `|-status|..|slp` seen in the
@@ -354,6 +365,10 @@ pub(crate) struct LeafMetaCtx {
     /// Pressure (gen 3 announces Pressure on entry, so world truth and the
     /// parser's revealed-ability rule coincide for on-field mons).
     pub(crate) pressure: [Vec<String>; 2],
+    /// HP Percentage Mod applies to these sides' rendered protocol lines.
+    /// `/100` damage is rounded, except for the first residual after a
+    /// switch/drag reset, which is provably Toxic stage one.
+    pub(crate) hp_percent: [bool; 2],
 }
 
 /// The parser's timed side conditions (showdown.py `_TIMED_SIDE_CONDITIONS`).
@@ -405,6 +420,99 @@ fn called_move_source(line: &str) -> Option<String> {
     Some(normalize_identifier(tag))
 }
 
+/// Parse a protocol HP condition's exact numerator and denominator.
+/// Percentage-mode lines use the same shape (`n/100`); callers must consult
+/// [`LeafMetaCtx::hp_percent`] before treating that pair as exact HP.
+fn condition_hp(raw: &str) -> Option<(i64, i64)> {
+    let hp = raw.split_whitespace().next()?;
+    let (current, maximum) = hp.split_once('/')?;
+    let current = current.parse::<i64>().ok()?;
+    let maximum = maximum.parse::<i64>().ok()?;
+    (current >= 0 && maximum > 0).then_some((current, maximum))
+}
+
+/// The explicit major status on a protocol condition, if the line carries one.
+/// Bare HP updates deliberately return `None`: they do not change status.
+fn condition_status(raw: &str) -> Option<String> {
+    raw.split_whitespace()
+        .skip(1)
+        .find(|field| *field != "fnt")
+        .map(normalize_identifier)
+}
+
+fn condition_is_fainted(raw: &str) -> bool {
+    raw.split_whitespace().any(|field| field == "fnt")
+}
+
+fn clear_toxic_meta(meta: &mut LeafMeta, side: usize) {
+    meta.toxic[side] = 0;
+    meta.active_toxic[side] = false;
+    meta.toxic_reentry_pending[side] = false;
+}
+
+/// Re-seed a Toxic stage from a residual damage line before its HP condition
+/// replaces the prior value. Exact HP recovers any integral Gen 3 multiplier;
+/// rounded `/100` HP recovers only the first tick after a public re-entry.
+fn reseed_toxic_from_residual(meta: &mut LeafMeta, rest: &str, ctx: &LeafMetaCtx) {
+    let Some(side) = line_slot(rest) else { return };
+    let fields: Vec<&str> = rest.split('|').collect();
+    let condition = fields.get(1).copied().unwrap_or("");
+    let is_toxic_residual = fields.iter().skip(2).any(|field| field.trim() == "[from] psn");
+    if !is_toxic_residual || !meta.active_toxic[side] {
+        return;
+    }
+    let Some((current_hp, maximum_hp)) = condition_hp(condition) else {
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    };
+    if current_hp <= 0 {
+        clear_toxic_meta(meta, side);
+        return;
+    }
+    if ctx.hp_percent[side] {
+        if meta.toxic_reentry_pending[side] {
+            meta.toxic[side] = 1;
+        }
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    }
+    let Some((previous_hp, previous_maximum)) = meta.active_hp[side] else {
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    };
+    meta.toxic_reentry_pending[side] = false;
+    if maximum_hp != previous_maximum || previous_hp <= current_hp {
+        return;
+    }
+    let damage = previous_hp - current_hp;
+    let unit = (maximum_hp / 16).max(1);
+    if damage % unit != 0 {
+        return;
+    }
+    let stage = damage / unit;
+    if (1..=15).contains(&stage) {
+        meta.toxic[side] = stage;
+    }
+}
+
+/// Carry the public active HP/status surface across protocol lines. The
+/// renderer writes only HP on ordinary damage/heal lines, so no status token
+/// means "unchanged", not "cured".
+fn update_active_condition(meta: &mut LeafMeta, side: usize, condition: &str) {
+    if let Some(hp) = condition_hp(condition) {
+        meta.active_hp[side] = Some(hp);
+    }
+    if condition_is_fainted(condition) {
+        clear_toxic_meta(meta, side);
+    } else if let Some(status) = condition_status(condition) {
+        meta.active_toxic[side] = status == "tox";
+        if status != "tox" {
+            meta.toxic[side] = 0;
+            meta.toxic_reentry_pending[side] = false;
+        }
+    }
+}
+
 /// Engine side index from a SIDE ident ("p1: name" / "p1a: name").
 fn side_ident_slot(rest: &str) -> Option<usize> {
     if rest.starts_with("p1") {
@@ -442,18 +550,21 @@ fn species_key(obj: &Map<String, Value>) -> String {
 
 /// Replay the parser's toxic/stint rules over synthesized lines
 /// (`showdown._ReplayParser._feed_line`: `|-status|..|tox` sets stage 1,
-/// `|-curestatus|` clears, the side's `|switch|`/`|drag|` resets stage AND
-/// stint, `|turn|` escalates every nonzero stage (cap 15) and advances every
-/// stint), plus the PP-charge replay (parser rules, see [`LeafMeta`]) and the
+/// status replacement, `|-curestatus|`, `|-cureteam|`, and `|faint|` clear;
+/// the side's `|switch|`/`|drag|` resets stage AND stint; `|turn|` escalates
+/// every nonzero stage through the internal saturation sentinel 16 and
+/// advances every stint. Exact residuals recover their multiplier, while
+/// rounded residuals recover only a switch/drag-proven stage one. This also
+/// replays the PP-charge rules (see [`LeafMeta`]) and the
 /// timed side-condition set-turn replay. `ctx` carries the sampled world's
-/// static per-side facts (Pressure holders).
+/// static per-side facts (Pressure holders and HP representation).
 pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMetaCtx) -> LeafMeta {
     let mut out = meta.clone();
     for line in lines {
         if line.starts_with("|turn|") {
             for side in 0..2 {
                 if out.toxic[side] > 0 {
-                    out.toxic[side] = (out.toxic[side] + 1).min(15);
+                    out.toxic[side] = (out.toxic[side] + 1).min(16);
                 }
                 out.stint[side] += 1;
             }
@@ -507,6 +618,36 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
             }
             continue;
         }
+        if let Some(rest) = line.strip_prefix("|-damage|") {
+            reseed_toxic_from_residual(&mut out, rest, ctx);
+            if let Some(side) = line_slot(rest) {
+                if let Some(condition) = rest.split('|').nth(1) {
+                    update_active_condition(&mut out, side, condition);
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|-heal|") {
+            if let Some(side) = line_slot(rest) {
+                if let Some(condition) = rest.split('|').nth(1) {
+                    update_active_condition(&mut out, side, condition);
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|faint|") {
+            if let Some(side) = line_slot(rest) {
+                clear_toxic_meta(&mut out, side);
+                out.active_hp[side] = None;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|-cureteam|") {
+            if let Some(side) = side_ident_slot(rest) {
+                clear_toxic_meta(&mut out, side);
+            }
+            continue;
+        }
         // Timed side-condition set turns (showdown.py
         // `_update_timed_side_conditions` :909-922): |-sidestart| records the
         // parser's CURRENT turn, |-sideend| pops the entry. Side idents on
@@ -533,15 +674,21 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
             let Some(side) = line_slot(rest) else { break };
             if is_status {
                 match rest.split('|').nth(1).map(|s| normalize_identifier(s.trim())) {
-                    Some(status) if status == "tox" => out.toxic[side] = 1,
+                    Some(status) if status == "tox" => {
+                        out.toxic[side] = 1;
+                        out.active_toxic[side] = true;
+                        out.toxic_reentry_pending[side] = false;
+                    }
                     Some(status) if status == "slp" => {
+                        clear_toxic_meta(&mut out, side);
                         let key = ident_species_key(rest);
                         out.sleep.insert((side, key), (true, 0));
                     }
-                    _ => {}
+                    Some(_) => clear_toxic_meta(&mut out, side),
+                    None => {}
                 }
             } else if is_cure {
-                out.toxic[side] = 0;
+                clear_toxic_meta(&mut out, side);
             } else {
                 out.toxic[side] = 0;
                 out.stint[side] = 0;
@@ -553,6 +700,9 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
                 if !species.is_empty() {
                     out.active[side] = species;
                 }
+                let condition = rest.split('|').nth(2).unwrap_or("");
+                update_active_condition(&mut out, side, condition);
+                out.toxic_reentry_pending[side] = out.active_toxic[side];
             }
             break;
         }
@@ -661,6 +811,16 @@ impl LeafContext {
                 species_keys[out].push(normalize_identifier(name));
             }
         }
+        let mut meta_ctx = LeafMetaCtx::default();
+        if let Some(hp_percent) = ctx.get("hp_percent").and_then(Value::as_array) {
+            for side in hp_percent {
+                match side.as_str() {
+                    Some("p1") => meta_ctx.hp_percent[0] = true,
+                    Some("p2") => meta_ctx.hp_percent[1] = true,
+                    other => return Err(err(format!("ctx JSON has bad hp_percent side {other:?}"))),
+                }
+            }
+        }
         let root_self_order: Vec<String> = md
             .get("self_team")
             .and_then(Value::as_array)
@@ -733,8 +893,11 @@ impl LeafContext {
                 .get(active)
                 .cloned()
                 .unwrap_or_default();
+            let active = side.get_active_immutable();
+            root_meta.active_toxic[engine_side] = active.status == PokemonStatus::TOXIC;
+            root_meta.active_hp[engine_side] = (active.maxhp > 0)
+                .then_some((active.hp as i64, active.maxhp as i64));
         }
-        let mut meta_ctx = LeafMetaCtx::default();
         for (engine_side, side) in [(0usize, &root_state.side_one), (1, &root_state.side_two)] {
             for (party, p) in side.pokemon.into_iter().enumerate() {
                 if p.ability == poke_engine::engine::abilities::Abilities::PRESSURE {
@@ -969,9 +1132,9 @@ impl LeafContext {
         // opponent raises the USER's flag) — so a side's clause goes up when
         // its OPPONENT gains a new non-Rest sleeper. Toxic stage:
         // line-driven metadata (the parser escalates on |turn| lines only —
-        // review F1), with a cure guard only for full cures the mapper does
-        // not render (|-curestatus| is fold-invisible; a status REPLACEMENT
-        // like Rest's tox->slp keeps the parser stage — golden-proven).
+        // review F1). The line replay clears every public Toxic-ending event;
+        // this state guard also protects rows whose engine state proves the
+        // active fainted or has a non-Toxic replacement status.
         for (index, (key_sc, key_tox, side, other, engine_side)) in [
             (
                 "self_sleep_clause_used",
@@ -1007,7 +1170,7 @@ impl LeafContext {
             md.insert(key_sc.into(), json!(clause));
             let active = side.get_active_immutable();
             let mut stage = meta.toxic[engine_side];
-            if stage > 0 && active.hp > 0 && active.status == PokemonStatus::NONE {
+            if stage > 0 && (active.hp <= 0 || active.status != PokemonStatus::TOXIC) {
                 stage = 0;
             }
             md.insert(key_tox.into(), json!(stage));
@@ -2051,6 +2214,91 @@ mod tests {
         assert_eq!(meta.active[1], "starmie");
     }
 
+    #[test]
+    fn toxic_meta_rest_status_replacement_and_cures_clear_stage() {
+        let root = LeafMeta {
+            toxic: [0, 7],
+            active_toxic: [false, true],
+            ..Default::default()
+        };
+        for line in [
+            "|-status|p2a: Starmie|slp|[from] move: Rest",
+            "|-status|p2a: Starmie|par",
+            "|-curestatus|p2a: Starmie|tox",
+            "|-cureteam|p2a: Starmie|tox",
+        ] {
+            let meta = evolve_leaf_meta(&root, &lines(&[line]), &LeafMetaCtx::default());
+            assert_eq!(meta.toxic[1], 0, "{line} must clear Toxic stage");
+            assert!(!meta.active_toxic[1], "{line} must end active Toxic");
+        }
+    }
+
+    #[test]
+    fn toxic_meta_switch_and_drag_reentry_residuals_recover_stage() {
+        let root = LeafMeta {
+            toxic: [0, 9],
+            active_toxic: [false, true],
+            active_hp: [None, Some((80, 240))],
+            ..Default::default()
+        };
+        let switched = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|switch|p2a: Starmie|Starmie, L77|90/240 tox",
+                "|-damage|p2a: Starmie|75/240|[from] psn",
+            ]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(switched.toxic[1], 1, "exact Toxic residual must recover stage one");
+        let advanced = evolve_leaf_meta(
+            &switched,
+            &lines(&["|turn|21"]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(advanced.toxic[1], 2);
+
+        let ctx = LeafMetaCtx {
+            hp_percent: [false, true],
+            ..Default::default()
+        };
+        let dragged = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|drag|p2a: Starmie|Starmie, L77|90/100 tox",
+                "|-damage|p2a: Starmie|85/100|[from] psn",
+            ]),
+            &ctx,
+        );
+        assert_eq!(dragged.toxic[1], 1, "reentry provenance must recover rounded stage one");
+
+        let unproven = evolve_leaf_meta(
+            &LeafMeta {
+                toxic: [0, 0],
+                active_toxic: [false, true],
+                active_hp: [None, Some((90, 100))],
+                ..Default::default()
+            },
+            &lines(&["|-damage|p2a: Starmie|85/100|[from] psn"]),
+            &ctx,
+        );
+        assert_eq!(unproven.toxic[1], 0, "rounded residual without reentry provenance fails closed");
+    }
+
+    #[test]
+    fn toxic_meta_preserves_saturation_sentinel_sixteen() {
+        let root = LeafMeta {
+            toxic: [0, 15],
+            active_toxic: [false, true],
+            ..Default::default()
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&["|upkeep", "|turn|32", "|turn|33"]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(meta.toxic[1], 16);
+    }
+
     /// toxic_stall repro: a faint-pending ply runs the ENGINE's end-of-turn
     /// tick but emits no |turn| line — the parser (and therefore the leaf)
     /// must NOT escalate.
@@ -2072,7 +2320,7 @@ mod tests {
             ]),
             &LeafMetaCtx::default(),
         );
-        assert_eq!(meta.toxic[1], 9);
+        assert_eq!(meta.toxic[1], 0);
     }
 
     /// Review F4: stint counting — +1 per |turn| line, reset on the side's
@@ -2108,6 +2356,7 @@ mod tests {
         root.active = ["swampert".to_string(), "zapdos".to_string()];
         let ctx = LeafMetaCtx {
             pressure: [Vec::new(), vec!["zapdos".to_string()]],
+            ..Default::default()
         };
         let meta = evolve_leaf_meta(
             &root,
