@@ -1,11 +1,10 @@
 //! Rest and end-of-turn residual composition pins.
 //!
-//! The retained rows 2901076/41, 3000156/47, and 3500842/79 initially looked
-//! like missing Leftovers or Toxic residuals. Replay shows the residual tail is
-//! present on every engine branch that survives the move; the apparent omission
-//! is instead attached to a capped-lethal damage branch. These controls make
-//! that boundary explicit so a future damage-lattice repair cannot be "fixed"
-//! by incorrectly re-attaching residuals after a terminal faint.
+//! The historical claim for retained rows 2901076/41, 3000156/47, and 3500842/79
+//! cannot be replayed because their raw reports are not retained. These controls
+//! therefore establish only the scheduler boundary: a survivor gets its eligible
+//! tail, while a terminal faint gets none. They must not be used to attribute any
+//! of the retained rows to the scheduler or to a damage/composition mechanism.
 
 use poke_engine::choices::Choices;
 use poke_engine::engine::items::Items;

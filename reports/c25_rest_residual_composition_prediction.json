@@ -1,7 +1,7 @@
 {
   "artifact": "c25_rest_residual_composition_prediction/v1",
-  "status": "pre_implementation",
-  "date": "2026-07-30",
+  "status": "closed_comparison_limit",
+  "date": "2026-07-31",
   "scope": {
     "retained_rows": [
       [2901076, 41],
@@ -15,14 +15,14 @@
       "transition matcher attribution"
     ]
   },
-  "replay_observation": {
-    "shared_shape": "A damaging move leaves the Rest user at low HP in the Showdown transcript; Rest then heals it to full, and the end-of-turn block includes the opposing survivor's Leftovers and, where applicable, poison residual.",
-    "engine_shape": "Each replay contains a surviving engine branch with the expected residual components and a separate capped-lethal branch without them. The capped-lethal branch is only reachable because the current engine damage lattice does not contain the observed surviving damage value."
+  "historical_claim": {
+    "status": "unverified",
+    "summary": "The prior pre-implementation note described a surviving Rest branch with a residual tail beside a capped-lethal terminal branch. The retained source reports required to replay that claim are not tracked in this checkout or either related lane."
   },
   "prediction": {
     "survivor": "For a Rest turn that leaves both sides alive, every resulting branch must retain all eligible end-of-turn residual instructions in Gen 3 order, including Leftovers before poison for the same Pokemon.",
     "terminal": "For a Rest turn whose damage branch ends the battle before Rest can execute, no later residual instruction may be emitted.",
-    "retained_rows": "The three retained identities will continue to miss until their observed damage values are representable. Altering residual scheduling cannot add the missing survivor branch and would make the valid capped-lethal branch incorrect."
+    "retained_rows": "No row-level outcome is asserted without the retained reports. The focused controls establish only the scheduler boundary, not an attribution for these identities."
   },
   "stop_rule": "Do not change residual scheduling unless a focused Rest fixture shows a surviving branch missing an otherwise eligible residual instruction, or a terminal branch emitting one. If both controls hold, fail closed and hand the shared damage-lattice defect to its dedicated lane.",
   "verification_plan": {
@@ -36,5 +36,25 @@
       "focused Rust regressions",
       "tests/test_public_invariant.py"
     ]
+  },
+  "closure": {
+    "disposition": "comparison_limit",
+    "production_change_licensed": false,
+    "matcher_or_composition_issue_proven": false,
+    "residual_scheduler_change": "refused",
+    "row_replay": {
+      "outcome": "not_replayable",
+      "reason": "The raw retained replay reports are absent from this worktree, the read-only damage-composition lane, and the read-only damage-arithmetic lane. The public gen3randombattle replay URLs derived from the three numeric identities returned HTTP 404, and the local differential harness cannot import its required pokezero_search consumer."
+    },
+    "focused_controls": {
+      "surviving_rest_tail": "passed",
+      "terminal_rest_tail": "passed",
+      "meaning": "Neither stop-rule trigger was observed in the controlled native fixture."
+    },
+    "build_provenance": {
+      "status": "not_attested",
+      "reason": "The two-consumer engine fingerprint cannot be checked without the installed pokezero_search consumer. The installed poke_engine wheel is a focused control only, not replay certification evidence."
+    },
+    "contract": "docs/rest_residual_composition_comparison_limit.md"
   }
 }
