@@ -30,6 +30,9 @@ def _build_state(
     s1_status="none",
     s2_ability=None,
     s2_maxhp=100,
+    s1_reserve=False,
+    s2_volatiles=(),
+    s2_volatile_durations=None,
 ):
     from pokezero.poke_engine_adapter import (
         BattleSpec,
@@ -56,10 +59,11 @@ def _build_state(
             moves=tuple(MoveSpec(id=m, pp=32) for m in moves),
         )
 
+    side_one = [mon("rattata", side_one_moves, speed=s1_speed, status=s1_status)]
+    if s1_reserve:
+        side_one.append(mon("pikachu", ("splash",), speed=s1_speed - 1))
     spec = BattleSpec(
-        side_one=SideSpec(
-            pokemon=(mon("rattata", side_one_moves, speed=s1_speed, status=s1_status),)
-        ),
+        side_one=SideSpec(pokemon=tuple(side_one)),
         side_two=SideSpec(
             pokemon=(
                 mon(
@@ -69,7 +73,9 @@ def _build_state(
                     maxhp=s2_maxhp,
                     ability=s2_ability,
                 ),
-            )
+            ),
+            volatile_statuses=s2_volatiles,
+            volatile_status_durations=s2_volatile_durations or {},
         ),
     )
     return build_poke_engine_state(spec).to_string()
@@ -215,6 +221,78 @@ class BranchEventsTest(unittest.TestCase):
             if token["kind"] == "move" and token["action"] == "tackle"
         )
         self.assertEqual(tackle["self_hp_cost"], 0.0)
+
+    def test_switch_prefixed_confusion_self_hit_is_canonical_and_not_lossy(self) -> None:
+        # This is the retained certification shape: p1 switches, then p2's
+        # confused active hits itself before it can use Splash. The mapper must
+        # preserve the switch prefix while rendering the standard confusion
+        # activation/damage pair rather than dropping into its generic
+        # attacker-side-damage fallback.
+        state = _build_state(
+            ("splash",),
+            ("splash",),
+            s1_reserve=True,
+            s2_volatiles=("confusion",),
+            s2_volatile_durations={"confusion": 0},
+        )
+        context = json.dumps({"p1": ["Rattata", "Pikachu"], "p2": ["Chansey"], "turn": 1})
+        report = json.loads(
+            pokezero_search.branch_events(state, "pikachu", "splash", context, True, False)
+        )
+        self_hit = next(
+            branch
+            for branch in report["branches"]
+            if any(line.endswith("|[from] confusion") for line in branch["events"])
+        )
+        self.assertEqual(self_hit["lossy"], [], self_hit)
+        switch = next(
+            index
+            for index, line in enumerate(self_hit["events"])
+            if line.startswith("|switch|p1a: Pikachu|")
+        )
+        activate = self_hit["events"].index("|-activate|p2a: Chansey|confusion")
+        damage = next(
+            index
+            for index, line in enumerate(self_hit["events"])
+            if line.startswith("|-damage|p2a: Chansey|") and line.endswith("|[from] confusion")
+        )
+        self.assertLess(switch, activate)
+        self.assertLess(activate, damage)
+        self.assertFalse(
+            any(line.startswith("|move|p2a: Chansey|") for line in self_hit["events"]),
+            self_hit,
+        )
+
+    def test_confusion_without_switch_still_uses_canonical_pair(self) -> None:
+        state = _build_state(
+            ("splash",),
+            ("splash",),
+            s2_volatiles=("confusion",),
+            s2_volatile_durations={"confusion": 0},
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "splash", "splash", CTX, True, False)
+        )
+        self_hit = next(
+            branch
+            for branch in report["branches"]
+            if any(line.endswith("|[from] confusion") for line in branch["events"])
+        )
+        self.assertEqual(self_hit["lossy"], [], self_hit)
+        self.assertIn("|-activate|p2a: Chansey|confusion", self_hit["events"])
+
+    def test_recoil_remains_recoil_not_confusion(self) -> None:
+        state = _build_state(("doubleedge",), ("splash",), s2_hp=400, s2_maxhp=400)
+        report = json.loads(
+            pokezero_search.branch_events(state, "doubleedge", "splash", CTX, True, False)
+        )
+        recoil = next(
+            branch
+            for branch in report["branches"]
+            if any("[from] Recoil" in line for line in branch["events"])
+        )
+        self.assertEqual(recoil["lossy"], [], recoil)
+        self.assertFalse(any("confusion" in line for line in recoil["events"]), recoil)
 
     def test_ambiguous_sleep_talk_call_is_flagged_lossy(self) -> None:
         # An asleep Sleep Talker whose callable moves ALL produce an empty
