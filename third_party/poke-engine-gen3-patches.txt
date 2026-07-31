@@ -1080,5 +1080,92 @@ poke-engine-gen3-counter-hiddenpower-category.patch
 # the counter-hiddenpower-category tree above.
 poke-engine-gen3-flashfire-phase1.patch
 
+# gen3 recharge-turn residuals. A Hyper Beam recharge turn is a FULL turn:
+# the recharging side's only option is None, but Showdown runs the whole
+# end-of-turn residual block on the |cant|<mon>|recharge boundary (sim probe:
+# Leftovers heal + toxic tick both fire on a (switch, recharge) turn).
+# end_of_turn_triggered's bare (Switch, None) exclusion - correct for
+# faint-replacement plies, whose residuals already ran or were deferred on
+# the ply that caused the faint - also swallowed VOLUNTARY switches beside a
+# recharging Pokemon, dropping every residual (the certification sweep's
+# 56-row family, all exactly this shape at 100% branch; e.g. 2000204/51:
+# Leech Seed, Leftovers and psn all observed-only). Distinguisher: on a
+# recharge turn the None side still carries MUSTRECHARGE when the trigger is
+# evaluated. Touches end_of_turn_triggered in gen3/generate_instructions.rs
+# only; authored against the flashfire-phase1 tree above.
+poke-engine-gen3-recharge-turn-residuals.patch
+
+# gen3 absorb abilities vs Protect and accuracy. The sim reaches an absorb
+# ability's onTryHit only AFTER Protect has blocked the move and the accuracy
+# roll has passed (sim probes: protecting Vaporeon answers -activate with no
+# absorb; missed Hydro Pump answers -miss with no absorb). The engine's
+# Water/Volt Absorb (and Dry Skin) arms call remove_all_effects(), which
+# clears flags.protect and forces accuracy to 100 (VOLTABSORB re-forced 100
+# explicitly), so the converted quarter-heal pierced Protect (before_move's
+# Protect gate never saw the flag) and healed on the sim's miss rolls - the
+# sweep's 39-row absorb family (23 protect-shape + 16 miss-shape; e.g.
+# 2000214/12 protected, 2000628/72 missed Hydro Pump). Preserves the original
+# accuracy and protect flag through the conversion; the existing Protect
+# stripping then clears the heal, and the accuracy split leaves the heal off
+# the miss branch. Touches the three arms in gen3/abilities.rs only; authored
+# against the recharge-turn-residuals tree above.
+poke-engine-gen3-absorb-protect-accuracy.patch
+
+# gen3 typed Hidden Power thaw exclusion. The thaw-on-fire-hit exclusion in
+# generate_instructions.rs listed only the generic Choices::HIDDENPOWER (and
+# WEATHERBALL), so pokezero's typed variants (HIDDENPOWERFIRE70 etc.) thawed a
+# frozen defender unconditionally and let it act — the certification sweep's
+# 4-row freeze family (e.g. 2000131/47: sim's Omastar stays frozen and cants;
+# engine emits ChangeStatus FREEZE -> NONE at 100% and Omastar attacks). The
+# sim never thaws on Hidden Power: its runtime move id is always the generic
+# hiddenpower (dex type Normal in gen3's frz.onDamagingHit; the typed name is
+# display-only in the request payload) — verified on the vendored checkout and
+# by live gen3customgame probes (HP-Fire IVs supereffective on Skarmory, no
+# thaw on a frozen Shuckle; Flamethrower control thaws). The exclusion now
+# enumerates all 33 Hidden Power variants, the same set as the
+# counter-hiddenpower-category patch above. The 80/20 self-thaw gate and real
+# Fire-move thaws are untouched. Touches the one condition in
+# gen3/generate_instructions.rs; authored against the absorb tree above.
+poke-engine-gen3-typed-hiddenpower-thaw.patch
+
+# Public no-op branch identity. Accuracy is rolled before Protect in Showdown,
+# but remove_effects_for_protect forced it to 100 and then duplicate-state
+# folding erased the miss-vs-Protect distinction. Full-HP absorb hits had the
+# same empty-delta collision with misses. Preserve accuracy and attach a
+# reversible zero-heal marker only to successful Protect/absorb hit branches;
+# the Rust protocol mapper consumes that marker into the correct public event.
+# Authored against the typed-hiddenpower-thaw tree above.
+poke-engine-gen3-public-noop-branches.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
+
+# Final c15 retained engine families plus the c17 Color Change incap adjudication:
+# fixed-point pinch/Thick Fat base power, post-hit Flail/Reversal bands,
+# Cloud Nine/Forecast transitions, and Ice Beam's freeze-before-Color-Change order.
+poke-engine-gen3-final-defects.patch
+
+# Gen 3 departure ordering for weather suppressors. Air Lock / Cloud Nine run
+# Forecast when the holder leaves, but not when a replacement suppressor enters,
+# so a direct suppressor-to-suppressor handoff exposes the underlying weather
+# before the switch line and keeps that form afterward.
+poke-engine-gen3-forecast-suppressor-handoff.patch
+
+# Independent-review composition fixes for the final-defects fan-out. Preserve
+# the first move's normal multi-hit count while retaining exact damage rolls
+# needed by pending Flail/Reversal, and pass actual post-cap direct damage to
+# deferred Color Change so zero-damage Endure branches never retype.
+poke-engine-gen3-review-compositions.patch
+
+# Gen 3 successful Substitute ends an existing partial-trap volatile. Showdown
+# silently ends Wrap / Bind / Fire Spin / Clamp / Whirlpool after the Substitute
+# is created, before end-of-turn residuals. Upstream leaves PARTIALLYTRAPPED in
+# place, emitting an extra 1/16 chip on that same boundary (retained identity
+# 3101100/29). The removal is strictly inside Substitute's successful-cost arm:
+# failed Substitute attempts, ordinary trapped turns, Rapid Spin, and the
+# source-leaves / Baton Pass lifecycle rules are unchanged. Pinned by
+# rust/pokezero-search/tests/gen3_switch_fidelity.rs; authored against the
+# review-compositions tree above. No upstream fixture patch changes, so the
+# frozen fixture-refresh entry remains unmodified.
+poke-engine-gen3-wrap-substitute-lifecycle.patch
+poke-engine-gen3-toxic-stage-cap.patch

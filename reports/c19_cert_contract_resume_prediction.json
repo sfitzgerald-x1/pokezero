@@ -1,0 +1,29 @@
+{
+  "scope": "Prediction-only artifact for the post-review certification contract and checkpoint-resume fixes. Committed before implementation; it contains no execution, cluster, or private deployment state.",
+  "source_commit_before_implementation": "cc646a5ec7e935c745442a398da6a04124f3fd28",
+  "predictions": {
+    "gates_bearing_contract": {
+      "pre_fix": "A contract with certification_gates but both registration flags false is accepted by the producer's legacy path even though the readout treats the same artifact as final and fails it.",
+      "post_fix": "FAIL before manifest production: any contract carrying certification_gates is final and must set registered_before_launch=true and requires_execution_contract=true. Explicit legacy opt-out remains available only for an artifact with no gates."
+    },
+    "predicted_class_rate_shape": {
+      "pre_fix": "The producer and checked-in final-contract schema accept a predicted_class_rates_10k entry such as {\"class\": 42}, while the readout later rejects it as a non-object.",
+      "post_fix": "FAIL before manifest production and under schema validation: every predicted class name is a string and every entry is an object with finite, ordered expected_10k and wilson95_count_10k values in the shape the readout consumes."
+    },
+    "family_schema_validator_drift": {
+      "pre_fix": "The checked-in JSON schema accepts arbitrary documented-family names and unconstrained rate intervals that the shared validator/readout reject, making the published interoperability contract weaker than its consumers.",
+      "post_fix": "The schema restricts documented-family keys to the shared emitted vocabulary plus limit:* and constrains interval element types and rate bounds where JSON Schema can. A regression compares schema vocabulary to the shared constants, while the shared validator continues to enforce cross-field ordering and calibration-dependent constraints."
+    },
+    "torn_checkpoint_tail": {
+      "pre_fix": "load_checkpoint ignores an invalid final JSONL fragment but leaves it in place. A later append concatenates a valid record onto the fragment, turning recoverable tail damage into fatal mid-file corruption.",
+      "post_fix": "A single-writer resume truncates only an invalid final non-empty JSONL fragment back through its preceding newline, fsyncs the repaired file, and then appends valid rows that reload cleanly. Invalid non-final records remain fatal and are never truncated."
+    }
+  },
+  "verification_plan": [
+    "Producer regression for gates-bearing unregistered contracts, paired with the existing readout behavior.",
+    "Producer and schema regressions for scalar, malformed, non-finite, and unordered predicted_class_rates_10k entries.",
+    "Schema vocabulary drift regression against the shared documented-family constants plus bounded structural interval assertions.",
+    "Checkpoint regression proving append after a torn final JSONL tail reloads fully, plus a separate mid-file corruption rejection.",
+    "Focused public Python tests, relevant broader tests, full Rust suite if practical, Python compilation, JSON parsing, and diff hygiene."
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "registered_before": "any instrument run on the 44-patch build (sweep re-read, census); authored after replay of 5 rows and live sim probes, before the patch was applied to the tree",
+  "mechanism": {
+    "patch_44_typed_hiddenpower_thaw": {
+      "engine_defect": "gen3/generate_instructions.rs thaw-on-fire-hit exclusion lists only Choices::HIDDENPOWER and Choices::WEATHERBALL; the choice vocabulary's 32 typed Hidden Power variants (HIDDENPOWERFIRE60/70 and the other types) slip through, so a typed HP Fire hit thaws a frozen defender unconditionally and lets it act (replayed: ChangeStatus FREEZE -> NONE at 100 percent of branches, defender deals damage the sim never saw)",
+      "sim_rule": "gen3 frz.onDamagingHit thaws on this.dex.moves.get(move.id).type === 'Fire'; the runtime id in real games is always the GENERIC 'hiddenpower' (dex type Normal; the typed name is display-only in the request payload), so the sim never thaws on Hidden Power regardless of its IV-derived dynamic type; the parent thawsTarget path also does not apply (typed HP entries carry no thawsTarget flag)",
+      "sim_probes": "live gen3customgame (hp_thaw_sim_probes.py): HP-Fire-IV Hidden Power is supereffective on Skarmory (dynamically Fire) yet a frozen Shuckle hit by it keeps frz and answers |cant| (seeds 14, 37); the 20 percent self-thaw arm appears at the defender's own action (seed 40; also a same-turn instance on seed 10), which is the engine's 80/20 gate and is NOT touched; Flamethrower control cures frz immediately after the damage line and the thawed mon acts the same turn (seeds 14, 37 turn 3)",
+      "fix_class": "enumerate all 33 HIDDENPOWER enum variants in the exclusion, exactly mirroring the counter-hiddenpower-category patch's 33-variant match arm (patch 40 precedent); the 80/20 freeze gate and the Flamethrower thaw path are untouched"
+    }
+  },
+  "family_decomposition": {
+    "family": "CAND_incapacitated_arm_pricing (11 rows in the amended c14 readout)",
+    "engine_hp_thaw": [[2000131, 47], [2100471, 18], [2200265, 81], [2300744, 133]],
+    "engine_hp_thaw_note": "all four replayed: typed HP Fire into an already-frozen slower defender; engine thaws at 100 percent and the defender acts; sim keeps frz and the defender cants",
+    "world_rest_provenance": [[2000281, 99]],
+    "world_rest_provenance_note": "re-laned by the Z14 adjudication (benched Rest sleeper seeded rest_turns=0); explicitly out of this lane's scope",
+    "same_turn_fresh_status_residue": [[2200051, 80], [2500224, 70], [2600627, 47], [2700702, 38], [2701204, 52], [2700752, 65]],
+    "same_turn_fresh_status_residue_note": "WHAT only, no WHY claimed: five same-turn fresh-sleep rows (Sleep Powder/Hypnosis this turn, sleeper cants) and one same-turn fresh-freeze row (Ice Beam frz this turn, target cants); no Hidden Power involved; NOT predicted to clear and not claimed for any lane here - they need their own adjudication"
+  },
+  "signature_scan": {
+    "method": "all 3821 retained sweep rows scanned for: a side's recorded choice is hiddenpowerfire* AND the opposing active takes the hit while frozen (damage line carries frz) AND stays frozen (cant after hit, no curestatus)",
+    "sweep_pure": [[2000131, 47], [2100471, 18], [2200265, 81], [2300744, 133]],
+    "sweep_mixed": [[2100295, 88]],
+    "sweep_mixed_note": "signature present (HP Fire into frozen Ampharos, cant after hit) but the row also carries the attacker's same-turn wake pricing (Articuno -curestatus slp [msg] before moving) across multiple candidate states at support gating; it sat inside an attributed family in the c14 readout - the same under-count direction the absorb enlargement found",
+    "census_rows_with_signature": 0,
+    "census_rows_with_truant_content": 0
+  },
+  "prediction": {
+    "sweep_reread": "3668 -> 3664 promised (exactly the four pure rows clear; baseline is the validated 43-patch re-read, reports/c15_sweep_reread.json); the mixed candidate 2100295/88 may clear or may re-read diverged on its wake-pricing content (not promised); every row outside the five signature rows re-reads diverged with its recorded class",
+    "census_300": "103 rows, identity-unchanged vs the 43-patch census (no HP-thaw signature and no Truant content in the census retention; the merged world-side Truant fix from PR 970 is expected to be a no-op on these 300 games)",
+    "downstream_allowance": "none expected: the thaw defect's consequences are confined to the boundary (per-boundary reseeding from observed state), unlike the absorb heal whose spurious magnitude flipped downstream cap shapes; any silent extra clearance will be diagnosed row-by-row and reported, not pocketed",
+    "zero_change_families": "attributed families (I1-I6, limit:*, LS_*), the recharge-56, the absorb populations, and the truant/world rows are untouched by this patch; the re-read must show zero re-classifications outside the five signature rows"
+  }
+}

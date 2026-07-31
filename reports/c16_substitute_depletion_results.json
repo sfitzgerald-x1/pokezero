@@ -1,0 +1,136 @@
+{
+  "schema": "c16-substitute-depletion-results/4",
+  "disposition": "superseded_pending_remeasurement",
+  "limit_family": "limit:world_substitute_health_unknown",
+  "provenance_contract": {
+    "accepted_limit": "Only an active Substitute with canonical, explicit substituteHealthState=unknown paired with null or integer-zero substituteDepletion is counted in limit:world_substitute_health_unknown.",
+    "canonical_pairs": "Active full and unknown accept only null or integer-zero depletion; active exact requires a positive integer; inactive absent/broken/no-volatile state requires null depletion. Booleans and other malformed values are rejected.",
+    "terminal_contradictions": "Missing, absent, broken, malformed, arbitrary, invalid exact, or non-canonical state/depletion provenance with an active volatile terminates as substitute_health_provenance_contradiction before construction or accepted-limit accounting.",
+    "exact_public_cases": "The replay fold retains cumulative exact depletion only for directly preceding, non-breaking Gen 3 Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom hits. Each sampled world derives remaining HP from its own floor(maxhp/4).",
+    "sample_incompatibility": "If exact depletion is greater than or equal to a sampled world's initial Substitute HP, construction terminates as substitute_depletion_world_incompatible; this is not the accepted unknown-health limit."
+  },
+  "prediction_score": {
+    "preregistered_rows": 12,
+    "post_instrument_rows": 13,
+    "predicted_identities_recovered": 12,
+    "prediction_misses": 1,
+    "missed_identity": {
+      "seed": 2000140,
+      "step": 48,
+      "explanation": "The stricter PR #973 instrument exposed this archived Substitute-breaking row after the 12-row prediction was committed."
+    }
+  },
+  "identity_cutoff_method": {
+    "description": "For each identity, compare a deterministic one-game replay ending immediately before the archived step with the same replay including that step.",
+    "before_max_steps": "step - 1",
+    "at_max_steps": "step",
+    "required_delta": 1,
+    "generic_skip_required": 0
+  },
+  "identities": [
+    {
+      "seed": 2000031,
+      "step": 60,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2000140,
+      "step": 48,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2100227,
+      "step": 35,
+      "named_limit_before": 3,
+      "named_limit_at": 4,
+      "delta": 1
+    },
+    {
+      "seed": 2100568,
+      "step": 48,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2101125,
+      "step": 47,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    },
+    {
+      "seed": 2200232,
+      "step": 51,
+      "named_limit_before": 3,
+      "named_limit_at": 4,
+      "delta": 1
+    },
+    {
+      "seed": 2400009,
+      "step": 83,
+      "named_limit_before": 4,
+      "named_limit_at": 5,
+      "delta": 1
+    },
+    {
+      "seed": 2400484,
+      "step": 36,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2400719,
+      "step": 68,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2401166,
+      "step": 75,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2600222,
+      "step": 44,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2601023,
+      "step": 51,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    },
+    {
+      "seed": 2701047,
+      "step": 47,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    }
+  ],
+  "historical_v1_verification": {
+    "identity_cutoffs": "13/13 named-limit deltas equal 1 under the superseded provenance classifier",
+    "generic_substitute_health_skips": 0,
+    "focused_tests": "196 passed before the provenance and fixed-damage corrections",
+    "repros_complete": true
+  },
+  "current_verification": {
+    "focused_unittest": "268 passed across engine world, replay parser, differential accounting, local Showdown materialization, canonical state/depletion matrix, and public-invariant suites",
+    "public_invariant": "passed",
+    "fresh_certification_sweep": "not run in this evidence update",
+    "identity_counts": "not asserted because retained v1 counts may include rows that now resolve to exact fixed-damage depletion, sampled-world incompatibility, or terminal provenance contradictions"
+  },
+  "coverage_boundary": "The retained v1 identity rows are historical evidence only. This revision makes no post-fix aggregate claim until a fresh differential sweep classifies every active Substitute as exact, explicit unknown limit, or terminal provenance contradiction."
+}

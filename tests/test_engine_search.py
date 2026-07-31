@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 import sys
 import tempfile
+import warnings
 from types import SimpleNamespace
 import unittest
 from collections import Counter
@@ -736,6 +737,7 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
             "early_stopped": stopped,
             "model_evals": completed,
             "lossy_renders": 0,
+            "attribution_unsafe_renders": 0,
             "prior_fallbacks": 0,
             "side_one": [
                 {"move": "alpha", "visits": alpha, "q": 0.5},
@@ -931,6 +933,22 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(len(native.calls[0]), 12)
 
+    def test_attribution_unsafe_native_branch_fails_the_world_closed(self) -> None:
+        native = self._Native(
+            [ValueError("attribution-unsafe renderer branch rejected before tree/model fold: sleeptalk_called_unidentified")]
+        )
+        policy = self._policy(early_stop=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            decision = self._run(policy, native, [self._world("unsafe-world")])
+        self.assertEqual(decision.metadata["engine_mcts"]["fallback"], "crate_search_failed")
+        self.assertEqual(policy.stats.worlds_searched, 0)
+        self.assertIn(
+            "crate_search: attribution-unsafe renderer branch rejected before tree/model fold: sleeptalk_called_unidentified",
+            policy.stats.world_failure_reasons,
+        )
+        self.assertEqual(policy.stats.attribution_unsafe_renders, 1)
+
     # --- telemetry counting (model path) ------------------------------------------
     #
     # The model path used to count every world TWICE — once above the aggregation loop
@@ -956,6 +974,15 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(
             decision.metadata["engine_mcts"]["worlds_searched"], len(worlds)
         )
+
+    def test_renderer_counters_are_preserved_from_native_reports(self) -> None:
+        report = self._report(70, 30, stopped=False)
+        report["lossy_renders"] = 3
+        report["attribution_unsafe_renders"] = 0
+        policy = self._policy(early_stop=False)
+        self._run(policy, self._Native([report]), [self._world("world-a")])
+        self.assertEqual(policy.stats.lossy_renders, 3)
+        self.assertEqual(policy.stats.attribution_unsafe_renders, 0)
 
     def test_world_count_is_linear_in_the_number_of_worlds(self) -> None:
         # Guards the shape as well as one value: a per-record increment would keep the

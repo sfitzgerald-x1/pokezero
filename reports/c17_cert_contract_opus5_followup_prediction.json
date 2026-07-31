@@ -1,0 +1,39 @@
+{
+  "scope": "Bounded follow-up to merged PR #981 after independent Opus 5 review. This artifact is committed before implementation and predicts only certification-contract behavior.",
+  "source_commit_before_implementation": "d0fd081168a1a8a959b4574664b13ae0cad4fcd8",
+  "predictions": {
+    "checkpoint_population": {
+      "one_record_for_two_games": "FAIL: the manifest/readout must reject a checkpoint with fewer records or distinct seeds than its paired shard report games.",
+      "incomplete_report_provenance": "FAIL: a shard report with checkpoint_provenance.complete != true or records_with_provenance != games must be rejected even when checkpoint rows individually carry valid provenance.",
+      "complete_population": "PASS: one gated, provenance-bearing checkpoint row per shard game with the report's complete provenance scalar remains acceptable."
+    },
+    "classification_order": {
+      "minority_absorb": "UNATTRIBUTED with absorb_through_protect_or_miss even when its matching miss is not the majority arm.",
+      "minority_same_turn_stat": "UNATTRIBUTED with same_turn_stat_event_gap even when a different arm has majority miss mass.",
+      "minority_structural_count": "UNATTRIBUTED with structural_component_count_without_supported_sibling before I2 can classify a small total miss mass.",
+      "all_emittable_counters": "Every EMITTABLE_EXCLUSION_COUNTERS member has a direct classifier regression at minority mass; observed nonzero still fails its predicted-zero gate."
+    },
+    "manifest_schema": {
+      "producer": "FAIL before writing a v2 manifest when any required per-shard probe record field is missing or malformed.",
+      "consumer": "FAIL when a syntactically valid JSON manifest diverges from the bounded v2 schema; producer and consumer agree on valid fixture output."
+    },
+    "build_fingerprint": {
+      "inputs": "Changing Cargo.toml or Cargo.lock in either the vendored engine tree or rust/pokezero-search changes the content fingerprint.",
+      "freshness": "The mtime freshness defense considers both manifests/locks as build inputs, so a stale artifact predating a changed Cargo input is rejected when content does not match."
+    },
+    "aggregate_alignment": {
+      "missing_scalar": "FAIL: absent aggregate shard scalar values are malformed, never silently counted as zero.",
+      "misaligned_paths": "FAIL: unordered/malformed seed summaries cannot cause zip-based report-path alignment to attach provenance failures to a different shard."
+    },
+    "family_rates": {
+      "lower": "Advisory only: an observed rate below a Wilson lower bound is recorded but does not fail certification without a separately declared prediction-interval gate.",
+      "upper": "Binding: an observed rate above the registered upper rate still fails certification.",
+      "unchanged_hard_gates": "Zero unattributed rows and predicted-zero exclusion counters remain binding."
+    }
+  },
+  "verification_plan": [
+    "Focused cert manifest/readout/build-stamp tests, including new negative population, schema, ordering, scalar, alignment, and rate-gate regressions.",
+    "Public invariant tests and broader relevant engine certification tests.",
+    "Python compilation, JSON parsing, and git diff --check."
+  ]
+}

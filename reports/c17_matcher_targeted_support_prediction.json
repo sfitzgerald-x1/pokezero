@@ -1,0 +1,16 @@
+{
+  "schema": "pokezero.c17.matcher-targeted-support-prediction.v1",
+  "source": "Follow-up to the independent review's same-turn affected-hit finding.",
+  "problem": "After selecting a later state-affected hit, the matcher still applies that branch-local legal-roll set to every roll-scaled component in the branch. In a two-hit turn such as Aurora Beam -> Attack drop -> Tackle, the prefix snapshot is valid only for the later Tackle against p1; using it for the earlier Aurora Beam against p2 can accept the earlier component against the wrong state.",
+  "required_mechanism": [
+    "Return the protocol target side together with the branch-local legal-roll set.",
+    "Use branch-local support only for the selected affected target side.",
+    "Retain the existing boundary pre-state support for all other components in that branch."
+  ],
+  "regression_prediction": "For Aurora Beam damage to p2 followed by a nonzero p2 Attack drop and p2 Tackle damage to p1, the reconstructed support must be labeled p1 and must not replace p2's pre-state support.",
+  "containment": [
+    "Do not widen action attribution, roll ranges, residual handling, or divergence classes.",
+    "Do not change the Rust prefix snapshot mechanism.",
+    "Do not reinterpret retained-row engine divergences as matches."
+  ]
+}

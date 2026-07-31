@@ -6412,3 +6412,162 @@ component whose output you are only INFERRING.** Reading Showdown's chain to pre
 behaviour is half a derivation; the other half is opening the engine's own recorded output.
 The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
 artifact said 65.
+---
+
+# Appendix Z15 — Certification instrument correction before the second sweep
+
+Review of the re-sweep preparation found two attribution rules that were too broad to support
+the zero-unattributed gate. Both corrections are intentionally conservative: a row returns to a
+named WHAT-level candidate unless its documented comparison basis is present in the same row.
+
+* **I4 mapper ties:** an equal-magnitude, different-label tie now attributes only when it is in
+  the majority arm. A minority-arm tie cannot explain an unexplained majority-arm mismatch.
+* **LS structural-arm echoes:** a component-count mismatch now attributes only when a same-side
+  sibling engine arm exactly carries the full observed nonempty component multiset. The former
+  `s2000561/67` citation was stale: its sibling arms do not carry the observed hit. Unsupported
+  count mismatches remain named-unattributed instead of being treated as branch-set accounting.
+
+The associated re-sweep specification also records the corrected #972 map without treating the
+adjudication as completed implementation: recoil-versus-Substitute requires the public
+depletion/knowledge-limit world lane; the incapacitated-arm family requires the engine typed-HP
+thaw exclusion, world bench-Rest provenance, and adjudication of the eight rows not sampled by
+#972. Every remaining WHAT-level candidate pool must close to a fix, documented follow-up, or
+proven comparison limit before launch.
+
+The immutable c14 archive was hash-verified (17/17) and regenerated twice under the amended
+instrument with byte-identical output. The c13 regression population remains **103/103 PASS**.
+The honest c14 accounting is **324/3821 unattributed** (was 277): I4 drops 176 -> 166,
+structural echoes drop 41 -> 0 because no archived row satisfies the new sibling proof, and six
+minority-only I4 rows fall back to the generic pool. This changes generic fallback rows 54 ->
+60 and named coverage **98.59% -> 98.43%**. The zero-unattributed certification gate is
+unchanged; the returned rows are the required WHY-adjudication work, not a pass condition.
+
+---
+
+# Appendix Z16 — Engine patches 42-45: rebuild and identity-diff evidence
+
+Four engine corrections identified by the certification sweep and independent review were
+repaired behind separate prediction commits:
+
+| patch | mechanism |
+| --- | --- |
+| 42 | A voluntary switch beside a recharge `cant` incorrectly skipped the full end-of-turn residual block. |
+| 43 | Water/Volt Absorb conversion erased Protect and accuracy, so heals fired through Protect and on missed moves. |
+| 44 | Typed Hidden Power variants bypassed the Gen 3 no-thaw exclusion and unconditionally thawed a frozen target. |
+| 45 | Protect and full-HP absorb outcomes with identical state deltas collapsed distinct public histories; the Rust end-of-turn mirror also omitted the engine's force-switch condition. |
+
+The patch-44 retained-population evidence remains the completed identity-diff instrument.
+Both engine consumers then rebuilt all **45 patches with fuzz=0** at fingerprint
+`0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10`;
+the fixture refresh remains last. The builders clean their temporary trees, so `.orig` artifacts
+are not retained. Behavioral probes passed 9/9, focused Python fidelity tests passed 29/29,
+the public-invariant test passed 1/1, and the Rust release suite passed 271/271.
+
+## Z16.1 Full retained-population re-read through patch 44
+
+All 3,821 retained sweep rows were re-read through both the 43-patch ablation and the patch-44
+build:
+
+| build | matched | still divergent |
+| --- | ---: | ---: |
+| 43 patches | 153 | 3,668 |
+| 44 patches | 158 | 3,663 |
+
+Patch 44 changed exactly five identities: its four pre-registered pure rows plus the one
+pre-registered mixed candidate (`2100295/88`). No other row changed verdict or class.
+
+Patches 42-43 cleared every registered pure row (56/56 recharge, 75/75 absorb) and eleven of
+the fifteen registered mixed candidates. The prediction's corrected absorb scan was still too
+narrow: **eleven additional Protect/miss rows cleared**, and `2701065/24` retained a poison
+divergence but changed class after the spurious absorb arm disappeared. Those misses are
+reported rather than pocketed; the exact identities live in
+`reports/c15_engine_patch_verification.json`.
+
+Patch 45 closes composed edge cases found in review. A 64-seed live Showdown probe produced
+57 Protect/ability activations and 7 misses in both Hydro Pump scenarios. The corrected native
+mapper now preserves the exact 80/20 public-history split for Hydro Pump into Protect and into
+a full-HP Water Absorb target, with zero lossy markers. Its detailed evidence is in
+`reports/c15_engine_review_results.json`. The final fresh sweep, rather than the patch-44
+archive, is the regression instrument for this correction.
+
+## Z16.2 Fresh census regression bound
+
+A strict 300-game census over seeds 1,500,000-1,500,299 on patch 44 measured 23,335
+boundaries, retained all 103 divergences, and produced zero engine errors. Against the c13
+re-baseline, the divergence identity set, class mapping, counters, and measured-boundary count
+were identical; the canonical identity/class hash is
+`f7f1c580146100d6b11531cd06fa158af1d7e2b10852a1285f35fe1d4f1b9d60`.
+
+This closes the patches' targeted regression requirement, not the certification program. The
+remaining retained rows still require their documented limit/follow-up dispositions, and the
+binding gate remains a fresh 10,000-game re-sweep with zero unattributed rows.
+
+---
+
+# Appendix Z17 — C25 Toxic residual-stage recovery hardening
+
+The prior parser repair correctly changed the replay residual formula to
+`max(1, floor(maxhp / 16)) * stage`, matching Gen 3 Showdown and the Rust
+engine's next-residual `toxic_count + 1` convention. Recovery review found
+three provenance defects around that otherwise-correct formula: rounded `/100`
+conditions were reverse-engineered into a hidden stage, a benched cure line
+could clear the active counter, and a fainted active retained its counter until
+a replacement arrived.
+
+The replay now records whether each counter is known from public protocol and
+whether each side's HP stream is exact, percentage-form, or unknown. A legacy
+snapshot with active `tox` but no provenance, a rounded residual without a
+public reset, or a condition-only residual cannot seed a world; materialization
+fails closed rather than asserting `toxic_count = 0`. A switch/drag reset plus
+the first percentage-form residual proves stage 1, while an exact 100-HP Pokemon
+still uses its real six-HP Toxic unit. At ordinary request boundaries the
+handoff subtracts one; at post-upkeep/pre-turn forced-switch boundaries the
+just-applied stage passes through unchanged. Internal parser value 16 preserves
+an already-saturated Showdown stage 15 across the ordinary-boundary subtraction,
+while observation encoding remains capped at 15. Controls cover the exact-100
+scenario, the 316-HP real capture with Leftovers-before-Toxic ordering,
+repeated ticks, switch/drag, Baton Pass, Rest/status replacement, Natural Cure,
+failed/reapplied Toxic, faint, and resume. This was the original parser/world
+construction disposition. Independent review later found the separate engine
+stage-cap defect documented in Z17.1; the final disposition includes both fixes.
+
+## Z17.1 Independent-review amendment: saturation and production rendering
+
+The original repair incorrectly assumed the engine capped `toxic_count + 1`.
+It did not: a parser raw saturation sentinel of 16 became engine counter 15,
+then produced an illegal stage-16 residual. The engine now caps the residual
+stage at 15 and stores at most pre-tick counter 14. The construction bridge
+therefore maps ordinary raw 16 and post-upkeep stage 15 to 14, while rejecting
+unrepresentable values. A two-residual 640-HP engine advance proves both ticks
+are 600 HP (15/16), with no stage-16 tick.
+
+The production event renderer intentionally omits public cure lines for some
+status operations. Rather than fabricate protocol, it carries a private ordered
+active-status transition into leaf metadata. Render-to-evolve coverage proves
+that Rest, Refresh, and Heal Bell clear Toxic stage/provenance without changing
+their public output. Clean switch and drag entries also clear stage and active
+provenance before deriving a possible Toxic re-entry.
+
+## Z17.2 Post-upkeep poisoned replacement: the only public stage-zero proof
+
+Gen 3 Showdown's `tox.onSwitchIn` sets `statusState.stage = 0`; its residual
+handler increments that value before applying the first 1/16 tick. The normal
+world bridge therefore correctly represents this first pending tick as engine
+`toxic_count = 0`. Most active-Toxic zero snapshots remain ambiguous and fail
+closed, but one public chronology is exact: a same-seat public active `|faint|`
+is followed by `|upkeep|`, then that seat's non-Baton-Pass `|switch|` is a
+faint replacement whose condition still says `tox`. That Pokemon missed the
+preceding residual, so an ordinary request after the next `|turn|` may
+materialize zero. The prior bare-post-upkeep rule was a proof forgery and is
+not accepted.
+
+The snapshot-carried faint latch is side-local, consumed by its replacement,
+and cleared on next-turn truncation, malformed/duplicate replacement,
+incompatible same-seat transition, or scenario reuse. Its resulting proof
+lasts only until its first Toxic residual. Switch/drag replacement, active
+status application or replacement, cure, faint, and the first Toxic residual
+all clear or replace it; a legacy snapshot without the field stays fail-closed.
+A synthetic post-upkeep `|drag|`
+is deliberately rejected: Gen 3 resolves phazing in the move action before the
+residual action emits `|upkeep|`. The proof is construction-only, so V2, V2.1,
+and V2.2 observation identities remain byte-identical.

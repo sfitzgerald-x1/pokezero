@@ -173,6 +173,16 @@ def _override() -> BattleStartOverride:
     )
 
 
+def _override_with_trimmed_snorlax_hp() -> BattleStartOverride:
+    trimmed = replace(_SNORLAX, evs={**(_SNORLAX.evs or {}), "hp": 0})
+    return BattleStartOverride(
+        player_teams={
+            "p1": pack_team(_team(_SWAMPERT, _STARMIE)),
+            "p2": pack_team(_team(trimmed, _STARMIE)),
+        },
+    )
+
+
 class UnpackTeamTests(unittest.TestCase):
     def test_pack_unpack_round_trips_exactly(self) -> None:
         team = _team(_SWAMPERT, _SNORLAX, _STARMIE)
@@ -326,6 +336,37 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.spec.side_two.side_conditions["toxic_count"], 3)
         self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
 
+    def test_toxic_stage_zero_is_a_valid_first_residual_counter(self) -> None:
+        # The replay/materialization seam admits this only for a post-upkeep
+        # poisoned replacement. Once admitted, the Rust world convention is
+        # the same: no stored count means the next residual is Toxic stage 1.
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["toxicStage"] = 0
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
+        self.assertNotIn("toxic_count", world.spec.side_two.side_conditions)
+
+    def test_toxic_stage_fifteen_or_sentinel_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        payload["sides"]["p2"]["toxicStage"] = 15
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+        payload["sides"]["p2"]["toxicStage"] = 16
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+    def test_active_toxic_requires_explicit_public_counter(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        payload["sides"]["p2"]["toxicStage"] = None
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+    def test_non_toxic_active_rejects_a_nonzero_toxic_counter(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["toxicStage"] = 2
+        self._assert_reason(payload, "toxic_stage_inconsistent")
+
     def test_ability_weather_is_indefinite(self) -> None:
         payload = _payload(self.dex, weather="sandstorm", weatherSetTurn=3, weatherFromAbility=True)
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
@@ -417,10 +458,15 @@ class BattleSpecConstructionTests(unittest.TestCase):
         starmie_max = _maxhp(_STARMIE, self.dex)
         payload["sides"]["p1"]["pokemon"][0]["condition"] = "0 fnt"
         payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        # A fainted active cannot carry a stale Substitute into the forced
+        # replacement world, even if the preceding snapshot had one.
+        payload["sides"]["p1"]["substituteHealthState"] = "absent"
+        payload["sides"]["p1"]["substituteDepletion"] = None
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertTrue(world.spec.side_one.force_switch)
         self.assertFalse(world.spec.side_two.force_switch)
         self.assertEqual(world.spec.side_one.pokemon[0].hp, 0)
+        self.assertNotIn("substitute", world.spec.side_one.volatile_statuses)
 
     def test_unown_letter_formes_collapse_to_base_species(self) -> None:
         unown_dex = _dex()
@@ -452,16 +498,186 @@ class BattleSpecConstructionTests(unittest.TestCase):
         # exactly this surface (seed-7001 bench repro).
         self.assertEqual(world.party_species["p2"], ("unownc",))
 
-    def test_substitute_supported_only_with_approximation_flag(self) -> None:
+    def test_substitute_requires_publicly_known_health_state(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["volatiles"] = ["Substitute"]
         self._assert_reason(payload, "volatile_unsupported")
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_substitute_health=True
+            )
+        self.assertEqual(caught.exception.reason, "substitute_health_provenance_contradiction")
+
+        payload["sides"]["p2"]["substituteHealthState"] = "full"
         world = battle_spec_from_payload(
             payload, _override(), dex=self.dex, approximate_substitute_health=True
         )
         side = world.spec.side_two
         self.assertIn("substitute", side.volatile_statuses)
         self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
+
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        payload["sides"]["p2"]["substituteDepletion"] = 7
+        exact = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        ).spec.side_two
+        self.assertEqual(exact.substitute_health, exact.pokemon[0].maxhp // 4 - 7)
+
+        payload["sides"]["p2"]["volatiles"] = []
+        payload["sides"]["p2"]["substituteHealthState"] = "broken"
+        payload["sides"]["p2"]["substituteDepletion"] = None
+        broken = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        ).spec.side_two
+        self.assertNotIn("substitute", broken.volatile_statuses)
+        self.assertEqual(broken.substitute_health, 0)
+
+    def test_active_substitute_invalid_provenance_is_a_terminal_contradiction(self) -> None:
+        for state, depletion in (
+            (None, None),
+            ("", None),
+            ("absent", None),
+            ("broken", None),
+            ("UNKNOWN", None),
+            ("arbitrary", None),
+            ("exact", None),
+            ("exact", 0),
+            ("exact", -1),
+            ("exact", True),
+        ):
+            with self.subTest(state=state, depletion=depletion):
+                payload = _payload(self.dex)
+                payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+                if state is not None:
+                    payload["sides"]["p2"]["substituteHealthState"] = state
+                payload["sides"]["p2"]["substituteDepletion"] = depletion
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_substitute_health=True
+                    )
+                self.assertEqual(
+                    caught.exception.reason,
+                    "substitute_health_provenance_contradiction",
+                )
+
+    def test_substitute_state_depletion_pair_matrix(self) -> None:
+        cases = (
+            # Active canonical pairs.
+            (True, "full", None, "built"),
+            (True, "full", 0, "built"),
+            (True, "unknown", None, "unknown"),
+            (True, "unknown", 0, "unknown"),
+            (True, "exact", 7, "built"),
+            # Active non-canonical companions and states.
+            (True, "full", 50, "contradiction"),
+            (True, "unknown", 50, "contradiction"),
+            (True, "full", -1, "contradiction"),
+            (True, "unknown", -1, "contradiction"),
+            (True, "full", "0", "contradiction"),
+            (True, "unknown", "0", "contradiction"),
+            (True, "full", 0.0, "contradiction"),
+            (True, "unknown", 0.0, "contradiction"),
+            (True, "full", False, "contradiction"),
+            (True, "unknown", False, "contradiction"),
+            (True, "exact", None, "contradiction"),
+            (True, "exact", 0, "contradiction"),
+            (True, "exact", -1, "contradiction"),
+            (True, "exact", "7", "contradiction"),
+            (True, "exact", 7.0, "contradiction"),
+            (True, "exact", True, "contradiction"),
+            (True, "absent", None, "contradiction"),
+            (True, "broken", None, "contradiction"),
+            # Inactive canonical pairs require no depletion.
+            (False, None, None, "built"),
+            (False, "", None, "built"),
+            (False, "absent", None, "built"),
+            (False, "broken", None, "built"),
+            (False, None, 0, "contradiction"),
+            (False, "absent", 0, "contradiction"),
+            (False, "broken", 50, "contradiction"),
+            (False, "absent", "0", "contradiction"),
+            (False, "broken", False, "contradiction"),
+            (False, "full", None, "contradiction"),
+            (False, "unknown", None, "contradiction"),
+            (False, "exact", 7, "contradiction"),
+        )
+        for active, state, depletion, outcome in cases:
+            with self.subTest(
+                active=active,
+                state=state,
+                depletion=depletion,
+                outcome=outcome,
+            ):
+                payload = _payload(self.dex)
+                payload["sides"]["p2"]["volatiles"] = ["Substitute"] if active else []
+                if state is not None:
+                    payload["sides"]["p2"]["substituteHealthState"] = state
+                payload["sides"]["p2"]["substituteDepletion"] = depletion
+                if outcome == "built":
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_substitute_health=True,
+                    )
+                    continue
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_substitute_health=True,
+                    )
+                expected = (
+                    "substitute_health_unknown"
+                    if outcome == "unknown"
+                    else "substitute_health_provenance_contradiction"
+                )
+                self.assertEqual(caught.exception.reason, expected)
+
+    def test_exact_depletion_is_applied_relative_to_sampled_max_hp(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "387/387"
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        payload["sides"]["p2"]["substituteDepletion"] = 50
+
+        side = battle_spec_from_payload(
+            payload,
+            _override_with_trimmed_snorlax_hp(),
+            dex=self.dex,
+            approximate_substitute_health=True,
+        ).spec.side_two
+
+        self.assertEqual(side.pokemon[0].maxhp, 370)
+        self.assertEqual(side.substitute_health, 42)
+
+    def test_exact_depletion_rejects_sample_that_could_not_have_survived(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "387/387"
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        # The replay's 96 HP Substitute survives at 4; the sampled world's
+        # 92 HP Substitute could not still be active.
+        payload["sides"]["p2"]["substituteDepletion"] = 92
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override_with_trimmed_snorlax_hp(),
+                dex=self.dex,
+                approximate_substitute_health=True,
+            )
+        self.assertEqual(caught.exception.reason, "substitute_depletion_world_incompatible")
+
+    def test_substitute_unknown_after_public_hit_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "unknown"
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_substitute_health=True
+            )
+        self.assertEqual(caught.exception.reason, "substitute_health_unknown")
 
     def test_sleep_approximation_flag(self) -> None:
         payload = _payload(self.dex)

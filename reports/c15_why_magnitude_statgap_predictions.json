@@ -1,0 +1,53 @@
+{
+  "registered_before_measurement": true,
+  "scope": "WHY-adjudication of the two sweep shapes left open by Appendix Z14: CAND_unresolved_magnitude (28 rows) and CAND_same_turn_stat_event_gap (9 rows), from reports/c14_cert_sweep_readout.json triage_161",
+  "engine": "unchanged, 41 patches, fingerprint 3204c777dec347aa, behavioral probes 9/9 in this worktree's venv before any measurement",
+  "disclosure": "hypotheses were formed from the triage basis strings (majority ratios), the matcher source (roll_components_agree / legal_roll_damages in scripts/engine_transition_differential.py), and the recorded payload fields of one row (2000298/23: branch_misses and protocol) read while building the row extraction; NO engine replay, branch enumeration, or legality enumeration has run at registration time",
+  "overlap_inputs_checked_mechanically_before_replay": {
+    "row_level": "zero (seed,step) overlap between the 37 rows and: patches 42-43 predicted-clear lists (recharge 56, absorb 26, absorb-variant 13) and corrected populations (absorb 75+6, recharge 56+9); the 12 recoil-vs-substitute rows; the 11 incapacitated-arm rows",
+    "game_level": "one shared game: seed 2000431 also carries an absorb-mixed row at step 19; my row there is step 32"
+  },
+  "sample_plan": {
+    "rule": "sampled rows fixed here, before replay; at least 6 of 28 and 4 of 9 per the standing discipline; chosen to span the ratio spread and to cover both non-roll_scaled classes in the 28",
+    "CAND_unresolved_magnitude": [
+      {"seed": 2000561, "step": 67, "why_chosen": "typical band 0.87"},
+      {"seed": 2500576, "step": 7, "why_chosen": "typical band 0.89"},
+      {"seed": 2400156, "step": 29, "why_chosen": "typical band 0.89"},
+      {"seed": 2000298, "step": 23, "why_chosen": "0.80, the payload row already read"},
+      {"seed": 2601196, "step": 46, "why_chosen": "low tail 0.75"},
+      {"seed": 2000431, "step": 32, "why_chosen": "low tail 0.71 + shares a game with an absorb-mixed row"},
+      {"seed": 2400451, "step": 56, "why_chosen": "low tail 0.68"},
+      {"seed": 2401127, "step": 54, "why_chosen": "extreme low 0.49"},
+      {"seed": 2201005, "step": 55, "why_chosen": "high tail 1.24"},
+      {"seed": 2600362, "step": 82, "why_chosen": "class component_magnitude:psn, ratio 1.12"},
+      {"seed": 2300040, "step": 84, "why_chosen": "class component_mismatch liquidooze/leftovers|liquidooze/leechseed"}
+    ],
+    "CAND_same_turn_stat_event_gap": [
+      {"seed": 2000261, "step": 31, "why_chosen": "0.87"},
+      {"seed": 2100079, "step": 7, "why_chosen": "0.85, earliest step in family"},
+      {"seed": 2300552, "step": 117, "why_chosen": "low end 0.81"},
+      {"seed": 2500120, "step": 60, "why_chosen": "0.89"},
+      {"seed": 2600657, "step": 49, "why_chosen": "0.89"}
+    ]
+  },
+  "hypotheses": {
+    "note": "brief-supplied and family-name WHYs are HYPOTHESES; four consecutive rounds inverted their briefs",
+    "CAND_unresolved_magnitude": {
+      "H-A_instrument_window": "the observed magnitude IS a legal gen3 roll (floor(base*r/100), r in 85..100) of the engine's OWN damage base, but the matcher's exact-membership path was unavailable at that boundary (calculate_damage refused, e.g. switch choices -> strict:no_damage_rolls) and the fallback proportional window [0.92*eng-1, 1.09*eng+1] around the engine's representative roll is TIGHTER than true legality near the min roll for small magnitudes; lane = instrument, clearance signature = magnitude (clears in place under a legality-aware readout)",
+      "H-B_engine_base": "the engine's damage base differs from Showdown's realized base by >= 1 point at these boundaries (a pipeline-step or modifier gap); observed lies OUTSIDE the engine's own legal roll set; lane = engine (damage patch); the extreme-ratio rows (0.49, 0.68, 0.71, 1.24) are expected here if anywhere - 0.49 smells like a missing halving step, 1.24 like a missing boost/screen on the engine side",
+      "H-C_echo": "a minority are echoes of the in-flight mechanisms on adjacent boundaries (Z13.5 precedent: any |cant| boundary drops the residual block); expected mainly for the two component-class rows (psn magnitude, liquidooze mismatch), which sit in residual-block pricing territory, not roll territory",
+      "expected_split": "majority H-A or H-B by legality membership - the replay decides per row; component-class rows H-C or new WHAT"
+    },
+    "CAND_same_turn_stat_event_gap": {
+      "H-D1_matcher_limited": "the same-turn boost/status event moves the realized damage base between pre-state and the hit; the ENGINE's in-branch value is consistent with the event (engine right), but the matcher's legal set is computed from the PRE-state and cannot confirm, and the window rejects a legitimate roll; lane = instrument/limit, clears in place under an event-aware legality recomputation",
+      "H-D2_engine_phase": "the engine prices the second mover's damage from PRE-event stats (boost/status not applied inside the branch before the dependent damage), so its value is systematically high vs observed (ratio band 0.70-0.96 = observed lower); lane = engine; the ratio direction predicts the event lowers the realized damage (attacker burned/stat-dropped or defender boosted same turn)",
+      "expected_split": "band-consistency argues one mechanism, not a mixture; direction of every sampled ratio (<1) should match the event's sign if H-D2"
+    }
+  },
+  "verdict_rules_registered": {
+    "membership_test": "per sampled row, enumerate the engine's own legal roll set from poke_engine.calculate_damage on every retained candidate state with the recorded joint action; observed IN set => the divergence is the matcher's acceptance path, not the engine's number (instrument/limit lane); observed OUT of set => engine-lane candidate, and the specific pipeline step must be named from the branch instructions before any engine WHY is claimed",
+    "generalization": "no shape-level WHY is claimed unless every sampled row in the shape is consistent with it; otherwise the shape is split into sub-shapes or left WHAT-level (candidate-not-finding licensed)",
+    "clearance_prediction": "required per shape with signature type: magnitude (clears in place) vs structural (scatters)",
+    "mass_claims": "any probability/mass statement uses the engine's own branch enumeration, not narration"
+  }
+}

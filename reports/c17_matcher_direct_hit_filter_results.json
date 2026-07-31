@@ -1,0 +1,30 @@
+{
+  "schema": "pokezero.c17.matcher-direct-hit-filter-results.v1",
+  "prediction_commit": "e04798c",
+  "implementation_commit": "cd79130",
+  "implementation_after_prediction": true,
+  "scope": "Classifier correction within the strict matcher only. No mapper behavior, attribution, support widening, residual logic, or divergence routing changed.",
+  "verification": {
+    "pre_implementation_regression": {
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_self_hp_cost_after_a_same_turn_stat_boost",
+      "exit_code": 1,
+      "result": "Expected failure: Substitute's same-side bare HP cost was mistaken for a direct defender hit and raised BranchLegalRollError."
+    },
+    "post_implementation_tests": [
+      {
+        "command": "cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib events::tests",
+        "result": "pass, 21 tests"
+      },
+      {
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "result": "pass, 52 tests"
+      },
+      {
+        "command": "native mapper replay: Calm Mind followed by Substitute",
+        "result": "pass: no legal_roll_state is emitted and branch_event_legal_rolls returns None without loading a state"
+      }
+    ]
+  },
+  "readout": "The matcher now identifies a direct roll only when the bare damage target differs from the most recent move actor. Same-side HP costs retain the existing pre-state path. Missing snapshots for genuine opponent hits remain fail-closed.",
+  "residual_risk": "Malformed move or damage idents are conservatively treated as potential opponent hits and remain fail-closed. This avoids accepting an ambiguous branch through the ordinary support path."
+}

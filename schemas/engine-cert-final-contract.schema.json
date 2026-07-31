@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engine-cert-final-contract.schema.json",
+  "title": "Public final engine certification contract",
+  "type": "object",
+  "$defs": {
+    "empiricalFamilyRate": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["wilson95_rate"],
+          "not": {"required": ["wilson95"]}
+        },
+        {
+          "required": ["wilson95"],
+          "not": {"required": ["wilson95_rate"]}
+        }
+      ],
+      "properties": {
+        "wilson95_rate": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "wilson95": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number", "minimum": 0}
+        },
+        "prediction_interval_rate": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "substituteFullRoundRiskBudget": {
+      "type": "object",
+      "required": [
+        "upper_full_round_rate",
+        "upper_rate_basis",
+        "risk_budget_rationale"
+      ],
+      "properties": {
+        "upper_full_round_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "upper_rate_basis": {"const": "pre_registered_risk_budget"},
+        "risk_budget_rationale": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["registered_before_launch", "requires_execution_contract", "certification_gates", "pre_registered_family_rate_table", "predicted_class_rates_10k", "launch_registration"],
+  "properties": {
+    "registered_before_launch": {"const": true},
+    "requires_execution_contract": {"const": true},
+    "certification_gates": {
+      "type": "object",
+      "required": ["expected_shards", "expected_games", "seed_blocks", "minimum_boundaries_full_round", "minimum_coverage_measured_fraction", "required_build_check", "required_matcher", "required_repros_per_game", "required_keep_repro", "required_behavioral_probe_passes", "required_source_commit", "required_image_commit", "required_engine_fingerprint", "required_readout_sha256", "required_execution_manifest_producer_sha256"],
+      "properties": {
+        "expected_shards": {"type": "integer", "minimum": 1},
+        "expected_games": {"type": "integer", "minimum": 1},
+        "minimum_boundaries_full_round": {"type": "integer", "minimum": 1},
+        "seed_blocks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["start", "games"],
+            "properties": {
+              "start": {"type": "integer", "minimum": 0},
+              "games": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "minimum_coverage_measured_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "required_build_check": {"type": "string", "minLength": 1},
+        "required_matcher": {"type": "string", "minLength": 1},
+        "required_repros_per_game": {"type": "integer", "minimum": 0},
+        "required_keep_repro": {"type": "integer", "minimum": 0},
+        "required_behavioral_probe_passes": {"type": "integer", "minimum": 1},
+        "required_source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_image_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_engine_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_readout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_execution_manifest_producer_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "pre_registered_family_rate_table": {
+      "type": "object",
+      "required": ["documented_families", "new_mechanisms_post_fix"],
+      "properties": {
+        "calibration_boundaries": {"type": "integer", "minimum": 1},
+        "documented_families": {
+          "type": "object",
+          "required": [
+            "I1_cap_state_shape",
+            "I2_matcher_accounting",
+            "I3_roll_inherited",
+            "I4_attribution_tie",
+            "I5_boundary_truncation",
+            "I6_sleeptalk_callee_union",
+            "LS_capped_lethal_shape",
+            "LS_confusion_fan",
+            "LS_crit_arm_pairing_echo",
+            "LS_structural_arm_echo",
+            "limit:roll_divergent_lethality",
+            "limit:world_sample_drag_target",
+            "limit:world_substitute_health_unknown"
+          ],
+          "properties": {
+            "I1_cap_state_shape": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "I2_matcher_accounting": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "I3_roll_inherited": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "I4_attribution_tie": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "I5_boundary_truncation": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "I6_sleeptalk_callee_union": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "LS_capped_lethal_shape": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "LS_confusion_fan": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "LS_crit_arm_pairing_echo": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "LS_structural_arm_echo": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "limit:roll_divergent_lethality": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "limit:world_sample_drag_target": {"$ref": "#/$defs/empiricalFamilyRate"},
+            "limit:world_substitute_health_unknown": {
+              "$ref": "#/$defs/substituteFullRoundRiskBudget"
+            }
+          },
+          "additionalProperties": false
+        },
+        "new_mechanisms_post_fix": {
+          "type": "object",
+          "required": [
+            "absorb_through_protect_or_miss",
+            "incapacitated_arm_pricing",
+            "recharge_turn_residual_gap",
+            "same_turn_stat_event_gap",
+            "structural_component_count_without_supported_sibling",
+            "truant_loaf_phase_drift",
+            "unattributed_generic"
+          ],
+          "properties": {
+            "absorb_through_protect_or_miss": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "absorb_through_protect_or_miss"}
+              },
+              "additionalProperties": false
+            },
+            "incapacitated_arm_pricing": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "incapacitated_arm_pricing"}
+              },
+              "additionalProperties": false
+            },
+            "recharge_turn_residual_gap": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "recharge_turn_residual_gap"}
+              },
+              "additionalProperties": false
+            },
+            "same_turn_stat_event_gap": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "same_turn_stat_event_gap"}
+              },
+              "additionalProperties": false
+            },
+            "structural_component_count_without_supported_sibling": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "structural_component_count_without_supported_sibling"}
+              },
+              "additionalProperties": false
+            },
+            "truant_loaf_phase_drift": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "truant_loaf_phase_drift"}
+              },
+              "additionalProperties": false
+            },
+            "unattributed_generic": {
+              "type": "object",
+              "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+              "properties": {
+                "predicted_next": {"const": 0},
+                "classifier_outcome": {"const": "UNATTRIBUTED"},
+                "exclusion_counter": {"const": "unattributed_generic"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "predicted_class_rates_10k": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["expected_10k", "wilson95_count_10k"],
+        "properties": {
+          "expected_10k": {"type": "number", "minimum": 0},
+          "wilson95_count_10k": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
+    "launch_registration": {
+      "type": "object",
+      "required": ["fresh_measurements_inspected_before_registration", "coordinator_go", "engine_patch_count"],
+      "properties": {
+        "fresh_measurements_inspected_before_registration": {"const": 0},
+        "coordinator_go": {"const": true},
+        "engine_patch_count": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

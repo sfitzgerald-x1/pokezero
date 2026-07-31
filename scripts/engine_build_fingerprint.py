@@ -14,11 +14,14 @@ possible shape for a measurement that gates an acceptance criterion.
 
 Two independent checks, because they catch different halves:
 
-  FINGERPRINT (content).  A sha256 over the shared patch list, every patch file
-  it names, and every `.rs` under rust/pokezero-search/src — i.e. all the build
-  inputs. The builders stamp it into the venv at build time; a mismatch means the
-  installed artifacts were built from different inputs than the ones checked out.
-  Exact, and independent of timestamps.
+  FINGERPRINT (content).  A sha256 over the pinned upstream sdist digest, shared
+  patch list, every patch file it names, and all tracked search-crate Rust,
+  Cargo, build-script, and pyproject inputs. The gitignored vendored tree is a
+  verified derivation of the pinned sdist plus those ordered patches, so a clean
+  checkout computes the same identity as a post-vendoring build. The builders
+  stamp it into the venv at build time; a mismatch means the installed
+  artifacts were built from different inputs than the ones checked out.
+  Exact, reproducible from tracked bytes, and independent of timestamps.
 
   The stamp must be written at the END of a FULL rebuild (wheel AND crate), which
   is what the sequence below does — a stamp written after rebuilding only one of
@@ -31,7 +34,7 @@ Two independent checks, because they catch different halves:
 
 Usage::
 
-    python scripts/engine_build_fingerprint.py --write        # after building
+    python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
     python scripts/engine_build_fingerprint.py --check        # before measuring
     python scripts/engine_build_fingerprint.py --print        # show the hash
 """
@@ -47,13 +50,16 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCH_LIST = REPO_ROOT / "third_party" / "poke-engine-gen3-patches.txt"
+BASE_SOURCE = REPO_ROOT / "third_party" / "poke-engine-base-source.json"
 VENDORED = REPO_ROOT / "third_party" / "poke-engine-src"
 # The crate's OWN sources are build inputs too. Without them a .so built before
 # an events.rs edit passes the content check whenever timestamps are in the
 # provenance-unknown state — the mapper changes, the fingerprint does not. Hit
 # in practice while landing the positional attributor.
 CRATE_SRC = REPO_ROOT / "rust" / "pokezero-search" / "src"
+CRATE_ROOT = REPO_ROOT / "rust" / "pokezero-search"
 STAMP_NAME = ".engine-build-fingerprint.json"
+STAMP_SCHEMA = "pokezero-engine-build/2"
 
 REBUILD_HINT = """
   scripts/vendor_poke_engine_src.sh <venv-python>
@@ -62,7 +68,7 @@ REBUILD_HINT = """
   (cd rust/pokezero-search && touch src/lib.rs && maturin build --release \\
        --interpreter <venv-python> -o ../dist)
   uv pip install --python <venv-python> --force-reinstall rust/dist/*.whl
-  python scripts/engine_build_fingerprint.py --write
+  python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 """.rstrip()
 
 
@@ -87,8 +93,61 @@ def crate_sources() -> list[Path]:
     return sorted(CRATE_SRC.rglob("*.rs"))
 
 
+def cargo_inputs() -> list[Path]:
+    """Tracked Cargo manifests/locks compiled by the search crate."""
+
+    return _checked_tree_inputs({"Cargo.toml", "Cargo.lock"})
+
+
+def build_metadata_inputs() -> list[Path]:
+    """Tracked build scripts and Python/maturin feature configuration."""
+
+    return _checked_tree_inputs({"build.rs", "pyproject.toml"})
+
+
+def _checked_tree_inputs(names: set[str]) -> list[Path]:
+    """Find checked build inputs while excluding generated and repository metadata."""
+
+    paths: set[Path] = set()
+    for root in (CRATE_ROOT,):
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if (
+                path.is_file()
+                and path.name in names
+                and not {".git", "target"}.intersection(path.relative_to(root).parts)
+            ):
+                paths.add(path)
+    return sorted(paths)
+
+
+def build_inputs() -> list[Path]:
+    """All checked source inputs that can change either installed consumer."""
+
+    return (
+        list(patch_files())
+        + [BASE_SOURCE]
+        + crate_sources()
+        + cargo_inputs()
+        + build_metadata_inputs()
+    )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def compute_fingerprint() -> dict[str, Any]:
     digest = hashlib.sha256()
+    if not BASE_SOURCE.exists():
+        raise FileNotFoundError(f"missing upstream source pin: {BASE_SOURCE}")
+    digest.update(BASE_SOURCE.name.encode())
+    digest.update(hashlib.sha256(BASE_SOURCE.read_bytes()).digest())
     digest.update(PATCH_LIST.read_bytes())
     entries = []
     for path in patch_files():
@@ -98,18 +157,27 @@ def compute_fingerprint() -> dict[str, Any]:
         digest.update(path.name.encode())
         digest.update(hashlib.sha256(blob).digest())
         entries.append(path.name)
-    # Crate sources, hashed by repo-relative path so the digest is location
-    # independent.
+    # Native source and dependency-resolution inputs are hashed by repo-relative
+    # path so the digest is location independent. The gitignored vendored engine
+    # tree is a deterministic derivation of BASE_SOURCE plus the ordered patch
+    # set; both builders verify the upstream archive before applying patches.
     crate = crate_sources()
-    digest.update(b"--crate--")
-    for path in crate:
+    cargo = cargo_inputs()
+    build_metadata = build_metadata_inputs()
+    digest.update(b"--native-inputs--")
+    for path in crate + cargo + build_metadata:
         digest.update(str(path.relative_to(REPO_ROOT)).encode())
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return {
         "fingerprint": digest.hexdigest(),
         "patches": entries,
         "count": len(entries),
+        "base_source": json.loads(BASE_SOURCE.read_text(encoding="utf-8")),
         "crate_sources": len(crate),
+        "cargo_inputs": [str(path.relative_to(REPO_ROOT)) for path in cargo],
+        "build_metadata_inputs": [
+            str(path.relative_to(REPO_ROOT)) for path in build_metadata
+        ],
     }
 
 
@@ -169,12 +237,49 @@ def _installed_binaries() -> list[Path]:
     return found
 
 
+def _installed_artifacts() -> dict[str, dict[str, Any]]:
+    """Content identities for both installed consumers of the patched engine."""
+
+    artifacts: dict[str, dict[str, Any]] = {}
+    for name in ("poke_engine", "pokezero_search"):
+        try:
+            module = __import__(name)
+        except Exception as error:  # noqa: BLE001 -- emitted as a useful rebuild failure
+            raise RuntimeError(f"cannot import installed {name}: {type(error).__name__}: {error}") from error
+        module_path = Path(getattr(module, "__file__", "") or "").resolve()
+        if not module_path.is_file():
+            raise RuntimeError(f"installed {name} has no module file")
+        extension_paths = sorted(
+            path.resolve()
+            for suffix in ("*.so", "*.pyd")
+            for path in module_path.parent.glob(suffix)
+        )
+        if not extension_paths:
+            raise RuntimeError(f"installed {name} has no native extension artifact")
+        artifacts[name] = {
+            "module_path": str(module_path),
+            "module_sha256": _sha256(module_path),
+            "extensions": [
+                {"path": str(path), "sha256": _sha256(path)} for path in extension_paths
+            ],
+        }
+    return artifacts
+
+
 def _stamp_path() -> Path:
     return Path(sys.prefix) / STAMP_NAME
 
 
 def write_stamp() -> Path:
+    """Record the just-built source and installed artifacts for both consumers."""
+
     payload = compute_fingerprint()
+    payload.update(
+        {
+            "schema": STAMP_SCHEMA,
+            "artifacts": _installed_artifacts(),
+        }
+    )
     path = _stamp_path()
     path.write_text(json.dumps(payload, indent=2))
     return path
@@ -193,7 +298,19 @@ def check(*, strict_mtime: bool = True) -> list[str]:
             f"no build stamp at {stamp} — the installed engine's provenance is unknown"
         )
     else:
-        recorded = json.loads(stamp.read_text())
+        try:
+            recorded = json.loads(stamp.read_text())
+        except json.JSONDecodeError:
+            recorded = {}
+            problems.append(f"build stamp at {stamp} is not valid JSON")
+        if not isinstance(recorded, dict):
+            recorded = {}
+            problems.append(f"build stamp at {stamp} is not a JSON object")
+        if recorded.get("schema") != STAMP_SCHEMA:
+            problems.append(
+                f"build stamp at {stamp} does not attest both installed consumers "
+                f"({STAMP_SCHEMA} required)"
+            )
         fingerprint_ok = recorded.get("fingerprint") == expected["fingerprint"]
         if not fingerprint_ok:
             problems.append(
@@ -202,9 +319,19 @@ def check(*, strict_mtime: bool = True) -> list[str]:
                 f"({recorded.get('count','?')} patches)\n"
                 f"    HEAD    : {expected['fingerprint'][:16]} ({expected['count']} patches)"
             )
+        try:
+            actual_artifacts = _installed_artifacts()
+        except RuntimeError as error:
+            problems.append(str(error))
+        else:
+            if recorded.get("artifacts") != actual_artifacts:
+                problems.append(
+                    "installed poke_engine/pokezero_search artifacts do not match the "
+                    "two-consumer build stamp"
+                )
 
     if strict_mtime:
-        sources = list(patch_files()) + [PATCH_LIST] + crate_sources()
+        sources = [PATCH_LIST] + build_inputs()
         if VENDORED.exists():
             sources += list(VENDORED.rglob("*.rs"))
         newest_source = max((p.stat().st_mtime for p in sources if p.exists()), default=0.0)
@@ -276,12 +403,19 @@ def assert_fresh(*, skip: bool = False) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--write", action="store_true", help="stamp the current patch set")
+    group.add_argument("--write", action="store_true", help="stamp a completed two-consumer rebuild")
     group.add_argument("--check", action="store_true", help="verify installed vs HEAD")
     group.add_argument("--print", dest="show", action="store_true")
+    ap.add_argument(
+        "--after-two-consumer-rebuild",
+        action="store_true",
+        help="required acknowledgement from scripts/build_search_crate_engine.sh",
+    )
     args = ap.parse_args(argv)
 
     if args.write:
+        if not args.after_two_consumer_rebuild:
+            ap.error("--write requires --after-two-consumer-rebuild; one-consumer stamps are forbidden")
         path = write_stamp()
         payload = json.loads(path.read_text())
         print(

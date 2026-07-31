@@ -1,0 +1,42 @@
+{
+  "artifact": "c17_color_change_freeze_prediction/v1",
+  "status": "pre_implementation",
+  "date": "2026-07-30",
+  "scope": {
+    "retained_row": [2700752, 65],
+    "source_adjudication": "reports/c17_incapacitated_action_adjudication.json",
+    "out_of_scope": [
+      "scripts/cert_sweep_readout.py",
+      "scripts/engine_transition_differential.py",
+      "reports/c15_resweep_spec.json",
+      "documentation ledger"
+    ]
+  },
+  "showdown_transcript": [
+    "p2 Seaking uses Ice Beam on p1 Kecleon",
+    "Kecleon receives frz before Color Change",
+    "Kecleon emits |cant| frz and does not use Brick Break"
+  ],
+  "rederived_current_source": {
+    "color_change_locus": "third_party/poke-engine-src/src/gen3/abilities.rs::ability_after_damage_hit",
+    "secondary_locus": "third_party/poke-engine-src/src/gen3/generate_instructions.rs::run_move",
+    "current_order": "damage -> ability_after_damage_hit(Color Change) -> get_instructions_from_status_effects(Ice Beam freeze)",
+    "failure_mechanism": "Color Change changes Kecleon from Normal to Ice before the same hit's freeze immunity check, so the freeze secondary is incorrectly rejected."
+  },
+  "prediction": {
+    "required_behavior": "The retained row must expose an Ice Beam freeze branch whose instructions order Damage, ChangeStatus NONE->FREEZE, then ChangeType NORMAL->ICE; Brick Break must be absent from that freeze branch.",
+    "unpatched_failure": "The retained current replay has no freeze branch and instead exposes Damage, ChangeType NORMAL->ICE, then Brick Break.",
+    "patch_boundary": "Only defer Color Change's type mutation until after same-hit status secondaries. Do not alter unrelated post-damage abilities or freeze immunity rules."
+  },
+  "verification_plan": {
+    "pins": "Rust and Python focused regressions with the Showdown-transcribed ordering above",
+    "builders": "scripts/vendor_poke_engine_src.sh and scripts/setup_poke_engine.sh, each with the patch list at fuzz=0",
+    "required_gates": [
+      "engine_build_fingerprint --check",
+      "engine behavioral probes",
+      "Rust tests",
+      "Python tests",
+      "public invariant"
+    ]
+  }
+}

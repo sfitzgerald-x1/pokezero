@@ -1,4 +1,4 @@
-"""The three `gen3customgame` probes that settled the Truant phase, as fixtures.
+"""The `gen3customgame` probes that delimit honest Truant phase tracking.
 
 These are the measurements the state machine in `test_truant_phase_seeding.py` encodes. They
 are kept executable rather than transcribed into prose because the derivation was WRONG once:
@@ -69,7 +69,7 @@ class TruantSimProbes(unittest.TestCase):
         self.assertIn("LOAF:p1a", got[2], f"first move turn after tracing should LOAF: {got[2]}")
         self.assertIn("MOVE:p1a", got[3], f"and alternate back: {got[3]}")
 
-    def test_post_residual_replacement_loafs_first(self) -> None:
+    def test_native_post_residual_replacement_loafs_first(self) -> None:
         """Probe 3. The replacement guard: entering AFTER upkeep misses that turn's flip."""
         from pokezero.showdown_fixture import FixturePokemon
 
@@ -85,6 +85,42 @@ class TruantSimProbes(unittest.TestCase):
         got = [_tags(s) for s in r.steps]
         self.assertIn("LOAF:p1a", got[2], f"a post-residual replacement should LOAF first: {got[2]}")
         self.assertIn("MOVE:p1a", got[3], f"and alternate back: {got[3]}")
+
+    def test_post_upkeep_forced_replacement_tracer_acts_first(self) -> None:
+        """Probe 4. A tracer entering after upkeep ACTS; the next turn it loafs."""
+        from pokezero.showdown_fixture import FixturePokemon
+
+        frail = FixturePokemon(
+            species="Shedinja", moves=["tackle"], ability="Wonder Guard", item="Leftovers"
+        )
+        por = FixturePokemon(
+            species="Porygon2", moves=["tackle"], ability="Trace", item="Leftovers"
+        )
+        ttar = FixturePokemon(
+            species="Tyranitar", moves=["tackle"], ability="Sand Stream", item="Leftovers"
+        )
+        slak = FixturePokemon(
+            species="Slaking", moves=["tackle"], ability="Truant", item="Leftovers"
+        )
+        result = self._run(
+            [frail, por],
+            [ttar, slak],
+            [
+                ("move tackle", "switch 2"),
+                ("switch 2", None),
+                ("move tackle", "move tackle"),
+                ("move tackle", "move tackle"),
+            ],
+            seed=13,
+        )
+        got = [_tags(step) for step in result.steps]
+        replacement = result.steps[1].protocol_lines
+        self.assertIn("|upkeep", result.steps[0].protocol_lines)
+        self.assertTrue(
+            any("|-ability|p1a: Porygon2|Truant|Trace|" in line for line in replacement)
+        )
+        self.assertIn("MOVE:p1a", got[2], f"post-upkeep Trace should ACT first: {got[2]}")
+        self.assertIn("LOAF:p1a", got[3], f"and alternate to loafing: {got[3]}")
 
 
 if __name__ == "__main__":

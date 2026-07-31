@@ -227,6 +227,67 @@ def assert_vocab_alignment(model_config, env_config, tables_path) -> str:
     return digest
 
 
+def build_shard_report(
+    *,
+    arm: str,
+    config_id: str,
+    checkpoint: str,
+    engine_fingerprint: str,
+    provenance: str,
+    pair_start: int,
+    pairs: int,
+    stats,
+    search_decisions: int,
+    search_wall: float,
+    wall_s: float,
+    results: list,
+    per_game: list,
+) -> dict:
+    """Assemble the shard report.
+
+    Split out of ``main`` so the serialized payload -- specifically the
+    ``policy_stats`` block and its reached-depth aggregates -- is reachable
+    from a test without standing up a full game loop.
+    """
+    return {
+        "schema_version": "pokezero.mcts-acceptance-shard.v1",
+        "arm": arm,
+        "config_id": config_id,
+        "checkpoint": checkpoint,
+        "engine_fingerprint": engine_fingerprint,
+        "provenance_sha256": provenance,
+        "pair_start": pair_start,
+        "pairs": pairs,
+        "games": len(results),
+        "total_decisions": search_decisions,
+        "fallback_decisions": stats.fallback_decisions,
+        "fallback_rate": round(
+            stats.fallback_decisions / max(1, stats.decisions), 6
+        ),
+        "fallback_reasons": dict(stats.fallback_reasons),
+        "world_failure_reasons": dict(stats.world_failure_reasons),
+        "search_wall_per_decision": round(search_wall / max(1, search_decisions), 4),
+        # Full policy stats payload, which carries the reached-depth aggregates
+        # (depth_reached_samples / _sum / _max / _histogram). A depth ladder is
+        # uninterpretable without them: whether the CAP was binding is the
+        # difference between "depth does not help" and "the sims budget never let
+        # the tree reach the cap".
+        #
+        # Called UNGUARDED on purpose. This was `to_payload() if hasattr(...)
+        # else {}` -- a method EngineMctsStats has never had, so the guard
+        # silently swallowed the miss and every shard recorded `{}`, dropping
+        # both the reached-depth aggregates above and the
+        # search_wall_per_searched_decision latency field. A hasattr guard on a
+        # serializer this report depends on can only ever convert a loud
+        # AttributeError into silently-missing evidence, which is the opposite
+        # of the "never hidden" contract EngineMctsStats documents.
+        "policy_stats": stats.to_dict(),
+        "wall_s": wall_s,
+        "results": results,
+        "per_game": per_game,
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
@@ -339,6 +400,19 @@ def main(argv=None) -> int:
             fallback_reasons: dict = {}
             world_failure_reasons: dict = {}
 
+            def to_dict(self) -> dict:
+                """The control arm runs no engine search, so it has no engine
+                telemetry -- an empty payload is the honest answer here.
+
+                Declared on the stub rather than guarded at the call site: the
+                report calls `to_dict()` unguarded so that a REAL
+                EngineMctsStats losing its serializer fails loudly instead of
+                silently writing `{}`, which is the bug this file was just
+                fixed for. A stub that legitimately has nothing to report says
+                so itself.
+                """
+                return {}
+
         search.stats = _NoStats()
 
     results = []
@@ -403,36 +477,21 @@ def main(argv=None) -> int:
     finally:
         env.close()
 
-    report = {
-        "schema_version": "pokezero.mcts-acceptance-shard.v1",
-        "arm": args.arm,
-        "config_id": config_id,
-        "checkpoint": args.checkpoint,
-        "engine_fingerprint": engine_fingerprint,
-        "provenance_sha256": provenance,
-        "pair_start": args.pair_start,
-        "pairs": args.pairs,
-        "games": len(results),
-        "total_decisions": search_decisions,
-        "fallback_decisions": search.stats.fallback_decisions,
-        "fallback_rate": round(
-            search.stats.fallback_decisions / max(1, search.stats.decisions), 6
-        ),
-        "fallback_reasons": dict(search.stats.fallback_reasons),
-        "world_failure_reasons": dict(search.stats.world_failure_reasons),
-        "search_wall_per_decision": round(search_wall / max(1, search_decisions), 4),
-        # Full policy stats payload, which carries the reached-depth aggregates
-        # (depth_reached_samples / _sum / _max / _histogram). A depth ladder is
-        # uninterpretable without them: whether the CAP was binding is the
-        # difference between "depth does not help" and "the sims budget never let
-        # the tree reach the cap".
-        "policy_stats": (
-            search.stats.to_payload() if hasattr(search.stats, "to_payload") else {}
-        ),
-        "wall_s": round(time.perf_counter() - started, 1),
-        "results": results,
-        "per_game": per_game,
-    }
+    report = build_shard_report(
+        arm=args.arm,
+        config_id=config_id,
+        checkpoint=args.checkpoint,
+        engine_fingerprint=engine_fingerprint,
+        provenance=provenance,
+        pair_start=args.pair_start,
+        pairs=args.pairs,
+        stats=search.stats,
+        search_decisions=search_decisions,
+        search_wall=search_wall,
+        wall_s=round(time.perf_counter() - started, 1),
+        results=results,
+        per_game=per_game,
+    )
     Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("\n=== SHARD COMPLETE ===")
     print(json.dumps(

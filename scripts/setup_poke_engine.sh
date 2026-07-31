@@ -8,7 +8,7 @@
 # can never drift (they did once — see that file's header). Per-patch rationale
 # lives there and in docs/engine_fidelity_findings.md.
 #
-# Requires: rustup/cargo, uv. Usage: scripts/setup_poke_engine.sh [venv-python]
+# Requires: rustup/cargo, uv, git. Usage: scripts/setup_poke_engine.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
@@ -20,19 +20,14 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
 uv run --python "$PYTHON" pip download "poke-engine==$VERSION" --no-deps --no-binary :all: -d "$BUILD_DIR" >/dev/null
-tar xzf "$BUILD_DIR"/poke_engine-"$VERSION".tar.gz -C "$BUILD_DIR"
+ARCHIVE="$BUILD_DIR/poke_engine-$VERSION.tar.gz"
+"$PYTHON" "$REPO/scripts/verify_poke_engine_source.py" \
+  "$ARCHIVE" --expected-version "$VERSION"
+tar xzf "$ARCHIVE" -C "$BUILD_DIR"
 SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-PATCH_LIST="$REPO/third_party/poke-engine-gen3-patches.txt"
-while IFS= read -r patch <&3; do
-  case "$patch" in ''|'#'*) continue ;; esac
-  if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
-    echo "ERROR: failed to apply $patch" >&2
-    exit 1
-  fi
-  echo "      $patch: applied"
-done 3< "$PATCH_LIST"
+"$PYTHON" "$REPO/scripts/apply_poke_engine_patches.py" "$SRC"
 
 # Installed from the sdist ROOT, never from poke-engine-py/. The root pyproject
 # sets `python-source = "python"` and `module-name = "poke_engine.poke_engine"`,
@@ -48,12 +43,6 @@ uv pip install --python "$PYTHON" --no-cache --force-reinstall "$SRC" \
 
 "$PYTHON" -c "import poke_engine; print('patched poke-engine (gen3) ready')"
 
-# Record which patch set this build came from, so the differential harness can
-# refuse to measure against a stale install (scripts/engine_build_fingerprint.py).
-# NOT tolerated to fail: a missing or stale stamp is exactly the state the gate
-# exists to catch, and swallowing the error would leave a freshly built engine
-# carrying someone else's fingerprint.
-# This step runs LAST, after the engine is already built and installed. If it is
-# the only thing that failed, the ENGINE IS FINE — re-run the stamp on its own:
-#     python scripts/engine_build_fingerprint.py --write
-"$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write
+# Do not stamp here. Certification evidence covers two consumers of this patch
+# set: this Python wheel and rust/pokezero-search. The coordinating rebuild
+# script stamps only after both are rebuilt and installed.

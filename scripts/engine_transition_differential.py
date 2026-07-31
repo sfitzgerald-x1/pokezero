@@ -26,9 +26,10 @@ Design points that make this different from
   the gate are reported separately as world-construction divergences, so
   constructor error is never charged to the engine's transition model (and
   never silently passes either).
-* **Fail-closed skips are counted, not hidden.** ``EngineWorldUnsupported``
+* **Fail-closed outcomes are counted, not hidden.** ``EngineWorldUnsupported``
   reasons, single-seat (force-switch) boundaries and unmappable choices each
-  get their own counted bucket.
+  get their own counted bucket. Public-information limits use their existing
+  ``limit:*`` family rather than masquerading as an engine transition result.
 
 Matching reuses the shipped matchers: exact boost-delta filter
 (:func:`pokezero.engine_fidelity_multiturn.observed_boost_deltas`), then exact
@@ -52,6 +53,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import re
 import random
 import sys
@@ -93,12 +95,13 @@ from pokezero.local_showdown import (  # noqa: E402
 )
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 from pokezero.randbat import Gen3RandbatSource, canonical_gen3_randbat_species_id  # noqa: E402
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 
 # Engine "no action" choice string (waiting seat / MUSTRECHARGE).
 _ENGINE_NO_MOVE = "none"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from engine_build_fingerprint import assert_fresh  # noqa: E402
+from engine_build_fingerprint import STAMP_SCHEMA, assert_fresh, compute_fingerprint  # noqa: E402
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
 
 _ENGINE_BOOST_FIELDS = (
@@ -284,14 +287,13 @@ def engine_choice_for_action(
 #      returns the base for non-crit and crit, so the set is enumerable, OR
 #   3. within +/-9 % of the engine's representative roll.
 #
-# Rung 3 is a band, and saying otherwise would be an over-claim: the legal set is
-# computed from the PRE-state with an assumed move order, so it is unreliable
-# whenever the turn reorders or a same-turn stat change moves the base, and it
-# therefore never VETOES — it can only accept. The honest description of the
-# predicate is "equal, or in the enumerated legal set, or within +/-9 % of the
-# engine's representative roll". What is genuinely gone is the NET-HP band: every
-# tolerance here is scoped to a single roll-scaled component, and no deterministic
-# component gets any tolerance at all.
+# Rung 3 is a band, and saying otherwise would be an over-claim. The baseline
+# legal set is computed from the PRE-state, but a mapper branch that switches or
+# changes a stat before direct damage is repriced from its branch-local post-state
+# below. The honest description of the predicate is "equal, or in the enumerated
+# legal set, or within +/-9 % of the engine's representative roll". What is
+# genuinely gone is the NET-HP band: every tolerance here is scoped to a single
+# roll-scaled component, and no deterministic component gets any tolerance at all.
 # ---------------------------------------------------------------------------------------------
 
 # Components that scale with the damage roll; everything else must be exact.
@@ -357,12 +359,22 @@ _PARTIAL_TRAP_SOURCES = frozenset({
 _CANONICAL_PARTIAL_TRAP = "partialtrap"
 
 
-def damage_components(
+@dataclasses.dataclass(frozen=True)
+class DamageComponent:
+    """One protocol HP event, retaining its source and exact input event."""
+
+    source: str
+    delta: int
+    event_index: int
+    critical: bool | None = None
+
+
+def damage_component_events(
     lines: Sequence[str],
     initial_hp: Mapping[str, int] | None = None,
     *,
     unattributed_damage_as_roll: bool = False,
-) -> dict[str, list[tuple[str, int]]]:
+) -> dict[str, list[DamageComponent]]:
     """Per-source HP deltas from a protocol slice, keyed by slot.
 
     ``initial_hp`` seeds the running HP per slot with the PRE-STEP value. Without
@@ -382,16 +394,14 @@ def damage_components(
     move in the gen3 pool that emits the tag, and it emits TWO lines, one per
     slot, the target's first and `[silent]`; both must be read.
 
-    Returns ``{"p1": [(source, delta), ...], "p2": [...]}`` where ``delta`` is
-    signed (negative = damage) and ``source`` is the normalized ``[from]`` tag
-    ("" for a bare damage line = direct move damage, "heal" for a bare heal).
-    Deltas are computed against the running HP for that slot, so a slot's
-    components sum to its net change and each is independently comparable.
+    Returns a per-slot ordered list. ``event_index`` is the original protocol
+    index, which lets a selected direct hit receive rebuilt support without
+    widening it to a different same-side HP event.
     """
 
     running: dict[str, int] = dict(initial_hp or {})
-    out: dict[str, list[tuple[str, int]]] = {"p1": [], "p2": []}
-    for line in lines:
+    out: dict[str, list[DamageComponent]] = {"p1": [], "p2": []}
+    for event_index, line in enumerate(lines):
         parts = line.split("|")
         if len(parts) < 3:
             continue
@@ -457,9 +467,42 @@ def damage_components(
             # that changed nothing carries no information, and recording it made
             # the component LISTS differ in length — surfacing as a spurious
             # roll-scaled mismatch (seed 1340000 step 110).
-            out[slot].append((source, new_hp - previous))
+            critical = None
+            if tag == "-damage" and source == "":
+                critical = _direct_hit_is_critical(
+                    lines,
+                    direct_damage_index=event_index,
+                    target_side=slot,
+                )
+            out[slot].append(
+                DamageComponent(source, new_hp - previous, event_index, critical)
+            )
         running[slot] = new_hp
     return out
+
+
+def damage_components(
+    lines: Sequence[str],
+    initial_hp: Mapping[str, int] | None = None,
+    *,
+    unattributed_damage_as_roll: bool = False,
+) -> dict[str, list[tuple[str, int]]]:
+    """Compatibility projection of :func:`damage_component_events`.
+
+    Existing reporting tools consume ``(source, delta)`` pairs. Strict branch
+    matching uses the event-preserving form above so selected-hit support cannot
+    leak to another component.
+    """
+
+    events = damage_component_events(
+        lines,
+        initial_hp,
+        unattributed_damage_as_roll=unattributed_damage_as_roll,
+    )
+    return {
+        slot: [(component.source, component.delta) for component in components]
+        for slot, components in events.items()
+    }
 
 
 def _maxhp_of(condition: str) -> int:
@@ -521,6 +564,200 @@ def legal_roll_damages(base_rolls: Sequence[int]) -> set[int]:
         for roll in range(85, 101):
             values.add(base * roll // 100)
     return values
+
+
+class BranchLegalRollError(ValueError):
+    """A state-changing branch could not supply its required local support."""
+
+
+@dataclasses.dataclass(frozen=True)
+class BranchLegalRollSupport:
+    """Exact roll support for one defender hit after a state mutation."""
+
+    target_side: str
+    event_index: int
+    critical: bool
+    damages: set[int]
+
+
+def _event_changes_roll_state(event: object) -> bool:
+    """Whether a rendered pre-hit event changes the damage-calculation state."""
+
+    if not isinstance(event, str):
+        return False
+    if event.startswith("|switch|"):
+        return True
+    if not event.startswith(("|-boost|", "|-unboost|")):
+        return False
+    fields = event.split("|")
+    try:
+        return int(fields[4]) != 0
+    except (IndexError, ValueError):
+        # A malformed stage event must not regain the stale-support fallback.
+        return True
+
+
+def _direct_hit_is_critical(
+    events: Sequence[object],
+    *,
+    direct_damage_index: int,
+    target_side: str,
+) -> bool:
+    """Whether the selected direct hit's own protocol segment is critical.
+
+    Showdown emits ``|-crit|`` per hit. Multi-hit moves therefore require the
+    scan to reset after the previous ``|-damage|``; scanning from ``|move|``
+    would leak a first-hit critical marker into every later hit.
+    """
+
+    segment_start = -1
+    for index in range(direct_damage_index - 1, -1, -1):
+        event = events[index]
+        if isinstance(event, str) and event.startswith(("|move|", "|-damage|")):
+            segment_start = index
+            break
+    for event in events[segment_start + 1:direct_damage_index]:
+        if not isinstance(event, str) or not event.startswith("|-crit|"):
+            continue
+        fields = event.split("|")
+        crit_target = fields[2].split(":", maxsplit=1)[0][:2] if len(fields) > 2 else ""
+        if crit_target == target_side:
+            return True
+    return False
+
+
+def branch_event_legal_rolls(
+    branch: Mapping[str, Any],
+    *,
+    side_one_choice: str,
+    side_two_choice: str,
+) -> BranchLegalRollSupport | None:
+    """Return support repriced after a pre-damage switch or stat event.
+
+    ``calculate_damage`` on the boundary pre-state prices the wrong target when
+    a switch resolves first, and the wrong stages when Boost/Unboost resolves
+    first. The mapper supplies ``legal_roll_state`` only when it has serialized
+    the exact branch prefix immediately before the first defender damage. The
+    completed ``post_state`` is deliberately never accepted here: it may include
+    the hit itself and later effects (for example Knock Off's item removal),
+    which cannot affect the hit being compared. The returned support is scoped
+    to that hit's protocol target, so an earlier hit in the same branch keeps
+    ordinary pre-state support.
+    """
+
+    events = branch.get("events")
+    if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+        raise BranchLegalRollError("branch events are missing or malformed")
+
+    acting_side: str | None = None
+    direct_damage_index: int | None = None
+    direct_damage_target: str | None = None
+    for index, event in enumerate(events):
+        if not isinstance(event, str):
+            continue
+        fields = event.split("|")
+        if event.startswith("|move|"):
+            actor = fields[2] if len(fields) > 2 else ""
+            candidate = actor.split(":", maxsplit=1)[0][:2]
+            acting_side = candidate if candidate in {"p1", "p2"} else None
+            continue
+        if not event.startswith("|-damage|") or "[from]" in event:
+            continue
+        target = fields[2] if len(fields) > 2 else ""
+        target_side = target.split(":", maxsplit=1)[0][:2]
+        state_changed = any(_event_changes_roll_state(prior) for prior in events[:index])
+        # A bare Substitute HP cost is not an opponent hit. It needs no damage
+        # support and the mapper correctly has no pre-hit snapshot for it.
+        if acting_side in {"p1", "p2"} and target_side == acting_side:
+            continue
+        # A malformed actor or target after a state mutation cannot be mapped to
+        # the correct side-specific support, so never reuse stale support.
+        if acting_side not in {"p1", "p2"} or target_side not in {"p1", "p2"}:
+            if state_changed:
+                raise BranchLegalRollError(
+                    "state-changing branch has malformed direct-damage ident"
+                )
+            continue
+        if state_changed:
+            direct_damage_index = index
+            direct_damage_target = target_side
+            break
+    if direct_damage_index is None:
+        return None
+
+    legal_roll_state = branch.get("legal_roll_state")
+    if not isinstance(legal_roll_state, str) or not legal_roll_state:
+        raise BranchLegalRollError(
+            "state-changing branch omitted pre-damage legal_roll_state"
+        )
+    try:
+        state = poke_engine.State.from_string(legal_roll_state)
+        side_one_rolls, side_two_rolls = poke_engine.calculate_damage(
+            state, side_one_choice, side_two_choice, True
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as error:  # noqa: BLE001
+        raise BranchLegalRollError(
+            f"could not calculate branch-local legal rolls: {type(error).__name__}"
+        ) from error
+    assert direct_damage_target is not None
+    rolls = side_one_rolls if direct_damage_target == "p2" else side_two_rolls
+    direct_damage_critical = _direct_hit_is_critical(
+        events,
+        direct_damage_index=direct_damage_index,
+        target_side=direct_damage_target,
+    )
+    if not rolls:
+        raise BranchLegalRollError("selected direct hit has no legal damage base")
+    if direct_damage_critical and len(rolls) < 2:
+        raise BranchLegalRollError("critical direct hit has no critical damage base")
+    selected_base = rolls[1] if direct_damage_critical else rolls[0]
+    return BranchLegalRollSupport(
+        target_side=direct_damage_target,
+        event_index=direct_damage_index,
+        critical=direct_damage_critical,
+        damages=legal_roll_damages([selected_base]),
+    )
+
+
+def branch_component_legal_rolls(
+    support: BranchLegalRollSupport | None,
+    *,
+    target_side: str,
+    component: DamageComponent,
+    pre_legal: set[int] | None,
+) -> set[int] | None:
+    """Use rebuilt support only for the exact selected direct-damage event."""
+
+    if (
+        support is not None
+        and support.target_side == target_side
+        and component.event_index == support.event_index
+        and component.source == ""
+    ):
+        return support.damages
+    return pre_legal
+
+
+def _split_component_events(
+    components: Sequence[DamageComponent],
+) -> tuple[Counter, list[DamageComponent]]:
+    """Event-preserving counterpart to :func:`_split_components`."""
+
+    exact: Counter = Counter()
+    rolled: list[DamageComponent] = []
+    for component in components:
+        if component.source in _IGNORED_SOURCES:
+            continue
+        if (
+            component.source in _ROLL_SCALED_SOURCES
+            or component.source.endswith("_to_full")
+        ):
+            rolled.append(component)
+        else:
+            exact[(component.source, component.delta)] += 1
+    return exact, rolled
 
 
 def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
@@ -591,6 +828,52 @@ def roll_components_agree(
         low = abs(eng) * 0.92 - 1
         high = abs(eng) * 1.09 + 1
         if not (low <= magnitude <= high):
+            return False
+    return True
+
+
+def roll_component_events_agree(
+    observed: Sequence[DamageComponent],
+    engine: Sequence[DamageComponent],
+    *,
+    support: BranchLegalRollSupport | None,
+    target_side: str,
+    pre_legal: set[int] | None,
+) -> bool:
+    """Compare ordered roll components with per-event legal support.
+
+    The selected branch snapshot prices one direct hit. A side-wide support set
+    is unsound: a later confusion, recoil, drain, or second direct hit may have
+    a different causal roll. Protocol order is retained deliberately here; a
+    branch that moves HP events is a different branch rather than interchangeable
+    evidence for a sorted magnitude list.
+    """
+
+    if len(observed) != len(engine):
+        return False
+    for observed_component, engine_component in zip(observed, engine):
+        selected_direct_event = (
+            support is not None
+            and target_side == support.target_side
+            and engine_component.event_index == support.event_index
+            and engine_component.source == ""
+        )
+        if selected_direct_event and (
+            observed_component.source != ""
+            or observed_component.critical is not support.critical
+        ):
+            return False
+        legal = branch_component_legal_rolls(
+            support,
+            target_side=target_side,
+            component=engine_component,
+            pre_legal=pre_legal,
+        )
+        if not roll_components_agree(
+            [(observed_component.source, observed_component.delta)],
+            [(engine_component.source, engine_component.delta)],
+            legal,
+        ):
             return False
     return True
 
@@ -731,6 +1014,26 @@ def hidden_counter_recovery(error: EngineWorldUnsupported) -> str | None:
         if part.strip()
     }
     return "confusion" if names == {"confusion"} else None
+
+
+def world_construction_limit(error: EngineWorldUnsupported) -> str | None:
+    """Return a named comparison limit for public state that cannot be known."""
+
+    if error.reason == "substitute_health_unknown":
+        return "limit:world_substitute_health_unknown"
+    return None
+
+
+def count_world_construction_limit(
+    counts: Counter[str], error: EngineWorldUnsupported
+) -> bool:
+    """Count a public-information limit and report whether it was handled."""
+
+    limit = world_construction_limit(error)
+    if limit is None:
+        return False
+    counts[limit] += 1
+    return True
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1024,9 +1327,12 @@ def evaluate_boundary_strict(
     # Both sides start from the same pre-state (the pre-state gate proved the
     # HP equal), so both extractions are seeded with it.
     pre_hp = {"p1": pre_features.p1_hp, "p2": pre_features.p2_hp}
-    observed_components = damage_components(step_lines, pre_hp)
-    obs_exact = {slot: _split_components(observed_components[slot])[0] for slot in ("p1", "p2")}
-    obs_rolled = {slot: _split_components(observed_components[slot])[1] for slot in ("p1", "p2")}
+    observed_components = damage_component_events(step_lines, pre_hp)
+    observed_split = {
+        slot: _split_component_events(observed_components[slot]) for slot in ("p1", "p2")
+    }
+    obs_exact = {slot: observed_split[slot][0] for slot in ("p1", "p2")}
+    obs_rolled = {slot: observed_split[slot][1] for slot in ("p1", "p2")}
 
     misses: list[tuple[int, str]] = []
     branch_total = 0
@@ -1045,14 +1351,16 @@ def evaluate_boundary_strict(
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
-        # Legal damage set for this pre-state; unavailable when the engine
-        # refuses the pair (recorded, then the proportional window is used).
-        legal: set[int] | None = None
+        # Baseline legal damage set for this pre-state; unavailable when the
+        # engine refuses the pair (recorded, then the proportional window is
+        # used). State-changing branches below replace this with their local
+        # support rather than silently reusing a stale target or stat stage.
+        pre_legal: set[int] | None = None
         try:
             s1_rolls, s2_rolls = poke_engine.calculate_damage(
                 state, side_one_choice, side_two_choice, True
             )
-            legal = legal_roll_damages(list(s1_rolls) + list(s2_rolls))
+            pre_legal = legal_roll_damages(list(s1_rolls) + list(s2_rolls))
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:  # noqa: BLE001
@@ -1072,8 +1380,17 @@ def evaluate_boundary_strict(
                 continue
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
+            try:
+                branch_support = branch_event_legal_rolls(
+                    branch,
+                    side_one_choice=side_one_choice,
+                    side_two_choice=side_two_choice,
+                )
+            except BranchLegalRollError as error:
+                counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
+                continue
             usable_branches += 1
-            engine_components = damage_components(
+            engine_components = damage_component_events(
                 branch.get("events") or [],
                 {engine_label_for_slot[slot]: pre_hp[slot] for slot in ("p1", "p2")},
                 unattributed_damage_as_roll=sleeptalk_union,
@@ -1082,17 +1399,21 @@ def evaluate_boundary_strict(
             reason = None
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
-                eng_exact, eng_rolled = _split_components(engine_components[label])
-                # ROLL FIRST. A branch whose roll does not match is the wrong
-                # branch, and its deterministic components are then compared
-                # against a different damage history — reporting THAT as the
-                # miss points at the wrong mechanic. Reject on the roll and let
-                # a later branch be judged on its residuals.
-                if not roll_components_agree(obs_rolled[slot], eng_rolled, legal):
+                eng_exact, eng_rolled = _split_component_events(engine_components[label])
+                # Branch-local support is tied to one direct protocol event.
+                # Every other rolled component remains on its ordinary pre-state
+                # range, including same-side recoil, drain, and confusion.
+                if not roll_component_events_agree(
+                    obs_rolled[slot],
+                    eng_rolled,
+                    support=branch_support,
+                    target_side=label,
+                    pre_legal=pre_legal,
+                ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={sorted(obs_rolled[slot], key=lambda p: p[1])} "
-                        f"engine={sorted(eng_rolled, key=lambda p: p[1])}"
+                        f"observed={[(c.source, c.delta) for c in obs_rolled[slot]]} "
+                        f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
@@ -1363,6 +1684,12 @@ def run_game(
                     # than only the first sweep rung.
                     "engine_states": [st.to_string() for st in prepared["states"]],
                     "gating": prepared["gating"],
+                    # Keep the mapper input and slot orientation with the repro;
+                    # downstream diagnostics must never reconstruct either from
+                    # a presumed p1=side_one identity mapping.
+                    "party_display": prepared["party_display"],
+                    "slot_sides": prepared["slot_sides"],
+                    "turn": prepared["turn"],
                     "pre_features": _features_payload(prepared["pre_features"]),
                     "observed": _features_payload(observed),
                     "observed_boost_deltas": observed_boost_deltas(step_lines),
@@ -1459,6 +1786,8 @@ def _prepare_boundary(
         world = _build(approximate_sleep_turns=approximate_sleep, hidden_volatiles=False)
         specs = [world.spec]
     except EngineWorldUnsupported as error:
+        if count_world_construction_limit(counts, error):
+            return None
         mechanic = hidden_counter_recovery(error) if hidden_counter_support else None
         if mechanic is None:
             counts[f"skip:world_unsupported:{error.reason}"] += 1
@@ -1474,6 +1803,8 @@ def _prepare_boundary(
                 )
                 specs = _confusion_counter_variants(world.spec)
         except EngineWorldUnsupported as inner:
+            if count_world_construction_limit(counts, inner):
+                return None
             counts[f"skip:world_unsupported:{inner.reason}"] += 1
             return None
         gating = "support"
@@ -1485,13 +1816,28 @@ def _prepare_boundary(
         return None
 
     states: list[Any] = []
-    for spec in specs:
+    constructed_specs: list[Any] = []
+    variant_construction: list[dict[str, object]] = []
+    for variant_index, spec in enumerate(specs):
         try:
-            states.append(build_poke_engine_state(spec, module=poke_engine))
+            state = build_poke_engine_state(spec, module=poke_engine)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except BaseException:  # noqa: BLE001 — an illegal counter combination
+        except BaseException as error:  # noqa: BLE001 — an illegal counter combination
+            # Hidden-counter support deliberately drops an illegal candidate for
+            # transition comparison.  Keep the drop explicit so diagnostics do
+            # not zip the surviving state against the wrong source spec.
+            variant_construction.append(
+                {
+                    "variant_index": variant_index,
+                    "status": "dropped",
+                    "error_type": type(error).__name__,
+                }
+            )
             continue
+        states.append(state)
+        constructed_specs.append(spec)
+        variant_construction.append({"variant_index": variant_index, "status": "constructed"})
     if not states:
         counts["skip:world_error:no_constructible_candidate"] += 1
         return None
@@ -1531,6 +1877,13 @@ def _prepare_boundary(
         },
         "turn": turn,
         "states": states,
+        # Diagnostic callers may attest the exact Python materialization
+        # payload against these native branch inputs before asking the engine
+        # to enumerate a transition. The game differential itself ignores it.
+        # Aligned one-to-one with ``states``.  ``variant_construction`` retains
+        # any support candidate the native constructor rejected.
+        "specs": constructed_specs,
+        "variant_construction": variant_construction,
         "slot_sides": world.slot_sides,
         "choices": choices,
         "pre_features": pre_features,
@@ -1555,6 +1908,43 @@ def _prepare_boundary(
 # ---------------------------------------------------------------------------------------------
 
 CHECKPOINT_SCHEMA = "engine-transition-differential/1"
+_FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def _checkpoint_provenance() -> dict[str, str | None]:
+    """Capture the runtime identity on every completed game, including resumes."""
+
+    source_commit = public_repo_commit(REPO_ROOT)
+    image_commit = os.environ.get("POKEZERO_IMAGE_COMMIT", "").strip().lower()
+    if not _FULL_GIT_SHA_RE.fullmatch(image_commit):
+        image_commit = None
+    stamp_path = Path(sys.prefix) / ".engine-build-fingerprint.json"
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        stamp = {}
+    fingerprint = stamp.get("fingerprint") if stamp.get("schema") == STAMP_SCHEMA else None
+    if fingerprint != compute_fingerprint()["fingerprint"]:
+        fingerprint = None
+    return {
+        "source_commit": source_commit,
+        "engine_fingerprint": fingerprint,
+        "image_commit": image_commit,
+    }
+
+
+def _resume_provenance_failures(
+    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | None]
+) -> list[str]:
+    failures: list[str] = []
+    for index, record in enumerate(records, start=1):
+        provenance = record.get("provenance")
+        if not isinstance(provenance, Mapping):
+            failures.append(f"checkpoint record {index} has no resume provenance")
+            continue
+        if dict(provenance) != dict(current):
+            failures.append(f"checkpoint record {index} provenance differs from this resume")
+    return failures
 
 
 def checkpoint_record(
@@ -1564,12 +1954,14 @@ def checkpoint_record(
     repros: Sequence[Mapping[str, Any]],
     seconds: float,
     build_check: str,
+    provenance: Mapping[str, str | None],
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
         # Carried per RECORD, not just per report, so a merge of many shards can
         # tell that ANY of them ran ungated.
         "build_check": build_check,
+        "provenance": dict(provenance),
         "seed": int(seed),
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
@@ -1577,28 +1969,152 @@ def checkpoint_record(
     }
 
 
+def checkpoint_report_aggregate(
+    records: Sequence[Mapping[str, Any]], *, keep_repro: int
+) -> dict[str, Any]:
+    """Reconstruct the report fields that durable checkpoint rows determine.
+
+    A report is derived evidence, while the JSONL checkpoint is the durable
+    per-game source.  Certification callers use this exact aggregate to reject
+    a stale report that hides checkpoint counters or retained repros.
+    """
+
+    totals: Counter = Counter()
+    repros: list[dict[str, Any]] = []
+    build_checks: set[str] = set()
+    for record in records:
+        build_checks.add(str(record.get("build_check", "unknown")))
+        counters = record.get("counters")
+        if not isinstance(counters, Mapping):
+            raise ValueError("checkpoint record has no counters object")
+        normalized: dict[str, int] = {}
+        for key, value in counters.items():
+            if not isinstance(key, str) or type(value) is not int:
+                raise ValueError("checkpoint record has malformed counter")
+            normalized[key] = value
+        totals.update(normalized)
+        record_repros = record.get("repros")
+        if not isinstance(record_repros, list) or not all(
+                isinstance(repro, Mapping) for repro in record_repros):
+            raise ValueError("checkpoint record has malformed repros")
+        for repro in record_repros:
+            if len(repros) < keep_repro:
+                repros.append(dict(repro))
+    # Match build_report's Counter access order so absent-but-observed-as-zero
+    # aggregate fields are represented identically in report["counters"].
+    measured = totals["boundaries_measured"]
+    diverged = totals["transition:diverged"]
+    engine_errors = totals["engine_error"]
+    matched = totals["transition:matched"]
+    full_rounds = totals["boundaries_full_round"]
+    gated = bool(build_checks) and build_checks <= {"gated"}
+    return {
+        "build_check": (
+            "gated"
+            if gated
+            else "NOT-GATED: " + ",".join(sorted(build_checks or {"unknown"}))
+        ),
+        "acceptance_eligible": gated,
+        "counters": dict(sorted(totals.items())),
+        "divergence_classes": {
+            key.split(":", 1)[1]: value
+            for key, value in sorted(totals.items())
+            if key.startswith("divergence_class:")
+        },
+        "transitions_diverged": diverged,
+        "engine_errors": engine_errors,
+        "transitions_matched": matched,
+        "boundaries_full_round": full_rounds,
+        "boundaries_measured": measured,
+        "repros": repros,
+    }
+
+
+def checkpoint_report_binding_failures(
+    records: Sequence[Mapping[str, Any]], report: Mapping[str, Any]
+) -> list[str]:
+    """Return exact checkpoint/report disagreements for certification callers."""
+
+    retention = report.get("repro_retention")
+    if not isinstance(retention, Mapping):
+        return ["report has no repro_retention object"]
+    keep_repro = retention.get("keep_repro")
+    if type(keep_repro) is not int or keep_repro < 0:
+        return ["report repro_retention.keep_repro is malformed"]
+    try:
+        aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
+    except ValueError as error:
+        return [str(error)]
+    failures: list[str] = []
+    for field in (
+        "build_check",
+        "acceptance_eligible",
+        "counters",
+        "divergence_classes",
+        "transitions_diverged",
+        "engine_errors",
+        "transitions_matched",
+        "boundaries_full_round",
+        "boundaries_measured",
+        "repros",
+    ):
+        if report.get(field) != aggregate[field]:
+            failures.append(f"report {field} does not match the checkpoint aggregate")
+    if retention.get("transitions_diverged") != aggregate["transitions_diverged"]:
+        failures.append("report repro_retention.transitions_diverged does not match the checkpoint aggregate")
+    if retention.get("repros_retained") != len(aggregate["repros"]):
+        failures.append("report repro_retention.repros_retained does not match the checkpoint aggregate")
+    return failures
+
+
 def append_checkpoint(handle: Any, record: Mapping[str, Any]) -> None:
     """Append one record and flush, so a kill loses at most the in-flight game."""
 
     handle.write(json.dumps(record, separators=(",", ":")) + "\n")
     handle.flush()
+    os.fsync(handle.fileno())
 
 
-def load_checkpoint(path: Path) -> list[dict[str, Any]]:
-    """Read a checkpoint file, tolerating a truncated final line from a hard kill."""
+def _truncate_torn_checkpoint_tail(path: Path, valid_prefix_bytes: int) -> None:
+    """Persist a repaired JSONL prefix before the single writer resumes appending."""
+
+    with path.open("r+b") as handle:
+        handle.truncate(valid_prefix_bytes)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _terminate_checkpoint_record(path: Path) -> None:
+    """Durably restore the JSONL delimiter after a complete torn final record."""
+
+    with path.open("r+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        handle.write(b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def load_checkpoint(
+    path: Path, *, repair_torn_tail: bool = False
+) -> list[dict[str, Any]]:
+    """Read a checkpoint, repairing bytes only for an explicit writer resume."""
 
     records: list[dict[str, Any]] = []
     if not path.exists():
         return records
-    raw = [line for line in path.read_text().splitlines()]
-    last_index = len(raw) - 1
-    for line_number, line in enumerate(raw):
-        line = line.strip()
+    raw = path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    last_index = len(lines) - 1
+    prefix_bytes = 0
+    for line_number, encoded_line in enumerate(lines):
+        next_prefix_bytes = prefix_bytes + len(encoded_line)
+        line = encoded_line.strip()
         if not line:
+            prefix_bytes = next_prefix_bytes
             continue
         try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
+            record = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             if line_number != last_index:
                 # Mid-file corruption would silently shrink the denominator of
                 # every rate computed from this shard, so it is fatal. Only the
@@ -1607,14 +2123,34 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
                     f"{path}: unparseable line {line_number + 1} of {len(raw)} — only the "
                     "final line may be a torn write; refusing to load a corrupt shard"
                 ) from None
+            if not repair_torn_tail:
+                raise ValueError(
+                    f"{path}: unparseable final line {line_number + 1}; "
+                    "refusing to repair checkpoint evidence outside writer resume"
+                ) from None
             print(
-                f"warning: {path}: discarding torn final line {line_number + 1} "
-                "(interrupted run)",
+                f"warning: {path}: truncating torn final line {line_number + 1} "
+                "before resume (interrupted run)",
                 file=sys.stderr,
             )
-            continue
-        if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
-            records.append(dict(record))
+            _truncate_torn_checkpoint_tail(path, prefix_bytes)
+            break
+        if not isinstance(record, Mapping) or record.get("schema") != CHECKPOINT_SCHEMA:
+            raise ValueError(
+                f"{path}: invalid checkpoint record at line {line_number + 1}; "
+                f"expected an object with schema {CHECKPOINT_SCHEMA!r}"
+            )
+        records.append(dict(record))
+        if (
+            repair_torn_tail
+            and line_number == last_index
+            and not raw.endswith(b"\n")
+        ):
+            # A hard kill may lose only the newline after an otherwise complete
+            # JSON record. Restore that delimiter before ``open('a')`` can join
+            # the next record to it.
+            _terminate_checkpoint_record(path)
+        prefix_bytes = next_prefix_bytes
     return records
 
 
@@ -1641,34 +2177,26 @@ def build_report(
     artifact instead of resting on the runner's memory of the flags.
     """
 
-    totals: Counter = Counter()
-    repros: list[dict[str, Any]] = []
+    aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
+    totals: Counter = Counter(aggregate["counters"])
+    repros: list[dict[str, Any]] = list(aggregate["repros"])
     seeds: list[int] = []
     total_seconds = 0.0
-    build_checks: set[str] = set()
+    provenance_rows: list[Mapping[str, Any]] = []
     for record in records:
-        build_checks.add(str(record.get("build_check", "unknown")))
-        totals.update({str(k): int(v) for k, v in (record.get("counters") or {}).items()})
         seeds.append(int(record.get("seed", -1)))
         total_seconds += float(record.get("seconds") or 0.0)
-        for repro in record.get("repros") or ():
-            if len(repros) < keep_repro:
-                repros.append(dict(repro))
+        provenance = record.get("provenance")
+        if isinstance(provenance, Mapping):
+            provenance_rows.append(provenance)
 
     games = len(records)
     measured = totals["boundaries_measured"]
     diverged = totals["transition:diverged"] + totals["engine_error"]
     wall = elapsed if elapsed is not None else total_seconds
-    # A report from an ungated run must never read as a gated one — same
-    # label-the-output rule as --allow-partial. "unknown" covers pre-field
-    # checkpoints, which are equally not-proven-gated.
-    gated = build_checks <= {"gated"} and build_checks
     report: dict[str, Any] = {
-        "build_check": (
-            "gated" if gated
-            else "NOT-GATED: " + ",".join(sorted(build_checks or {"unknown"}))
-        ),
-        "acceptance_eligible": bool(gated),
+        "build_check": aggregate["build_check"],
+        "acceptance_eligible": aggregate["acceptance_eligible"],
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
@@ -1697,13 +2225,19 @@ def build_report(
             if totals["boundaries_full_round"]
             else None
         ),
-        "divergence_classes": {
-            key.split(":", 1)[1]: value
-            for key, value in sorted(totals.items())
-            if key.startswith("divergence_class:")
-        },
+        "divergence_classes": aggregate["divergence_classes"],
         "counters": dict(sorted(totals.items())),
         "repros": repros,
+        "checkpoint_provenance": {
+            "records_with_provenance": len(provenance_rows),
+            "complete": len(provenance_rows) == games,
+            "distinct": sorted(
+                {
+                    json.dumps(dict(provenance), sort_keys=True)
+                    for provenance in provenance_rows
+                }
+            ),
+        },
     }
     if sources:
         report["merged_from"] = list(sources)
@@ -1788,12 +2322,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     skipped_check = bool(args.skip_build_check) and not args.merge_from
     assert_fresh(skip=args.skip_build_check or bool(args.merge_from))
     build_check = "skipped" if skipped_check else "gated"
+    provenance = _checkpoint_provenance()
 
     # --- merge mode: pure aggregation, no simulator ---
     if args.merge_from:
         records: list[dict[str, Any]] = []
         for path in args.merge_from:
-            loaded = load_checkpoint(path)
+            try:
+                loaded = load_checkpoint(path)
+            except ValueError as error:
+                raise SystemExit(f"cannot merge checkpoint evidence: {error}") from None
             print(f"{path}: {len(loaded)} games", flush=True)
             records.extend(loaded)
         seen: set[int] = set()
@@ -1837,7 +2375,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_records: list[dict[str, Any]] = []
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
-        done_records = load_checkpoint(args.checkpoint)
+        done_records = load_checkpoint(args.checkpoint, repair_torn_tail=True)
+        resume_failures = _resume_provenance_failures(done_records, provenance)
+        if resume_failures:
+            raise SystemExit(
+                "checkpoint resume provenance mismatch:\n  - " + "\n  - ".join(resume_failures)
+            )
         done_seeds = {int(r["seed"]) for r in done_records}
         print(f"resume: {len(done_seeds)} games already in {args.checkpoint}", flush=True)
 
@@ -1887,6 +2430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repros=game_repros,
                 seconds=time.perf_counter() - game_started,
                 build_check=build_check,
+                provenance=provenance,
             )
             records.append(record)
             if handle is not None:

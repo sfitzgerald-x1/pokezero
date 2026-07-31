@@ -8,20 +8,76 @@ the failure mode that looks like success.
 
 from __future__ import annotations
 
+from collections import Counter
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import engine_transition_differential as differential  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     _split_components,
+    branch_event_legal_rolls,
+    branch_component_legal_rolls,
     classify_divergence,
+    count_world_construction_limit,
     damage_components,
+    roll_component_events_agree,
     roll_components_agree,
+    world_construction_limit,
 )
+from pokezero.engine_world import EngineWorldUnsupported  # noqa: E402
+
+
+class WorldConstructionLimits(unittest.TestCase):
+    def test_unknown_substitute_health_is_a_named_limit(self):
+        error = EngineWorldUnsupported("substitute_health_unknown", "public hit without amount")
+        self.assertEqual(
+            world_construction_limit(error),
+            "limit:world_substitute_health_unknown",
+        )
+
+    def test_other_world_errors_remain_non_limit_skips(self):
+        error = EngineWorldUnsupported("payload_malformed", "bad payload")
+        self.assertIsNone(world_construction_limit(error))
+
+    def test_named_limit_accounting_is_reusable_across_constructor_passes(self):
+        counts = Counter()
+        error = EngineWorldUnsupported("substitute_health_unknown", "public hit without amount")
+        self.assertTrue(count_world_construction_limit(counts, error))
+        self.assertTrue(count_world_construction_limit(counts, error))
+        self.assertEqual(counts["limit:world_substitute_health_unknown"], 2)
+        self.assertNotIn("skip:world_unsupported:substitute_health_unknown", counts)
+
+    def test_non_limit_is_not_counted_by_limit_accounting(self):
+        counts = Counter()
+        error = EngineWorldUnsupported("payload_malformed", "bad payload")
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
+    def test_substitute_provenance_contradiction_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_health_provenance_contradiction",
+            "active Substitute has missing provenance",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
+    def test_substitute_sample_incompatibility_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_depletion_world_incompatible",
+            "sampled Substitute could not have survived exact depletion",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
 
 
 class HealToFullTolerance(unittest.TestCase):
@@ -207,6 +263,330 @@ class LengthMismatch(unittest.TestCase):
     def test_differing_component_counts_never_agree(self):
         self.assertFalse(roll_components_agree([("", -50)], [], None))
         self.assertFalse(roll_components_agree([], [("", -50)], None))
+
+
+class EventAwareBranchLegality(unittest.TestCase):
+    """Legal roll support must follow state changes that precede a hit."""
+
+    def setUp(self):
+        self._original_poke_engine = differential.poke_engine
+        self.loaded_states: list[str] = []
+
+        def from_string(value: str) -> str:
+            self.loaded_states.append(value)
+            return value
+
+        def calculate_damage(state: str, _side_one: str, _side_two: str, _critical: bool):
+            # 25 has the Gen 3 85..100% support 21..25. The retained Calm Mind
+            # row needs 21 after the boost; the stale pre-state range was 24..29.
+            self.assertIn(state, {"post-boost", "post-switch", "after-drop"})
+            if state == "after-drop":
+                # Aurora Beam is the earlier p1 -> p2 hit. The affected later
+                # Tackle targets p1, so only side_two's rolls are valid there.
+                return [90], [25]
+            return [25], []
+
+        differential.poke_engine = SimpleNamespace(
+            State=SimpleNamespace(from_string=from_string),
+            calculate_damage=calculate_damage,
+        )
+
+    def tearDown(self):
+        differential.poke_engine = self._original_poke_engine
+
+    def test_uses_pre_damage_snapshot_after_a_same_turn_stat_boost(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p2a: Clefable|Calm Mind|p2a: Clefable",
+                    "|-boost|p2a: Clefable|spd|1",
+                    "|move|p1a: Clefable|Fire Blast|p2a: Clefable",
+                    "|-damage|p2a: Clefable|279/300 par",
+                ],
+                "legal_roll_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="calmmind",
+        )
+
+        self.assertEqual(legal.target_side, "p2")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["post-boost"])
+
+    def test_uses_pre_damage_snapshot_after_a_same_turn_switch(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|switch|p2a: Lanturn|Lanturn, L82, M|143/339 tox",
+                    "|move|p1a: Sableye|knockoff|p2a: Lanturn",
+                    "|-damage|p2a: Lanturn|122/339 tox",
+                ],
+                "legal_roll_state": "post-switch",
+            },
+            side_one_choice="knockoff",
+            side_two_choice="lanturn",
+        )
+
+        self.assertEqual(legal.target_side, "p2")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["post-switch"])
+
+    def test_ignores_state_changes_that_follow_direct_damage(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Flamethrower|p2a: B",
+                    "|-damage|p2a: B|100/200",
+                    "|-boost|p1a: A|spa|1",
+                ],
+                "post_state": "must-not-load",
+            },
+            side_one_choice="flamethrower",
+            side_two_choice="splash",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
+    def test_ignores_a_self_hp_cost_after_a_same_turn_stat_boost(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Calm Mind|p1a: Rattata",
+                    "|-boost|p1a: Rattata|spa|1",
+                    "|move|p2a: Chansey|Substitute|p2a: Chansey",
+                    "|-damage|p2a: Chansey|75/100",
+                ],
+            },
+            side_one_choice="calmmind",
+            side_two_choice="substitute",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
+    def test_ignores_a_capped_stat_event_before_an_opponent_hit(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Swords Dance|p1a: Rattata",
+                    "|-boost|p1a: Rattata|atk|0",
+                    "|move|p2a: Chansey|Tackle|p1a: Rattata",
+                    "|-damage|p1a: Rattata|80/100",
+                ],
+            },
+            side_one_choice="swordsdance",
+            side_two_choice="tackle",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
+    def test_uses_the_first_opponent_hit_affected_by_a_stat_event(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Aurora Beam|p2a: Chansey",
+                    "|-damage|p2a: Chansey|49/100",
+                    "|-unboost|p2a: Chansey|atk|1",
+                    "|move|p2a: Chansey|Tackle|p1a: Rattata",
+                    "|-damage|p1a: Rattata|67/100",
+                ],
+                "legal_roll_state": "after-drop",
+            },
+            side_one_choice="aurorabeam",
+            side_two_choice="tackle",
+        )
+
+        self.assertEqual(legal.target_side, "p1")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["after-drop"])
+
+    def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
+        with self.assertRaises(differential.BranchLegalRollError):
+            branch_event_legal_rolls(
+                {
+                    "events": [
+                        "|switch|p2a: Lanturn|Lanturn, L82, M|143/339 tox",
+                        "|move|p1a: Sableye|knockoff|p2a: Lanturn",
+                        "|-damage|p2a: Lanturn|122/339 tox",
+                    ],
+                    "post_state": "must-not-load",
+                },
+                side_one_choice="knockoff",
+                side_two_choice="lanturn",
+            )
+
+        self.assertEqual(self.loaded_states, [])
+
+    def test_branch_local_support_does_not_reprice_an_earlier_hit(self):
+        support = differential.BranchLegalRollSupport(
+            target_side="p1",
+            event_index=7,
+            critical=False,
+            damages={21, 22, 23, 24, 25},
+        )
+        selected = differential.DamageComponent("", -21, 7)
+        earlier = differential.DamageComponent("", -41, 6)
+
+        self.assertEqual(
+            differential.branch_component_legal_rolls(
+                support,
+                target_side="p1",
+                component=selected,
+                pre_legal={41, 42},
+            ),
+            {21, 22, 23, 24, 25},
+        )
+        self.assertEqual(
+            differential.branch_component_legal_rolls(
+                support,
+                target_side="p2",
+                component=earlier,
+                pre_legal={41, 42},
+            ),
+            {41, 42},
+        )
+
+    def test_critical_direct_hit_cannot_borrow_the_noncritical_range(self):
+        def calculate_damage(_state, _side_one, _side_two, _first):
+            # The Python engine exposes [normal, critical] bases per actor.
+            return [25, 100], [30, 120]
+
+        differential.poke_engine.calculate_damage = calculate_damage
+        support = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Fire Blast|p2a: B",
+                    "|-boost|p1a: A|spa|1",
+                    "|-crit|p2a: B",
+                    "|-damage|p2a: B|100/200",
+                ],
+                "legal_roll_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="splash",
+        )
+
+        self.assertTrue(support.critical)
+        self.assertEqual(support.damages, set(range(85, 101)))
+        self.assertNotIn(25, support.damages)
+
+    def test_noncritical_direct_hit_cannot_borrow_the_critical_range(self):
+        def calculate_damage(_state, _side_one, _side_two, _first):
+            return [25, 100], [30, 120]
+
+        differential.poke_engine.calculate_damage = calculate_damage
+        support = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Fire Blast|p2a: B",
+                    "|-boost|p1a: A|spa|1",
+                    "|-damage|p2a: B|100/200",
+                ],
+                "legal_roll_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="splash",
+        )
+
+        self.assertFalse(support.critical)
+        self.assertEqual(support.damages, {21, 22, 23, 24, 25})
+        self.assertNotIn(85, support.damages)
+
+    def test_first_hit_critical_does_not_mark_second_hit_critical(self):
+        events = [
+            "|move|p1a: A|Double Kick|p2a: B",
+            "|-crit|p2a: B",
+            "|-damage|p2a: B|150/200",
+            "|-damage|p2a: B|125/200",
+        ]
+
+        self.assertTrue(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=2, target_side="p2"
+            )
+        )
+        self.assertFalse(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=3, target_side="p2"
+            )
+        )
+
+    def test_second_hit_critical_is_local_to_second_hit(self):
+        events = [
+            "|move|p1a: A|Double Kick|p2a: B",
+            "|-damage|p2a: B|175/200",
+            "|-crit|p2a: B",
+            "|-damage|p2a: B|125/200",
+        ]
+
+        self.assertFalse(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=1, target_side="p2"
+            )
+        )
+        self.assertTrue(
+            differential._direct_hit_is_critical(
+                events, direct_damage_index=3, target_side="p2"
+            )
+        )
+
+    def test_selected_direct_support_cannot_legalize_other_components(self):
+        support = differential.BranchLegalRollSupport(
+            target_side="p1",
+            event_index=7,
+            critical=False,
+            damages={21, 22, 23, 24, 25},
+        )
+        pre_legal = {41, 42}
+        selected = differential.DamageComponent("", -21, 7)
+        same_side_direct = differential.DamageComponent("", -21, 9)
+        confusion = differential.DamageComponent("confusion", -21, 8)
+        recoil = differential.DamageComponent("recoil", -21, 8)
+        drain = differential.DamageComponent("drain", 21, 8)
+
+        self.assertEqual(
+            branch_component_legal_rolls(
+                support, target_side="p1", component=selected, pre_legal=pre_legal
+            ),
+            support.damages,
+        )
+        for component in (same_side_direct, confusion, recoil, drain):
+            with self.subTest(component=component):
+                self.assertEqual(
+                    branch_component_legal_rolls(
+                        support,
+                        target_side="p1",
+                        component=component,
+                        pre_legal=pre_legal,
+                    ),
+                    pre_legal,
+                )
+
+    def test_observed_critical_cannot_match_a_noncritical_branch(self):
+        support = differential.BranchLegalRollSupport("p1", 7, False, {21, 22, 23, 24, 25})
+        self.assertFalse(
+            roll_component_events_agree(
+                [differential.DamageComponent("", -21, 3, True)],
+                [differential.DamageComponent("", -21, 7, False)],
+                support=support,
+                target_side="p1",
+                pre_legal={21, 22, 23, 24, 25},
+            )
+        )
+
+    def test_observed_noncritical_cannot_match_a_critical_branch(self):
+        support = differential.BranchLegalRollSupport("p1", 7, True, {85, 86, 87})
+        self.assertFalse(
+            roll_component_events_agree(
+                [differential.DamageComponent("", -85, 3, False)],
+                [differential.DamageComponent("", -85, 7, True)],
+                support=support,
+                target_side="p1",
+                pre_legal={85, 86, 87},
+            )
+        )
 
 
 if __name__ == "__main__":

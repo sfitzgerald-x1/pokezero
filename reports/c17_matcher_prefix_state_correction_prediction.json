@@ -1,0 +1,30 @@
+{
+  "schema": "pokezero.c17.matcher-prefix-state-correction-prediction.v1",
+  "supersedes": "The implementation mechanism in reports/c17_matcher_final_prediction.json; the retained-row identities and expected supports remain unchanged.",
+  "reason": "A completed mapper post_state can include effects of the direct hit being priced, such as item removal or Color Change. Repricing the same move from that state can manufacture support that was not legal at hit resolution.",
+  "required_mechanism": [
+    "The Rust event mapper must emit legal_roll_state only when it can serialize the exact raw-instruction prefix immediately before the first defender Damage/DamageSubstitute inside a segmented action phase.",
+    "That prefix must include all earlier same-turn instructions, including a switch, switch-in hazards, and stat Boost instructions, and exclude the direct hit and every later instruction.",
+    "The Python matcher must use legal_roll_state only when its corresponding rendered branch has a switch, boost, or unboost before its first bare direct-damage line.",
+    "A state-changing branch missing legal_roll_state is unusable for strict matching; it must not fall back to the pre-state legal set."
+  ],
+  "regression_predictions": [
+    {
+      "case": "same-turn stat boost before direct damage",
+      "expectation": "The snapshot carries the boosted defending stat and its roll support contains the retained observed 21."
+    },
+    {
+      "case": "same-turn switch before direct damage",
+      "expectation": "The snapshot carries the switched-in defender before Knock Off removes its item, and its roll support contains the retained observed 21."
+    },
+    {
+      "case": "post-hit state mutation",
+      "expectation": "The snapshot is serialized before the direct Damage instruction, so a later mutation cannot affect legal-roll support."
+    }
+  ],
+  "containment": [
+    "Do not modify vendored poke-engine patches or engine behavior.",
+    "Do not widen attribution, exact-component comparison, branch classification, or residual handling.",
+    "Do not reuse completed post_state for legal-roll calculation."
+  ]
+}
