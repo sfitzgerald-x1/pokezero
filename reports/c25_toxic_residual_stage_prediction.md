@@ -121,15 +121,19 @@ entries clear both the stage and active provenance before re-entry derivation.
 
 One active-Toxic zero is public rather than unknown. Showdown resets Toxic's
 `statusState.stage` to zero on switch-in and increments it immediately before
-the next residual. When `|upkeep|` is followed by a non-Baton-Pass `|switch|`
-whose replacement condition retains `tox`, that replacement missed the
-completed residual block. Its first pending engine residual therefore requires
-the legitimate pre-tick `toxic_count = 0`; direct materialization now admits
-only that snapshot shape.
+the next residual. The earlier repair was too broad: a bare post-upkeep
+non-Baton-Pass switch could forge that proof. The accepted shape is now a
+public active faint for the SAME seat, followed by `|upkeep|`, followed by that
+seat's non-Baton-Pass `|switch|` whose replacement condition retains `tox`.
+That replacement missed the completed residual block, so its first pending
+engine residual requires the legitimate pre-tick `toxic_count = 0`.
 
-The proof is snapshot-carried but construction-only: it changes neither the raw
-public Toxic feature nor V2/V2.1/V2.2 observation bytes. It expires on the
-first Toxic residual and is cleared by active status/cure/faint transitions or
-a later switch/drag. A post-upkeep `|drag|` is rejected as synthetic chronology:
-Gen 3 executes phazing during the move action, before its residual action emits
-`|upkeep|`. Missing proof in a legacy snapshot remains fail-closed.
+The same-seat faint latch is snapshot-carried and consumed by the replacement;
+it clears on a next turn, malformed or duplicate replacement, incompatible
+same-seat transition, and scenario reuse. The resulting proof is
+construction-only: it changes neither the raw public Toxic feature nor
+V2/V2.1/V2.2 observation bytes. Rust leaf metadata receives it through private
+context only, consumes it on the first Toxic residual, and otherwise clears it
+on cure, switch, or faint. A post-upkeep `|drag|` is rejected as synthetic
+chronology: Gen 3 executes phazing during the move action, before its residual
+action emits `|upkeep|`. Missing proof in a legacy snapshot remains fail-closed.

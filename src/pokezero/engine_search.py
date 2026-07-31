@@ -1247,6 +1247,14 @@ class EngineMctsPolicy:
                     "p1": list(world.party_species["p1"]),
                     "p2": list(world.party_species["p2"]),
                     "turn": turn,
+                    # Construction-only provenance for a root Toxic zero.
+                    # The leaf context consumes this outside model metadata.
+                    "toxic_stage_zero_after_upkeep": {
+                        slot: bool(
+                            getattr(replay, "toxic_stage_zero_after_upkeep", {}).get(slot, False)
+                        )
+                        for slot in ("p1", "p2")
+                    },
                 }
             )
             world_seed = rng.getrandbits(63)

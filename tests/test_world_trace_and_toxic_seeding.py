@@ -32,6 +32,7 @@ import unittest
 from pokezero.local_showdown import (
     _apply_traced_ability_materialization_state,
     _materialization_toxic_stage,
+    _seed_scenario_parser_state,
 )
 from pokezero.showdown import _ReplayParser, _update_toxic_stage
 
@@ -272,6 +273,7 @@ class ToxicStageWorldTest(unittest.TestCase):
 
                 replay = parser.snapshot()
                 self.assertFalse(replay.post_upkeep_window)
+                self.assertFalse(replay.toxic_faint_replacement_pending[replaced_side])
                 self.assertEqual(replay.toxic_stage[replaced_side], 0)
                 self.assertTrue(replay.toxic_stage_known[replaced_side])
                 self.assertTrue(replay.toxic_stage_zero_after_upkeep[replaced_side])
@@ -288,6 +290,111 @@ class ToxicStageWorldTest(unittest.TestCase):
                 legacy_resumed = _ReplayParser.from_snapshot(legacy).snapshot()
                 self.assertFalse(legacy_resumed.toxic_stage_zero_after_upkeep[replaced_side])
                 self.assertIsNone(_materialization_toxic_stage(legacy_resumed, replaced_side))
+
+    def test_post_upkeep_zero_requires_the_same_seat_faint(self) -> None:
+        for fainted_side in (None, "p2"):
+            with self.subTest(fainted_side=fainted_side):
+                parser = _ReplayParser("toxic-zero-same-seat", complete_prefix=True)
+                lines = [
+                    "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                    "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                    "|turn|1",
+                ]
+                if fainted_side is not None:
+                    lines.append("|faint|p2a: LeadTwo")
+                lines.extend(
+                    [
+                        "|upkeep",
+                        "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                        "|turn|2",
+                    ]
+                )
+                parser.feed(lines)
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_faint_latch_rejects_drag_baton_action_phase_and_duplicate_replacements(self) -> None:
+        cases = {
+            "drag": [
+                "|upkeep",
+                "|drag|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "baton-pass": [
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox|[from] Baton Pass",
+            ],
+            "action-phase-switch": [
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|upkeep",
+            ],
+            "duplicate-switch": [
+                "|upkeep",
+                "|switch|p1a: First|First, L80, M|90/100 tox",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+            "malformed-switch": [
+                "|upkeep",
+                "|switch|p1a: Broken",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ],
+        }
+        for label, suffix in cases.items():
+            with self.subTest(label=label):
+                parser = _ReplayParser(f"toxic-zero-{label}", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        *suffix,
+                        "|turn|2",
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_faint_replacement_pending["p1"])
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_faint_latch_snapshot_truncation_and_scenario_reuse_fail_closed(self) -> None:
+        parser = _ReplayParser("toxic-zero-truncated", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+            ]
+        )
+        resumed = _ReplayParser.from_snapshot(parser.snapshot())
+        self.assertTrue(resumed.toxic_faint_replacement_pending["p1"])
+        resumed.feed(
+            [
+                "|turn|2",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+            ]
+        )
+        self.assertFalse(resumed.toxic_stage_zero_after_upkeep["p1"])
+
+        state = {
+            "turn": 2,
+            "field": {"weather": "", "turnsRemaining": 0, "permanent": False},
+            "sides": {
+                player: {
+                    "sideConditions": {},
+                    "activeVolatiles": [],
+                    "activeSlot": 0,
+                    "pokemon": [{"status": {"id": "tox", "toxicStage": 0}}],
+                }
+                for player in ("p1", "p2")
+            },
+        }
+        resumed.toxic_faint_replacement_pending["p1"] = True
+        resumed.toxic_stage_zero_after_upkeep["p1"] = True
+        _seed_scenario_parser_state(resumed, state)
+        self.assertFalse(resumed.toxic_faint_replacement_pending["p1"])
+        self.assertFalse(resumed.toxic_stage_zero_after_upkeep["p1"])
 
     def test_post_upkeep_drag_cannot_claim_the_replacement_zero(self) -> None:
         # In Gen 3 a drag resolves in its move action, before the residual

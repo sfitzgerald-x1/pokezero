@@ -6554,15 +6554,20 @@ Gen 3 Showdown's `tox.onSwitchIn` sets `statusState.stage = 0`; its residual
 handler increments that value before applying the first 1/16 tick. The normal
 world bridge therefore correctly represents this first pending tick as engine
 `toxic_count = 0`. Most active-Toxic zero snapshots remain ambiguous and fail
-closed, but one public chronology is exact: `|upkeep|` has closed residuals and
-the following non-Baton-Pass `|switch|` is a faint replacement whose condition
-still says `tox`. That Pokemon missed the preceding residual, so an ordinary
-request after the next `|turn|` may materialize zero.
+closed, but one public chronology is exact: a same-seat public active `|faint|`
+is followed by `|upkeep|`, then that seat's non-Baton-Pass `|switch|` is a
+faint replacement whose condition still says `tox`. That Pokemon missed the
+preceding residual, so an ordinary request after the next `|turn|` may
+materialize zero. The prior bare-post-upkeep rule was a proof forgery and is
+not accepted.
 
-The snapshot-carried proof is side-local and lasts only until its first Toxic
-residual. Switch/drag replacement, active status application or replacement,
-cure, faint, and the first Toxic residual all clear or replace it; a legacy
-snapshot without the field stays fail-closed. A synthetic post-upkeep `|drag|`
+The snapshot-carried faint latch is side-local, consumed by its replacement,
+and cleared on next-turn truncation, malformed/duplicate replacement,
+incompatible same-seat transition, or scenario reuse. Its resulting proof
+lasts only until its first Toxic residual. Switch/drag replacement, active
+status application or replacement, cure, faint, and the first Toxic residual
+all clear or replace it; a legacy snapshot without the field stays fail-closed.
+A synthetic post-upkeep `|drag|`
 is deliberately rejected: Gen 3 resolves phazing in the move action before the
 residual action emits `|upkeep|`. The proof is construction-only, so V2, V2.1,
 and V2.2 observation identities remain byte-identical.

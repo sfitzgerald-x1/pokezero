@@ -372,6 +372,35 @@ pub(crate) struct LeafMetaCtx {
     pub(crate) hp_percent: [bool; 2],
 }
 
+/// Construction-only root proof for the one active-Toxic zero that is public:
+/// a same-seat fainted mon was replaced after upkeep. This lives in `ctx_json`,
+/// not the observation metadata or any frozen model schema.
+fn root_toxic_zero_after_upkeep(ctx: &Value) -> [bool; 2] {
+    let proof = ctx
+        .get("toxic_stage_zero_after_upkeep")
+        .and_then(Value::as_object);
+    [
+        proof
+            .and_then(|proof| proof.get("p1"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        proof
+            .and_then(|proof| proof.get("p2"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    ]
+}
+
+fn seed_root_toxic_reentry_pending(meta: &mut LeafMeta, proof: [bool; 2]) {
+    for side in 0..2 {
+        // The proof is meaningful only for the active toxic zero itself. A
+        // malformed/stale context must fail closed instead of leaking into a
+        // later residual, cure, switch, or faint.
+        meta.toxic_reentry_pending[side] =
+            proof[side] && meta.toxic[side] == 0 && meta.active_toxic[side];
+    }
+}
+
 /// The parser's timed side conditions (showdown.py `_TIMED_SIDE_CONDITIONS`).
 const TIMED_SIDE_CONDITIONS: [&str; 4] = ["reflect", "lightscreen", "safeguard", "mist"];
 
@@ -844,6 +873,7 @@ impl LeafContext {
                 }
             }
         }
+        let root_toxic_zero_proof = root_toxic_zero_after_upkeep(&ctx);
         let root_self_order: Vec<String> = md
             .get("self_team")
             .and_then(Value::as_array)
@@ -921,6 +951,7 @@ impl LeafContext {
             root_meta.active_hp[engine_side] = (active.maxhp > 0)
                 .then_some((active.hp as i64, active.maxhp as i64));
         }
+        seed_root_toxic_reentry_pending(&mut root_meta, root_toxic_zero_proof);
         for (engine_side, side) in [(0usize, &root_state.side_one), (1, &root_state.side_two)] {
             for (party, p) in side.pokemon.into_iter().enumerate() {
                 if p.ability == poke_engine::engine::abilities::Abilities::PRESSURE {
@@ -2423,6 +2454,95 @@ mod tests {
                 "{event} clean entry has no reentry proof"
             );
         }
+    }
+
+    #[test]
+    fn sanctioned_root_zero_proof_reaches_percent_leaf_for_both_seats() {
+        for side in 0..2 {
+            let mut root = LeafMeta {
+                active_toxic: [side == 0, side == 1],
+                active_hp: [Some((100, 100)), Some((100, 100))],
+                ..Default::default()
+            };
+            let proof = root_toxic_zero_after_upkeep(&json!({
+                "toxic_stage_zero_after_upkeep": {
+                    "p1": side == 0,
+                    "p2": side == 1,
+                }
+            }));
+            seed_root_toxic_reentry_pending(&mut root, proof);
+            assert!(root.toxic_reentry_pending[side], "root proof lost for side {side}");
+            assert!(!root.toxic_reentry_pending[1 - side]);
+
+            let mut ctx = LeafMetaCtx::default();
+            ctx.hp_percent[side] = true;
+            let ident = if side == 0 { "p1a: Replacement" } else { "p2a: Replacement" };
+            let leaf = evolve_leaf_meta(
+                &root,
+                &lines(&[
+                    &format!("|-damage|{ident}|94/100 tox|[from] psn"),
+                    "|upkeep",
+                    "|turn|2",
+                ]),
+                &ctx,
+            );
+            // The first rounded residual proves stage one; the following
+            // parser turn boundary advances it to the next pending stage.
+            assert_eq!(leaf.toxic[side], 2, "root-to-leaf recovery side {side}");
+            assert!(!leaf.toxic_reentry_pending[side], "proof must be consumed");
+        }
+    }
+
+    #[test]
+    fn root_zero_proof_fails_closed_and_expires_on_lifecycle_transitions() {
+        let mut root = LeafMeta {
+            active_toxic: [true, false],
+            active_hp: [Some((100, 100)), None],
+            ..Default::default()
+        };
+        seed_root_toxic_reentry_pending(&mut root, root_toxic_zero_after_upkeep(&json!({})));
+        let ctx = LeafMetaCtx {
+            hp_percent: [true, false],
+            ..Default::default()
+        };
+        let unproven = evolve_leaf_meta(
+            &root,
+            &lines(&["|-damage|p1a: Replacement|94/100 tox|[from] psn"]),
+            &ctx,
+        );
+        assert_eq!(unproven.toxic[0], 0, "missing root proof must fail closed");
+
+        for line in [
+            "|-curestatus|p1a: Replacement|tox",
+            "|switch|p1a: Other|Other, L80|100/100",
+            "|faint|p1a: Replacement",
+        ] {
+            let mut proven = root.clone();
+            seed_root_toxic_reentry_pending(
+                &mut proven,
+                root_toxic_zero_after_upkeep(&json!({
+                    "toxic_stage_zero_after_upkeep": {"p1": true, "p2": false}
+                })),
+            );
+            let expired = evolve_leaf_meta(&proven, &lines(&[line]), &ctx);
+            assert!(
+                !expired.toxic_reentry_pending[0],
+                "{line} must retire root zero proof"
+            );
+        }
+
+        let mut forged = LeafMeta {
+            toxic: [1, 0],
+            active_toxic: [true, false],
+            ..Default::default()
+        };
+        seed_root_toxic_reentry_pending(
+            &mut forged,
+            root_toxic_zero_after_upkeep(&json!({
+                "toxic_stage_zero_after_upkeep": {"p1": true, "p2": true}
+            })),
+        );
+        assert_eq!(forged.toxic_reentry_pending, [false, false]);
     }
 
     #[test]
