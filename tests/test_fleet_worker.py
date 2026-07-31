@@ -7,6 +7,7 @@ the shell fleet worker) and the OOM/task recycle bounds.
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -320,12 +321,15 @@ class FanInTests(unittest.TestCase):
                 max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
                 crash_inject=crash,
             )
-        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        abandoned = list(self.cache_dir.iterdir())
+        self.assertEqual(len(abandoned), 1)
+        self.assertTrue(abandoned[0].name.startswith(".shard-ww1-v1.tmp."))
         self._requeue_claim("w1", "i1-s0.env")
         run_worker(
-            self.queue, worker_id="w2", static_argv=[], collect_fn=self._real_collect,
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
         )
+        self.assertEqual([path.name for path in self.cache_dir.iterdir()], ["shard-ww1-v1"])
         inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
         self.assertEqual(inventory.total_games, 1)
 
@@ -393,6 +397,144 @@ class FanInTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1)).total_games, 1)
 
+    def test_crash_after_done_link_recovers_same_inode_without_failed_marker(self) -> None:
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        def crash_after_publish(boundary: str, _task) -> None:
+            if boundary == "fanin-after-target-publication":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash_after_publish,
+            )
+        self._requeue_claim("w1", "i1-s0.env")
+
+        def crash_after_link(boundary: str, _task) -> None:
+            if boundary == "fanin-after-done-link":
+                raise SystemExit("simulated process death")
+
+        with self.assertRaises(SystemExit):
+            run_worker(
+                self.queue, worker_id="w2", static_argv=[], collect_fn=counted_collect,
+                max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+                crash_inject=crash_after_link,
+            )
+        claim = self.queue / "claimed" / "i1-s0.env.w2"
+        done = self.queue / "done" / "i1-s0.env"
+        self.assertTrue(os.path.samestat(claim.stat(), done.stat()))
+
+        self._requeue_claim("w2", "i1-s0.env")
+        run_worker(
+            self.queue, worker_id="w3", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([path.name for path in (self.queue / "done").iterdir()], ["i1-s0.env"])
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_unrelated_legacy_shard_preserves_untried_claim_and_stops(self) -> None:
+        (self.cache_dir / "shard-wlegacy-v1").mkdir()
+        self._manifests(2)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+        self.assertFalse(list((self.queue / "done").iterdir()))
+
+    def test_unrelated_malformed_shard_preserves_untried_claim_and_stops(self) -> None:
+        malformed = self.cache_dir / "shard-wmalformed-v1"
+        malformed.mkdir()
+        (malformed / "fanin-manifest.json").write_text("{", encoding="utf-8")
+        self._manifests(1)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(calls, [])
+        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+
+    def test_inventory_becoming_malformed_after_collection_preserves_claim(self) -> None:
+        self._manifests(2)
+        calls: list[list[str]] = []
+
+        def collect_then_add_malformed_shard(argv: list[str]) -> int:
+            calls.append(argv)
+            result = self._real_collect(argv)
+            (self.cache_dir / "shard-wmalformed-v1").mkdir()
+            return result
+
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=collect_then_add_malformed_shard,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.queue / "claimed" / "i1-s0.env.w1").exists())
+        self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
+        self.assertFalse(list((self.queue / "failed").iterdir()))
+        self.assertFalse(list((self.queue / "done").iterdir()))
+
+    def test_current_task_metadata_conflict_fails_only_that_claim(self) -> None:
+        self._write_version("shard-wother-v1", [FanInTask("i1-s0.env", 1, 0, 1, 999)])
+        self._manifests(2)
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, max_tasks=1, idle_exit_seconds=None, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(calls, [])
+        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+        self.assertTrue((self.queue / "pending" / "i1-s1.env").exists())
+
+    def test_different_inode_done_marker_is_a_task_conflict(self) -> None:
+        self._write_version("shard-wother-v1", [FanInTask("i1-s0.env", 1, 0, 1, 100)])
+        self._manifests(1)
+        (self.queue / "done" / "i1-s0.env").write_text("different claim", encoding="utf-8")
+        calls: list[list[str]] = []
+
+        def counted_collect(argv: list[str]) -> int:
+            calls.append(argv)
+            return self._real_collect(argv)
+
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=counted_collect,
+            max_rss_mb=None, max_tasks=1, idle_exit_seconds=None, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(calls, [])
+        self.assertTrue((self.queue / "done" / "i1-s0.env").exists())
+        self.assertTrue((self.queue / "failed" / "i1-s0.env.w1.failed").exists())
+
     def test_revoked_claim_cannot_publish_a_target(self) -> None:
         self._manifests(1)
 
@@ -405,7 +547,7 @@ class FanInTests(unittest.TestCase):
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
             crash_inject=revoke,
         )
-        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        self.assertFalse(list(self.cache_dir.iterdir()))
         self.assertFalse((self.queue / "done" / "i1-s0.env").exists())
 
     def test_strict_inventory_rejects_malformed_or_missing_manifest(self) -> None:
@@ -454,6 +596,28 @@ class FanInTests(unittest.TestCase):
                 FanInQueueContract(2, expected_task_count=2, expected_game_count=2, seed_start=100),
             )
 
+    def test_selected_version_vanishing_reselects_new_highest_version(self) -> None:
+        from unittest.mock import patch
+        import shutil
+
+        tasks = [FanInTask("i1-s0.env", 1, 0, 1, 100)]
+        v4 = self._write_version("shard-ww1-v4", tasks)
+        original_read = fleet_worker._read_fanin_manifest
+        raced = False
+
+        def publish_v5_while_reading(path: Path):
+            nonlocal raced
+            if path == v4 and not raced:
+                raced = True
+                self._write_version("shard-ww1-v5", tasks)
+                shutil.rmtree(v4)
+            return original_read(path)
+
+        with patch.object(fleet_worker, "_read_fanin_manifest", new=publish_v5_while_reading):
+            inventory = read_fanin_inventory(self.cache_dir, self._contract(tasks=1, games=1))
+        self.assertTrue(raced)
+        self.assertEqual([shard.path.name for shard in inventory.shards], ["shard-ww1-v5"])
+
     def test_adopts_existing_version_and_sweeps_stale(self) -> None:
         from pokezero.dataset import TrajectoryDatasetConfig
         from tests.test_cache_concat import rollout_record, write_cache
@@ -496,7 +660,7 @@ class FanInTests(unittest.TestCase):
             self.queue, worker_id="w1", static_argv=[], collect_fn=revoking_collect,
             max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
         )
-        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        self.assertFalse(list(self.cache_dir.iterdir()))
         self.assertFalse(list((self.queue / "done").iterdir()))
 
     def test_log_dir_persists_commit_lines(self) -> None:
