@@ -346,6 +346,17 @@ fn successful_substitute_ends_the_target_partial_trap_before_residuals() {
         "a successful Substitute must end the target's partial trap: {:?}",
         list
     );
+    let side_two_damage_count = list
+        .iter()
+        .filter(|instruction| {
+            matches!(instruction, Instruction::Damage(damage) if damage.side_ref == SideReference::SideTwo)
+        })
+        .count();
+    assert_eq!(
+        side_two_damage_count, 1,
+        "only the Substitute HP cost may remain; partial-trap chip must be absent: {:?}",
+        list
+    );
     assert_reverts_cleanly(&mut state, &list);
 }
 
