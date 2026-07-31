@@ -915,6 +915,16 @@ class ShowdownPokemon:
     live_type_source: Optional[str] = None
 
 
+def _is_current_public_active(pokemon: object | None) -> bool:
+    """Whether a public record is explicitly the current active Pokemon.
+
+    Toxic proof latches authorize simulator-private state, so truthiness is not
+    sufficient here: snapshots can contain stale, partial, or malformed rows.
+    """
+
+    return getattr(pokemon, "active", None) is True
+
+
 @dataclass(frozen=True)
 class ShowdownReplayState:
     battle_id: str
@@ -1442,29 +1452,37 @@ class _ReplayParser:
         snapshot_stage_known = getattr(snapshot, "toxic_stage_known", {})
         parser.toxic_stage_known = {}
         for slot in ("p1", "p2"):
-            if slot in snapshot_stage_known:
-                parser.toxic_stage_known[slot] = bool(snapshot_stage_known[slot])
+            if isinstance(snapshot_stage_known, Mapping) and slot in snapshot_stage_known:
+                parser.toxic_stage_known[slot] = snapshot_stage_known[slot] is True
                 continue
             # Old snapshots did not preserve this provenance. A non-toxic active
             # has no counter to reconstruct; an active tox mon must fail closed.
             active = snapshot.public_active.get(slot)
-            parser.toxic_stage_known[slot] = not _condition_has_status(
-                active.condition if active is not None else None,
-                "tox",
+            parser.toxic_stage_known[slot] = (
+                _is_current_public_active(active)
+                and not _condition_has_status(getattr(active, "condition", None), "tox")
             )
         for slot, known in parser.toxic_stage_known.items():
             if not known:
                 parser.toxic_stage[slot] = 0
         snapshot_zero_after_upkeep = getattr(snapshot, "toxic_stage_zero_after_upkeep", {})
         parser.toxic_stage_zero_after_upkeep = {
-            slot: bool(snapshot_zero_after_upkeep.get(slot, False))
+            slot: (
+                snapshot_zero_after_upkeep.get(slot) is True
+                if isinstance(snapshot_zero_after_upkeep, Mapping)
+                else False
+            )
             for slot in ("p1", "p2")
         }
         snapshot_zero_after_upkeep_deadline = getattr(
             snapshot, "toxic_stage_zero_after_upkeep_expires_after_turn", {}
         )
+        if not isinstance(snapshot_zero_after_upkeep_deadline, Mapping):
+            snapshot_zero_after_upkeep_deadline = {}
         parser.toxic_stage_zero_after_upkeep_expires_after_turn = {}
         snapshot_zero_after_upkeep_ident = getattr(snapshot, "toxic_stage_zero_after_upkeep_ident", {})
+        if not isinstance(snapshot_zero_after_upkeep_ident, Mapping):
+            snapshot_zero_after_upkeep_ident = {}
         for slot in ("p1", "p2"):
             deadline = snapshot_zero_after_upkeep_deadline.get(slot)
             proof_ident = snapshot_zero_after_upkeep_ident.get(slot)
@@ -1474,9 +1492,9 @@ class _ReplayParser:
                 and isinstance(deadline, int)
                 and isinstance(proof_ident, str)
                 and _is_active_protocol_ident(proof_ident)
-                and active is not None
-                and active.ident == proof_ident
-                and _condition_has_status(active.condition, "tox")
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == proof_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
                 and parser.toxic_stage_known[slot]
                 and parser.toxic_stage[slot] == 0
             ):
@@ -1493,6 +1511,10 @@ class _ReplayParser:
         )
         snapshot_expected_ident = getattr(snapshot, "toxic_faint_replacement_expected_ident", {})
         snapshot_invalid = getattr(snapshot, "toxic_faint_replacement_invalid", None)
+        if not isinstance(snapshot_faint_replacement_pending, Mapping):
+            snapshot_faint_replacement_pending = {}
+        if not isinstance(snapshot_expected_ident, Mapping):
+            snapshot_expected_ident = {}
         for slot in ("p1", "p2"):
             expected_ident = snapshot_expected_ident.get(slot)
             active = parser.public_active.get(slot)
@@ -1503,16 +1525,16 @@ class _ReplayParser:
                     or slot not in snapshot_invalid
                     or slot not in snapshot_expected_ident
                 )
-                else bool(snapshot_invalid.get(slot, False))
+                else snapshot_invalid.get(slot) is not False
             )
             parser.toxic_faint_replacement_pending[slot] = bool(
-                snapshot_faint_replacement_pending.get(slot, False)
+                snapshot_faint_replacement_pending.get(slot) is True
                 and not parser.toxic_faint_replacement_invalid[slot]
-                and not bool(snapshot.post_upkeep_window)
+                and snapshot.post_upkeep_window is False
                 and isinstance(expected_ident, str)
                 and _is_active_protocol_ident(expected_ident)
-                and active is not None
-                and active.ident == expected_ident
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == expected_ident
             )
             parser.toxic_faint_replacement_expected_ident[slot] = (
                 expected_ident if parser.toxic_faint_replacement_pending[slot] else None
@@ -1629,13 +1651,14 @@ class _ReplayParser:
                 replacement_slot
             )
             replacement_is_canonical = _is_active_protocol_ident(parts[2])
+            replacement_active = self.public_active.get(replacement_slot)
             replacement_matches_pending = bool(
                 pending_faint_replacement
                 and not self.toxic_faint_replacement_invalid.get(replacement_slot, True)
                 and replacement_is_canonical
                 and isinstance(expected_fainted_ident, str)
-                and self.public_active.get(replacement_slot) is not None
-                and self.public_active[replacement_slot].ident == expected_fainted_ident
+                and _is_current_public_active(replacement_active)
+                and getattr(replacement_active, "ident", None) == expected_fainted_ident
             )
             # Consume before parsing: malformed or duplicate replacement
             # lines must never leave a faint proof reusable later.
@@ -2001,8 +2024,8 @@ class _ReplayParser:
             if (
                 not self._post_upkeep_window
                 and _is_active_protocol_ident(parts[2])
-                and active is not None
-                and active.ident == parts[2]
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == parts[2]
                 and not self.toxic_faint_replacement_pending[slot]
                 and not self.toxic_faint_replacement_invalid[slot]
             ):
@@ -2137,7 +2160,11 @@ class _ReplayParser:
         # a stage-zero world, even if later exact recovery is impossible.
         self.toxic_stage_zero_after_upkeep[slot] = False
         active = self.public_active.get(slot)
-        prev_condition = active.condition if active is not None and active.ident == parts[2] else None
+        prev_condition = (
+            getattr(active, "condition", None)
+            if _is_current_public_active(active) and getattr(active, "ident", None) == parts[2]
+            else None
+        )
         prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
         cur_hp, cur_max = _hp_numerator_denominator(new_condition)
         max_hp = prev_max or cur_max

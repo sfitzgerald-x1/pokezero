@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Verify C26's immutable public provenance and current regression surface.
+"""Verify C26's immutable public provenance from the final public merge commit.
 
 C26 retained no replay rows or classifier output. This checker keeps the
 original public merge as immutable provenance while exercising the current
 checkout's switch-prefixed renderer contract. It cannot prove a fresh result
-for any historical identity or grant certification clearance.
+for any historical identity or grant certification clearance. This verifier is
+post-merge only: the checked-out commit must exactly equal freshly fetched
+``origin/main`` before it can report a passing result.
 """
 
 from __future__ import annotations
@@ -109,6 +111,17 @@ def refresh_authoritative_origin_main(repo: Path) -> str:
         ],
     )
     return git(repo, "rev-parse", "--verify", "origin/main^{commit}").strip()
+
+
+def require_post_merge_head(repo: Path, authoritative_main: str) -> None:
+    """Reject branch validation; the full verifier certifies only published main."""
+
+    head = git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    if head != authoritative_main:
+        raise RuntimeError(
+            "full C26 supersession verification is post-merge only: "
+            f"HEAD {head!r} must exactly equal freshly fetched origin/main {authoritative_main!r}"
+        )
 
 
 def require_cargo_regression_evidence(stdout: str, test_name: str) -> dict[str, int | str]:
@@ -228,12 +241,13 @@ def verify_current_engine_inputs(repo: Path) -> dict[str, object]:
 
 
 def verify_current_regression_surface(repo: Path, authoritative_main: str) -> list[object]:
-    """Exercise current-main-equivalent renderer behavior, not frozen source text."""
+    """Exercise the renderer only from the final, fetched ``origin/main`` commit."""
 
     git(repo, "merge-base", "--is-ancestor", authoritative_main, "HEAD")
+    require_post_merge_head(repo, authoritative_main)
     command(
         repo,
-        "current checkout public-input comparison",
+        "post-merge public-input equality with origin/main",
         [
             "git",
             "-C",

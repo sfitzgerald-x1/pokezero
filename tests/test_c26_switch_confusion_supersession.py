@@ -105,5 +105,35 @@ class OriginMainRefreshTests(unittest.TestCase):
         self.assertEqual(command.call_count, 1)
 
 
+class PostMergeLifecycleTests(unittest.TestCase):
+    def test_branch_head_is_rejected_before_any_full_verifier_command(self) -> None:
+        with patch.object(VERIFIER, "git", side_effect=["", "branch-head\n"]), patch.object(
+            VERIFIER, "command"
+        ) as command:
+            with self.assertRaisesRegex(RuntimeError, "post-merge only"):
+                VERIFIER.verify_current_regression_surface(REPO_ROOT, "public-main")
+
+        command.assert_not_called()
+
+    def test_full_verifier_retains_the_exact_public_input_equality_gate(self) -> None:
+        def command_output(_repo, label, _args, **_kwargs):
+            return cargo_output(test_line=f"test {TEST_NAME} ... ok") if label.startswith(
+                "current switch-prefixed"
+            ) else ""
+
+        with patch.object(VERIFIER, "git", side_effect=["", "public-main\n"]), patch.object(
+            VERIFIER, "command", side_effect=command_output
+        ) as command:
+            VERIFIER.verify_current_regression_surface(REPO_ROOT, "public-main")
+
+        equality_calls = [
+            call for call in command.call_args_list
+            if call.args[1] == "post-merge public-input equality with origin/main"
+        ]
+        self.assertEqual(len(equality_calls), 1)
+        self.assertEqual(equality_calls[0].args[2][0:3], ["git", "-C", str(REPO_ROOT)])
+        self.assertEqual(equality_calls[0].args[2][3:6], ["diff", "--quiet", "public-main"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,7 @@ from pokezero.local_showdown import (
     _materialization_toxic_stage,
     _seed_scenario_parser_state,
 )
-from pokezero.showdown import _ReplayParser, _update_toxic_stage
+from pokezero.showdown import ShowdownPokemon, _ReplayParser, _update_toxic_stage
 
 
 class ToxicStageParserTest(unittest.TestCase):
@@ -308,6 +308,12 @@ class ToxicStageWorldTest(unittest.TestCase):
                         "|turn|1",
                         f"|-damage|{ident}|0 fnt",
                         f"|faint|{ident}",
+                    ]
+                )
+                parser = _ReplayParser.from_snapshot(parser.snapshot())
+                self.assertTrue(parser.toxic_faint_replacement_pending[replaced_side])
+                parser.feed(
+                    [
                         "|upkeep",
                         (
                             f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
@@ -321,6 +327,80 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertTrue(replay.toxic_stage_zero_after_upkeep[replaced_side])
                 self.assertEqual(replay.toxic_stage[replaced_side], 0)
                 self.assertEqual(_materialization_toxic_stage(replay, replaced_side), 0)
+
+    def test_snapshot_toxic_proofs_require_exact_active_marker_for_both_sides(self) -> None:
+        for replaced_side in ("p1", "p2"):
+            with self.subTest(replaced_side=replaced_side):
+                lead = "LeadOne" if replaced_side == "p1" else "LeadTwo"
+                ident = f"{replaced_side}a: {lead}"
+                parser = _ReplayParser(
+                    f"toxic-active-marker-{replaced_side}", complete_prefix=True
+                )
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        f"|-damage|{ident}|0 fnt",
+                        f"|faint|{ident}",
+                    ]
+                )
+                pending = parser.snapshot()
+                active = pending.public_active[replaced_side]
+
+                control = _ReplayParser.from_snapshot(pending)
+                self.assertTrue(control.toxic_faint_replacement_pending[replaced_side])
+                control.feed(
+                    [
+                        "|upkeep",
+                        (
+                            f"|switch|{replaced_side}a: Replacement|Replacement, L80, M|"
+                            "90/100 tox"
+                        ),
+                        "|turn|2",
+                    ]
+                )
+                zero_proof = control.snapshot()
+                self.assertTrue(zero_proof.toxic_stage_zero_after_upkeep[replaced_side])
+                self.assertEqual(_materialization_toxic_stage(zero_proof, replaced_side), 0)
+
+                invalid_active_records = {
+                    "false": replace(active, active=False),
+                    "none": replace(active, active=None),
+                    "truthy-int": replace(active, active=1),
+                    "truthy-string": replace(active, active="yes"),
+                    "malformed": object(),
+                }
+                for label, invalid_active in invalid_active_records.items():
+                    with self.subTest(replaced_side=replaced_side, active=label):
+                        restored_pending = _ReplayParser.from_snapshot(
+                            replace(
+                                pending,
+                                public_active={
+                                    **pending.public_active,
+                                    replaced_side: invalid_active,
+                                },
+                            )
+                        )
+                        self.assertFalse(
+                            restored_pending.toxic_faint_replacement_pending[replaced_side]
+                        )
+
+                        restored_zero = _ReplayParser.from_snapshot(
+                            replace(
+                                zero_proof,
+                                public_active={
+                                    **zero_proof.public_active,
+                                    replaced_side: invalid_active,
+                                },
+                            )
+                        ).snapshot()
+                        self.assertFalse(
+                            restored_zero.toxic_stage_zero_after_upkeep[replaced_side]
+                        )
+                        self.assertIsNone(
+                            _materialization_toxic_stage(restored_zero, replaced_side)
+                        )
 
     def test_post_upkeep_zero_requires_the_same_seat_faint(self) -> None:
         for fainted_side in (None, "p2"):
@@ -770,11 +850,48 @@ class ToxicStageWorldTest(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertIsNone(_materialization_toxic_stage(tampered, "p1"))
 
+    def test_direct_materialization_requires_exact_active_marker_for_both_sides(self) -> None:
+        for player in ("p1", "p2"):
+            with self.subTest(player=player):
+                active = ShowdownPokemon(
+                    ident=f"{player}a: Replacement",
+                    showdown_slot=player,
+                    species="Replacement",
+                    condition="90/100 tox",
+                    active=True,
+                )
+                replay = SimpleNamespace(
+                    toxic_stage={player: 0},
+                    toxic_stage_known={player: True},
+                    toxic_stage_zero_after_upkeep={player: True},
+                    toxic_stage_zero_after_upkeep_ident={player: active.ident},
+                    toxic_stage_zero_after_upkeep_expires_after_turn={player: 2},
+                    toxic_faint_replacement_invalid={player: False},
+                    toxic_faint_replacement_pending={player: False},
+                    toxic_faint_replacement_expected_ident={player: None},
+                    public_active={player: active},
+                    post_upkeep_window=False,
+                    turn_number=2,
+                )
+                self.assertEqual(_materialization_toxic_stage(replay, player), 0)
+
+                invalid_active_records = {
+                    "false": replace(active, active=False),
+                    "none": replace(active, active=None),
+                    "truthy-int": replace(active, active=1),
+                    "truthy-string": replace(active, active="yes"),
+                    "malformed": object(),
+                }
+                for label, invalid_active in invalid_active_records.items():
+                    with self.subTest(player=player, active=label):
+                        replay.public_active = {player: invalid_active}
+                        self.assertIsNone(_materialization_toxic_stage(replay, player))
+
     def test_stage_fifteen_saturation_survives_both_boundaries(self) -> None:
         replay = SimpleNamespace(
             toxic_stage={"p1": 16},
             toxic_stage_known={"p1": True},
-            public_active={"p1": SimpleNamespace(condition="1/100 tox")},
+            public_active={"p1": SimpleNamespace(condition="1/100 tox", active=True)},
             post_upkeep_window=False,
         )
 
@@ -787,8 +904,8 @@ class ToxicStageWorldTest(unittest.TestCase):
             toxic_stage={"p1": 0, "p2": 0},
             toxic_stage_known={"p1": True, "p2": False},
             public_active={
-                "p1": SimpleNamespace(condition="100/100"),
-                "p2": SimpleNamespace(condition="85/100 tox"),
+                "p1": SimpleNamespace(condition="100/100", active=True),
+                "p2": SimpleNamespace(condition="85/100 tox", active=True),
             },
             post_upkeep_window=False,
         )
@@ -799,7 +916,7 @@ class ToxicStageWorldTest(unittest.TestCase):
         replay = SimpleNamespace(
             toxic_stage={"p1": 17},
             toxic_stage_known={"p1": True},
-            public_active={"p1": SimpleNamespace(condition="85/100 tox")},
+            public_active={"p1": SimpleNamespace(condition="85/100 tox", active=True)},
             post_upkeep_window=False,
         )
         self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
@@ -809,8 +926,8 @@ class ToxicStageWorldTest(unittest.TestCase):
             toxic_stage={"p1": 0, "p2": 0},
             toxic_stage_known={},
             public_active={
-                "p1": SimpleNamespace(condition="100/100"),
-                "p2": SimpleNamespace(condition="85/100 tox"),
+                "p1": SimpleNamespace(condition="100/100", active=True),
+                "p2": SimpleNamespace(condition="85/100 tox", active=True),
             },
             post_upkeep_window=False,
         )

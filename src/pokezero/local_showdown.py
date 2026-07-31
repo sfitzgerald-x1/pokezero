@@ -38,6 +38,7 @@ from .showdown import (
     ShowdownPokemon,
     ShowdownReplayState,
     _is_active_protocol_ident,
+    _is_current_public_active,
     _normalize_identifier,
     _ReplayParser,
     normalize_for_player,
@@ -2271,10 +2272,12 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
     proof_present, zero_after_upkeep = provenance_value("toxic_stage_zero_after_upkeep")
     if proof_present and type(zero_after_upkeep) is not bool:
         return None
-    active_is_toxic = bool(
-        active is not None
-        and "tox" in str(active.condition or "").split()
-    )
+    if not _is_current_public_active(active):
+        return None
+    condition = getattr(active, "condition", None)
+    if not isinstance(condition, str):
+        return None
+    active_is_toxic = "tox" in condition.split()
     if not active_is_toxic:
         return None if zero_after_upkeep is True else 0
     known_present, known = provenance_value("toxic_stage_known")

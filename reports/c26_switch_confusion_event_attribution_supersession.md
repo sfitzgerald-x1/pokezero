@@ -32,12 +32,13 @@ any of these labels or preserve a fresh classifier outcome.
 Consequently, this record does **not** claim a row replay, independent residual
 clearance, binding certification clearance, or a fresh classifier result.
 
-## Reproducible Check
+## Verification Lifecycle
 
-Run from this worktree:
+Before merge, branch validation is deliberately limited to parser/unit and
+current-artifact checks. These commands are required, but they are **not** a
+C26 supersession-verifier PASS:
 
 ```bash
-uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
 uv run --isolated --python 3.12 python tests/test_c26_switch_confusion_supersession.py
 (cd rust/pokezero-search && cargo test --test gen3_confusion_event_renderer)
 uv run --isolated --python 3.12 python tests/test_poke_engine_patch_stack.py
@@ -45,16 +46,19 @@ uv run --isolated --python 3.12 python tests/test_public_invariant.py
 git diff --check
 ```
 
-The checker separates two claims. It reads immutable historical provenance from
-public merge `8af4f42` with `git show`, first force-refreshes `origin/main`
-from the authoritative remote, and then proves that merge is an ancestor of the
-freshly fetched commit. The same fetched commit is the base for the current
-ancestry and public-input-diff checks, so a stale tracking ref cannot satisfy
-either claim. It then validates the current tracked engine source pin and
-patch-list digest, checks the vendored patch target digest, and runs the current
-switch-prefixed Rust regression alongside the nine fail-closed verifier unit
-tests, patch-stack tests, and public-invariant test. Cargo output must contain
-the exact named regression with `... ok`, the complete 22-test runnable target,
-zero ignored tests, and zero filtered-out tests. The ordinary Recoil control
-remains in the same renderer integration suite. None of these commands reruns a
-C26 classifier or clears certification.
+After the final merge commit is fetched to `origin/main` and checked out as
+`HEAD`, the full verifier is required and expected to pass:
+
+```bash
+uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
+```
+
+It force-refreshes `origin/main`, rejects any `HEAD` that is not exactly that
+commit, and retains the exact public-input equality gate for `events.rs`,
+`Cargo.toml`, the engine source pin, and patch list. Only then does it validate
+the engine artifacts and rerun the eleven parser/unit tests, 22-test renderer
+suite, patch-stack test, and public-invariant test. A feature branch that
+changes those authenticated inputs is therefore expected to fail the full
+verifier before merge, not to report a pre-merge PASS. The ordinary Recoil
+control remains in the renderer suite. None of these commands reruns a C26
+classifier or clears certification.

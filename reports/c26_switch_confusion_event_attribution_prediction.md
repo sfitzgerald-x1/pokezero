@@ -51,10 +51,10 @@ fresh classifier result, a row replay, or evidence that any residual clears.
 
 ## Exact Commands
 
-Run from this worktree:
+Before merge, run the branch-validation checks below. They are not a full C26
+supersession-verifier PASS:
 
 ```bash
-uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
 uv run --isolated --python 3.12 python tests/test_c26_switch_confusion_supersession.py
 (cd rust/pokezero-search && cargo test --test gen3_confusion_event_renderer)
 uv run --isolated --python 3.12 python tests/test_poke_engine_patch_stack.py
@@ -62,9 +62,14 @@ uv run --isolated --python 3.12 python tests/test_public_invariant.py
 git diff --check
 ```
 
-The verifier runs its nine fail-closed parser/provenance unit tests and the
-complete renderer integration suite, including the switch regression and Recoil
-negative control, plus the patch-stack and public-invariant tests after checking
-the pinned engine source and patch-list digest. A post-fix certification
-classifier replay with retained inputs remains required before any binding
-certification or sweep claim.
+After the final merge commit is on freshly fetched `origin/main` and checked out
+as `HEAD`, run the full verifier:
+
+```bash
+uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
+```
+
+It requires that exact post-merge state and preserves the exact renderer/patch
+public-input equality gate; a feature branch that changes those inputs is
+expected to fail it. A post-fix certification classifier replay with retained
+inputs remains required before any binding certification or sweep claim.
