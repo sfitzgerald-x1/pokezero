@@ -2018,6 +2018,10 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
         # 15"; the model-facing feature remains clamped to 15.
         parser.toxic_stage[player] = min(16, engine_stage + 1) if toxic else 0
         parser.toxic_stage_known[player] = True
+        # Scenario materialization always returns an ordinary action-request boundary. It
+        # cannot carry the replay-only proof for a replacement that arrived after a prior
+        # upkeep, so ensure a reused parser never retains one.
+        parser.toxic_stage_zero_after_upkeep[player] = False
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:

@@ -25,6 +25,7 @@ ignored it.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
@@ -136,6 +137,24 @@ class ToxicStageParserTest(unittest.TestCase):
         )
         self.assertEqual(stage["p1"], 0)
         self.assertTrue(known["p1"])
+
+    def test_active_status_lifecycle_retires_post_upkeep_zero_proof(self) -> None:
+        # The proof is for one specific active Toxic stint, not an assertion
+        # about the slot forever. All of the regular active-status reset paths
+        # must clear it alongside the numeric ramp.
+        for event in (
+            ["", "-status", "p1a: Zapdos", "tox"],
+            ["", "-status", "p1a: Zapdos", "slp"],
+            ["", "-curestatus", "p1a: Zapdos", "tox"],
+            ["", "-cureteam", "p1a: Zapdos", "tox"],
+            ["", "faint", "p1a: Zapdos"],
+        ):
+            with self.subTest(event=event[1]):
+                stage = {"p1": 0, "p2": 0}
+                known = {"p1": True, "p2": True}
+                zero_after_upkeep = {"p1": True, "p2": False}
+                _update_toxic_stage(event, stage, known, zero_after_upkeep)
+                self.assertFalse(zero_after_upkeep["p1"])
 
     def test_failed_reapplication_does_not_rewrite_the_live_counter(self) -> None:
         # Re-Toxic into an already-toxic target is a public failure, not a new
@@ -262,6 +281,57 @@ class ToxicStageWorldTest(unittest.TestCase):
                 resumed = _ReplayParser.from_snapshot(replay).snapshot()
                 self.assertTrue(resumed.toxic_stage_zero_after_upkeep[replaced_side])
                 self.assertEqual(_materialization_toxic_stage(resumed, replaced_side), 0)
+
+                # A legacy snapshot lacks the new proof. Its numeric zero must
+                # remain fail-closed rather than reinterpret an old checkpoint.
+                legacy = replace(replay, toxic_stage_zero_after_upkeep={})
+                legacy_resumed = _ReplayParser.from_snapshot(legacy).snapshot()
+                self.assertFalse(legacy_resumed.toxic_stage_zero_after_upkeep[replaced_side])
+                self.assertIsNone(_materialization_toxic_stage(legacy_resumed, replaced_side))
+
+    def test_post_upkeep_drag_cannot_claim_the_replacement_zero(self) -> None:
+        # In Gen 3 a drag resolves in its move action, before the residual
+        # action emits |upkeep|. Treating a synthetic post-upkeep drag as a
+        # faint replacement would widen the proof beyond real chronology.
+        parser = _ReplayParser("toxic-post-upkeep-drag", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|upkeep",
+                "|drag|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        replay = parser.snapshot()
+        self.assertEqual(replay.toxic_stage["p1"], 0)
+        self.assertTrue(replay.toxic_stage_known["p1"])
+        self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+        self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_post_upkeep_zero_proof_expires_with_its_first_toxic_residual(self) -> None:
+        parser = _ReplayParser(
+            "toxic-post-upkeep-first-tick", complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|100/100 tox",
+                "|turn|2",
+            ]
+        )
+        self.assertTrue(parser.toxic_stage_zero_after_upkeep["p1"])
+        parser.feed(["|-damage|p1a: Replacement|94/100 tox|[from] psn"])
+        replay = parser.snapshot()
+        self.assertEqual(replay.toxic_stage["p1"], 1)
+        self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 0)
 
     def test_active_toxic_zero_without_post_upkeep_replacement_proof_fails_closed(self) -> None:
         replay = SimpleNamespace(

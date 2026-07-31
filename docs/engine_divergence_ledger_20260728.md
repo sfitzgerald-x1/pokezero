@@ -6547,3 +6547,22 @@ active-status transition into leaf metadata. Render-to-evolve coverage proves
 that Rest, Refresh, and Heal Bell clear Toxic stage/provenance without changing
 their public output. Clean switch and drag entries also clear stage and active
 provenance before deriving a possible Toxic re-entry.
+
+## Z17.2 Post-upkeep poisoned replacement: the only public stage-zero proof
+
+Gen 3 Showdown's `tox.onSwitchIn` sets `statusState.stage = 0`; its residual
+handler increments that value before applying the first 1/16 tick. The normal
+world bridge therefore correctly represents this first pending tick as engine
+`toxic_count = 0`. Most active-Toxic zero snapshots remain ambiguous and fail
+closed, but one public chronology is exact: `|upkeep|` has closed residuals and
+the following non-Baton-Pass `|switch|` is a faint replacement whose condition
+still says `tox`. That Pokemon missed the preceding residual, so an ordinary
+request after the next `|turn|` may materialize zero.
+
+The snapshot-carried proof is side-local and lasts only until its first Toxic
+residual. Switch/drag replacement, active status application or replacement,
+cure, faint, and the first Toxic residual all clear or replace it; a legacy
+snapshot without the field stays fail-closed. A synthetic post-upkeep `|drag|`
+is deliberately rejected: Gen 3 resolves phazing in the move action before the
+residual action emits `|upkeep|`. The proof is construction-only, so V2, V2.1,
+and V2.2 observation identities remain byte-identical.

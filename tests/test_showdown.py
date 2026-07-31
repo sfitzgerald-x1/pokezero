@@ -21,7 +21,9 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    V2_REPLAY_OBSERVATION_SPEC,
     V2_1_REPLAY_OBSERVATION_SPEC,
+    V2_2_REPLAY_OBSERVATION_SPEC,
     NUMERIC_ACTUAL_HP,
     NUMERIC_ACTUAL_SPE,
     NUMERIC_EFFECT_CHANCE,
@@ -1951,6 +1953,60 @@ class Phase2DynamicStateTest(unittest.TestCase):
         legacy_resumed = _ReplayParser.from_snapshot(legacy)
         self.assertEqual(legacy_resumed.toxic_stage["p1"], 0)
         self.assertFalse(legacy_resumed.toxic_stage_known["p1"])
+
+    def test_post_upkeep_zero_proof_is_invisible_to_frozen_observation_schemas(self) -> None:
+        # This is construction-only provenance. It must not mutate the public
+        # replay counter or the V2/V2.1/V2.2 encodes already used by frozen
+        # checkpoints; only direct world materialization consumes it.
+        replay = parse_showdown_replay(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ],
+            complete_prefix=True,
+        )
+        without_proof = replace(replay, toxic_stage_zero_after_upkeep={})
+        # V2.2 rejects a vocabulary that cannot represent its turn-merged
+        # surface.  Keep the existing frozen V2/V2.1 test vocabulary intact;
+        # this deliberately local vocabulary is only the minimal schema gate
+        # for comparing the same trace with and without construction-only
+        # provenance.
+        turn_merged_vocab = build_category_vocabulary(
+            [*_TEST_VOCAB.tokens, "tt_phase:turn"]
+        )
+        for player in ("p1", "p2"):
+            with self.subTest(player=player):
+                state = normalize_for_player(
+                    replay, player_id=player, configured_showdown_slot=player,
+                    include_turn_merged=True,
+                )
+                legacy_state = normalize_for_player(
+                    without_proof, player_id=player, configured_showdown_slot=player,
+                    include_turn_merged=True,
+                )
+                self.assertEqual(state, legacy_state)
+                for spec in (
+                    V2_REPLAY_OBSERVATION_SPEC,
+                    V2_1_REPLAY_OBSERVATION_SPEC,
+                    V2_2_REPLAY_OBSERVATION_SPEC,
+                ):
+                    category_vocab = (
+                        turn_merged_vocab
+                        if spec is V2_2_REPLAY_OBSERVATION_SPEC
+                        else _TEST_VOCAB
+                    )
+                    encoded = observation_from_player_state(
+                        state, category_vocab=category_vocab, spec=spec,
+                    )
+                    legacy_encoded = observation_from_player_state(
+                        legacy_state, category_vocab=category_vocab, spec=spec,
+                    )
+                    self.assertEqual(encoded, legacy_encoded, spec.schema_version)
 
     def test_toxic_counter_does_not_baton_pass_to_the_replacement(self) -> None:
         state = parse_showdown_replay(

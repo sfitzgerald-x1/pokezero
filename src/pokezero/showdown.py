@@ -1128,10 +1128,12 @@ class ShowdownReplayState:
     # latter rather than silently seed a false ``toxic_count = 0``.
     toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
     # A known stage-0 active ``tox`` counter is normally ambiguous at an
-    # action boundary. This proof is set only when a switch/drag introduced the
-    # poisoned Pokemon after upkeep, after that turn's residual had already
-    # run. It permits the engine's legitimate pre-tick counter 0 without
-    # relaxing the fail-closed rule for every other stage-0 snapshot.
+    # action boundary. This proof is set only when a non-Baton-Pass ``switch``
+    # introduced the poisoned Pokemon after ``|upkeep|``, after that turn's
+    # residual had already run. It permits the engine's legitimate pre-tick
+    # counter 0 without relaxing the fail-closed rule for every other stage-0
+    # snapshot. It is retired by the first Toxic residual and every active
+    # status/faint transition.
     toxic_stage_zero_after_upkeep: Mapping[str, bool] = field(default_factory=dict)
     # Provenance for HP numerators/denominators in this protocol stream. ``exact`` means the
     # denominator is the Pokemon's real max HP; ``percentage`` means Showdown's rounded /100
@@ -1589,12 +1591,16 @@ class _ReplayParser:
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 self.toxic_stage_known[pokemon.showdown_slot] = True
                 # A normal switch-in will take this turn's residual before its
-                # next action. Only a forced switch/drag after ``|upkeep|``
-                # missed that residual, so only that public chronology proves
-                # an active Toxic pre-tick counter of zero at materialization.
+                # next action. Gen 3 writes ``|upkeep|`` only after the residual
+                # phase, then emits the faint replacement as ``|switch|``. That
+                # replacement missed the just-finished residual, so its next
+                # Toxic tick has the legitimate pre-tick counter zero. A
+                # ``|drag|`` is an action-phase phaze, and Baton Pass is not a
+                # faint replacement; neither may manufacture this narrow proof.
                 self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot] = bool(
-                    event_type in {"switch", "drag"}
+                    event_type == "switch"
                     and self._post_upkeep_window
+                    and not is_baton_pass
                     and _condition_has_status(pokemon.condition, "tox")
                 )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
@@ -1741,7 +1747,12 @@ class _ReplayParser:
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
-        _update_toxic_stage(parts, self.toxic_stage, self.toxic_stage_known)
+        _update_toxic_stage(
+            parts,
+            self.toxic_stage,
+            self.toxic_stage_known,
+            self.toxic_stage_zero_after_upkeep,
+        )
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
         _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
@@ -1846,6 +1857,10 @@ class _ReplayParser:
         # Only a BADLY-poisoned residual ramps; a plain ``psn`` residual carries no ``tox`` token.
         if "tox" not in new_condition.split():
             return
+        # This public residual consumes the one deferred first tick of a
+        # post-upkeep replacement. It is no longer evidence for materializing
+        # a stage-zero world, even if later exact recovery is impossible.
+        self.toxic_stage_zero_after_upkeep[slot] = False
         active = self.public_active.get(slot)
         prev_condition = active.condition if active is not None and active.ident == parts[2] else None
         prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
@@ -3444,6 +3459,7 @@ def _update_toxic_stage(
     parts: Sequence[str],
     toxic_stage: dict[str, int],
     toxic_stage_known: dict[str, bool] | None = None,
+    toxic_stage_zero_after_upkeep: dict[str, bool] | None = None,
 ) -> None:
     """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
     |-cureteam| lines.
@@ -3454,7 +3470,9 @@ def _update_toxic_stage(
 
     Every transition here is public protocol evidence. ``toxic_stage_known`` is optional for
     direct unit callers; when supplied it distinguishes a real public zero from an incomplete
-    prefix that must never be materialized as a synthetic zero counter.
+    prefix that must never be materialized as a synthetic zero counter. The optional
+    ``toxic_stage_zero_after_upkeep`` carries the still-pending, post-upkeep replacement proof;
+    every active status/cure/faint transition retires it before changing the regular stage.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -3464,6 +3482,8 @@ def _update_toxic_stage(
         return
     active_target = _is_active_protocol_ident(parts[2])
     if event_type == "faint" and active_target:
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
@@ -3472,6 +3492,8 @@ def _update_toxic_stage(
         # alter the current active mon's statusState.stage.
         return
     elif event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 1
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
@@ -3486,12 +3508,16 @@ def _update_toxic_stage(
         # Rest` on an already-toxed mon left the ramp standing at its old value, so a LATER
         # re-tox in the same stint was priced from a stage that no longer existed. Observed
         # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
     elif event_type in {"-curestatus", "-cureteam"}:
         # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True

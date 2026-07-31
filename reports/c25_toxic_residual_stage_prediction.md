@@ -116,3 +116,20 @@ these lifecycle paths. It supplies an internal ordered active-status transition
 to `LeafMeta`, so Rest, Refresh, and Heal Bell clear stale Toxic metadata while
 their externally rendered protocol remains faithful. Clean switch and drag
 entries clear both the stage and active provenance before re-entry derivation.
+
+## Post-upkeep replacement amendment
+
+One active-Toxic zero is public rather than unknown. Showdown resets Toxic's
+`statusState.stage` to zero on switch-in and increments it immediately before
+the next residual. When `|upkeep|` is followed by a non-Baton-Pass `|switch|`
+whose replacement condition retains `tox`, that replacement missed the
+completed residual block. Its first pending engine residual therefore requires
+the legitimate pre-tick `toxic_count = 0`; direct materialization now admits
+only that snapshot shape.
+
+The proof is snapshot-carried but construction-only: it changes neither the raw
+public Toxic feature nor V2/V2.1/V2.2 observation bytes. It expires on the
+first Toxic residual and is cleared by active status/cure/faint transitions or
+a later switch/drag. A post-upkeep `|drag|` is rejected as synthetic chronology:
+Gen 3 executes phazing during the move action, before its residual action emits
+`|upkeep|`. Missing proof in a legacy snapshot remains fail-closed.
