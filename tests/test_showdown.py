@@ -1954,6 +1954,89 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertEqual(legacy_resumed.toxic_stage["p1"], 0)
         self.assertFalse(legacy_resumed.toxic_stage_known["p1"])
 
+    def test_toxic_snapshot_restoration_requires_exact_boolean_upkeep_window(self) -> None:
+        parser = _ReplayParser("toxic-window-type", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: One|One, L80, M|90/100 tox",
+                "|switch|p2a: Two|Two, L80, F|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        snapshot = parser.snapshot()
+        active_idents = {
+            slot: snapshot.public_active[slot].ident for slot in ("p1", "p2")
+        }
+        proof_snapshot = replace(
+            snapshot,
+            toxic_stage_zero_after_upkeep={"p1": True, "p2": True},
+            toxic_stage_zero_after_upkeep_expires_after_turn={"p1": 2, "p2": 2},
+            toxic_stage_zero_after_upkeep_ident=active_idents,
+            toxic_faint_replacement_pending={"p1": True, "p2": True},
+            toxic_faint_replacement_expected_ident=active_idents,
+            toxic_faint_replacement_invalid={"p1": False, "p2": False},
+        )
+
+        for window, deadline in ((False, 2), (True, 3)):
+            with self.subTest(valid_window=window):
+                restored = _ReplayParser.from_snapshot(
+                    replace(
+                        proof_snapshot,
+                        post_upkeep_window=window,
+                        toxic_stage_zero_after_upkeep_expires_after_turn={
+                            "p1": deadline,
+                            "p2": deadline,
+                        },
+                    )
+                ).snapshot()
+                self.assertIs(restored.post_upkeep_window, window)
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep, {"p1": True, "p2": True})
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_expires_after_turn,
+                    {"p1": deadline, "p2": deadline},
+                )
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep_ident, active_idents)
+                self.assertEqual(
+                    restored.toxic_faint_replacement_invalid,
+                    {"p1": False, "p2": False},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_pending,
+                    {"p1": not window, "p2": not window},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_expected_ident,
+                    active_idents if not window else {"p1": None, "p2": None},
+                )
+
+        for window in (1, "yes", None):
+            with self.subTest(malformed_window=window):
+                restored = _ReplayParser.from_snapshot(
+                    replace(proof_snapshot, post_upkeep_window=window)
+                ).snapshot()
+                self.assertIs(restored.post_upkeep_window, False)
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep, {"p1": False, "p2": False})
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_expires_after_turn,
+                    {"p1": None, "p2": None},
+                )
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_ident,
+                    {"p1": None, "p2": None},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_invalid,
+                    {"p1": True, "p2": True},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_pending,
+                    {"p1": False, "p2": False},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_expected_ident,
+                    {"p1": None, "p2": None},
+                )
+
     def test_post_upkeep_zero_proof_is_invisible_to_frozen_observation_schemas(self) -> None:
         # This is construction-only provenance. It must not mutate the public
         # replay counter or the V2/V2.1/V2.2 encodes already used by frozen

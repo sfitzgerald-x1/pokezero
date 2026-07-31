@@ -106,14 +106,22 @@ class OriginMainRefreshTests(unittest.TestCase):
 
 
 class PostMergeLifecycleTests(unittest.TestCase):
-    def test_branch_head_is_rejected_before_any_full_verifier_command(self) -> None:
-        with patch.object(VERIFIER, "git", side_effect=["", "branch-head\n"]), patch.object(
-            VERIFIER, "command"
-        ) as command:
+    def test_branch_head_is_rejected_before_historical_or_expensive_verifier_work(self) -> None:
+        with patch.object(
+            VERIFIER, "refresh_authoritative_origin_main", return_value="public-main"
+        ) as refresh, patch.object(VERIFIER, "git", return_value="branch-head\n") as git, patch.object(
+            VERIFIER, "verify_historical_public_merge"
+        ) as historical, patch.object(VERIFIER, "verify_current_engine_inputs") as engine, patch.object(
+            VERIFIER, "verify_current_regression_surface"
+        ) as regression:
             with self.assertRaisesRegex(RuntimeError, "post-merge only"):
-                VERIFIER.verify_current_regression_surface(REPO_ROOT, "public-main")
+                VERIFIER.main()
 
-        command.assert_not_called()
+        refresh.assert_called_once_with(REPO_ROOT)
+        git.assert_called_once_with(REPO_ROOT, "rev-parse", "--verify", "HEAD^{commit}")
+        historical.assert_not_called()
+        engine.assert_not_called()
+        regression.assert_not_called()
 
     def test_full_verifier_retains_the_exact_public_input_equality_gate(self) -> None:
         def command_output(_repo, label, _args, **_kwargs):
@@ -121,9 +129,7 @@ class PostMergeLifecycleTests(unittest.TestCase):
                 "current switch-prefixed"
             ) else ""
 
-        with patch.object(VERIFIER, "git", side_effect=["", "public-main\n"]), patch.object(
-            VERIFIER, "command", side_effect=command_output
-        ) as command:
+        with patch.object(VERIFIER, "command", side_effect=command_output) as command:
             VERIFIER.verify_current_regression_surface(REPO_ROOT, "public-main")
 
         equality_calls = [

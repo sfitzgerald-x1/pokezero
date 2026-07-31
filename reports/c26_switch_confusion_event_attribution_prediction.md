@@ -69,7 +69,8 @@ as `HEAD`, run the full verifier:
 uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
 ```
 
-It requires that exact post-merge state and preserves the exact renderer/patch
-public-input equality gate; a feature branch that changes those inputs is
-expected to fail it. A post-fix certification classifier replay with retained
-inputs remains required before any binding certification or sweep claim.
+It force-refreshes `origin/main` and rejects a non-identical `HEAD` before any
+historical, engine, or renderer work. It then preserves the exact
+renderer/patch public-input equality gate; a feature branch that changes those
+inputs is expected to fail it. A post-fix certification classifier replay with
+retained inputs remains required before any binding certification or sweep claim.

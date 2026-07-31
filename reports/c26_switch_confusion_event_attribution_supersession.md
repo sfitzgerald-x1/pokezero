@@ -53,11 +53,12 @@ After the final merge commit is fetched to `origin/main` and checked out as
 uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
 ```
 
-It force-refreshes `origin/main`, rejects any `HEAD` that is not exactly that
-commit, and retains the exact public-input equality gate for `events.rs`,
-`Cargo.toml`, the engine source pin, and patch list. Only then does it validate
-the engine artifacts and rerun the eleven parser/unit tests, 22-test renderer
-suite, patch-stack test, and public-invariant test. A feature branch that
+It force-refreshes `origin/main` and immediately rejects any `HEAD` that is
+not exactly that commit, before historical provenance, engine-input, Rust, or
+other verifier work. It then retains the exact public-input equality gate for
+`events.rs`, `Cargo.toml`, the engine source pin, and patch list before
+validating the engine artifacts and rerunning the eleven parser/unit tests,
+22-test renderer suite, patch-stack test, and public-invariant test. A feature branch that
 changes those authenticated inputs is therefore expected to fail the full
 verifier before merge, not to report a pre-merge PASS. The ordinary Recoil
 control remains in the renderer suite. None of these commands reruns a C26

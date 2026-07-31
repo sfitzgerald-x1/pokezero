@@ -241,10 +241,8 @@ def verify_current_engine_inputs(repo: Path) -> dict[str, object]:
 
 
 def verify_current_regression_surface(repo: Path, authoritative_main: str) -> list[object]:
-    """Exercise the renderer only from the final, fetched ``origin/main`` commit."""
+    """Exercise the renderer after ``main`` has authenticated the final checkout."""
 
-    git(repo, "merge-base", "--is-ancestor", authoritative_main, "HEAD")
-    require_post_merge_head(repo, authoritative_main)
     command(
         repo,
         "post-merge public-input equality with origin/main",
@@ -328,6 +326,7 @@ def main() -> int:
             raise RuntimeError(f"missing C26 evidence record: {path}")
 
     authoritative_main = refresh_authoritative_origin_main(repo)
+    require_post_merge_head(repo, authoritative_main)
     historical = verify_historical_public_merge(repo, authoritative_main)
     engine = verify_current_engine_inputs(repo)
     current_checks = verify_current_regression_surface(repo, authoritative_main)

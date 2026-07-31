@@ -1419,6 +1419,8 @@ class _ReplayParser:
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
         """Hydrate parser state directly, without replaying its protocol prefix."""
 
+        snapshot_post_upkeep_window = getattr(snapshot, "post_upkeep_window", None)
+        post_upkeep_window_is_valid = type(snapshot_post_upkeep_window) is bool
         parser = cls(
             snapshot.battle_id,
             hp_visibility=getattr(snapshot, "hp_visibility", {}),
@@ -1468,7 +1470,7 @@ class _ReplayParser:
         snapshot_zero_after_upkeep = getattr(snapshot, "toxic_stage_zero_after_upkeep", {})
         parser.toxic_stage_zero_after_upkeep = {
             slot: (
-                snapshot_zero_after_upkeep.get(slot) is True
+                post_upkeep_window_is_valid and snapshot_zero_after_upkeep.get(slot) is True
                 if isinstance(snapshot_zero_after_upkeep, Mapping)
                 else False
             )
@@ -1521,16 +1523,17 @@ class _ReplayParser:
             parser.toxic_faint_replacement_invalid[slot] = (
                 True
                 if (
-                    not isinstance(snapshot_invalid, Mapping)
+                    not post_upkeep_window_is_valid
+                    or not isinstance(snapshot_invalid, Mapping)
                     or slot not in snapshot_invalid
                     or slot not in snapshot_expected_ident
                 )
                 else snapshot_invalid.get(slot) is not False
             )
-            parser.toxic_faint_replacement_pending[slot] = bool(
+            parser.toxic_faint_replacement_pending[slot] = (
                 snapshot_faint_replacement_pending.get(slot) is True
                 and not parser.toxic_faint_replacement_invalid[slot]
-                and snapshot.post_upkeep_window is False
+                and snapshot_post_upkeep_window is False
                 and isinstance(expected_ident, str)
                 and _is_active_protocol_ident(expected_ident)
                 and _is_current_public_active(active)
@@ -1575,7 +1578,11 @@ class _ReplayParser:
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
         }
-        parser._post_upkeep_window = bool(snapshot.post_upkeep_window)
+        # Toxic replacement proof is valid only at an exact protocol boundary.
+        # Never coerce malformed snapshot data into a boundary authorization.
+        parser._post_upkeep_window = (
+            snapshot_post_upkeep_window if post_upkeep_window_is_valid else False
+        )
         parser._truant_skip_next_flip = {
             slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
         }
