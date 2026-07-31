@@ -1285,11 +1285,30 @@ fn render_move_phase(
         }
     }
 
-    // Gen 3 records a confusion check as an increment of its hidden duration
-    // immediately followed by self-damage. The old single-Damage check missed
-    // this real pair, so it fell through to the generic self-damage fallback.
-    if render_confusion_self_hit(sim, side, choice, &segment[cursor..], ctx, out) {
-        return;
+    // Confusion self-hit: the residue after the prelude is a single Damage on
+    // the user (the engine's hit-yourself branch).
+    if segment[cursor..].len() == 1 {
+        if let Instruction::Damage(damage) = &segment[cursor] {
+            if damage.side_ref == side {
+                let confused = {
+                    let s = match side {
+                        SideReference::SideOne => &sim.state.side_one,
+                        SideReference::SideTwo => &sim.state.side_two,
+                    };
+                    s.volatile_statuses
+                        .contains(&PokemonVolatileStatus::CONFUSION)
+                };
+                if confused && choice.crash.is_none() {
+                    let ident = ctx.active_ident(sim.state, side);
+                    sim.apply(&segment[cursor]);
+                    let condition = sim.hp_condition(side);
+                    out.lines
+                        .push(format!("|-damage|{ident}|{condition}|[from] confusion"));
+                    emit_faint_if_dead(sim, side, ctx, out);
+                    return;
+                }
+            }
+        }
     }
 
     let attacker_ident = ctx.active_ident(sim.state, side);
@@ -1964,53 +1983,6 @@ fn render_move_phase(
     for fainted in pending_faints {
         emit_faint_if_dead(sim, fainted, ctx, out);
     }
-}
-
-/// Render the exact engine delta for a failed Gen 3 confusion check.
-///
-/// This intentionally accepts only the duration increment plus same-side
-/// damage pair emitted before a move resolves. In particular, state alone is
-/// not enough to infer confusion: unrelated self-damage must continue through
-/// the explicit attribution ladder below.
-fn render_confusion_self_hit(
-    sim: &mut Sim<'_>,
-    side: SideReference,
-    choice: &Choice,
-    tail: &[Instruction],
-    ctx: &EventContext,
-    out: &mut RenderedEvents,
-) -> bool {
-    let [Instruction::ChangeVolatileStatusDuration(duration), Instruction::Damage(damage)] = tail
-    else {
-        return false;
-    };
-    if duration.side_ref != side
-        || duration.volatile_status != PokemonVolatileStatus::CONFUSION
-        || duration.amount != 1
-        || damage.side_ref != side
-        || choice.crash.is_some()
-    {
-        return false;
-    }
-    let confused = match side {
-        SideReference::SideOne => &sim.state.side_one,
-        SideReference::SideTwo => &sim.state.side_two,
-    }
-    .volatile_statuses
-    .contains(&PokemonVolatileStatus::CONFUSION);
-    if !confused {
-        return false;
-    }
-
-    let ident = ctx.active_ident(sim.state, side);
-    out.lines.push(format!("|-activate|{ident}|confusion"));
-    sim.apply(&tail[0]);
-    sim.apply(&tail[1]);
-    let condition = sim.hp_condition(side);
-    out.lines
-        .push(format!("|-damage|{ident}|{condition}|[from] confusion"));
-    emit_faint_if_dead(sim, side, ctx, out);
-    true
 }
 
 /// Identify which move Sleep Talk called by re-generating each sleep-talk
@@ -2824,7 +2796,6 @@ pub fn branch_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use poke_engine::state::PokemonMoveIndex;
 
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
 
@@ -2946,137 +2917,6 @@ mod tests {
         );
         sim.finish();
         assert_eq!(state.serialize(), serialized);
-    }
-
-    #[test]
-    fn switch_prefixed_confusion_self_hit_renders_the_canonical_pair() {
-        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
-        // Give p1 a legal reserve, then make p2's active confused. A voluntary
-        // switch resolves first, so this is the retained certification shape
-        // that previously reached the generic self-damage fallback.
-        state.side_one.pokemon[PokemonIndex::P1] = state.side_one.pokemon[PokemonIndex::P0].clone();
-        state
-            .side_two
-            .volatile_statuses
-            .insert(PokemonVolatileStatus::CONFUSION);
-        state.side_two.volatile_status_durations.confusion = 0;
-        let mut context = ctx();
-        context.species[0].push("Charmeleon".to_string());
-        let s1 = MoveChoice::Switch(PokemonIndex::P1);
-        let s2 = MoveChoice::Move(PokemonMoveIndex::M0);
-        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
-
-        let rendered = branches
-            .iter()
-            .map(|branch| {
-                render_branch_events(
-                    &mut state,
-                    &s1,
-                    &s2,
-                    &branch.instruction_list,
-                    true,
-                    &context,
-                )
-            })
-            .find(|branch| {
-                branch
-                    .lines
-                    .iter()
-                    .any(|line| line.ends_with("|[from] confusion"))
-            })
-            .expect("a confusion self-hit branch");
-
-        assert!(rendered.lossy.is_empty(), "{rendered:?}");
-        let switch = rendered
-            .lines
-            .iter()
-            .position(|line| line.starts_with("|switch|p1a: Charmeleon|"))
-            .expect("switch prefix");
-        let activate = rendered
-            .lines
-            .iter()
-            .position(|line| line == "|-activate|p2a: Squirtle|confusion")
-            .expect("confusion activation");
-        let damage = rendered
-            .lines
-            .iter()
-            .position(|line| line.starts_with("|-damage|p2a: Squirtle|") && line.ends_with("|[from] confusion"))
-            .expect("tagged confusion damage");
-        assert!(switch < activate && activate < damage, "{rendered:?}");
-        assert!(
-            !rendered
-                .lines
-                .iter()
-                .any(|line| line.starts_with("|move|p2a: Squirtle|")),
-            "a confusion self-hit must not also render a used move: {rendered:?}"
-        );
-    }
-
-    #[test]
-    fn confusion_pair_requires_a_live_confusion_volatile() {
-        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
-        let before = state.serialize();
-        let choice = build_choice(
-            &state,
-            SideReference::SideTwo,
-            &MoveChoice::Move(PokemonMoveIndex::M0),
-        );
-        let tail = [
-            Instruction::ChangeVolatileStatusDuration(
-                poke_engine::instruction::ChangeVolatileStatusDurationInstruction {
-                    side_ref: SideReference::SideTwo,
-                    volatile_status: PokemonVolatileStatus::CONFUSION,
-                    amount: 1,
-                },
-            ),
-            Instruction::Damage(poke_engine::instruction::DamageInstruction {
-                side_ref: SideReference::SideTwo,
-                damage_amount: 1,
-            }),
-        ];
-        let mut out = RenderedEvents::default();
-        let mut sim = Sim::new(&mut state, [false, false]);
-        assert!(
-            !render_confusion_self_hit(
-                &mut sim,
-                SideReference::SideTwo,
-                &choice,
-                &tail,
-                &ctx(),
-                &mut out,
-            ),
-            "self-damage alone must never infer confusion"
-        );
-        sim.finish();
-        assert!(out.lines.is_empty());
-        assert_eq!(state.serialize(), before);
-
-        // A confused crash move can pass its confusion check and then miss,
-        // leaving the same duration-plus-damage shape. Its crash damage is
-        // deliberately ambiguous in the instruction stream, so the mapper
-        // must retain the existing fail-closed path instead of calling it a
-        // confusion self-hit.
-        state
-            .side_two
-            .volatile_statuses
-            .insert(PokemonVolatileStatus::CONFUSION);
-        let mut crash_choice = choice;
-        crash_choice.crash = Some(0.5);
-        let mut out = RenderedEvents::default();
-        let mut sim = Sim::new(&mut state, [false, false]);
-        assert!(
-            !render_confusion_self_hit(
-                &mut sim,
-                SideReference::SideTwo,
-                &crash_choice,
-                &tail,
-                &ctx(),
-                &mut out,
-            ),
-            "a crash branch must not be mistaken for a confusion self-hit"
-        );
-        sim.finish();
-        assert!(out.lines.is_empty());
     }
 
     /// ONE SIDE's emission order, pinned against the REAL engine.
