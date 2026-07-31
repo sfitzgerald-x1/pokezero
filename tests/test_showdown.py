@@ -1817,7 +1817,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_toxic_residual_reseed_rejects_non_surviving_or_ambiguous_damage(self) -> None:
         # Preserve the known stage rather than inventing one from a lethal/capped line or a
         # non-integral number of Gen 3 Toxic units.
-        for condition in ("0/239 tox", "224/239 tox"):
+        for condition in ("0/239 tox", "224/239 tox", "50/100 tox"):
             with self.subTest(condition=condition):
                 state = parse_showdown_replay(
                     [

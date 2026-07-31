@@ -3726,8 +3726,9 @@ def _max_hp_from_condition(condition: str | None) -> int | None:
 def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | None]:
     """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
 
-    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``); the
-    caller derives the toxic-residual fraction from the pair, so either scale recovers the stage.
+    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``).
+    Callers that need an exact Gen 3 damage unit must reject rounded percentage deltas rather
+    than infer hidden state from them.
     """
     if not condition:
         return None, None
