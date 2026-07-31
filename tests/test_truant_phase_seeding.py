@@ -121,21 +121,61 @@ class TruantAnchorTest(unittest.TestCase):
 
 
 class TracedTruantTest(unittest.TestCase):
-    """A traced holder gets NO derived seed — the anchors establish it."""
+    """Trace acquisition starts acting, then follows public residual chronology."""
 
     TRACE = "|-ability|p1a: Porygon2|Truant|Trace|[from] ability: Trace|[of] p2a: Slaking"
     POR = "|switch|p1a: Porygon2|Porygon2, L80|267/267"
 
-    def test_a_tracer_is_recognised_as_a_holder_but_left_unknown(self) -> None:
-        # Deliberately unknown rather than derived. Seeding `false` at acquisition and
-        # counting `|turn|` flips reproduces the probe in the common case and MISSES when the
-        # acquisition switch-in is a post-residual replacement, because there is no `|turn|`
-        # boundary between acquisition and the next move. Measured: it cost a new divergence
-        # while fixing three. Unknown falls back to the caller's proxy, which is no worse
-        # than before, and the first anchor makes it exact.
+    def test_a_tracer_starts_acting_before_the_next_residual(self) -> None:
+        # Copied Truant does not run the native ability's switch-in hook. The Pokemon entry
+        # default is therefore public-derivable at the Trace line: act until a residual flips
+        # it. This is distinct from native Slaking's switch-in seed.
         p = _parse([self.POR, "|switch|p2a: Slaking|Slaking, L80, M|362/362", self.TRACE])
         self.assertEqual(p.traced_ability["p1"], "truant")
-        self.assertIsNone(p.truant_phase["p1"])
+        self.assertIs(p.truant_phase["p1"], False)
+
+    def test_retained_identity_3400443_step_2_loafs_after_pre_upkeep_trace(self) -> None:
+        # Exact retained protocol shape: Porygon2 enters, publicly traces Truant during the
+        # action phase, then the normal end-of-turn boundary occurs before the decision.
+        p = _parse([
+            "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
+            "|switch|p2a: Slaking|Slaking, L80, M|362/362",
+            "|turn|2",
+            self.POR,
+            self.TRACE,
+            "|upkeep",
+            "|turn|3",
+        ])
+        self.assertIs(p.truant_phase["p1"], True)
+
+    def test_retained_identity_3400443_step_69_loafs_after_pre_upkeep_trace(self) -> None:
+        # The second retained row reaches the same public state after a longer prefix. Its
+        # phase is determined by the acquisition-to-upkeep chronology, not turn number.
+        p = _parse([
+            "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
+            "|switch|p2a: Slaking|Slaking, L80, M|362/362",
+            "|turn|69",
+            self.POR,
+            self.TRACE,
+            "|upkeep",
+            "|turn|70",
+        ])
+        self.assertIs(p.truant_phase["p1"], True)
+
+    def test_post_upkeep_trace_replacement_does_not_count_a_past_residual(self) -> None:
+        # A replacement after upkeep did not exist during that residual. The following turn
+        # boundary closes the parser window but must not flip this freshly copied Truant.
+        p = _parse([
+            "|switch|p1a: Shedinja|Shedinja, L80|1/1",
+            "|switch|p2a: Slaking|Slaking, L80, M|362/362",
+            "|turn|2",
+            "|faint|p1a: Shedinja",
+            "|upkeep",
+            self.POR,
+            self.TRACE,
+            "|turn|3",
+        ])
+        self.assertIs(p.truant_phase["p1"], False)
 
     def test_an_anchor_establishes_the_traced_phase(self) -> None:
         p = _parse([self.POR, "|switch|p2a: Slaking|Slaking, L80, M|362/362", self.TRACE,
@@ -146,6 +186,16 @@ class TracedTruantTest(unittest.TestCase):
         p = _parse([SLAKING, OPP, "|turn|1",
                     "|switch|p1a: Porygon2|Porygon2, L80|267/267",
                     "|-ability|p1a: Porygon2|Levitate|Trace|[from] ability: Trace|[of] p2a: Snorlax"])
+        self.assertIsNone(p.truant_phase["p1"])
+
+    def test_trace_without_an_active_truant_copy_makes_no_phase_claim(self) -> None:
+        # A non-Truant copy retains explicit unknown state, rather than conflating it with a
+        # known acting Truant phase.
+        p = _parse([
+            self.POR,
+            "|switch|p2a: Snorlax|Snorlax, L80, M|400/400",
+            "|-ability|p1a: Porygon2|Immunity|Trace|[from] ability: Trace|[of] p2a: Snorlax",
+        ])
         self.assertIsNone(p.truant_phase["p1"])
 
 

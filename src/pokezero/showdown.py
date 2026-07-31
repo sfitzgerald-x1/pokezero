@@ -1994,29 +1994,21 @@ class _ReplayParser:
             normalized = _normalize_identifier(copied)
             self.traced_ability[slot] = normalized
             if normalized == "truant":
-                # Traced Truant is deliberately NOT given a derived starting parity, even
-                # though the parity is derivable and was probed. Sim-verified behaviour:
+                # A copied ability does not run Truant's native ``onSwitchIn`` hook. The
+                # simulator consequently retains the Pokemon entry default, ``truantTurn =
+                # false``, at the public Trace event. From that point every residual flips the
+                # bit, so this parser can carry the phase exactly using the same turn boundary
+                # it already uses for native holders.
                 #
-                #   lead (turn 0) acquisition  -> ACTS on its first move turn
-                #   mid-battle acquisition     -> LOAFS on its first move turn
-                #   re-entry re-traces         -> fresh acquisition, parity resets
-                #
-                # which composes from patch 32 (a copied ability's Start event does not fire,
-                # so Truant's `onSwitchIn` never runs for a tracer), `sim/pokemon.ts` leaving
-                # `truantTurn` false on entry, and `onResidual` flipping every turn end.
-                #
-                # Seeding `false` here and counting `|turn|` flips reproduces that in the
-                # common case and MISSES when the acquisition switch-in is a mid-turn
-                # replacement after a faint: there is no `|turn|` boundary between the
-                # acquisition and the next move, so the flip count is short by one and the
-                # parity inverts for the rest of the stint. Measured: it cost one new
-                # divergence (2200291/41) while fixing three.
-                #
-                # The anchors below establish the traced parity from the sim's own published
-                # behaviour instead, which is exact and needs no flip accounting. Marking the
-                # holder is all that is required here.
-                if self.truant_phase.get(slot) is None:
-                    pass  # phase stays UNKNOWN until the first anchor; see _anchor_truant_phase
+                # A Trace after ``|upkeep|`` is a replacement that entered after the residual
+                # it would otherwise be charged for. Reuse the native replacement guard so the
+                # following ``|turn|`` does not double-count it. No hidden state is needed: the
+                # Trace line and the parser-visible upkeep window fully determine the case.
+                self.truant_phase[slot] = False
+                if self._post_upkeep_window:
+                    self._truant_skip_next_flip.add(slot)
+                else:
+                    self._truant_skip_next_flip.discard(slot)
             elif self.truant_phase.get(slot) is not None:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
