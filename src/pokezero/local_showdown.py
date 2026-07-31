@@ -2480,10 +2480,11 @@ def _apply_rest_sleep_provenance(
     with the resolved world's ability, because Early Bird burns two timer units per attempt
     while each skippedTime refund restores one.
 
-    An ACTIVE sleeper with a nonzero skipped run, or an attempt whose direct outcome is absent
-    in a truncated protocol prefix, cannot be represented by the Rust world (which has no
-    ``skippedTime`` field). Its row carries an explicit pending-refund marker so the downstream
-    constructor fails closed before approximate sleep handling can invent a generic timer.
+    An ACTIVE sleeper with a nonzero skipped run, an attempt whose direct outcome is absent in a
+    truncated protocol prefix, or malformed/inconsistent public Rest state cannot be represented
+    by the Rust world (which has no ``skippedTime`` field). Its row carries an explicit marker so
+    the downstream constructor fails closed before approximate sleep handling can invent a
+    generic timer.
 
     Until this the only sleep provenance crossing into world construction was the pair of
     aggregate booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``),
@@ -2498,11 +2499,12 @@ def _apply_rest_sleep_provenance(
     ``public_active``. A materialization row, by contrast, carries the SPECIES. The two
     coincide here only because gen3 randbats runs under Nickname Clause and never
     nicknames anything: reconstructing the key from the row's species is therefore exact
-    for this format and WRONG the moment nicknames are allowed. A miss is fail-soft in
-    the safe direction — the row simply carries no count, and world construction falls
-    back to its existing sleep handling — and keys are per-side and per-name, so a miss
-    can never collide with a DIFFERENT mon's entry. Do not extend this to a nicknamed
-    format without carrying the ident through the row.
+    for this format and WRONG the moment nicknames are allowed. A cosmetic base-form
+    fallback (``Unown`` -> ``Unown-Z``) is permitted only when it is one tracker key to
+    one sleeping row. A missing or ambiguous correspondence marks the affected known
+    sleeper rows unrepresentable; it must never fall through to generic sleep
+    approximation. Do not extend this to a nicknamed format without carrying the ident
+    through the row.
 
     Only a mon that is in the Rest map AND absent from the opposing side's induced-victim
     set is annotated, so the emitted field means exactly "this sleep is its own Rest's"
@@ -2513,20 +2515,85 @@ def _apply_rest_sleep_provenance(
     refunded_turns = replay.rest_sleep_refunded_turns
     skipped_turns = replay.rest_sleep_skipped_turns
     pending_attempts = replay.rest_sleep_pending_attempt
-    if not counts:
+    if not (counts or refunded_turns or skipped_turns or pending_attempts):
         return
+    tracker_keys = {
+        key
+        for tracker in (counts, refunded_turns, skipped_turns, pending_attempts)
+        for key in tracker
+        if isinstance(key, str) and key.startswith(f"{player}:")
+    }
+    known_rows = [
+        (index, species)
+        for index, row in enumerate(rows)
+        if isinstance(species := row.get("species"), str)
+    ]
+    sleeping_rows = [
+        (index, species)
+        for index, species in known_rows
+        if "slp" in str(rows[index].get("condition") or "").split()
+    ]
+    exact_known_keys = {f"{player}:{_normalize_identifier(species)}" for _, species in known_rows}
+    exact_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        key = f"{player}:{_normalize_identifier(species)}"
+        if key in tracker_keys:
+            exact_candidates.setdefault(key, []).append(index)
+
+    row_tracker_keys: dict[int, str] = {}
+    handled_tracker_keys: set[str] = set()
+    for key, candidates in exact_candidates.items():
+        if len(candidates) == 1:
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.add(key)
+
+    # Cosmetic base forms are safe only as a one-to-one reconciliation after exact
+    # matches claim their keys. Multiple sleeping formes for one base are ambiguous.
+    base_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        if index in row_tracker_keys:
+            continue
+        normalized = _normalize_identifier(species)
+        base = _normalize_identifier(species.split("-", 1)[0])
+        if base != normalized:
+            base_candidates.setdefault(base, []).append(index)
+    for base, candidates in base_candidates.items():
+        matching_keys = [
+            key
+            for key in tracker_keys - handled_tracker_keys
+            if key not in exact_known_keys and key.partition(":")[2] == base
+        ]
+        if not matching_keys:
+            continue
+        if len(matching_keys) == 1 and len(candidates) == 1:
+            key = matching_keys[0]
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.update(matching_keys)
+
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
     # therefore recorded under its opponent.
     induced = set(replay.induced_sleep_victims.get(opponent_showdown_slot(player), ()))
-    for row in rows:
-        species = row.get("species")
-        if not isinstance(species, str):
+    for index, key in row_tracker_keys.items():
+        row = rows[index]
+        if key not in counts:
+            if key in refunded_turns or key in skipped_turns or key in pending_attempts:
+                row["restSleepProvenanceUnrepresentable"] = True
             continue
-        key = f"{player}:{_normalize_identifier(species)}"
-        count = counts.get(key)
-        if count is None or key in induced:
+        count = counts[key]
+        if key in induced:
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
-        if pending_attempts.get(key, False):
+        pending = pending_attempts.get(key, False)
+        if not isinstance(pending, bool):
+            row["restSleepProvenanceUnrepresentable"] = True
+            continue
+        if pending:
             row["restSleepRefundPending"] = True
             continue
         skipped = skipped_turns.get(key, 0)
@@ -2541,6 +2608,7 @@ def _apply_rest_sleep_provenance(
             or refunded < 0
             or skipped < 0
         ):
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         if skipped:
             if bool(row.get("active")):
@@ -2550,13 +2618,20 @@ def _apply_rest_sleep_provenance(
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible
-            # Rest counter. Leave the row unannotated so construction follows its fail-closed path.
+            # Rest counter. Mark it so construction cannot approximate it as induced sleep.
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         row["restSleepAttempts"] = count
         if refunded:
             row["restSleepRefundedTime"] = refunded
         if skipped:
             row["restSleepSkippedTime"] = skipped
+
+    if tracker_keys - handled_tracker_keys:
+        # A public Rest tracker that cannot be tied to a revealed row must not let any
+        # same-side sleeper pass through the generic approximation path.
+        for index, _ in sleeping_rows:
+            rows[index]["restSleepProvenanceUnrepresentable"] = True
 
 
 def _materialization_identifier(value: str) -> str:

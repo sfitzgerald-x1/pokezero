@@ -1633,6 +1633,11 @@ def _hp_and_status(
     status = _STATUS_CODES.get(status_code)
     if status is None:
         if status_code == _SLEEP_STATUS_CODE:
+            if bool(row.get("restSleepProvenanceUnrepresentable")):
+                raise EngineWorldUnsupported(
+                    "rest_sleep_provenance_unrepresentable",
+                    f"{slot}: {species!r} has malformed public Rest provenance",
+                )
             if bool(row.get("restSleepRefundPending")):
                 raise EngineWorldUnsupported(
                     "rest_sleep_skipped_time_pending",
