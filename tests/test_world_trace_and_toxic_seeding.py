@@ -404,6 +404,102 @@ class ToxicStageWorldTest(unittest.TestCase):
                 self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
                 self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
 
+    def test_invalid_faint_history_is_terminal_until_a_clean_turn(self) -> None:
+        cases = {
+            "third-duplicate": [
+                "|faint|p1a: LeadOne",
+                "|faint|p1a: LeadOne",
+                "|faint|p1a: LeadOne",
+            ],
+            "forged-then-exact": [
+                "|faint|p1a: NotTheActive",
+                "|faint|p1a: LeadOne",
+            ],
+        }
+        for label, faints in cases.items():
+            with self.subTest(label=label):
+                parser = _ReplayParser(f"toxic-terminal-{label}", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        *faints,
+                        "|upkeep",
+                        "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                        "|turn|2",
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_replacement_requires_canonical_active_ident(self) -> None:
+        parser = _ReplayParser("toxic-noncanonical-replacement", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        replay = parser.snapshot()
+        self.assertEqual(replay.public_active["p1"].ident, "p1a: LeadOne")
+        self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+
+    def test_invalid_turn_markers_retire_a_live_replacement_proof(self) -> None:
+        for marker in ("|turn|2", "|turn|1", "|turn|3", "|turn|not-a-number"):
+            with self.subTest(marker=marker):
+                parser = _ReplayParser("toxic-invalid-turn", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        "|upkeep",
+                        "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                        "|turn|2",
+                        marker,
+                    ]
+                )
+                replay = parser.snapshot()
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+                self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
+    def test_snapshot_without_faint_identity_cannot_restore_or_rearm_pending_proof(self) -> None:
+        parser = _ReplayParser("toxic-identity-snapshot", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+            ]
+        )
+        legacy = replace(
+            parser.snapshot(),
+            toxic_faint_replacement_expected_ident={},
+            toxic_faint_replacement_invalid={},
+        )
+        resumed = _ReplayParser.from_snapshot(legacy)
+        self.assertFalse(resumed.toxic_faint_replacement_pending["p1"])
+        resumed.feed(
+            [
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        replay = resumed.snapshot()
+        self.assertFalse(replay.toxic_stage_zero_after_upkeep["p1"])
+        self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
+
     def test_faint_latch_snapshot_truncation_and_scenario_reuse_fail_closed(self) -> None:
         parser = _ReplayParser("toxic-zero-truncated", complete_prefix=True)
         parser.feed(

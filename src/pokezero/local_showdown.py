@@ -2023,7 +2023,10 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
         # upkeep, so ensure a reused parser never retains one.
         parser.toxic_stage_zero_after_upkeep[player] = False
         parser.toxic_stage_zero_after_upkeep_expires_after_turn[player] = None
+        parser.toxic_stage_zero_after_upkeep_ident[player] = None
         parser.toxic_faint_replacement_pending[player] = False
+        parser.toxic_faint_replacement_expected_ident[player] = None
+        parser.toxic_faint_replacement_invalid[player] = False
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:

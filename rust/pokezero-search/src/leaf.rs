@@ -614,6 +614,10 @@ pub(crate) fn evolve_leaf_meta_with_status_transitions(
         }
         let line = &lines[line_offset];
         if line.starts_with("|turn|") {
+            // A root stage-zero proof has exactly one residual opportunity.
+            // If the first branch marker arrives without that Toxic residual,
+            // do not let a later rounded residual manufacture its stage.
+            out.toxic_reentry_pending = [false, false];
             for side in 0..2 {
                 if out.toxic[side] > 0 {
                     out.toxic[side] = (out.toxic[side] + 1).min(16);
@@ -621,6 +625,12 @@ pub(crate) fn evolve_leaf_meta_with_status_transitions(
                 out.stint[side] += 1;
             }
             out.turns_seen += 1;
+            continue;
+        }
+        if line == "|upkeep" {
+            // `|upkeep|` follows the residual block. A live proof here missed
+            // its first Toxic tick and is terminal for this leaf branch.
+            out.toxic_reentry_pending = [false, false];
             continue;
         }
         if let Some(rest) = line.strip_prefix("|move|") {
@@ -2543,6 +2553,45 @@ mod tests {
             })),
         );
         assert_eq!(forged.toxic_reentry_pending, [false, false]);
+    }
+
+    #[test]
+    fn root_zero_proof_expires_at_first_missed_residual_opportunity() {
+        for side in 0..2 {
+            for boundary in ["|upkeep", "|turn|2"] {
+                let mut root = LeafMeta {
+                    active_toxic: [side == 0, side == 1],
+                    active_hp: [Some((100, 100)), Some((100, 100))],
+                    ..Default::default()
+                };
+                let proof = root_toxic_zero_after_upkeep(&json!({
+                    "toxic_stage_zero_after_upkeep": {
+                        "p1": side == 0,
+                        "p2": side == 1,
+                    }
+                }));
+                seed_root_toxic_reentry_pending(&mut root, proof);
+                let mut ctx = LeafMetaCtx::default();
+                ctx.hp_percent[side] = true;
+                let ident = if side == 0 { "p1a: Replacement" } else { "p2a: Replacement" };
+                let expired = evolve_leaf_meta(
+                    &root,
+                    &lines(&[
+                        boundary,
+                        &format!("|-damage|{ident}|94/100 tox|[from] psn"),
+                    ]),
+                    &ctx,
+                );
+                assert!(
+                    !expired.toxic_reentry_pending[side],
+                    "{boundary} must retire side {side}'s root proof"
+                );
+                assert_eq!(
+                    expired.toxic[side], 0,
+                    "later rounded residual after {boundary} must not recover side {side}"
+                );
+            }
+        }
     }
 
     #[test]
