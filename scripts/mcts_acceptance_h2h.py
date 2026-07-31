@@ -400,6 +400,19 @@ def main(argv=None) -> int:
             fallback_reasons: dict = {}
             world_failure_reasons: dict = {}
 
+            def to_dict(self) -> dict:
+                """The control arm runs no engine search, so it has no engine
+                telemetry -- an empty payload is the honest answer here.
+
+                Declared on the stub rather than guarded at the call site: the
+                report calls `to_dict()` unguarded so that a REAL
+                EngineMctsStats losing its serializer fails loudly instead of
+                silently writing `{}`, which is the bug this file was just
+                fixed for. A stub that legitimately has nothing to report says
+                so itself.
+                """
+                return {}
+
         search.stats = _NoStats()
 
     results = []

@@ -131,6 +131,29 @@ class ShardPolicyStatsTest(unittest.TestCase):
         self.assertNotIn("depth_reached_mean", payload)
         self.assertEqual(payload["depth_reached_samples"], 0)
 
+    def test_control_arm_stub_can_serialize(self) -> None:
+        # Regression, found in independent review. The --arm control path
+        # replaces search.stats with a local _NoStats stub that has no
+        # to_dict, so the unguarded call raised AFTER every game had been
+        # played, discarding the whole shard. The stub now declares its own
+        # serializer. The sibling test below uses a real EngineMctsStats and
+        # therefore did NOT cover this.
+        import re
+
+        source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text(
+            encoding="utf-8"
+        )
+        stub = re.search(r"class _NoStats:.*?(?=\n        search\.stats)", source, re.S)
+        self.assertIsNotNone(stub, "control-arm stub not found; did the arm change?")
+        namespace: dict = {}
+        exec(stub.group(0).replace("\n        ", "\n"), namespace)  # noqa: S102
+        stats = namespace["_NoStats"]()
+        self.assertEqual(stats.to_dict(), {})
+        # And it must survive the real report builder end to end.
+        report = report_for(stats)
+        self.assertEqual(report["policy_stats"], {})
+        self.assertEqual(report["fallback_decisions"], 0)
+
     def test_report_is_json_serializable(self) -> None:
         # to_dict() returns a Counter-derived histogram; the shard is written
         # with json.dumps, so a non-serializable member would only surface at
