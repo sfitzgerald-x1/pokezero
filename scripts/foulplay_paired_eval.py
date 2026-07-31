@@ -74,9 +74,25 @@ THREAD_PIN_ENV = {
 }
 
 
-def checkpoint_tag(checkpoint: str) -> str:
-    """Short stable label for a checkpoint, used to keep raw arms distinct."""
-    return Path(checkpoint).stem or "ckpt"
+def checkpoint_tag(checkpoint: str, explicit: str | None = None) -> str:
+    """Short stable label for a checkpoint, used to keep cells distinct.
+
+    Prefer an EXPLICIT tag from the caller. Inferring it from the filename is a
+    trap here: both campaign checkpoints are copies of files named
+    `transformer-policy.pt`, so per-checkpoint subdirectories would give k0 and
+    k1 the same stem -- collapsing cell A into G and R0 into R1. That fails
+    loud at merge time (conflicting scores) but only after the GPU-hours are
+    spent, so the launcher passes --checkpoint-tag from the campaign JSON key
+    and the inferred stem is a fallback for ad-hoc runs.
+    """
+    if explicit:
+        return explicit
+    path = Path(checkpoint)
+    stem = path.stem or "ckpt"
+    # Disambiguate the known-colliding case without needing the flag.
+    if stem in {"transformer-policy", "model", "checkpoint"} and path.parent.name:
+        return f"{path.parent.name}-{stem}"
+    return stem
 
 
 def config_id_for(args: argparse.Namespace) -> str:
@@ -87,7 +103,7 @@ def config_id_for(args: argparse.Namespace) -> str:
     #     of every paired delta;
     #   - cells A (k0) and G (k1) run the SAME search config, so an unqualified
     #     id pools them -- and cell G's entire job is the checkpoint contrast.
-    tag = checkpoint_tag(args.checkpoint)
+    tag = checkpoint_tag(args.checkpoint, getattr(args, "checkpoint_tag", None))
     if args.arm == "raw":
         return f"raw@{tag}"
     base = f"d{args.depth}-s{args.sims}-b{args.batch}-w{args.worlds}"
@@ -237,6 +253,10 @@ def main(argv=None) -> int:
     ap.add_argument("--worlds", type=int, default=4)
     ap.add_argument("--opponent-priors", action="store_true",
                     help="engine-mcts opponent-side model priors (cells B/E)")
+    ap.add_argument("--checkpoint-tag", default=None,
+                    help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
+                         "distinct when two checkpoints share a filename, which the "
+                         "campaign copies do.")
     ap.add_argument("--engine-model-path", default=None)
     ap.add_argument("--engine-tables-path", default=None)
     ap.add_argument("--out", required=True)
