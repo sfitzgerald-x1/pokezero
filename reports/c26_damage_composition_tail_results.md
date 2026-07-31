@@ -48,18 +48,22 @@ They are not substitutes for an exact retained-row replay.
 
 ## Identity Boundary
 
-The C15 WHAT matrix is explicit rather than family-derived:
+The C15 WHAT matrix is explicit rather than family-derived. On the current
+49-patch engine, every identity replays as `matched` through an in-memory
+`origin/main` matcher control, so C26 owns none of them. PR #980 contains no
+exact-identity closure evidence for this population; the observed clearances
+are current-main results rather than an attribution to that PR.
 
 | Disposition | Exact identities |
 | --- | --- |
-| Closed by PR #980/current main | none |
-| Active matcher scope, not exactly cleared | `2000298/23`, `2000561/67` |
+| Closed by PR #980 exact identity evidence | none |
+| Closed by current main | all 11 C15 WHAT identities |
 | Exact poison/matcher tail cleared | none |
 | C27/Rest | none |
-| Still unresolved or refused | all 11 C15 WHAT identities |
+| Still unresolved or refused | none |
 
-`2601196/46` contains poison, but its divergence is an Ice Beam direct damage
-gap and not C26's matching-source terminal-cap tail. It remains divergent.
+`2601196/46` contains poison, but no C26 poison-tail attribution is made: its
+current-main control is simply matched with the rest of the C15 population.
 
 ## Verification
 
@@ -68,3 +72,5 @@ gap and not C26's matching-source terminal-cap tail. It remains divergent.
 - `tests/test_c26_damage_composition_readout.py`: public identity-matrix and
   fail-closed replay contract.
 - `tests/test_public_invariant.py`: public repository invariant guard.
+- Current-main control: all 11 exact C15 identities match on the attested
+  49-patch build.

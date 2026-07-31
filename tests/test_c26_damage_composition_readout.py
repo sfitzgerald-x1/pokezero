@@ -26,25 +26,28 @@ WHAT_IDENTITIES = {
 
 
 class C26DamageCompositionReadoutTest(unittest.TestCase):
-    def test_every_c15_identity_has_a_row_level_disposition(self) -> None:
+    def test_current_main_replays_every_c15_identity(self) -> None:
         readout = json.loads(READOUT.read_text())
 
         self.assertEqual(readout["schema"], "c26-damage-composition-tail-readout/1")
         self.assertEqual(set(readout["source_population"]["identities"]), WHAT_IDENTITIES)
-        rows = readout["current_replay"]["rows"]
+        self.assertEqual(readout["current_main_control"]["ref"], "origin/main")
+        rows = readout["current_main_control"]["rows"]
         self.assertEqual({row["identity"] for row in rows}, WHAT_IDENTITIES)
-        self.assertTrue(all(row["verdict"] in {"diverged", "skip_lossy"} for row in rows))
-        self.assertTrue(all(row["evidence"] for row in rows))
+        self.assertTrue(all(row["verdict"] == "matched" for row in rows))
+        self.assertTrue(all(row["branches"] > 0 for row in rows))
 
-    def test_readout_does_not_turn_scope_or_family_into_a_clearance(self) -> None:
+    def test_readout_does_not_turn_scope_or_family_into_c26_ownership(self) -> None:
         readout = json.loads(READOUT.read_text())
         matrix = readout["ownership_matrix"]
 
-        self.assertEqual(matrix["closed_by_pr_980_or_current_main"], [])
+        self.assertEqual(matrix["closed_by_pr_980_exact_identity_evidence"], [])
+        self.assertEqual(set(matrix["closed_by_current_main"]), WHAT_IDENTITIES)
         self.assertEqual(matrix["active_matcher_poison_tail_exactly_cleared"], [])
         self.assertEqual(matrix["c27_rest"], [])
-        self.assertEqual(set(matrix["genuinely_unresolved_or_refused"]), WHAT_IDENTITIES)
+        self.assertEqual(matrix["genuinely_unresolved_or_refused"], [])
         self.assertTrue(readout["invariants"]["no_family_name_is_used_as_ownership_evidence"])
+        self.assertTrue(readout["invariants"]["current_main_control_replays_every_c15_identity"])
 
     def test_historical_c26_targets_are_fail_closed_without_their_trace(self) -> None:
         readout = json.loads(READOUT.read_text())
