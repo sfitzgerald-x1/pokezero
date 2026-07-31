@@ -20,8 +20,9 @@ TEST_NAME = VERIFIER.CURRENT_REGRESSION
 
 def cargo_output(*, test_line: str, count: int = 22, ignored: int = 0, filtered: int = 0) -> str:
     passed = count - ignored
+    test_word = "test" if count == 1 else "tests"
     return (
-        f"running {count} tests\n"
+        f"running {count} {test_word}\n"
         f"{test_line}\n\n"
         "test result: ok. "
         f"{passed} passed; 0 failed; {ignored} ignored; 0 measured; "

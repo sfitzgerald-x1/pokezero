@@ -39,7 +39,7 @@ CURRENT_PUBLIC_INPUTS = (
     "third_party/poke-engine-base-source.json",
     "third_party/poke-engine-gen3-patches.txt",
 )
-_CARGO_RUNNING_TESTS = re.compile(r"(?m)^running (?P<count>\d+) tests$")
+_CARGO_RUNNING_TESTS = re.compile(r"(?m)^running (?P<count>\d+) tests?$")
 _CARGO_RESULT = re.compile(
     r"(?m)^test result: ok\. (?P<passed>\d+) passed; (?P<failed>\d+) failed; "
     r"(?P<ignored>\d+) ignored; (?P<measured>\d+) measured; "
@@ -245,6 +245,20 @@ def verify_current_regression_surface(repo: Path, authoritative_main: str) -> li
             *CURRENT_PUBLIC_INPUTS,
         ],
     )
+    command(
+        repo,
+        "C26 supersession verifier unit test",
+        [
+            "uv",
+            "run",
+            "--isolated",
+            "--python",
+            "3.12",
+            "python",
+            "tests/test_c26_switch_confusion_supersession.py",
+        ],
+        forbid_skip=True,
+    )
     cargo_stdout = command(
         repo,
         "current switch-prefixed confusion renderer regression",
@@ -286,6 +300,7 @@ def verify_current_regression_surface(repo: Path, authoritative_main: str) -> li
         forbid_skip=True,
     )
     return [
+        "tests/test_c26_switch_confusion_supersession.py",
         {"cargo_renderer": cargo_evidence},
         "tests/test_poke_engine_patch_stack.py",
         "tests/test_public_invariant.py",

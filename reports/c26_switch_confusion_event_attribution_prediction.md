@@ -55,14 +55,16 @@ Run from this worktree:
 
 ```bash
 uv run --isolated --python 3.12 python scripts/verify_c26_switch_confusion_supersession.py
+uv run --isolated --python 3.12 python tests/test_c26_switch_confusion_supersession.py
 (cd rust/pokezero-search && cargo test --test gen3_confusion_event_renderer)
 uv run --isolated --python 3.12 python tests/test_poke_engine_patch_stack.py
 uv run --isolated --python 3.12 python tests/test_public_invariant.py
 git diff --check
 ```
 
-The verifier runs the complete renderer integration suite, including the switch
-regression and Recoil negative control, plus the patch-stack and public-invariant
-tests after checking the pinned engine source and patch-list digest. A post-fix
-certification classifier replay with retained inputs remains required before any
-binding certification or sweep claim.
+The verifier runs its nine fail-closed parser/provenance unit tests and the
+complete renderer integration suite, including the switch regression and Recoil
+negative control, plus the patch-stack and public-invariant tests after checking
+the pinned engine source and patch-list digest. A post-fix certification
+classifier replay with retained inputs remains required before any binding
+certification or sweep claim.
