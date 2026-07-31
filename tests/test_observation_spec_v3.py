@@ -42,7 +42,9 @@ from pokezero.showdown import (
     NUMERIC_TT_CONFUSION_SELFHIT,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
+    NUMERIC_TT_KO,
     NUMERIC_TT_MISS,
+    NUMERIC_TT_SELF_HP_COST,
     NUMERIC_WRAP_TRAP_TURNS,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
@@ -978,6 +980,22 @@ class IncrementalFoldParityTest(unittest.TestCase):
         self.assertEqual(products.transition_tokens, batch)
         self.assertTrue(any(token.confusion_selfhit for token in products.transition_tokens))
 
+    def test_incremental_fold_does_not_credit_lethal_self_hit_to_previous_move(self) -> None:
+        from pokezero.transitions_fold import FoldState
+
+        _, products = FoldState.initial(perspective_slot="p1").advance(
+            _LETHAL_CONFUSE_SELFHIT_LINES
+        )
+        splash = next(
+            token
+            for token in products.transition_tokens
+            if token.kind == "move" and token.action == "splash"
+        )
+        self.assertEqual(splash.damage_fraction, 0.0)
+        self.assertEqual(splash.self_hp_cost, 0.0)
+        self.assertFalse(splash.ko)
+        self.assertTrue(splash.confusion_selfhit)
+
     def test_payload_round_trip_carries_confusion_and_omits_it_when_clean(self) -> None:
         from pokezero.transitions_fold import FoldState
 
@@ -1655,13 +1673,22 @@ class WishTurnsEncodeTest(unittest.TestCase):
 
 # Change 10 fixture: p2 Skarmory (faster) attacks p1 Snorlax for 0.17, then the SLOWER
 # confused Snorlax self-hits for 0.10 with an UNTAGGED -damage and no |move|/|cant| line —
-# so the fold folds 0.10 into Skarmory's move damage (0.27) exactly as the change brief
-# reproduces. Skarmory (base speed 70) outspeeds Snorlax (30), so it is the FIRST sub-block.
+# the fold tracks the self-hit marker/fraction without adding it to Skarmory's move damage.
+# Skarmory (base speed 70) outspeeds Snorlax (30), so it is the FIRST sub-block.
 _CONFUSE_SELFHIT_LINES = _LEADS + [
     "|move|p2a: Skarmory|Drill Peck|p1a: Snorlax",
     "|-damage|p1a: Snorlax|83/100",  # opponent move = 0.17
     "|-activate|p1a: Snorlax|confusion",
     "|-damage|p1a: Snorlax|73/100",  # confused self-hit = 0.10 (untagged)
+    "|upkeep",
+    "|turn|2",
+]
+
+_LETHAL_CONFUSE_SELFHIT_LINES = _LEADS + [
+    "|move|p2a: Skarmory|Splash|p1a: Snorlax",
+    "|-activate|p1a: Snorlax|confusion",
+    "|-damage|p1a: Snorlax|0 fnt",
+    "|faint|p1a: Snorlax",
     "|upkeep",
     "|turn|2",
 ]
@@ -1672,9 +1699,7 @@ _CONFUSE_SELFHIT_LINES = _LEADS + [
     "requires a local Gen 3 Pokemon Showdown checkout",
 )
 class ConfusionSelfHitEncodeTest(unittest.TestCase):
-    """Change 10 at the encode layer: v2.2 keeps the folded damage (0.27) byte-identically;
-    v3 subtracts the confused defender's self-hit back out (0.17) and sets the flag. Both
-    seats, non-vacuous (the two encodes DISAGREE on the damage column), v2.2 prefix frozen."""
+    """All schemas keep self-hit damage/KO separate; V3 also exposes the marker."""
 
     @staticmethod
     def _vocab():
@@ -1697,15 +1722,12 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
         observation.validate(spec)
         return _legacy_v3_semantic_view(observation)
 
-    def test_v3_corrects_the_damage_and_sets_the_flag_v2_2_keeps_the_folded_value(self) -> None:
+    def test_all_schemas_keep_move_damage_clean_and_v3_sets_the_flag(self) -> None:
         state = self._state(_CONFUSE_SELFHIT_LINES)
         turn1 = TRANSITION_TOKEN_OFFSET + 1  # lead pair at +0, turn 1 at +1
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
-        # v2.2 (frozen): the self-hit is still folded into the move's damage column (0.27).
-        self.assertAlmostEqual(v2_2.numeric_features[turn1][NUMERIC_TT_DAMAGE_FRACTION], 0.27)
-        # v3: the move's OWN damage (self-hit removed) is 0.17, and the flag is set. This is a
-        # NON-VACUOUS guard — without the fix v3 would read 0.27 too and this assertion fails.
+        self.assertAlmostEqual(v2_2.numeric_features[turn1][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
         self.assertAlmostEqual(v3.numeric_features[turn1][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
         self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_CONFUSION_SELFHIT], 1.0)
         # The flag is set on EXACTLY that one row.
@@ -1714,10 +1736,7 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
             [turn1],
         )
 
-    def test_v2_2_is_frozen_and_v3_diverges_only_at_the_corrected_damage_column(self) -> None:
-        # The semantic view makes the single intentional v3 rewrite explicit: v2.2 retains the
-        # folded value, while v3 subtracts the confusion self-hit. The raw permutation-map test
-        # owns physical positions; the v2.2 cmp-against-pristine battery owns byte identity.
+    def test_v2_2_and_v3_share_corrected_move_damage_for_both_seats(self) -> None:
         for player in ("p1", "p2"):
             state = self._state(_CONFUSE_SELFHIT_LINES, player=player)
             v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
@@ -1732,12 +1751,22 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
                 for ci in range(width)
                 if a[ci] != b[ci]
             }
-            # The sole divergence on the shared surface is the intended damage correction.
-            self.assertEqual(prefix_diffs, {(flagged_row, NUMERIC_TT_DAMAGE_FRACTION)})
-            self.assertAlmostEqual(v2_2.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.27)
+            self.assertEqual(prefix_diffs, set())
+            self.assertAlmostEqual(v2_2.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
             self.assertAlmostEqual(v3.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
-            # Categoricals, masks, and token types are wholly untouched by change 10.
             _assert_shared_non_numeric_surface(self, v2_2, v3)
+
+    def test_lethal_self_hit_never_credits_previous_move_damage_cost_or_ko(self) -> None:
+        state = self._state(_LETHAL_CONFUSE_SELFHIT_LINES)
+        turn1 = TRANSITION_TOKEN_OFFSET + 1
+        for spec in (V2_2_REPLAY_OBSERVATION_SPEC, V3_REPLAY_OBSERVATION_SPEC):
+            encoded = self._encode(state, spec)
+            row = encoded.numeric_features[turn1]
+            self.assertEqual(row[NUMERIC_TT_DAMAGE_FRACTION], 0.0)
+            self.assertEqual(row[NUMERIC_TT_SELF_HP_COST], 0.0)
+            self.assertEqual(row[NUMERIC_TT_KO], 0.0)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_CONFUSION_SELFHIT], 1.0)
 
 
 if __name__ == "__main__":

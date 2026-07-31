@@ -14,6 +14,7 @@ from pokezero.showdown import (
     NUMERIC_SELF_SCREENS,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TT_ABS_TURN,
+    NUMERIC_TT_CONFUSION_SELFHIT,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
     OPPONENT_POKEMON_TOKEN_OFFSET,
@@ -256,7 +257,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             1.0,
         )
 
-    def test_second_sub_block_confusion_rewrite_is_declared_and_projected(self) -> None:
+    def test_second_sub_block_confusion_marker_is_declared_and_projected(self) -> None:
         state = self._state()
         token_index, token = next(
             (index, token)
@@ -284,7 +285,11 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         self.assertEqual(v2_2.numeric_features[row][NUMERIC_TM2_DAMAGE_FRACTION], 0.25)
         self.assertEqual(
             v3.numeric_features[row][v3_numeric_index(NUMERIC_TM2_DAMAGE_FRACTION)],
-            0.15,
+            0.25,
+        )
+        self.assertEqual(
+            v3.numeric_features[row][v3_numeric_index(NUMERIC_TT_CONFUSION_SELFHIT)],
+            1.0,
         )
 
     def test_v3_refuses_a_noncanonical_public_census(self) -> None:
