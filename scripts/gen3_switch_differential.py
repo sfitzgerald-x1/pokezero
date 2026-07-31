@@ -936,10 +936,21 @@ def _spec(name):
             facts=lambda L: {
                 "substitute_started": _has(L, "|-start|p2a: Blissey|Substitute"),
                 "victim_ticked": _residual_from(L, "Fire Spin", "p2a"),
+                "silent_trap_release": _has(
+                    L,
+                    "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]|[silent]",
+                ),
             },
-            expect={"substitute_started": True, "victim_ticked": False},
-            landmark=lambda L: _has(L, "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]"),
-            landmark_desc="Substitute ended the partial trap")
+            expect={
+                "substitute_started": True,
+                "victim_ticked": False,
+                "silent_trap_release": True,
+            },
+            landmark=lambda L: _has(
+                L,
+                "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]|[silent]",
+            ),
+            landmark_desc="Substitute silently ended the active partial trap")
     if name in ("spikes1layer", "spikes2layers", "spikes3layers"):
         # p1 Skarmory stacks `layers` of Spikes on p2's side, then p2 sends in a
         # 461 max HP Snorlax. Showdown's gen4 Spikes condition (which gen3

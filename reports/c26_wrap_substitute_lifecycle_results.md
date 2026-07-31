@@ -10,7 +10,27 @@ Spin landed on four; all four exercised the measured boundary and passed:
 3. Showdown emitted `-end ... Fire Spin [partiallytrapped] [silent]` before
    upkeep and emitted no Fire Spin residual damage on that boundary.
 
-Missed Fire Spin setup seeds were skipped rather than treated as evidence.
+Missed Fire Spin setup seeds were skipped rather than treated as evidence. The
+exact reproducible command is:
+
+```sh
+PYTHONPATH=src .venv/bin/python scripts/gen3_switch_differential.py \
+  --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
+  --seeds 3 4 5 6 7 8 9 10 --only partialtrapsubstitute
+```
+
+On a landed setup, the measured Showdown protocol boundary was:
+
+```text
+|move|p2a: Blissey|Substitute|p2a: Blissey
+|-start|p2a: Blissey|Substitute
+|-end|p2a: Blissey|Fire Spin|[partiallytrapped]|[silent]
+|-damage|p2a: Blissey|435/651
+|upkeep
+```
+
+The fixture now requires the silent release marker, which distinguishes this
+Substitute lifecycle from ordinary partial-trap expiry.
 
 ## Native Reproduction
 
@@ -36,8 +56,8 @@ The native fixture verifies all of the following:
 - a Substitute attempt at exactly one-quarter HP fails and leaves the partial
   trap and its chip in place;
 - an ordinary trapped turn keeps the partial trap and its chip; and
-- existing switch-out and Baton Pass controls continue to cover the independent
-  source-departure lifecycle.
+- the independent source-departure switch-out and Baton Pass controls in the
+  companion trap/perish fidelity suite still cover their separate lifecycle.
 
 The vendored patch stack applies from the pinned upstream source with strict
 `git apply` / `patch --fuzz=0` handling. No upstream fixture refresh was needed

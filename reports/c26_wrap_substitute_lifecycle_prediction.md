@@ -32,7 +32,8 @@ The fix must not:
 The implementation is accepted only if a direct native fixture proves the
 four discriminators above and a Showdown-backed probe confirms the successful
 Substitute lifecycle. The patch must apply through the frozen patch manifest
-with no fuzz, keep fixture refresh last, and preserve apply/reverse behavior.
+with no fuzz, append without reordering the existing fixture-refresh record,
+and preserve apply/reverse behavior.
 
 This artifact intentionally predicts behavior before inspecting or modifying
 the relevant engine code. Results and residual limitations belong in the

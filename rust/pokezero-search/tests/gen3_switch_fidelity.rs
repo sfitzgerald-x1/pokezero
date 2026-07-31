@@ -19,6 +19,8 @@
 //!   routine as the patched code and have no other regression cover.
 //! * Baton Pass carries the Perish Song counter to the receiver —
 //!   `poke-engine-gen3-batonpass-perish.patch`.
+//! * A successful Substitute ends only the user's existing partial trap before
+//!   residuals — `poke-engine-gen3-wrap-substitute-lifecycle.patch`.
 
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
@@ -83,6 +85,12 @@ fn damages_side(list: &[Instruction], side_ref: SideReference) -> bool {
         Instruction::Damage(damage) => damage.side_ref == side_ref && damage.damage_amount > 0,
         _ => false,
     })
+}
+
+fn has_switch_option(options: &[MoveChoice]) -> bool {
+    options
+        .iter()
+        .any(|option| matches!(option, MoveChoice::Switch(_)))
 }
 
 /// New lifecycle instructions must preserve tree reversibility just like move
@@ -321,6 +329,10 @@ fn successful_substitute_ends_the_target_partial_trap_before_residuals() {
         .side_two
         .volatile_statuses
         .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::FOCUSENERGY);
 
     let list = only_branch(generate(
         &mut state,
@@ -346,6 +358,15 @@ fn successful_substitute_ends_the_target_partial_trap_before_residuals() {
         "a successful Substitute must end the target's partial trap: {:?}",
         list
     );
+    assert!(
+        !removes_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::FOCUSENERGY
+        ),
+        "Substitute must not clear unrelated user volatiles: {:?}",
+        list
+    );
     let side_two_damage_count = list
         .iter()
         .filter(|instruction| {
@@ -357,6 +378,22 @@ fn successful_substitute_ends_the_target_partial_trap_before_residuals() {
         "only the Substitute HP cost may remain; partial-trap chip must be absent: {:?}",
         list
     );
+    state.apply_instructions(&list);
+    assert!(
+        state
+            .side_two
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::FOCUSENERGY),
+        "unrelated Focus Energy must remain after Substitute: {:?}",
+        state
+    );
+    let (_, side_two_options) = state.get_all_options();
+    assert!(
+        has_switch_option(&side_two_options),
+        "releasing partial trapping must restore the target's switch options: {:?}",
+        side_two_options
+    );
+    state.reverse_instructions(&list);
     assert_reverts_cleanly(&mut state, &list);
 }
 
