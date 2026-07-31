@@ -202,10 +202,15 @@ def paired_improvement(candidate: dict, cand_raw: dict, anchor: dict, anchor_raw
     )
     if not shared:
         return None
+    # The caller records this. A cell can clear --min-pairs on its OWN delta
+    # while overlapping the anchor on far fewer pairs, and the improvement CI
+    # is computed over the OVERLAP -- a 20-pair overlap can yield
+    # "+1.000 [+1.000, +1.000]" beside a reported `pairs: 400`.
     deltas = [
         (candidate[k] - cand_raw[k]) - (anchor[k] - anchor_raw[k]) for k in shared
     ]
-    return bootstrap_mean(deltas, _indices(len(shared)))
+    interval = bootstrap_mean(deltas, _indices(len(shared)))
+    return interval, len(shared)
 
 
 def score_cell(search: dict, raw: dict, indices) -> dict:
@@ -421,13 +426,24 @@ def main(argv=None) -> int:
             if cid == args.anchor:
                 beats_anchor.append(cid)
                 continue
-            imp = paired_improvement(
+            result = paired_improvement(
                 rows[cid], rows[cells[cid]["raw_arm"]], anchor_rows, anchor_raw
             )
-            if imp is None:
+            if result is None:
                 cells[cid]["improvement_over_anchor"] = None
                 continue
-            cells[cid]["improvement_over_anchor"] = imp.to_payload()
+            imp, overlap = result
+            payload = imp.to_payload()
+            payload["pairs"] = overlap
+            cells[cid]["improvement_over_anchor"] = payload
+            if overlap < args.min_pairs:
+                # The improvement is estimated over the OVERLAP with the
+                # anchor, which can be far thinner than either cell's own n.
+                payload["ineligible"] = (
+                    f"overlap with the anchor is {overlap} pairs < {args.min_pairs}"
+                )
+                cells[cid]["ineligible_because"].append(payload["ineligible"])
+                continue
             if imp.low > 0.0:
                 beats_anchor.append(cid)
         # `ranked` is already sorted by delta, so the first survivor is the
@@ -439,15 +455,37 @@ def main(argv=None) -> int:
                 f"largest eligible delta whose improvement over {args.anchor} excludes 0: "
                 f"{imp['point']:+.3f} [{imp['low']:+.3f}, {imp['high']:+.3f}]"
             )
-        else:
+        elif not cells[args.anchor]["ineligible_because"]:
             winner = args.anchor
             adoption = (
                 f"no eligible cell's improvement over {args.anchor} excludes 0; "
                 "adopting the anchor per section 9 Phase 2"
             )
+        else:
+            # The anchor is the fallback, not an exemption. Adopting a cell the
+            # report itself rejected -- over the cap, seat-gapped, or short of
+            # the minimum -- would publish it as the campaign's power config
+            # with an adoption string that never mentions the rejection.
+            winner = None
+            adoption = (
+                f"NO ADOPTION: no eligible cell beats the anchor, and the anchor "
+                f"{args.anchor} is itself ineligible "
+                f"({'; '.join(cells[args.anchor]['ineligible_because'])}). "
+                "Section 9 Phase 2's fallback assumes a healthy anchor."
+            )
     elif ranked:
         winner = ranked[0]
         adoption = "no --anchor given; reporting the largest eligible delta only"
+    else:
+        # No cell survived eligibility. Saying so explicitly matters: a null
+        # winner with a null reason reads as "not computed yet" rather than as
+        # "every cell was rejected".
+        rejected = {c: v["ineligible_because"] for c, v in cells.items()}
+        winner = None
+        adoption = (
+            "NO ADOPTION: no cell passed eligibility. "
+            + "; ".join(f"{c}: {', '.join(r)}" for c, r in sorted(rejected.items()) if r)
+        )
 
     report = {
         "schema_version": SCHEMA_VERSION,

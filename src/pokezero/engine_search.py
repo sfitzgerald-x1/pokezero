@@ -533,21 +533,34 @@ def opponent_request_order(context, party_species) -> list[str] | None:
     """The opponent's Showdown request order at this decision, or None.
 
     Showdown keeps a player's active at request slot 0 and swaps the incoming
-    mon into slot 0 on every switch-in, so the request order is the party order
-    with one slot-0 swap accumulated per switch-in from battle start. That
-    order is the label space of the model's opponent action head
-    (`rollout._opponent_action_index` is the other seat's own action index), so
-    the crate needs it to gather opponent priors onto the right arms.
+    mon into slot 0 on every switch-in (`sim/battle-actions.ts` `switchIn`, an
+    unconditional slot swap that also fires for forced replacements and for
+    `dragIn`). So the request order is the party order with one slot-0 swap
+    accumulated per switch-in from battle start, and that order is the label
+    space of the model's opponent action head.
 
-    The crate cannot derive this itself: it never receives pre-root protocol
-    lines. Four in-crate approximations were each wrong beyond a single switch.
-    Here the history IS available -- the opponent's public active species per
-    round -- so it is computed once and passed through ctx.
+    Detection is the hard part, and it is why this fails closed aggressively.
+    The obvious approach -- diff the opponent's public active across OUR
+    decision rounds -- UNDER-COUNTS: the opponent also switches at rounds where
+    we were not requested, most commonly a forced replacement after a faint,
+    and those rounds carry no observation on our side. Measured against live
+    Showdown over 12 gen3 randbat games, that approach was wrong on 170 of 811
+    decisions (21%, 6 of 12 games) and never once detected its own error --
+    once a swap is missed the permutation stays broken for the rest of the
+    battle.
 
-    Returns None rather than a guess whenever the history cannot be resolved
-    cleanly (unknown species, an active not in the sampled party, no
-    observations). A wrong order permutes opponent switch priors silently; the
-    crate's documented fallback is at least a KNOWN approximation.
+    A wrong order silently permutes opponent switch priors, which is strictly
+    worse than the crate's documented one-swap fallback, so this returns None
+    whenever the history cannot be reconstructed with confidence -- including
+    the case above, which is detectable: the opponent has trajectory steps at
+    rounds absent from our observations.
+
+    NOTE: returning None is currently the COMMON case in real battles, not an
+    edge case. Making this correct means reconciling opponent trajectory steps
+    against public switch/drag lines the way
+    `determinization._public_opponent_team_index_constraints` already does; it
+    maintains exactly this permutation internally as `current_order`. Reuse
+    that rather than writing a third implementation.
     """
     from .determinization import (
         _own_observations_by_decision_round,
@@ -560,6 +573,24 @@ def opponent_request_order(context, party_species) -> list[str] | None:
         return None
     if not observations:
         return None
+
+    # FAIL CLOSED on the dominant real failure: any opponent action at a round
+    # we did not observe may have moved its party invisibly.
+    opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
+    try:
+        steps = getattr(getattr(context, "trajectory", None), "steps", None) or ()
+        unobserved = sorted(
+            step.turn_index
+            for step in steps
+            if step.player_id == opponent_slot
+            and step.turn_index < getattr(context, "decision_round_index", 1 << 30)
+            and step.turn_index not in observations
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if unobserved:
+        return None
+
     order = [normalize_id(str(name)) for name in party_species]
     if len(set(order)) != len(order):
         # Duplicate species: slot-0 swaps are ambiguous by species name.

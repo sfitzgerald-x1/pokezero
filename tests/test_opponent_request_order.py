@@ -41,12 +41,29 @@ class OpponentRequestOrderTest(unittest.TestCase):
         determinization._own_observations_by_decision_round = self._obs
         determinization._public_opponent_active_species = self._act
 
-    def order_for(self, actives, party=None):
+    def order_for(self, actives, party=None, opponent_turns=None):
+        """`opponent_turns` = rounds at which the OPPONENT acted.
+
+        Defaults to exactly the observed rounds, i.e. the benign case. Passing a
+        round we did not observe is the real-battle case (a forced replacement
+        after a faint) and must fail closed.
+        """
         determinization._own_observations_by_decision_round = (
             lambda ctx: dict(enumerate(actives))
         )
         determinization._public_opponent_active_species = lambda o: o
-        return opponent_request_order(SimpleNamespace(), party or PARTY)
+        turns = range(len(actives)) if opponent_turns is None else opponent_turns
+        context = SimpleNamespace(
+            player_id="p1",
+            decision_round_index=10_000,
+            trajectory=SimpleNamespace(
+                steps=[
+                    SimpleNamespace(player_id="p2", turn_index=t, action_index=0)
+                    for t in turns
+                ]
+            ),
+        )
+        return opponent_request_order(context, party or PARTY)
 
     def test_no_switches_leaves_the_party_order(self) -> None:
         self.assertEqual(self.order_for(["typhlosion"]), expected_order([]))
@@ -83,6 +100,34 @@ class OpponentRequestOrderTest(unittest.TestCase):
         # makes the permutation ambiguous.
         party = ["absol", "absol", "smeargle", "vaporeon", "sharpedo", "typhlosion"]
         self.assertIsNone(self.order_for(["absol"], party=party))
+
+
+class FailClosedOnUnobservedRoundsTest(OpponentRequestOrderTest):
+    """The failure that made attempt 5 wrong on 21% of real decisions.
+
+    The opponent also acts at rounds where WE were not requested -- most often
+    a forced replacement after a faint. Those rounds carry no observation on
+    our side, so an active-diff under-counts switch-ins and returns a
+    confidently wrong permutation that stays broken for the rest of the battle.
+    Measured against live Showdown: 170 of 811 decisions across 12 games, and
+    it never detected its own error.
+    """
+
+    def test_opponent_action_at_an_unobserved_round_fails_closed(self) -> None:
+        # We observed rounds 0..2; the opponent also acted at round 3.
+        self.assertIsNone(
+            self.order_for(
+                ["typhlosion", "typhlosion", "absol"], opponent_turns=[0, 1, 2, 3]
+            )
+        )
+
+    def test_fully_observed_history_still_resolves(self) -> None:
+        # The guard must not reject the benign case outright, or the channel is
+        # dead code rather than fail-closed.
+        self.assertEqual(
+            self.order_for(["typhlosion", "absol"], opponent_turns=[0, 1]),
+            expected_order(["absol"]),
+        )
 
 
 if __name__ == "__main__":

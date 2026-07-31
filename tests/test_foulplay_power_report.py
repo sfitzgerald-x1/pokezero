@@ -363,35 +363,66 @@ class CrossCheckpointImprovementTest(unittest.TestCase):
 
 
 class FilterThenRankTest(unittest.TestCase):
-    def test_second_place_is_adopted_when_the_leader_fails_the_improvement(self) -> None:
-        # Section 9 Phase 2 (iii) is a per-cell FILTER. Testing only the leader
-        # and falling back to the anchor discards a cell that cleanly beats it.
+    def test_runner_up_is_adopted_when_the_leader_fails_the_improvement(self) -> None:
+        """Section 9 Phase 2 (iii) is a per-cell FILTER, not a leader-only test.
+
+        Round 5 caught the previous fixture inverted: the cell it called
+        "second" actually had the LARGER delta, so it WAS ranked[0] and the
+        test passed under a leader-only implementation. This one asserts the
+        ordering it depends on before asserting the outcome.
+        """
         n = 60
         raw = {(i, "p1"): 0.0 for i in range(n)}
         anchor = {(i, "p1"): 1.0 if i < 30 else 0.0 for i in range(n)}
-        # Leader: bigger delta but noisy against the anchor (wins and losses).
+        # Leader: biggest delta, but its wins and losses against the anchor are
+        # mixed, so the improvement CI straddles 0.
         leader = dict(anchor)
-        for i in range(30, 45):
+        for i in range(30, 48):
             leader[(i, "p1")] = 1.0
-        for i in range(0, 12):
+        for i in range(0, 10):
             leader[(i, "p1")] = 0.0
-        # Runner-up: smaller delta, but strictly dominates the anchor.
-        second = dict(anchor)
-        for i in range(30, 38):
-            second[(i, "p1")] = 1.0
+        # Runner-up: smaller delta, strictly dominates the anchor.
+        runner_up = dict(anchor)
+        for i in range(30, 36):
+            runner_up[(i, "p1")] = 1.0
         rep = run([
             shard("anchor@k0", "search", "/c/k0.pt", anchor),
             shard("leader@k0", "search", "/c/k0.pt", leader),
-            shard("second@k0", "search", "/c/k0.pt", second),
+            shard("runnerup@k0", "search", "/c/k0.pt", runner_up),
             shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
         ], anchor="anchor@k0")
-        lead_imp = rep["cells"]["leader@k0"]["improvement_over_anchor"]
-        sec_imp = rep["cells"]["second@k0"]["improvement_over_anchor"]
-        self.assertLessEqual(lead_imp["low"], 0.0, "fixture: leader must be noisy")
-        self.assertGreater(sec_imp["low"], 0.0, "fixture: runner-up must be clean")
-        # The runner-up's improvement is computed at all -- the old code never
-        # looked past ranked[0] -- and it is adopted.
-        self.assertEqual(rep["winner"], "second@k0")
+        lead_d = rep["cells"]["leader@k0"]["paired_delta"]["point"]
+        run_d = rep["cells"]["runnerup@k0"]["paired_delta"]["point"]
+        # The fixture only means anything if the leader really does lead.
+        self.assertGreater(lead_d, run_d, "fixture inverted: leader must rank first")
+        self.assertEqual(rep["ranking_eligible"][0], "leader@k0")
+        self.assertLessEqual(
+            rep["cells"]["leader@k0"]["improvement_over_anchor"]["low"], 0.0
+        )
+        self.assertGreater(
+            rep["cells"]["runnerup@k0"]["improvement_over_anchor"]["low"], 0.0
+        )
+        self.assertEqual(rep["winner"], "runnerup@k0")
+
+
+class IneligibleAnchorTest(unittest.TestCase):
+    def test_a_rejected_anchor_is_not_adopted_as_the_power_config(self) -> None:
+        """Round 5: the anchor fallback skipped the anchor's own eligibility.
+
+        A cell the report itself marks REJECTED for exceeding the latency cap
+        was still published as the adopted config, with an adoption string that
+        never mentioned the rejection.
+        """
+        n = 30
+        raw = {(i, "p1"): 0.0 for i in range(n)}
+        anchor = {(i, "p1"): 1.0 for i in range(n)}
+        rep = run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor, gate=31.0),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ], anchor="anchor@k0")
+        self.assertIn("REJECTED", rep["cells"]["anchor@k0"]["cap"])
+        self.assertIsNone(rep["winner"])
+        self.assertIn("NO ADOPTION", rep["adoption_rule"])
 
 
 class DepthRuleTest(unittest.TestCase):
