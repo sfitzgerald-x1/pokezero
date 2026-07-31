@@ -194,6 +194,108 @@ class OpponentActionMappingTest(unittest.TestCase):
             "an action slot; the opponent map is reading the wrong seat's team",
         )
 
+    def _corpus(self):
+        return load_golden_corpus(COMMITTED_SAMPLE_DIR)
+
+    def _encoders_for_both_seats(self, row_a, row_b):
+        """(state_str, encoder rooted at row_a's seat, encoder rooted at row_b's).
+
+        Both encoders describe the SAME physical state; only the rooting seat
+        differs. That is what makes the mirror comparison meaningful.
+        """
+        tables_json = _tables_json()
+        if tables_json is None:
+            self.skipTest("no encoder tables artifact and no Showdown checkout")
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.env import BattleStartOverride
+        from pokezero.engine_world import EngineWorldUnsupported, battle_spec_from_payload
+        from pokezero.poke_engine_adapter import build_poke_engine_state
+
+        if not Path(DEFAULT_SHOWDOWN_ROOT).exists():
+            self.skipTest("no Showdown checkout (dex required)")
+        dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
+        game = {g.record.battle_id: g for g in self._corpus().games}[row_a.battle_id]
+        packed = {
+            slot: (game.record.true_teams.get(slot) or {}).get("packed")
+            for slot in ("p1", "p2")
+        }
+        if not packed["p1"] or not packed["p2"]:
+            return None
+        try:
+            world = battle_spec_from_payload(
+                row_a.public_materialization,
+                BattleStartOverride(player_teams=packed),
+                dex=dex,
+                approximate_sleep_turns=True,
+                approximate_substitute_health=True,
+            )
+            state = build_poke_engine_state(world.spec)
+        except EngineWorldUnsupported:
+            return None
+        ctx = json.dumps({
+            "p1": list(world.party_species["p1"]),
+            "p2": list(world.party_species["p2"]),
+            "turn": int(row_a.public_materialization.get("turn") or 0),
+        })
+        state_str = state.to_string()
+        return (
+            state_str,
+            pokezero_search.LeafEncoder(tables_json, _row_inputs(row_a), ctx, state_str),
+            pokezero_search.LeafEncoder(tables_json, _row_inputs(row_b), ctx, state_str),
+        )
+
+    def test_seat_mirror_opponent_map_equals_that_seats_own_map(self) -> None:
+        """THE orientation pin. Advertised since the first draft; never existed.
+
+        Round 3 found B2 still live after two attempted fixes, because every
+        pin written for it checked a property of the map in isolation. This one
+        compares against ground truth: root the same physical state from BOTH
+        seats, and the p1-rooted context's OPPONENT map must assign the same
+        action slots as the p2-rooted context's OWN map. That second map is the
+        head's label space (`rollout.py::_opponent_action_index` is the other
+        seat's own `decision.action_index`), so agreement here is exactly the
+        property the opponent priors depend on.
+
+        Measured: 1 disagreement with the pre-fix packed-party-order root, 0
+        after correcting it to active-first. The disagreement was a
+        rotation-by-one of every switch arm, appearing from the opponent's
+        first switch onward.
+        """
+        by_round: dict[tuple[str, int], list] = {}
+        for row in self._corpus().decision_rows:
+            by_round.setdefault((row.battle_id, row.decision_round_index), []).append(row)
+        compared = 0
+        for (battle_id, rnd), rows in sorted(by_round.items()):
+            if len(rows) < 2:
+                continue
+            built = self._encoders_for_both_seats(rows[0], rows[1])
+            if built is None:
+                continue
+            state_str, rooted_a, rooted_b = built
+            opponent = {
+                d: i for d, i in rooted_a.opponent_action_map(state_str)
+                if d.startswith("switch")
+            }
+            own = {
+                d: i for d, i in rooted_b.self_action_map(state_str)
+                if d.startswith("switch")
+            }
+            shared = set(opponent) & set(own)
+            if not shared:
+                continue
+            compared += 1
+            with self.subTest(battle=battle_id, round=rnd):
+                mismatched = {k: (opponent[k], own[k]) for k in sorted(shared)
+                              if opponent[k] != own[k]}
+                self.assertEqual(
+                    mismatched, {},
+                    "opponent map disagrees with that seat's own action block; "
+                    "opponent switch priors are bound to the wrong arms",
+                )
+        if not compared:
+            self.skipTest("no committed round has rows for both seats")
+
     def test_opponent_order_evolves_through_its_own_switches(self) -> None:
         """The pin for B2: an unevolved opponent order permutes every switch arm.
 

@@ -1683,8 +1683,27 @@ impl LeafContext {
     /// indices, unlike `md["opponent_team"]`, which is the partial belief view.
     /// Callers evolve this through a branch's switches with
     /// [`evolve_self_order`] and `opponent_prefix()`.
-    pub(crate) fn root_opponent_order(&self) -> &[String] {
-        &self.species_keys[self.engine_side_index(false)]
+    pub(crate) fn root_opponent_order(&self) -> Vec<String> {
+        // ACTIVE-FIRST, not the raw packed party order. The head's label space
+        // is that seat's own Showdown request order, which keeps the active at
+        // slot 0 and accumulates a slot-0 swap on every switch-in; the self
+        // side gets this free because `root_self_order` comes from
+        // `md["self_team"]`, the real request. The opponent has no request, so
+        // the packed order must be corrected the same way before
+        // `evolve_self_order` layers further swaps on top of it.
+        //
+        // Measured on the golden corpus: without this swap the crate's switch
+        // slots disagree with `rollout.py::_opponent_action_index` on every row
+        // whose opponent has already switched -- i.e. from the opponent's first
+        // switch onward, which is most of a gen3 randbat. Applying the swap
+        // reproduces the label order exactly.
+        let engine_side = self.engine_side_index(false);
+        let mut order = self.species_keys[engine_side].clone();
+        let active = self.root_active_party[engine_side];
+        if active < order.len() && active != 0 {
+            order.swap(0, active);
+        }
+        order
     }
 
     pub(crate) fn opponent_prefix(&self) -> &'static str {
@@ -1732,10 +1751,12 @@ impl LeafContext {
         // first switch and are rotated by one from then on -- which in a gen3
         // randbat is most of the game, and permutes every opponent switch
         // prior.
+        let root_opponent: Vec<String> =
+            if slot_is_self { Vec::new() } else { self.root_opponent_order() };
         let order: &[String] = if slot_is_self {
             self_order.unwrap_or(&self.root_self_order)
         } else {
-            self_order.unwrap_or_else(|| self.root_opponent_order())
+            self_order.unwrap_or(&root_opponent)
         };
         let active_party = active_index_usize(self_side);
         let team_flags: Vec<(String, bool)> = order
@@ -2094,7 +2115,7 @@ impl PyLeafEncoder {
         // OPPONENT's protocol prefix.
         let opponent_order = lines.as_deref().map(|lines| {
             evolve_self_order(
-                self.ctx.root_opponent_order(),
+                &self.ctx.root_opponent_order(),
                 lines,
                 self.ctx.opponent_prefix(),
             )

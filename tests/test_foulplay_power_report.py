@@ -72,6 +72,9 @@ def run(shards, **kw):
             p.write_text(json.dumps(sh), encoding="utf-8")
             paths.append(str(p))
         argv = list(paths)
+        # Fixtures are deliberately small; the section 8 minimum (400) is the
+        # production default and is exercised by MinimumPairsTest below.
+        kw.setdefault("min_pairs", 1)
         for k, v in kw.items():
             argv += [f"--{k.replace('_','-')}", str(v)]
         out = Path(d) / "report.json"
@@ -85,16 +88,29 @@ def run(shards, **kw):
 
 class PairedDeltaTest(unittest.TestCase):
     def test_delta_is_per_pair_not_difference_of_means(self) -> None:
-        # Asymmetric coverage: the arms' MEANS differ from the paired mean.
-        # search wins the two shared pairs; its extra unshared win must not
-        # inflate the delta, and raw's extra unshared loss must not either.
-        search = {(1, "p1"): 1.0, (2, "p1"): 1.0, (3, "p1"): 1.0}
+        """The two estimators must DIVERGE here, or this pins nothing.
+
+        Round 3 caught the earlier fixture: it gave paired == diff-of-means ==
+        1.0, so it could not tell the estimators apart while its docstring
+        claimed it did. This one is built so they genuinely disagree.
+
+        Shared pairs: search and raw tie (both 0.0), so the PAIRED delta is 0.
+        Unshared: search has an extra win, raw an extra loss, which drags the
+        two arms' MEANS apart. Difference-of-means would report +0.333; the
+        paired estimator must report 0.0.
+        """
+        search = {(1, "p1"): 0.0, (2, "p1"): 0.0, (3, "p1"): 1.0}
         raw = {(1, "p1"): 0.0, (2, "p1"): 0.0, (4, "p1"): 0.0}
+        # Sanity: the two estimators really do differ on this fixture.
+        diff_of_means = (sum(search.values()) / len(search)) - (sum(raw.values()) / len(raw))
+        self.assertAlmostEqual(diff_of_means, 1 / 3)
+
         rep = run([shard("cell@k0", "search", "/c/k0.pt", search),
                    shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)])
         cell = rep["cells"]["cell@k0"]
         self.assertEqual(cell["pairs"], 2)
-        self.assertAlmostEqual(cell["paired_delta"]["point"], 1.0)
+        self.assertAlmostEqual(cell["paired_delta"]["point"], 0.0)
+        self.assertNotAlmostEqual(cell["paired_delta"]["point"], diff_of_means)
         self.assertEqual(cell["dropped_unpaired"], {"search_only": 1, "raw_only": 1})
 
     def test_unpaired_rows_are_dropped_and_counted_never_half_scored(self) -> None:
@@ -234,6 +250,88 @@ class WilsonTest(unittest.TestCase):
 
     def test_wilson_of_empty_sample_is_degenerate_not_a_crash(self) -> None:
         self.assertEqual(_R.wilson(0, 0), (0.0, 0.0))
+
+
+class AdoptionRuleTest(unittest.TestCase):
+    """Section 9 Phase 2 (iii): a CI on the IMPROVEMENT, not delta-vs-point."""
+
+    def _pair(self, cand_extra_wins):
+        # Anchor and candidate tie on most pairs; candidate strictly dominates
+        # on `cand_extra_wins`. Both share the raw arm, so the improvement is
+        # very tightly estimated even though each delta individually is not.
+        n = 60
+        anchor, cand, raw = {}, {}, {}
+        for i in range(n):
+            k = (i, "p1")
+            raw[k] = 0.0
+            anchor[k] = 1.0 if i % 2 else 0.0
+            cand[k] = anchor[k]
+        for i in range(cand_extra_wins):
+            cand[(i * 2, "p1")] = 1.0
+        return [
+            shard("anchor@k0", "search", "/c/k0.pt", anchor),
+            shard("cand@k0", "search", "/c/k0.pt", cand),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ]
+
+    def test_candidate_adopted_when_the_improvement_ci_excludes_zero(self) -> None:
+        rep = run(self._pair(6), anchor="anchor@k0")
+        imp = rep["cells"]["cand@k0"]["improvement_over_anchor"]
+        self.assertGreater(imp["low"], 0.0)
+        self.assertEqual(rep["winner"], "cand@k0")
+
+    def test_anchor_retained_when_the_improvement_ci_includes_zero(self) -> None:
+        # One extra win over 60 pairs: a positive point estimate whose CI
+        # straddles 0. The old rule (candidate.low > anchor.point) could adopt
+        # here; the plan's rule must not.
+        rep = run(self._pair(1), anchor="anchor@k0")
+        imp = rep["cells"]["cand@k0"]["improvement_over_anchor"]
+        self.assertGreater(imp["point"], 0.0)
+        self.assertLessEqual(imp["low"], 0.0)
+        self.assertEqual(rep["winner"], "anchor@k0")
+        self.assertIn("includes 0", rep["adoption_rule"])
+
+    def test_a_mistyped_anchor_is_fatal_not_silently_ignored(self) -> None:
+        # Cell ids are checkpoint-qualified, so typos are easy; falling back to
+        # largest-delta-wins would disable the adoption rule with no diagnostic.
+        with self.assertRaises(SystemExit) as caught:
+            run(self._pair(6), anchor="anchorTYPO@k0")
+        self.assertIn("not among the shards", str(caught.exception))
+
+    def test_an_unscoreable_anchor_is_fatal(self) -> None:
+        # An anchor with no shared pairs made the old comparison silently
+        # degrade to "delta > 0".
+        anchor = {(900, "p1"): 1.0}
+        cand = {(i, "p1"): 1.0 for i in range(10)}
+        raw = {(i, "p1"): 0.0 for i in range(10)}
+        with self.assertRaises(SystemExit) as caught:
+            run([shard("anchor@k0", "search", "/c/k0.pt", anchor),
+                 shard("cand@k0", "search", "/c/k0.pt", cand),
+                 shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)],
+                anchor="anchor@k0")
+        self.assertIn("anchor", str(caught.exception).lower())
+
+
+class HealthGateTest(unittest.TestCase):
+    def test_fallback_above_the_limit_makes_a_cell_ineligible(self) -> None:
+        search = {(i, "p1"): 1.0 for i in range(10)}
+        raw = {(i, "p1"): 0.0 for i in range(10)}
+        sh = shard("c@k0", "search", "/c/k0.pt", search)
+        for seat in sh["per_seat"].values():
+            seat["fallback_rate"] = 0.05
+        rep = run([sh, shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)])
+        self.assertNotIn("c@k0", rep["ranking_eligible"])
+        self.assertTrue(any("fallback" in r for r in rep["cells"]["c@k0"]["ineligible_because"]))
+
+    def test_short_cell_is_ineligible_at_the_section_8_minimum(self) -> None:
+        search = {(i, "p1"): 1.0 for i in range(10)}
+        raw = {(i, "p1"): 0.0 for i in range(10)}
+        rep = run([shard("c@k0", "search", "/c/k0.pt", search),
+                   shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)], min_pairs=400)
+        self.assertNotIn("c@k0", rep["ranking_eligible"])
+        self.assertTrue(
+            any("minimum" in r for r in rep["cells"]["c@k0"]["ineligible_because"])
+        )
 
 
 if __name__ == "__main__":

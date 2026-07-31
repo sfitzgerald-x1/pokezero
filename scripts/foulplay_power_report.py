@@ -25,9 +25,10 @@ plausible number:
   is terminal, not last-write-wins;
 * a cell whose `search_wall_per_searched_decision` mean exceeds the cap is
   reported REJECTED and its delta is not eligible for adoption;
-* a Tier-2 depth cell without reached-depth evidence is reported UNSCOREABLE
-  rather than being read as a null (the confound the depth axis exists to
-  avoid).
+* a depth cell that does not out-reach its reference is BUDGET-STARVED and
+  excluded, rather than being read as a null (the confound the depth axis
+  exists to avoid). Requires `--campaign` to know each cell's reference; the
+  report records whether the rule was applied.
 
 Usage::
 
@@ -52,6 +53,11 @@ SCHEMA_VERSION = "pokezero.foulplay-power-report.v1"
 LATENCY_CAP_SECONDS = 20.0
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20260730
+# Section 8: "a rise above ~2% means FoulPlay is steering games into
+# world-construction gaps". Gates eligibility, per section 9 Phase 2 (ii).
+FALLBACK_LIMIT = 0.02
+# Section 8: ">= 400 pairs per cell (200 per seat)".
+MIN_PAIRS = 400
 
 
 def wilson(wins: float, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -174,6 +180,27 @@ def health_of(meta_entry: dict) -> dict:
     }
 
 
+def paired_improvement(candidate: dict, anchor: dict, rows: dict, raw_id: str):
+    """CI on (candidate - anchor) over the pairs all three arms share.
+
+    Section 9 Phase 2 (iii). Because every cell plays the SAME seeds against the
+    SAME raw arm, the raw arm cancels out of the improvement -- so this is a
+    far tighter estimate than differencing two independently-bootstrapped
+    deltas, and it is the quantity the plan actually gates adoption on.
+    """
+    from pokezero.mcts_eval.scoring import bootstrap_paired_delta
+
+    raw = rows.get(raw_id, {})
+    shared = sorted(set(candidate) & set(anchor) & set(raw))
+    if not shared:
+        return None
+    # (candidate - raw) - (anchor - raw) == candidate - anchor, but computed
+    # per pair so the bootstrap resamples PAIRS rather than arms.
+    return bootstrap_paired_delta(
+        [candidate[k] for k in shared], [anchor[k] for k in shared], _indices(len(shared))
+    )
+
+
 def score_cell(search: dict, raw: dict, indices) -> dict:
     """Paired delta over the pairs BOTH arms actually played."""
     from pokezero.mcts_eval.scoring import bootstrap_mean, bootstrap_paired_delta
@@ -237,12 +264,41 @@ def main(argv=None) -> int:
     ap.add_argument("--anchor", default=None,
                     help="config_id of the anchor cell (A); winners must beat it")
     ap.add_argument("--cap-seconds", type=float, default=LATENCY_CAP_SECONDS)
+    ap.add_argument("--min-pairs", type=int, default=MIN_PAIRS,
+                    help="section 8 minimum per cell (default %(default)s). Lower it "
+                         "only for a deliberately partial read, and say so in the write-up: "
+                         "the campaign's own acceptance criterion is the default.")
+    ap.add_argument("--campaign", default=None,
+                    help="campaign JSON; supplies each depth cell's reads_against "
+                         "reference so the section 5 non-starvation rule can be applied")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
     shards = load_shards(args.shards)
     fingerprint = assert_single_build(shards, args.expect_fingerprint)
     rows, meta = collect_rows(shards)
+
+    # config_id -> the config_id its depth evidence is read against. Empty
+    # without --campaign, in which case depth cells are scored WITHOUT the
+    # non-starvation rule and the report says so.
+    depth_reference: dict[str, str] = {}
+    if args.campaign:
+        campaign = json.loads(Path(args.campaign).read_text(encoding="utf-8"))
+        by_cell = {c["cell_id"]: c for c in campaign.get("cells", [])}
+
+        def cid_of(cell):
+            tag = Path(campaign["checkpoints"][cell["checkpoint"]]["path"]).stem
+            if cell["arm"] == "raw":
+                return f"raw@{tag}"
+            base = f"d{cell['depth']}-s{cell['sims']}-b{cell['batch']}-w{cell['worlds']}"
+            if cell.get("opponent_priors"):
+                base += "+opp-priors"
+            return f"{base}@{tag}"
+
+        for cell in campaign.get("cells", []):
+            ref = cell.get("reads_against")
+            if ref and ref in by_cell:
+                depth_reference[cid_of(cell)] = cid_of(by_cell[ref])
 
     raw_arms = {c: r for c, r in rows.items() if meta[c]["arm"] == "raw"}
     if not raw_arms:
@@ -269,6 +325,10 @@ def main(argv=None) -> int:
         scored["latency"] = latency_of(meta[cid])
         scored["health"] = health_of(meta[cid])
         scored["opponent_priors"] = meta[cid]["opponent_priors"]
+        if scored.get("pairs", 0) < args.min_pairs:
+            scored["min_pairs_shortfall"] = (
+                f"{scored.get('pairs', 0)} pairs < the required minimum of {args.min_pairs}"
+            )
 
         gate = scored["latency"]["search_wall_per_searched_decision_mean"]
         if gate is None:
@@ -282,24 +342,92 @@ def main(argv=None) -> int:
             scored["seat_health"] = flag
         cells[cid] = scored
 
-    eligible = {
-        c: v for c, v in cells.items()
-        if v.get("pairs") and str(v.get("cap", "")).startswith("PASS")
-        and "seat_health" not in v
-    }
+    # --- section 9 Phase 2 eligibility -------------------------------------
+    # (i) cap, (ii) seat AND fallback health, (iii) depth evidence where the
+    # campaign says a cell is a depth cell.
+    for cid, cell in cells.items():
+        reasons = []
+        if not cell.get("pairs"):
+            reasons.append("no shared pairs")
+        if not str(cell.get("cap", "")).startswith("PASS"):
+            reasons.append(cell.get("cap", "cap unknown"))
+        if "seat_health" in cell:
+            reasons.append("seat gap")
+        fb = (cell.get("health") or {}).get("fallback_rate")
+        if fb is not None and fb > FALLBACK_LIMIT:
+            reasons.append(f"fallback {fb:.1%} over {FALLBACK_LIMIT:.0%}")
+        if cell.get("min_pairs_shortfall"):
+            reasons.append(cell["min_pairs_shortfall"])
+        # Depth cells: a d6/d8 cell that did not out-reach its reference is
+        # BUDGET-STARVED, and its flat strength is void rather than a null.
+        # This is the confound section 5 exists to prevent, and it is why the
+        # reference is cell H and not the anchor.
+        ref = depth_reference.get(cid)
+        if ref:
+            mine = (cell.get("health") or {}).get("depth_reached_mean")
+            theirs = (cells.get(ref, {}).get("health") or {}).get("depth_reached_mean")
+            if mine is None:
+                reasons.append("UNSCOREABLE - depth cell with no depth_reached evidence")
+            elif theirs is None:
+                reasons.append(f"UNSCOREABLE - reference {ref} has no depth_reached evidence")
+            elif mine <= theirs:
+                reasons.append(
+                    f"BUDGET-STARVED - depth_reached_mean {mine:.2f} <= {ref}'s {theirs:.2f}; "
+                    "strength is void, not a null"
+                )
+        cell["ineligible_because"] = reasons
+
+    eligible = {c: v for c, v in cells.items() if not v["ineligible_because"]}
     ranked = sorted(eligible, key=lambda c: eligible[c]["paired_delta"]["point"], reverse=True)
+
     winner = None
-    if ranked and args.anchor and args.anchor in cells:
-        best = eligible[ranked[0]]
-        anchor = cells[args.anchor]
-        # Adoption rule (section 9 Phase 2): the winner must beat the ANCHOR's
-        # delta, not merely have the largest one.
-        if best["paired_delta"]["low"] > anchor.get("paired_delta", {}).get("point", 0.0):
-            winner = ranked[0]
+    adoption = None
+    if args.anchor is not None:
+        if args.anchor not in cells:
+            raise SystemExit(
+                f"--anchor {args.anchor!r} is not among the shards' config_ids "
+                f"({sorted(cells)}). Refusing to silently fall back to "
+                "largest-delta-wins: cell ids are checkpoint-qualified and a typo "
+                "would disable the adoption rule without a diagnostic."
+            )
+        if not cells[args.anchor].get("pairs"):
+            raise SystemExit(
+                f"anchor {args.anchor!r} has no scoreable pairs "
+                f"({cells[args.anchor].get('error')}); the adoption rule is undefined."
+            )
+    if ranked and args.anchor:
+        best_id = ranked[0]
+        if best_id == args.anchor:
+            winner, adoption = args.anchor, "anchor is already the best eligible cell"
         else:
-            winner = args.anchor
+            # THE section 9 Phase 2 (iii) test: a paired bootstrap CI on the
+            # IMPROVEMENT (candidate - anchor) excluding 0. Not
+            # candidate.low > anchor.point: every cell shares the seeds AND the
+            # raw arm, so the raw arm cancels in the improvement and it is far
+            # better estimated than either delta on its own. Comparing a CI
+            # against a point estimate throws that pairing away and can err in
+            # both directions.
+            imp = paired_improvement(rows[best_id], rows[args.anchor], rows,
+                                     cells[best_id]["raw_arm"])
+            if imp is None:
+                winner = args.anchor
+                adoption = f"{best_id} shares no pairs with the anchor; adopting the anchor"
+            else:
+                cells[best_id]["improvement_over_anchor"] = imp.to_payload()
+                if imp.low > 0.0:
+                    winner, adoption = best_id, (
+                        f"improvement over {args.anchor} is "
+                        f"{imp.point:+.3f} [{imp.low:+.3f}, {imp.high:+.3f}], excludes 0"
+                    )
+                else:
+                    winner, adoption = args.anchor, (
+                        f"{best_id} has the largest delta but its improvement over "
+                        f"{args.anchor} is {imp.point:+.3f} [{imp.low:+.3f}, {imp.high:+.3f}], "
+                        "which includes 0 -- adopting the anchor per section 9 Phase 2"
+                    )
     elif ranked:
         winner = ranked[0]
+        adoption = "no --anchor given; reporting the largest eligible delta only"
 
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -309,10 +437,16 @@ def main(argv=None) -> int:
         "cells": cells,
         "ranking_eligible": ranked,
         "winner": winner,
+        "adoption_rule": adoption,
+        "depth_rule_applied": bool(depth_reference),
+        "min_pairs": args.min_pairs,
         "winner_note": (
-            "Eligibility requires shared pairs, a passing cap, and no seat-gap flag. "
-            "A cell rejected by the cap is NOT a miss for its strength prediction -- "
-            "it is unscored."
+            "Eligibility requires shared pairs, >= the section 8 minimum, a passing "
+            "cap, seat and fallback health, and -- for depth cells, when --campaign "
+            "is given -- reached-depth clearing their reference. A cell excluded by "
+            "the cap or as budget-starved is NOT a miss for its strength prediction; "
+            "it is unscored. Adoption compares the paired IMPROVEMENT over the "
+            "anchor, not two independent deltas."
         ),
     }
     text = json.dumps(report, indent=2)

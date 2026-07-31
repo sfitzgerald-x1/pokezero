@@ -930,7 +930,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             root_fold.clone(),
                             root_turn,
                             leaf_ctx.root_self_order().to_vec(),
-                            leaf_ctx.root_opponent_order().to_vec(),
+                            leaf_ctx.root_opponent_order(),
                             leaf_ctx.root_meta().clone(),
                         ),
                         Some(key) => match fold_by_branch.get(&key) {
