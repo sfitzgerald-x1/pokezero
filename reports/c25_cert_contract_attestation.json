@@ -1,13 +1,13 @@
 {
   "schema_version": "pokezero.engine-cert-contract-attestation/v1",
-  "contract_source_commit": "228764ae154da160a53aa3100014bec9a1fed58c",
+  "contract_source_commit": "535bcd29f05a013102e348b98ae81bb48700ad6f",
   "contract_path": "reports/c15_resweep_spec.json",
-  "contract_sha256": "8e13da92bdf31d4ca2927287a78a58deb8fbbc5e0c2adf8106cf811c06642664",
-  "launch_source_commit": "2005dbe7cc679f4564a54cabaeeffbc77a9215ae",
+  "contract_sha256": "2403ac7b84a7eba93da379c2b6fd7c7dd06eaf9ff78d05a592435ec9eec5a5df",
+  "launch_source_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
   "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
   "registration": {
-    "pull_request": 983,
+    "pull_request": 985,
     "fresh_sweep2_measurements_inspected": 0,
-    "purpose": "Bind the pre-registered final contract to immutable tracked bytes while keeping its executable build source and image commit non-circular."
+    "purpose": "Bind the digest-verified, evidence-anchored final contract to immutable tracked bytes while keeping its executable build source and image commit non-circular."
   }
 }

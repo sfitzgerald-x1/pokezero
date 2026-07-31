@@ -13,7 +13,7 @@
 # can never drift (they did once — see that file's header). Per-patch rationale
 # lives there and in docs/engine_fidelity_findings.md.
 #
-# Requires: uv, rsync. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
+# Requires: uv, rsync, git. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
@@ -34,15 +34,7 @@ tar xzf "$ARCHIVE" -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-PATCH_LIST="$REPO/third_party/poke-engine-gen3-patches.txt"
-while IFS= read -r patch <&3; do
-  case "$patch" in ''|'#'*) continue ;; esac
-  if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
-    echo "ERROR: failed to apply $patch" >&2
-    exit 1
-  fi
-  echo "      $patch: applied"
-done 3< "$PATCH_LIST"
+"$PYTHON" "$REPO/scripts/apply_poke_engine_patches.py" "$SRC"
 
 # `patch` writes a <file>.orig backup whenever a hunk needs one, and those
 # backups are pre-patch copies of files we just changed. Left in place they ride
