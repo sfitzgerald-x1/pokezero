@@ -437,6 +437,7 @@ class EngineMctsStats:
     products_wall_seconds: float = 0.0
     row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
+    attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
@@ -486,6 +487,7 @@ class EngineMctsStats:
             "products_wall_seconds": self.products_wall_seconds,
             "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
+            "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
@@ -1203,6 +1205,12 @@ class EngineMctsPolicy:
                     if early_stop_min_sims and isinstance(error, TypeError)
                     else detail
                 )
+                # Unsafe renderer branches abort the native world before a
+                # chance outcome can be silently omitted from its expectation.
+                # The native report is unavailable on that error path, so
+                # retain the same observability counter at the fallback seam.
+                if "attribution-unsafe renderer branch rejected before" in reason:
+                    self.stats.attribution_unsafe_renders += 1
                 self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -1238,6 +1246,9 @@ class EngineMctsPolicy:
             self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
             self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.attribution_unsafe_renders += int(
+                report.get("attribution_unsafe_renders") or 0
+            )
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report
 

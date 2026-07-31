@@ -515,18 +515,16 @@ NUMERIC_MEANLOOK_TRAP = V3_LEGACY_NUMERIC_BASE + 10
 # above the v2.2 census — legacy modes stay byte-frozen; the v2.2 pending bits 56/57 are unchanged.
 NUMERIC_SELF_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 11
 NUMERIC_OPP_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 12
-# Change 10 — confusion self-hit damage-attribution correction, one 0/1 bit on the OPPONENT's
-# turn-merged move sub-block (the token whose damage was polluted), schema >= v3 only. When a
+# Change 10 — confusion self-hit marker, one 0/1 bit on the OPPONENT's
+# turn-merged move sub-block, schema >= v3 only. When a
 # SLOWER confused mon self-hits, the sim emits ``|-activate|SLOT|confusion`` then an UNTAGGED
-# ``|-damage|SLOT|…`` with no |move|/|cant| line; the fold folds that self-damage into the
-# opponent's still-open move window's ``damage_fraction`` (correct for the v2.2 field, which is
-# left FROZEN). Under v3 the encode writes the move's damage-fraction column as
-# ``damage_fraction - confusion_selfhit_fraction`` (the move's own damage, self-hit removed) and
-# sets this bit = "the defender self-hit from confusion after this move." A single column (not a
+# ``|-damage|SLOT|…`` with no |move|/|cant| line; the fold keeps that self-damage separate
+# from the opponent's still-open move window's damage and KO attribution. V3 sets this bit =
+# "the defender self-hit from confusion after this move." A single column (not a
 # first/second pair like the fail bit) because the correction always rides the FIRST sub-block in
 # practice — the confused mon must be SLOWER, so the opponent moved first; the write is mirrored
-# onto the second sub-block defensively. Additive/schema-agnostic at extraction (the token fields
-# are always populated); only a v3 encode reads them, so v2/v2.1/v2.2 output stays byte-identical.
+# onto the second sub-block defensively. Attribution is corrected schema-agnostically at
+# extraction; only V3 emits the additional marker.
 NUMERIC_TT_CONFUSION_SELFHIT = V3_LEGACY_NUMERIC_BASE + 13
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
 # encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
@@ -1032,6 +1030,11 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
+    # Public parser chronology needed across snapshots taken after ``|upkeep|`` but before a
+    # forced replacement and the following ``|turn|``. A replacement entered after that
+    # residual, so its next turn-boundary flip must be skipped.
+    post_upkeep_window: bool = False
+    truant_skip_next_flip: tuple[str, ...] = ()
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1386,6 +1389,10 @@ class _ReplayParser:
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
         }
+        parser._post_upkeep_window = bool(snapshot.post_upkeep_window)
+        parser._truant_skip_next_flip = {
+            slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
+        }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
         }
@@ -1449,45 +1456,13 @@ class _ReplayParser:
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
-                # gen3 Truant phase for the INCOMING mon. Truant's `onSwitchIn` runs only for
-                # a mon that already has the ability, and sets
-                # `truantTurn = this.turn !== 0` -- so a mid-battle switch-in starts on the
-                # LOAF side of the toggle and a turn-0 lead on the ACT side. Both then take
-                # one `onResidual` flip before their first move opportunity, which is why both
-                # end up ACTING on it. Seeded here rather than inferred from later behaviour
-                # because the switch line is the event the sim itself keys on.
-                #
-                # Species is sufficient and unambiguous: `slakoth` and `slaking` are the only
-                # gen3 Truant lines and both are MONO-ability, so no reveal is needed. A mon
-                # that acquires Truant later by Trace is handled at the `-ability` line, not
-                # here -- at ITS switch-in it did not have the ability, so Truant's onSwitchIn
-                # never ran for it and its `truantTurn` is still the `false` that
-                # `sim/pokemon.ts` resets on entry.
-                # gen3 seeds the phase at switch-in: `truantTurn = this.turn !== 0`. Both a
-                # turn-0 lead (False) and a mid-battle switch-in (True) then take exactly one
-                # `onResidual` flip before their first move opportunity, which is why both end
-                # up ACTING on it -- the `turn !== 0` term is that compensation.
-                #
-                # Reproducing it in a replay needs the flip to land on the same side of the
-                # residual boundary, and the per-`|turn|` flip below is skipped for turn 1
-                # because there is no end-of-turn-0 residual to mirror. Getting that wrong
-                # inverted the lead's parity and produced divergences at the first boundary.
-                #
-                # Species is decisive: `slakoth` and `slaking` are the only gen3 Truant lines
-                # and both are mono-ability. A mon that acquires Truant later by Trace is
-                # seeded at its `-ability` line instead.
-                #
-                # Deriving it was tried and withdrawn. gen3 seeds `truantTurn = this.turn != 0`
-                # at switch-in, which is correct for the sim but depends, in a REPLAY, on the
-                # flip landing on the right side of the residual boundary. It did not for a
-                # turn-0 lead -- there is no "end of turn 0" residual to flip -- and the
-                # resulting inverted parity produced divergences at the very first boundary,
-                # trading rows rather than fixing them.
-                #
-                # Unknown is the honest state and it is not a loss: per the same gen3 rule
-                # BOTH a lead and a mid-battle switch-in act on their first move opportunity,
-                # which is what the downstream proxy already assumes. The phase becomes known
-                # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
+                # Native Slakoth and Slaking are mono-ability, so species proves that Truant's
+                # switch-in hook ran and `truantTurn = this.turn !== 0` is an honest seed. A
+                # post-upkeep forced replacement missed the residual that just ran, so its
+                # first following `|turn|` must not flip the bit again. Trace acquisition is
+                # different: retained current-source cases prove that identical public line
+                # placement can produce opposite first phases, so the `-ability` handler leaves
+                # traced Truant UNKNOWN until a public move or Truant `cant` anchors it.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
                     if self._post_upkeep_window:
@@ -1994,29 +1969,18 @@ class _ReplayParser:
             normalized = _normalize_identifier(copied)
             self.traced_ability[slot] = normalized
             if normalized == "truant":
-                # Traced Truant is deliberately NOT given a derived starting parity, even
-                # though the parity is derivable and was probed. Sim-verified behaviour:
+                # Do not derive a boolean phase from the Trace line. Current-source probes show
+                # that publicly similar pre-upkeep acquisitions can start on opposite phases:
+                # a one-sided action switch (3400443/2) loafs next turn, while a simultaneous
+                # Porygon2/Slaking switch (2200291/41) acts. Event-queue membership, not just
+                # line position, decides whether copied Truant receives that residual.
                 #
-                #   lead (turn 0) acquisition  -> ACTS on its first move turn
-                #   mid-battle acquisition     -> LOAFS on its first move turn
-                #   re-entry re-traces         -> fresh acquisition, parity resets
-                #
-                # which composes from patch 32 (a copied ability's Start event does not fire,
-                # so Truant's `onSwitchIn` never runs for a tracer), `sim/pokemon.ts` leaving
-                # `truantTurn` false on entry, and `onResidual` flipping every turn end.
-                #
-                # Seeding `false` here and counting `|turn|` flips reproduces that in the
-                # common case and MISSES when the acquisition switch-in is a mid-turn
-                # replacement after a faint: there is no `|turn|` boundary between the
-                # acquisition and the next move, so the flip count is short by one and the
-                # parity inverts for the rest of the stint. Measured: it cost one new
-                # divergence (2200291/41) while fixing three.
-                #
-                # The anchors below establish the traced parity from the sim's own published
-                # behaviour instead, which is exact and needs no flip accounting. Marking the
-                # holder is all that is required here.
-                if self.truant_phase.get(slot) is None:
-                    pass  # phase stays UNKNOWN until the first anchor; see _anchor_truant_phase
+                # Preserve only the public holder fact. The first own move or Truant ``cant``
+                # line anchors the phase exactly, after which normal public turn flips apply.
+                # This is the measured Z13.3 withdrawal: seeding here fixed selected rows but
+                # created 2200291/41, while leaving it unknown created no new identity.
+                self.truant_phase[slot] = None
+                self._truant_skip_next_flip.discard(slot)
             elif self.truant_phase.get(slot) is not None:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
@@ -2347,6 +2311,8 @@ class _ReplayParser:
             live_type_override=dict(self.live_type_override),
             traced_ability=dict(self.traced_ability),
             truant_phase=dict(self.truant_phase),
+            post_upkeep_window=self._post_upkeep_window,
+            truant_skip_next_flip=tuple(sorted(self._truant_skip_next_flip)),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
@@ -4863,8 +4829,14 @@ def _encode_transition_tokens(
         if token.weather:
             _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        if token.damage_fraction:
-            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, token.damage_fraction))
+        # Internal transition semantics exclude confusion self-damage. This
+        # writer serves only frozen V2/V2.1, so reconstruct their historical
+        # aggregate at the schema boundary.
+        legacy_damage = token.damage_fraction
+        if token.confusion_selfhit:
+            legacy_damage += token.confusion_selfhit_fraction
+        if legacy_damage:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, legacy_damage))
         if token.kind == _TT_KIND_MOVE:
             # n_hits is a move-token field; switch/cant rows keep 0.0 (not a constant 1/5).
             _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
@@ -4952,12 +4924,11 @@ def _encode_turn_merged_transition_tokens(
         if first.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_FIRST_BP, f"species:{first.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        # Spec v3 change 10: under v3 subtract a folded-in confusion self-hit back out of the
-        # move's damage; under v2.2 first_damage IS first.damage_fraction (the frozen field),
-        # so the write is byte-identical.
+        # Internal transition semantics are corrected. Reconstruct the frozen
+        # V2.2 aggregate only when dispatching the legacy merged layout.
         first_damage = first.damage_fraction
-        if schema_v3 and first.confusion_selfhit:
-            first_damage = max(0.0, first_damage - first.confusion_selfhit_fraction)
+        if not schema_v3 and first.confusion_selfhit:
+            first_damage += first.confusion_selfhit_fraction
         if first_damage:
             _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first_damage))
         if first.kind == _TT_KIND_MOVE:
@@ -4995,8 +4966,8 @@ def _encode_turn_merged_transition_tokens(
         # projected into v3's grouped history region after encoding.
         if schema_v3 and first.fail:
             _set_numeric(num_row, NUMERIC_TT_FAIL, 1.0)
-        # Spec v3 change 10: the confusion self-hit flag on the (opponent's) move sub-block
-        # whose damage was just corrected above.
+        # Spec v3 change 10: the confusion self-hit flag on the preceding
+        # opponent move sub-block.
         if schema_v3 and first.confusion_selfhit:
             _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 
@@ -5025,11 +4996,10 @@ def _encode_turn_merged_transition_tokens(
         if second.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_SECOND_BP, f"tt2_species:{second.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_TM2_PRESENT, 1.0)
-        # Spec v3 change 10 (second-mover mirror; the confused mon is normally SLOWER so this
-        # rarely fires, but the correction is symmetric). v2.2 uses the frozen field.
+        # Symmetric legacy reconstruction for the second action sub-block.
         second_damage = second.damage_fraction
-        if schema_v3 and second.confusion_selfhit:
-            second_damage = max(0.0, second_damage - second.confusion_selfhit_fraction)
+        if not schema_v3 and second.confusion_selfhit:
+            second_damage += second.confusion_selfhit_fraction
         if second_damage:
             _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second_damage))
         if second.kind == _TT_KIND_MOVE:
@@ -5057,7 +5027,7 @@ def _encode_turn_merged_transition_tokens(
         if schema_v3 and second.fail:
             _set_numeric(num_row, NUMERIC_TM2_FAIL, 1.0)
         # Spec v3 change 10: the confusion self-hit flag rides the same single column as the
-        # first sub-block (one per-turn bit; the corrected damage is TM2's above).
+        # first sub-block (one per-turn bit).
         if schema_v3 and second.confusion_selfhit:
             _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 

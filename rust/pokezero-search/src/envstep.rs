@@ -32,7 +32,9 @@ use poke_engine::engine::generate_instructions::generate_instructions_from_move_
 use poke_engine::engine::state::MoveChoice;
 use poke_engine::state::{Side, SideReference, State};
 
-use crate::events::{move_choice_from_str, render_branch_events, EventContext};
+use crate::events::{
+    move_choice_from_str, reject_attribution_unsafe, render_branch_events, EventContext,
+};
 use crate::{move_display, parse_state, sample_branch_index};
 
 /// Parse an option display back into a [`MoveChoice`].
@@ -57,8 +59,8 @@ fn env_move_choice(name: &str, state: &State, side: SideReference) -> PyResult<M
 /// Render one seat's option surface, tagging the "this seat is not acting"
 /// shape the engine encodes as a lone [`MoveChoice::None`].
 fn options_payload(side: &Side, options: &[MoveChoice]) -> (Vec<String>, bool) {
-    let requested = !(options.is_empty()
-        || (options.len() == 1 && matches!(options[0], MoveChoice::None)));
+    let requested =
+        !(options.is_empty() || (options.len() == 1 && matches!(options[0], MoveChoice::None)));
     let displays = options.iter().map(|c| move_display(side, c)).collect();
     (displays, requested)
 }
@@ -118,7 +120,8 @@ pub fn env_battle_over(state_str: &str) -> PyResult<f32> {
 ///
 /// Returns JSON:
 /// `{"post_state", "events": [line...], "turn_completed": bool,
-///   "lossy": [slug...], "percentage": f32, "branch_index": i64,
+///   "lossy": [slug...], "attribution_unsafe": bool,
+///   "attribution_unsafe_reasons": [slug...], "percentage": f32, "branch_index": i64,
 ///   "branch_count": usize, "battle_over": f32}`.
 ///
 /// `ctx_json` is the [`EventContext`] shape:
@@ -156,6 +159,8 @@ pub fn env_step(
             "events": ["|"],
             "turn_completed": false,
             "lossy": ["empty_instruction_list"],
+            "attribution_unsafe": false,
+            "attribution_unsafe_reasons": [],
             "percentage": 100.0,
             "branch_index": -1,
             "branch_count": 0,
@@ -179,13 +184,20 @@ pub fn env_step(
         branch_on_damage,
         &ctx,
     );
+    // Do not apply an exact engine endpoint while handing the caller an event
+    // stream that cannot prove its action owner. The caller can retain its
+    // current fold/state and choose its established fallback/error handling.
+    reject_attribution_unsafe(&rendered, "env_step")?;
     state.apply_instructions(&branch.instruction_list);
+    let attribution_unsafe = rendered.is_attribution_unsafe();
 
     let report = serde_json::json!({
         "post_state": state.serialize(),
         "events": rendered.lines,
         "turn_completed": rendered.turn_completed,
         "lossy": rendered.lossy,
+        "attribution_unsafe": attribution_unsafe,
+        "attribution_unsafe_reasons": rendered.attribution_unsafe,
         "percentage": branch.percentage,
         "branch_index": index as i64,
         "branch_count": branches.len(),
@@ -212,6 +224,32 @@ mod tests {
 
     fn fixture() -> String {
         MINIMAL.trim().to_string()
+    }
+
+    fn attribution_unsafe_fixture() -> String {
+        use poke_engine::choices::Choices;
+        use poke_engine::engine::state::PokemonVolatileStatus;
+        use poke_engine::state::PokemonMoveIndex;
+
+        // Confusion's 40-power hit and High Jump Kick's crash are both 50 HP
+        // here, so the engine merges an action-attribution-ambiguous branch.
+        let mut state = parse_state(&fixture()).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state.side_two.get_active().speed = 1;
+        state.side_two.get_active().attack = 143;
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::HIGHJUMPKICK);
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::CONFUSION);
+        state.serialize()
     }
 
     /// The minimal fixture is a 1-v-1, so it can never produce a switch
@@ -366,5 +404,22 @@ mod tests {
     fn malformed_state_is_a_value_error_not_a_panic() {
         assert!(env_options("definitely not a state", true).is_err());
         assert!(env_battle_over("definitely not a state").is_err());
+    }
+
+    #[test]
+    fn unsafe_renderer_branch_is_rejected_before_env_post_state() {
+        Python::initialize();
+        let state = attribution_unsafe_fixture();
+        let error = (0..128u64)
+            .find_map(|seed| {
+                env_step(&state, "splash", "highjumpkick", &ctx_json(), seed, false)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .expect("at least one seed must sample the known ambiguous branch");
+        assert!(
+            error.contains("attribution-unsafe renderer branch rejected before env_step"),
+            "{error}"
+        );
     }
 }

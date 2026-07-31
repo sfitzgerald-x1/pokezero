@@ -2128,10 +2128,9 @@ def _public_materialization_payload(
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
             # gen3 Truant loaf parity for the active mon: True = loafs on its next move
-            # attempt, False = acts, absent = no holder OR the phase is genuinely unknown
-            # (a truncated prefix whose switch-in was never observed). The world must keep
-            # those last two apart -- "no volatile" and "we don't know" produce the same
-            # engine behaviour but only one of them is a claim.
+            # attempt, False = acts, None = no holder OR a genuinely unknown phase. Unknown
+            # includes a truncated prefix and a full-prefix Trace acquisition whose residual
+            # event-queue membership cannot be recovered from public line order.
             #
             # This replaces a "moved last round -> loafs now" proxy computed downstream. The
             # sim's bit is a free-running toggle flipped at EVERY residual regardless of what

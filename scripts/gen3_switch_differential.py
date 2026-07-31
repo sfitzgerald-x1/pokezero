@@ -22,6 +22,9 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   partialtrap   : the TRAPPER switches out -> the victim stops taking partial-trap
                   damage (``partiallytrapped.onResidual`` frees it once the source
                   is no longer active); the no-switch control keeps taking it.
+  partialtrapsubstitute : a trapped victim successfully uses Substitute -> the
+                  existing partial trap ends before residuals; the failed-cost
+                  and ordinary-turn controls are pinned natively.
   spikesNlayer(s) : a 461 max HP Snorlax switching into 1/2/3 layers of Spikes
                   lands on exactly 404/385/346 — 1/8, 1/6 and 1/4 of max HP,
                   floored. ``spikesminimum`` is the other end of the same
@@ -342,6 +345,11 @@ def _ninetales():  # partial-trap setter
 def _blissey():  # trap/seed victim
     return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
                           moves=("Splash", "Soft-Boiled"))
+
+
+def _blissey_substitute():  # partial-trap victim that can establish a Substitute
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Substitute", "Splash"))
 
 
 def _spikes_skarmory():  # hazard setter with an inert filler move
@@ -818,6 +826,23 @@ def _index_of(lines, prefix: str):
     return None
 
 
+def _ordered(lines, earlier: str, later: str) -> bool:
+    """Whether two protocol entries both exist and retain their emission order."""
+
+    earlier_index = _index_of(lines, earlier)
+    later_index = _index_of(lines, later)
+    return earlier_index is not None and later_index is not None and earlier_index < later_index
+
+
+def _condition_after(lines, prefix: str, source: str):
+    """The HP condition on the sourced protocol line, or ``None`` if absent."""
+
+    for line in lines:
+        if line.startswith(prefix) and source in line:
+            return line.split("|")[3]
+    return None
+
+
 # --- scenario specs ---------------------------------------------------------
 # `expect` maps fact-name -> ground truth. `setup_step`/`setup_landed` gate the
 # scenarios whose setup move can miss.
@@ -915,6 +940,34 @@ def _spec(name):
             facts=lambda L: {"victim_ticked": _residual_from(L, "Fire Spin", "p2a")},
             expect={"victim_ticked": True},
             landmark=lambda L: True, landmark_desc="")
+    if name == "partialtrapsubstitute":
+        # A successful Substitute explicitly ends the existing partial trap
+        # before the residual phase. The setup remains accuracy-gated, so only
+        # landed Fire Spin seeds assert the measured boundary.
+        return dict(
+            p1=[_ninetales()], p2=[_blissey_substitute()],
+            turns=[("move firespin", "move splash"), ("move splash", "move substitute")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-activate|") and _has(L, "move: Fire Spin")
+                                   and not _has(L, "[miss]"),
+            facts=lambda L: {
+                "substitute_started": _has(L, "|-start|p2a: Blissey|Substitute"),
+                "victim_ticked": _residual_from(L, "Fire Spin", "p2a"),
+                "silent_trap_release": _has(
+                    L,
+                    "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]|[silent]",
+                ),
+            },
+            expect={
+                "substitute_started": True,
+                "victim_ticked": False,
+                "silent_trap_release": True,
+            },
+            landmark=lambda L: _has(
+                L,
+                "|-end|p2a: Blissey|Fire Spin|[partiallytrapped]|[silent]",
+            ),
+            landmark_desc="Substitute silently ended the active partial trap")
     if name in ("spikes1layer", "spikes2layers", "spikes3layers"):
         # p1 Skarmory stacks `layers` of Spikes on p2's side, then p2 sends in a
         # 461 max HP Snorlax. Showdown's gen4 Spikes condition (which gen3
@@ -2142,6 +2195,43 @@ def _spec(name):
                     else {"rest_failed": False, "slept": True, "toxic_landed": False}),
             landmark=lambda L: _has(L, "|move|p1a: Xatu|Rest"),
             landmark_desc="Rest was used")
+    if name == "restresidualtail":
+        # Independent Showdown oracle for the native Rest residual-composition
+        # controls. Aipom is poisoned on the setup turn, then its fixed 100 HP
+        # Seismic Toss leaves Snorlax at 361/461 and Rest heals it to full. On
+        # the same measured turn Aipom's 251 max HP gives Leftovers 15, followed
+        # by stage-two Toxic 30: 236 -> 251 -> 221. Gen 3 orders the same
+        # Pokemon's item at residual 10.4 before status damage at 10.6.
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                               moves=("Seismic Toss", "Splash"))
+        snorlax = FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                                 moves=("Toxic", "Rest", "Splash"))
+        rest_heal = "|-heal|p2a: Snorlax|461/461 slp|[silent]"
+        return dict(
+            p1=[aipom], p2=[snorlax],
+            turns=[("move splash", "move toxic"),
+                   ("move seismictoss", "move rest")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p1a: Aipom|tox"),
+            facts=lambda L: {
+                "damage_precedes_rest": _ordered(
+                    L, "|-damage|p2a: Snorlax|361/461", rest_heal
+                ),
+                "restored_to_full": _has(L, rest_heal),
+                "sequence": _residual_sequence(L),
+                "tail_conditions": [
+                    _condition_after(L, "|-heal|p1a: Aipom", "[from] item: Leftovers"),
+                    _condition_after(L, "|-damage|p1a: Aipom", "[from] psn"),
+                ],
+            },
+            expect={
+                "damage_precedes_rest": True,
+                "restored_to_full": True,
+                "sequence": [("p1a", "item: Leftovers"), ("p1a", "psn")],
+                "tail_conditions": ["251/251 tox", "221/251 tox"],
+            },
+            landmark=lambda L: _has(L, rest_heal),
+            landmark_desc="Seismic Toss damaged and Rest fully healed Snorlax")
     # --- Pain Split clamps to each mon's own maxhp ---------------------------
     if name in ("painsplitclamp", "painsplitcontrol"):
         # `painsplit.onHit` averages the two HP values and assigns each through
@@ -2176,6 +2266,7 @@ def _spec(name):
 
 SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol",
+             "partialtrapsubstitute",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
@@ -2211,7 +2302,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "residualspeedpara", "residualspeedparacontrol",
              "residualspeedtie", "residualspeedsand", "residualspeedleech",
              "residualsuborder", "residualberrybeforestatus",
-             "restfullhp", "restdamagedcontrol",
+             "restfullhp", "restdamagedcontrol", "restresidualtail",
              "painsplitclamp", "painsplitcontrol")
 
 
