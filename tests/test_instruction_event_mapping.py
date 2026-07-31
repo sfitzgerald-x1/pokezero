@@ -294,6 +294,20 @@ class BranchEventsTest(unittest.TestCase):
         self.assertEqual(recoil["lossy"], [], recoil)
         self.assertFalse(any("confusion" in line for line in recoil["events"]), recoil)
 
+    def test_ordinary_opponent_damage_is_not_confusion(self) -> None:
+        report = json.loads(
+            pokezero_search.branch_events(
+                _build_state(("splash",), ("tackle",)), "splash", "tackle", CTX, True, False
+            )
+        )
+        hit = next(
+            branch
+            for branch in report["branches"]
+            if any(line.startswith("|-damage|p1a: Rattata|") for line in branch["events"])
+        )
+        self.assertEqual(hit["lossy"], [], hit)
+        self.assertFalse(any("confusion" in line for line in hit["events"]), hit)
+
     def test_ambiguous_sleep_talk_call_is_flagged_lossy(self) -> None:
         # An asleep Sleep Talker whose callable moves ALL produce an empty
         # delta (splash, and roar against a reserve-less side): the called
