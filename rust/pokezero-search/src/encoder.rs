@@ -2571,8 +2571,11 @@ fn write_sub_block_numerics(
     columns: SubBlockColumns,
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    let damage_fraction = if layout.is_v3() && sub.confusion_selfhit {
-        (sub.damage_fraction - sub.confusion_selfhit_fraction).max(0.0)
+    // The fold keeps confusion self-damage separate from move damage for
+    // every schema. Reconstruct only the frozen V2.2 aggregate; V3 consumes
+    // the corrected semantic value and additionally exposes the presence bit.
+    let damage_fraction = if !layout.is_v3() && sub.confusion_selfhit {
+        sub.damage_fraction + sub.confusion_selfhit_fraction
     } else {
         sub.damage_fraction
     };

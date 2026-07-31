@@ -42,8 +42,8 @@ use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::tree::{
-    apply_self_priors, finalize, multiply_report_json, traverse, BranchSeam, LeafPrice,
-    root_visit_lock, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
+    apply_self_priors, finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam,
+    LeafPrice, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -659,7 +659,11 @@ fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f
 /// with the node's own arm order.
 fn self_options_at(state: &State, self_side_one: bool) -> Vec<MoveChoice> {
     let (s1_options, s2_options) = state.get_all_options();
-    let mut options = if self_side_one { s1_options } else { s2_options };
+    let mut options = if self_side_one {
+        s1_options
+    } else {
+        s2_options
+    };
     if options.is_empty() {
         options.push(MoveChoice::None);
     }
@@ -749,6 +753,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
+    let mut attribution_unsafe_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
     let root_turn = event_ctx.turn;
@@ -892,6 +897,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if !rendered.lossy.is_empty() {
                         lossy_renders += 1;
                     }
+                    if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
+                        attribution_unsafe_renders += 1;
+                        leaf_error = Some(error);
+                        return LeafPrice::Ready(0.5);
+                    }
                     let advance_started = Instant::now();
                     let advance_result = fold.advance_in_place(&rendered.lines);
                     fold_advance_nanos += advance_started.elapsed().as_nanos();
@@ -948,11 +958,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
-                                Ok(map) => pending_maps.push((
-                                    (seam.chance, seam.branch_index),
-                                    row,
-                                    map,
-                                )),
+                                Ok(map) => {
+                                    pending_maps.push(((seam.chance, seam.branch_index), row, map))
+                                }
                                 Err(error) => {
                                     leaf_error = Some(error);
                                     return LeafPrice::Ready(0.5);
@@ -1050,10 +1058,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         tree_nanos += finalize_started.elapsed().as_nanos();
         completed += traversals.len();
         rounds += 1;
-        if early_stop_min_sims > 0
-            && completed >= early_stop_min_sims
-            && completed < iterations
-        {
+        if early_stop_min_sims > 0 && completed >= early_stop_min_sims && completed < iterations {
             let remaining = iterations - completed;
             if let Some((locked, leader, runner_up)) =
                 root_visit_lock(&tree, early_stop_side_one, remaining)
@@ -1093,7 +1098,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
-         \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
+         \"lossy_renders\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
          \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
@@ -1103,6 +1108,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         rounds,
         model_evals,
         lossy_renders,
+        attribution_unsafe_renders,
         fold_by_branch.len(),
         model_priors,
         prior_branches,
@@ -1502,14 +1508,10 @@ impl NativeLeafModel {
             ));
         }
         let root_state = parse_state(state_str)?;
-        let leaf_ctx = crate::leaf::LeafContext::new(
-            tables_json,
-            root_inputs_json,
-            ctx_json,
-            &root_state,
-        )?;
-        let event_ctx = crate::events::EventContext::from_json(ctx_json)
-            .map_err(PyValueError::new_err)?;
+        let leaf_ctx =
+            crate::leaf::LeafContext::new(tables_json, root_inputs_json, ctx_json, &root_state)?;
+        let event_ctx =
+            crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
         py.detach(|| {

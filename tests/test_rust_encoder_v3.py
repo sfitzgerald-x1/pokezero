@@ -207,12 +207,71 @@ class RustEncoderV3ParityTest(unittest.TestCase):
                 name,
             )
 
-        # The real protocol places the confusion correction on the first mover in
-        # practice. Exercise the mirrored second-sub-block encoder defensively by
-        # round-tripping a valid fold payload with that additive marker moved there.
+        # The fold product is schema-agnostic and therefore carries corrected
+        # move damage. V3 writes it directly; the native V2.2 dispatch must add
+        # the separate self-hit fraction back and remain byte-exact with Python.
+        selfhit_token = next(
+            token for token in products.transition_tokens if token.confusion_selfhit
+        )
+        self.assertAlmostEqual(selfhit_token.damage_fraction, 0.30)
+        self.assertAlmostEqual(selfhit_token.confusion_selfhit_fraction, 0.10)
+        selfhit_row = TRANSITION_TOKEN_OFFSET + 1
+        v3_damage_column = numeric_columns["NUMERIC_TT_DAMAGE_FRACTION"]
+        self.assertAlmostEqual(
+            want["numeric_features"][selfhit_row, v3_damage_column], 0.30
+        )
+
+        legacy_header = copy.deepcopy(self.corpus.header)
+        legacy_inputs = copy.deepcopy(inputs)
+        legacy_inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V2_2
+        legacy_spec, legacy_masks = self.backends.observation_contract_from_header(
+            legacy_header
+        )
+        legacy_observation = observation_from_player_state(
+            state,
+            category_vocab=reference._vocab,
+            spec=legacy_spec,
+            dex=reference._dex,
+            feature_masks=legacy_masks,
+        )
+        legacy_want = self.backends.arrays_dict_from_observation_arrays(
+            self.backends.GoldenObservationArrays.from_observation(legacy_observation)
+        )
+        legacy_tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
+        legacy_tables_json = json.dumps(
+            legacy_tables,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        legacy_rust = self.backends.RustFoldBackend(
+            tables_json=legacy_tables_json,
+            header=legacy_header,
+        )
+        legacy_got = legacy_rust.encode_with_fold(legacy_inputs, fold.to_payload())
+        legacy_damage_column = legacy_tables["layout"]["numeric_columns"][
+            "NUMERIC_TT_DAMAGE_FRACTION"
+        ]
+        self.assertAlmostEqual(
+            legacy_want["numeric_features"][selfhit_row, legacy_damage_column],
+            0.40,
+        )
+        for name in self.backends.ARRAY_NAMES:
+            self.assertEqual(
+                numpy.ascontiguousarray(legacy_got[name]).tobytes(),
+                numpy.ascontiguousarray(legacy_want[name]).tobytes(),
+                f"v2.2 confusion compatibility {name}",
+            )
+
+        # The real protocol places the confusion marker on the first mover in
+        # practice. Exercise the mirrored second-sub-block encoder defensively
+        # with a semantic self-hit-only payload.
         second_payload = copy.deepcopy(fold.to_payload())
         second = second_payload["merged_done"][2]["token"]["second"]
-        second["damage_fraction"] = 0.1
+        second["damage_fraction"] = 0.0
         second["confusion_selfhit"] = True
         second["confusion_selfhit_fraction"] = 0.1
         second_fold = FoldState.from_payload(second_payload)
