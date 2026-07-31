@@ -98,3 +98,20 @@ percentage opponent HP. The read-only sidecar strips requests and may reconnect
 mid-battle, so it cannot prove either fact and deliberately keeps Toxic stage
 unknown until public reset/status chronology establishes it; the sidecar does
 not construct engine worlds from that value.
+
+## Review amendment
+
+Independent review found that the preceding prediction overstated the engine
+behavior: the vendored Gen 3 engine used `toxic_count + 1` without a cap. Thus
+materializing the raw parser saturation sentinel `16` as counter `15` produced
+an illegal stage-16 residual. The repaired seam caps engine residual damage at
+stage 15 and saturates the stored pre-tick counter at 14. Materialization now
+maps ordinary raw `16` and post-upkeep stage `15` to counter `14`; inputs above
+the parser representation fail closed. The correction is proven by advancing
+two residual blocks at 640 max HP, each dealing exactly 600 (15/16), never 640.
+
+Production leaf rendering does not invent `-status` or cure protocol lines for
+these lifecycle paths. It supplies an internal ordered active-status transition
+to `LeafMeta`, so Rest, Refresh, and Heal Bell clear stale Toxic metadata while
+their externally rendered protocol remains faithful. Clean switch and drag
+entries clear both the stage and active provenance before re-entry derivation.

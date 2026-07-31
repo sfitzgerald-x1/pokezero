@@ -2243,7 +2243,7 @@ def _public_materialization_payload(
 
 
 def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
-    """Return the public Toxic counter in the simulator's current-stage convention.
+    """Return the engine's pre-tick Toxic counter for the next residual.
 
     ``None`` is intentional: a snapshot that lacks the public provenance for
     an active Toxic counter is not allowed to silently materialize as stage 0.
@@ -2256,19 +2256,24 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
         active is not None
         and "tox" in str(active.condition or "").split()
     )
+    if not active_is_toxic:
+        return 0
     known = replay.toxic_stage_known.get(player)
     if not bool(known):
-        return None if active_is_toxic else 0
+        return None
     tracked_stage = int(replay.toxic_stage.get(player, 0))
+    if not 1 <= tracked_stage <= 16:
+        return None
     if replay.post_upkeep_window:
-        # Residuals have run but the next |turn| line has not. The raw public stage is therefore
-        # the just-applied multiplier. Clamp the internal saturation sentinel back to
-        # Showdown's valid stage-15 maximum.
-        return min(15, max(0, tracked_stage))
+        # Residuals have run but the next |turn| line has not. The raw public stage is the
+        # multiplier just paid, which is the counter needed for the NEXT tick. The engine's
+        # counter is pre-tick and must stay at 14 once Showdown's stage has saturated at 15.
+        return min(14, max(0, tracked_stage))
     # At an ordinary action request, |turn| has advanced the public feature to the multiplier
     # that will be charged at the next residual; the simulator still holds the prior count.
     # Sentinel 16 distinguishes an already-saturated current stage from raw 15's current 14.
-    return min(15, max(0, tracked_stage - 1))
+    # Both produce pre-tick counter 14: the vendored engine computes stage = counter + 1.
+    return min(14, max(0, tracked_stage - 1))
 
 
 def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:

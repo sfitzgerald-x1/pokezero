@@ -6529,3 +6529,20 @@ scenario, the 316-HP real capture with Leftovers-before-Toxic ordering,
 repeated ticks, switch/drag, Baton Pass, Rest/status replacement, Natural Cure,
 failed/reapplied Toxic, faint, and resume. This is a parser/world construction
 correction, not an engine defect.
+
+## Z17.1 Independent-review amendment: saturation and production rendering
+
+The original repair incorrectly assumed the engine capped `toxic_count + 1`.
+It did not: a parser raw saturation sentinel of 16 became engine counter 15,
+then produced an illegal stage-16 residual. The engine now caps the residual
+stage at 15 and stores at most pre-tick counter 14. The construction bridge
+therefore maps ordinary raw 16 and post-upkeep stage 15 to 14, while rejecting
+unrepresentable values. A two-residual 640-HP engine advance proves both ticks
+are 600 HP (15/16), with no stage-16 tick.
+
+The production event renderer intentionally omits public cure lines for some
+status operations. Rather than fabricate protocol, it carries a private ordered
+active-status transition into leaf metadata. Render-to-evolve coverage proves
+that Rest, Refresh, and Heal Bell clear Toxic stage/provenance without changing
+their public output. Clean switch and drag entries also clear stage and active
+provenance before deriving a possible Toxic re-entry.

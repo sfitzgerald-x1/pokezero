@@ -60,6 +60,7 @@ use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::state::{PokemonStatus, PokemonType, Side, State};
 
 use crate::encoder::{encode_row_value, encoded_to_dict, EncodedArrays, Tables};
+use crate::events::ActiveStatusTransition;
 use crate::fold::{FoldStateInner, PyFoldState};
 use crate::parse_state;
 
@@ -559,8 +560,30 @@ fn species_key(obj: &Map<String, Value>) -> String {
 /// timed side-condition set-turn replay. `ctx` carries the sampled world's
 /// static per-side facts (Pressure holders and HP representation).
 pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMetaCtx) -> LeafMeta {
+    evolve_leaf_meta_with_status_transitions(meta, lines, ctx, &[])
+}
+
+pub(crate) fn evolve_leaf_meta_with_status_transitions(
+    meta: &LeafMeta,
+    lines: &[String],
+    ctx: &LeafMetaCtx,
+    transitions: &[ActiveStatusTransition],
+) -> LeafMeta {
     let mut out = meta.clone();
-    for line in lines {
+    for line_offset in 0..=lines.len() {
+        for transition in transitions.iter().filter(|transition| transition.line_offset == line_offset) {
+            if transition.new_status == PokemonStatus::TOXIC {
+                out.toxic[transition.side] = 1;
+                out.active_toxic[transition.side] = true;
+                out.toxic_reentry_pending[transition.side] = false;
+            } else {
+                clear_toxic_meta(&mut out, transition.side);
+            }
+        }
+        if line_offset == lines.len() {
+            break;
+        }
+        let line = &lines[line_offset];
         if line.starts_with("|turn|") {
             for side in 0..2 {
                 if out.toxic[side] > 0 {
@@ -690,7 +713,7 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
             } else if is_cure {
                 clear_toxic_meta(&mut out, side);
             } else {
-                out.toxic[side] = 0;
+                clear_toxic_meta(&mut out, side);
                 out.stint[side] = 0;
                 out.fresh_active[side] = true;
                 // Active tracking (Pressure resolution): species from the
@@ -2146,9 +2169,42 @@ impl PyLeafEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::{render_branch_events, EventContext};
+    use poke_engine::choices::Choices;
+    use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+    use poke_engine::state::PokemonMoveIndex;
 
     fn lines(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn rendered_status_cure(choice: Choices) -> crate::events::RenderedEvents {
+        let mut state = State::default();
+        let active = state.side_one.get_active();
+        active.maxhp = 200;
+        active.hp = 100;
+        active.status = PokemonStatus::TOXIC;
+        active.replace_move(PokemonMoveIndex::M0, choice);
+        let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
+        let s2 = MoveChoice::None;
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, false);
+        assert_eq!(
+            branches.len(),
+            1,
+            "expected deterministic status cure: {branches:?}"
+        );
+        render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branches[0].instruction_list,
+            false,
+            &EventContext {
+                species: [vec!["Rattata".to_string()], vec!["Chansey".to_string()]],
+                turn: 1,
+                hp_percent: [false, false],
+            },
+        )
     }
 
     #[test]
@@ -2234,6 +2290,68 @@ mod tests {
     }
 
     #[test]
+    fn rendered_status_cures_clear_toxic_meta_without_fake_protocol_lines() {
+        let root = LeafMeta {
+            toxic: [7, 0],
+            active_toxic: [true, false],
+            active_hp: [Some((100, 200)), None],
+            ..Default::default()
+        };
+
+        let rest = rendered_status_cure(Choices::REST);
+        assert!(
+            rest.lines
+                .iter()
+                .any(|line| line.contains("|-heal|p1a: Rattata|200/200 slp|[silent]")),
+            "Rest's production form carries sleep on its silent heal: {:?}",
+            rest.lines
+        );
+        assert!(
+            !rest
+                .lines
+                .iter()
+                .any(|line| line.starts_with("|-status|p1a: Rattata|slp")),
+            "the production renderer must not rely on a synthetic Rest status line: {:?}",
+            rest.lines
+        );
+        let rest_meta = evolve_leaf_meta_with_status_transitions(
+            &root,
+            &rest.lines,
+            &LeafMetaCtx::default(),
+            &rest.active_status_transitions,
+        );
+        assert_eq!(rest_meta.toxic[0], 0);
+        assert!(!rest_meta.active_toxic[0]);
+
+        for choice in [Choices::REFRESH, Choices::HEALBELL] {
+            let rendered = rendered_status_cure(choice);
+            assert!(
+                !rendered
+                    .lines
+                    .iter()
+                    .any(|line| line.starts_with("|-curestatus|")),
+                "the production renderer must not invent cure text: {:?}",
+                rendered.lines
+            );
+            assert!(
+                !rendered.active_status_transitions.is_empty(),
+                "the leaf must receive the renderer-private cure transition"
+            );
+            let meta = evolve_leaf_meta_with_status_transitions(
+                &root,
+                &rendered.lines,
+                &LeafMetaCtx::default(),
+                &rendered.active_status_transitions,
+            );
+            assert_eq!(meta.toxic[0], 0, "{choice:?} must clear stale Toxic stage");
+            assert!(
+                !meta.active_toxic[0],
+                "{choice:?} must clear Toxic provenance"
+            );
+        }
+    }
+
+    #[test]
     fn toxic_meta_switch_and_drag_reentry_residuals_recover_stage() {
         let root = LeafMeta {
             toxic: [0, 9],
@@ -2282,6 +2400,29 @@ mod tests {
             &ctx,
         );
         assert_eq!(unproven.toxic[1], 0, "rounded residual without reentry provenance fails closed");
+
+        for event in ["switch", "drag"] {
+            let clean = evolve_leaf_meta(
+                &root,
+                &lines(&[
+                    &format!("|{event}|p2a: Blissey|Blissey, L80, F|90/240"),
+                    "|-damage|p2a: Blissey|75/240|[from] psn",
+                ]),
+                &LeafMetaCtx::default(),
+            );
+            assert_eq!(
+                clean.toxic[1], 0,
+                "{event} to a healthy mon must not resurrect Toxic"
+            );
+            assert!(
+                !clean.active_toxic[1],
+                "{event} must clear active Toxic provenance"
+            );
+            assert!(
+                !clean.toxic_reentry_pending[1],
+                "{event} clean entry has no reentry proof"
+            );
+        }
     }
 
     #[test]

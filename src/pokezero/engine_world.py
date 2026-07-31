@@ -1225,12 +1225,14 @@ def _build_side_spec(
             side_conditions[mapped] = remaining
         else:
             side_conditions[mapped] = int(value)
+    # `toxicStage` is a bridge-only pre-tick counter, not the public multiplier.  The engine
+    # charges `toxic_count + 1`; 15 would therefore create an illegal stage-16 residual.
     toxic_stage = side_payload.get("toxicStage")
     if party[active_index].status == "toxic":
         if (
             isinstance(toxic_stage, bool)
             or not isinstance(toxic_stage, int)
-            or not 0 <= toxic_stage <= 15
+            or not 0 <= toxic_stage <= 14
         ):
             raise EngineWorldUnsupported(
                 "toxic_stage_unknown",

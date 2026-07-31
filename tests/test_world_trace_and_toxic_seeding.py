@@ -233,9 +233,9 @@ class ToxicStageWorldTest(unittest.TestCase):
             post_upkeep_window=False,
         )
 
-        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 15)
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 14)
         replay.post_upkeep_window = True
-        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 15)
+        self.assertEqual(_materialization_toxic_stage(replay, "p1"), 14)
 
     def test_unknown_counter_never_materializes_as_zero(self) -> None:
         replay = SimpleNamespace(
@@ -249,6 +249,15 @@ class ToxicStageWorldTest(unittest.TestCase):
         )
 
         self.assertIsNone(_materialization_toxic_stage(replay, "p2"))
+
+    def test_unrepresentable_toxic_stage_fails_closed(self) -> None:
+        replay = SimpleNamespace(
+            toxic_stage={"p1": 17},
+            toxic_stage_known={"p1": True},
+            public_active={"p1": SimpleNamespace(condition="85/100 tox")},
+            post_upkeep_window=False,
+        )
+        self.assertIsNone(_materialization_toxic_stage(replay, "p1"))
 
     def test_missing_provenance_blocks_only_an_active_toxic_side(self) -> None:
         replay = SimpleNamespace(

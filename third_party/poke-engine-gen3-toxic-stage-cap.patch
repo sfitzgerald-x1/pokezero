@@ -1,0 +1,42 @@
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3494,7 +3494,7 @@
+                         // The min-1 clamp sits INSIDE the multiply, which is a second,
+                         // opposite divergence at the bottom of the HP range: a 1 HP
+                         // Shedinja (in the gen3 randbats pool) takes `1 * stage`, not 1.
+-                        let stage = toxic_count + 1;
++                        let stage = cmp::min(toxic_count + 1, 15);
+                         let per_stage = cmp::max(active_pkmn.maxhp / 16, 1);
+                         // Clamp against remaining HP in i32 so a deep ladder on a big
+                         // maxhp cannot overflow the i16 the instruction carries.
+@@ -3510,16 +3510,18 @@
+                             .instruction_list
+                             .push(toxic_damage_instruction);
+-
++
+-                        let toxic_counter_increment_instruction =
+-                            Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
+-                                side_ref: *side_ref,
+-                                side_condition: PokemonSideCondition::ToxicCount,
+-                                amount: 1,
+-                            });
+-                        side.side_conditions.toxic_count += 1;
+-                        incoming_instructions
+-                            .instruction_list
+-                            .push(toxic_counter_increment_instruction);
++                        let next_toxic_count = cmp::min(side.side_conditions.toxic_count + 1, 14);
++                        let toxic_increment = next_toxic_count - side.side_conditions.toxic_count;
++                        if toxic_increment != 0 {
++                            incoming_instructions
++                                .instruction_list
++                                .push(Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
++                                    side_ref: *side_ref,
++                                    side_condition: PokemonSideCondition::ToxicCount,
++                                    amount: toxic_increment,
++                                }));
++                            side.side_conditions.toxic_count = next_toxic_count;
++                        }
+                     }
+                     _ => {}
+                 }

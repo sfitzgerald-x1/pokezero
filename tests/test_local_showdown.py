@@ -676,7 +676,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(next_payload["sides"]["p1"]["toxicStage"], 5)
 
             # Showdown caps Toxic at stage 15. The parser keeps an internal 16 sentinel at an
-            # ordinary request so stage 15 does not round-trip back to 14.
+            # ordinary request; world materialization converts it to the engine's pre-tick 14.
             state["sides"]["p1"]["pokemon"][0]["status"]["toxicStage"] = 15
             env.materialize_scenario_state(scenario_state=state)
             capped_replay = env._parser.snapshot()
@@ -684,7 +684,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 env.public_materialization_state("p1")
             )
             self.assertEqual(capped_replay.toxic_stage["p1"], 16)
-            self.assertEqual(capped_payload["sides"]["p1"]["toxicStage"], 15)
+            self.assertEqual(capped_payload["sides"]["p1"]["toxicStage"], 14)
 
     def test_reset_with_start_override_runs_custom_game_with_injected_teams(self) -> None:
         config = integration_config()

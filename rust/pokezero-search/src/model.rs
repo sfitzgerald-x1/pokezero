@@ -907,10 +907,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
                     );
-                    let meta = crate::leaf::evolve_leaf_meta(
+                    let meta = crate::leaf::evolve_leaf_meta_with_status_transitions(
                         &parent_meta,
                         &rendered.lines,
                         leaf_ctx.meta_ctx(),
+                        &rendered.active_status_transitions,
                     );
                     let tensor_started = Instant::now();
                     let encoded_result = leaf_ctx.encode_leaf(

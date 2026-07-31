@@ -145,6 +145,25 @@ fn the_toxic_minimum_is_one_per_stage_not_one_total() {
     assert_eq!(residual_damage(PokemonStatus::TOXIC, 1, 0), 1);
 }
 
+/// The constructed-world bridge seeds the engine with the pre-tick counter
+/// (14 for Showdown's saturated stage 15). Advancing a real residual must keep
+/// that counter at 14 so a later search ply cannot invent stage-16 damage.
+#[test]
+fn toxic_stage_fifteen_stays_capped_across_residual_advances() {
+    let mut state = residual_state(PokemonStatus::TOXIC, 640, 14);
+    let first = generate(&mut state);
+    assert_eq!(damage_to(&first, SideReference::SideOne), 600);
+    state.apply_instructions(&first);
+    assert_eq!(state.side_one.side_conditions.toxic_count, 14);
+
+    // Restore HP only to observe the second generated multiplier; the counter
+    // itself came from the first real end-of-turn instruction list above.
+    state.side_one.get_active().hp = 640;
+    let second = generate(&mut state);
+    assert_eq!(damage_to(&second, SideReference::SideOne), 600);
+    assert_eq!(state.side_one.side_conditions.toxic_count, 14);
+}
+
 /// The tick is still capped by remaining HP, exactly as `Pokemon.damage` caps it.
 #[test]
 fn the_toxic_tick_cannot_overdraw_remaining_hp() {
