@@ -28,6 +28,8 @@ def _build_state(
     s1_speed=200,
     s1_volatile_statuses=(),
     s1_types=("normal",),
+    s1_ability=None,
+    s1_boosts=None,
     s2_hp=100,
     s2_speed=100,
     s2_attack=100,
@@ -38,6 +40,9 @@ def _build_state(
     s2_item=None,
     s2_maxhp=100,
     s2_volatile_statuses=(),
+    s1_side_conditions=None,
+    s2_side_conditions=None,
+    s2_boosts=None,
 ):
     from pokezero.poke_engine_adapter import (
         BattleSpec,
@@ -88,9 +93,12 @@ def _build_state(
                     speed=s1_speed,
                     status=s1_status,
                     types=s1_types,
+                    ability=s1_ability,
                 ),
             ),
             volatile_statuses=s1_volatile_statuses,
+            side_conditions=s1_side_conditions or {},
+            boosts=s1_boosts or {},
         ),
         side_two=SideSpec(
             pokemon=(
@@ -108,6 +116,8 @@ def _build_state(
                 ),
             ),
             volatile_statuses=s2_volatile_statuses,
+            side_conditions=s2_side_conditions or {},
+            boosts=s2_boosts or {},
         ),
     )
     return build_poke_engine_state(spec).to_string()
@@ -254,7 +264,7 @@ class BranchEventsTest(unittest.TestCase):
         )
         self.assertEqual(tackle["self_hp_cost"], 0.0)
 
-    def test_ambiguous_sleep_talk_call_is_flagged_lossy(self) -> None:
+    def test_ambiguous_sleep_talk_call_is_rejected_before_fold(self) -> None:
         # An asleep Sleep Talker whose callable moves ALL produce an empty
         # delta (splash, and roar against a reserve-less side): the called
         # move cannot be identified, and the invariant is flag-lossy, never
@@ -275,11 +285,44 @@ class BranchEventsTest(unittest.TestCase):
         ]
         self.assertTrue(flagged, report["branches"])
         for branch in flagged:
+            self.assertTrue(branch["attribution_unsafe"], branch)
+            self.assertIn(
+                "sleeptalk_called_unidentified", branch["attribution_unsafe_reasons"], branch
+            )
+            self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertIn("|-activate|p1a: Rattata|confusion", branch["events"])
             self.assertIn("|move|p1a: Rattata|sleeptalk|p1a: Rattata", branch["events"])
-            self.assertNotIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertFalse(
                 any("[from] residual" in line for line in branch["events"]),
+                branch,
+            )
+
+    def test_nonempty_ambiguous_sleep_talk_tail_keeps_post_state_out_of_fold(self) -> None:
+        # Tackle and Scratch share the same non-empty Gen 3 damage tail here,
+        # so the delta cannot prove which called move owned the public effects.
+        state = _build_state(
+            ("sleeptalk", "tackle", "scratch"),
+            ("splash",),
+            s1_status="sleep",
+            s1_speed=500,
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, True)
+        )
+        unsafe = [
+            branch
+            for branch in report["branches"]
+            if "sleeptalk_called_unidentified" in branch["attribution_unsafe_reasons"]
+        ]
+        self.assertTrue(unsafe, report["branches"])
+        for branch in unsafe:
+            self.assertTrue(branch["attribution_unsafe"], branch)
+            self.assertLess(branch["post"]["p2"]["active_hp"], 100, branch)
+            self.assertEqual(branch["post"]["p1"]["active_status"], "sleep", branch)
+            self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
+            self.assertIn("|move|p1a: Rattata|sleeptalk|p1a: Rattata", branch["events"])
+            self.assertFalse(
+                any(line.startswith("|-damage|p2a: Chansey|") for line in branch["events"]),
                 branch,
             )
 
@@ -346,6 +389,7 @@ class BranchEventsTest(unittest.TestCase):
         )
         self.assertIn("|-activate|p2a: Chansey|confusion", blocked["events"])
         self.assertIn("attract_immobilization_source_unknown", blocked["lossy"], blocked)
+        self.assertFalse(blocked["attribution_unsafe"], blocked)
         self.assertFalse(
             any(line.startswith("|move|p2a: Chansey|substitute") for line in blocked["events"]),
             blocked,
@@ -366,6 +410,100 @@ class BranchEventsTest(unittest.TestCase):
             ),
             tokens,
         )
+
+    def test_attract_empty_tail_ambiguities_fail_closed(self) -> None:
+        # An empty post-confusion tail is not unique evidence of Attract. Each
+        # case can also be a real attempted move with no observable change.
+        cases = {
+            "protect": ("protect", "tackle", _build_state(
+                ("protect",),
+                ("tackle",),
+                s1_speed=500,
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "immunity": ("splash", "tackle", _build_state(
+                ("splash",),
+                ("tackle",),
+                s1_speed=500,
+                s1_types=("ghost",),
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "miss": ("splash", "hydropump", _build_state(
+                ("splash",),
+                ("hydropump",),
+                s1_speed=500,
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "status": ("splash", "toxic", _build_state(
+                ("splash",),
+                ("toxic",),
+                s1_speed=500,
+                s1_status="poison",
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "capped_boost": ("splash", "swordsdance", _build_state(
+                ("splash",),
+                ("swordsdance",),
+                s1_speed=500,
+                s2_speed=1,
+                s2_boosts={"attack": 6},
+                s2_volatile_statuses=("attract",),
+            )),
+            "opponent_capped_boost": ("splash", "charm", _build_state(
+                ("splash",),
+                ("charm",),
+                s1_speed=500,
+                s1_boosts={"attack": -6},
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "opponent_boost_immunity": ("splash", "charm", _build_state(
+                ("splash",),
+                ("charm",),
+                s1_speed=500,
+                s1_ability="clearbody",
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+            "side_condition": ("splash", "spikes", _build_state(
+                ("splash",),
+                ("spikes",),
+                s1_speed=500,
+                s2_speed=1,
+                s1_side_conditions={"spikes": 3},
+                s2_volatile_statuses=("attract",),
+            )),
+            "intrinsic_noop": ("splash", "splash", _build_state(
+                ("splash",),
+                ("splash",),
+                s1_speed=500,
+                s2_speed=1,
+                s2_volatile_statuses=("attract",),
+            )),
+        }
+        for name, (s1_move, s2_move, state) in cases.items():
+            with self.subTest(name=name):
+                report = json.loads(
+                    pokezero_search.branch_events(
+                        state, s1_move, s2_move, CTX, True, False
+                    )
+                )
+                unsafe = [
+                    branch
+                    for branch in report["branches"]
+                    if "attract_empty_tail_ambiguous" in branch["attribution_unsafe_reasons"]
+                ]
+                self.assertTrue(unsafe, report["branches"])
+                for branch in unsafe:
+                    self.assertTrue(branch["attribution_unsafe"], branch)
+                    self.assertFalse(
+                        any("|cant|p2a: Chansey|Attract" in line for line in branch["events"]),
+                        branch,
+                    )
 
     def test_confusion_crash_recoil_and_explosion_do_not_fake_self_hit(self) -> None:
         crash_state = _build_state(
@@ -544,10 +682,26 @@ class BranchEventsTest(unittest.TestCase):
                     for token in fold.products_payload()["transition_tokens"]
                     if token["kind"] == "move" and token["action"] == "splash"
                 )
-                self.assertEqual(splash["damage_fraction"], 0.0, splash)
+                self.assertEqual(splash["damage_fraction"], 0.35, splash)
                 self.assertEqual(splash["self_hp_cost"], 0.0, splash)
                 self.assertFalse(splash["ko"], splash)
                 self.assertTrue(splash["confusion_selfhit"], splash)
+
+    def test_native_fold_keeps_historical_hit_after_confusion_selfhit(self) -> None:
+        # The self-hit lands in the prior move window, but it must not erase
+        # the historical fact that Drill Peck already damaged its defender.
+        # Only the last-damage KO guard is cleared.
+        lines = LEAD_LINES + [
+            "|move|p2a: Chansey|Drill Peck|p1a: Rattata",
+            "|-damage|p1a: Rattata|83/100",
+            "|-activate|p1a: Rattata|confusion",
+            "|-damage|p1a: Rattata|73/100",
+        ]
+        fold = pokezero_search.FoldState.initial("p1")
+        fold.advance_in_place(lines)
+        current = fold.to_payload()["current_window"]
+        self.assertTrue(current["defender_hit_by_move"], current)
+        self.assertFalse(current["defender_last_damage_by_move"], current)
 
     def test_lethal_self_hit_is_not_previous_move_damage_or_ko(self) -> None:
         state = _build_state(
@@ -578,7 +732,9 @@ class BranchEventsTest(unittest.TestCase):
             for token in fold.products_payload()["transition_tokens"]
             if token["kind"] == "move" and token["action"] == "splash"
         )
-        self.assertEqual(splash["damage_fraction"], 0.0, splash)
+        # This fold starts from the public lead's 100/100 condition, so the
+        # lethal self-hit contributes the full observed fraction.
+        self.assertEqual(splash["damage_fraction"], 1.0, splash)
         self.assertEqual(splash["self_hp_cost"], 0.0, splash)
         self.assertFalse(splash["ko"], splash)
         self.assertTrue(splash["confusion_selfhit"], splash)
@@ -622,21 +778,12 @@ class BranchEventsTest(unittest.TestCase):
             for branch in json.loads(
                 pokezero_search.branch_events(expiry_state, "splash", "splash", CTX, True, False)
             )["branches"]
-            if "|-end|p2a: Chansey|confusion" in branch["events"]
+            if "confusion_expiry_timing_unobservable" in branch["attribution_unsafe_reasons"]
             and "|move|p2a: Chansey|splash||[still]" in branch["events"]
         )
         self.assertIn("|move|p2a: Chansey|splash||[still]", expiry["events"])
-        fold = pokezero_search.FoldState.initial("p1")
-        fold.advance_in_place(LEAD_LINES)
-        fold.advance_in_place(expiry["events"])
-        self.assertFalse(
-            any(
-                token["kind"] == "move"
-                and token["action"] == "splash"
-                and token.get("confusion_selfhit", False)
-                for token in fold.products_payload()["transition_tokens"]
-            )
-        )
+        self.assertNotIn("|-end|p2a: Chansey|confusion", expiry["events"])
+        self.assertTrue(expiry["attribution_unsafe"], expiry)
 
         wake_state = _build_state(
             ("splash",),
@@ -673,7 +820,7 @@ class BranchEventsTest(unittest.TestCase):
         self.assertIn("|move|p2a: Chansey|substitute|p2a: Chansey", own_tempo[0]["events"])
         self.assertNotIn("|-activate|p2a: Chansey|confusion", own_tempo[0]["events"])
 
-    def test_collapsed_confusion_crash_branch_is_lossy_not_misattributed(self) -> None:
+    def test_collapsed_confusion_crash_branch_is_rejected_without_naked_damage(self) -> None:
         state = _build_state(
             ("splash",),
             ("highjumpkick",),
@@ -689,25 +836,21 @@ class BranchEventsTest(unittest.TestCase):
                     state, "splash", "highjumpkick", CTX, True, False
                 )
             )["branches"]
-            if "|-damage|p2a: Chansey|50/100" in branch["events"]
+            if "confusion_selfhit_ambiguous_executed_self_damage"
+            in branch["attribution_unsafe_reasons"]
         )
         self.assertIn(
             "confusion_selfhit_ambiguous_executed_self_damage", collision["lossy"], collision
         )
         self.assertNotIn("|-activate|p2a: Chansey|confusion", collision["events"])
+        self.assertTrue(collision["attribution_unsafe"], collision)
         self.assertFalse(
             any("|move|p2a: Chansey|highjumpkick" in line for line in collision["events"]),
             collision,
         )
-        fold = pokezero_search.FoldState.initial("p1")
-        fold.advance_in_place(LEAD_LINES)
-        fold.advance_in_place(collision["events"])
-        splash = next(
-            token
-            for token in fold.products_payload()["transition_tokens"]
-            if token["kind"] == "move" and token["action"] == "splash"
+        self.assertFalse(
+            any(line.startswith("|-damage|") for line in collision["events"]), collision
         )
-        self.assertFalse(splash.get("confusion_selfhit", False))
 
 
 @unittest.skipIf(pokezero_search is None, "pokezero_search native module not built")

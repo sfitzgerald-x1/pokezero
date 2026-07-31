@@ -285,7 +285,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         self.assertEqual(v2_2.numeric_features[row][NUMERIC_TM2_DAMAGE_FRACTION], 0.25)
         self.assertEqual(
             v3.numeric_features[row][v3_numeric_index(NUMERIC_TM2_DAMAGE_FRACTION)],
-            0.25,
+            0.15,
         )
         self.assertEqual(
             v3.numeric_features[row][v3_numeric_index(NUMERIC_TT_CONFUSION_SELFHIT)],

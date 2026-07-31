@@ -409,7 +409,7 @@ is reachable in the pool via Signal Beam's 10% secondary), the sim emits
 intervening `|move|`/`|cant|` line** — the confused mon's turn is spent hurting
 itself. When the confused mon is the **SLOWER** of the two, that untagged
 self-damage lands while the FASTER opponent's move window is still open, and the
-fold — correctly, for the `damage_fraction` field the v2.2 encode reads — folds
+fold — correctly, for the legacy `damage_fraction` field V2/V2.1/V2.2 encode reads — folds
 it into the opponent's move `damage_fraction`. The opponent's move token then
 overstates its own damage by the self-hit amount (e.g. a 0.17 Surf reads 0.27
 after a 0.10 self-hit folds in), polluting damage calibration.
@@ -439,16 +439,14 @@ touching the folded `damage_fraction` field:
   the opponent moved first; the write is mirrored onto the second sub-block defensively.
   **No new token is synthesized** (that would change the turn-merged stream length/order
   and break v2.2 byte-identity).
-- **v2.2 stays FROZEN (explicit).** Change 10 is a V3-only rewrite of the carried
-  `NUMERIC_TT_DAMAGE_FRACTION` semantic field. **The
-  v2.2 encode deliberately RETAINS the folded value (0.27 in the example) — the
-  live m50/l200 runs keep exactly the value they were trained on.** The v2.2 path
-  never reads `confusion_selfhit_fraction`/`confusion_selfhit` and computes the
-  damage column from the unchanged `damage_fraction`, so v2.2 output is byte-
-  identical to the pre-change encoder by construction (verified: a v2.2-vs-pristine
-  SHA over a confusion-self-hit-both-seats + normal-game battery is identical). The
-  V3 map carries every applicable v2.2 semantic field except this intentionally
-  corrected value and the documented dead-column drops.
+- **V2/V2.1/V2.2 stay FROZEN (explicit).** Change 10 is a V3-only rewrite of the
+  carried `NUMERIC_TT_DAMAGE_FRACTION` semantic field. **Every legacy encoder retains
+  the folded value (0.27 in the example) — existing checkpoints keep exactly the value
+  they were trained on.** V2/V2.1 read their per-action `TransitionToken` aggregate;
+  V2.2 reads the turn-merged sub-block aggregate. None reads
+  `confusion_selfhit_fraction`/`confusion_selfhit`, so all three outputs are byte-
+  identical to their pre-change encoders. The V3 map carries every applicable V2.2
+  semantic field except this intentionally corrected value and documented dead-column drops.
 - **Reachability:** confusion is a reachable volatile (Signal Beam 10% in the pool;
   the confusion self-hit is a 50% roll). Encoded per the owner directive (encode
   reachable, do NOT gate on incidence).
@@ -533,12 +531,12 @@ touching the folded `damage_fraction` field:
    (mirrors the #769 pinch-berry class).
 10. Confusion self-hit (change 10): a scripted game where the SLOWER confused mon
     self-hits with an untagged `-damage` (no `|move|`/`|cant|` line) has the
-    opponent's move token read the FOLDED damage (0.27) under v2.2 and the
+    opponent's move token read the FOLDED damage (0.27) under V2/V2.1/V2.2 and the
     CORRECTED damage (0.17) plus `NUMERIC_TT_CONFUSION_SELFHIT = 1` under v3; the
     fold records `confusion_selfhit_fraction`/`confusion_selfhit` on both fold
     paths and they survive the merge/flatten bijection; a `[from] confusion`
     tagged self-hit and a confused-mon-that-still-moves engage neither field; the
-    v2.2 encoding is byte-identical to before the change (cmp-against-pristine SHA
+    V2/V2.1/V2.2 encodings are byte-identical to before the change (cross-schema freeze
     over a both-seats + normal-game battery), and the change fails without the fix
     (pristine v3 reads 0.27).
 11. The raw V3 output has exactly 155 numeric columns. A synthetic projection
@@ -546,7 +544,7 @@ touching the folded `damage_fraction` field:
     `v3[v3_numeric_index(old)] == v2_2[old]`, except the documented first- and
     second-sub-block confusion-self-hit rewrites. Every dead legacy index raises from
     `v3_numeric_index`; categorical rows, masks, and token types remain shared.
-12. Existing V2.2 test suites pass untouched.
+12. Existing V2/V2.1/V2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
