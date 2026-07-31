@@ -359,8 +359,8 @@ class WorldPayloadTest(unittest.TestCase):
         self.assertFalse(self._seed(False, truant_loafs=True))
 
     def test_unknown_falls_back_to_the_proxy(self) -> None:
-        # None means "no holder, or a truncated prefix whose switch-in was never seen".
-        # Falling back preserves previous behaviour instead of asserting an acting phase.
+        # None means no phase assertion: no holder, a truncated prefix, or a full-prefix
+        # Trace acquisition whose residual event-queue membership is ambiguous.
         self.assertTrue(self._seed(None, truant_loafs=True))
         self.assertFalse(self._seed(None, truant_loafs=False))
 
