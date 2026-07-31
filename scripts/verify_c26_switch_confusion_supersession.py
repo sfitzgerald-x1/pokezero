@@ -23,7 +23,7 @@ EVENTS = "rust/pokezero-search/src/events.rs"
 NATIVE_TEST = "rust/pokezero-search/tests/gen3_confusion_event_renderer.rs"
 PREDICTION = "reports/c26_switch_confusion_event_attribution_prediction.md"
 SUPERSESSION = "reports/c26_switch_confusion_event_attribution_supersession.md"
-PATCH_LIST_SHA256 = "690b9407059c4a9322b9bee2a7dc59f3a5ea8477c5c7b493c8243b3157c903ea"
+PATCH_LIST_SHA256 = "e6f1b4048bdce856928ee555c32a96eee45342a3d38368679c9dc98f3cd12112"
 ENGINE_SOURCE_SPEC = {
     "schema": "pokezero-engine-upstream-source/1",
     "distribution": "poke-engine",
