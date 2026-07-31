@@ -320,7 +320,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Fan each committed task into one worker-owned shard per window "
             "(shard-w<worker>-v<k> beside the task's out dir) instead of one shard "
-            "per task — keeps train shard count at fleet size with micro tasks."
+            "per task — keeps train shard count at fleet size with micro tasks. Start "
+            "strict fan-in with a fresh cache directory, or a drained directory whose "
+            "selected versions all contain fanin-manifest.json; legacy selected versions "
+            "stop workers and are rejected by the private trainer handoff's strict, "
+            "queue-quiescent inventory reader."
         ),
     )
     selfplay_worker.add_argument(
