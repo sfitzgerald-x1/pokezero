@@ -25,36 +25,69 @@ fn generate(
     branches
 }
 
-fn has_heal(list: &[Instruction], side_ref: SideReference, amount: i16) -> bool {
-    list.iter().any(|instruction| match instruction {
-        Instruction::Heal(heal) => heal.side_ref == side_ref && heal.heal_amount == amount,
-        _ => false,
+/// Apply then reverse: search relies on every emitted instruction being an exact
+/// inverse, so a Rest/residual reshape cannot corrupt the tree.
+fn assert_reverts_cleanly(state: &mut State, list: &Vec<Instruction>) {
+    let before = format!("{:?}", state);
+    state.apply_instructions(list);
+    state.reverse_instructions(list);
+    assert_eq!(
+        before,
+        format!("{:?}", state),
+        "instructions did not revert"
+    );
+}
+
+fn index_of<F>(list: &[Instruction], predicate: F) -> usize
+where
+    F: Fn(&Instruction) -> bool,
+{
+    list.iter()
+        .position(predicate)
+        .unwrap_or_else(|| panic!("expected instruction not emitted: {:?}", list))
+}
+
+fn damage_at(list: &[Instruction], side_ref: SideReference, amount: i16) -> usize {
+    index_of(list, |instruction| {
+        matches!(instruction,
+            Instruction::Damage(damage)
+                if damage.side_ref == side_ref && damage.damage_amount == amount
+        )
     })
 }
 
-fn has_damage(list: &[Instruction], side_ref: SideReference, amount: i16) -> bool {
-    list.iter().any(|instruction| match instruction {
-        Instruction::Damage(damage) => {
-            damage.side_ref == side_ref && damage.damage_amount == amount
-        }
-        _ => false,
+fn heal_at(list: &[Instruction], side_ref: SideReference, amount: i16) -> usize {
+    index_of(list, |instruction| {
+        matches!(instruction,
+            Instruction::Heal(heal)
+                if heal.side_ref == side_ref && heal.heal_amount == amount
+        )
     })
 }
 
-fn rests_side_two(list: &[Instruction]) -> bool {
-    list.iter().any(|instruction| match instruction {
-        Instruction::ChangeStatus(change) => {
-            change.side_ref == SideReference::SideTwo && change.new_status == PokemonStatus::SLEEP
-        }
-        _ => false,
+fn rest_at(list: &[Instruction]) -> usize {
+    index_of(list, |instruction| {
+        matches!(instruction,
+            Instruction::ChangeStatus(change)
+                if change.side_ref == SideReference::SideTwo
+                    && change.new_status == PokemonStatus::SLEEP
+        )
     })
 }
 
-/// This is the surviving half of the retained Rest shapes: Rest resolves, then
-/// the opposing Toxic user gets its full order-10 residual tail. For 288 max HP,
-/// Leftovers is 18 and Toxic stage two is 36.
-#[test]
-fn surviving_rest_turn_keeps_leftovers_and_toxic_tail() {
+fn side_two_rests(list: &[Instruction]) -> bool {
+    list.iter().any(|instruction| {
+        matches!(instruction,
+            Instruction::ChangeStatus(change)
+                if change.side_ref == SideReference::SideTwo
+                    && change.new_status == PokemonStatus::SLEEP
+        )
+    })
+}
+
+/// Fixed damage keeps this a single branch: 100 damage leaves Rest's 285 HP user
+/// alive, and Rest's 100 HP heal can therefore be ordered against the tail.
+fn surviving_rest_state(toxic: bool) -> State {
     let mut state = State::default();
 
     let one = state.side_one.get_active();
@@ -62,33 +95,92 @@ fn surviving_rest_turn_keeps_leftovers_and_toxic_tail() {
     one.hp = 157;
     one.speed = 200;
     one.item = Items::LEFTOVERS;
-    one.status = PokemonStatus::TOXIC;
-    one.replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
-    state.side_one.side_conditions.toxic_count = 1;
+    one.replace_move(PokemonMoveIndex::M0, Choices::SEISMICTOSS);
+    if toxic {
+        one.status = PokemonStatus::TOXIC;
+        state.side_one.side_conditions.toxic_count = 1;
+    }
 
     let two = state.side_two.get_active();
     two.maxhp = 285;
-    two.hp = 17;
+    two.hp = 285;
     two.speed = 1;
     two.replace_move(PokemonMoveIndex::M0, Choices::REST);
 
+    state
+}
+
+fn only_rest_choice_branch(state: &mut State) -> Vec<Instruction> {
     let branches = generate(
-        &mut state,
+        state,
         &MoveChoice::Move(PokemonMoveIndex::M0),
         &MoveChoice::Move(PokemonMoveIndex::M0),
     );
     assert_eq!(branches.len(), 1, "expected one deterministic Rest branch");
-    let list = &branches[0].instruction_list;
+    branches.into_iter().next().unwrap().instruction_list
+}
 
-    assert!(rests_side_two(list), "Rest must execute: {list:?}");
+/// This is the Leftovers-only survivor control. A fixed nonterminal hit must be
+/// followed by Rest's full heal and then the opposing survivor's item tail.
+#[test]
+fn surviving_rest_turn_keeps_leftovers_tail() {
+    let mut state = surviving_rest_state(false);
+    let list = only_rest_choice_branch(&mut state);
+
+    let hit = damage_at(&list, SideReference::SideTwo, 100);
+    let rest = rest_at(&list);
+    let full_heal = heal_at(&list, SideReference::SideTwo, 100);
+    let leftovers = heal_at(&list, SideReference::SideOne, 18);
     assert!(
-        has_heal(list, SideReference::SideOne, 18),
-        "the surviving Toxic user keeps its Leftovers tick: {list:?}"
+        hit < rest && rest < full_heal && full_heal < leftovers,
+        "damage, Rest, full heal, then the survivor's Leftovers tail must stay ordered: {list:?}"
+    );
+
+    assert_reverts_cleanly(&mut state, &list);
+    state.apply_instructions(&list);
+    assert_eq!(
+        state.side_two.get_active_immutable().hp,
+        285,
+        "Rest healed to full"
     );
     assert!(
-        has_damage(list, SideReference::SideOne, 36),
-        "the surviving Toxic user keeps its stage-two poison tick: {list:?}"
+        state.side_one.get_active_immutable().hp > 0,
+        "attacker survived"
     );
+    assert!(
+        state.side_two.get_active_immutable().hp > 0,
+        "Rest user survived"
+    );
+    assert_eq!(state.battle_is_over(), 0.0, "both sides remain in battle");
+}
+
+/// This is the same surviving shape with the Toxic tail enabled. For 288 max HP,
+/// Leftovers is 18 and Toxic stage two is 36; the two instructions must be in
+/// their same-Pokemon Gen 3 suborder, not merely present somewhere in the list.
+#[test]
+fn surviving_rest_turn_orders_leftovers_before_toxic_tail() {
+    let mut state = surviving_rest_state(true);
+    let list = only_rest_choice_branch(&mut state);
+
+    let hit = damage_at(&list, SideReference::SideTwo, 100);
+    let rest = rest_at(&list);
+    let full_heal = heal_at(&list, SideReference::SideTwo, 100);
+    let leftovers = heal_at(&list, SideReference::SideOne, 18);
+    let toxic = damage_at(&list, SideReference::SideOne, 36);
+    assert!(
+        hit < rest && rest < full_heal && full_heal < leftovers && leftovers < toxic,
+        "damage, Rest/full heal, then Leftovers before Toxic must stay ordered: {list:?}"
+    );
+
+    assert_reverts_cleanly(&mut state, &list);
+    state.apply_instructions(&list);
+    assert_eq!(
+        state.side_two.get_active_immutable().hp,
+        285,
+        "Rest healed to full"
+    );
+    assert_eq!(state.side_one.get_active_immutable().hp, 139);
+    assert_eq!(state.battle_is_over(), 0.0, "both sides remain in battle");
 }
 
 /// The terminal half of the same shape is intentionally the opposite: when
@@ -104,7 +196,9 @@ fn terminal_rest_turn_never_readds_residual_tail() {
     one.hp = 157;
     one.speed = 200;
     one.item = Items::LEFTOVERS;
-    one.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+    one.status = PokemonStatus::TOXIC;
+    one.replace_move(PokemonMoveIndex::M0, Choices::SEISMICTOSS);
+    state.side_one.side_conditions.toxic_count = 1;
 
     let two = state.side_two.get_active();
     two.maxhp = 285;
@@ -121,24 +215,62 @@ fn terminal_rest_turn_never_readds_residual_tail() {
         state.side_two.pokemon[index].hp = 0;
     }
 
-    let branches = generate(
-        &mut state,
-        &MoveChoice::Move(PokemonMoveIndex::M0),
-        &MoveChoice::Move(PokemonMoveIndex::M0),
+    assert_eq!(
+        state.side_two.get_active_immutable().hp,
+        1,
+        "KO precondition"
     );
-    assert!(!branches.is_empty(), "expected damaging branches");
-    for branch in branches {
-        let list = &branch.instruction_list;
-        assert!(
-            !rests_side_two(list),
-            "a fainted Rest user cannot execute: {list:?}"
-        );
-        assert!(
-            !list.iter().any(|instruction| matches!(
-                instruction,
-                Instruction::Heal(heal) if heal.side_ref == SideReference::SideOne
-            )),
-            "a terminal branch must not re-add Leftovers: {list:?}"
-        );
-    }
+    assert!(
+        [
+            PokemonIndex::P1,
+            PokemonIndex::P2,
+            PokemonIndex::P3,
+            PokemonIndex::P4,
+            PokemonIndex::P5,
+        ]
+        .iter()
+        .all(|index| state.side_two.pokemon[*index].hp == 0),
+        "the Rest user is side two's last living Pokemon"
+    );
+    assert_eq!(state.battle_is_over(), 0.0, "battle is live before the KO");
+
+    let list = only_rest_choice_branch(&mut state);
+    assert_eq!(
+        damage_at(&list, SideReference::SideTwo, 1),
+        0,
+        "the fixed hit KOs"
+    );
+    assert!(
+        !side_two_rests(&list),
+        "a fainted Rest user cannot execute: {list:?}"
+    );
+    assert!(
+        !list.iter().any(|instruction| matches!(
+            instruction,
+            Instruction::Heal(heal) if heal.side_ref == SideReference::SideOne
+        )),
+        "a terminal branch must not re-add Leftovers: {list:?}"
+    );
+    assert!(
+        !list.iter().any(|instruction| matches!(
+            instruction,
+            Instruction::Damage(damage) if damage.side_ref == SideReference::SideOne
+        )),
+        "a terminal branch must not re-add Toxic: {list:?}"
+    );
+    assert!(
+        !list
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::ChangeSideCondition(_))),
+        "a terminal branch must not advance any residual side condition: {list:?}"
+    );
+
+    assert_reverts_cleanly(&mut state, &list);
+    state.apply_instructions(&list);
+    assert_eq!(
+        state.side_two.get_active_immutable().hp,
+        0,
+        "the final Pokemon fainted"
+    );
+    assert_eq!(state.battle_is_over(), 1.0, "the KO ended the battle");
 }

@@ -17,7 +17,7 @@
   },
   "historical_claim": {
     "status": "unverified",
-    "summary": "The prior pre-implementation note described a surviving Rest branch with a residual tail beside a capped-lethal terminal branch. The retained source reports required to replay that claim are not tracked in this checkout or either related lane."
+    "summary": "The prior pre-implementation note described a surviving Rest branch with a residual tail beside a capped-lethal terminal branch. The retained source reports required to replay that claim are not tracked in this checkout or its reachable local Git history."
   },
   "prediction": {
     "survivor": "For a Rest turn that leaves both sides alive, every resulting branch must retain all eligible end-of-turn residual instructions in Gen 3 order, including Leftovers before poison for the same Pokemon.",
@@ -27,33 +27,218 @@
   "stop_rule": "Do not change residual scheduling unless a focused Rest fixture shows a surviving branch missing an otherwise eligible residual instruction, or a terminal branch emitting one. If both controls hold, fail closed and hand the shared damage-lattice defect to its dedicated lane.",
   "verification_plan": {
     "focused_pins": [
-      "surviving Rest turn with opposing Leftovers",
-      "surviving Rest turn with opposing Leftovers plus Toxic",
-      "terminal damage branch beside Rest with no residual tail"
+      {
+        "id": "surviving_rest_leftovers_tail",
+        "description": "Fixed nonterminal damage, Rest full heal, then the surviving opponent's Leftovers tail."
+      },
+      {
+        "id": "surviving_rest_leftovers_toxic_order",
+        "description": "The same survivor composition with Leftovers before stage-two Toxic for one Pokemon."
+      },
+      {
+        "id": "terminal_rest_no_tail",
+        "description": "Fixed battle-ending damage before Rest, with no Rest or residual tail."
+      }
     ],
     "required_gates": [
-      "engine build fingerprint",
-      "focused Rust regressions",
-      "tests/test_public_invariant.py"
+      {
+        "id": "engine_build_fingerprint",
+        "required_for": "two_consumer_replay_certification"
+      },
+      {
+        "id": "focused_rust_regressions",
+        "required_for": "native_scheduler_control"
+      },
+      {
+        "id": "sibling_residual_rest_regressions",
+        "required_for": "shared_residual_and_Rest_regression_coverage"
+      },
+      {
+        "id": "showdown_rest_residual_oracle",
+        "required_for": "independent_residual_order_and_magnitude_control"
+      },
+      {
+        "id": "closure_limit_invariant",
+        "required_for": "machine_readable_comparison_limit"
+      },
+      {
+        "id": "public_invariant",
+        "required_for": "public_artifact_boundary"
+      },
+      {
+        "id": "patch_stack",
+        "required_for": "vendored_engine_patch_integrity"
+      },
+      {
+        "id": "json_validation",
+        "required_for": "artifact_syntax"
+      },
+      {
+        "id": "git_diff_check",
+        "required_for": "whitespace_integrity"
+      }
     ]
   },
   "closure": {
     "disposition": "comparison_limit",
+    "comparison_limit": true,
+    "verification_status": "limited_not_clearance",
     "production_change_licensed": false,
+    "production_scheduler_behavior_changed": false,
+    "matcher_issue_proven": false,
+    "composition_issue_proven": false,
     "matcher_or_composition_issue_proven": false,
     "residual_scheduler_change": "refused",
+    "negative_evidence": {
+      "public_paths": "opaque",
+      "rows": [
+        {
+          "identity": "2901076/41",
+          "searched": {
+            "scopes": [
+              "current checkout tracked content",
+              "reachable local Git content"
+            ],
+            "refs": [
+              "HEAD",
+              "--all"
+            ],
+            "retained_input": "absent"
+          },
+          "candidate_public_replay": {
+            "candidate_url_label": "opaque-public-gen3randombattle-candidate-2901076",
+            "http_status": 404
+          },
+          "harness_import": {
+            "status": "blocked_missing_poke_engine",
+            "pokezero_search_status": "not_reached_and_not_installed",
+            "run_status": "not_run"
+          },
+          "final_disposition": "not_replayable"
+        },
+        {
+          "identity": "3000156/47",
+          "searched": {
+            "scopes": [
+              "current checkout tracked content",
+              "reachable local Git content"
+            ],
+            "refs": [
+              "HEAD",
+              "--all"
+            ],
+            "retained_input": "absent"
+          },
+          "candidate_public_replay": {
+            "candidate_url_label": "opaque-public-gen3randombattle-candidate-3000156",
+            "http_status": 404
+          },
+          "harness_import": {
+            "status": "blocked_missing_poke_engine",
+            "pokezero_search_status": "not_reached_and_not_installed",
+            "run_status": "not_run"
+          },
+          "final_disposition": "not_replayable"
+        },
+        {
+          "identity": "3500842/79",
+          "searched": {
+            "scopes": [
+              "current checkout tracked content",
+              "reachable local Git content"
+            ],
+            "refs": [
+              "HEAD",
+              "--all"
+            ],
+            "retained_input": "absent"
+          },
+          "candidate_public_replay": {
+            "candidate_url_label": "opaque-public-gen3randombattle-candidate-3500842",
+            "http_status": 404
+          },
+          "harness_import": {
+            "status": "blocked_missing_poke_engine",
+            "pokezero_search_status": "not_reached_and_not_installed",
+            "run_status": "not_run"
+          },
+          "final_disposition": "not_replayable"
+        }
+      ]
+    },
     "row_replay": {
       "outcome": "not_replayable",
-      "reason": "The raw retained replay reports are absent from this worktree, the read-only damage-composition lane, and the read-only damage-arithmetic lane. The public gen3randombattle replay URLs derived from the three numeric identities returned HTTP 404, and the local differential harness cannot import its required pokezero_search consumer."
+      "evidence": "closure.negative_evidence.rows"
     },
-    "focused_controls": {
-      "surviving_rest_tail": "passed",
-      "terminal_rest_tail": "passed",
-      "meaning": "Neither stop-rule trigger was observed in the controlled native fixture."
+    "focused_pin_results": {
+      "surviving_rest_leftovers_tail": {
+        "status": "passed",
+        "scope": "engine_only_control",
+        "result": "Fixed 100 damage precedes Rest's full heal, then the surviving opponent's Leftovers instruction."
+      },
+      "surviving_rest_leftovers_toxic_order": {
+        "status": "passed",
+        "scope": "engine_only_control",
+        "result": "Fixed 100 damage precedes Rest's full heal, then Leftovers 18 precedes Toxic 36 for the same survivor."
+      },
+      "terminal_rest_no_tail": {
+        "status": "passed",
+        "scope": "engine_only_control",
+        "result": "A 1 HP final Pokemon is KOed by fixed damage; Rest, Leftovers, Toxic, and Toxic-counter tail are absent."
+      }
+    },
+    "gate_results": {
+      "engine_build_fingerprint": {
+        "status": "not_attested",
+        "clearance_effect": "not_clearance",
+        "reason": "The absent two-consumer build stamp requires a full wheel and crate rebuild/write that records the same engine fingerprint for both consumers. Merely installing pokezero_search cannot create, validate, or attest that stamp."
+      },
+      "focused_rust_regressions": {
+        "status": "passed",
+        "clearance_effect": "engine_only_control_not_production_clearance",
+        "command": "cargo test --test gen3_rest_residual_composition"
+      },
+      "sibling_residual_rest_regressions": {
+        "status": "passed",
+        "clearance_effect": "regression_control_not_production_clearance",
+        "command": "focused sibling residual and Rest test suites"
+      },
+      "showdown_rest_residual_oracle": {
+        "status": "passed",
+        "clearance_effect": "independent_control_not_production_or_row_replay_clearance",
+        "command": "PYTHONPATH=src python scripts/gen3_switch_differential.py --only restresidualtail",
+        "result": "3 of 4 seeds asserted; one Toxic setup miss was skipped by the scenario gate."
+      },
+      "closure_limit_invariant": {
+        "status": "passed",
+        "clearance_effect": "artifact_control_not_production_clearance",
+        "command": "python tests/test_rest_residual_composition_limit.py"
+      },
+      "public_invariant": {
+        "status": "passed",
+        "clearance_effect": "artifact_control_not_production_clearance",
+        "command": "python tests/test_public_invariant.py"
+      },
+      "patch_stack": {
+        "status": "passed",
+        "clearance_effect": "patch_integrity_control_not_production_clearance",
+        "command": "python tests/test_poke_engine_patch_stack.py"
+      },
+      "json_validation": {
+        "status": "passed",
+        "clearance_effect": "syntax_control_not_production_clearance",
+        "command": "python -m json.tool reports/c25_rest_residual_composition_prediction.json"
+      },
+      "git_diff_check": {
+        "status": "passed",
+        "clearance_effect": "whitespace_control_not_production_clearance",
+        "command": "git diff --check"
+      }
     },
     "build_provenance": {
       "status": "not_attested",
-      "reason": "The two-consumer engine fingerprint cannot be checked without the installed pokezero_search consumer. The installed poke_engine wheel is a focused control only, not replay certification evidence."
+      "clearance_effect": "not_clearance",
+      "reason": "The absent two-consumer build stamp requires a full wheel and crate rebuild/write that records the same engine fingerprint for both consumers. Merely installing pokezero_search cannot create, validate, or attest that stamp."
     },
     "contract": "docs/rest_residual_composition_comparison_limit.md"
   }

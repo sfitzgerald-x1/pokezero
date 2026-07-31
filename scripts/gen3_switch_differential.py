@@ -826,6 +826,23 @@ def _index_of(lines, prefix: str):
     return None
 
 
+def _ordered(lines, earlier: str, later: str) -> bool:
+    """Whether two protocol entries both exist and retain their emission order."""
+
+    earlier_index = _index_of(lines, earlier)
+    later_index = _index_of(lines, later)
+    return earlier_index is not None and later_index is not None and earlier_index < later_index
+
+
+def _condition_after(lines, prefix: str, source: str):
+    """The HP condition on the sourced protocol line, or ``None`` if absent."""
+
+    for line in lines:
+        if line.startswith(prefix) and source in line:
+            return line.split("|")[3]
+    return None
+
+
 # --- scenario specs ---------------------------------------------------------
 # `expect` maps fact-name -> ground truth. `setup_step`/`setup_landed` gate the
 # scenarios whose setup move can miss.
@@ -2178,6 +2195,43 @@ def _spec(name):
                     else {"rest_failed": False, "slept": True, "toxic_landed": False}),
             landmark=lambda L: _has(L, "|move|p1a: Xatu|Rest"),
             landmark_desc="Rest was used")
+    if name == "restresidualtail":
+        # Independent Showdown oracle for the native Rest residual-composition
+        # controls. Aipom is poisoned on the setup turn, then its fixed 100 HP
+        # Seismic Toss leaves Snorlax at 361/461 and Rest heals it to full. On
+        # the same measured turn Aipom's 251 max HP gives Leftovers 15, followed
+        # by stage-two Toxic 30: 236 -> 251 -> 221. Gen 3 orders the same
+        # Pokemon's item at residual 10.4 before status damage at 10.6.
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                               moves=("Seismic Toss", "Splash"))
+        snorlax = FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                                 moves=("Toxic", "Rest", "Splash"))
+        rest_heal = "|-heal|p2a: Snorlax|461/461 slp|[silent]"
+        return dict(
+            p1=[aipom], p2=[snorlax],
+            turns=[("move splash", "move toxic"),
+                   ("move seismictoss", "move rest")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p1a: Aipom|tox"),
+            facts=lambda L: {
+                "damage_precedes_rest": _ordered(
+                    L, "|-damage|p2a: Snorlax|361/461", rest_heal
+                ),
+                "restored_to_full": _has(L, rest_heal),
+                "sequence": _residual_sequence(L),
+                "tail_conditions": [
+                    _condition_after(L, "|-heal|p1a: Aipom", "[from] item: Leftovers"),
+                    _condition_after(L, "|-damage|p1a: Aipom", "[from] psn"),
+                ],
+            },
+            expect={
+                "damage_precedes_rest": True,
+                "restored_to_full": True,
+                "sequence": [("p1a", "item: Leftovers"), ("p1a", "psn")],
+                "tail_conditions": ["251/251 tox", "221/251 tox"],
+            },
+            landmark=lambda L: _has(L, rest_heal),
+            landmark_desc="Seismic Toss damaged and Rest fully healed Snorlax")
     # --- Pain Split clamps to each mon's own maxhp ---------------------------
     if name in ("painsplitclamp", "painsplitcontrol"):
         # `painsplit.onHit` averages the two HP values and assigns each through
@@ -2248,7 +2302,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "residualspeedpara", "residualspeedparacontrol",
              "residualspeedtie", "residualspeedsand", "residualspeedleech",
              "residualsuborder", "residualberrybeforestatus",
-             "restfullhp", "restdamagedcontrol",
+             "restfullhp", "restdamagedcontrol", "restresidualtail",
              "painsplitclamp", "painsplitcontrol")
 
 
