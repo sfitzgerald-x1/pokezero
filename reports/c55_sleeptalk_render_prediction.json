@@ -1,0 +1,37 @@
+{
+ "schema": "c55-sleeptalk-callee-damage-render-prediction/1",
+ "registers": "the fix identified in reports/c54_sleeptalk_render_contract_mismatch.json",
+ "change": "in rust/pokezero-search/src/events.rs, the Sleep Talk block at ~1479: when identify_sleep_talk_called returns None, emit the callee's damage under the generic unattributed tag instead of applying the instructions silently. The differential's existing unattributed_damage_as_roll / _UNKNOWN_CALLEE_SOURCE path already consumes exactly that, so no matcher change is required.",
+ "offline_simulation": {
+  "method": "simulated the fix by splitting each impossible negative heal component into the generic callee damage the renderer should have emitted plus the real heal, sizing a Leftovers tick as maxhp//16 read from the event line's own denominator",
+  "result": {
+   "unattributed": "476 -> 400 (-76)",
+   "matched": "3,711 -> 3,792 (+81)",
+   "structural": "443 -> 367",
+   "unattributed_generic": "28 -> 28",
+   "same_turn": "5 -> 5"
+  },
+  "family_flow": {
+   "I6_sleeptalk_callee_union": "97 -> 94",
+   "limit:world_sample_drag_target": "265 -> 264",
+   "limit:roll_divergent_lethality": "1270 -> 1269"
+  }
+ },
+ "why_this_one_passes_the_test_the_others_failed": "The retag moved 48 rows INTO I6, a candidate-not-finding family. The lossy marking removed 15 boundaries from measurement. This does neither: every family is flat or slightly DOWN, including I6, and the 76 rows leave the residue by becoming MATCHED. The engine reproduces the observed transition; it was only failing to describe the damage it dealt.",
+ "registered_prediction": {
+  "unattributed": {
+   "before": 476,
+   "after": "~400"
+  },
+  "matched": {
+   "before": 3711,
+   "after": "~3792"
+  },
+  "no_family_may_grow": "a family absorbing rows would mean laundering, and falsifies this",
+  "invariant": "a render repair may only REMOVE divergences, never add them: matched -> divergent must be ZERO",
+  "regression_gate": "tests/test_search_depth_tactics.py, GREEN at 5 tests"
+ },
+ "why_the_numbers_are_approximate": "This is a SIMULATION, not the fix. I reconstructed the split by sizing the Leftovers tick as maxhp//16; the real renderer will emit the engine's own magnitudes, which may differ by a point or by more where the heal is not Leftovers. The direction and rough scale are predicted; the exact count is not, and I am registering '~400' rather than 400 so that a near miss is not read as a pass.",
+ "cost": "a crate change, so the engine fingerprint moves and C42, C45 and C46's era stamps must be mechanically re-derived, not carried forward",
+ "status": "REGISTERED, NOT IMPLEMENTED"
+}
