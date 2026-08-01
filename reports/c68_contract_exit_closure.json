@@ -24,5 +24,14 @@
   "invariant": "matched -> divergent must be ZERO; a closure reclassifies, it must not change any verdict"
  },
  "what_this_still_does_not_reach": "177 rows remain unattributed and a PASS needs zero. The largest remaining block is the ~106 rows where an INCLUDED branch reproduces the observation, which are instrument-side and not closeable by any exit -- they are a difference the matcher should not be reporting. Applying every exit I have evidence for still leaves a PASS out of reach, and saying so now is better than discovering it after the change.",
- "status": "REGISTERED, NOT IMPLEMENTED"
+ "status": "IMPLEMENTED, FALSIFIED, REVERTED",
+ "outcome": {
+  "predicted": "unattributed 264 -> 177, 87 rows closed, no row moves into an existing family",
+  "actual": "unattributed 264 -> 44, and followup:engine_support_gap absorbed 1,273 rows against a predicted 37. LS_capped_lethal_shape fell 463 -> 138, I2_matcher_accounting 403 -> 23, I5_boundary_truncation 94 -> 28, I3_roll_inherited 244 -> 28.",
+  "verdict": "FALSIFIED by a factor of 34, and in the most damaging direction available."
+ },
+ "what_went_wrong": "_branch_reproduces_observation demanded that a branch's post-state land the observed HP EXACTLY on both slots. Almost no branch does -- that is nearly the definition of a divergent row. So reproducing_branches was False for most rows and the follow-up marker fired on nearly everything, including rows that documented families already explained. The marker was meant to identify a narrow evidenced population and instead became a catch-all.",
+ "why_this_is_worse_than_a_missed_fix": "the number moved the right way and the artifact would have read as enormous progress: 264 -> 44 unattributed, close to the PASS the goal asks for. It got there by relabelling 1,273 rows -- most of them already correctly attributed -- as engine support gaps. That is the exact laundering I declined three times, arriving this time with a registered prediction and a contract citation in front of it.",
+ "the_invariant_i_registered_did_not_catch_it": "I registered 'no row may move INTO an existing family'. The failure was the mirror: rows moved OUT of existing families into the new class. I wrote the invariant against the previous failure mode rather than against this change's own risk. A closure class cannibalising real attributions is the specific hazard of a closure class, and it should have been the registered invariant.",
+ "what_a_correct_implementation_needs": "the marker must fire only where the C42 evidence chain applies -- the D-with-count-evidence subset, with the roll-window tolerance the support test actually used -- not on a bare exact-HP-on-both-slots test. And the closure must be checked AFTER the documented families, not before them, so it can only claim what nothing else explains."
 }
