@@ -1,0 +1,65 @@
+{
+ "schema": "c46-trick-attacker-item-gap/1",
+ "population": "the 36 unattributed_generic rows remaining after C45",
+ "finding": "9 of the 36 (25%) are Trick boundaries where the SIMULATOR fails the move and the ENGINE executes the swap.",
+ "controls_run_before_the_writeup": {
+  "enrichment": "Trick appears in 25.0% of unattributed_generic against 0.3% of all other survivors (11 of 3,513) -- an 80x enrichment",
+  "sim_outcome": "9 of 9 cohort rows have |-fail| immediately after the Trick line; outside the cohort only 4 of 11 do",
+  "the_discriminating_condition": "attacker holds NO item in 8 of the 9 cohort rows. Adding the 3 sim-failed Trick rows from outside the cohort: every boundary where the attacker holds no item fails in the simulator, 11 of 11. Where the attacker DOES hold an item the sim failed twice and succeeded twice, so the rule is one-directional and only the no-item arm is claimed."
+ },
+ "the_engine_gap": {
+  "location": "third_party/poke-engine-src/src/gen3/choice_effects.rs Choices::TRICK",
+  "conditions_the_engine_checks": [
+   "attacker_item == defender_item",
+   "!defender.item_can_be_removed()",
+   "defender has Substitute"
+  ],
+  "the_missing_condition": "in gen3 Trick fails when the ATTACKER holds no item. The engine never inspects the attacker's item except to compare it with the defender's, so NONE-vs-HELD passes every check and the engine performs the swap.",
+  "why_the_equality_check_hides_it": "NONE vs NONE is caught by attacker_item == defender_item, so the defect only shows when the defender holds something -- which is exactly the cohort."
+ },
+ "evidence_standard": "There is no Showdown checkout on this box, so the gen3 rule is not confirmed from Showdown's source. It does not need to be: the evidence is the simulator's own output across 11 boundaries, and the simulator is the ground truth this program compares against. A source reading would be weaker evidence than the behaviour.",
+ "registered_prediction": {
+  "change": "add an attacker-holds-no-item early return to the gen3 TRICK effect",
+  "expected": {
+   "unattributed_generic": {
+    "before": 36,
+    "after": 27
+   },
+   "total_unattributed": {
+    "before": 485,
+    "after": 476
+   }
+  },
+  "identity_level_falsifier": "the 9 named Trick rows must clear; any other row changing state falsifies it",
+  "verification_requires": "a vendored-tree rebuild -- this changes the engine fingerprint, so the patch is NOT verified by this registration and the prediction stands open until a rebuild measures it",
+  "regression_gate": "tests/test_search_depth_tactics.py, currently GREEN at 5 tests",
+  "rows_that_must_clear": [
+   "s18100343/52",
+   "s18100475/78",
+   "s18100475/79",
+   "s18500795/64",
+   "s18600362/56"
+  ],
+  "note_on_the_row_list": "5 of the 9 identified by seed/step here; the full set is recoverable from the cohort filter in the same way"
+ },
+ "why_this_one_is_registrable_when_the_74_were_not": "The 74 support gaps are heterogeneous with no mechanism spanning them, so any patch would be scoped to a shape. This has a named mechanism, a single call site, a one-directional rule that held 11 of 11, and a predicted row delta. That is what the pre-registration gate is asking for.",
+ "prediction_outcome": "FALSIFIED",
+ "measured": {
+  "unattributed_generic": "36 -> 36 (predicted 27)",
+  "total_unattributed": "485 -> 485 (predicted 476)",
+  "rows_cleared": 0,
+  "survivor_population": "3,549 -> 3,549, and every family counter byte-identical"
+ },
+ "what_went_wrong": {
+  "the_inference_i_never_checked": "I concluded 'the engine executes the swap' from the presence of an engine-side itemleftovers tick. I never observed a ChangeItem instruction on the pre-fix build. Dumping the branch for the anchor row s18100475/78 after the rebuild shows the engine emits no ChangeItem AND no p1 Leftovers heal at all: [Switch SideTwo P0->P5, SetLastUsedMove x2, Heal SideTwo 14, Damage SideOne 80, ChangeSideCondition SideOne ToxicCount]. The behaviour I patched may never have occurred at these boundaries.",
+  "so_the_gap_is_unproven": "The empirical rule stands -- 11 of 11 boundaries where the attacker holds no item fail in the simulator. What is unproven is that the ENGINE ever disagreed. Without a pre-fix ChangeItem observation there is no measured defect, only a source reading of what the code would do in a case I did not confirm arises.",
+  "the_leftovers_tick_is_still_unexplained": "The miss says p1 engine_only=[('itemleftovers', 16)] while the branch dump shows no p1 heal and a SideTwo heal of 14, not 16. The numbers do not correspond, so the component attribution and the raw instruction stream disagree here. That is the real open question in these 9 rows and it was never the Trick move."
+ },
+ "action_taken": {
+  "reverted": true,
+  "what": "patch removed from third_party/poke-engine-gen3-patches.txt, patch file deleted, PATCHED_TARGET_TREE_SHA256 restored to eb071e08, engine rebuilt",
+  "verified_restored": "the full re-read reproduces 485 unattributed = 444 structural + 36 generic + 5 same_turn, identical to the pre-C46 state",
+  "why_revert_rather_than_keep": "The change is probably correct gen3 behaviour, but it delivered nothing measurable and its justification is refuted. Keeping it would change the engine fingerprint, which by the program's own era rule VOIDS every era-stamped adjudication -- C42, the family audit, the C45 re-derivation. Paying that for an unproven fix with a zero measured delta inverts the cost/benefit the pre-registration gate exists to protect."
+ },
+ "what_this_cycle_was_worth": "The prediction gate did its job. A plausible mechanism, an 80x enrichment, a rule holding 11 of 11, a clean single call site -- and it was still wrong, caught by the registered row delta rather than by review. Had the change been made without a registered prediction it would have shipped as a fidelity improvement and nobody would have learned that the Leftovers discrepancy in these 9 rows has nothing to do with Trick."
+}
