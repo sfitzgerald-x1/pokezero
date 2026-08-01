@@ -62,7 +62,6 @@ from .neural_policy import (
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     OBSERVATION_SCHEMA_VERSION_V3,
-    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     PokeZeroObservationV0,
