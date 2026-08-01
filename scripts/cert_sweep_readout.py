@@ -222,7 +222,14 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                     "move (sweep NEW absorb mechanism; capped variant)")
 
     if "|-boost|" in proto or "|-unboost|" in proto or "|-status|" in proto:
-        for miss in misses:
+        # MAJORITY ARM ONLY -- the same correction C28 made to
+        # roll_scaled_component below, at the site it missed. This rule used to
+        # scan every arm, so a minority branch decided 32 of the 37 rows this
+        # counter held on the C32 sweep, while the majority arm complained about
+        # something a documented family already explains (24 of them I2). I4
+        # states the reason: a tie confined to a minority arm cannot explain the
+        # majority-arm complaint.
+        for miss in [majority]:
             miss_obs, miss_eng = _miss_pairs(miss)
             if len(miss_obs) == 1 and len(miss_eng) == 1 and miss_eng[0][1] != 0:
                 miss_ratio = abs(miss_obs[0][1]) / max(1, abs(miss_eng[0][1]))
