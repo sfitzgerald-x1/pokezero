@@ -115,6 +115,14 @@ def _sibling_arm_carries_observed_components(
     evidence of a carried shape.
     """
 
+    # EXACT magnitudes deliberately. This is stricter than the primary matcher,
+    # which accepts a roll-scaled component at any legal roll -- and that
+    # asymmetry is the ledger's own rule (Appendix X.3.3): "only the verdict that
+    # *reduces* the residue has to clear a bar." LS_structural_arm_echo reduces
+    # the residue, so it clears a higher bar than a match does. Relaxing this to
+    # the matcher's tolerance was considered under C28 and withdrawn:
+    # tests/test_cert_sweep_readout_attribution.py pins the near-miss sibling
+    # case, and the pin is right.
     observed_components = Counter(observed)
     anchor_side = _MISS_SIDE_RE.search(anchor)
     if not observed_components or anchor_side is None:
@@ -214,7 +222,14 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                             "boost/status boundary (WHAT-level candidate, WHY open)")
 
     if cls == "roll_scaled_component":
-        for miss in misses:
+        # MAJORITY ARM ONLY. This rule used to scan every arm, so a 6%-mass
+        # branch could decide the row while the majority arm complained about
+        # something a documented family explains -- 22 of 29 structural rows on
+        # the 52-patch build. I4 below states the reason in its own words: "A tie
+        # confined to a minority arm cannot explain the majority-arm complaint."
+        # This rule was the only documented-family-preempting rule outside the
+        # marked new-mechanism block that reasoned from a minority arm.
+        for miss in [majority]:
             miss_obs, miss_eng = _miss_pairs(miss)
             if len(miss_obs) != len(miss_eng):
                 if _sibling_arm_carries_observed_components(misses, miss, miss_obs):

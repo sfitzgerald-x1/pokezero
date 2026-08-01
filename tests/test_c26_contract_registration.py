@@ -96,12 +96,28 @@ class SourceIdentityTests(unittest.TestCase):
             self.assertEqual(
                 hashlib.sha256(_show(source, relative)).hexdigest(), registered, relative
             )
-            # ...and the working tree still runs exactly those bytes.
-            self.assertEqual(
-                hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(),
-                registered,
-                relative,
-            )
+
+    def test_c26_source_identity_is_superseded_not_silently_stale(self) -> None:
+        """C26 is now historical, and that has to be visible rather than implied.
+
+        This used to assert the working tree still ran the registered bytes,
+        which made C26 the ACTIVE registration. C27 moved the engine fingerprint
+        and C28 moved the readout, so it no longer is. The registered hashes at
+        the pinned commit stay immutable evidence -- checked above -- but the
+        working tree has deliberately diverged, exactly as C15's did, and a
+        successor registration is owed before any sweep runs.
+        """
+
+        gates = _contract()["certification_gates"]
+        current_readout = hashlib.sha256(
+            (ROOT / "scripts" / "cert_sweep_readout.py").read_bytes()
+        ).hexdigest()
+        self.assertNotEqual(
+            current_readout,
+            gates["required_readout_sha256"],
+            "the working tree matches C26 again; either C28 was reverted or the "
+            "successor registration is missing",
+        )
 
 
 class CalibrationAgreementTests(unittest.TestCase):
