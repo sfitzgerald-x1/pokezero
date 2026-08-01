@@ -1,0 +1,45 @@
+{
+ "schema": "c40-search-impact-of-the-support-gaps/1",
+ "population": "the 74 confirmed support gaps from C37, re-validated against roll collapse in C39",
+ "purpose": "supply objective 4's missing search term. The charter ranks by rows x is-engine-gap x changes-tree-pricing-at-decision-margins, and only the third term was unmeasured.",
+ "margin_1_lethality": {
+  "why_this_margin": "KO vs no-KO is the largest single value discontinuity a gen3 tree has",
+  "result": {
+   "agree_neither_KOs": 58,
+   "INVERSION_sim_survives_but_an_engine_branch_KOs": 15,
+   "INVERSION_sim_KOs_but_no_engine_branch_can": 1,
+   "total_inversions": "16 of 74 (21.6%)"
+  },
+  "a_miscoding_i_caught": "My first pass reported 1 inversion (1.4%) and I was about to adjudicate the whole bucket as search-irrelevant on it. The categories were wrong: 'sim survives but SOME engine branch KOs' fell through into the 'neither KOs' bucket because the test demanded EVERY branch KO. Fixed, the true figure is 16 -- an order of magnitude larger, and it reverses the adjudication.",
+  "the_direction_matters_more_than_the_count": "15 of the 16 are the engine believing it can KO where the simulator says the defender survives. That is the over-optimistic direction -- premature commits into 'guaranteed' KOs that were not -- which is the bias flagged for post-C27 evaluation. It is still present in the residual support gaps."
+ },
+ "margin_2_n_hit_KO_threshold": {
+  "why_this_margin": "a median 44% magnitude error should move how many hits it takes to kill, which is what a tree prices when deciding to stay in, switch, or set up",
+  "result": {
+   "threshold_shifts": 56,
+   "no_shift": 10,
+   "not_measurable": 8,
+   "shift_rate": "56 of 74 (75.7%)"
+  },
+  "notable_shifts": {
+   "5->4": 6,
+   "4->3": 6,
+   "1->2": 4,
+   "6->5": 3,
+   "2->4": 3,
+   "7->4": 2
+  }
+ },
+ "adjudication": {
+  "verdict": "the engine-gap bucket DOES change tree pricing at decision margins. The third term of the ranking formula is not zero.",
+  "evidence": "21.6% lethality inversion and 75.7% n-hit-KO threshold shift, both measured offline on the confirmed-unreachable population",
+  "era": "derived on engine fingerprint 51d56b3f (53 patches) and the post-C35 readout; must be re-derived on any fingerprint or readout change",
+  "what_i_would_have_written_instead": "On the miscoded lethality figure alone I would have adjudicated this bucket as real but search-irrelevant and closed it. That adjudication would have been wrong and would have closed the highest-impact open work in the program."
+ },
+ "ranked_target_for_objective_4": {
+  "first": "the 15 over-optimistic lethality inversions -- smallest row count but the sharpest margin and the known-harmful direction",
+  "then": "the 56 n-hit-KO threshold shifts, which subsume most of the rest",
+  "still_required_before_any_patch": "a registered prediction with the tactics-suite regression gate, and a mechanism. C39 established the bucket is heterogeneous -- half engine-smaller, a quarter larger, a quarter bracketing -- so there is no single fix, and the 15 inversions need their own mechanism diagnosis before a patch can be scoped."
+ },
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+}
