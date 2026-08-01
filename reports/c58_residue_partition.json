@@ -29,5 +29,23 @@
  "era": {
   "engine_fingerprint": "c50da60a",
   "differential_sha256": "dc78c413f08cae137693569cd01931bd49fcc24535ce73210566861e9695b786"
+ },
+ "CORRECTED": {
+  "the_defect_in_my_own_instrument": "The partition used net HP per slot between the boundary's pre and post features. That is meaningless whenever the ACTIVE CHANGED on a slot, because the two HP readings then belong to DIFFERENT Pokemon. Found by reading s18000268/37, where observed p2 nets +17 while the matching branch nets -96 and my test passed it anyway: p2 had switched to Cradily, so 184 and 239 are different mons.",
+  "scope": {
+   "no slot switched (test valid)": 236,
+   "one slot switched": 101,
+   "both switched": 4,
+   "unreliable share": "105 of 341 = 30.8%"
+  },
+  "corrected_partition_over_the_236_valid_rows": {
+   "an INCLUDED branch reproduces the observation": 132,
+   "no branch reproduces it at all": 53,
+   "only an EXCLUDED attribution-unsafe branch does": 50,
+   "error": 1
+  },
+  "what_changed": "The engine-gap bucket falls hardest: 107 -> 53 among rows where the test is valid. The original 107 absorbed switch rows whose HP comparison was nonsense. The instrument bucket falls 183 -> 132. The comparison-limit bucket is unchanged at 50, because it is defined by the branch's lossy severity rather than by the HP test.",
+  "what_the_headline_should_have_been": "Not '54/31/15 instrument/engine/limit over 341'. It is 132/53/50 over the 236 rows the instrument can actually judge, with 105 rows unmeasured by this method. The 46%-cannot-be-cleared-by-matcher-work claim rested on the inflated 107 and does not survive: on valid rows it is 103 of 236, 44%, which happens to land close, but by arithmetic rather than by the evidence I cited.",
+  "how_to_measure_the_105": "compare per-Pokemon rather than per-slot: identify the active on each side before and after, and compare HP for the mon that was actually present. The row payloads carry active_changed and the protocol carries the switch lines, so this is available offline."
  }
 }
