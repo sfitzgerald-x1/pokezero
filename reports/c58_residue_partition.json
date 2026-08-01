@@ -1,0 +1,33 @@
+{
+ "schema": "c58-residue-partition/1",
+ "population": "all 341 unattributed rows at fingerprint c50da60a, post-C55 and post-C57",
+ "method": "for each row, ask where the match lives: in a branch the differential INCLUDES, in one it EXCLUDES as attribution-unsafe, or nowhere. 'Match' is net HP on both slots, exactly or within the legal roll window.",
+ "partition": {
+  "an INCLUDED branch reproduces the observation": {
+   "rows": 183,
+   "share": "53.7%",
+   "bucket": "instrument-artifact",
+   "reading": "the engine reaches the observed HP outcome on a branch the matcher considered and rejected, so the rejection is at the component-decomposition level, not the outcome level"
+  },
+  "no branch reproduces the observation at all": {
+   "rows": 107,
+   "share": "31.4%",
+   "bucket": "engine-gap",
+   "reading": "the transition is outside the engine's enumerated support. The 50 rows confirmed unreachable by the C37 method are a subset."
+  },
+  "only an EXCLUDED attribution-unsafe branch reproduces it": {
+   "rows": 50,
+   "share": "14.7%",
+   "bucket": "comparison-limit",
+   "reading": "C57 admitted the 27 lossy-only branches; these are the ones the renderer says it genuinely cannot attribute. Excluding them is correct -- admitting an unobservable attribution could manufacture a false MATCH."
+  },
+  "error": 1
+ },
+ "why_this_artifact_is_worth_having": "Objective 3 bucketed FAMILIES. This buckets the actual remaining ROWS, which is the thing the certification gate counts. It says how much of the 341 is instrument, how much is engine, and how much is a limit -- 54/31/15 -- so the next fix can be chosen by where the mass is rather than by which shape happens to be legible.",
+ "the_limit_of_the_test": "'Reproduces the observation' is net HP per slot; the matcher compares component decompositions. So the 183 are rows where the OUTCOME is reached and the decomposition is rejected -- which is strong evidence of an instrument issue but not proof, since a branch can legitimately differ in how it splits the same net HP. Calling them instrument-artifact is a bucketing judgement on that evidence, not a measurement of the decomposition itself.",
+ "what_it_implies_for_a_PASS": "107 rows are engine-support gaps and will not yield to matcher work. 50 are a comparison limit the producer itself cannot resolve. Together that is 157 of 341 -- 46% -- that no instrument fix can clear. A PASS at zero unattributed therefore requires either engine changes that widen support, or those shapes closed as documented follow-ups and evidence-backed limits under the contract's own three exits.",
+ "era": {
+  "engine_fingerprint": "c50da60a",
+  "differential_sha256": "dc78c413f08cae137693569cd01931bd49fcc24535ce73210566861e9695b786"
+ }
+}
