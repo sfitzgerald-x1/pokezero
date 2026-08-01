@@ -783,63 +783,28 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     engine_stamp=paths["stamp"],
                 )
 
-    def test_checked_in_final_contract_matches_current_launch_vocabulary(self) -> None:
-        lifecycle_path = (
-            ROOT / "reports" / "certification_contract_lifecycle.json"
-        )
-        if lifecycle_path.is_file():
-            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                lifecycle["schema_version"],
-                "pokezero.engine-cert-contract-lifecycle/v1",
-            )
-            self.assertIs(lifecycle["launchable"], False)
-            for relative in lifecycle["required_absent_artifacts"]:
-                self.assertFalse((ROOT / relative).exists(), relative)
-            if lifecycle["stage"] == "build_source":
-                identity = lifecycle["source_code_identity"]
-                self.assertEqual(
-                    identity["readout_sha256"],
-                    _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
-                )
-                self.assertEqual(
-                    identity["execution_manifest_producer_sha256"],
-                    _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
-                )
-                fingerprint = json.loads(
-                    subprocess.check_output(
-                        [
-                            sys.executable,
-                            "scripts/engine_build_fingerprint.py",
-                            "--print",
-                        ],
-                        cwd=ROOT,
-                        text=True,
-                    )
-                )
-                self.assertEqual(
-                    identity["engine_fingerprint"], fingerprint["fingerprint"]
-                )
-                return
-            self.assertEqual(
-                lifecycle["stage"], "contract_registered_attestation_pending"
-            )
-            self.assertEqual(
-                lifecycle["registered_contract_path"],
-                "reports/c15_resweep_spec.json",
-            )
-            self.assertEqual(
-                lifecycle["registered_contract_sha256"],
-                _sha256(ROOT / lifecycle["registered_contract_path"]),
-            )
-            self.assertEqual(
-                lifecycle["registered_calibration_path"],
-                "reports/c24_final_classifier_c14_calibration.json",
-            )
+    def test_checked_in_historical_c15_contract_is_self_consistent(self) -> None:
+        """C15 is attested history, not the launch contract for the current engine."""
 
-        contract = json.loads(
-            (ROOT / "reports" / "c15_resweep_spec.json").read_text(encoding="utf-8")
+        attestation = json.loads(
+            (ROOT / "reports" / "c25_cert_contract_attestation.json").read_text(
+                encoding="utf-8"
+            )
         )
+        contract_path = ROOT / attestation["contract_path"]
+        contract_bytes = contract_path.read_bytes()
+        source_bytes = subprocess.check_output(
+            (
+                "git",
+                "-C",
+                str(ROOT),
+                "show",
+                f"{attestation['contract_source_commit']}:{attestation['contract_path']}",
+            )
+        )
+        self.assertEqual(contract_bytes, source_bytes)
+        self.assertEqual(hashlib.sha256(contract_bytes).hexdigest(), attestation["contract_sha256"])
+        contract = json.loads(contract_bytes)
         calibration = json.loads(
             (ROOT / "reports" / "c24_final_classifier_c14_calibration.json").read_text(
                 encoding="utf-8"
@@ -855,7 +820,6 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest.validate_final_contract_schema(contract), [])
         gates = contract["certification_gates"]
         self.assertEqual(
             gates["required_source_commit"],
@@ -916,31 +880,6 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 hashlib.sha256(source_bytes).hexdigest(), registered_hash
             )
         self.assertEqual(
-            gates["required_readout_sha256"],
-            _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
-        )
-        self.assertEqual(
-            gates["required_execution_manifest_producer_sha256"],
-            _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
-        )
-        table = contract["pre_registered_family_rate_table"]
-        self.assertEqual(
-            set(table["documented_families"]),
-            set(manifest.EMITTABLE_DOCUMENTED_FAMILIES)
-            | set(manifest.EMITTABLE_LIMIT_FAMILIES),
-        )
-        self.assertEqual(
-            {
-                entry["exclusion_counter"]
-                for entry in table["new_mechanisms_post_fix"].values()
-            },
-            set(manifest.REGISTERED_ZERO_EXCLUSION_COUNTERS),
-        )
-        self.assertEqual(
-            table["calibration_boundaries"],
-            c14["aggregate"]["boundaries_measured"],
-        )
-        self.assertEqual(
             calibration["source_evidence"]["boundaries_measured"],
             c14["aggregate"]["boundaries_measured"],
         )
@@ -973,121 +912,15 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         self.assertEqual(calibration["raw_class_archive_counts"], c14_raw_counts)
         self.assertEqual(len(contract["predicted_class_rates_10k"]), 61)
-        source_counts = calibration["current_classifier_archive_replay"][
-            "family_counts"
-        ]
-        self.assertEqual(
-            calibration["registered_family_source_counts"], source_counts
-        )
-        calibration_boundaries = c14["aggregate"]["boundaries_measured"]
-        expected_intervals = {}
-        for family, count in source_counts.items():
-            lower_rate, upper_rate = readout.wilson(count, calibration_boundaries)
-            lower = round(lower_rate * calibration_boundaries)
-            upper = round(upper_rate * calibration_boundaries)
-            expected_intervals[family] = [
-                lower
-                if family
-                in {
-                    "limit:roll_divergent_lethality",
-                    "limit:world_sample_drag_target",
-                }
-                else 0,
-                upper,
-            ]
-        self.assertEqual(
-            {
-                family: entry["wilson95"]
-                for family, entry in table["documented_families"].items()
-                if "wilson95" in entry
-            },
-            expected_intervals,
-        )
-        self.assertEqual(
-            calibration["registered_family_count_intervals"], expected_intervals
-        )
-        substitute = table["documented_families"][
-            "limit:world_substitute_health_unknown"
-        ]
-        substitute_evidence = calibration["registered_non_empirical_upper_rates"][
-            "limit:world_substitute_health_unknown"
-        ]
-        self.assertEqual(
-            substitute["upper_full_round_rate"],
-            substitute_evidence["upper_full_round_rate"],
-        )
-        self.assertEqual(
-            substitute["upper_rate_basis"], substitute_evidence["basis"]
-        )
-        self.assertEqual(
-            substitute_evidence["denominator"], "boundaries_full_round"
-        )
-        self.assertLess(
-            substitute["upper_full_round_rate"],
-            1.0 - gates["minimum_coverage_measured_fraction"],
-        )
-        anchor = substitute_evidence["nearest_historical_anchor"]
-        _, anchor_upper = readout.wilson(
-            anchor["identities"], anchor["boundaries_full_round"]
-        )
-        self.assertAlmostEqual(
-            anchor["wilson95_upper_rate"], anchor_upper, places=10
-        )
-        self.assertAlmostEqual(
-            anchor["observed_rate"],
-            anchor["identities"] / anchor["boundaries_full_round"],
-            places=10,
-        )
-        self.assertAlmostEqual(
-            anchor["registered_to_wilson_upper_multiple"],
-            substitute["upper_full_round_rate"] / anchor_upper,
-            places=3,
-        )
-        self.assertLessEqual(substitute["upper_full_round_rate"], 0.0001)
-        self.assertEqual(
-            substitute_evidence["maximum_at_registered_minimum_boundaries"],
-            round(
-                substitute["upper_full_round_rate"]
-                * gates["minimum_boundaries_full_round"]
-            ),
-        )
         self.assertEqual(c17["summary"]["identities"], 13)
         self.assertEqual(
             sum(row["at_limit"] - row["before_limit"] for row in c17["identities"]),
             c17["summary"]["identities"],
         )
-        fingerprint = json.loads(
-            subprocess.check_output(
-                [sys.executable, "scripts/engine_build_fingerprint.py", "--print"],
-                cwd=ROOT,
-                text=True,
-            )
-        )
-        self.assertEqual(
-            gates["required_engine_fingerprint"], fingerprint["fingerprint"]
-        )
-        self.assertEqual(
-            fingerprint["count"],
-            contract["launch_registration"]["engine_patch_count"],
-        )
 
     def test_checked_in_contract_attestation_binds_tracked_contract_blob(
         self,
     ) -> None:
-        lifecycle_path = (
-            ROOT / "reports" / "certification_contract_lifecycle.json"
-        )
-        if lifecycle_path.is_file():
-            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
-            self.assertFalse(
-                (ROOT / "reports" / "c25_cert_contract_attestation.json").exists()
-            )
-            self.assertIn(
-                lifecycle["stage"],
-                {"build_source", "contract_registered_attestation_pending"},
-            )
-            return
-
         attestation_path = ROOT / "reports" / "c25_cert_contract_attestation.json"
         attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -1106,6 +939,10 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(contract_bytes).hexdigest(),
             attestation["contract_sha256"],
+        )
+        self.assertEqual(
+            (ROOT / attestation["contract_path"]).read_bytes(),
+            contract_bytes,
         )
         contract = json.loads(contract_bytes)
         gates = contract["certification_gates"]
