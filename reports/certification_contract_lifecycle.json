@@ -1,8 +1,8 @@
 {
   "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "contract_registered_attestation_pending",
+  "stage": "attested_fail",
   "launchable": false,
-  "launchable_note": "The lifecycle is launchable only once a validated sweep attestation exists. The registered contract below is what authorises the fresh sweep; this flag tracks whether the repository holds a completed certification package, and it stays false until reports/c32_current_engine_attestation.json is written against that contract.",
+  "launchable_note": "The C32 sweep ran to completion and FAILED. The lifecycle records an attested negative result; it is not launchable and must not be read as certified.",
   "purpose": "The C32 contract and its archival calibration are registered together against the frozen 53-patch build source. The sweep attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
   "supersedes": {
     "registration": "C26",
@@ -13,9 +13,7 @@
     "why": "C26 pinned the 51-patch engine and the pre-C28 readout. It was registered, its launcher enforcement and contract attestation were completed, and then a pre-launch diagnostic showed it would fail with roughly 4,800 unattributed rows. The sweep was deliberately held rather than spent, so its eight 1,250-game blocks from 16,000,000 remain unconsumed. Its artifacts stay as immutable evidence and its seed blocks stay burned rather than recycled.",
     "diagnosis": "docs/engine_c26_structural_residue_diagnosis_20260731.md"
   },
-  "required_absent_artifacts": [
-    "reports/c32_current_engine_attestation.json"
-  ],
+  "required_absent_artifacts": [],
   "source_code_identity": {
     "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
     "readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
@@ -26,5 +24,12 @@
   "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash.",
   "registered_contract_path": "reports/c32_current_engine_resweep_spec.json",
   "registered_contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
-  "registered_calibration_path": "reports/c32_current_engine_calibration.json"
+  "registered_calibration_path": "reports/c32_current_engine_calibration.json",
+  "registered_sweep_attestation_path": "reports/c32_current_engine_attestation.json",
+  "result": {
+    "verdict": "FAIL",
+    "unattributed_rows": 3882,
+    "coverage": 0.9587,
+    "run_id": "cert-c32-20260801b"
+  }
 }

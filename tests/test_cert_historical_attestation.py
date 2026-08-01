@@ -88,10 +88,23 @@ class HistoricalCertificationAttestationTests(unittest.TestCase):
         self.assertIs(lifecycle["launchable"], False)
         self.assertIn(
             lifecycle["stage"],
-            {"build_source", "contract_registered_attestation_pending"},
+            # attested_fail is a real terminal state, added when C32 ran to
+            # completion and failed. A negative result is evidence the program is
+            # designed to produce, so the lifecycle has to be able to express it
+            # rather than looking forever pending.
+            {"build_source", "contract_registered_attestation_pending", "attested_fail"},
         )
         for relative in lifecycle["required_absent_artifacts"]:
             self.assertFalse((ROOT / relative).exists(), relative)
+        if lifecycle["stage"] == "attested_fail":
+            attestation = ROOT / lifecycle["registered_sweep_attestation_path"]
+            self.assertTrue(attestation.is_file())
+            import json as _json
+            payload = _json.loads(attestation.read_text(encoding="utf-8"))
+            self.assertEqual(payload["verdict"], "FAIL")
+            self.assertEqual(lifecycle["result"]["verdict"], "FAIL")
+            self.assertIs(lifecycle["launchable"], False)
+            return
         if lifecycle["stage"] == "build_source":
             for field in (
                 "registered_contract_path",

@@ -309,13 +309,26 @@ class ContractAttestationTests(unittest.TestCase):
     def test_the_sweep_result_attestation_is_a_different_artifact(self) -> None:
         """A contract attestation must never be mistaken for a sweep result."""
 
-        self._attestation()
+        contract_att = self._attestation()
         self.assertNotEqual(self.PATH, ATTESTATION_PATH)
-        self.assertFalse(ATTESTATION_PATH.exists())
         lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))
         self.assertNotIn(
             str(self.PATH.relative_to(ROOT)), lifecycle["required_absent_artifacts"]
         )
+        if not ATTESTATION_PATH.exists():
+            return
+        # Once the sweep has run, the two must stay distinguishable: one binds
+        # contract BYTES, the other reports a sweep RESULT. Conflating them is how
+        # a registration gets read as a certification.
+        sweep_att = json.loads(ATTESTATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract_att["schema_version"], "pokezero.engine-cert-contract-attestation/v1"
+        )
+        self.assertEqual(
+            sweep_att["schema_version"], "pokezero.engine-cert-sweep-attestation/v1"
+        )
+        self.assertIn("verdict", sweep_att)
+        self.assertNotIn("verdict", contract_att)
 
 
 class LifecycleTests(unittest.TestCase):
