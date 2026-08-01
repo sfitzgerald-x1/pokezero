@@ -4263,7 +4263,7 @@ def observation_from_player_state(
         attention_mask=attention_mask,
         legal_action_mask=state.legal_action_mask,
         perspective=state.perspective,
-        metadata=_observation_metadata(state),
+        metadata=_observation_metadata(state, dex=dex),
         schema_version=spec.schema_version,
     )
 
@@ -5648,6 +5648,61 @@ def _healthy_grounded_bench(
     return count
 
 
+def field_credit_values(
+    state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None",
+) -> dict[str, float]:
+    """The six settled Part-B column values (spec v4), by metadata key.
+
+    SINGLE DERIVATION, TWO CONSUMERS — the same rule the pack itself is built on. The Python
+    encoder writes these, and ``_observation_metadata`` publishes the identical numbers so the
+    native Rust leaf encoder can read them instead of re-implementing the gen3 grounding rule.
+    A re-derivation is exactly the kind of thing that drifts silently between two languages.
+    """
+
+    values: dict[str, float] = {}
+    values["self_hazard_credit"] = min(1.0, state.self_hazard_damage_suffered / _TEAM_SIZE)
+    values["opponent_hazard_credit"] = min(
+        1.0, state.opponent_hazard_damage_suffered / _TEAM_SIZE
+    )
+    self_layers = min(
+        3, sum(int(state.self_side_condition_counts.get(n, 0)) for n in _HAZARD_CONDITIONS)
+    )
+    opp_layers = min(
+        3, sum(int(state.opponent_side_condition_counts.get(n, 0)) for n in _HAZARD_CONDITIONS)
+    )
+    values["self_hazard_expected"] = (
+        min(
+            1.0,
+            _healthy_grounded_bench(state.self_team, beliefs_by_species=None, dex=dex)
+            * _SPIKES_DAMAGE_BY_LAYERS[self_layers]
+            / _TEAM_SIZE,
+        )
+        if self_layers
+        else 0.0
+    )
+    values["opponent_hazard_expected"] = (
+        min(
+            1.0,
+            _healthy_grounded_bench(
+                state.opponent_team,
+                beliefs_by_species=state.belief_view.opponent_by_species(),
+                dex=dex,
+            )
+            * _SPIKES_DAMAGE_BY_LAYERS[opp_layers]
+            / _TEAM_SIZE,
+        )
+        if opp_layers
+        else 0.0
+    )
+    values["self_items_removed_credit"] = min(1.0, state.self_items_removed / _TEAM_SIZE)
+    values["opponent_items_removed_credit"] = min(
+        1.0, state.opponent_items_removed / _TEAM_SIZE
+    )
+    return values
+
+
 def _encode_field_credit_features(
     num_row: list[float],
     state: PlayerRelativeBattleState,
@@ -5663,58 +5718,18 @@ def _encode_field_credit_features(
     exactly as "layers we laid" means NUMERIC_OPP_HAZARDS.
     """
 
-    # B1 — realized payoff. The parser's per-side ledger accumulates each ``[from] Spikes`` hit as
-    # a fraction of the struck mon's own max HP; dividing by the team turns that into the share of
-    # a whole team's HP the layers have already taken off.
-    if state.self_hazard_damage_suffered:
-        _set_numeric(
-            num_row,
-            NUMERIC_SELF_HAZARD_CREDIT,
-            min(1.0, state.self_hazard_damage_suffered / _TEAM_SIZE),
-        )
-    if state.opponent_hazard_damage_suffered:
-        _set_numeric(
-            num_row,
-            NUMERIC_OPP_HAZARD_CREDIT,
-            min(1.0, state.opponent_hazard_damage_suffered / _TEAM_SIZE),
-        )
-    # B2 — what the remaining layers are still worth: how many grounded, living bench mons are
-    # left to walk into them, times what one entry costs at the current layer count, on the same
-    # team-HP scale as B1. Zero whenever there are no layers, so the two columns read as a
-    # matched (spent, remaining) pair.
-    self_layers = min(3, sum(int(state.self_side_condition_counts.get(name, 0)) for name in _HAZARD_CONDITIONS))
-    opp_layers = min(3, sum(int(state.opponent_side_condition_counts.get(name, 0)) for name in _HAZARD_CONDITIONS))
-    if self_layers:
-        grounded = _healthy_grounded_bench(state.self_team, beliefs_by_species=None, dex=dex)
-        _set_numeric(
-            num_row,
-            NUMERIC_SELF_HAZARD_EXPECTED,
-            min(1.0, grounded * _SPIKES_DAMAGE_BY_LAYERS[self_layers] / _TEAM_SIZE),
-        )
-    if opp_layers:
-        grounded = _healthy_grounded_bench(
-            state.opponent_team,
-            beliefs_by_species=state.belief_view.opponent_by_species(),
-            dex=dex,
-        )
-        _set_numeric(
-            num_row,
-            NUMERIC_OPP_HAZARD_EXPECTED,
-            min(1.0, grounded * _SPIKES_DAMAGE_BY_LAYERS[opp_layers] / _TEAM_SIZE),
-        )
-    # B4 — items-removed credit, /6 (items per team), same team denominator as the hazard block.
-    if state.self_items_removed:
-        _set_numeric(
-            num_row,
-            NUMERIC_SELF_ITEMS_REMOVED_CREDIT,
-            min(1.0, state.self_items_removed / _TEAM_SIZE),
-        )
-    if state.opponent_items_removed:
-        _set_numeric(
-            num_row,
-            NUMERIC_OPP_ITEMS_REMOVED_CREDIT,
-            min(1.0, state.opponent_items_removed / _TEAM_SIZE),
-        )
+    values = field_credit_values(state, dex=dex)
+    for key, column in (
+        ("self_hazard_credit", NUMERIC_SELF_HAZARD_CREDIT),
+        ("opponent_hazard_credit", NUMERIC_OPP_HAZARD_CREDIT),
+        ("self_hazard_expected", NUMERIC_SELF_HAZARD_EXPECTED),
+        ("opponent_hazard_expected", NUMERIC_OPP_HAZARD_EXPECTED),
+        ("self_items_removed_credit", NUMERIC_SELF_ITEMS_REMOVED_CREDIT),
+        ("opponent_items_removed_credit", NUMERIC_OPP_ITEMS_REMOVED_CREDIT),
+    ):
+        value = values[key]
+        if value:
+            _set_numeric(num_row, column, value)
 
 
 def _side_condition_features(counts: Mapping[str, int]) -> tuple[float, float]:
@@ -7087,8 +7102,13 @@ def _encode_action_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if pokemon is not None else 0.0)
 
 
-def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
+def _observation_metadata(
+    state: PlayerRelativeBattleState, *, dex: "ShowdownDex | None" = None
+) -> dict[str, Any]:
     return {
+        # Part B's settled column values, published so the native leaf encoder reads the same
+        # numbers this encoder writes rather than re-deriving the grounding rule in Rust.
+        **field_credit_values(state, dex=dex),
         "battle_id": state.battle_id,
         "player_id": state.player_id,
         "request_kind": state.request_kind,
@@ -7157,6 +7177,21 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_hazard_damage_suffered": state.opponent_hazard_damage_suffered,
         "self_items_removed": state.self_items_removed,
         "opponent_items_removed": state.opponent_items_removed,
+        "self_arrived_by_baton_pass": state.self_arrived_by_baton_pass,
+        "opponent_arrived_by_baton_pass": state.opponent_arrived_by_baton_pass,
+        "self_choice_locked": state.self_choice_locked,
+        "opponent_choice_locked": state.opponent_choice_locked,
+        "self_item_swapped": state.self_item_swapped,
+        "opponent_item_swapped": state.opponent_item_swapped,
+        # The matchup-conditional pair, ALREADY conditioned on our current active. It travels
+        # on the metadata rather than through FoldProducts because products deliberately carry
+        # only the encoder-consumed tendency surface — verified when the golden fold sample was
+        # patched and products came back byte-identical. The native leaf encoder reads it from
+        # here, exactly as it reads the other boundary facts.
+        "opponent_matchup_switch_evidence": {
+            species: list(pair)
+            for species, pair in state.opponent_matchup_switch_evidence.items()
+        },
     }
 
 
