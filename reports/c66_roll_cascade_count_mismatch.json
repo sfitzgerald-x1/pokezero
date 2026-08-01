@@ -1,0 +1,21 @@
+{
+ "schema": "c66-roll-cascade-count-mismatch/1",
+ "found_by": "reading the component lists of the 23 exact-outcome switch rows, after every generated hypothesis in the preceding cycles had been refuted",
+ "the_mechanism": "The engine picks a legal damage roll that differs from the simulator's. That difference propagates: a Wish or Recover that would have capped the mon at full no longer does, so a Leftovers tick which had nothing to do now has 4 HP of room and emits a line. The NET HP change is identical; the COMPONENT COUNT is not. The matcher rejects on count before any roll tolerance is applied, so a difference entirely explained by a legal roll is rejected by a structural check.",
+ "worked_example": {
+  "row": "s18000588/37",
+  "observed": "[('', -41), ('movewish_to_full', 119)] -> net +78",
+  "engine": "[('', -45), ('movewish', 119), ('itemleftovers_to_full', 4)] -> net +78",
+  "reading": "-41 and -45 are one legal roll apart. At -41 the Wish tops the mon out and Leftovers is a no-op with no line. At -45 the Wish leaves 4 HP short and Leftovers fills it, adding a third component."
+ },
+ "measured_over_the_count_mismatch_rows": {
+  "SAME net HP, different component count": 84,
+  "net differs beyond a legal roll": 34,
+  "net differs but within one legal roll": 2,
+  "share_that_is_net_identical": "84 of 120 = 70.0%"
+ },
+ "why_this_is_the_first_solid_lead_in_several_cycles": "It is not an enrichment, a proxy, or an inference from one row. The two component lists sum to the same number, and the arithmetic linking the roll difference to the extra component is visible in each example. C60 predicted this shape without naming it: 'a length check cannot distinguish the engine modelling a different outcome from the engine rendering the same outcome with a different number of events'. This is a third case it also cannot distinguish -- the engine modelling a legally different ROLL whose downstream capping differs.",
+ "what_a_fix_would_have_to_respect": "NOT simply comparing net HP. Net-equality is exactly the false-match risk the exact-component comparison exists to prevent: damage and heals that coincidentally sum alike are not the same transition. A sound repair has to establish that the count difference is CAUSED by the roll difference -- that the extra component is a cap-filling residual whose magnitude equals the roll gap -- rather than merely observing that the totals agree. In s18000588/37 the extra itemleftovers is 4 and the roll gap is 4, and that identity is what would license the match.",
+ "ceiling": "84 candidate rows, and lower once the causal condition above is required rather than net equality alone.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+}
