@@ -33,5 +33,24 @@
   "coverage_cost": "15 boundaries out of the 476 unattributed. Against 787,376 measured boundaries that is 0.002%, so the coverage gate at 0.9587 is not materially moved by the loss itself.",
   "the_extrapolation_i_am_NOT_making": "This is measured over the unattributed set only. The lossy rule would apply to every boundary in a sweep, including the matched majority. C52's control gives the base rate -- 0.8% of attributed rows carry a defective branch against 16.6% of unattributed -- and matched boundaries by definition had a branch that matched, so all-branches-defective should be rarer still. That is a reasoned expectation, not a measurement, and the sweep-wide cost is unknown.",
   "what_is_still_unmeasured": "The BENEFIT. I measured what the lossy rule costs and not what it clears. Removing a defective branch only helps if another branch then matches, and I have not run that. The decision between lossy-marking and rendering the callee event cannot be made on a cost figure alone, and I am not going to present a half-measured trade as though it were a recommendation."
- }
+ },
+ "alternative_measured_benefit": {
+  "result": {
+   "unaffected (no defective branch)": 377,
+   "clean branches remain but none matches -> still diverges": 75,
+   "all defective -> skip_lossy, row LEAVES the measured set": 15,
+   "CLEAN branch reproduces the observation -> row clears": 8,
+   "error": 1
+  },
+  "the_trade": "clears 8 rows; removes 15 boundaries from measurement; leaves 75 unchanged",
+  "verdict": "REJECTED TOO. It removes more boundaries from measurement than it clears rows.",
+  "why_that_is_disqualifying": "A skipped boundary is not an explained one. It leaves the denominator, so the residue shrinks without anything being understood -- the same objection that killed the retag, arriving by a different route. Trading 15 hidden boundaries for 8 cleared rows makes the certification number look better and the engine no more faithful."
+ },
+ "both_instrument_side_repairs_are_now_eliminated_on_measurement": {
+  "retag": "48 of its 48 gains land in I6_sleeptalk_callee_union, a candidate-not-finding family",
+  "lossy_marking": "clears 8, hides 15",
+  "what_survives": "rendering the Sleep Talk callee's damage event in the crate. It is the only repair that addresses the cause: the branch's HP outcome is already correct, so making the event stream describe the damage it actually dealt turns 79 mis-decomposed branches into correctly decomposed ones without moving a single row into an unevidenced family or out of the measured set.",
+  "its_cost": "an engine-consumer change, so the fingerprint moves and every era-stamped adjudication must be mechanically re-derived. That is a real cost and this session has paid it once already for C46, where the re-derivation returned identical results."
+ },
+ "what_this_investigation_produced": "A confirmed mechanism, two candidate repairs, and both repairs eliminated on measured grounds rather than taste. The remaining path is single and specified. Four cycles produced no movement in the residue and that is the correct outcome: the two ways to move it quickly were both forms of hiding rows, and finding that out cost less than shipping either."
 }
