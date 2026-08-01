@@ -702,8 +702,17 @@ POSITIONS: tuple[PositionSpec, ...] = (
         name="perish-clock",
         title="Perish Song clock (needs d5: 4 turns + forced-replacement ply)",
         derivation=(
-            "toss=100 exact; surf avg 75 (five surfs = 375 < 620, crit never in range => the "
-            "trap arm is a STRICT forced loss, no crit lottery). A at 310 survives exactly "
+            "toss=100 exact; surf non-crit base 82 (rolls 69-82, avg arm 75), crit base 165 "
+            "(rolls 140-165, avg arm 152). ERRATUM (C27): this derivation previously claimed "
+            "'crit never in range => a STRICT forced loss, no crit lottery', reasoning from a "
+            "single hit against 620 and from AVERAGE rolls. The trap's win is cumulative: A "
+            "gets exactly four surfs before the fourth toss kills it, and 4 x 152 = 608 < 620 "
+            "while 4 x 165 = 660 > 620. Three average crits leave Blissey on 164, which is "
+            "inside the crit straddle window (140, 165], so a fourth crit rolling high enough "
+            "is lethal. The pre-C27 engine could not represent that line because its crit arm "
+            "carried only the average roll; the strict zero was an artifact of the incomplete "
+            "branch support, not a property of the position. The trap arm is bounded by the "
+            "crit lottery like every other position, at order 1e-6. A at 310 survives exactly "
             "three tosses. Perish sung at T1 faints B at the end of T4 while benched "
             "Registeel survives untouched => terminal WIN at ply 4. Sung at T2+, our side "
             "is emptied mid-T5 (A dead mid-T4, one-toss fodder dead mid-T5) before the "

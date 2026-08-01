@@ -1180,3 +1180,19 @@ poke-engine-gen3-toxic-stage-cap.patch
 # the frozen stack above because older zero-context fallback patches retain
 # their exact application positions.
 poke-engine-gen3-recharge-forced-replacement.patch
+
+# C27 crit-arm kill split. The gen3 brancher already partitions the KO
+# threshold when the NON-CRIT roll range straddles it, using
+# compare_health_with_damage_multiples for exact masses and an exact non-kill
+# representative. The sibling path -- non-crit can never kill -- split crit from
+# non-crit but collapsed the crit arm to its AVERAGE roll, so when the crit
+# range straddled the defender's HP the other side of that threshold was absent
+# from the branch support entirely. The engine then asserted a KO a legal crit
+# roll would not have scored (or the reverse), which the tree prices as full
+# crit mass on one outcome at exactly the tactical margins. Applies the existing
+# identity to the crit arm rather than standing a second partitioner beside it,
+# and fixes that identity dropping a roll landing EXACTLY on the defender's HP
+# from both buckets -- exact-equal is lethal, and its mass was silently priced
+# as a survival. Measured before the patch in
+# reports/c27_kill_split_premeasure.json.
+poke-engine-gen3-crit-kill-split.patch

@@ -127,8 +127,18 @@ class DepthTacticsSuite(unittest.TestCase):
 
     def test_trap_moves_win_at_most_the_crit_lottery(self) -> None:
         """The trap arm's achievable win probability is bounded by the crit
-        lotteries the engine's own KO-split branching admits (strictly zero
-        on perish-clock, whose trap can never reach crit range)."""
+        lotteries the engine's own KO-split branching admits.
+
+        perish-clock used to assert a strict zero here, justified as "its trap
+        can never reach crit range". C27 showed that claim was overclaimed, and
+        the correction is a proof erratum rather than a regression: the trap
+        wins on FOUR consecutive crits, because three average crits leave
+        Blissey on 164 and a fourth crit rolling 164-165 out of its 140-165
+        range is lethal. The pre-C27 engine collapsed the crit arm to its
+        average roll (152, four of which total 608 < 620), so it could not
+        represent that line at all. The zero measured the missing branch, not
+        the position. See scripts/depth_tactics_probe.py for the arithmetic.
+        """
         for name, (spec, state) in self.states.items():
             if name == "immediate-ko-control":
                 continue  # its "trap" is merely inferior, not a forced loss
@@ -140,7 +150,17 @@ class DepthTacticsSuite(unittest.TestCase):
                     f"{name}: trap {spec.trap_move} p_win_upper {upper}",
                 )
                 if name == "perish-clock":
-                    self.assertEqual(upper, 0.0, "perish trap must be a strict forced loss")
+                    # Bounded by four consecutive crits; strictly positive
+                    # because that line is real and now representable.
+                    self.assertGreater(
+                        upper, 0.0,
+                        "the four-crit line is reachable; a zero here means the "
+                        "crit kill-split regressed",
+                    )
+                    self.assertLessEqual(
+                        upper, (1.0 / 16.0) ** 4,
+                        f"perish trap {upper} exceeds the four-crit lottery",
+                    )
 
     def test_exact_horizon_argmax_flips_at_the_designed_depth(self) -> None:
         """The infinite-sample HP-leaf expectimax argmax flips to the winning

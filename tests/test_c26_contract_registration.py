@@ -222,6 +222,64 @@ class RetentionTests(unittest.TestCase):
         self.assertGreaterEqual(gates["required_keep_repro"], worst_case)
 
 
+class ContractAttestationTests(unittest.TestCase):
+    """The CONTRACT attestation, which is not the sweep-result attestation."""
+
+    PATH = ROOT / "reports" / "c26_cert_contract_attestation.json"
+
+    def _attestation(self) -> dict:
+        if not self.PATH.is_file():
+            self.skipTest("the C26 contract attestation is not registered yet")
+        return json.loads(self.PATH.read_text(encoding="utf-8"))
+
+    def test_attests_the_registered_contract_bytes(self) -> None:
+        attestation = self._attestation()
+        self.assertEqual(
+            attestation["schema_version"],
+            "pokezero.engine-cert-contract-attestation/v1",
+        )
+        self.assertEqual(attestation["contract_path"], str(CONTRACT_PATH.relative_to(ROOT)))
+        attested = _show(attestation["contract_source_commit"], attestation["contract_path"])
+        self.assertEqual(attested, CONTRACT_PATH.read_bytes())
+        self.assertEqual(
+            hashlib.sha256(attested).hexdigest(), attestation["contract_sha256"]
+        )
+
+    def test_attestation_is_not_circular(self) -> None:
+        """It pins the registration commit, which cannot contain it."""
+
+        attestation = self._attestation()
+        present = subprocess.run(
+            ("git", "-C", str(ROOT), "cat-file", "-e",
+             f"{attestation['contract_source_commit']}:"
+             f"{self.PATH.relative_to(ROOT)}"),
+            capture_output=True,
+        )
+        self.assertNotEqual(present.returncode, 0)
+
+    def test_attestation_agrees_with_the_launch_identity(self) -> None:
+        attestation = self._attestation()
+        gates = _contract()["certification_gates"]
+        self.assertEqual(attestation["launch_source_commit"], gates["required_source_commit"])
+        self.assertEqual(attestation["launch_source_commit"], gates["required_image_commit"])
+        self.assertEqual(
+            attestation["required_engine_fingerprint"],
+            gates["required_engine_fingerprint"],
+        )
+        self.assertEqual(attestation["registration"]["fresh_c26_measurements_inspected"], 0)
+
+    def test_the_sweep_result_attestation_is_a_different_artifact(self) -> None:
+        """A contract attestation must never be mistaken for a sweep result."""
+
+        self._attestation()
+        self.assertNotEqual(self.PATH, ATTESTATION_PATH)
+        self.assertFalse(ATTESTATION_PATH.exists())
+        lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn(
+            str(self.PATH.relative_to(ROOT)), lifecycle["required_absent_artifacts"]
+        )
+
+
 class LifecycleTests(unittest.TestCase):
     def test_lifecycle_registers_this_contract_and_still_awaits_attestation(self) -> None:
         lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))

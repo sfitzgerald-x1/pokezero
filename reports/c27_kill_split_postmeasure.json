@@ -1,0 +1,126 @@
+{
+ "schema": "c27-kill-split-postmeasure/1",
+ "purpose": "Actual outcome of the crit-arm kill-split repair against the prediction registered before it was written.",
+ "engine": {
+  "before": "776fa1e15cec731d3223b493fab992dc042fd3da8bdee6d4b8c9dc1a1d192c9c",
+  "after": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+  "patches_before": 51,
+  "patches_after": 52
+ },
+ "archive_tally": {
+  "before": {
+   "diverged": 3496,
+   "matched": 324,
+   "skip_lossy": 1
+  },
+  "after": {
+   "diverged": 3211,
+   "matched": 609,
+   "skip_lossy": 1
+  }
+ },
+ "rows_newly_matched": 285,
+ "registered_aggregate_ceiling": 432,
+ "registered_lethality_ceiling": 389,
+ "per_family": {
+  "I1_cap_state_shape": {
+   "before": 50,
+   "after": 37,
+   "actual_reduction": 13,
+   "registered_ceiling": 12,
+   "within_ceiling": false
+  },
+  "I2_matcher_accounting": {
+   "before": 3,
+   "after": 2,
+   "actual_reduction": 1,
+   "registered_ceiling": 0,
+   "within_ceiling": false
+  },
+  "I5_boundary_truncation": {
+   "before": 157,
+   "after": 92,
+   "actual_reduction": 65,
+   "registered_ceiling": 49,
+   "within_ceiling": false
+  },
+  "LS_capped_lethal_shape": {
+   "before": 428,
+   "after": 432,
+   "actual_reduction": -4,
+   "registered_ceiling": 40,
+   "within_ceiling": true
+  },
+  "UNATTRIBUTED": {
+   "before": 883,
+   "after": 855,
+   "actual_reduction": 28,
+   "registered_ceiling": 125,
+   "within_ceiling": true
+  },
+  "limit:roll_divergent_lethality": {
+   "before": 1275,
+   "after": 1093,
+   "actual_reduction": 182,
+   "registered_ceiling": 175,
+   "within_ceiling": false
+  }
+ },
+ "registration_shortfall": "The per-family ceilings counted only rows with an unreachable CRIT ARM. The patch also fixed the exactly-on-the-line roll being dropped from both buckets, and -- visible on the anchor row -- restored secondary-effect branches on the newly reachable survive arm. Those are additional clearance sources the ceiling did not model, so three per-family lines were exceeded even though the aggregate held. The ceiling should have been registered for the bundle, or the two fixes measured separately. Meta-lesson: the prediction was registered for a narrower patch than shipped. When the scope grew to include the == fix and the restored secondary branches, the registration should have been amended BEFORE the measurement run. Scope change requires re-registration, the same rule as prediction-before-measurement, one level up.",
+ "fresh_sample": {
+  "seed_band": 17000000,
+  "games": 60,
+  "boundaries_measured": {
+   "before": 4738,
+   "after": 4738
+  },
+  "transitions_diverged": {
+   "before": 64,
+   "after": 60
+  },
+  "unattributed": {
+   "before": 29,
+   "after": 29
+  },
+  "structural_counter": {
+   "before": 29,
+   "after": 29
+  },
+  "projected_unattributed_per_10k": {
+   "before": 4833,
+   "after": 4833
+  },
+  "elapsed_seconds": {
+   "before": 151.7,
+   "after": 436.8,
+   "ratio": 2.88
+  },
+  "probe_report_sha256": "8641119834c1a7c6a4654a23fa423612d0623df705dd14d8a908001bfce8d7d3"
+ },
+ "headline": "The repair is correct and fixes a real engine fidelity gap -- 285 archive rows and 4 fresh rows now land in-support -- but it does NOT move the certification gate. Unattributed is unchanged at 29 on the fresh sample (~4,833 per 10,000 games) and falls only 883 -> 855 on the archive. The gate is the capped-heal matcher artifact, which this patch does not touch, exactly as the diagnosis predicted.",
+ "open_items": [
+  "tests/test_search_depth_tactics.py::test_trap_moves_win_at_most_the_crit_lottery [perish-clock] now returns p_win_upper 9.5361328125e-07 against an asserted strict 0.0. Plausibly a CORRECTED proof rather than a broken one: the patch adds a crit that does not kill, and the strict zero may have held only because the support was incomplete. The pin is deliberately NOT updated.",
+  "Differential wall time is 2.88x. The search pays a different and probably much smaller cost -- it gates damage branching by DAMAGE_BRANCH_DEPTH and deep_ko_straddle -- while the Python binding passes branch_on_damage unconditionally, so the differential branches everywhere. Unmeasured.",
+  "Walk-row mass re-derivation for the nine capped-lethal adjudications.",
+  "The == orphan needs an explicit pin.",
+  "f32-vs-integer roll derivation disagrees on 20 of 7,484 pairs; registered as a separate follow-up because it changes emitted damage on every case A hit."
+ ],
+ "perish_clock_adjudication": {
+  "world": "a - the prior proof was overclaimed; the repair caught our own error",
+  "measured": {
+   "surf_non_crit_base": 82,
+   "surf_non_crit_rolls": "69-82",
+   "surf_non_crit_avg_arm": 75,
+   "surf_crit_base": 165,
+   "surf_crit_rolls": "140-165",
+   "surf_crit_avg_arm": 152,
+   "blissey_hp": 620,
+   "surfs_available_before_lapras_dies": 4
+  },
+  "arithmetic": "4 x 152 (average crit) = 608 < 620, which is why the pre-C27 engine measured a strict zero. 4 x 165 (max crit) = 660 > 620. Three average crits leave Blissey on 164, inside the crit straddle window (140, 165], so C27 emits a kill arm there that previously did not exist.",
+  "verdict": "The four-crit line is legal and always was; the pre-C27 branch support could not represent it because the crit arm carried only the average roll. The strict zero measured the missing branch, not the position.",
+  "resolution": "Pin corrected as a proof erratum, not re-baselined to the observed number: the assertion is now that the trap is strictly positive (a zero would mean the kill-split regressed) and bounded by the four-crit lottery (1/16)^4. The false clause was also removed from the position's derivation string.",
+  "observed_p_win_upper": 9.5361328125e-07,
+  "four_crit_lottery_bound": 1.52587890625e-05
+ }
+}
