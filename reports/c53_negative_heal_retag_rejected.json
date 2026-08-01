@@ -1,0 +1,24 @@
+{
+ "schema": "c53-negative-heal-retag-REJECTED/1",
+ "proposed": "in damage_component_events, retag any heal-source component with a NEGATIVE delta as _UNKNOWN_CALLEE_SOURCE, since a heal cannot reduce HP and the delta has absorbed unrendered Sleep Talk callee damage (mechanism confirmed in reports/c52_impossible_heal_component.json)",
+ "headline_number": "unattributed 476 -> 459, a net -17, with 4 rows divergent -> matched and ZERO matched -> divergent",
+ "verdict": "REJECTED. The headline is an artifact.",
+ "the_full_flow_that_the_net_hides": {
+  "unattributed -> attributed": 48,
+  "attributed -> unattributed": 31,
+  "attributed -> attributed": 6,
+  "attributed -> matched": 4,
+  "net_unattributed": "-48 + 31 = -17"
+ },
+ "why_it_is_rejected": "ALL 48 of the gains land in one family: I6_sleeptalk_callee_union. That family is bucketed candidate-not-finding in the audit -- it is not an evidenced explanation. So the entire net improvement is 48 rows laundered into an unevidenced bucket, paid for by 31 rows that had real family attributions and now have none. Nothing is explained that was not explained before; the number moves and the understanding does not.",
+ "this_is_the_same_call_i_made_in_C37": "In C37 I declined to reorder the structural rule ahead of I6, worth up to 57 rows off the certification number, on exactly this ground: 'moving rows into it would launder unattributed rows into an unevidenced family and make the metric move without explaining anything.' The retag reaches the same destination by a different route. Having refused the direct version I am not taking the indirect one because it arrived wearing a mechanism.",
+ "what_is_still_true": "The C52 mechanism is confirmed and unaffected by this rejection: 79 of 79 defective branches are Sleep Talk branches, 52 of 79 render no damage line at all, and the impossible negative heal component is real. The defect is real; this particular repair is the wrong one.",
+ "the_alternative_and_its_cost": {
+  "option": "mark the branch LOSSY rather than retagging the component -- an event stream missing a damage line cannot be compared, which is what the existing _SLEEPTALK_LOSSY_MARKER path already expresses",
+  "why_it_is_more_honest": "it says 'this branch is unusable' instead of 'this damage is explained by a family that explains nothing'",
+  "its_cost": "excluded branches can produce skip_lossy verdicts, which reduces measured boundaries -- and coverage is ALREADY a failing gate at 0.9587 against 0.97. This trade has to be measured, not assumed.",
+  "not_yet_measured": true
+ },
+ "the_real_fix": "render the Sleep Talk callee's damage event in the crate. That removes the cause instead of relabelling its symptom, and it is an engine-consumer change rather than a matcher one, so it would change the fingerprint and force era re-derivation.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+}
