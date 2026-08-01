@@ -100,5 +100,37 @@
    },
    "why_five_hypotheses_failed": "Every one reasoned about what the source must do. The bug was not in the logic I kept re-reading -- capped_bases, the promotion rule, the scoping -- but in a mutation two lines away that made the logic correct and the STATE wrong. Values found it in one attempt."
   }
+ },
+ "residual_after_c34": {
+  "total": 515,
+  "by_counter": {
+   "structural_component_count_without_supported_sibling": 433,
+   "same_turn_stat_event_gap": 37,
+   "unattributed_generic": 36,
+   "truant_loaf_phase_drift": 9
+  },
+  "shapes": {
+   "structural": {
+    "count_mismatch_no_cap": 296,
+    "count_mismatch_with_cap": 137,
+    "sample": "observed=[('', -42)] engine=[('', -19), ('leechseed_to_full', 19)]",
+    "reading": "The ENGINE side is the longer one -- it splits into damage plus a capped Leech Seed where Showdown reports a single component. That is the REVERSE of the shape C34 fixed, where the observed side was longer. Cap-adjacent but a distinct problem, and it is the only residual shape large enough to dominate."
+   },
+   "same_turn_stat_event_gap": {
+    "count_matched": 29,
+    "count_mismatch": 7,
+    "sample": "observed=[('', -229)] engine=[('', -124)]",
+    "reading": "Mostly count-MATCHED, so not structural at all: a magnitude disagreement of nearly 2x, which is the ratio of a crit. Plausibly a crit the engine did not price on this boundary -- the C27/C31 family, at a third site."
+   },
+   "unattributed_generic": {
+    "sample": "engine_only=[('psn', -32)]",
+    "reading": "An exact-bucket residual the engine emits and Showdown does not."
+   },
+   "truant_loaf_phase_drift": {
+    "sample": "observed=[] engine=[('', -163)]",
+    "reading": "The engine damages where Showdown does nothing -- the loaf-phase signature the counter is named for. Nine rows, and the first FRESH evidence for this counter: the archive's 48 could always be dismissed as pre-#970. These cannot."
+   }
+  },
+  "sequencing_consequence": "Four distinct problems, not one. Only the 433 dominates, and it is not the shape C34 addressed. The 37 same-turn rows look like unpriced crits, which would put them in the engine-gap bucket alongside C27 and C31 rather than the instrument bucket. The 9 Truant rows matter out of proportion to their count: they are the first fresh-population evidence for a predicted-zero counter that the archive could never settle."
  }
 }
