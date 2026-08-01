@@ -324,3 +324,141 @@ omission: launching would spend the reserved blocks to obtain a FAIL this
 document already predicts from a sample 167 times cheaper, and any fix requires
 a new registration cycle regardless. Recording the binding FAIL remains
 available if a formally attested negative result is wanted.
+
+---
+
+# Addendum: the kill split already exists — C27 is a repair
+
+## Audit first (the mechanism was already there)
+
+The proposed "outcome-partitioned branching" is not a new mechanism. The gen3
+brancher already partitions the KO threshold, and the search crate already
+detects straddles:
+
+- `rust/pokezero-search/src/tree.rs` — `deep_ko_straddle()` / `straddles_ko()`
+  turn damage branching on beyond `DAMAGE_BRANCH_DEPTH` when
+  `max_damage >= defender_hp && max_damage * 0.85 < defender_hp`.
+- `third_party/poke-engine-src/poke-engine-py/src/lib.rs:1073` — the Python
+  binding the differential uses already passes `branch_on_damage = true`.
+- `third_party/poke-engine-src/src/gen3/generate_instructions.rs` — the
+  partition itself, via `compare_health_with_damage_multiples(max_damage, hp)`
+  returning `(average_non_kill_damage, num_kill_rolls)`.
+
+So the differential is already receiving damage-branched output. The defect is
+narrower and more specific than "the engine collapses rolls".
+
+## The actual defect: case B has no kill split
+
+The brancher has two paths.
+
+**Case A — the non-crit roll range straddles the defender's HP.** Correct: it
+splits kill from non-kill with exact masses and an exact non-kill
+representative.
+
+```rust
+let (average_non_kill_damage, num_kill_rolls) =
+    compare_health_with_damage_multiples(max_damage_dealt, defender_active.hp);
+let branch_chance = ((1.0 - crit_rate) * (num_kill_rolls as f32 / 16.0)) + crit_rate;
+```
+
+**Case B — the non-crit roll can never kill.** It splits crit from non-crit and
+applies **no kill split to the crit arm**:
+
+```rust
+branch_damage = (max_crit_damage as f32 * 0.925) as i16;   // the AVERAGE crit roll
+```
+
+When the crit range straddles the defender's HP, that average lands on one side
+of the threshold and the other side is absent from the support. Alakazam:
+non-crit max ~114 against 209 HP so case B applies, and the crit arm's average
+209 is exactly lethal while lower legal crit rolls — including Showdown's 205 —
+are not.
+
+Two further inaccuracies sit in the same function and should be fixed with it:
+case A's `branch_chance` asserts `P(kill | crit) = 1`, and
+`compare_health_with_damage_multiples` counts `damage > health` as a kill and
+`damage < health` as a non-kill, so a roll landing exactly on the HP total is
+counted in neither bucket.
+
+The repair is to apply the existing identity to the crit arm — **not** to add a
+second partitioner beside it. One derivation, one truth.
+
+## Pre-registered measurement (before any engine edit)
+
+`scripts/c27_kill_split_premeasure.py` →
+`reports/c27_kill_split_premeasure.json`, derived from retained rows the patch
+cannot see. It pins the brancher and readout hashes it measured against.
+
+**Frequency**, over damaging hits in each population:
+
+| case | archive | fresh |
+| --- | ---: | ---: |
+| case A — non-crit straddle, **already split** | 245 (6.5%) | 1 (1.6%) |
+| case B — crit straddle, **unsplit (the defect)** | 443 (11.8%) | 7 (10.9%) |
+| case B — crit always kills | 1,243 | 13 |
+| case B — crit never kills | 1,423 | 42 |
+
+The unsplit case is roughly **1.8× more common than the case the engine already
+handles**. Both populations are retained *divergent* rows, which over-represent
+straddles almost by construction, so these rates are upper bounds on the
+all-boundary rate — the conservative direction for a cost estimate.
+
+**Branch inflation.** At most one added branch per row in 421 of 3,690 archive
+rows, two in 11, none in the rest. The repair cannot add a branch where all
+sixteen rolls agree on the outcome, so cost is confined to the straddle.
+
+**Predicted clearance — an UPPER BOUND, class-split as required.**
+
+| current family | rows with an unreachable crit arm | family total | share |
+| --- | ---: | ---: | ---: |
+| `limit:roll_divergent_lethality` | 175 | 1,281 | 13.7% |
+| UNATTRIBUTED | 125 | 1,159 | 10.8% |
+| `I5_boundary_truncation` | 49 | 164 | 29.9% |
+| `LS_capped_lethal_shape` | 40 | 438 | 9.1% |
+| `I1_cap_state_shape` | 12 | 52 | 23.1% |
+| `I3_roll_inherited` | 12 | 235 | 5.1% |
+| `limit:world_sample_drag_target` | 11 | 271 | 4.1% |
+| `I4_attribution_tie` | 6 | 166 | 3.6% |
+| `I6_sleeptalk_callee_union` | 2 | 35 | 5.7% |
+
+Attribution here is over recorded payloads, matching the basis of the family
+totals beside it.
+
+**This does not empty the family, and no one should predict that it will.**
+13.7% of `limit:roll_divergent_lethality` has an unreachable crit arm. The
+remainder are thresholds a same-transition partition cannot reach — chiefly
+residual-lethality and cross-turn cases. Seed 17000037/55 is the clearest
+cross-turn example: the crit left Gyarados below a quarter of its maximum, so
+the Substitute it chose **on a later turn** failed. No partition of this
+transition's rolls can capture a threshold whose significance depends on a
+future choice; those rows are genuine comparison limits and stay.
+
+The figures are upper bounds by construction: they count boundaries where the
+repair would place a reachable arm on the observed side of the threshold.
+Whether the rest of that arm's transition then matches can only be settled by
+the patched engine — which is the point of registering them first.
+
+## Why this reprioritises C27
+
+The differential is the smaller half. Today the tree prices the Alakazam
+position as "crit ⇒ KO at 6.25%", when the true KO mass is
+6.25% × (kill rolls / 16). That bias sits at KO thresholds — precisely the
+tactical margins where search earns its keep — and it is present in every
+searched world containing a near-lethal position, on 11.8% of damaging hits in
+this sample. C27 is a search-pricing repair that also cleans the differential's
+largest family, not a bookkeeping change.
+
+## Lockstep churn to plan for
+
+A branch-shape change moves things that key on today's shapes: the matcher's
+legal-set derivation, the readout's family rules (whose pre-registered rates
+assume the current shape), branch-structure assertions in the tactics suite, and
+the single-representative damage pins. The engine and the instrument must share
+one derivation of what a roll class contains —
+`compare_health_with_damage_multiples` is that identity — so they cannot
+disagree. The walk standard gets simpler in exchange: its mass-gated
+hand-reconstruction of exactly these partitions becomes readable directly from
+branch masses.
+
+**Era discipline applies.** A partition change alters branch supports, so any
+in-flight eval campaign must be single-era or reported as separate eras.
