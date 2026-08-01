@@ -33,5 +33,23 @@
   "why": "21 rows of 341, and clearance would be at most 21 since a miss being explained does not clear a row unless some branch matches entirely. Against that, the change touches roll_component_events_agree -- the comparison the whole residue is measured by, and the one place where a false match hides a real difference instead of flagging a non-difference. A 6% reduction is not worth loosening the safest check in the matcher.",
   "what_would_change_it": "if the same causal identity accounts for a materially larger share once the OTHER cascade shapes are characterised -- a cap flag flipping without an extra component, or a residual that shrinks rather than appears. The 63 net-equal-but-not-causal rows are where to look, and they may hold a second identity as exact as this one.",
   "the_ceiling_i_published_was_too_high": "C66 said 84 candidates, 'lower once the causal condition is required'. It is 21. Stating the size of the drop because 'lower' understated it by a factor of four."
+ },
+ "generalised_identity": {
+  "found_by": "reading the 63 net-equal-but-not-causal rows, which C66 named as the place to look",
+  "what_the_narrow_predicate_missed": "it required the extra residual's magnitude to EQUAL the damage gap. In most rows the gap is split: the engine's larger damage means a Wish or Recover heals MORE as well, and the residual covers only what is left. s18000053/136 has damage gap 6 = heal gap 3 + residual 3; s18001200/15 has 9 = 2 + 7. The narrow form caught only the special case where the heal magnitude happened to be unchanged.",
+  "the_general_form": "damage gap == sum of the increases across ALL healing components",
+  "and_what_that_actually_is": "conservation. If the mon ends at the same HP, extra damage must be matched by extra healing, so the identity reduces to net equality. That is worth stating plainly rather than dressing up: the general 'causal' condition IS net equality once every component is a damage or a heal.",
+  "so_the_predicate_has_to_constrain_SHAPE_not_just_sums": "exactly one direct-damage component on each side, one legal roll apart; every other component a positive heal source; and the totals equal. That is tighter than bare net equality because it forbids the unrelated-differences case -- two damage components, or a residual that reduces HP -- which is what made net equality unsafe.",
+  "measured": {
+   "rows explained": 77,
+   "rows not explained": 264,
+   "share": "22.6%"
+  },
+  "against_the_earlier_numbers": "84 net-equal, 21 under the narrow causal form, 77 under the shape-constrained form"
+ },
+ "engineering_judgement_REVISED": {
+  "previous": "21 rows, not worth touching the safest check in the matcher",
+  "now": "77 rows, 22.6% of the residue. That is a materially different proposition from 6% and it meets the condition I set for revisiting: 'if the same identity accounts for a materially larger share once the OTHER cascade shapes are characterised'.",
+  "but_still_not_shipped_here": "the predicate is now close enough to net equality that its safety rests entirely on the shape constraints, and those deserve adversarial testing before they touch roll_component_events_agree -- specifically, how often two genuinely different transitions satisfy one-direct-each-plus-heals-plus-equal-totals. That is a false-match measurement, not a row count, and it is the gate this change has to pass."
  }
 }
