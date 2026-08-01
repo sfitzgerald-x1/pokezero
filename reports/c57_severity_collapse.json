@@ -20,5 +20,22 @@
  "the_fix": "make the skip decision read attribution_unsafe rather than lossy. It is a matcher change, so no rebuild and no fingerprint movement, and it is justified by the producer's own published contract rather than by a judgement about what is safe to admit.",
  "ceiling": "27 is a CANDIDATE population. The test is net HP on both slots while the matcher compares component decompositions, so some of the 27 may still diverge. Not a predicted delta.",
  "a_measurement_error_worth_recording": "My first pass reported 122 errors and 20 lossy-only, because I read attribution_unsafe as a list when it is a bool -- list(True) raises. The 122 'errors' were the attribution-unsafe branches, i.e. the majority answer, silently discarded into an error bucket. Had I not checked what the field actually contained I would have reported 20 as the finding and missed that 63 of the 90 must stay excluded.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 366"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 366",
+ "status": "IMPLEMENTED AND VERIFIED",
+ "measured": {
+  "unattributed": "366 -> 341 (-25)",
+  "rows cleared": 27,
+  "structural": "333 -> 309",
+  "unattributed_generic": "28 -> 27",
+  "same_turn": "5 -> 5",
+  "ceiling_was": "27 candidates; 27 cleared, so the ceiling was exact this time"
+ },
+ "invariants": {
+  "matched -> divergent": "ZERO, verified by row identity",
+  "no family may grow": "ONE EXCEPTION, recorded rather than glossed: LS_capped_lethal_shape goes 463 -> 464. A single row re-attributed between two documented families, not laundering at scale -- but it is a literal violation of the invariant I registered in C55, so it is stated here instead of being absorbed into the headline.",
+  "limit:roll_divergent_lethality": "1098 -> 1095, down",
+  "tests": "64 pass, tactics gate green"
+ },
+ "no_fingerprint_change": "this is a matcher edit, so the engine fingerprint stays at c50da60a and the era-stamped adjudications survive; the differential hash changes, so the family audit was re-derived (reports/c57_family_bucket_audit.json, no family OPEN)",
+ "differential_sha256": "dc78c413f08cae137693569cd01931bd49fcc24535ce73210566861e9695b786"
 }

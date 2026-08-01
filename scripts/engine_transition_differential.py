@@ -1393,7 +1393,22 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            if lossy and not sleeptalk_union:
+            # SKIP ON attribution_unsafe, NOT ON lossy. The renderer publishes two
+            # severities and this read collapsed them: mark_lossy means telemetry
+            # is incomplete while the action window is still exact, and
+            # mark_attribution_unsafe means the attribution is not observable
+            # from the engine delta -- and because the latter also writes to
+            # `lossy`, a merely telemetry-incomplete branch was discarded exactly
+            # as if its attribution were unobservable. 27 rows of the C32 residue
+            # were reported divergent while a branch carrying only
+            # `attract_immobilization_source_unknown` -- whose own source comment
+            # says "telemetry-only because the public action window itself is
+            # exact", and for which a full |cant|...|Attract line IS emitted --
+            # reproduced the observation. The attribution-unsafe branches stay
+            # excluded: admitting an unobservable attribution could manufacture a
+            # false MATCH, which hides a real difference rather than flagging a
+            # non-difference. reports/c57_severity_collapse.json.
+            if bool(branch.get("attribution_unsafe")) and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:
