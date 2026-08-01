@@ -1,0 +1,38 @@
+{
+ "schema": "c34-aliasing-fix-postmeasure/1",
+ "prediction": "reports/c34_aliasing_fix_prediction.json",
+ "prediction_outcome": "CONFIRMED within the registered tolerance",
+ "population": "all 7,249 retained divergent rows from the C32 sweep",
+ "result": {
+  "matched": 3700,
+  "still_diverged": 3549,
+  "structural_before": 3779,
+  "structural_after": 433,
+  "total_unattributed_before": 3882,
+  "total_unattributed_after": 515
+ },
+ "registered_vs_actual": {
+  "structural_after": {
+   "predicted": "~400",
+   "actual": 433
+  },
+  "total_unattributed_after": {
+   "predicted": "~500",
+   "actual": 515
+  },
+  "cleared": {
+   "predicted": "~3,360",
+   "actual": 3700
+  }
+ },
+ "invariant": {
+  "rule": "a false-divergence repair may only REMOVE divergences, never add them",
+  "measured_against": "the C32 sweep's own attribution, not the archive's",
+  "decreases": 3701,
+  "increases": 1,
+  "the_one_increase": "I4_attribution_tie 119 -> 120. One row gained. A fix of this kind should add nothing anywhere, so this is a real if tiny violation and is recorded as such rather than rounded away. It needs identifying before C34 ships into a registration.",
+  "my_first_reading_was_wrong": "I initially reported I1 and LS_capped_lethal_shape as RISING. That compared against the ARCHIVE's counts instead of the sweep's. Against the sweep both fall sharply -- I1 333 -> 96, LS_capped_lethal_shape 501 -> 461 -- which shows the leak was inflating four families at once, not only the structural one."
+ },
+ "does_not_reach_a_pass": "515 unattributed rows remain against a required zero, and the C32 run independently failed on coverage 0.9587 against a 0.97 floor, on seven family bounds calibrated from the archive, and on eighteen malformed predicted_class entries. This fix touches none of those.",
+ "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+}
