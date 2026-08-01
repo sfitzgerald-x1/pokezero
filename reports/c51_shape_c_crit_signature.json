@@ -36,16 +36,17 @@
   "what_this_kills": "the tempting headline -- '81 rows where the engine cannot reach the observed crit' -- is not supported. The baseline comparison removes it."
  },
  "what_is_established": [
-  "shape C has a real and distinctive signature: observed magnitude is ~2x the engine's shape-matched sibling, median 1.98 over 125 pairs",
-  "Sleep Talk is enriched 4.9x and is NOT the mechanism (control: crit pairs are slightly MORE common on Sleep Talk boundaries)",
-  "40 of 117 have an engine branch reaching the observed magnitude on the complaining slot; 77 do not"
+  "observed magnitude is ~2x the engine's shape-matched sibling, median 1.98 over 125 pairs",
+  "Sleep Talk is enriched 4.9x and is NOT the mechanism (controlled)",
+  "39 of 117 have a branch reproducing the observed HP outcome on both slots; only 1 row is explained by an other-slot mismatch",
+  "112 of 117 anchors carry an EMPTY engine decomposition against a non-empty observed one"
  ],
  "what_is_not": [
   "whether any of the 117 is an engine gap -- lacking a 2x pair is the baseline condition (80% of all boundaries), so it does not discriminate",
   "whether the 40 are matcher failures -- that needs a whole-boundary test, not a per-slot one",
   "why the shape-matching sibling test prefers the non-crit arm"
  ],
- "next": "for the 40, re-run evaluate_boundary_strict per branch and record WHICH slot and component defeats the magnitude-matching branch. That is a whole-boundary test and it is the one that decides whether there is a matcher defect here at all.",
+ "next": "the linking test: for the 39 both-slots-agree branches, is THAT branch's decomposition also empty? If yes, shape C is an event-attribution defect -- the engine deals damage its own event stream does not attribute -- and it is an instrument defect with a predictable row delta. If no, the two signals are unrelated and shape C is still unexplained.",
  "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
  "correction_to_the_split": {
   "what_i_claimed": "36 of 117 are pairing failures where the engine has the crit magnitude and the matcher did not use it",
@@ -57,5 +58,23 @@
   },
   "and_it_still_does_not_prove_a_pairing_failure": "40 of 117 have a branch reaching the observed magnitude ON THE COMPLAINING SLOT. That does not mean the row should have matched: evaluate_boundary_strict requires a single branch to agree on BOTH slots and all components, so a branch that matches p1 can legitimately fail on p2. A per-slot test cannot establish a whole-boundary matching failure. The '36 pairing failures' framing is withdrawn; what is measured is 40 rows worth checking at boundary level, not 36 defects.",
   "the_pattern_worth_naming": "Three tests in this one cycle, each answering a narrower question than the claim I wanted to make from it: crit-pair-exists for engine-gap, sleep-talk-enrichment for mechanism, reaches-magnitude-on-one-slot for pairing failure. Two were caught by a control and one by re-reading what the matcher actually requires."
+ },
+ "whole_boundary_test": {
+  "why": "the per-slot test could not decide whether a magnitude-matching branch legitimately failed on the other slot. This checks both slots.",
+  "result": {
+   "BOTH slots agree": 39,
+   "matches complaining slot but OTHER slot differs": 1,
+   "no branch matches the complaining slot": 77
+  },
+  "reading": "The 'legitimately fails on the other slot' explanation I raised when withdrawing the pairing claim accounts for exactly ONE row, not forty. 39 of 117 have an engine branch whose HP outcome agrees with the observation on BOTH slots -- exactly or within the legal roll window -- while the row is still reported divergent.",
+  "the_limit_of_this_test": "It compares net HP per slot. The matcher compares COMPONENT decompositions. A branch can reproduce net HP on both slots and still be rejected because the damage is attributed to different sources. So this identifies 39 rows where the engine reaches the observed OUTCOME; it does not by itself prove the matcher is wrong."
+ },
+ "anchor_decomposition": {
+  "measured": {
+   "engine side of the anchor miss is EMPTY": 112,
+   "engine has components": 5
+  },
+  "reading": "95.7% of shape C anchors show observed components against engine=[] -- the engine's majority arm decomposes to nothing on the complaining slot.",
+  "NOT_yet_linked_to_the_39": "The anchor is the MAJORITY miss. The branch whose HP agrees on both slots may be a different branch entirely. These two measurements are taken on possibly different arms and I am NOT combining them into a mechanism. Combining measurements taken on different arms is precisely the C35 defect -- a minority arm deciding a row the majority arm explains -- and I am not going to reproduce it in the diagnosis after fixing it in the code."
  }
 }
