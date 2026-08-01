@@ -155,6 +155,29 @@ where the roll changes a downstream discrete outcome:
 - 17000001/1 — Alakazam takes a crit Thunderbolt to 4/209 and survives to take
   Leftovers; the engine's crit arm prices the same hit as lethal, so it emits no
   Leftovers heal at all.
+
+  The branch set is not the problem. Replaying the state gives exactly the right
+  three arms:
+
+  ```
+  pct=84.38  Switch SideOne: P0 -> P5 | Damage SideOne: 106 | Heal SideOne: 13
+  pct=9.38   Switch ... | Damage SideOne: 106 | ChangeStatus ... PARALYZE | Heal SideOne: 13
+  pct=6.25   Switch ... | Damage SideOne: 209 | ToggleSideOneForceSwitch
+  ```
+
+  6.25% is exactly 1/16, the Gen 3 normal crit ratio, and the non-crit arm
+  splits 90/10 for Thunderbolt's paralysis chance. The engine models the crit
+  *rate* correctly and explores the crit arm. What each arm carries is a single
+  representative damage value — 106 non-crit, 209 crit (the 2× Gen 3 crit
+  multiplier) — not the roll spread. Showdown's crit rolled 205.
+
+  Ordinarily that is harmless: the matcher accepts a magnitude inside the legal
+  roll set or within ±9%. But a roll difference that crosses a **discrete
+  threshold** cannot be absorbed by a magnitude tolerance. 209 ≥ Alakazam's 209
+  HP faints it and cancels the Leftovers tick; 205 leaves it at 4 and the tick
+  happens. One HP of roll changes the whole downstream event sequence. That is
+  the standing reason `limit:roll_divergent_lethality` exists and carries the
+  largest registered bound of any family.
 - 17000028/53 — the same shape on a crit Hidden Power into Banette.
 - 17000037/55 — Gyarados is crit to 58/258, which is below ¼ max, so its
   Substitute *fails*; in the engine's non-crit arm Gyarados is at 154 and
@@ -164,6 +187,21 @@ where the roll changes a downstream discrete outcome:
 These are roll-divergent lethality and its Substitute-viability cousin — the
 `limit:roll_divergent_lethality` family already exists and is registered with a
 bound. The structural rule files them as an unexplained mechanism instead.
+
+The reason they never reach that family is worth stating precisely: the
+lethality difference surfaces as an **absent residual component** (no Leftovers
+tick, no Substitute cost) rather than as a `capped_lethal` component. So
+`classify_divergence` labels the row `roll_scaled_component`, and the structural
+rule — which triggers on exactly that class — claims it before any documented
+family is consulted. A boundary whose whole story is "the representative roll
+landed on the other side of a KO threshold" is reported as an unexplained
+mechanism.
+
+Detecting that shape is a fourth candidate change, and it is detection rather
+than attribution-widening: the family already exists with a registered bound,
+and `poke_engine.calculate_damage(..., True)` already returns the legal roll
+vector the matcher uses elsewhere, so "is there a legal roll on the other side
+of this threshold?" is answerable from data already on hand.
 
 ### Where the archive disagrees, and why that is expected
 
