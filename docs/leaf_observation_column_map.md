@@ -237,6 +237,7 @@ accepted with a reason — none is an encoder defect, and the defect classes
 | `engine_roll` | 313 | 97 | Determinized chance semantics: the engine prices one representative damage roll (0.925·max collapse); reality rolled elsewhere in the envelope. HP fractions, substitute survival, and pinch-berry thresholds ride the roll. Exact-expectation backup prices the enumerated distribution — per-branch observations legitimately differ from the one trajectory reality took. |
 | `engine_model` | 33 | 5 | Tagged vendored-engine deviations, each with a fail-closed or counted guard: Transform's empty delta (roots fail closed), Encore volatile not applied (roots fail closed), recharge consumed one ply early on faint-replacement plies, Baton-Passed saved moves never resolving, merged full-para/miss/fail outcomes (engine `combine_duplicate_instructions` — the renderer picks the dominant-mass cause), Ghost-curse boost delta + volatile lifetime (rendered real-shape, flagged `lossy`, scenario-gated). |
 | `ledger_skew` | 1 | 0 | Recorded production inconsistency reproduced as recorded: the belief ledger's condition string keeps a stale status suffix through a cure (Refresh/Heal Bell) — root-parity documents the same ~1% class on recorded rows. |
+| `root_frozen_pack` | n/a (v4 only) | n/a (v4 only) | **V4 k0 feature pack, root-frozen at the leaf.** The 15 pack columns enumerated in `leaf_vs_reality.py::V4_ROOT_FROZEN_PACK_COLUMNS` are written from the ROOT's `observation_metadata` and never re-derived per leaf, so at depth > 0 they describe the root. Two different reasons, and they are not equally permanent. (a) **Permanent by design** — the hazard credit/expected pair encodes the gen3 grounding rule (Levitate, Flying, unrevealed-slot accounting); re-deriving that rule in Rust is exactly the duplication this design refuses, since a second implementation free to drift is worse than a stale-but-consistent one. Same for the damage ledgers, Truant phase, items-removed credit, choice lock, item-swapped, last-used move and traced ability. (b) **Follow-up, not accepted forever** — `NUMERIC_MON_SWITCHED_VS_ACTIVE` / `NUMERIC_MON_STAYED_VS_ACTIVE` are frozen only because they are not yet surfaced through `ProductsData`; `fold.rs::matchup_counters` IS branch-advanced per leaf and keyed by `(side, species, facing)`, so the leaf value is derivable and should be re-selected against the leaf's active mon, mirroring `showdown._matchup_switch_evidence`. Until then they read the root's matchup. Note these two are named `NUMERIC_MON_*` and would otherwise be swept into `fold` by the prefix rule — they are matched first so the divergence stays visible rather than accidentally accepted. |
 | long-game Tier-2 overlay capacity | n/a | n/a | `FoldState` retains a 512-action tail. If a cumulative tracker annotation arrives only after its token has aged out of both fold representations, the live fold fails closed for the rest of that battle instead of applying it to an ambiguous token. This is the same bounded-history contract as corpus folding; it is a visible fallback, not silent encoding drift. |
 
 Epistemic freeze and roll collapse are structural (the belief architecture
@@ -246,6 +247,19 @@ a search — failed closed at world construction. None of these classes can
 silently grow: the differential's exit code gates `state`/`turn` at zero,
 and every class reallocation requires a documented rule in
 `scripts/leaf_vs_reality.py::classify`.
+
+**Correction (v4 feature-pack change).** That "cannot silently grow" claim was
+vacuous for a period and should be read with the caveat. `leaf_vs_reality.py`
+imported `TOKEN_BLOCKS`, which the V3 history trim (`ffc2723f`) had renamed to
+`FIXED_TOKEN_BLOCKS`; the name was unused, but the stale import made the module
+**unimportable**, so the gate could not start — let alone return a non-zero exit
+code — from that commit until the import was dropped. A gate that cannot run
+pins nothing. Anyone reading a green history for this differential between
+`ffc2723f` and the v4 pack should treat it as absence of evidence.
+
+The `root_frozen_pack` row above is the one class whose members are expected at
+v4 specifically, and half of it (the matchup pair) is a tracked follow-up rather
+than an accepted-forever divergence.
 
 ## /100 opponent-HP base decision (forward caveat #2, resolved)
 

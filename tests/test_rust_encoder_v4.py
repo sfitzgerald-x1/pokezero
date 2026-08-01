@@ -133,10 +133,14 @@ class RustEncoderV4ParityTest(unittest.TestCase):
             )
         # Give EVERY opponent mon a distinct (switched, stayed) cell, so a Rust write that
         # lands on the wrong token, the wrong column, or only the active mon cannot pass.
+        # The two members must also stay DISTINCT PER MON: with a symmetric pair the switched
+        # and stayed columns are element-wise equal and a transposed write in the Rust array
+        # literal is invisible. (index + 1, index % 3 + 5) is asymmetric for every index in
+        # 0..5 and peaks at 7/8, so no cell saturates the divisor and collapses back to equal.
         from pokezero.showdown import _normalize_identifier
 
         metadata["opponent_matchup_switch_evidence"] = {
-            _normalize_identifier(mon["species"]): [index + 1, (index % 3) + 1]
+            _normalize_identifier(mon["species"]): [index + 1, (index % 3) + 5]
             for index, mon in enumerate(metadata["opponent_team"])
         }
         return header, inputs, metadata
@@ -260,13 +264,36 @@ class RustEncoderV4ParityTest(unittest.TestCase):
         rust = self.backends.RustBackend(tables_json=tables_json, header=header)
         nums = numpy.ascontiguousarray(rust.encode(inputs)["numeric_features"])
         column = tables["layout"]["numeric_columns"]["NUMERIC_MON_SWITCHED_VS_ACTIVE"]
+        stayed_column = tables["layout"]["numeric_columns"]["NUMERIC_MON_STAYED_VS_ACTIVE"]
         offset = tables["layout"]["token_offsets"]["opponent_pokemon"]
+        # Bound by the BLOCK WIDTH, not len(opponent_team): the fixture's metadata team can
+        # carry more entries than the six-slot opponent block can represent, and running off
+        # the end would read action-candidate rows and call them missing matchup writes.
+        block_width = (
+            tables["layout"]["token_offsets"]["action_candidates"] - offset
+        )
+        team_size = min(len(metadata["opponent_team"]), block_width)
         lit = [
             index
-            for index in range(offset, offset + len(metadata["opponent_team"]))
+            for index in range(offset, offset + team_size)
             if nums[index, column] != 0.0
         ]
-        self.assertGreater(len(lit), 1, "matchup pair reached at most one opponent token")
+        # EVERY revealed opponent token, not just "more than one" — a partial write that
+        # reached two of three tokens would satisfy a >1 assertion.
+        self.assertEqual(
+            len(lit), team_size, "matchup pair did not reach every opponent token"
+        )
+        # And the guard above only means something if the two columns can be told apart:
+        # if the fixture ever makes them element-wise equal, a transposed write passes.
+        switched_values = [nums[index, column] for index in range(offset, offset + team_size)]
+        stayed_values = [
+            nums[index, stayed_column] for index in range(offset, offset + team_size)
+        ]
+        self.assertNotEqual(
+            switched_values,
+            stayed_values,
+            "fixture made switched/stayed symmetric — a transposition would be invisible",
+        )
 
     def test_the_a2_ablation_mask_is_honoured_by_the_native_encoder(self) -> None:
         """The mask exists solely for the k0+pack vs k0+pack+lastmove arm pair. If the crate

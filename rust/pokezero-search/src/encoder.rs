@@ -310,7 +310,9 @@ impl Tables {
                     value
                 } else if tables_schema_is_v4 {
                     return Err(err(
-                        "v4 encoder tables are missing constants.matchup_count_divisor",
+                        "v4 encoder tables are missing or have a non-positive \
+                         constants.matchup_count_divisor (it divides a count, so zero \
+                         and negatives are malformed, not merely absent)",
                     ));
                 } else {
                     // Pre-v4 tables never carry it and never read it.
@@ -2455,7 +2457,7 @@ fn write_history_cells(
     if layout.stats_block {
         write_stats_token(tables, grid, products)?;
     }
-    write_opponent_mon_history(tables, grid, products, md, opponent_mons)?;
+    write_opponent_mon_history(tables, grid, products, opponent_mons)?;
     Ok(())
 }
 
@@ -2847,7 +2849,6 @@ fn write_opponent_mon_history(
     tables: &Tables,
     grid: &mut Grid,
     products: &ProductsData,
-    md: &Value,
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;

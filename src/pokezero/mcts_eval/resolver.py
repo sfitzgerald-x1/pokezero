@@ -44,7 +44,13 @@ from typing import Any, Mapping
 # point of having the field: a behaviour change in the exporter must not be
 # silently reused. (Missing this bump caused a trimmed run to reuse cached
 # 87-token tables and fail the root/leaf contract check.)
-EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v4"
+# v5: the exporter's output semantics changed twice in the v4 feature-pack work —
+# default_feature_masks gained feature_pack_last_move, and the categorical map now excludes
+# the per-schema-unreachable families instead of emitting a colliding index. Both were traced
+# as backward-safe by hand (absent mask keys default True on both sides; the crate resolves
+# categoricals by name), but "safe on inspection" is exactly the judgement this field exists
+# to make unnecessary. Bump on an output change; do not re-derive the safety argument.
+EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v5"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
 SUPPORTED_OBSERVATION_SCHEMAS = (

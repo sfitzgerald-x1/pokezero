@@ -93,7 +93,13 @@ from fidelity_gate_events import (  # noqa: E402
     realized_action_actors,
     truant_loaf_slots,
 )
-from leaf_root_parity import TOKEN_BLOCKS, bitwise_equal, block_of, column_names  # noqa: E402
+# PRE-EXISTING BREAK, fixed here: `TOKEN_BLOCKS` was renamed FIXED_TOKEN_BLOCKS by the V3
+# history trim (ffc2723f) and this import was never updated, so THIS ENTIRE GATE has been
+# unimportable — not merely failing, unrunnable — since that commit. The name was never used
+# in this module, so dropping it is the whole fix. Worth stating plainly because the accepted-
+# divergences ledger claims `state`/`turn` are "pinned at ZERO by the gate's exit code": that
+# claim has been vacuous for as long as the gate could not start.
+from leaf_root_parity import bitwise_equal, block_of, column_names  # noqa: E402
 
 # Column families that are EXPECTED to diverge one boundary ahead, with the
 # reason each is expected (kept explicit — the honest-classification rule).
@@ -156,6 +162,39 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
     return names
 
 
+# The v4 k0 feature pack's ROOT-FROZEN columns. The leaf lane writes these from the root's
+# observation_metadata and never re-derives them, so at depth > 0 they describe the root, not
+# the leaf. They are listed rather than prefix-matched because they do not share one: the
+# alternative is a prefix rule that silently adopts future columns it was never reasoned about.
+#
+# Why frozen rather than fixed: the hazard pair encodes the gen3 grounding rule (Levitate, Flying,
+# Air Balloon-less gen3 semantics, unrevealed-slot accounting), and re-deriving that rule in Rust
+# is the duplication this design deliberately refuses — a second implementation that drifts is
+# worse than a stale-but-consistent one. The matchup pair is the opposite case: its data DOES
+# exist at the leaf (fold.rs::matchup_counters is branch-advanced, keyed by (side, species,
+# facing)), so it is frozen only because it is not yet surfaced through ProductsData. That one is
+# a genuine follow-up, not a permanent divergence.
+V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
+    {
+        "NUMERIC_TRUANT_LOAF",
+        "NUMERIC_LAST_DAMAGE_DEALT",
+        "NUMERIC_LAST_DAMAGE_TAKEN",
+        "NUMERIC_SELF_HAZARD_CREDIT",
+        "NUMERIC_OPP_HAZARD_CREDIT",
+        "NUMERIC_SELF_HAZARD_EXPECTED",
+        "NUMERIC_OPP_HAZARD_EXPECTED",
+        "NUMERIC_SELF_ITEMS_REMOVED_CREDIT",
+        "NUMERIC_OPP_ITEMS_REMOVED_CREDIT",
+        "NUMERIC_CHOICE_LOCKED",
+        "NUMERIC_ITEM_SWAPPED",
+        "NUMERIC_MON_SWITCHED_VS_ACTIVE",
+        "NUMERIC_MON_STAYED_VS_ACTIVE",
+        "CATEGORY_LAST_USED_MOVE",
+        "CATEGORY_TRACED_ABILITY",
+    }
+)
+
+
 def classify(
     array: str,
     block: str,
@@ -164,6 +203,12 @@ def classify(
     tags: set[str],
     reveal_pp: bool = False,
 ) -> str:
+    # BEFORE the fold prefix rule on purpose. The matchup pair is named NUMERIC_MON_*, so the
+    # prefix would sweep it into `fold` — an accepted class, but the wrong reason: nothing about
+    # it is fold-derived at the leaf today. Being accidentally accepted by a name coincidence is
+    # how a divergence stops being reviewed.
+    if column in V4_ROOT_FROZEN_PACK_COLUMNS:
+        return "root_frozen_pack"
     if block == "transition" or column.startswith(
         ("NUMERIC_STAT_", "NUMERIC_MON_", "NUMERIC_TIER2_")
     ):
