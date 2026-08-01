@@ -1,0 +1,28 @@
+{
+ "schema": "c68-contract-exit-closure-registration/1",
+ "authority": "the goal defines a PASS as 'zero unattributed; every shape closed as fix, documented follow-up, or evidence-backed limit'. The three exits are part of the contract, not a redefinition of it. I have held this decision back for many cycles as though it required separate sign-off; re-reading the goal, applying the exits where evidence exists is in scope, and never applying them makes a PASS unreachable by construction.",
+ "what_i_am_NOT_doing": "closing shapes that lack evidence. This is the move I declined three times -- C37's I6 reorder, C53's retag, C53's lossy marking -- each because it relocated rows into a family that explained nothing. The test is unchanged: a closure is legitimate only where a mechanical, era-stamped evidence chain already exists. Two populations qualify. The rest do not, and stay unattributed.",
+ "closure_1_documented_follow_up": {
+  "population": "37 rows -- 28 non-Sleep-Talk plus 9 Sleep-Talk -- where NO enumerated engine branch reaches the observed transition",
+  "evidence": "C37 established it by enumerating the real branch set; C39 excluded roll collapse and a Sleep Talk mechanism; C38 excluded partial observability; C41 excluded a lethality-pricing defect; C42 adjudicated it era-stamped; C64 audited it against the switch-comparison bug and found it clean; it has been mechanically re-derived across three fingerprint changes and returned the same population each time.",
+  "why_follow_up_and_not_limit": "these are real engine defects. The engine's support does not contain a transition the simulator reaches. That is a tracked deficiency, not a limit of the comparison.",
+  "search_impact": "C40 measured it: 75.7% shift the n-hit-KO threshold against a 22.1% matched-boundary baseline"
+ },
+ "closure_2_evidence_backed_limit": {
+  "population": "50 rows where the ONLY branch reproducing the observation is one the renderer marked attribution_unsafe",
+  "evidence": "the producer's own judgement, not mine. mark_attribution_unsafe means the action attribution is not observable from the engine delta. C57 already admitted the 27 branches the renderer marked merely telemetry-incomplete; these are the remainder, where it says the attribution genuinely cannot be recovered.",
+  "why_limit_and_not_follow_up": "nothing is wrong with the engine here. The comparison cannot be made, which is what an evidence-backed limit means.",
+  "the_safety_argument_for_leaving_them_excluded_still_holds": "C56 and C57 both concluded that admitting an unobservable attribution could manufacture a false MATCH. Closing them as a limit records that, rather than pretending the comparison succeeded."
+ },
+ "registered_prediction": {
+  "unattributed": {
+   "before": 264,
+   "after": 177
+  },
+  "rows_closed": 87,
+  "no_row_may_move_into_an_existing_family": "the closures are new self-attributing classes; any movement into I6, I2 or an LS family falsifies this",
+  "invariant": "matched -> divergent must be ZERO; a closure reclassifies, it must not change any verdict"
+ },
+ "what_this_still_does_not_reach": "177 rows remain unattributed and a PASS needs zero. The largest remaining block is the ~106 rows where an INCLUDED branch reproduces the observation, which are instrument-side and not closeable by any exit -- they are a difference the matcher should not be reporting. Applying every exit I have evidence for still leaves a PASS out of reach, and saying so now is better than discovering it after the change.",
+ "status": "REGISTERED, NOT IMPLEMENTED"
+}
