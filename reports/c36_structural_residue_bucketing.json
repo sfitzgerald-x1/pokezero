@@ -1,0 +1,37 @@
+{
+ "schema": "c36-structural-residue-bucketing/1",
+ "population": "the 435 structural_component_count_without_supported_sibling rows remaining after C35, on the current build",
+ "why_this_needed_its_own_measurement": "The counter's name -- 'without supported sibling' -- describes the filter that creates it, so asking 'do these rows have a supporting sibling?' is tautological and answers nothing. I ran that measurement first and it returned 435/435 as a matter of definition. The bucketing question is different: the helper requires EXACT magnitudes, which deliberately conflates 'no engine arm produces this shape' with 'an arm produces it at a different roll'. Exactness is right for the ATTRIBUTION verdict under X.3.3 -- that verdict reduces residue. Bucketing is not a residue-reducing verdict, so it needs the looser question asked separately.",
+ "split": {
+  "D_no_arm_carries_the_shape_at_all": {
+   "rows": 211,
+   "reading": "the engine's branch set does not contain the component shape the simulator produced -- the strongest engine-support-gap signal in the residue",
+   "label_strictness_caveat_tested": {
+    "concern": "'shape' is matched by source LABEL (leechseed vs leechseed_to_full are distinct), which could manufacture this bucket",
+    "result": "179 of 211 have no sibling even by component COUNT, ignoring labels entirely. Label strictness does not explain the bucket.",
+    "held_uncertain": "the remaining 32 are label-sensitive and are NOT claimed as support gaps"
+   }
+  },
+  "C_sibling_carries_shape_magnitudes_not_a_legal_roll_apart": {
+   "rows": 116,
+   "reading": "an arm has the right shape but a magnitude no gen3 roll can reach. gen3 damage is floor(base*r/100) with r in 85..100, so two rolls of one base differ by at most 100/85; these exceed it. Engine-side magnitude divergence, not a roll disagreement."
+  },
+  "A_observed_side_empty_engine_arm_emits_what_the_sim_did_not": {
+   "rows": 99,
+   "reading": "the engine's arm emits a component on a side where the simulator emitted none"
+  },
+  "B_sibling_carries_shape_within_the_legal_roll_window": {
+   "rows": 9,
+   "reading": "an arm carries the shape at a legal roll apart; the exact-magnitude strictness is what rejects these. The only instrument-artifact candidates in the 435."
+  }
+ },
+ "what_this_changes": "It inverts the working assumption. 426 of the 435 are engine-side questions and only 9 are instrument-artifact candidates. The four cycles before this one -- C29, C30, C34, C35 -- were all matcher fixes, and they were the right targets at the time: C34 alone cleared 3,340 structural rows. But that seam is now worked out. What remains in this counter is mostly the engine's branch set not containing transitions the simulator reaches, which is the FIDELITY objective's own definition of a support gap, not the certification objective's.",
+ "bucketing": {
+  "engine-gap": "D-with-count-evidence (179) + C (116) + A (99) = 394",
+  "held-uncertain": "D-label-sensitive (32)",
+  "instrument-artifact": "B (9)",
+  "era": "derived on readout post-C35; must be re-derived on the next fingerprint or readout change"
+ },
+ "does_not_reach_a_pass": "This is a diagnosis, not a fix. Unattributed stays at 485. No engine change is registered here and none should be until a single sub-population is picked and pre-measured by the C27 method.",
+ "next_and_why": "Take D-with-count-evidence (179 rows) first: it is the largest, it has the cleanest signal, and 'the engine has no branch with this component count' is a checkable claim about generate_instructions rather than an inference about pricing."
+}
