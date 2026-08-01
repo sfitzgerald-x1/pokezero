@@ -1,0 +1,27 @@
+{
+ "schema": "c73-eight-hundred-game-sweep/1",
+ "why": "the projection from C72 rested on 2 of 25 retained rows, a 95% interval of 0-19%, which is too wide to plan against. 800 games at a fourth seed range with FULL repro retention.",
+ "run": {
+  "games": 800,
+  "seed_start": 19500000,
+  "boundaries_measured": 62846,
+  "coverage": 0.9657,
+  "engine_errors": 0,
+  "retention": "242 of 242, repros_complete true"
+ },
+ "results": {
+  "divergence_rate": "242/62,846 = 0.385%  (200-game run 0.440%, C32 0.921%)",
+  "unattributed_fraction": "10/242 = 4.13%, 95% CI [1.6%, 6.6%]",
+  "coverage": "0.9657, against C32's 0.9587 and the 200-game run's 0.9534"
+ },
+ "this_REVISES_my_own_projection": {
+  "c72_said": "~268 unattributed at 10,000 games, from 2 of 25",
+  "now": "~125, band [49, 201], from 10 of 242",
+  "the_corpus_fraction_is_OUTSIDE_the_new_interval": "the corpus sits at 8.24% and the fresh CI tops out at 6.6%. The corpus OVERSTATES the unattributed fraction, which is the opposite of what the 25-row sample suggested and the opposite of the direction I would have guessed.",
+  "why_that_makes_sense": "the C32 corpus was retained conditional on divergence under the OLD build. The four fixes cleared whole classes from it, and what survives is enriched for the hard cases -- rows that resisted four separate repairs. Fresh data has the natural mix, not the residue of a filtering process. I should have anticipated this: every measurement I made on that corpus was on a population selected against exactly the fixes I was applying."
+ },
+ "coverage_is_closer_than_i_reported": "0.9657 against the 0.97 floor, short by about 3,400 boundaries at certification scale. Better than both C32 (0.9587) and the 200-game run (0.9534). The 200-game figure was the outlier and I reported it as though it were the trend.",
+ "what_this_means_for_a_certification_attempt": "a fresh sweep would land near 125 unattributed, not 268 and not 255. Still not a PASS, but half what I told the user one cycle ago, and the coverage gap is also smaller than the corpus suggested. If anyone is deciding whether to spend the cluster shards, the honest input is that the run would fail on both gates but by a materially smaller margin than the corpus measurement implies.",
+ "what_did_not_change": "the shape census. The fresh unattributed rows are 8 structural_component_count and 2 unattributed_generic -- the same two counters that dominate the corpus residue. No new shape, on a fourth independent seed range.",
+ "zero_engine_errors_across_1000_fresh_games": "200 + 800 games, 78,070 boundaries, no engine error"
+}
