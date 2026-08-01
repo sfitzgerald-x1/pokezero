@@ -49,6 +49,23 @@ Measured baseline, same 60 fresh games, seed band 17,000,000:
 The readout change forces a source freeze, so it rides the capped-heal fix
 rather than spending a cycle of its own.
 
+### The KPI is comparable only within a matcher era
+
+Corrected after C28. This document first claimed that an instrument fix cannot
+move the KPI. That holds only for **classifier** changes: the KPI is
+`transitions_diverged / boundaries_measured`, and both are computed by the
+**differential**. A differential-side instrument fix — which the capped-heal work
+is — moves the KPI directly.
+
+Unqualified, that would let a matcher relaxation read as a fidelity gain, which
+is exactly the dashboard-versus-reality failure the bucket scheme exists to
+prevent.
+
+So every KPI reading is stamped with **both** the engine fingerprint and the
+differential's source hash, and may only be compared against a reading sharing
+the differential hash. A matcher change opens a new KPI era and requires
+re-baselining the prior engine on the new matcher before any delta is claimed.
+
 ## The three buckets
 
 Every registered family belongs in exactly one. The current table does not
