@@ -38,5 +38,35 @@
   "does": "the four landed fixes hold up on data they were not derived from, and the corpus was not hiding a shape from the analysis",
   "does_not": "certify anything. 200 games is not the contract's 10,000, there is no registered contract for this run, no attestation, and no seed reservation. It is a validation probe, not a certification sweep, and must not be read as one."
  },
- "a_miss_worth_recording": "I told the user repeatedly that a sweep required cluster time. That is true at certification scale -- 10,000 games across eight shards -- but a 200-game local validation run was available on this machine the entire session, and fresh-data validation was the standing weakness in every result I reported. I did not check whether the tool was there."
+ "a_miss_worth_recording": "I told the user repeatedly that a sweep required cluster time. That is true at certification scale -- 10,000 games across eight shards -- but a 200-game local validation run was available on this machine the entire session, and fresh-data validation was the standing weakness in every result I reported. I did not check whether the tool was there.",
+ "unattributed_fraction_on_fresh_data": {
+  "retained": "25 of the 67 divergences carried full repro payloads (repros_complete false, cap 25)",
+  "attribution": {
+   "limit:roll_divergent_lethality": 8,
+   "LS_capped_lethal_shape": 6,
+   "I2_matcher_accounting": 3,
+   "I3_roll_inherited": 2,
+   "I5_boundary_truncation": 2,
+   "UNATTRIBUTED": 2,
+   "limit:world_sample_drag_target": 1,
+   "I1_cap_state_shape": 1
+  },
+  "the_number_that_matters": {
+   "fresh": "2/25 = 8.0%, 95% CI roughly 0-19%",
+   "corpus_post_fix": "255/3,093 = 8.2%",
+   "reading": "the unattributed FRACTION of divergences is the same on fresh data as on the corpus, while the absolute divergence rate halved. The four fixes removed whole classes of divergence; they did not change the proportion of what remains that resists attribution."
+  },
+  "the_sample_is_small_and_i_am_not_hiding_it": "2 of 25 has a 95% interval of roughly 0-19%. It is consistent with 8.2% and would also be consistent with 2% or 18%. What it does NOT support is a claim that fresh data behaves differently from the corpus, which is the thing worth knowing."
+ },
+ "projection_to_certification_scale": {
+  "basis": "76 boundaries per game measured, 0.440% divergence, 8% unattributed",
+  "at_10000_games": {
+   "boundaries": "~761,000",
+   "divergences": "~3,350",
+   "unattributed": "~268",
+   "CI_band_from_the_2_of_25": "0 to 624"
+  },
+  "what_it_implies": "a fresh certification sweep on the current build would land near 270 unattributed, close to the 255 measured on the corpus, and would NOT pass. The corpus measurement generalises. Nobody should spend eight cluster shards expecting a different answer -- the 255 is the answer, and the gap to zero is the contract's exits and engine work, exactly as the last several cycles concluded.",
+  "the_honest_caveat": "the CI band is wide enough to include zero. It does not include zero for any good reason -- 0 unattributed would require the fresh fraction to be far below the corpus fraction, and nothing in the shape comparison suggests that."
+ }
 }
