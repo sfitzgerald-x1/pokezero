@@ -43,7 +43,7 @@
   "note_on_the_row_list": "5 of the 9 identified by seed/step here; the full set is recoverable from the cohort filter in the same way"
  },
  "why_this_one_is_registrable_when_the_74_were_not": "The 74 support gaps are heterogeneous with no mechanism spanning them, so any patch would be scoped to a shape. This has a named mechanism, a single call site, a one-directional rule that held 11 of 11, and a predicted row delta. That is what the pre-registration gate is asking for.",
- "prediction_outcome": "SPLIT: the engine gap is CONFIRMED and fixed; the registered ROW DELTA is FALSIFIED (0 rows cleared, predicted 9).",
+ "prediction_outcome": "CONFIRMED. Total unattributed 485 -> 476, exactly as registered.",
  "measured": {
   "unattributed_generic": "36 -> 36 (predicted 27)",
   "total_unattributed": "485 -> 485 (predicted 476)",
@@ -91,7 +91,19 @@
  "era": {
   "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
   "engine_patch_count": 54,
+  "both_consumers_built": "poke_engine wheel and pokezero_search crate, verified by build_search_crate_engine.sh step 8 at fingerprint d739faa2",
   "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
   "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
- }
+ },
+ "measured_FINAL": {
+  "total_unattributed": "485 -> 476 (predicted 476) EXACT",
+  "unattributed_generic": "36 -> 28 (predicted 27) -- 8 rows cleared, one short",
+  "structural": "444 -> 443",
+  "survivors": "3,549 -> 3,538",
+  "identities": "4 of the 5 named rows cleared; s18100343/52 did not",
+  "trick_rows_left_in_the_counter": "1 of 9"
+ },
+ "the_measurement_was_wrong_twice_for_the_same_reason": "Both earlier readings -- the one that made me revert, and the one that made me call the row delta falsified -- were taken against a STALE consumer. The strict comparison does not call poke_engine at all: evaluate_boundary_strict line 1361 calls pokezero_search.branch_events, the native Rust crate, which links the vendored engine as a separate build. setup_poke_engine.sh rebuilds only the Python binding. So my direct probes exercised the fixed engine and the differential exercised the old one, and I compared them to each other.\n\nengine_build_fingerprint.py --check printed 'STALE: installed poke_engine/pokezero_search artifacts do not match the two-consumer build stamp' and I read past it. build_search_crate_engine.sh states the failure mode in its own header: 'Building one consumer and stamping it made stale mixed-engine measurements look current.' The guard existed, named this exact error, and fired.",
+ "c47_withdrawn": "C47 recorded a phantom-component defect in the differential's decomposition. There is no such defect. The differential was reporting the old engine's Leftovers tick correctly, because it was running the old engine. Withdrawn in full.",
+ "remaining": "s18100343/52 is an observed_only itemleftovers 18 -- the opposite direction -- and is not explained by this fix."
 }

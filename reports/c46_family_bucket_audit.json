@@ -8,9 +8,9 @@
  },
  "population": {
   "kind": "fresh_sweep",
-  "rows": 3549,
+  "rows": 3538,
   "cleared_or_skipped_on_this_build": 0,
-  "divergent_rows_measured": 3549
+  "divergent_rows_measured": 3538
  },
  "buckets": {
   "instrument-artifact": 5,
@@ -104,16 +104,16 @@
   },
   "LS_capped_lethal_shape": {
    "bucket": "candidate-not-finding",
-   "finding": "no decisive signature: net-identical 179/465, tolerance-passing 109/465, count-mismatch 273/465. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "finding": "no decisive signature: net-identical 179/463, tolerance-passing 109/463, count-mismatch 271/463. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
    "source": "mechanical signatures",
    "signature_profile": "mixed-with-a-partial-signature",
-   "archive_rows": 465,
+   "archive_rows": 463,
    "signatures": {
-    "measured": 465,
+    "measured": 463,
     "net_identical": 179,
     "labels_align_cap_normalised": 190,
     "rolls_inside_tolerance": 109,
-    "count_mismatch": 273
+    "count_mismatch": 271
    }
   },
   "LS_confusion_fan": {
@@ -240,11 +240,11 @@
    "finding": "Four instrument defects found so far: the rule fired from minority arms (C28), the capped-heal bound was denied its scale input (C30), and C29's own fix aliased the shared observed split (C34). On the FRESH C32 sweep the counter reached 3,779 and C34 brought it to 433.",
    "corrected": "This entry previously read 'resolved', on the strength of a 60-game probe reaching zero. The C32 sweep produced 3,779 -- the probe was a 167th of the population and sampled the opposite shape. 433 rows survive C34, and their dominant sample inverts C34's: the ENGINE side is the longer one, splitting into damage plus a capped Leech Seed. Not resolved.",
    "source": "shipped, measured change",
-   "archive_rows": 444,
+   "archive_rows": 443,
    "signatures": {
-    "measured": 444,
-    "count_mismatch": 444,
-    "carries_cap": 138,
+    "measured": 443,
+    "count_mismatch": 443,
+    "carries_cap": 137,
     "net_identical": 98
    }
   },
@@ -259,16 +259,15 @@
   },
   "unattributed_generic": {
    "bucket": "candidate-not-finding",
-   "finding": "no decisive signature: net-identical 1/36, tolerance-passing 3/36, count-mismatch 23/36. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "finding": "no decisive signature: net-identical 0/28, tolerance-passing 3/28, count-mismatch 15/28. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
    "source": "mechanical signatures",
    "signature_profile": "no-signature",
-   "archive_rows": 36,
+   "archive_rows": 28,
    "signatures": {
-    "measured": 36,
-    "count_mismatch": 23,
+    "measured": 28,
+    "count_mismatch": 15,
     "labels_align_cap_normalised": 10,
-    "rolls_inside_tolerance": 3,
-    "net_identical": 1
+    "rolls_inside_tolerance": 3
    }
   }
  },

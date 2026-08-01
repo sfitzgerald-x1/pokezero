@@ -9,5 +9,7 @@
   "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
   "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
   "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
- }
+ },
+ "STATUS": "WITHDRAWN IN FULL",
+ "why": "There is no phantom component. The differential calls pokezero_search.branch_events, a separate native build that was stale; it was reporting the OLD engine's Leftovers tick accurately. Rebuilding both consumers cleared 8 of the 9 rows. See reports/c46_trick_attacker_item_gap.json."
 }
