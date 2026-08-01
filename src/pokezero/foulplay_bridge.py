@@ -3342,7 +3342,6 @@ async def _handle_decision_boundary(
             player,
             set_source=belief_set_source,
             include_turn_merged=observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
-            include_feature_pack_v4=observation_spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
         )
         for player in requested_players
     }

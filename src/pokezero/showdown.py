@@ -37,6 +37,7 @@ from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
@@ -690,9 +691,17 @@ NUMERIC_MON_STAYED_VS_ACTIVE = V4_NUMERIC_BASE + 10
 # over generation; Trick's lock emitted nothing at all, and its usage sits near zero.
 #
 # ``NUMERIC_ITEM_SWAPPED``: the currently-held item arrived via Trick rather than being the
-# mon's own. Without it the lock bit is sign-ambiguous — a NATIVE Choice Band is assigned to
+# mon's own. In principle this is the sign discriminator — a NATIVE Choice Band is assigned to
 # all-attacks sets and makes its holder stronger, while a Tricked one is a liability we
-# inflicted. Same item, opposite valence, and this is the public fact that separates them.
+# inflicted, same item and opposite valence.
+#
+# HONEST LIMIT IN THIS POOL, do not read more into the pair than it carries: a native Band is
+# never announced (gen3 emits no Frisk/held-item reveal, and the only ``isChoice`` item is
+# Choice Band), so ``choice_item_public`` can only be set by a Trick's ``|-item|`` line. In
+# gen3 randbats today that makes the two columns COLLINEAR — locked implies swapped — and the
+# separate column earns its keep only if a native reveal surface ever appears. It is kept
+# distinct rather than folded in because collapsing two facts into one column is the harder
+# thing to undo later, and because the pair is what the model needs if that surface arrives.
 #
 # Both are raw facts, not judgements: neither says the lock is good or bad. The move identity
 # (A2, sharing the action token's ``move:<id>`` embedding row, which carries the move's damage
@@ -4041,6 +4050,17 @@ def observation_from_player_state(
             "undeclared hybrid stamped with the wider version; the 119-column relic family "
             f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
         )
+    if schema_v4 and spec.categorical_feature_count != _V4_CATEGORICAL_FEATURE_COUNT:
+        # EXACT, not a floor. Every earlier schema was wider than its predecessor, so "at least
+        # my census" was sufficient; v4 is the first that SHRINKS (41 vs v3's 51), which makes
+        # a stale 51 look like a legal over-wide spec and silently emit ten dead columns on a
+        # tensor stamped v4.
+        raise ValueError(
+            "observation encode: the grouped v4 layout requires exactly "
+            f"{_V4_CATEGORICAL_FEATURE_COUNT} categorical columns, got "
+            f"{spec.categorical_feature_count}. v4 is NARROWER than v3 (the turn-merged block "
+            "is gone), so a v3-width spec is a mismatch, not a permissible superset."
+        )
     categorical_floor = _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA[spec.schema_version]
     if spec.categorical_feature_count < categorical_floor:
         raise ValueError(
@@ -4263,7 +4283,9 @@ def observation_from_player_state(
         attention_mask=attention_mask,
         legal_action_mask=state.legal_action_mask,
         perspective=state.perspective,
-        metadata=_observation_metadata(state, dex=dex),
+        metadata=_observation_metadata(
+            state, dex=dex, schema_version=spec.schema_version
+        ),
         schema_version=spec.schema_version,
     )
 
@@ -5625,14 +5647,23 @@ def _healthy_grounded_bench(
     *,
     beliefs_by_species: Mapping[str, "RevealedPokemonBelief"] | None,
     dex: "ShowdownDex | None",
+    unseen_slots: int = 0,
 ) -> int:
     """Count of BENCHED, unfainted, Spikes-grounded mons — the population a layer still bills.
 
     The active mon is excluded: it is already on the field and will not pay entry chip again
     unless it leaves and returns, which is precisely the future the value column is pricing.
+
+    ``unseen_slots`` is the opponent's NOT-YET-REVEALED party members, and it is load-bearing.
+    ``state.opponent_team`` holds only revealed mons, so counting that list alone made the
+    column smallest exactly when Spikes are worth most — early, before reveals — and made its
+    magnitude a proxy for how much of their team we have seen rather than for hazard exposure.
+    It also inverted the documented conservative default (an unknown mon counts as GROUNDED,
+    because we must not claim an immunity we cannot see) and broke comparability with the self
+    side, which is always a complete six.
     """
 
-    count = 0
+    count = max(0, unseen_slots)
     for pokemon in team:
         if pokemon.active:
             continue
@@ -5689,6 +5720,9 @@ def field_credit_values(
                 state.opponent_team,
                 beliefs_by_species=state.belief_view.opponent_by_species(),
                 dex=dex,
+                # Every party slot we have not seen yet is a benched, living, presumed-grounded
+                # mon. int(_TEAM_SIZE) is the gen3 singles party size.
+                unseen_slots=int(_TEAM_SIZE) - len(state.opponent_team),
             )
             * _SPIKES_DAMAGE_BY_LAYERS[opp_layers]
             / _TEAM_SIZE,
@@ -5785,14 +5819,20 @@ def _encode_active_volatiles(cat_row: list[str], volatiles: Sequence[str]) -> No
     if len(names) > VOLATILE_BUCKET_COUNT:
         VOLATILE_BUCKET_OVERFLOWS += 1
         dropped = names[VOLATILE_BUCKET_COUNT:]
-        warnings.warn(
-            f"volatile bag overflow: {len(names)} tracked volatiles on one mon exceeds the "
-            f"{VOLATILE_BUCKET_COUNT} buckets; dropping {dropped}. The observation is still "
-            "valid and the run continues, but this is public state the model cannot see — "
-            "raise VOLATILE_BUCKET_COUNT (a schema change) if it recurs.",
-            VolatileBucketOverflowWarning,
-            stacklevel=2,
-        )
+        # Wrapped: a `-W error` profile would otherwise turn this deliberately NON-FATAL
+        # diagnostic into an encode exception, breaking the very collection run the truncation
+        # exists to protect. The counter above is the signal that always survives.
+        try:
+            warnings.warn(
+                f"volatile bag overflow: {len(names)} tracked volatiles on one mon exceeds the "
+                f"{VOLATILE_BUCKET_COUNT} buckets; dropping {dropped}. The observation is "
+                "still valid and the run continues, but this is public state the model cannot "
+                "see — raise VOLATILE_BUCKET_COUNT (a schema change) if it recurs.",
+                VolatileBucketOverflowWarning,
+                stacklevel=2,
+            )
+        except Exception:  # pragma: no cover - a warning must never abort an encode
+            pass
     for index, name in enumerate(names[:VOLATILE_BUCKET_COUNT]):
         column = CATEGORY_VOLATILE_OFFSET + index
         if column >= len(cat_row):
@@ -7103,12 +7143,22 @@ def _encode_action_tokens(
 
 
 def _observation_metadata(
-    state: PlayerRelativeBattleState, *, dex: "ShowdownDex | None" = None
+    state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None" = None,
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V4,
 ) -> dict[str, Any]:
+    # The v4 pack block is SCHEMA-GATED, not unconditional. Publishing it on every schema was
+    # not merely wasteful (field_credit_values walks the bench on each encode): the search lane
+    # PREFERS metadata["opponent_must_recharge"] over its own reconstruction, so an always-
+    # present key silently changed world seeding for the v2.2/v3 arms currently in flight.
+    # Tensor bytes were frozen either way; behaviour was not, and mid-run behaviour changes to
+    # a live arm are exactly what the contract discipline exists to prevent.
+    pack: dict[str, Any] = {}
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
+        pack = _feature_pack_metadata(state, dex=dex)
     return {
-        # Part B's settled column values, published so the native leaf encoder reads the same
-        # numbers this encoder writes rather than re-deriving the grounding rule in Rust.
-        **field_credit_values(state, dex=dex),
+        **pack,
         "battle_id": state.battle_id,
         "player_id": state.player_id,
         "request_kind": state.request_kind,
@@ -7157,41 +7207,6 @@ def _observation_metadata(
         "opponent_wrap_trap_elapsed": state.opponent_wrap_trap_elapsed,
         "self_meanlook_trap": state.self_meanlook_trap,
         "opponent_meanlook_trap": state.opponent_meanlook_trap,
-        # V4 public-state inputs (the k0 feature pack). Metadata-only under every earlier schema,
-        # exactly like the V3 block above: it lets the schema-bound Rust/golden encoders reproduce
-        # V4 without replaying private data, and it is the surface the SEARCH lane reads for
-        # ``must_recharge`` so the world and the observation share one parser truth.
-        "self_must_recharge": state.self_must_recharge,
-        "opponent_must_recharge": state.opponent_must_recharge,
-        "self_truant_loaf": state.self_truant_loaf,
-        "opponent_truant_loaf": state.opponent_truant_loaf,
-        "self_last_used_move": state.self_last_used_move,
-        "opponent_last_used_move": state.opponent_last_used_move,
-        "self_traced_ability": state.self_traced_ability,
-        "opponent_traced_ability": state.opponent_traced_ability,
-        "self_last_damage_dealt": state.self_last_damage_dealt,
-        "self_last_damage_taken": state.self_last_damage_taken,
-        "opponent_last_damage_dealt": state.opponent_last_damage_dealt,
-        "opponent_last_damage_taken": state.opponent_last_damage_taken,
-        "self_hazard_damage_suffered": state.self_hazard_damage_suffered,
-        "opponent_hazard_damage_suffered": state.opponent_hazard_damage_suffered,
-        "self_items_removed": state.self_items_removed,
-        "opponent_items_removed": state.opponent_items_removed,
-        "self_arrived_by_baton_pass": state.self_arrived_by_baton_pass,
-        "opponent_arrived_by_baton_pass": state.opponent_arrived_by_baton_pass,
-        "self_choice_locked": state.self_choice_locked,
-        "opponent_choice_locked": state.opponent_choice_locked,
-        "self_item_swapped": state.self_item_swapped,
-        "opponent_item_swapped": state.opponent_item_swapped,
-        # The matchup-conditional pair, ALREADY conditioned on our current active. It travels
-        # on the metadata rather than through FoldProducts because products deliberately carry
-        # only the encoder-consumed tendency surface — verified when the golden fold sample was
-        # patched and products came back byte-identical. The native leaf encoder reads it from
-        # here, exactly as it reads the other boundary facts.
-        "opponent_matchup_switch_evidence": {
-            species: list(pair)
-            for species, pair in state.opponent_matchup_switch_evidence.items()
-        },
     }
 
 
@@ -7237,6 +7252,50 @@ def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[st
         )
     return candidates
 
+
+
+def _feature_pack_metadata(
+    state: PlayerRelativeBattleState, *, dex: "ShowdownDex | None"
+) -> dict[str, Any]:
+    """V4 public-state inputs (the k0 feature pack), for v4 encodes only.
+
+    Metadata-only under every earlier schema in the sense that it is simply ABSENT there: it
+    lets the schema-bound Rust/golden encoders reproduce V4 without replaying private data, and
+    it is the surface the SEARCH lane reads for ``must_recharge`` so the world and the
+    observation share one parser truth — but only for the schema that has those columns.
+    """
+
+    return {
+        # Part B's settled column values, published so the native leaf encoder reads the same
+        # numbers this encoder writes rather than re-deriving the grounding rule in Rust.
+        **field_credit_values(state, dex=dex),
+        "self_must_recharge": state.self_must_recharge,
+        "opponent_must_recharge": state.opponent_must_recharge,
+        "self_truant_loaf": state.self_truant_loaf,
+        "opponent_truant_loaf": state.opponent_truant_loaf,
+        "self_last_used_move": state.self_last_used_move,
+        "opponent_last_used_move": state.opponent_last_used_move,
+        "self_traced_ability": state.self_traced_ability,
+        "opponent_traced_ability": state.opponent_traced_ability,
+        "self_last_damage_dealt": state.self_last_damage_dealt,
+        "self_last_damage_taken": state.self_last_damage_taken,
+        "opponent_last_damage_dealt": state.opponent_last_damage_dealt,
+        "opponent_last_damage_taken": state.opponent_last_damage_taken,
+        "self_hazard_damage_suffered": state.self_hazard_damage_suffered,
+        "opponent_hazard_damage_suffered": state.opponent_hazard_damage_suffered,
+        "self_items_removed": state.self_items_removed,
+        "opponent_items_removed": state.opponent_items_removed,
+        "self_arrived_by_baton_pass": state.self_arrived_by_baton_pass,
+        "opponent_arrived_by_baton_pass": state.opponent_arrived_by_baton_pass,
+        "self_choice_locked": state.self_choice_locked,
+        "opponent_choice_locked": state.opponent_choice_locked,
+        "self_item_swapped": state.self_item_swapped,
+        "opponent_item_swapped": state.opponent_item_swapped,
+        "opponent_matchup_switch_evidence": {
+            species: list(pair)
+            for species, pair in state.opponent_matchup_switch_evidence.items()
+        },
+    }
 
 def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
     if pokemon is None:

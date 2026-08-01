@@ -1,50 +1,50 @@
 {
- "array_dtypes": {
-  "attention_mask": "|b1",
-  "categorical_ids": "<i4",
-  "legal_action_mask": "|b1",
-  "numeric_features": "<f8",
-  "token_type_ids": "<i2"
- },
- "array_shapes": {
-  "attention_mask": [
-   151
-  ],
-  "categorical_ids": [
-   151,
-   51
-  ],
-  "legal_action_mask": [
-   9
-  ],
-  "numeric_features": [
-   151,
-   155
-  ],
-  "token_type_ids": [
-   151
-  ]
- },
- "counts": {
-  "decisions": 5,
-  "fold_rows": 5,
-  "games": 1
- },
- "files": {
-  "arrays.npz": {
-   "bytes": 6898,
-   "sha256": "0bc0e3e798c117c80468c6dec219e6f1ddd10819ed9dd624a293b9c0b27042c3"
+  "array_dtypes": {
+    "attention_mask": "|b1",
+    "categorical_ids": "<i4",
+    "legal_action_mask": "|b1",
+    "numeric_features": "<f8",
+    "token_type_ids": "<i2"
   },
-  "fold.jsonl.gz": {
-   "bytes": 3444,
-   "sha256": "f476791dea47cab47474c0f041e9349c93d923614f53139fc2893fc3335c1882",
-   "uncompressed_bytes": 51913
+  "array_shapes": {
+    "attention_mask": [
+      151
+    ],
+    "categorical_ids": [
+      151,
+      51
+    ],
+    "legal_action_mask": [
+      9
+    ],
+    "numeric_features": [
+      151,
+      155
+    ],
+    "token_type_ids": [
+      151
+    ]
   },
-  "rows.jsonl": {
-   "bytes": 102578,
-   "sha256": "48024d6ff450cbe0c977cdc2223882ac8acb9dbdbcccb96c33c16178c7f6a796"
-  }
- },
- "schema_sha256": "879230ebe3c45556aaae820a17fd0c5da10207d69e3322f75f8cf27d9bb564f1",
- "schema_version": "pokezero.golden-encoder-corpus.v2"
+  "counts": {
+    "decisions": 5,
+    "fold_rows": 5,
+    "games": 1
+  },
+  "files": {
+    "arrays.npz": {
+      "bytes": 6898,
+      "sha256": "0bc0e3e798c117c80468c6dec219e6f1ddd10819ed9dd624a293b9c0b27042c3"
+    },
+    "fold.jsonl.gz": {
+      "bytes": 3444,
+      "sha256": "f476791dea47cab47474c0f041e9349c93d923614f53139fc2893fc3335c1882",
+      "uncompressed_bytes": 51913
+    },
+    "rows.jsonl": {
+      "bytes": 102578,
+      "sha256": "48024d6ff450cbe0c977cdc2223882ac8acb9dbdbcccb96c33c16178c7f6a796"
+    }
+  },
+  "schema_sha256": "879230ebe3c45556aaae820a17fd0c5da10207d69e3322f75f8cf27d9bb564f1",
+  "schema_version": "pokezero.golden-encoder-corpus.v2"
 }

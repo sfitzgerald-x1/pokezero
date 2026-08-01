@@ -350,14 +350,39 @@ class TransformerPolicyConfig:
         schema_spec = observation_spec_for_schema(self.observation_schema_version)
         transition_token_capacity = schema_spec.transition_token_count
         if self.transition_token_count == 0:
-            # Sentinel: default to the stamped schema's full region.
+            # Sentinel: default to the stamped schema's full region. For a HISTORY-FREE schema
+            # that region is empty, so the sentinel resolves to 0 and stays there — 0 is the
+            # only valid width, not a missing value.
             object.__setattr__(self, "transition_token_count", transition_token_capacity)
-        if not 0 < self.transition_token_count <= transition_token_capacity:
+        if transition_token_capacity == 0:
+            # v4 and any successor that carries no transition region. Demanding >= 1 here made
+            # the config unconstructible: the sentinel resolves to 0 and every explicit value
+            # exceeds the capacity, so no v4 model could be built, trained, or loaded at all.
+            if self.transition_token_count != 0:
+                raise ValueError(
+                    f"observation schema {self.observation_schema_version!r} carries no "
+                    "transition region, so transition_token_count must be 0; got "
+                    f"{self.transition_token_count}."
+                )
+        elif not 0 < self.transition_token_count <= transition_token_capacity:
             raise ValueError(
                 "transition_token_count must be in "
                 f"1..{transition_token_capacity} for observation schema "
                 f"{self.observation_schema_version!r}."
             )
+        if transition_token_capacity == 0:
+            # A history-free schema has no region to budget. The dataclass default is the
+            # legacy full-region constant, i.e. "unset", so resolve that to 0; but an
+            # EXPLICIT non-zero budget is a real mistake — someone believing they configured a
+            # history horizon on a contract that has none — and must not pass silently.
+            if self.transition_token_budget == TRANSITION_TOKEN_COUNT:
+                object.__setattr__(self, "transition_token_budget", 0)
+            elif self.transition_token_budget != 0:
+                raise ValueError(
+                    f"observation schema {self.observation_schema_version!r} carries no "
+                    "transition region, so transition_token_budget must be 0; got "
+                    f"{self.transition_token_budget}. There is no history horizon to set."
+                )
         if not 0 <= self.transition_token_budget <= self.transition_token_count:
             raise ValueError(
                 "transition_token_budget must be in "

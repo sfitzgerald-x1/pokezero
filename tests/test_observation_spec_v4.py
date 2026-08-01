@@ -175,14 +175,21 @@ class V4EncodeTestBase(unittest.TestCase):
 
         return load_showdown_dex_cached(SHOWDOWN_ROOT)
 
-    def _state(self, lines, *, player="p1"):
+    def _state(self, lines, *, player="p1", turn_merged=False):
+        """Normalize the way PRODUCTION v4 does: include_turn_merged=False.
+
+        v4 is deliberately absent from TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, so every
+        harness builds v4 states without the merged stream. Hardcoding True here would have
+        exercised a path v4 never takes; the v3-freeze test opts back in explicitly, because
+        v3 does need it.
+        """
         replay = parse_showdown_replay(lines, battle_id="v4-encode", complete_prefix=True)
         return normalize_for_player(
             replay,
             player_id=player,
             configured_showdown_slot=player,
             format_id="gen3randombattle",
-            include_turn_merged=True,
+            include_turn_merged=turn_merged,
         )
 
     def _encode(self, state, spec=None, *, dex=True):
@@ -728,7 +735,7 @@ class V4LastMoveAblationMaskTest(V4EncodeTestBase):
 
         # The column does not exist under v3, so toggling the switch cannot perturb a v3
         # encode — the property that makes it safe to add while v3 arms are running.
-        state = self._state(_RECHARGE_LINES, player="p2")
+        state = self._state(_RECHARGE_LINES, player="p2", turn_merged=True)
         rows = [
             observation_from_player_state(
                 state,
@@ -955,24 +962,22 @@ class V4ChoiceLockTest(V4EncodeTestBase):
             self._vocab().encode("move:calmmind"),
         )
 
-    def test_a_native_choice_band_is_not_marked_as_swapped(self) -> None:
-        # The valence discriminator. A band the mon owns is its asset; a Tricked one is a
-        # liability we inflicted. Both read "holds a Choice Band" without this bit.
-        native = [
-            "|player|p1|Alice|",
-            "|player|p2|Bob|",
-            "|switch|p1a: Slaking|Slaking, L74, M|100/100",
-            "|switch|p2a: Snorlax|Snorlax, L78, M|100/100",
-            "|turn|1",
-            "|-item|p2a: Snorlax|Choice Band|[from] ability: Frisk",
-            "|move|p2a: Snorlax|Body Slam|p1a: Slaking",
-            "|-damage|p1a: Slaking|70/100",
-            "|upkeep",
-            "|turn|2",
-        ]
-        locked, swapped = self._bits(native)
-        self.assertEqual(locked, 1.0)
-        self.assertEqual(swapped, 0.0)
+    def test_in_this_pool_a_lock_is_always_a_tricked_lock(self) -> None:
+        """The pair is collinear in gen3 randbats, and that is worth pinning explicitly.
+
+        A NATIVE Choice Band is never announced — gen3 has no Frisk-style reveal and Choice
+        Band is the only ``isChoice`` item — so ``choice_item_public`` can only be set by a
+        Trick's ``|-item|`` line. An earlier version of this test manufactured the native case
+        with ``[from] ability: Frisk``, which the gen 3 sim cannot emit; it asserted a state
+        that does not exist. Pin the real invariant instead: locked implies swapped here.
+        """
+        locked, swapped = self._bits(self._TRICK)
+        self.assertEqual((locked, swapped), (1.0, 1.0))
+        # And the columns stay independent in the encoding, so the day a native reveal surface
+        # appears the model does not have to unlearn a conflation.
+        self.assertNotEqual(
+            v4_numeric_index(NUMERIC_CHOICE_LOCKED), v4_numeric_index(NUMERIC_ITEM_SWAPPED)
+        )
 
     def test_losing_the_item_clears_both_bits(self) -> None:
         knocked = self._TRICK + [
@@ -1027,6 +1032,17 @@ class V4HistoryIsGoneTest(V4EncodeTestBase):
                 OBSERVATION_SCHEMA_VERSION_V4, NUMERIC_TIER2_CB_PINNED
             )
         )
+        # Column presence is not evidence the DERIVATION survived. The pinned conclusions come
+        # off state.transition_tokens, which normalize still populates at
+        # include_turn_merged=False — assert that stream is non-empty on the production path,
+        # since an empty one would leave the column silently constant-zero.
+        state = self._state(_RECHARGE_LINES)
+        self.assertTrue(
+            state.transition_tokens,
+            "v4 normalize produced no transition tokens; the tier2 and tendency derivations "
+            "read that stream even though v4 encodes none of its rows",
+        )
+        self.assertIsNotNone(state.tendency_stats)
 
 
 class V4VolatileOverflowTest(unittest.TestCase):
@@ -1076,7 +1092,10 @@ class V4FreezesV3Test(V4EncodeTestBase):
     """The invariant a new contract lives or dies by: v3 output is untouched."""
 
     def _v3(self, lines, *, player="p1"):
-        return self._encode(self._state(lines, player=player), V3_REPLAY_OBSERVATION_SPEC)
+        # v3 IS turn-merged, so it needs the merged stream; v4 is not and does not.
+        return self._encode(
+            self._state(lines, player=player, turn_merged=True), V3_REPLAY_OBSERVATION_SPEC
+        )
 
     def test_v3_encode_carries_no_pack_column_and_keeps_its_census(self) -> None:
         for lines in (_LEADS, _RECHARGE_LINES, V4CreditEncodeTest._SPIKES_LINES):
@@ -1091,19 +1110,20 @@ class V4FreezesV3Test(V4EncodeTestBase):
                 V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             )
 
-    def test_v3_bytes_are_identical_with_and_without_pack_evidence_in_the_log(self) -> None:
-        # The strongest available statement of the freeze: a replay FULL of pack signals
-        # (a recharge lock, knocked-off item, hazard chip, damage on both sides) encodes at v3
-        # to exactly the same rows as it did before the pack existed — because no v3 column
-        # reads any of it. Compared against a v3 encode of the same state re-derived through the
-        # v4 projection's shared writer surface.
+    def test_every_v3_column_carries_the_same_value_under_v4(self) -> None:
+        # NOTE ON WHAT THIS DOES AND DOES NOT PROVE. It shows the two projections agree
+        # column-for-column on a replay full of pack signals, i.e. no pack write leaked into a
+        # shared v3-gated writer. It does NOT establish "identical to before the pack existed"
+        # — both sides move together if a shared writer changes. The evidence for the true
+        # freeze is the committed golden corpus: arrays.npz is byte-unchanged on this branch.
         lines = _RECHARGE_LINES + [
             "|move|p2a: Blissey|Knock Off|p1a: Slaking",
             "|-enditem|p1a: Slaking|Leftovers|[from] move: Knock Off|[of] p2a: Blissey",
             "|upkeep",
             "|turn|4",
         ]
-        state = self._state(lines)
+        # One state that satisfies BOTH: v3 needs the merged stream, v4 ignores it.
+        state = self._state(lines, turn_merged=True)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
         v4 = self._encode(state, V4_REPLAY_OBSERVATION_SPEC)
         # Every column v3 carries appears in v4 with the same VALUE (at a different index).
@@ -1128,16 +1148,22 @@ class V4FreezesV3Test(V4EncodeTestBase):
             observation_from_player_state(
                 self._state(_LEADS), category_vocab=self._vocab(), spec=narrowed
             )
-        # v4's categorical census is NARROWER than v3's (the turn-merged block is gone), so the
-        # narrowing that must be refused is against v4's own floor, not v3's number.
-        narrowed_categorical = replace(
-            V4_REPLAY_OBSERVATION_SPEC,
-            categorical_feature_count=V4_REPLAY_OBSERVATION_SPEC.categorical_feature_count - 1,
-        )
-        with self.assertRaisesRegex(ValueError, "requires at least"):
-            observation_from_player_state(
-                self._state(_LEADS), category_vocab=self._vocab(), spec=narrowed_categorical
+        # v4's categorical census is NARROWER than v3's (the turn-merged block is gone), so
+        # BOTH directions must be refused. A floor-only check would accept a stale v3 width as
+        # a permissible superset and silently emit ten dead columns on a v4-stamped tensor.
+        for count in (
+            V4_REPLAY_OBSERVATION_SPEC.categorical_feature_count - 1,
+            V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+        ):
+            narrowed_categorical = replace(
+                V4_REPLAY_OBSERVATION_SPEC, categorical_feature_count=count
             )
+            with self.assertRaises(ValueError):
+                observation_from_player_state(
+                    self._state(_LEADS),
+                    category_vocab=self._vocab(),
+                    spec=narrowed_categorical,
+                )
 
 
 @unittest.skipUnless(
