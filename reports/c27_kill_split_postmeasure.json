@@ -66,7 +66,7 @@
    "within_ceiling": false
   }
  },
- "registration_shortfall": "The per-family ceilings counted only rows with an unreachable CRIT ARM. The patch also fixed the exactly-on-the-line roll being dropped from both buckets, and -- visible on the anchor row -- restored secondary-effect branches on the newly reachable survive arm. Those are additional clearance sources the ceiling did not model, so three per-family lines were exceeded even though the aggregate held. The ceiling should have been registered for the bundle, or the two fixes measured separately.",
+ "registration_shortfall": "The per-family ceilings counted only rows with an unreachable CRIT ARM. The patch also fixed the exactly-on-the-line roll being dropped from both buckets, and -- visible on the anchor row -- restored secondary-effect branches on the newly reachable survive arm. Those are additional clearance sources the ceiling did not model, so three per-family lines were exceeded even though the aggregate held. The ceiling should have been registered for the bundle, or the two fixes measured separately. Meta-lesson: the prediction was registered for a narrower patch than shipped. When the scope grew to include the == fix and the restored secondary branches, the registration should have been amended BEFORE the measurement run. Scope change requires re-registration, the same rule as prediction-before-measurement, one level up.",
  "fresh_sample": {
   "seed_band": 17000000,
   "games": 60,
@@ -104,5 +104,23 @@
   "Walk-row mass re-derivation for the nine capped-lethal adjudications.",
   "The == orphan needs an explicit pin.",
   "f32-vs-integer roll derivation disagrees on 20 of 7,484 pairs; registered as a separate follow-up because it changes emitted damage on every case A hit."
- ]
+ ],
+ "perish_clock_adjudication": {
+  "world": "a - the prior proof was overclaimed; the repair caught our own error",
+  "measured": {
+   "surf_non_crit_base": 82,
+   "surf_non_crit_rolls": "69-82",
+   "surf_non_crit_avg_arm": 75,
+   "surf_crit_base": 165,
+   "surf_crit_rolls": "140-165",
+   "surf_crit_avg_arm": 152,
+   "blissey_hp": 620,
+   "surfs_available_before_lapras_dies": 4
+  },
+  "arithmetic": "4 x 152 (average crit) = 608 < 620, which is why the pre-C27 engine measured a strict zero. 4 x 165 (max crit) = 660 > 620. Three average crits leave Blissey on 164, inside the crit straddle window (140, 165], so C27 emits a kill arm there that previously did not exist.",
+  "verdict": "The four-crit line is legal and always was; the pre-C27 branch support could not represent it because the crit arm carried only the average roll. The strict zero measured the missing branch, not the position.",
+  "resolution": "Pin corrected as a proof erratum, not re-baselined to the observed number: the assertion is now that the trap is strictly positive (a zero would mean the kill-split regressed) and bounded by the four-crit lottery (1/16)^4. The false clause was also removed from the position's derivation string.",
+  "observed_p_win_upper": 9.5361328125e-07,
+  "four_crit_lottery_bound": 1.52587890625e-05
+ }
 }
