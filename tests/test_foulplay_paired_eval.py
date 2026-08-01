@@ -161,6 +161,43 @@ class FoulplayPathTest(unittest.TestCase):
         self.assertIsNone(ns.foulplay_python)
         self.assertNotIn("--foulplay-root", _DRIVER.bridge_argv(ns, seat="p1"))
 
+    def test_the_required_argument_set_is_pinned(self) -> None:
+        """N5/N6: nothing pinned which arguments are required.
+
+        The refactor provably dropped no required=True (review diffed every
+        parser action, 19 vs 19), but the tests did not PIN the set, so a later
+        change could quietly make --out or --checkpoint optional and a shard
+        would run with a default it should never have. Cheap to pin now that the
+        parser is reachable; it was unreachable before the extraction.
+        """
+        required = {a.dest for a in _DRIVER.build_parser()._actions if a.required}
+        self.assertEqual(
+            required,
+            {"checkpoint", "showdown_root", "arm", "seed_start", "pairs", "out"},
+        )
+
+    def test_main_parses_through_build_parser(self) -> None:
+        """N8: build_parser() is tested, but nothing asserted main() USES it.
+
+        A divergent re-inlined parser in main() would leave every other test
+        green. main() is one line today, so drift takes deliberate effort -- but
+        the assertion is two lines.
+        """
+        calls = []
+        real = _DRIVER.build_parser
+
+        def spy():
+            calls.append(1)
+            return real()
+
+        _DRIVER.build_parser = spy
+        try:
+            with self.assertRaises(SystemExit):
+                _DRIVER.main([])  # no required args -> argparse exits 2
+        finally:
+            _DRIVER.build_parser = real
+        self.assertEqual(len(calls), 1, "main() did not parse through build_parser()")
+
     def test_paths_are_forwarded_on_both_arms_and_seats(self) -> None:
         # The raw arm drives the same opponent, so it needs the same path.
         for arm in ("search", "raw"):
