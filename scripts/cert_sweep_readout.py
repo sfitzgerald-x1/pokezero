@@ -183,7 +183,21 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # Truant loaf-phase drift (validation: s2000059/11 — Slaking attacks in
     # the sim, engine's branch loafed; also the inverse s2000054/49). The
     # structural-arm echo rule below would eat both directions.
-    if ("Slaking" in proto or "Slakoth" in proto or "Truant" in proto) and (
+    # NARROWED to the actual loaf signature. This used to gate on the protocol
+    # merely MENTIONING a Slaking, with no requirement that the boundary be a
+    # loaf turn or that the Slaking be active on the slot being compared -- so
+    # any switch boundary in a game containing a Slaking qualified. On the C32
+    # sweep that was 8 of its 9 rows: switch boundaries whose complaining slot
+    # held a different mon entirely, with RemoveVolatileStatus TRUANT firing
+    # because the Slaking was leaving the field. A predicted-zero counter is a
+    # fail-closed alarm, and one that fires on unrelated boundaries manufactures
+    # certification failures. The narrowed predicate is the loaf signature
+    # itself, so a genuine loaf-phase drift still surfaces.
+    _truant_slot = _MISS_SIDE_RE.search(majority)
+    _truant_loaf = ("|cant|" in proto and "truant" in proto.lower()
+                    and _truant_slot is not None
+                    and f"{_truant_slot.group(1)}a: Slak" in proto)
+    if _truant_loaf and (
             (not obs_c and eng_c) or (obs_c and not eng_c)):
         return ("UNATTRIBUTED",
                 "Truant boundary with one-sided damage components: loaf-phase "

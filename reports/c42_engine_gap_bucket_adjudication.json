@@ -4,9 +4,10 @@
  "era": {
   "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
   "engine_patch_count": 53,
-  "readout_sha256": "b10329f8d79a08fe01f10c9e1828e146b0a9a2bc6318aace742872d51ac2b72b",
+  "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
   "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a",
-  "rule": "this adjudication is void on any change to the fingerprint, readout or differential hash above, and must be mechanically re-derived rather than carried forward"
+  "rule": "this adjudication is void on any change to the fingerprint, readout or differential hash above, and must be mechanically re-derived rather than carried forward",
+  "rederived_at_this_era_by": "reports/c45_truant_counter_adjudication.json -- branch-set measurement re-run, identical 74 rows"
  },
  "family": "structural_component_count_without_supported_sibling -> the confirmed engine-support-gap sub-population",
  "bucket": "engine-gap",

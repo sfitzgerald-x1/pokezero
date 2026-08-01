@@ -116,19 +116,25 @@ ESTABLISHED: dict[str, dict[str, str]] = {
         ),
     },
     "truant_loaf_phase_drift": {
-        "bucket": "OPEN -- predicted-zero counter with fresh nonzero evidence",
-        "evidence": "reports/c32_current_engine_attestation.json",
+        "bucket": "instrument-artifact",
+        "evidence": "reports/c45_truant_counter_adjudication.json",
         "finding": (
-            "The escape clause in the previous entry has been cashed. That entry said the bucket "
-            "could not be settled on the archive and only a fresh sweep could decide it. The C32 "
-            "sweep decided it: NINE rows, shape observed=[] against engine=[('', -163)] -- the "
-            "engine damages where Showdown does nothing, which is the loaf-phase signature the "
-            "counter is named for. The archive's 48 were dismissible as pre-#970; these are not."
+            "The C32 sweep's 9 rows are NOT loaf boundaries. 8 of 9 are switch boundaries "
+            "and 8 of 9 have the Slaking on a different slot than the one being compared; "
+            "the 3 that carry a TRUANT volatile carry it only because "
+            "RemoveVolatileStatus TRUANT fires as the Slaking leaves the field, and the "
+            "complaining slot's HP delta belongs to the incoming mon. The rule gated on "
+            "the protocol MENTIONING a Slaking, so any switch boundary in a game "
+            "containing one qualified."
         ),
         "consequence": (
-            "A counter registered at predicted-zero is nonzero on a fresh population, so it is a "
-            "certification failure in its own right and needs its own diagnosis rather than "
-            "inheriting the structural work."
+            "The previous entry read this as an engine-side loaf-phase drift surviving "
+            "#970 and a certification failure in its own right. That was a false alarm "
+            "produced by the counter's own breadth. The rule is narrowed to the loaf "
+            "signature -- |cant| truant with the Slaking active on the compared slot -- "
+            "which preserves sensitivity to a genuine drift while ending the false "
+            "positives. The 9 rows move to the structural counter; total unattributed is "
+            "unchanged at 485, so this is a relabel and not a residue reduction."
         ),
     },
     "I1_cap_state_shape": {

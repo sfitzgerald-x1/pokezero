@@ -78,5 +78,17 @@
     "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
    }
   ]
+ },
+ "prediction_outcome": "CONFIRMED on counts AND identities (9/9 named rows moved as named)",
+ "verification": {
+  "truant_loaf_phase_drift": "9 -> 0",
+  "structural_component_count_without_supported_sibling": "435 -> 444",
+  "total_unattributed": "485 -> 485 (relabel, as registered)",
+  "tests": "64 tests pass across the readout contract, tactics, contract registration and patch pins"
+ },
+ "era_rederivation": {
+  "new_readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
+  "audit": "reports/c45_family_bucket_audit.json -- re-derived, not carried forward. No family is bucketed OPEN any longer; truant_loaf_phase_drift is now instrument-artifact with C45 as its evidence.",
+  "c42_revalidated": "C42's engine-gap adjudication was era-stamped on the previous readout hash and was therefore VOID by its own rule. Re-derived rather than re-stamped: the branch-set support measurement returns the identical 74 unreachable rows (37 Sleep Talk, 37 other) from the same 179-row population, because the 9 relabelled rows do not enter that bucket. The adjudication's substance survives the era change on evidence."
  }
 }
