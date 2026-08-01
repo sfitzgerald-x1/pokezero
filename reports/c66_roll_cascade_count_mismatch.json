@@ -17,5 +17,21 @@
  "why_this_is_the_first_solid_lead_in_several_cycles": "It is not an enrichment, a proxy, or an inference from one row. The two component lists sum to the same number, and the arithmetic linking the roll difference to the extra component is visible in each example. C60 predicted this shape without naming it: 'a length check cannot distinguish the engine modelling a different outcome from the engine rendering the same outcome with a different number of events'. This is a third case it also cannot distinguish -- the engine modelling a legally different ROLL whose downstream capping differs.",
  "what_a_fix_would_have_to_respect": "NOT simply comparing net HP. Net-equality is exactly the false-match risk the exact-component comparison exists to prevent: damage and heals that coincidentally sum alike are not the same transition. A sound repair has to establish that the count difference is CAUSED by the roll difference -- that the extra component is a cap-filling residual whose magnitude equals the roll gap -- rather than merely observing that the totals agree. In s18000588/37 the extra itemleftovers is 4 and the roll gap is 4, and that identity is what would license the match.",
  "ceiling": "84 candidate rows, and lower once the causal condition above is required rather than net equality alone.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "causal_predicate_measured": {
+  "predicate": "exactly one extra component; it is a cap-filling heal residual with positive magnitude; that magnitude EQUALS the gap between the two direct-damage components; and the two direct components are one legal roll apart",
+  "result": {
+   "rows where a miss satisfies it": 21,
+   "rows where none does": 320
+  },
+  "against_net_equality": "84 rows are net-equal; only 21 survive the causal condition",
+  "why_the_gap_is_so_large": "net equality is cheap to satisfy. Two lists can sum alike through unrelated differences -- a heal that differs one way and a residual the other. The causal condition demands the extra residual's magnitude BE the roll gap, which is the arithmetic that actually links the two descriptions to one transition. 63 of the 84 do not have that identity.",
+  "the_predicate_is_precise_where_it_fires": "all three sampled rows are textbook cascades: s18000588/37 (-41 vs -45, extra leftovers 4), s18000642/44 (-124 vs -122, extra leftovers 2), s18001125/57 (-145 vs -136, extra leftovers 9). The gap equals the residual in each."
+ },
+ "engineering_judgement": {
+  "verdict": "NOT worth implementing as it stands, and I am recording that rather than shipping it.",
+  "why": "21 rows of 341, and clearance would be at most 21 since a miss being explained does not clear a row unless some branch matches entirely. Against that, the change touches roll_component_events_agree -- the comparison the whole residue is measured by, and the one place where a false match hides a real difference instead of flagging a non-difference. A 6% reduction is not worth loosening the safest check in the matcher.",
+  "what_would_change_it": "if the same causal identity accounts for a materially larger share once the OTHER cascade shapes are characterised -- a cap flag flipping without an extra component, or a residual that shrinks rather than appears. The 63 net-equal-but-not-causal rows are where to look, and they may hold a second identity as exact as this one.",
+  "the_ceiling_i_published_was_too_high": "C66 said 84 candidates, 'lower once the causal condition is required'. It is 21. Stating the size of the drop because 'lower' understated it by a factor of four."
+ }
 }
