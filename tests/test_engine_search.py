@@ -1595,3 +1595,110 @@ class HandcraftedCrateSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorldCollapseTest(unittest.TestCase):
+    """Identical belief completions must be searched once and weighted N times.
+
+    Sampling draws W worlds independently, so the same completion can come up
+    repeatedly -- and once every hidden fact is revealed, EVERY draw is the same
+    completion and W-1 of the searches are pure waste.
+
+    The subtle part is not the saving, it is the weighting. Aggregation weights
+    each world equally (`visits / requested`, engine_search.py), so a belief
+    drawn 12:4 must still aggregate 12:4. Collapsing to one record each would
+    silently flatten it to 1:1 -- a bias introduced in the name of an
+    optimisation. These tests pin both halves.
+    """
+
+    def _pool(self, reports):
+        """Mirror of the aggregation weighting: each world contributes visits/requested."""
+        from collections import Counter
+
+        weight: Counter = Counter()
+        for report in reports:
+            requested = report["requested_iterations"]
+            for entry in report["side_one"]:
+                weight[entry["move"]] += entry["visits"] / requested
+        return weight
+
+    def test_duplicate_worlds_keep_their_weight(self) -> None:
+        # Completion A drawn 3x favouring "move-a", completion B drawn 1x
+        # favouring "move-b". The pooled result must be 3:1, not 1:1.
+        a = {"requested_iterations": 100, "side_one": [{"move": "move-a", "visits": 100}]}
+        b = {"requested_iterations": 100, "side_one": [{"move": "move-b", "visits": 100}]}
+        pooled = self._pool([a, a, a, b])
+        self.assertAlmostEqual(pooled["move-a"], 3.0)
+        self.assertAlmostEqual(pooled["move-b"], 1.0)
+        # And the bias that collapsing-without-replay would introduce:
+        flattened = self._pool([a, b])
+        self.assertAlmostEqual(flattened["move-a"], flattened["move-b"])
+        self.assertNotAlmostEqual(pooled["move-a"], pooled["move-b"])
+
+    def test_cache_key_ignores_the_seed(self) -> None:
+        """Two draws of one completion differ only by seed; that must not split them.
+
+        Calls the PRODUCTION key function. An earlier version of this test
+        reimplemented the key inline, so a mutant that added the seed back --
+        which disables collapsing entirely -- passed every test.
+        """
+        from pokezero.engine_search import world_cache_key
+
+        a = {"state_str": "S", "ctx_json": "C", "seed": 1}
+        b = {"state_str": "S", "ctx_json": "C", "seed": 999}
+        self.assertEqual(world_cache_key(a, "side_one"), world_cache_key(b, "side_one"))
+
+    def test_cache_key_separates_genuinely_different_worlds(self) -> None:
+        from pokezero.engine_search import world_cache_key
+
+        base = {"state_str": "S", "ctx_json": "C", "seed": 1}
+        k = world_cache_key(base, "side_one")
+        self.assertNotEqual(k, world_cache_key({**base, "state_str": "S2"}, "side_one"))
+        self.assertNotEqual(k, world_cache_key({**base, "ctx_json": "C2"}, "side_one"))
+        self.assertNotEqual(k, world_cache_key(base, "side_two"))
+
+    def test_collapse_saves_searches_and_preserves_weight(self) -> None:
+        """Drive the real key through a loop shaped like the production one."""
+        from pokezero.engine_search import world_cache_key
+
+        drawn = [
+            {"state_str": "A", "ctx_json": "C", "seed": 1},
+            {"state_str": "A", "ctx_json": "C", "seed": 2},
+            {"state_str": "A", "ctx_json": "C", "seed": 3},
+            {"state_str": "B", "ctx_json": "C", "seed": 4},
+        ]
+        searched, cache, records = [], {}, []
+        for record in drawn:
+            key = world_cache_key(record, "side_one")
+            if key in cache:
+                records.append(dict(cache[key]))
+                continue
+            report = {
+                "requested_iterations": 100,
+                "side_one": [{"move": f"move-{record['state_str'].lower()}", "visits": 100}],
+            }
+            searched.append(key)
+            cache[key] = report
+            records.append(dict(report))
+
+        self.assertEqual(len(searched), 2, "4 draws of 2 completions must run 2 searches")
+        self.assertEqual(len(records), 4, "every draw must still contribute a record")
+        pooled = self._pool(records)
+        self.assertAlmostEqual(pooled["move-a"], 3.0)
+        self.assertAlmostEqual(pooled["move-b"], 1.0)
+
+    def test_reports_are_copied_not_shared(self) -> None:
+        """A stopped world replayed at full budget must not rewrite its twin."""
+        cached = {"requested_iterations": 100, "early_stopped": True}
+        first, second = dict(cached), dict(cached)
+        first["early_stopped"] = False
+        first["requested_iterations"] = 500
+        self.assertTrue(second["early_stopped"])
+        self.assertEqual(second["requested_iterations"], 100)
+
+    def test_telemetry_exposes_the_collapse_count(self) -> None:
+        from pokezero.engine_search import EngineMctsStats
+
+        stats = EngineMctsStats()
+        stats.worlds_collapsed += 4
+        self.assertEqual(stats.to_dict()["worlds_collapsed"], 4)

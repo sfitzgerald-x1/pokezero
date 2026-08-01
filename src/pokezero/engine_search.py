@@ -424,6 +424,20 @@ def _blocker_bucket(token: str) -> str:
     return kind
 
 
+def world_cache_key(record: Mapping[str, Any], side_key: str) -> tuple[str, str, str]:
+    """Identity of a SEARCH PROBLEM, for collapsing duplicate belief draws.
+
+    Two sampled worlds with the same serialized state, the same context and the
+    same seat are not two hypotheses; they are one hypothesis drawn twice.
+
+    The per-world SEED is deliberately excluded. Differing seeds are exactly
+    what makes two identical completions look like distinct searches, which is
+    the redundancy being removed -- include the seed and the collapse never
+    fires.
+    """
+    return (str(record["state_str"]), str(record["ctx_json"]), str(side_key))
+
+
 @dataclass
 class EngineMctsStats:
     """Cumulative per-policy telemetry; every fallback is counted, never hidden."""
@@ -446,6 +460,8 @@ class EngineMctsStats:
     item_override_decisions: int = 0
     worlds_attempted: int = 0
     worlds_searched: int = 0
+    # Belief completions drawn more than once and searched only once.
+    worlds_collapsed: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
     decision_wall_seconds: float = 0.0
@@ -506,6 +522,7 @@ class EngineMctsStats:
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
             "worlds_searched": self.worlds_searched,
+            "worlds_collapsed": self.worlds_collapsed,
             "total_iterations": self.total_iterations,
             "search_wall_seconds": self.search_wall_seconds,
             "decision_wall_seconds": self.decision_wall_seconds,
@@ -1261,6 +1278,9 @@ class EngineMctsPolicy:
         config = self._config
 
         world_runs: list[dict[str, Any]] = []
+        # Per-DECISION cache of search results, keyed by the search problem
+        # itself. Never shared across turns.
+        world_report_cache: dict[tuple[str, str, str], Any] = {}
         search_started = time.perf_counter()
 
         def run_world(
@@ -1388,9 +1408,36 @@ class EngineMctsPolicy:
                 "side_key": side_key,
             }
             stop_floor = config.early_stop_min_sims if config.early_stop else 0
+            # COLLAPSE identical belief completions. Two worlds whose serialized
+            # state, context and seat all match are not two hypotheses -- they
+            # are the same search problem drawn twice, and searching both spends
+            # budget computing the same numbers. The limiting case is a fully
+            # revealed belief, where every world is identical and W-1 of the
+            # searches are pure waste.
+            #
+            # The key DELIBERATELY EXCLUDES the per-world seed: differing seeds
+            # are precisely what would make two identical completions look like
+            # distinct searches, which is the redundancy being removed.
+            #
+            # Each duplicate still appends its OWN record holding a copy of the
+            # report, so aggregation sees the same world count and the same
+            # per-world weights as before. That matters: aggregation weights
+            # every world equally (visits/requested), so collapsing WITHOUT
+            # replaying multiplicity would turn a belief drawn 12:4 into a
+            # uniform 1:1 -- a bias, not a saving.
+            cache_key = world_cache_key(record, side_key)
+            cached = world_report_cache.get(cache_key)
+            if cached is not None:
+                self.stats.worlds_collapsed += 1
+                # A copy per record: a stopped world may be replayed at full
+                # budget later, and that must not rewrite its twin's report.
+                record["report"] = dict(cached)
+                world_runs.append(record)
+                continue
             report = run_world(record, stop_floor)
             if report is not None:
-                record["report"] = report
+                world_report_cache[cache_key] = report
+                record["report"] = dict(report)
                 world_runs.append(record)
 
         stopped_runs = [
