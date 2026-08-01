@@ -1156,3 +1156,27 @@ poke-engine-gen3-forecast-suppressor-handoff.patch
 # needed by pending Flail/Reversal, and pass actual post-cap direct damage to
 # deferred Color Change so zero-damage Endure branches never retype.
 poke-engine-gen3-review-compositions.patch
+
+# Gen 3 successful Substitute ends an existing partial-trap volatile. Showdown
+# silently ends Wrap / Bind / Fire Spin / Clamp / Whirlpool after the Substitute
+# is created, before end-of-turn residuals. Upstream leaves PARTIALLYTRAPPED in
+# place, emitting an extra 1/16 chip on that same boundary (retained identity
+# 3101100/29). The removal is strictly inside Substitute's successful-cost arm:
+# failed Substitute attempts, ordinary trapped turns, Rapid Spin, and the
+# source-leaves / Baton Pass lifecycle rules are unchanged. Pinned by
+# rust/pokezero-search/tests/gen3_switch_fidelity.rs; authored against the
+# review-compositions tree above. No upstream fixture patch changes, so the
+# frozen fixture-refresh entry remains unmodified.
+poke-engine-gen3-wrap-substitute-lifecycle.patch
+poke-engine-gen3-toxic-stage-cap.patch
+
+# gen3 forced-replacement recharge timing. A Hyper Beam KO makes the defender
+# replace before the waiting attacker reaches Showdown's onBeforeMove hook.
+# The engine removed MUSTRECHARGE during that compulsory replacement, then
+# skipped the attacker's actual recharge turn. Defer removal while the opponent
+# still has force_switch; the existing pending-force-switch mapper path already
+# owns that replacement boundary. Pinned by the real KO/replacement sequence in
+# tests/test_engine_recharge_absorb_fidelity.py. This entry must remain after
+# the frozen stack above because older zero-context fallback patches retain
+# their exact application positions.
+poke-engine-gen3-recharge-forced-replacement.patch

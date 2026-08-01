@@ -24,8 +24,8 @@
 //! the branch; phase 2 (second mover, `first_move=false`, phase-1 prefix as
 //! `incoming`) must extend it; the remaining tail is the end-of-turn segment
 //! (`add_end_of_turn_instructions` output). Generation is deterministic, so
-//! the match is exact; a branch that fails to segment is reported as such
-//! (`lossy`), never silently mis-rendered.
+//! the match is exact; a branch that fails to segment is reported as
+//! attribution-unsafe and is never allowed through the fold/encoder path.
 //!
 //! # Honest limits (see docs/crate_search_design.md for the full table)
 //!
@@ -36,8 +36,8 @@
 //!   (the usually-larger probability mass), documented ambiguity;
 //! - the KO-straddle branch conflates "high roll" and "crit" — no `|-crit|`
 //!   is emitted for it;
-//! - Sleep Talk's called move id is not in the delta — the called move's
-//!   effects are attributed to the Sleep Talk window (flagged lossy).
+//! - Sleep Talk's called move id is not in the delta — an unidentified call is
+//!   attribution-unsafe rather than assigned to an invented action window.
 //!
 //! Lines the fold provably ignores (fold.rs `process_line`) are deliberately
 //! NOT rendered: `|-singleturn|`, `|-curestatus|`, `|-fail|`, `|-ability|`,
@@ -47,7 +47,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use poke_engine::choices::{Choice, Choices, MoveCategory, MoveTarget};
+use poke_engine::choices::{Boost, Choice, Choices, MoveCategory, MoveTarget};
 use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::damage_calc::type_effectiveness_modifier;
 use poke_engine::engine::generate_instructions::{
@@ -56,9 +56,10 @@ use poke_engine::engine::generate_instructions::{
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
-use poke_engine::instruction::{Instruction, StateInstructions};
+use poke_engine::instruction::{ChangeStatusInstruction, Instruction, StateInstructions};
 use poke_engine::state::{
-    PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus, PokemonType, SideReference, State,
+    PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
+    PokemonType, SideReference, State,
 };
 
 use crate::parse_state;
@@ -195,11 +196,69 @@ pub struct RenderedEvents {
     /// True when this ply emitted `|turn|N+1` (the caller advances its turn
     /// counter for deeper plies).
     pub turn_completed: bool,
-    /// Non-empty when part of the branch could not be attributed exactly;
-    /// each entry is a stable reason slug. Rendering is still fold-safe
-    /// (unattributed residual damage carries a `[from]` tag), but the branch
-    /// should be counted, not trusted blindly.
+    /// Non-empty when rendering lost some diagnostic fidelity; each entry is
+    /// a stable reason slug. A reason may be telemetry-only when the emitted
+    /// action attribution remains exact.
     pub lossy: Vec<String>,
+    /// Stable subset of [`Self::lossy`] which cannot safely cross the
+    /// renderer-to-fold boundary. Production model search and env stepping
+    /// reject these branches before fold/encoder advancement instead of
+    /// silently inventing action evidence or dropping chance mass.
+    pub attribution_unsafe: Vec<String>,
+    /// Internal status transitions for the leaf's line-driven ledgers. These
+    /// deliberately do not add protocol text for fold-ignored cure events.
+    pub(crate) active_status_transitions: Vec<ActiveStatusTransition>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveStatusTransition {
+    /// Apply after this many rendered lines, preserving instruction order.
+    pub(crate) line_offset: usize,
+    pub(crate) side: usize,
+    pub(crate) new_status: PokemonStatus,
+}
+
+fn active_status_transition(
+    state: &State,
+    change: &ChangeStatusInstruction,
+) -> Option<ActiveStatusTransition> {
+    (state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index).then_some(
+        ActiveStatusTransition {
+            line_offset: 0,
+            side: side_usize(change.side_ref),
+            new_status: change.new_status,
+        },
+    )
+}
+
+impl RenderedEvents {
+    fn mark_lossy(&mut self, reason: &'static str) {
+        self.lossy.push(reason.to_string());
+    }
+
+    fn mark_attribution_unsafe(&mut self, reason: &'static str) {
+        self.mark_lossy(reason);
+        self.attribution_unsafe.push(reason.to_string());
+    }
+
+    pub fn is_attribution_unsafe(&self) -> bool {
+        !self.attribution_unsafe.is_empty()
+    }
+}
+
+/// Refuse an event stream whose action attribution is not observable from the
+/// engine delta. Callers must do this before advancing a fold or encoding a
+/// leaf: treating a rejected chance branch as a zero-weight branch would lose
+/// probability mass, so model search lets the normal world-fallback path own
+/// the whole world instead.
+pub fn reject_attribution_unsafe(rendered: &RenderedEvents, lane: &str) -> PyResult<()> {
+    if rendered.is_attribution_unsafe() {
+        return Err(PyValueError::new_err(format!(
+            "attribution-unsafe renderer branch rejected before {lane}: {}",
+            rendered.attribution_unsafe.join(",")
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +279,9 @@ fn build_choice(state: &State, side: SideReference, mc: &MoveChoice) -> Choice {
             c
         }
         MoveChoice::Move(move_index) => {
-            let mut c = side_ref.get_active_immutable().moves[move_index].choice.clone();
+            let mut c = side_ref.get_active_immutable().moves[move_index]
+                .choice
+                .clone();
             c.move_index = *move_index;
             c
         }
@@ -650,12 +711,8 @@ fn ability_immunity(
 ) -> Option<&'static str> {
     use poke_engine::state::PokemonType;
     let damaging = choice.category != MoveCategory::Status;
-    let inflicts = |status: PokemonStatus| {
-        choice
-            .status
-            .as_ref()
-            .map_or(false, |s| s.status == status)
-    };
+    let inflicts =
+        |status: PokemonStatus| choice.status.as_ref().map_or(false, |s| s.status == status);
     Some(match ability {
         Abilities::LEVITATE if damaging && choice.move_type == PokemonType::GROUND => "Levitate",
         Abilities::WONDERGUARD if damaging && effectiveness <= 1.0 => "Wonder Guard",
@@ -697,44 +754,27 @@ pub fn render_branch_events(
     // fainted (faint replacement — the faint ply already ran residuals +
     // upkeep) or alive (pivot — the engine never runs the pivot turn's
     // residuals; documented deviation)?
-    let pre_ply_replacement = if matches!(s1_move, MoveChoice::Switch(_)) && s2_move == &MoveChoice::None
-    {
-        state.side_one.get_active_immutable().hp <= 0
-    } else if s1_move == &MoveChoice::None && matches!(s2_move, MoveChoice::Switch(_)) {
-        state.side_two.get_active_immutable().hp <= 0
-    } else {
-        false
-    };
+    let pre_ply_replacement =
+        if matches!(s1_move, MoveChoice::Switch(_)) && s2_move == &MoveChoice::None {
+            state.side_one.get_active_immutable().hp <= 0
+        } else if s1_move == &MoveChoice::None && matches!(s2_move, MoveChoice::Switch(_)) {
+            state.side_two.get_active_immutable().hp <= 0
+        } else {
+            false
+        };
 
     let seg = match segment(state, s1_move, s2_move, instructions, branch_on_damage) {
         Some(seg) => seg,
         None => {
-            // Fold-safe fallback: apply everything, render nothing but the
-            // state-tracking lines we can attribute without phases (hp only),
-            // and mark the branch lossy so callers can count it.
-            out.lossy.push("segmentation_failed".to_string());
+            // The renderer cannot identify action/residual boundaries. Keep
+            // the simulation reversible for diagnostic post-state reporting,
+            // but emit no partially attributed protocol stream: model/env
+            // callers reject this branch before it reaches fold/encoder.
+            out.mark_attribution_unsafe("segmentation_failed");
             let mut sim = Sim::new(state, ctx.hp_percent);
-            let mut plan = ResidualPlan::default();
-            for (index, ins) in instructions.iter().enumerate() {
-                render_residual_instruction(
-                    &mut sim,
-                    ins,
-                    instructions.get(index + 1),
-                    &mut plan,
-                    ctx,
-                    &mut out,
-                    true,
-                );
+            for ins in instructions {
+                sim.apply(ins);
             }
-            finish_ply(
-                &mut sim,
-                s1_move,
-                s2_move,
-                eot_triggered,
-                pre_ply_replacement,
-                ctx,
-                &mut out,
-            );
             sim.finish();
             return out;
         }
@@ -780,11 +820,10 @@ pub fn render_branch_events(
                 &mut plan,
                 ctx,
                 &mut out,
-                false,
             );
         }
         // A pivot in flight (U-turn/Baton Pass chose to switch, the engine
-        // skipped residuals): the turn is not over — no |upkeep| yet.
+        // skipped residuals): the turn is not over — no |upkeep yet.
         if !(sim.state.side_one.force_switch || sim.state.side_two.force_switch) {
             out.lines.push("|upkeep".to_string());
         }
@@ -822,8 +861,7 @@ fn finish_ply(
     let s1_hp = sim.active_hp(SideReference::SideOne).0;
     let s2_hp = sim.active_hp(SideReference::SideTwo).0;
     let replacement_pending = s1_hp <= 0 || s2_hp <= 0;
-    let force_switch_pending =
-        sim.state.side_one.force_switch || sim.state.side_two.force_switch;
+    let force_switch_pending = sim.state.side_one.force_switch || sim.state.side_two.force_switch;
     if eot_triggered {
         if !replacement_pending && !force_switch_pending {
             out.lines.push(format!("|turn|{}", ctx.turn + 1));
@@ -848,7 +886,7 @@ fn finish_ply(
             out.lines.push("|upkeep".to_string());
         }
         // Faint replacement: the faint ply already carried residuals +
-        // |upkeep|; the real protocol places the replacement switch before
+        // |upkeep; the real protocol places the replacement switch before
         // |turn|, which is exactly where we are now.
         out.lines.push(format!("|turn|{}", ctx.turn + 1));
         out.turn_completed = true;
@@ -940,7 +978,14 @@ fn render_switch_phase(
                 // Intimidate on entry (real: |-ability| then |-unboost|; the
                 // fold only reads the boost line).
                 sim.apply(ins);
-                out.lines.push(render_boost_line(ctx, sim, boost.side_ref, boost.stat, boost.amount, None));
+                out.lines.push(render_boost_line(
+                    ctx,
+                    sim,
+                    boost.side_ref,
+                    boost.stat,
+                    boost.amount,
+                    None,
+                ));
             }
             // Pre-switch bookkeeping (volatile clears, boost resets, toxic
             // reset, PARTIALLYTRAPPED release, ability change...): no lines.
@@ -973,6 +1018,13 @@ fn render_none_phase(
 struct MovePrelude {
     used_move: bool,
     woke_up: bool,
+    /// The exact 40-power damage the engine would emit for the pre-move
+    /// confusion self-hit, if this phase actually reached that handler.
+    ///
+    /// This is deliberately recorded from the duration `+1` instruction,
+    /// rather than inferred from PP or last-move bookkeeping. Both of those
+    /// instructions are omitted by the engine in common legal states.
+    confusion_self_hit_damage: Option<i16>,
 }
 
 /// Consume the pre-move bookkeeping (PP, last-used-move, sleep/freeze/rest
@@ -989,6 +1041,7 @@ fn consume_move_prelude(
     let mut prelude = MovePrelude {
         used_move: true,
         woke_up: false,
+        confusion_self_hit_damage: None,
     };
     // Attacker already fainted (first mover KO'd it before it could act) or
     // the opponent's pivot (U-turn/Baton Pass) saved this move for after the
@@ -1034,9 +1087,7 @@ fn consume_move_prelude(
     // Truant loaf: the whole phase is the volatile removal.
     if segment.len() == 1 {
         if let Instruction::RemoveVolatileStatus(remove) = &segment[0] {
-            if remove.side_ref == side
-                && remove.volatile_status == PokemonVolatileStatus::TRUANT
-            {
+            if remove.side_ref == side && remove.volatile_status == PokemonVolatileStatus::TRUANT {
                 let ident = ctx.active_ident(sim.state, side);
                 out.lines.push(format!("|cant|{ident}|ability: Truant"));
                 sim.apply(&segment[0]);
@@ -1095,6 +1146,63 @@ fn consume_move_prelude(
             }
             Instruction::RemoveVolatileStatus(remove)
                 if remove.side_ref == side
+                    && remove.volatile_status == PokemonVolatileStatus::DESTINYBOND =>
+            {
+                // Choosing any other move silently clears the previous
+                // Destiny Bond before the status gate. It is real state
+                // bookkeeping, but has no public protocol line.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::DisableMove(disable)
+                if disable.side_ref == side
+                    && (sim
+                        .state
+                        .get_side_immutable(&side)
+                        .get_active_immutable()
+                        .item
+                        == Items::CHOICEBAND
+                        || matches!(
+                            choice.volatile_status.as_ref(),
+                            Some(volatile)
+                                if volatile.volatile_status
+                                    == PokemonVolatileStatus::LOCKEDMOVE
+                                    && volatile.target == MoveTarget::User
+                        )) =>
+            {
+                // Choice Band and locked-move setup disable the unused slots
+                // before confusion runs. The disables are silent and may
+                // legally appear even when confusion cancels the move.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::SetFutureSight(set)
+                if set.side_ref == side && choice.move_id == Choices::FUTURESIGHT =>
+            {
+                // The engine records Future Sight's pending-slot bookkeeping
+                // in choice_before_move. The selected move still has to pass
+                // the later confusion gate before a |move| line is emitted.
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            // Confusion's onBeforeMove handler increments its bounded-duration
+            // counter before it chooses the self-hit branch. This is silent
+            // protocol bookkeeping, like PP and last-move updates above. If it
+            // remains in the move segment, the following lone self-damage is
+            // no longer recognized as a cancelled move and can be rendered as
+            // the selected move's self-cost (notably Substitute).
+            Instruction::ChangeVolatileStatusDuration(change)
+                if change.side_ref == side
+                    && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && change.amount == 1 =>
+            {
+                prelude.confusion_self_hit_damage =
+                    Some(confusion_self_hit_damage(sim.state, side));
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::RemoveVolatileStatus(remove)
+                if remove.side_ref == side
                     && charge_volatile_move(remove.volatile_status).is_some() =>
             {
                 // Charge release (Solar Beam turn 2 etc.): consumed silently;
@@ -1107,39 +1215,46 @@ fn consume_move_prelude(
                     && change.old_status == PokemonStatus::SLEEP
                     && change.new_status == PokemonStatus::NONE =>
             {
+                let transition = active_status_transition(sim.state, change);
                 // Natural / Rest wake. Real protocol: |-curestatus| (ignored
                 // by the fold — omitted).
                 sim.apply(ins);
                 *cursor += 1;
                 prelude.woke_up = true;
                 sleep_gate_seen = true;
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
                     && change.old_status == PokemonStatus::FREEZE
                     && change.new_status == PokemonStatus::NONE =>
             {
+                let transition = active_status_transition(sim.state, change);
                 // Thaw (real: |-curestatus|..|frz| — fold-ignored).
                 sim.apply(ins);
                 *cursor += 1;
                 sleep_gate_seen = true;
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::SetSleepTurns(set) if set.side_ref == side => {
                 sim.apply(ins);
                 *cursor += 1;
                 if set.new_turns > set.previous_turns && !prelude.woke_up {
-                    // Stayed asleep (sleep-turn counter advanced, no wake).
-                    // Sleep Talk still acts through the sleep — the real
-                    // protocol shows |cant|..|slp| AND the Sleep Talk lines.
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id == Choices::SLEEPTALK {
-                        // Everything after the sleep gate belongs to the
-                        // CALLED move (e.g. a called Refresh's status cure
-                        // must not be mis-read as a natural wake).
-                        return prelude;
+                    // Showdown emits the sleep gate even for Sleep Talk. The
+                    // click is sleep-usable, so only ordinary moves stop
+                    // here; Sleep Talk continues through the lower-priority
+                    // confusion gate and then emits its own move line.
+                    if choice.move_id != Choices::SLEEPTALK {
+                        prelude.used_move = false;
                     }
-                    prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
             }
@@ -1147,13 +1262,13 @@ fn consume_move_prelude(
                 sim.apply(ins);
                 *cursor += 1;
                 if !prelude.woke_up {
-                    // Still resting.
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id == Choices::SLEEPTALK {
-                        return prelude; // see above
+                    // Rest sleep uses the same public sleep gate and the
+                    // same Sleep Talk continuation rule as ordinary sleep.
+                    if choice.move_id != Choices::SLEEPTALK {
+                        prelude.used_move = false;
                     }
-                    prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
             }
@@ -1188,6 +1303,105 @@ fn consume_move_prelude(
     prelude
 }
 
+/// The Gen 3 confusion self-hit is a deterministic, typeless 40-power
+/// physical hit against the user's own boosted Attack and Defense. This is a
+/// direct mirror of the engine's `generate_instructions_from_existing_status_conditions`
+/// calculation, including burn and the current-HP cap.
+fn confusion_self_hit_damage(state: &State, side: SideReference) -> i16 {
+    let active_side = state.get_side_immutable(&side);
+    let active = active_side.get_active_immutable();
+    let attack = active_side.calculate_boosted_stat(PokemonBoostableStat::Attack);
+    let defense = active_side
+        .calculate_boosted_stat(PokemonBoostableStat::Defense)
+        .max(1);
+
+    let mut damage = 2.0 * active.level as f32;
+    damage = damage.floor() / 5.0;
+    damage = damage.floor() + 2.0;
+    damage = damage.floor() * 40.0;
+    damage = damage * attack as f32 / defense as f32;
+    damage = damage.floor() / 50.0;
+    damage = damage.floor() + 2.0;
+    if active.status == PokemonStatus::BURN {
+        damage /= 2.0;
+    }
+    std::cmp::min(damage as i16, active.hp)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfusionSelfHitEvidence {
+    Exact,
+    AmbiguousExecutedSelfDamage,
+}
+
+/// Decide whether a one-damage action tail is provably a confusion self-hit.
+///
+/// A pre-move duration increment proves the confusion handler ran, but it does
+/// not alone prove that it stopped the chosen move: a missed Jump Kick can
+/// produce the same bare self-damage, and a self-destructing move can do so
+/// behind Protect or immunity. We only render the public `|-activate|...|
+/// confusion` line when the fixed 40-power damage identity is unique. When the
+/// engine has collapsed an executed self-damage branch onto that identity, the
+/// caller must preserve the endpoint behind a stable lossy marker instead.
+fn classify_confusion_self_hit(
+    state: &State,
+    side: SideReference,
+    choice: &Choice,
+    action_tail: &[Instruction],
+    expected_damage: Option<i16>,
+) -> Option<ConfusionSelfHitEvidence> {
+    let expected_damage = expected_damage?;
+    let damage = match action_tail {
+        [Instruction::Damage(damage)] if damage.side_ref == side => damage.damage_amount,
+        _ => return None,
+    };
+    if damage != expected_damage {
+        return None;
+    }
+
+    let active = state.get_side_immutable(&side).get_active_immutable();
+    let crash_matches = choice.crash.map_or(false, |fraction| {
+        let crash = (active.maxhp as f32 * fraction) as i16;
+        damage == std::cmp::min(crash, active.hp)
+    });
+    if crash_matches || self_faint_move_can_be_self_only(state, side, choice, damage) {
+        return Some(ConfusionSelfHitEvidence::AmbiguousExecutedSelfDamage);
+    }
+    Some(ConfusionSelfHitEvidence::Exact)
+}
+
+/// Explosion/Self-Destruct normally leave target damage in their action tail,
+/// which makes a bare user damage impossible to confuse with their execution.
+/// Protect, type/ability immunity are the exceptions: the engine records only
+/// the user's faint, so a lethal confusion self-hit has the same delta.
+/// Memento is deliberately excluded: success first lowers the target's stats
+/// before fainting its user, while a protected/immune Memento does not faint;
+/// it can never produce this one-instruction self-damage collision.
+fn self_faint_move_can_be_self_only(
+    state: &State,
+    side: SideReference,
+    choice: &Choice,
+    damage: i16,
+) -> bool {
+    if !matches!(choice.move_id, Choices::EXPLOSION | Choices::SELFDESTRUCT) {
+        return false;
+    }
+    let attacker_hp = state.get_side_immutable(&side).get_active_immutable().hp;
+    if damage != attacker_hp {
+        return false;
+    }
+    let defender = other_side(side);
+    let defender_active = state.get_side_immutable(&defender).get_active_immutable();
+    let protected = state
+        .get_side_immutable(&defender)
+        .volatile_statuses
+        .contains(&PokemonVolatileStatus::PROTECT)
+        && choice.flags.protect;
+    let effectiveness = type_effectiveness_modifier(&choice.move_type, defender_active);
+    let ability_blocks = ability_immunity(defender_active.ability, choice, effectiveness).is_some();
+    protected || effectiveness == 0.0 || ability_blocks
+}
+
 /// A `(move, ...)` action phase. `called_tag` marks a caller-invoked move
 /// (Sleep Talk): the prelude is skipped and the `|move|` line carries the
 /// `[from]` caller attribution (fold: `called` token flag).
@@ -1214,11 +1428,47 @@ fn render_move_phase(
             .contains(&PokemonVolatileStatus::LOCKEDMOVE)
     };
 
+    let mut confusion_self_hit_damage = None;
     if called_tag.is_none() {
         let prelude = consume_move_prelude(sim, side, choice, segment, &mut cursor, ctx, out);
         if !prelude.used_move {
             return;
         }
+        confusion_self_hit_damage = prelude.confusion_self_hit_damage;
+    }
+
+    let tail = &segment[cursor..];
+    match classify_confusion_self_hit(sim.state, side, choice, tail, confusion_self_hit_damage) {
+        Some(ConfusionSelfHitEvidence::Exact) => {
+            let ident = ctx.active_ident(sim.state, side);
+            out.lines.push(format!("|-activate|{ident}|confusion"));
+            sim.apply(&tail[0]);
+            let condition = sim.hp_condition(side);
+            out.lines.push(format!("|-damage|{ident}|{condition}"));
+            emit_faint_if_dead(sim, side, ctx, out);
+            return;
+        }
+        Some(ConfusionSelfHitEvidence::AmbiguousExecutedSelfDamage) => {
+            // The native engine combines chance outcomes with equal state
+            // deltas. Do not invent either a confusion activation or a move
+            // line when a crash/self-faint execution shares this exact delta.
+            // In particular, never emit a causeless bare -damage: it would
+            // be charged to the preceding move window by the fold. The exact
+            // endpoint remains available to diagnostics, while production
+            // callers fail closed before using this stream as evidence.
+            out.mark_attribution_unsafe("confusion_selfhit_ambiguous_executed_self_damage");
+            sim.apply(&tail[0]);
+            return;
+        }
+        None => {}
+    }
+
+    // Showdown announces a surviving confusion check before the selected
+    // move (including Sleep Talk) proceeds. The exact self-hit arm above
+    // already emitted the same activation before returning.
+    if confusion_self_hit_damage.is_some() {
+        let ident = ctx.active_ident(sim.state, side);
+        out.lines.push(format!("|-activate|{ident}|confusion"));
     }
 
     // Sleep Talk while asleep: the instruction list carries the CALLED
@@ -1238,14 +1488,14 @@ fn render_move_phase(
             let attacker_ident = ctx.active_ident(sim.state, side);
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
-            let tail: Vec<Instruction> = segment[cursor..].to_vec();
-            match identify_sleep_talk_called(sim.state, side, &tail, branch_on_damage) {
+            let called_tail: Vec<Instruction> = tail.to_vec();
+            match identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage) {
                 Some(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
                         &called_choice,
-                        &tail,
+                        &called_tail,
                         branch_on_damage,
                         ctx,
                         out,
@@ -1253,23 +1503,14 @@ fn render_move_phase(
                     );
                 }
                 None => {
-                    // Unrecoverable from the delta (documented insufficiency):
-                    // fold-safe fallback — the effects (if any) accrue to
-                    // the Sleep Talk window. ALWAYS flagged, even for an
-                    // empty delta (an ambiguous no-op call still means the
-                    // real stream had a called-move line we cannot emit).
-                    out.lossy.push("sleeptalk_called_unidentified".to_string());
-                    let mut plan = ResidualPlan::default();
-                    for (index, ins) in tail.iter().enumerate() {
-                        render_residual_instruction(
-                            sim,
-                            ins,
-                            tail.get(index + 1),
-                            &mut plan,
-                            ctx,
-                            out,
-                            true,
-                        );
+                    // The called move is not provable from this delta. Keep
+                    // the simulated state exact, but do not emit its HP,
+                    // status, or side effects without a public action owner.
+                    // Callers reject before fold/encoder so post-state cannot
+                    // silently diverge from the event stream.
+                    out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    for instruction in &called_tail {
+                        sim.apply(instruction);
                     }
                 }
             }
@@ -1282,32 +1523,6 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             return;
-        }
-    }
-
-    // Confusion self-hit: the residue after the prelude is a single Damage on
-    // the user (the engine's hit-yourself branch).
-    if segment[cursor..].len() == 1 {
-        if let Instruction::Damage(damage) = &segment[cursor] {
-            if damage.side_ref == side {
-                let confused = {
-                    let s = match side {
-                        SideReference::SideOne => &sim.state.side_one,
-                        SideReference::SideTwo => &sim.state.side_two,
-                    };
-                    s.volatile_statuses
-                        .contains(&PokemonVolatileStatus::CONFUSION)
-                };
-                if confused && choice.crash.is_none() {
-                    let ident = ctx.active_ident(sim.state, side);
-                    sim.apply(&segment[cursor]);
-                    let condition = sim.hp_condition(side);
-                    out.lines
-                        .push(format!("|-damage|{ident}|{condition}|[from] confusion"));
-                    emit_faint_if_dead(sim, side, ctx, out);
-                    return;
-                }
-            }
         }
     }
 
@@ -1348,13 +1563,16 @@ fn render_move_phase(
         expected_damage_values(sim.state, side, choice, branch_on_damage);
 
     // Classify the remaining tail.
-    let tail = &segment[cursor..];
     let deals_damage_to_defender = tail.iter().any(|ins| match ins {
         Instruction::Damage(d) => d.side_ref == defender,
         Instruction::DamageSubstitute(d) => d.side_ref == defender,
         _ => false,
     });
     let has_any_effect = !tail.is_empty();
+    let is_self_faint_move = matches!(
+        choice.move_id,
+        Choices::EXPLOSION | Choices::SELFDESTRUCT | Choices::MEMENTO
+    );
 
     // The |move| line. Target rendering (measured against the golden corpus):
     // opponent-target moves always show the target; self-target moves show
@@ -1379,26 +1597,22 @@ fn render_move_phase(
     // Type-based status immunity (Steel/Poison vs psn, Fire vs brn, Ice vs
     // frz): the real protocol shows |-immune| and it wins over the
     // already-statused fail (PS checks immunity first).
-    let status_type_immune = choice
-        .status
-        .as_ref()
-        .map_or(false, |status| {
-            use poke_engine::state::PokemonType;
-            let d = match defender {
-                SideReference::SideOne => &sim.state.side_one,
-                SideReference::SideTwo => &sim.state.side_two,
-            };
-            let active = d.get_active_immutable();
-            match status.status {
-                PokemonStatus::BURN => active.has_type(&PokemonType::FIRE),
-                PokemonStatus::FREEZE => active.has_type(&PokemonType::ICE),
-                PokemonStatus::POISON | PokemonStatus::TOXIC => {
-                    active.has_type(&PokemonType::POISON)
-                        || active.has_type(&PokemonType::STEEL)
-                }
-                _ => false,
+    let status_type_immune = choice.status.as_ref().map_or(false, |status| {
+        use poke_engine::state::PokemonType;
+        let d = match defender {
+            SideReference::SideOne => &sim.state.side_one,
+            SideReference::SideTwo => &sim.state.side_two,
+        };
+        let active = d.get_active_immutable();
+        match status.status {
+            PokemonStatus::BURN => active.has_type(&PokemonType::FIRE),
+            PokemonStatus::FREEZE => active.has_type(&PokemonType::ICE),
+            PokemonStatus::POISON | PokemonStatus::TOXIC => {
+                active.has_type(&PokemonType::POISON) || active.has_type(&PokemonType::STEEL)
             }
-        });
+            _ => false,
+        }
+    });
     let status_fail = choice.category == MoveCategory::Status
         && choice.status.is_some()
         && !has_any_effect
@@ -1410,11 +1624,40 @@ fn render_move_phase(
             };
             d.get_active_immutable().status != PokemonStatus::NONE
         };
-    // Boost moves whose stats are all at cap generate no instructions but
-    // still "succeed" in the real protocol (explicit self target + 0-amount
-    // boost lines).
-    let capped_boost_move =
-        self_target && !has_any_effect && choice.boost.is_some() && choice.category == MoveCategory::Status;
+    // A boost can be empty because every requested stat is capped OR an
+    // opponent-side stat drop is blocked by Clear Body/White Smoke,
+    // Hyper Cutter/Keen Eye, or Substitute. Both are indistinguishable from
+    // Attract's empty immobilization branch. Only the self-target cap keeps
+    // the renderer's established zero-amount boost-line behavior.
+    let boost_has_no_effect = !has_any_effect
+        && choice.category == MoveCategory::Status
+        && choice
+            .boost
+            .as_ref()
+            .map_or(false, |boost| !boost_would_apply(sim.state, side, boost));
+    let capped_boost_move = self_target && boost_has_no_effect;
+    // Most volatile moves have move-specific no-op paths (failed Protect,
+    // no eligible Encore target, an already-present volatile). Substitute is
+    // the one pure volatile whose public pre-state proves an executed move
+    // would change state, so it remains a sound Attract immobilization cue.
+    let volatile_empty_tail_ambiguous = !has_any_effect
+        && choice.volatile_status.as_ref().map_or(false, |volatile| {
+            if volatile.volatile_status != PokemonVolatileStatus::SUBSTITUTE {
+                return true;
+            }
+            let target = match &volatile.target {
+                MoveTarget::User => side,
+                MoveTarget::Opponent => defender,
+            };
+            let target_side = sim.state.get_side_immutable(&target);
+            !target_side
+                .get_active_immutable()
+                .volatile_status_can_be_applied(
+                    &volatile.volatile_status,
+                    &target_side.volatile_statuses,
+                    choice.first_move,
+                )
+        });
     // A pure side-condition move whose condition is at CAP (spikes: 3
     // layers; screens/safeguard/mist: 1) fails with the real protocol's
     // blank-target form: `|move|..|Spikes||[still]` + `|-fail|user`
@@ -1427,9 +1670,39 @@ fn render_move_phase(
                 MoveTarget::User => side,
                 MoveTarget::Opponent => defender,
             };
-            let cap = if sc.condition == PokemonSideCondition::Spikes { 3 } else { 1 };
+            let cap = if sc.condition == PokemonSideCondition::Spikes {
+                3
+            } else {
+                1
+            };
             side_condition_value(sim.state, target_side, sc.condition) >= cap
         });
+    // Empty tails need two independent predicates. The same engine delta can
+    // represent an immobilizer OR a successful move that left no state change.
+    // Full paralysis has a documented probability-based tie break; Attract
+    // does not, so the latter must reject rather than invent either action.
+    let deterministic_noop = (defender_protected && choice.flags.protect)
+        || (is_damaging && effectiveness == 0.0)
+        || (is_damaging && absorb.is_some())
+        || ability_immune.is_some()
+        || status_fail
+        || status_type_immune
+        || boost_has_no_effect
+        || side_condition_fail;
+    let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
+    let move_could_act = is_damaging
+        || choice.status.is_some()
+        || (choice.heal.is_some() && attacker_hp < attacker_maxhp)
+        || choice.volatile_status.is_some()
+        || choice.side_condition.is_some()
+        || choice.boost.is_some();
+    let empty_tail_can_be_accuracy_miss = choice.target == MoveTarget::Opponent
+        && !status_fail
+        && !non_ghost_curse
+        && ability_immune.is_none()
+        && effectiveness > 0.0
+        && choice.accuracy < 100.0;
+
     // Full paralysis: the engine merges the 25% fully-paralyzed branch with
     // any same-delta branch (notably the miss branch). When the empty delta
     // is not deterministically explained and the move WOULD have acted, the
@@ -1442,22 +1715,45 @@ fn render_move_phase(
         };
         s.get_active_immutable().status == PokemonStatus::PARALYZE
     };
+    let attacker_attracted = {
+        let s = match side {
+            SideReference::SideOne => &sim.state.side_one,
+            SideReference::SideTwo => &sim.state.side_two,
+        };
+        s.volatile_statuses
+            .contains(&PokemonVolatileStatus::ATTRACT)
+            && s.get_active_immutable().ability != Abilities::OBLIVIOUS
+    };
+
+    // Attract's immobilized branch is also an empty tail, including after the
+    // higher-priority confusion handler has already incremented its duration.
+    // An empty tail is only evidence of immobilization when the selected move
+    // could otherwise change state and no deterministic no-op/miss explains
+    // the same endpoint. Protect, immunity, misses, capped boosts/statuses,
+    // capped side conditions, and intrinsically no-effect moves therefore
+    // fail closed: rendering either |cant| or |move| would invent attribution.
+    if attacker_attracted && !has_any_effect && called_tag.is_none() {
+        if deterministic_noop
+            || volatile_empty_tail_ambiguous
+            || empty_tail_can_be_accuracy_miss
+            // Attract resolves before full paralysis, but the engine merges
+            // their identical empty endpoints. The aggregate branch cannot
+            // prove which immobilizer stopped this action.
+            || attacker_paralyzed
+            || !move_could_act
+        {
+            out.mark_attribution_unsafe("attract_empty_tail_ambiguous");
+            return;
+        }
+        // The action is uniquely immobilized, but the engine does not retain
+        // Attract's source/gender attribution. That omission is telemetry-only
+        // because the public action window itself is exact.
+        out.mark_lossy("attract_immobilization_source_unknown");
+        out.lines.push(format!("|cant|{attacker_ident}|Attract"));
+        return;
+    }
+
     if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
-        let deterministic_noop = (defender_protected && choice.flags.protect)
-            || (is_damaging && effectiveness == 0.0)
-            || (is_damaging && absorb.is_some())
-            || ability_immune.is_some()
-            || status_fail
-            || status_type_immune
-            || capped_boost_move
-            || side_condition_fail;
-        let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
-        let move_could_act = is_damaging
-            || choice.status.is_some()
-            || (choice.heal.is_some() && attacker_hp < attacker_maxhp)
-            || choice.volatile_status.is_some()
-            || choice.side_condition.is_some()
-            || choice.boost.is_some();
         if !deterministic_noop && move_could_act {
             out.lines.push(format!("|cant|{attacker_ident}|par"));
             return;
@@ -1511,9 +1807,9 @@ fn render_move_phase(
             instruction_side(ins) == Some(defender)
                 || matches!(ins, Instruction::ChangeStatus(c) if c.side_ref == defender)
         });
-        let crash_only = tail.iter().all(|ins| {
-            matches!(ins, Instruction::Damage(d) if d.side_ref == side)
-        });
+        let crash_only = tail
+            .iter()
+            .all(|ins| matches!(ins, Instruction::Damage(d) if d.side_ref == side));
         if !defender_affected && (tail.is_empty() || (choice.crash.is_some() && crash_only)) {
             missed = true;
         }
@@ -1540,7 +1836,7 @@ fn render_move_phase(
         out.lines.push(format!(
             "|-start|{defender_ident}|Curse|[of] {attacker_ident}"
         ));
-        out.lossy.push("ghost_curse_engine_model".to_string());
+        out.mark_attribution_unsafe("ghost_curse_engine_model");
     }
 
     // Real fail lines (fold-ignored; kept for line-stream fidelity with the
@@ -1555,9 +1851,7 @@ fn render_move_phase(
                 status_code(d.get_active_immutable().status)
             };
             match code {
-                Some(code) => out
-                    .lines
-                    .push(format!("|-fail|{defender_ident}|{code}")),
+                Some(code) => out.lines.push(format!("|-fail|{defender_ident}|{code}")),
                 None => out.lines.push(format!("|-fail|{defender_ident}")),
             }
         } else if side_condition_fail {
@@ -1575,9 +1869,8 @@ fn render_move_phase(
                     sim.apply(ins);
                     let condition = sim.hp_condition(side);
                     let ident = ctx.active_ident(sim.state, side);
-                    out.lines.push(format!(
-                        "|-damage|{ident}|{condition}|[from] {move_name}"
-                    ));
+                    out.lines
+                        .push(format!("|-damage|{ident}|{condition}|[from] {move_name}"));
                     emit_faint_if_dead(sim, side, ctx, out);
                     continue;
                 }
@@ -1585,6 +1878,26 @@ fn render_move_phase(
             sim.apply(ins);
         }
         return;
+    }
+
+    // Explosion/Self-Destruct faint the user before the hit check. Their
+    // resulting tail is therefore nonempty even when the target was protected
+    // or immune; render that target outcome before walking the user's faint.
+    let mut self_faint_target_outcome_rendered = false;
+    if is_self_faint_move && has_any_effect && !deals_damage_to_defender {
+        if defender_protected && choice.flags.protect {
+            out.lines
+                .push(format!("|-activate|{defender_ident}|Protect"));
+            self_faint_target_outcome_rendered = true;
+        } else if is_damaging && effectiveness == 0.0 {
+            out.lines.push(format!("|-immune|{defender_ident}"));
+            self_faint_target_outcome_rendered = true;
+        } else if let Some(ability) = ability_immune {
+            out.lines.push(format!(
+                "|-immune|{defender_ident}|[from] ability: {ability}"
+            ));
+            self_faint_target_outcome_rendered = true;
+        }
     }
 
     // Deterministic no-effect renders.
@@ -1596,16 +1909,21 @@ fn render_move_phase(
                 for (stat, amount) in [
                     (PokemonBoostableStat::Attack, boost.boosts.attack),
                     (PokemonBoostableStat::Defense, boost.boosts.defense),
-                    (PokemonBoostableStat::SpecialAttack, boost.boosts.special_attack),
-                    (PokemonBoostableStat::SpecialDefense, boost.boosts.special_defense),
+                    (
+                        PokemonBoostableStat::SpecialAttack,
+                        boost.boosts.special_attack,
+                    ),
+                    (
+                        PokemonBoostableStat::SpecialDefense,
+                        boost.boosts.special_defense,
+                    ),
                     (PokemonBoostableStat::Speed, boost.boosts.speed),
                     (PokemonBoostableStat::Accuracy, boost.boosts.accuracy),
                 ] {
                     if amount != 0 {
                         let head = if amount > 0 { "-boost" } else { "-unboost" };
                         let code = boost_stat_code(stat);
-                        out.lines
-                            .push(format!("|{head}|{attacker_ident}|{code}|0"));
+                        out.lines.push(format!("|{head}|{attacker_ident}|{code}|0"));
                     }
                 }
             }
@@ -1652,8 +1970,7 @@ fn render_move_phase(
     // effectiveness in the real protocol, only immunity.
     if is_damaging && deals_damage_to_defender && choice.base_power > 0.0 {
         if effectiveness > 1.0 {
-            out.lines
-                .push(format!("|-supereffective|{defender_ident}"));
+            out.lines.push(format!("|-supereffective|{defender_ident}"));
         } else if effectiveness > 0.0 && effectiveness < 1.0 {
             out.lines.push(format!("|-resisted|{defender_ident}"));
         }
@@ -1673,10 +1990,6 @@ fn render_move_phase(
             }
         };
     }
-    let is_self_faint_move = matches!(
-        choice.move_id,
-        Choices::EXPLOSION | Choices::SELFDESTRUCT | Choices::MEMENTO
-    );
     let is_transform = choice.move_id == Choices::TRANSFORM;
     if is_transform {
         out.lines
@@ -1728,9 +2041,8 @@ fn render_move_phase(
             }
             Instruction::DamageSubstitute(_) => {
                 sim.apply(ins);
-                out.lines.push(format!(
-                    "|-activate|{defender_ident}|Substitute|[damage]"
-                ));
+                out.lines
+                    .push(format!("|-activate|{defender_ident}|Substitute|[damage]"));
                 defender_hits += 1;
             }
             Instruction::RemoveVolatileStatus(remove)
@@ -1738,8 +2050,7 @@ fn render_move_phase(
                     && remove.volatile_status == PokemonVolatileStatus::SUBSTITUTE =>
             {
                 sim.apply(ins);
-                out.lines
-                    .push(format!("|-end|{defender_ident}|Substitute"));
+                out.lines.push(format!("|-end|{defender_ident}|Substitute"));
             }
             Instruction::Damage(damage) if damage.side_ref == side => {
                 // Attacker-side damage attribution ladder. A bare render is
@@ -1815,21 +2126,18 @@ fn render_move_phase(
                         .push(format!("|-damage|{attacker_ident}|{condition}"));
                     note_faint!(side);
                 } else {
-                    // Unexplained attacker-side damage: render bare (the
-                    // status-quo reading) but FLAG it — a bare line charges
-                    // the window's self_hp_cost, which is wrong if the true
-                    // source was opponent-inflicted.
-                    out.lossy.push("unattributed_self_damage".to_string());
+                    // Unexplained attacker-side damage has no observable
+                    // owner. Do not emit a bare line that the fold would
+                    // charge as self-cost; fail closed before encoding.
+                    out.mark_attribution_unsafe("unattributed_self_damage");
                     sim.apply(ins);
-                    let condition = sim.hp_condition(side);
-                    out.lines
-                        .push(format!("|-damage|{attacker_ident}|{condition}"));
-                    note_faint!(side);
                 }
             }
             Instruction::Heal(heal) => {
                 if heal.heal_amount == 0 && heal.side_ref == defender {
-                    if defender_protected {
+                    if self_faint_target_outcome_rendered {
+                        continue;
+                    } else if defender_protected {
                         out.lines
                             .push(format!("|-activate|{defender_ident}|Protect"));
                     } else if let Some(ability) = absorb {
@@ -1837,8 +2145,22 @@ fn render_move_phase(
                             "|-immune|{defender_ident}|[from] ability: {ability}"
                         ));
                     } else {
-                        out.lossy.push("unattributed_noop_heal_marker".to_string());
+                        out.mark_attribution_unsafe("unattributed_noop_heal_marker");
                     }
+                    continue;
+                }
+                if choice.move_id == Choices::MEMENTO
+                    && heal.side_ref == side
+                    && heal.heal_amount < 0
+                {
+                    // Memento is represented as a negative self-Heal so the
+                    // reversible engine can restore the user. It is not
+                    // Liquid Ooze: Showdown first shows the target stat drops
+                    // and then silently faints the user. Deferring the faint
+                    // preserves that order and lets the fold charge the
+                    // action's remaining HP through its Memento rule.
+                    sim.apply(ins);
+                    note_faint!(side);
                     continue;
                 }
                 sim.apply(ins);
@@ -1863,8 +2185,7 @@ fn render_move_phase(
                         out.lines
                             .push(format!("|-heal|{target_ident}|{condition} slp|[silent]"));
                     } else {
-                        out.lines
-                            .push(format!("|-heal|{target_ident}|{condition}"));
+                        out.lines.push(format!("|-heal|{target_ident}|{condition}"));
                     }
                 } else {
                     // Heal on the DEFENDER inside our move phase: absorb
@@ -1874,20 +2195,19 @@ fn render_move_phase(
                             "|-heal|{target_ident}|{condition}|[from] ability: {ability}|[of] {attacker_ident}"
                         ));
                     } else {
-                        out.lines
-                            .push(format!("|-heal|{target_ident}|{condition}"));
+                        out.lines.push(format!("|-heal|{target_ident}|{condition}"));
                     }
                 }
             }
             Instruction::ChangeStatus(change) => {
+                let transition = active_status_transition(sim.state, change);
                 sim.apply(ins);
                 let target_ident = ctx.active_ident(sim.state, change.side_ref);
                 if change.old_status == PokemonStatus::NONE {
                     if let Some(code) = status_code(change.new_status) {
                         if change.side_ref == side && choice.move_id == Choices::REST {
-                            out.lines.push(format!(
-                                "|-status|{target_ident}|slp|[from] move: Rest"
-                            ));
+                            out.lines
+                                .push(format!("|-status|{target_ident}|slp|[from] move: Rest"));
                         } else {
                             out.lines.push(format!("|-status|{target_ident}|{code}"));
                         }
@@ -1895,6 +2215,10 @@ fn render_move_phase(
                 }
                 // Status cures (Heal Bell / Refresh / lum): |-curestatus| is
                 // fold-ignored — omitted.
+                if let Some(mut transition) = transition {
+                    transition.line_offset = out.lines.len();
+                    out.active_status_transitions.push(transition);
+                }
             }
             Instruction::Boost(boost) => {
                 sim.apply(ins);
@@ -1952,7 +2276,9 @@ fn render_move_phase(
                 // as |-start|/|-singleturn| in the real protocol — all
                 // fold-ignored, deliberately omitted (module docs).
             }
-            Instruction::ChangeType(_) | Instruction::ChangeAbility(_) | Instruction::FormeChange(_) => {
+            Instruction::ChangeType(_)
+            | Instruction::ChangeAbility(_)
+            | Instruction::FormeChange(_) => {
                 // Transform internals / trace: single |-transform| line
                 // already rendered; the rest is silent.
                 sim.apply(ins);
@@ -2048,8 +2374,16 @@ fn expected_damage_values(
     };
     let (rolls_s1, rolls_s2) = calculate_both_damage_rolls(
         state,
-        if s1_first { choice.clone() } else { Choice::default() },
-        if s1_first { Choice::default() } else { choice.clone() },
+        if s1_first {
+            choice.clone()
+        } else {
+            Choice::default()
+        },
+        if s1_first {
+            Choice::default()
+        } else {
+            choice.clone()
+        },
         s1_first,
     );
     let rolls = match side {
@@ -2116,11 +2450,7 @@ fn render_side_condition_change(
     }
 }
 
-fn side_condition_value(
-    state: &State,
-    side: SideReference,
-    condition: PokemonSideCondition,
-) -> i8 {
+fn side_condition_value(state: &State, side: SideReference, condition: PokemonSideCondition) -> i8 {
     let s = match side {
         SideReference::SideOne => &state.side_one,
         SideReference::SideTwo => &state.side_two,
@@ -2133,6 +2463,39 @@ fn side_condition_value(
         PokemonSideCondition::Mist => s.side_conditions.mist,
         _ => 0,
     }
+}
+
+/// Whether an attempted primary boost can mutate the exact current engine
+/// state. The engine suppresses opponent-side stat drops behind Substitute
+/// and the Gen 3 stat-drop immunities before it emits any instruction.
+fn boost_would_apply(state: &State, attacker: SideReference, boost: &Boost) -> bool {
+    let target = match &boost.target {
+        MoveTarget::User => attacker,
+        MoveTarget::Opponent => other_side(attacker),
+    };
+    let target_side = state.get_side_immutable(&target);
+    let target_pokemon = target_side.get_active_immutable();
+    if target_pokemon.hp <= 0 {
+        return false;
+    }
+    boost
+        .boosts
+        .get_as_pokemon_boostable()
+        .iter()
+        .any(|(stat, amount)| {
+            if *amount == 0 {
+                return false;
+            }
+            if *amount < 0
+                && target != attacker
+                && target_pokemon
+                    .immune_to_stats_lowered_by_opponent(stat, &target_side.volatile_statuses)
+            {
+                return false;
+            }
+            let current = target_side.get_boost_from_boost_enum(stat);
+            (*amount > 0 && current < 6) || (*amount < 0 && current > -6)
+        })
 }
 
 fn emit_faint_if_dead(
@@ -2167,7 +2530,6 @@ fn render_residual_instruction(
     plan: &mut ResidualPlan,
     ctx: &EventContext,
     out: &mut RenderedEvents,
-    lossy_mode: bool,
 ) {
     match ins {
         Instruction::Damage(damage) => {
@@ -2199,17 +2561,16 @@ fn render_residual_instruction(
                 let cause = plan
                     .take(side, true)
                     .unwrap_or_else(|| residual_heal_cause(sim.state, side, next_ins));
-                out.lines
-                    .push(if cause.is_empty() {
-                        // Showdown renders the Leech Seed sap on the SEEDER as a
-                        // bare silent heal — the `[from] Leech Seed` tag goes on
-                        // the victim's damage line, not the drainer's heal
-                        // (verified against a live trace:
-                        // `|-heal|p1a: Bellossom|259/293|[silent]`).
-                        format!("|-heal|{ident}|{condition}|[silent]")
-                    } else {
-                        format!("|-heal|{ident}|{condition}|[from] {cause}")
-                    });
+                out.lines.push(if cause.is_empty() {
+                    // Showdown renders the Leech Seed sap on the SEEDER as a
+                    // bare silent heal — the `[from] Leech Seed` tag goes on
+                    // the victim's damage line, not the drainer's heal
+                    // (verified against a live trace:
+                    // `|-heal|p1a: Bellossom|259/293|[silent]`).
+                    format!("|-heal|{ident}|{condition}|[silent]")
+                } else {
+                    format!("|-heal|{ident}|{condition}|[from] {cause}")
+                });
             }
         }
         Instruction::ChangeWeather(change) => {
@@ -2230,6 +2591,7 @@ fn render_residual_instruction(
             render_side_condition_change(change, sim, ctx, out, None);
         }
         Instruction::ChangeStatus(change) => {
+            let transition = active_status_transition(sim.state, change);
             // Yawn falling asleep at end of turn.
             sim.apply(ins);
             if change.old_status == PokemonStatus::NONE {
@@ -2237,6 +2599,10 @@ fn render_residual_instruction(
                     let ident = ctx.active_ident(sim.state, change.side_ref);
                     out.lines.push(format!("|-status|{ident}|{code}"));
                 }
+            }
+            if let Some(mut transition) = transition {
+                transition.line_offset = out.lines.len();
+                out.active_status_transitions.push(transition);
             }
         }
         Instruction::Boost(boost) => {
@@ -2254,11 +2620,21 @@ fn render_residual_instruction(
                 Some(&item_name),
             ));
         }
+        Instruction::RemoveVolatileStatus(remove)
+            if remove.volatile_status == PokemonVolatileStatus::CONFUSION =>
+        {
+            // The engine resolves its bounded confusion ladder at end of turn
+            // for implementation convenience, but Showdown keeps the inert
+            // volatile visible through the next decision boundary and snaps
+            // out only when that mon next attempts to move. Emitting -end here
+            // would leak the engine's future branch into public state early.
+            // We cannot defer an event across independent renderer calls, so
+            // retain the exact engine endpoint only as an unsafe diagnostic
+            // branch and reject it before fold/encoder advancement.
+            out.mark_attribution_unsafe("confusion_expiry_timing_unobservable");
+            sim.apply(ins);
+        }
         _ => {
-            if lossy_mode {
-                // In segmentation-failure fallback the whole list flows
-                // through here; everything else is silent state-keeping.
-            }
             sim.apply(ins);
         }
     }
@@ -2367,7 +2743,8 @@ impl ResidualPlan {
             if let Some(label) = weather_chips(state, side) {
                 plan.damage[i].push(label.to_string());
             }
-            if s.volatile_statuses.contains(&PokemonVolatileStatus::LEECHSEED)
+            if s.volatile_statuses
+                .contains(&PokemonVolatileStatus::LEECHSEED)
                 && opponent.get_active_immutable().hp > 0
             {
                 plan.damage[i].push("Leech Seed".to_string());
@@ -2448,7 +2825,9 @@ impl ResidualPlan {
             }
             // Silent: Showdown tags the victim's DAMAGE with Leech Seed and
             // emits the seeder's heal bare.
-            let at = drain_at[i].unwrap_or(plan.heal[i].len()).min(plan.heal[i].len());
+            let at = drain_at[i]
+                .unwrap_or(plan.heal[i].len())
+                .min(plan.heal[i].len());
             plan.heal[i].insert(at, String::new());
         }
 
@@ -2468,8 +2847,8 @@ impl ResidualPlan {
             }
         }
         for i in 0..2 {
-            plan.usable[i] = plan.damage[i].len() == emitted_damage[i]
-                && plan.heal[i].len() == emitted_heal[i];
+            plan.usable[i] =
+                plan.damage[i].len() == emitted_damage[i] && plan.heal[i].len() == emitted_heal[i];
         }
         plan
     }
@@ -2683,14 +3062,16 @@ fn legal_roll_state_before_direct_damage(
 
     for (start, end, attacker) in phases {
         let defender = other_side(attacker);
-        let Some(direct_damage_index) = full[start..end]
-            .iter()
-            .position(|instruction| match instruction {
-                Instruction::Damage(damage) | Instruction::DamageSubstitute(damage) => {
-                    damage.side_ref == defender
-                }
-                _ => false,
-            }) else {
+        let Some(direct_damage_index) =
+            full[start..end]
+                .iter()
+                .position(|instruction| match instruction {
+                    Instruction::Damage(damage) | Instruction::DamageSubstitute(damage) => {
+                        damage.side_ref == defender
+                    }
+                    _ => false,
+                })
+        else {
             continue;
         };
         let prefix = full[..start + direct_damage_index].to_vec();
@@ -2712,7 +3093,8 @@ fn legal_roll_state_before_direct_damage(
 /// Enumerate the engine's chance outcomes for a joint action and render each
 /// as protocol lines (the instruction→event mapping), returning JSON:
 /// `{"end_of_turn": bool, "branches": [{"percentage", "events", "turn_completed",
-///   "lossy", "post", "post_state", "legal_roll_state"}]}`.
+///   "lossy", "attribution_unsafe", "attribution_unsafe_reasons", "post",
+///   "post_state", "legal_roll_state"}]}`.
 ///
 /// `ctx_json`: `{"p1": [display species...], "p2": [...], "turn": N}` with
 /// species in ENGINE PARTY ORDER (see `EngineWorld.party_species`).
@@ -2739,6 +3121,8 @@ pub fn branch_events(
             "events": ["|"],
             "turn_completed": false,
             "lossy": ["empty_instruction_list"],
+            "attribution_unsafe": false,
+            "attribution_unsafe_reasons": [],
             "post": post_state_summary(&state),
         }));
     }
@@ -2770,11 +3154,14 @@ pub fn branch_events(
             None
         };
         state.reverse_instructions(&branch.instruction_list);
+        let attribution_unsafe = rendered.is_attribution_unsafe();
         let mut obj = serde_json::json!({
             "percentage": branch.percentage,
             "events": rendered.lines,
             "turn_completed": rendered.turn_completed,
             "lossy": rendered.lossy,
+            "attribution_unsafe": attribution_unsafe,
+            "attribution_unsafe_reasons": rendered.attribution_unsafe,
             "post": post,
         });
         if let Some(post_state) = post_state {
@@ -2819,6 +3206,112 @@ mod tests {
     }
 
     #[test]
+    fn forced_replacement_defers_hyper_beam_recharge_cant_until_next_turn() {
+        let fixture = MINIMAL
+            .trim()
+            .replacen("EMBER;false;32", "HYPERBEAM;false;8", 1);
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state.side_two.get_active().speed = 1;
+        state.side_two.pokemon[PokemonIndex::P1] = state.side_two.pokemon[PokemonIndex::P0].clone();
+        state.side_two.get_active().hp = 1;
+        let ctx = EventContext {
+            species: [
+                vec!["Charmander".to_string()],
+                vec!["Squirtle".to_string(), "Squirtle".to_string()],
+            ],
+            turn: 4,
+            hp_percent: [false, false],
+        };
+
+        // A guaranteed Hyper Beam KO opens the opponent's forced-replacement
+        // boundary while the attacker still owes its recharge turn.
+        let hyper_beam =
+            MoveChoice::from_string("hyperbeam", &state.side_one).expect("Hyper Beam is available");
+        let ko =
+            generate_instructions_from_move_pair(&mut state, &hyper_beam, &MoveChoice::None, true)
+                .into_iter()
+                .find(|branch| {
+                    branch.instruction_list.iter().any(|instruction| {
+                        matches!(instruction, Instruction::ToggleSideTwoForceSwitch)
+                    })
+                })
+                .expect("Hyper Beam KO creates a forced replacement");
+        state.apply_instructions(&ko.instruction_list);
+        assert!(state.side_two.force_switch);
+        assert!(state
+            .side_one
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::MUSTRECHARGE));
+
+        let forced_replacement = generate_instructions_from_move_pair(
+            &mut state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            true,
+        );
+        assert_eq!(forced_replacement.len(), 1);
+        assert!(end_of_turn_triggered(
+            &state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+        ));
+        let replacement = &forced_replacement[0].instruction_list;
+        let rendered_replacement = render_branch_events(
+            &mut state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            replacement,
+            true,
+            &ctx,
+        );
+        let replacement_text = rendered_replacement.lines.join("\n");
+        assert!(
+            replacement_text.contains("|switch|p2a: Squirtle|Squirtle|100/100"),
+            "{replacement_text}"
+        );
+        assert!(replacement_text.contains("|upkeep"), "{replacement_text}");
+        assert!(
+            !replacement_text.contains("|cant|p1a: Charmander|recharge"),
+            "the replacement is not the recharger turn: {replacement_text}"
+        );
+        state.apply_instructions(replacement);
+        assert!(!state.side_two.force_switch);
+        assert!(
+            state
+                .side_one
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::MUSTRECHARGE),
+            "recharge must survive until side one next acts"
+        );
+
+        let tackle =
+            MoveChoice::from_string("tackle", &state.side_two).expect("Tackle is available");
+        let recharge_turn =
+            generate_instructions_from_move_pair(&mut state, &MoveChoice::None, &tackle, true);
+        assert!(!recharge_turn.is_empty());
+        for branch in recharge_turn {
+            let rendered = render_branch_events(
+                &mut state,
+                &MoveChoice::None,
+                &tackle,
+                &branch.instruction_list,
+                true,
+                &EventContext {
+                    turn: 5,
+                    ..ctx.clone()
+                },
+            );
+            let text = rendered.lines.join("\n");
+            assert_eq!(
+                text.matches("|cant|p1a: Charmander|recharge").count(),
+                1,
+                "the next turn is the sole recharge render: {text}"
+            );
+        }
+    }
+
+    #[test]
     fn legal_roll_snapshot_includes_an_earlier_stat_boost_but_not_the_hit() {
         let fixture = MINIMAL
             .trim()
@@ -2845,7 +3338,11 @@ mod tests {
         assert_eq!(priced.side_two.special_attack_boost, 1);
         assert_eq!(priced.side_two.special_defense_boost, 1);
         assert_eq!(priced.side_two.get_active_immutable().hp, 100);
-        assert_eq!(state.serialize(), before, "snapshotting must restore the source state");
+        assert_eq!(
+            state.serialize(),
+            before,
+            "snapshotting must restore the source state"
+        );
     }
 
     #[test]
@@ -2871,7 +3368,11 @@ mod tests {
 
         assert_eq!(priced.side_two.active_index, PokemonIndex::P1);
         assert_eq!(priced.side_two.get_active_immutable().hp, 100);
-        assert_eq!(state.serialize(), before, "snapshotting must restore the source state");
+        assert_eq!(
+            state.serialize(),
+            before,
+            "snapshotting must restore the source state"
+        );
     }
 
     #[test]
@@ -3004,7 +3505,6 @@ mod tests {
             rendered.lines
         );
     }
-
 
     /// THE INTERLEAVING, pinned against the REAL engine — the half the single-side
     /// test above cannot see.
@@ -3144,7 +3644,6 @@ mod tests {
                 &mut plan,
                 &ctx(),
                 &mut rendered,
-                false,
             );
         }
         sim.finish();
@@ -3314,7 +3813,7 @@ mod tests {
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
         let mut plan = ResidualPlan::default();
-        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered, false);
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
         sim.finish();
         assert!(
             rendered.lines[0].contains("[from] item: Leftovers"),
@@ -3323,11 +3822,10 @@ mod tests {
         );
 
         // Resolving: DecrementWish for the SAME side follows immediately.
-        let decrement = Instruction::DecrementWish(
-            poke_engine::instruction::DecrementWishInstruction {
+        let decrement =
+            Instruction::DecrementWish(poke_engine::instruction::DecrementWishInstruction {
                 side_ref: SideReference::SideOne,
-            },
-        );
+            });
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
         let mut plan = ResidualPlan::default();
@@ -3338,7 +3836,6 @@ mod tests {
             &mut plan,
             &ctx(),
             &mut rendered,
-            false,
         );
         sim.finish();
         assert!(
@@ -3348,16 +3845,20 @@ mod tests {
         );
 
         // A DecrementWish for the OTHER side must not claim this heal.
-        let other = Instruction::DecrementWish(
-            poke_engine::instruction::DecrementWishInstruction {
+        let other =
+            Instruction::DecrementWish(poke_engine::instruction::DecrementWishInstruction {
                 side_ref: SideReference::SideTwo,
-            },
-        );
+            });
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
         let mut plan = ResidualPlan::default();
         render_residual_instruction(
-            &mut sim, &heal, Some(&other), &mut plan, &ctx(), &mut rendered, false,
+            &mut sim,
+            &heal,
+            Some(&other),
+            &mut plan,
+            &ctx(),
+            &mut rendered,
         );
         sim.finish();
         assert!(
@@ -3380,7 +3881,12 @@ mod tests {
         let mut sim = Sim::new(&mut state, [false, false]);
         let mut plan = ResidualPlan::default();
         render_residual_instruction(
-            &mut sim, &instruction, None, &mut plan, &ctx(), &mut rendered, false,
+            &mut sim,
+            &instruction,
+            None,
+            &mut plan,
+            &ctx(),
+            &mut rendered,
         );
         assert_eq!(
             rendered.lines,
@@ -3402,14 +3908,8 @@ mod tests {
         let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
         assert!(!branches.is_empty());
         for branch in &branches {
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx(),
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx());
             assert!(
                 rendered.lossy.is_empty(),
                 "branch failed to segment: {:?} / {:?}",
@@ -3417,8 +3917,14 @@ mod tests {
                 branch.instruction_list
             );
             let text = rendered.lines.join("\n");
-            assert!(text.contains("|move|p1a: Charmander|tackle|p2a: Squirtle"), "{text}");
-            assert!(text.contains("|move|p2a: Squirtle|tackle|p1a: Charmander"), "{text}");
+            assert!(
+                text.contains("|move|p1a: Charmander|tackle|p2a: Squirtle"),
+                "{text}"
+            );
+            assert!(
+                text.contains("|move|p2a: Squirtle|tackle|p1a: Charmander"),
+                "{text}"
+            );
             assert!(text.contains("|-damage|"), "{text}");
             assert!(text.contains("|upkeep"), "{text}");
             assert!(rendered.turn_completed, "{text}");
@@ -3447,21 +3953,18 @@ mod tests {
     /// self-HP cut is not derivable from the engine delta).
     #[test]
     fn ghost_curse_renders_target_start_and_no_boosts() {
-        let fixture = MINIMAL.trim().replace("FIRE", "GHOST").replace("EMBER", "CURSE");
+        let fixture = MINIMAL
+            .trim()
+            .replace("FIRE", "GHOST")
+            .replace("EMBER", "CURSE");
         let mut state = parse_state(&fixture).expect("fixture parses");
         let s1 = MoveChoice::from_string("curse", &state.side_one).unwrap();
         let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
         let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
         assert!(!branches.is_empty());
         for branch in &branches {
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx(),
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx());
             let text = rendered.lines.join("\n");
             assert!(
                 text.contains("|move|p1a: Charmander|curse|p2a: Squirtle"),
@@ -3495,14 +3998,8 @@ mod tests {
         let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
         assert!(!branches.is_empty());
         for branch in &branches {
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx(),
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx());
             let text = rendered.lines.join("\n");
             assert!(
                 text.contains("|move|p1a: Charmander|curse|p1a: Charmander"),
@@ -3543,14 +4040,8 @@ mod tests {
             if !applies_flashfire {
                 continue;
             }
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx(),
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx());
             let text = rendered.lines.join("\n");
             assert!(
                 text.contains("|-start|p2a: Squirtle|ability: Flash Fire"),
@@ -3571,6 +4062,76 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no branch applied the FLASHFIRE volatile");
+    }
+
+    /// Memento's engine-side `Heal(-remaining_hp)` is reversible machinery,
+    /// not a Liquid Ooze drain reversal. The protocol must preserve the target
+    /// stat drops and defer the user faint; the fold then charges the user's
+    /// actual remaining fraction, not a synthetic damage line.
+    #[test]
+    fn memento_negative_heal_preserves_order_and_fold_self_cost() {
+        let fixture = MINIMAL
+            .trim()
+            .replace("EMBER;false;32", "SPLASH;false;32")
+            .replace("WATERGUN;false;32", "MEMENTO;false;32");
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state.side_two.get_active().speed = 1;
+        state.side_two.get_active().maxhp = 100;
+        state.side_two.get_active().hp = 60;
+        let s1 = MoveChoice::from_string("splash", &state.side_one).expect("Splash");
+        let s2 = MoveChoice::from_string("memento", &state.side_two).expect("Memento");
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, false);
+        let branch = branches
+            .iter()
+            .find(|branch| {
+                branch.instruction_list.iter().any(|instruction| {
+                    matches!(instruction, Instruction::Boost(boost)
+                        if boost.side_ref == SideReference::SideOne && boost.amount == -2)
+                })
+            })
+            .expect("successful Memento branch with target stat drops");
+        let rendered = render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branch.instruction_list,
+            false,
+            &ctx(),
+        );
+        assert_eq!(
+            rendered.lines,
+            [
+                "|",
+                "|move|p1a: Charmander|splash||[still]",
+                "|move|p2a: Squirtle|memento|p1a: Charmander",
+                "|-unboost|p1a: Charmander|atk|2",
+                "|-unboost|p1a: Charmander|spa|2",
+                "|faint|p2a: Squirtle",
+                "|",
+                "|upkeep",
+            ],
+            "Memento must not render its self-faint as Liquid Ooze damage"
+        );
+        let mut fold = crate::fold::FoldStateInner::initial(0, 128, 512);
+        let mut lines = vec![
+            "|switch|p1a: Charmander|Charmander, L100|100/100".to_string(),
+            "|switch|p2a: Squirtle|Squirtle, L100|60/100".to_string(),
+            "|turn|4".to_string(),
+        ];
+        lines.extend(rendered.lines);
+        fold.advance_in_place(&lines)
+            .expect("fold advances over the Memento protocol");
+        let memento = fold
+            .products()
+            .transition_tokens
+            .into_iter()
+            .find(|token| token.action == "memento")
+            .expect("Memento token present");
+        assert!(
+            (memento.self_hp_cost - 0.60).abs() < f64::EPSILON,
+            "Memento must charge the user's remaining HP fraction: {memento:?}"
+        );
     }
 
     /// The /100 base reconciliation (ladder streams): the exact Showdown HP
@@ -3605,14 +4166,8 @@ mod tests {
         let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
         let mut saw_p2_damage = false;
         for branch in &branches {
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx,
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx);
             for line in &rendered.lines {
                 if !line.starts_with("|-damage|") && !line.starts_with("|-heal|") {
                     continue;
@@ -3672,14 +4227,8 @@ mod tests {
         let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
         assert!(!branches.is_empty());
         for branch in &branches {
-            let rendered = render_branch_events(
-                &mut state,
-                &s1,
-                &s2,
-                &branch.instruction_list,
-                true,
-                &ctx(),
-            );
+            let rendered =
+                render_branch_events(&mut state, &s1, &s2, &branch.instruction_list, true, &ctx());
             let sethp: Vec<&String> = rendered
                 .lines
                 .iter()
@@ -3700,7 +4249,10 @@ mod tests {
                 .collect();
             assert_eq!(
                 tags,
-                vec!["move: Pain Split".to_string(), "move: Pain Split".to_string()],
+                vec![
+                    "move: Pain Split".to_string(),
+                    "move: Pain Split".to_string()
+                ],
                 "the two halves must carry the SAME attribution: {sethp:?}"
             );
 
@@ -3712,7 +4264,9 @@ mod tests {
                 "exactly one half is [silent]: {sethp:?}"
             );
             assert!(
-                sethp.iter().any(|l| l.contains("p2a") && l.contains("[silent]")),
+                sethp
+                    .iter()
+                    .any(|l| l.contains("p2a") && l.contains("[silent]")),
                 "the TARGET's half is the silent one: {sethp:?}"
             );
 
@@ -3734,5 +4288,4 @@ mod tests {
             );
         }
     }
-
 }

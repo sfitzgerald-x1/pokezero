@@ -360,7 +360,7 @@ class PendingSubBlockTest(unittest.TestCase):
 class ReplacementPhaseTest(unittest.TestCase):
     def _explosion_lines(self) -> list[str]:
         # Engine-verified cold pair: both faints, then both replacements back-to-back
-        # in ONE forceSwitch cycle, before |upkeep|.
+        # in ONE forceSwitch cycle, before |upkeep.
         return _leads("Golem", "Abra") + [
             "|move|p1a: Golem|Explosion|p2a: Abra",
             "|-damage|p2a: Abra|0 fnt",
@@ -711,10 +711,11 @@ class ConfusionSelfHitMergeTest(unittest.TestCase):
         merged = _assert_bijection(self, lines)
         turn = merged[1]
         self.assertEqual(turn.phase, PHASE_TURN)
-        # The faster Alakazam is the FIRST sub-block and carries the correction metadata.
+        # The faster Alakazam is the FIRST sub-block and carries the marker,
+        # while its move damage excludes the later self-hit.
         self.assertEqual(turn.first.actor_slot, "p2")
         self.assertEqual(turn.first.action, "surf")
-        self.assertAlmostEqual(turn.first.damage_fraction, 0.27)  # frozen v2.2 value
+        self.assertAlmostEqual(turn.first.damage_fraction, 0.17)
         self.assertTrue(turn.first.confusion_selfhit)
         self.assertAlmostEqual(turn.first.confusion_selfhit_fraction, 0.10)
         # The confused mon's declared action was consumed with no move trace: NEGATED.

@@ -97,6 +97,34 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+def _root_toxic_zero_after_upkeep_attestation(replay: object) -> dict[str, dict[str, bool | None]]:
+    """Serialize only exact proof booleans for the Rust root handoff.
+
+    The leaf has no replay snapshot to inspect.  Preserve malformed values as
+    JSON ``null`` rather than coercing them with ``bool(...)`` so its decoder
+    can fail closed before creating a Toxic re-entry latch.
+    """
+
+    def exact_bool_field(name: str, slot: str) -> bool | None:
+        values = getattr(replay, name, None)
+        value = values.get(slot) if isinstance(values, Mapping) else None
+        return value if type(value) is bool else None
+
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    exact_post_upkeep_window = (
+        post_upkeep_window if type(post_upkeep_window) is bool else None
+    )
+    return {
+        slot: {
+            "proof": exact_bool_field("toxic_stage_zero_after_upkeep", slot),
+            "pending": exact_bool_field("toxic_faint_replacement_pending", slot),
+            "invalid": exact_bool_field("toxic_faint_replacement_invalid", slot),
+            "post_upkeep_window": exact_post_upkeep_window,
+        }
+        for slot in ("p1", "p2")
+    }
+
+
 def _checkpoint_feature_masks_payload(model_config: Any) -> dict[str, Any]:
     """Encoder-table mask payload derived from checkpoint provenance."""
 
@@ -447,6 +475,7 @@ class EngineMctsStats:
     products_wall_seconds: float = 0.0
     row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
+    attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
@@ -496,6 +525,7 @@ class EngineMctsStats:
             "products_wall_seconds": self.products_wall_seconds,
             "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
+            "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
@@ -1275,6 +1305,12 @@ class EngineMctsPolicy:
                     if early_stop_min_sims and isinstance(error, TypeError)
                     else detail
                 )
+                # Unsafe renderer branches abort the native world before a
+                # chance outcome can be silently omitted from its expectation.
+                # The native report is unavailable on that error path, so
+                # retain the same observability counter at the fallback seam.
+                if "attribution-unsafe renderer branch rejected before" in reason:
+                    self.stats.attribution_unsafe_renders += 1
                 self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -1310,6 +1346,9 @@ class EngineMctsPolicy:
             self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
             self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.attribution_unsafe_renders += int(
+                report.get("attribution_unsafe_renders") or 0
+            )
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report
 
@@ -1319,6 +1358,11 @@ class EngineMctsPolicy:
                     "p1": list(world.party_species["p1"]),
                     "p2": list(world.party_species["p2"]),
                     "turn": turn,
+                    # Construction-only provenance for a root Toxic zero.
+                    # The leaf context consumes this outside model metadata.
+                    "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
+                        replay
+                    ),
                     **(
                         {"opponent_request_order": opponent_order}
                         if (opponent_order := opponent_request_order(
