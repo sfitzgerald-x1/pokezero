@@ -21,19 +21,56 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
+import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import poke_engine
 
+from cert_sweep_reread import reread_row
+from engine_build_fingerprint import assert_fresh, compute_fingerprint
 from engine_transition_differential import _split_components, damage_components, legal_roll_damages
 from pokezero.gen3_damage import Gen3DamageContext, apply_chain, gen3_damage_rolls
 from triage_roll_components import triage_row
 
 
 FAMILIES = ("CAND_unresolved_magnitude", "CAND_same_turn_stat_event_gap")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# These are hash-pinned historical lane definitions. They identify rows already
+# owned by another repair lane; they do not attest the current engine build.
+_OVERLAP_ARTIFACTS = {
+    "patches_42_43": {
+        "path": "reports/c15_recharge_absorb_prediction.json",
+        "source_commit": "9b85c99a41f845697e521695e1f6da22674d0bc9",
+        "sha256": "49384abe1ad916903a9be19f4b652dd16bdf55212a2179e080f056b0642cf770",
+    },
+    "patch_44": {
+        "path": "reports/c15_hiddenpower_thaw_prediction.json",
+        "source_commit": "39368cbffc84bb3e8844c59ad925fae7ebcb015c",
+        "sha256": "4d7d1678a4e8f7916d69d18fbc4cdbb9ef6c9ce77ba86ddaf2def1f942c61682",
+    },
+    "patches_42_44_verification": {
+        "path": "reports/c15_engine_patch_verification.json",
+        "source_commit": "9b85c99a41f845697e521695e1f6da22674d0bc9",
+        "sha256": "948a91596ecdb6ee9992653dbaaf73c3d73f6f8c94c93b320dd807787b216ba8",
+    },
+    "bench_rest_world": {
+        "path": "reports/c16_bench_rest_results.md",
+        "source_commit": "df310b875fcac3dbc85f852b3e79af83d6b45592",
+        "sha256": "d6181895bd27aa938b9ec9d7409d7b2453448720da0353d130249fe6b9413fb7",
+    },
+}
+_CORRECTED_PATCH_42_43_POPULATIONS = {
+    "absorb_pure": 75,
+    "absorb_mixed": 6,
+    "recharge_pure": 56,
+    "recharge_mixed": 9,
+}
 
 # These are row-level conclusions, not a replacement for the shape-level
 # families.  A shape is generalized only where every sampled row supports it.
@@ -364,6 +401,149 @@ def _target_plan(
     return targets, initial, remainder
 
 
+def _read_overlap_artifact(name: str, source_root: Path) -> bytes:
+    metadata = _OVERLAP_ARTIFACTS[name]
+    content = (source_root / str(metadata["path"])).read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != metadata["sha256"]:
+        raise ValueError(
+            f"overlap source {metadata['path']} has sha256 {digest}, "
+            f"expected {metadata['sha256']}"
+        )
+    return content
+
+
+def _identity_pairs(value: Any, source: str) -> set[tuple[int, int]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{source} must contain a list of [seed, step] pairs")
+    identities: set[tuple[int, int]] = set()
+    for row in value:
+        if (
+            not isinstance(row, list)
+            or len(row) != 2
+            or any(isinstance(part, bool) or not isinstance(part, int) for part in row)
+        ):
+            raise ValueError(f"{source} has malformed identity {row!r}")
+        identities.add((row[0], row[1]))
+    return identities
+
+
+def _overlap_sources(
+    source_root: Path = REPO_ROOT,
+) -> tuple[dict[str, set[tuple[int, int]]], dict[str, dict[str, str | int]]]:
+    """Load exact historical repair-lane identities with content provenance."""
+
+    recharge = json.loads(_read_overlap_artifact("patches_42_43", source_root))
+    hiddenpower = json.loads(_read_overlap_artifact("patch_44", source_root))
+    verification = json.loads(
+        _read_overlap_artifact("patches_42_44_verification", source_root)
+    )
+    bench_rest = _read_overlap_artifact("bench_rest_world", source_root).decode()
+    if not all(isinstance(value, Mapping) for value in (recharge, hiddenpower, verification)):
+        raise ValueError("overlap JSON sources must be objects")
+
+    try:
+        corrected = recharge["population_correction_addendum"]["corrected_populations"]
+        patch_42_43: set[tuple[int, int]] = set()
+        for population, expected_count in _CORRECTED_PATCH_42_43_POPULATIONS.items():
+            identities = _identity_pairs(
+                corrected[population]["rows"], f"patches_42_43.{population}"
+            )
+            if len(identities) != expected_count:
+                raise ValueError(
+                    f"patches_42_43.{population} has {len(identities)} identities, "
+                    f"expected {expected_count}"
+                )
+            patch_42_43.update(identities)
+
+        registration_miss = verification["patches_42_43_prediction_score"]["registration_miss"]
+        patch_42_43.update(
+            _identity_pairs(
+                registration_miss["additional_clearances"],
+                "patches_42_44_verification.additional_clearances",
+            )
+        )
+        patch_42_43.update(
+            _identity_pairs(
+                [registration_miss["class_change"]["row"]],
+                "patches_42_44_verification.class_change",
+            )
+        )
+        patch_44 = _identity_pairs(hiddenpower["signature_scan"]["sweep_pure"], "patch_44.pure")
+        patch_44.update(
+            _identity_pairs(hiddenpower["signature_scan"]["sweep_mixed"], "patch_44.mixed")
+        )
+        patch_44.update(
+            _identity_pairs(
+                verification["retained_sweep_reread"]["patch_44_only_clearances"],
+                "patches_42_44_verification.patch_44_only_clearances",
+            )
+        )
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"overlap source schema changed: {error}") from error
+
+    bench_matches = re.findall(r"seed `(\d+)` step `(\d+)`", bench_rest)
+    if bench_matches != [("2000281", "99")]:
+        raise ValueError(f"bench Rest source has unexpected identities: {bench_matches!r}")
+    sources = {
+        "patches_42_43": patch_42_43,
+        "patch_44": patch_44,
+        "bench_rest_world": {(2000281, 99)},
+    }
+    provenance = {
+        name: {
+            "path": str(metadata["path"]),
+            "source_commit": str(metadata["source_commit"]),
+            "sha256": str(metadata["sha256"]),
+            "identity_count": len(sources.get(name, set())),
+        }
+        for name, metadata in _OVERLAP_ARTIFACTS.items()
+    }
+    provenance["patches_42_43"]["verification_path"] = str(
+        _OVERLAP_ARTIFACTS["patches_42_44_verification"]["path"]
+    )
+    provenance["patches_42_43"]["verification_source_commit"] = str(
+        _OVERLAP_ARTIFACTS["patches_42_44_verification"]["source_commit"]
+    )
+    provenance.pop("patches_42_44_verification")
+    return sources, provenance
+
+
+def _assert_no_active_lane_overlap(
+    targets: Mapping[tuple[int, int], str], sources: Mapping[str, set[tuple[int, int]]]
+) -> None:
+    target_keys = set(targets)
+    overlaps = {
+        source: sorted(target_keys & identities)
+        for source, identities in sources.items()
+        if target_keys & identities
+    }
+    if overlaps:
+        rendered = "; ".join(
+            f"{source}={','.join(f'{seed}/{step}' for seed, step in rows)}"
+            for source, rows in sorted(overlaps.items())
+        )
+        raise ValueError(f"C15 target overlaps an active repair lane: {rendered}")
+
+
+def _overlap_evidence(
+    key: tuple[int, int],
+    sources: Mapping[str, set[tuple[int, int]]],
+    provenance: Mapping[str, Mapping[str, str | int]],
+) -> dict[str, Any]:
+    matched_sources = sorted(source for source, identities in sources.items() if key in identities)
+    return {
+        "has_repair_lane_overlap": bool(matched_sources),
+        "matched_sources": matched_sources,
+        "source_artifacts": provenance,
+        "note": (
+            "Derived from hash-pinned historical repair-lane source artifacts."
+            if not matched_sources
+            else "Target must be removed or re-laned before current-engine reread."
+        ),
+    }
+
+
 def _state_with_side_one_active(raw: str, active_index: int) -> Any:
     chunks = raw.split("/")
     side = chunks[0].split("=")
@@ -442,8 +622,6 @@ def _fixed_point_base_power_probe(row: Mapping[str, Any]) -> dict[str, Any] | No
         )
     )
     observed = int(probe["observed"])
-    if observed in current_values:
-        raise AssertionError(f"expected current engine legal set to reject {key}: {observed}")
     if observed not in fixed_values:
         raise AssertionError(f"expected fixed-point legal set to admit {key}: {observed}")
     return {
@@ -454,7 +632,7 @@ def _fixed_point_base_power_probe(row: Mapping[str, Any]) -> dict[str, Any] | No
         "observed": observed,
         "current_engine_legal_rolls": current_values,
         "fixed_point_legal_rolls": fixed_values,
-        "observed_in_current_engine_set": False,
+        "observed_in_current_engine_set": observed in current_values,
         "observed_in_fixed_point_set": True,
         "base_power": int(probe["base_power"]),
         "modifier": float(probe["modifier"]),
@@ -492,6 +670,23 @@ def _substitute_health_probe(row: Mapping[str, Any]) -> dict[str, Any] | None:
             if "DamageSubstitute" in str(branch.instruction_list)
         ],
         "source_locus": "src/pokezero/engine_world.py approximate_substitute_health",
+    }
+
+
+def _current_reread(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Run the certification comparator on one retained historical C15 row."""
+
+    # The retained certification archive deliberately omits slot_sides, and
+    # cert_sweep_reread reconstructs its identity mapping from that contract.
+    # A future archive with a mapping must use a comparator that consumes it;
+    # silently treating a non-identity mapping as identity would mis-score a row.
+    if "slot_sides" in row:
+        raise ValueError("C15 current reread requires retained rows without slot_sides")
+    verdict, misses, branch_count = reread_row(row)
+    return {
+        "verdict": verdict,
+        "misses": misses[:4] if verdict == "diverged" else [],
+        "branch_count": branch_count,
     }
 
 
@@ -595,7 +790,12 @@ def _state_string_counterfactual(row: Mapping[str, Any]) -> dict[str, Any] | Non
     }
 
 
-def _row_evidence(row: Mapping[str, Any], family: str) -> dict[str, Any]:
+def _row_evidence(
+    row: Mapping[str, Any],
+    family: str,
+    overlap_sources: Mapping[str, set[tuple[int, int]]],
+    overlap_provenance: Mapping[str, Mapping[str, str | int]],
+) -> dict[str, Any]:
     key = (int(row["seed"]), int(row["step"]))
     side_one, side_two = _engine_choices(row)
     states = row.get("engine_states") or [row["engine_state"]]
@@ -650,17 +850,9 @@ def _row_evidence(row: Mapping[str, Any], family: str) -> dict[str, Any]:
         "controlled_state_counterfactual": _state_string_counterfactual(row),
         "fixed_point_base_power_probe": fixed_point_probe,
         "substitute_health_probe": _substitute_health_probe(row),
-        "overlap": {
-            "patches_42_44_or_world_row_overlap": False,
-            "note": (
-                "Pre-registered overlap check found zero (seed, step) matches against patches "
-                "42-44, the recoil/substitute set, the incapacitation set, and world-lane rows. "
-                "Seed 2000431 has a separate absorb row at step 19; this sample is step 32."
-                if key == (2000431, 32)
-                else "No row-level overlap with patches 42-44 or the current world lanes."
-            ),
-        },
-        "adjudication": adjudication,
+        "historical_adjudication": adjudication,
+        "current_engine_reread": _current_reread(row),
+        "overlap": _overlap_evidence(key, overlap_sources, overlap_provenance),
     }
 
 
@@ -672,7 +864,7 @@ def _prediction_score(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "unscored_resolution_gap": [],
     }
     for row in rows:
-        label = str(row["adjudication"]["prediction"])
+        label = str(row["historical_adjudication"]["prediction"])
         if label.startswith("confirmed"):
             bucket = "confirmed"
         elif label.startswith("partial"):
@@ -693,25 +885,42 @@ def _markdown(result: Mapping[str, Any]) -> str:
     registrations = result["prediction_score_by_registration"]
     initial = registrations["initial_16"]
     remainder = registrations["remaining_21"]
+    current_tally = result["current_engine_reread_tally"]
+    current_build = result["current_engine_build"]
+    current_tally_text = ", ".join(
+        f"{count} {verdict}" for verdict, count in sorted(current_tally.items())
+    )
     unresolved = [
         f"{row['seed']}/{row['step']}"
         for row in result["rows"]
-        if row["adjudication"]["why_status"] == "still_WHAT"
+        if row["historical_adjudication"]["why_status"] == "still_WHAT"
     ]
     lines = [
         "# C15 WHY adjudication: full magnitude and same-turn-stat population",
         "",
         "## Scope",
         "",
-        "This is a replay-first adjudication of all 37 rows in the two registered C15 populations: "
+        "This is a replay-first historical adjudication plus a current-engine re-read of all 37 "
+        "rows in the two registered C15 populations: "
         "28 `CAND_unresolved_magnitude` rows and 9 `CAND_same_turn_stat_event_gap` rows. "
         "The original 16-row sample and its refutations are preserved; the exact 21-row complement "
-        "was separately preregistered before any remaining repro was opened. This artifact does not "
-        "relabel the certification sweep or modify the living ledger.",
+        "was separately preregistered before any remaining repro was opened. Historical verdicts are "
+        "not relabeled here. The current re-read is a 37-row diagnostic, not the full certification "
+        "sweep or a certification result.",
         "",
         "**Coverage: 37/37 (100%).**",
         "",
-        "## Prediction Score",
+        "## Current Engine Re-read",
+        "",
+        f"- Build: {current_build['patch_count']} patches, fingerprint "
+        f"`{current_build['fingerprint']}`.",
+        f"- Strict transition comparator tally: {current_tally_text}.",
+        "- The runner checks the installed Python and Rust consumers against the checked-out build "
+        "before replay, and fails closed on an overlap with a separately owned historical repair lane.",
+        "- These outcomes are directional evidence for the fixed C15 rows only. The complete retained "
+        "population remains the certification gate.",
+        "",
+        "## Historical Prediction Score",
         "",
         f"- Rule-scored rows: {score['scored_rows']}/{score['registered_rows']}.",
         f"- Confirmed: {len(score['confirmed'])} ({', '.join(score['confirmed']) or 'none'})",
@@ -739,7 +948,7 @@ def _markdown(result: Mapping[str, Any]) -> str:
         "Torrent or Thick Fat are carried as `.5` floats in Rust, while Showdown's inherited "
         "`chainModify` rounds half-down before the damage formula.",
         "",
-        "## Population Readout",
+        "## Historical Population Readout",
         "",
         f"- Confirmed engine defects: {result['why_status_counts']['confirmed_engine_defect']}/37.",
         f"- Confirmed instrument defects: {result['why_status_counts']['confirmed_instrument_defect']}/37.",
@@ -747,33 +956,30 @@ def _markdown(result: Mapping[str, Any]) -> str:
         f"- Still WHAT-level: {result['why_status_counts']['still_WHAT']}/37 "
         f"({', '.join(unresolved)}).",
         "",
-        "## Per-Row Verdicts",
+        "## Per-Row Historical Verdicts",
         "",
-        "| Family | Row | WHY status | Verdict | Lane | Prediction |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Family | Row | Historical WHY status | Current strict re-read | Historical verdict |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for row in result["rows"]:
-        adjudication = row["adjudication"]
+        adjudication = row["historical_adjudication"]
         lines.append(
             f"| {row['family']} | {row['seed']}/{row['step']} | {adjudication['why_status']} | "
-            f"{adjudication['verdict']} | "
-            f"{adjudication['lane']} | {adjudication['prediction']} |"
+            f"{row['current_engine_reread']['verdict']} | {adjudication['verdict']} |"
         )
     lines.extend(["", "## Generalization Boundary", ""])
     lines.extend([
-        "- The odd-base-power finding generalizes only to the 20 replayed rows whose exact fixed-point control admits the observation while the current engine set rejects it. It does not absorb the other 17 rows.",
+        "- The odd-base-power finding is historical: it generalized only to the 20 replayed rows whose fixed-point control admitted the observation while the then-current engine rejected it. The current strict comparator records whether each retained transition now matches; it does not extend that conclusion beyond these identities.",
         "- `CAND_same_turn_stat_event_gap` is not a mechanism: its rows include fixed-point base-power defects, an event-aware matcher omission, post-boost WHAT candidates, and noncausal/misbucketed events.",
         "- `CAND_unresolved_magnitude` is also mixed: switch comparison limits, capped residuals, hidden Substitute HP, dynamic HP/weather timing, fixed-point base-power defects, matcher accounting, and 11 still-WHAT rows.",
         "- `2600535/80` is a comparison limit. Public state omits remaining Substitute HP; the documented maxhp/4 materialization cannot reproduce both the observed sub break and drain heal.",
-        "- No row overlaps patches 42-44 or active world-lane rows at the same `(seed, step)`; the shared seed 2000431 is explicitly recorded as a different step.",
+        "- The runner derives and hashes the current historical repair-lane identities before replay. Any overlap at the same `(seed, step)` fails closed; the recorded C15 intersection is empty.",
         "",
-        "## Banked Follow-Ups",
+        "## Historical Follow-Ups",
         "",
-        "- Engine fixed-point: replace Torrent's floating `*= 1.5` in `abilities.rs::ability_modify_attack_being_used` and Thick Fat's `/= 2.0` in `abilities.rs::ability_modify_attack_against`; audit sibling Blaze, Overgrow, and Swarm arms.",
-        "- Engine timing: inspect `generate_instructions.rs::before_move -> choice_effects::modify_choice` for Flail/Reversal BP after earlier same-turn damage (`2201005/55`), and `abilities.rs::update_forecast` plus the weather-expiry call ordering for `2400451/56`.",
-        "- Instrument: in `engine_transition_differential.py::evaluate_boundary_strict -> roll_components_agree`, derive event-aware legal rolls after same-turn stat changes (`2300552/117`) and post-switch branch legality (`2600362/82`).",
-        "- Comparison limits: keep capped residual handling in `roll_components_agree` (`2300040/84`) and `_build_side_spec`'s `substitute_health = maxhp // 4` approximation (`2600535/80`) explicit; do not turn hidden Substitute HP into a deterministic engine patch.",
-        "- Remaining WHY: carry the 11 exact unresolved identities above into a focused source lane rather than inferring from family or ratio.",
+        "- The historical engine and timing leads are retained for provenance only. The current strict reread is the authoritative statement about these 37 identities on this build.",
+        "- The two instrument rows and two documented comparison-limit rows remain separately labeled when the strict comparator still diverges; this bounded read does not turn either into an engine patch.",
+        "- This report does not generalize its 37 identities to the full retained certification population. That claim remains reserved for the full re-sweep.",
         "",
         "## Reproduction",
         "",
@@ -782,8 +988,8 @@ def _markdown(result: Mapping[str, Any]) -> str:
         "  --archive <retained-sweep-archive> \\",
         "  --prediction reports/c15_why_magnitude_statgap_predictions.json \\",
         "  --remainder-prediction reports/c15_why_magnitude_statgap_remainder_predictions.json \\",
-        "  --out-json reports/c15_why_magnitude_statgap_results.json \\",
-        "  --out-md reports/c15_why_magnitude_statgap_report.md",
+        "  --out-json reports/c15_why_magnitude_statgap_current_engine.json \\",
+        "  --out-md reports/c15_why_magnitude_statgap_current_engine.md",
         "```",
         "",
         "The JSON artifact retains every branch instruction, protocol event, legal-roll set, controlled probe, and per-row rationale.",
@@ -820,13 +1026,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     if actual_family_counts != expected_family_counts:
         raise ValueError(f"unexpected family population: {actual_family_counts}")
+    assert_fresh()
+    overlap_sources, overlap_provenance = _overlap_sources()
+    _assert_no_active_lane_overlap(targets, overlap_sources)
     rows_by_key = _load_rows(args.archive, targets)
-    rows = [_row_evidence(rows_by_key[key], targets[key]) for key in sorted(targets)]
+    rows = [
+        _row_evidence(
+            rows_by_key[key], targets[key], overlap_sources, overlap_provenance
+        )
+        for key in sorted(targets)
+    ]
     rows_by_identity = {(int(row["seed"]), int(row["step"])): row for row in rows}
     initial_rows = [rows_by_identity[key] for key in sorted(initial_keys)]
     remainder_rows = [rows_by_identity[key] for key in sorted(remainder_keys)]
     why_status_counts = {
-        status: sum(row["adjudication"]["why_status"] == status for row in rows)
+        status: sum(row["historical_adjudication"]["why_status"] == status for row in rows)
         for status in (
             "confirmed_engine_defect",
             "confirmed_instrument_defect",
@@ -834,17 +1048,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             "still_WHAT",
         )
     }
+    current_reread_tally = dict(
+        Counter(row["current_engine_reread"]["verdict"] for row in rows)
+    )
+    if sum(current_reread_tally.values()) != len(rows):
+        raise AssertionError("current C15 reread tally does not cover every retained row")
+    engine_build = compute_fingerprint()
     result = {
-        "schema": "c15-why-adjudication/3",
-        "registered_before_measurement": {
+        "schema": "c15-why-adjudication/4",
+        "historical_registration_metadata": {
             "initial_16": bool(prediction.get("registered_before_measurement")),
             "remaining_21": bool(
                 remainder_prediction.get("registered_before_remaining_measurement")
             ),
         },
+        "current_engine_build": {
+            "fingerprint": engine_build["fingerprint"],
+            "patch_count": engine_build["count"],
+            "freshness_gate": "scripts/engine_build_fingerprint.py::assert_fresh",
+        },
         "population_count": len(rows),
         "coverage": "37/37",
         "family_counts": actual_family_counts,
+        "overlap_sources": overlap_provenance,
+        "current_engine_reread_tally": current_reread_tally,
         "why_status_counts": why_status_counts,
         "prediction_score": _prediction_score(rows),
         "prediction_score_by_registration": {
