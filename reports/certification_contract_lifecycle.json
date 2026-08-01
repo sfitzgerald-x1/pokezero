@@ -1,9 +1,9 @@
 {
   "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "build_source",
+  "stage": "contract_registered_attestation_pending",
   "launchable": false,
-  "launchable_note": "The lifecycle is launchable only once a validated attestation exists. This commit freezes a new build source; the successor contract, calibration and attestation are intentionally absent so a later registration can pin this source without circular Git metadata.",
-  "purpose": "Freezes the C32 build source: the 53-patch engine after C27 (crit-arm kill split) and C31 (Substitute quarter-HP gate), and the certification consumers after C28 (majority-arm scoping of the structural rule), C29 (cap marking no longer changes bucket membership), C30 (the capped-heal bound receives the step's damage scale) and the fidelity KPI. Every one of those changes invalidated the C26 source identity by construction.",
+  "launchable_note": "The lifecycle is launchable only once a validated sweep attestation exists. The registered contract below is what authorises the fresh sweep; this flag tracks whether the repository holds a completed certification package, and it stays false until reports/c32_current_engine_attestation.json is written against that contract.",
+  "purpose": "The C32 contract and its archival calibration are registered together against the frozen 53-patch build source. The sweep attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
   "supersedes": {
     "registration": "C26",
     "contract": "reports/c26_current_engine_resweep_spec.json",
@@ -14,8 +14,6 @@
     "diagnosis": "docs/engine_c26_structural_residue_diagnosis_20260731.md"
   },
   "required_absent_artifacts": [
-    "reports/c32_current_engine_resweep_spec.json",
-    "reports/c32_current_engine_calibration.json",
     "reports/c32_current_engine_attestation.json"
   ],
   "source_code_identity": {
@@ -25,5 +23,8 @@
     "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
     "engine_patch_count": 53
   },
-  "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash."
+  "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash.",
+  "registered_contract_path": "reports/c32_current_engine_resweep_spec.json",
+  "registered_contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
+  "registered_calibration_path": "reports/c32_current_engine_calibration.json"
 }
