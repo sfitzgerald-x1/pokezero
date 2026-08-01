@@ -41,5 +41,6 @@
   "then": "the 56 n-hit-KO threshold shifts, which subsume most of the rest",
   "still_required_before_any_patch": "a registered prediction with the tactics-suite regression gate, and a mechanism. C39 established the bucket is heterogeneous -- half engine-smaller, a quarter larger, a quarter bracketing -- so there is no single fix, and the 15 inversions need their own mechanism diagnosis before a patch can be scoped."
  },
- "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485",
+ "CORRECTED_BY": "reports/c41_lethality_claim_retraction.json -- the lethality/over-optimism claim is RETRACTED. 'Some branch KOs' vs 'no branch KOs' are not mirror conditions; on symmetric thresholds the asymmetry is 5 vs 1 at n=6 (not significant) with a Brier score of 0.066. The n-hit-KO threshold shift (56 of 74) stands and is the real search impact."
 }

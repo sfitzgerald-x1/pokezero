@@ -1,0 +1,26 @@
+{
+ "schema": "c41-lethality-claim-retraction/1",
+ "corrects": "reports/c40_search_impact_of_support_gaps.json",
+ "what_c40_claimed": "15 of 16 lethality inversions run in the over-optimistic direction -- the engine believing it can KO where the simulator says the defender survives -- and this is the 'premature commits into guaranteed KOs that were not' bias flagged for post-C27 evaluation, still present in the residual support gaps.",
+ "verdict": "RETRACTED. The asymmetry was an artifact of my own thresholds.",
+ "the_error": "I compared 'SOME engine branch KOs' (lethal mass > 0%) against 'NO engine branch KOs' (lethal mass = 0%). Those are not mirror conditions -- the first fires on a 1.3% chance, the second requires certainty. Any distribution-valued engine will look over-optimistic under that pairing. The engine enumerates a distribution and the simulator rolls one outcome; a 5% KO branch that did not fire is the engine being right, not wrong.",
+ "the_symmetric_test": {
+  "method": "compare the engine's lethal branch MASS against the realized outcome, both sides at the same 50% threshold",
+  "result": {
+   "engine_leaned_KO_sim_survived": 5,
+   "engine_leaned_survive_sim_KOd": 1,
+   "engine_leaned_survive_sim_survived": 68
+  },
+  "asymmetry": "5 vs 1, n=6",
+  "significance": "one-sided binomial p = 0.109 against a fair split; two-sided ~0.22. Not significant.",
+  "brier_score": "0.066 mean over all 74 -- the engine's KO probabilities are well calibrated even on a population selected for unreachability",
+  "caveat_stated_honestly": "this population is SELECTED on unreachability, so 0.066 is not a calibration estimate for the engine at large; it is only evidence that these 74 rows do not show a lethality-pricing defect"
+ },
+ "the_mechanism_i_also_misread": "Every engine KO branch had delta exactly -hp0 with zero overkill, which I first read as a marginal max-roll overshoot -- a defect damage_calc.rs documents twice in its own comments. It is not. HP clamps at zero, so EVERY KO branch has delta -hp0 by construction. Zero overkill is the representation, not a finding.",
+ "what_survives_from_c40": {
+  "n_hit_KO_threshold_shift": "56 of 74 (75.7%) STANDS -- it is a magnitude claim, not a lethality one, and does not depend on the asymmetric threshold",
+  "so_the_search_term_is_still_nonzero": "the engine-gap bucket does change tree pricing, but through n-hit-KO thresholds, not through lethality"
+ },
+ "corrected_ranked_target_for_objective_4": "The 56 n-hit-KO threshold shifts, NOT the '15 inversions'. C40 ranked the 15 first on the strength of the retracted bias claim; with that gone they are 6 rows of ordinary distribution behaviour and should not lead.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+}
