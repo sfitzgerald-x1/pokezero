@@ -39,5 +39,17 @@
   "verdict": "the family SPLITS, roughly evenly. 217 rows are an engine support gap -- the crit arm is not in the branch set at all. 173 are a renderer gap -- the branch exists and reaches the observed magnitude, but carries no |-crit| tag, which is the C55 class at a new site.",
   "why_the_split_matters": "these need different fixes and land in different buckets. The 217 are engine-gap and belong in objective 4's burndown ranked by search impact. The 173 are instrument-artifact and are plausibly the cheaper repair -- C55 fixed exactly this shape for Sleep Talk callees and cleared 331 rows. Treating the 403 as one family, as the current audit does, guarantees whichever fix is attempted will explain at most half of it.",
   "the_ambiguity_was_worth_naming": "I declined to pick in C77 because a tag search cannot distinguish enumeration from rendering. Had I guessed, either answer would have been wrong for about half the family."
+ },
+ "chasing_the_173_renderer_gap": {
+  "the_renderer_condition": "events.rs ~2054 emits |-crit| only when six conditions hold: not already emitted, damage lines not done, a collapsed crit value exists, the damage EXACTLY equals it, that value differs from the regular collapsed value, and -- notably -- damage.damage_amount < pre_hp, so no crit tag is ever emitted on a KO.",
+  "hypothesis": "the KO guard explains the 173: a crit that kills is never tagged",
+  "measured": {
+   "crit does NOT kill, no tag": 122,
+   "crit DOES kill, no tag": 50,
+   "other": 1
+  },
+  "verdict": "REFUTED for the majority. The KO guard accounts for 50 of 173, 29%. The other 122 are non-KO crits that still receive no tag, so a different condition is suppressing them -- most likely the exact-value match against crit_collapsed, since the engine collapses its roll fan to at most three representatives and a crit branch need not land exactly on the stored value.",
+  "status": "the 173 remain a renderer gap with the specific condition unidentified. 50 are explained by the KO guard; 122 are not.",
+  "next": "instrument the six conditions at events.rs:2054 and count which one fails, per row. That is the C60 method -- instrument the gate rather than infer from outside it -- and it is the approach that worked every time I used it and failed every time I substituted a proxy."
  }
 }
