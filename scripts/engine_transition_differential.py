@@ -742,17 +742,28 @@ def branch_component_legal_rolls(
 
 def _split_component_events(
     components: Sequence[DamageComponent],
+    *,
+    capped_bases: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Counter, list[DamageComponent]]:
-    """Event-preserving counterpart to :func:`_split_components`."""
+    """Event-preserving counterpart to :func:`_split_components`.
+
+    ``capped_bases`` names base sources that either side reported as capped on
+    this slot. They are roll-scaled on BOTH sides, so a cap present on one side
+    and absent on the other cannot change the roll-scaled list's length. See the
+    call site in :func:`evaluate_boundary_strict`.
+    """
 
     exact: Counter = Counter()
     rolled: list[DamageComponent] = []
     for component in components:
         if component.source in _IGNORED_SOURCES:
             continue
+        capped = component.source.endswith("_to_full")
+        base = component.source[: -len("_to_full")] if capped else component.source
         if (
             component.source in _ROLL_SCALED_SOURCES
-            or component.source.endswith("_to_full")
+            or capped
+            or base in capped_bases
         ):
             rolled.append(component)
         else:
@@ -1400,6 +1411,38 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
+                # CAP MARKING RELAXES MAGNITUDE, NEVER MEMBERSHIP.
+                #
+                # `_to_full` is encoded in the source NAME, which also moves the
+                # component between buckets — something the tag was never meant
+                # to do ("only the magnitude is relaxed, and only in the capped
+                # direction", above). Whether a heal caps depends on the damage
+                # roll, so membership, and therefore the roll-scaled list's
+                # LENGTH, became roll-dependent — and the comparison below
+                # rejects on length before any tolerance applies. Two arms
+                # differing only by a legal roll then read as structurally
+                # different (seed 17000013 step 12: Leftovers caps at 290/290
+                # against the observed -84 roll and does not against the
+                # engine's -90).
+                #
+                # So if EITHER side marks a base source as capped on this slot,
+                # both sides treat that base source as roll-scaled here. The
+                # magnitude tolerance still applies only where a cap is
+                # involved; nothing else changes bucket.
+                capped_bases = {
+                    component.source[: -len("_to_full")]
+                    for component in list(observed_components[slot])
+                    + list(engine_components[label])
+                    if component.source.endswith("_to_full")
+                }
+                if capped_bases:
+                    observed_split[slot] = _split_component_events(
+                        observed_components[slot], capped_bases=capped_bases
+                    )
+                    obs_exact[slot], obs_rolled[slot] = observed_split[slot]
+                    eng_exact, eng_rolled = _split_component_events(
+                        engine_components[label], capped_bases=capped_bases
+                    )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.

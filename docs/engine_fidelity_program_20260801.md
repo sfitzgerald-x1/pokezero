@@ -142,13 +142,14 @@ as results of the change that overturned them, with the reasoning that failed.
 
 ## Sequencing
 
-1. **Capped-heal matcher fix — critical path.** The 29 unattributed rows per 60
-   games are this artifact: `_split_component_events` routes a component into the
-   roll-scaled bucket iff its source ends with `_to_full`, so bucket membership,
-   and therefore list *length*, is roll-dependent — and
+1. **Capped-heal matcher fix — critical path.** Corrected after C28: this is
+   4 rows per 60 games, not 29. The rule's minority-arm scoping was the larger
+   share (22 rows) and shipped as C28; its exact-magnitude sibling-carry check
+   turned out not to be a defect at all and was withdrawn. The remaining
+   mechanism is real: `_split_component_events` routes a component into the
+   roll-scaled bucket iff its source ends with `_to_full`, so bucket membership —
+   and therefore list *length* — is roll-dependent, and
    `roll_component_events_agree` rejects on length before applying any tolerance.
-   With the structural rule's minority-arm scoping and its exact-magnitude
-   sibling-carry check, this is what stands between here and a PASS.
 2. **Bucketing audit — alongside**, not instead of.
 3. **One successor contract** carrying the capped-heal fix, the KPI, and C27,
    rather than a registration cycle each.
