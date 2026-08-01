@@ -297,7 +297,14 @@ class ContractAttestationTests(unittest.TestCase):
             attestation["required_engine_fingerprint"],
             gates["required_engine_fingerprint"],
         )
-        self.assertEqual(attestation["registration"]["fresh_c26_measurements_inspected"], 0)
+        # Cycle-labelled key, so match on the shape rather than the label: the
+        # claim is that no fresh measurement was inspected before registration.
+        inspected = [
+            value
+            for key, value in attestation["registration"].items()
+            if key.startswith("fresh_") and key.endswith("_measurements_inspected")
+        ]
+        self.assertEqual(inspected, [0], attestation["registration"])
 
     def test_the_sweep_result_attestation_is_a_different_artifact(self) -> None:
         """A contract attestation must never be mistaken for a sweep result."""

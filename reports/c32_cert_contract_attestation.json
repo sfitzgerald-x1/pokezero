@@ -1,0 +1,13 @@
+{
+ "schema_version": "pokezero.engine-cert-contract-attestation/v1",
+ "contract_source_commit": "a4c7b74247619608792ebfd60f673842d941bdf0",
+ "contract_path": "reports/c32_current_engine_resweep_spec.json",
+ "contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
+ "launch_source_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
+ "required_engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+ "registration": {
+  "fresh_c32_measurements_inspected": 0,
+  "supersedes": "reports/c26_cert_contract_attestation.json (C26, registered_never_executed)",
+  "purpose": "Bind the registered C32 contract to immutable tracked bytes while keeping its executable build source and image commit non-circular. This attests the CONTRACT only; the C32 sweep attestation is reports/c32_current_engine_attestation.json and does not exist until a fresh sweep completes."
+ }
+}
