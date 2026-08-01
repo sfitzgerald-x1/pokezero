@@ -46,6 +46,8 @@ def args(**overrides) -> argparse.Namespace:
         opponent_priors=False,
         engine_model_path=None,
         engine_tables_path=None,
+        foulplay_root=None,
+        foulplay_python=None,
         out="/tmp/shard.json",
         skip_build_check=True,
     )
@@ -90,6 +92,121 @@ class ConfigIdTest(unittest.TestCase):
             _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k0.pt")),
             _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k1.pt")),
         )
+
+
+class FoulplayPathTest(unittest.TestCase):
+    """The driver must be able to point the bridge at a relocated foul-play.
+
+    The bridge defaults to a repo-relative checkout and has no environment
+    fallback, so a deployment that ships foul-play elsewhere cannot reach it. A
+    whole campaign probe died on that: every shard raised FileNotFoundError for
+    .../third_party/foul-play/.venv/bin/python while the image had it at
+    /opt/foul-play.
+    """
+
+    def test_paths_are_forwarded_when_given(self) -> None:
+        argv = _DRIVER.bridge_argv(
+            args(foulplay_root="/opt/foul-play",
+                 foulplay_python="/opt/foul-play/.venv/bin/python"),
+            seat="p1",
+        )
+        self.assertEqual(argv[argv.index("--foulplay-root") + 1], "/opt/foul-play")
+        self.assertEqual(
+            argv[argv.index("--foulplay-python") + 1], "/opt/foul-play/.venv/bin/python"
+        )
+
+    def test_omitted_paths_leave_the_bridge_default_alone(self) -> None:
+        # Passing an empty value would override the bridge default with nothing.
+        argv = _DRIVER.bridge_argv(args(), seat="p1")
+        self.assertNotIn("--foulplay-root", argv)
+        self.assertNotIn("--foulplay-python", argv)
+
+    def test_empty_path_does_not_override_the_bridge_default(self) -> None:
+        # Truthiness, not `is not None`: forwarding "" hands the bridge Path("")
+        # and overrides its default with nothing. Review found this case asserted
+        # only in a comment, so the `is not None` mutant survived.
+        argv = _DRIVER.bridge_argv(args(foulplay_root="", foulplay_python=""), seat="p1")
+        self.assertNotIn("--foulplay-root", argv)
+        self.assertNotIn("--foulplay-python", argv)
+
+    def test_the_real_cli_yields_the_dests_bridge_argv_reads(self) -> None:
+        """Pin CLI -> Namespace -> bridge_argv, not bridge_argv alone.
+
+        Every other test here hand-builds a Namespace, so deleting or renaming an
+        add_argument left the suite green while a real run would die with
+        AttributeError inside bridge_argv -- the exact "only shows up in
+        production" failure these flags exist to prevent. Found by review.
+        """
+        parser = _DRIVER.build_parser()
+        ns = parser.parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "raw", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+            "--foulplay-root", "/opt/foul-play",
+            "--foulplay-python", "/opt/foul-play/.venv/bin/python",
+        ])
+        self.assertEqual(ns.foulplay_root, "/opt/foul-play")
+        self.assertEqual(ns.foulplay_python, "/opt/foul-play/.venv/bin/python")
+        # And they survive the trip through bridge_argv on a real parse.
+        built = _DRIVER.bridge_argv(ns, seat="p1")
+        self.assertEqual(built[built.index("--foulplay-root") + 1], "/opt/foul-play")
+
+    def test_the_cli_defaults_leave_both_paths_unset(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "raw", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+        ])
+        self.assertIsNone(ns.foulplay_root)
+        self.assertIsNone(ns.foulplay_python)
+        self.assertNotIn("--foulplay-root", _DRIVER.bridge_argv(ns, seat="p1"))
+
+    def test_the_required_argument_set_is_pinned(self) -> None:
+        """N5/N6: nothing pinned which arguments are required.
+
+        The refactor provably dropped no required=True (review diffed every
+        parser action, 19 vs 19), but the tests did not PIN the set, so a later
+        change could quietly make --out or --checkpoint optional and a shard
+        would run with a default it should never have. Cheap to pin now that the
+        parser is reachable; it was unreachable before the extraction.
+        """
+        required = {a.dest for a in _DRIVER.build_parser()._actions if a.required}
+        self.assertEqual(
+            required,
+            {"checkpoint", "showdown_root", "arm", "seed_start", "pairs", "out"},
+        )
+
+    def test_main_parses_through_build_parser(self) -> None:
+        """N8: build_parser() is tested, but nothing asserted main() USES it.
+
+        A divergent re-inlined parser in main() would leave every other test
+        green. main() is one line today, so drift takes deliberate effort -- but
+        the assertion is two lines.
+        """
+        calls = []
+        real = _DRIVER.build_parser
+
+        def spy():
+            calls.append(1)
+            return real()
+
+        _DRIVER.build_parser = spy
+        try:
+            with self.assertRaises(SystemExit):
+                _DRIVER.main([])  # no required args -> argparse exits 2
+        finally:
+            _DRIVER.build_parser = real
+        self.assertEqual(len(calls), 1, "main() did not parse through build_parser()")
+
+    def test_paths_are_forwarded_on_both_arms_and_seats(self) -> None:
+        # The raw arm drives the same opponent, so it needs the same path.
+        for arm in ("search", "raw"):
+            for seat in ("p1", "p2"):
+                with self.subTest(arm=arm, seat=seat):
+                    argv = _DRIVER.bridge_argv(
+                        args(arm=arm, foulplay_root="/opt/foul-play"), seat=seat
+                    )
+                    self.assertIn("--foulplay-root", argv)
 
 
 class OpponentDefinitionTest(unittest.TestCase):
