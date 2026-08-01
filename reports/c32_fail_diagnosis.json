@@ -22,7 +22,7 @@
  "leading_hypothesis": {
   "claim": "C29's cap promotion is scoped too widely and is inflating this counter. It promotes a base source to roll-scaled when ANY component on that SLOT carries a cap, rather than when the paired component does. An UNCAPPED itemleftovers tick belongs in the exact bucket; it reaches the roll-scaled comparison only through that promotion, where the length check then rejects it before any tolerance applies.",
   "why_it_matters": "If true, C29 moved rows that would have been reported as exact-bucket differences into the structural counter -- changing how they are CLASSIFIED without changing whether they diverge, and inflating the very counter I then declared resolved.",
-  "status": "RETRACTED. The confirmation was measured at the wrong scope.",
+  "status": "SUPERSEDED. All five hypotheses were wrong; the real defect was found by reading values.",
   "how_to_settle_it": "Re-read a sample of these boundaries with capped_bases scoped to the component pair instead of the slot, and compare verdicts. Offline, no engine change, no sweep."
  },
  "independent_of_that": {
@@ -81,6 +81,24 @@
    "C34 as designed is a no-op, measured on 400 rows.",
    "The mechanism placing an uncapped itemleftovers into the roll-scaled list remains UNEXPLAINED."
   ],
-  "next_step": "Stop hypothesising and instrument directly: for one row, dump obs_exact, obs_rolled, eng_exact, eng_rolled and capped_bases as evaluate_boundary_strict actually computes them. Five inferences from reading the source have now failed; the next answer should come from the values, not the code."
+  "next_step": "Stop hypothesising and instrument directly: for one row, dump obs_exact, obs_rolled, eng_exact, eng_rolled and capped_bases as evaluate_boundary_strict actually computes them. Five inferences from reading the source have now failed; the next answer should come from the values, not the code.",
+  "resolved_by_instrumentation": {
+   "method": "Stopped inferring from source and dumped the actual values at the comparison site for one row: capped_bases, obs_exact, obs_rolled, eng_exact, eng_rolled and both raw component lists, as evaluate_boundary_strict computes them.",
+   "observed": {
+    "capped_bases": "[] (EMPTY -- so C29's promotion was not active on this branch at all)",
+    "obs_rolled": "[('', -60), ('itemleftovers', 17)]",
+    "eng_exact": "{('itemleftovers', 17): 1}",
+    "note": "An IDENTICAL component sat in the rolled bucket on one side and the exact bucket on the other, with no cap anywhere in play."
+   },
+   "root_cause": "An aliasing bug I introduced in C29. obs_exact and obs_rolled are built ONCE before the branch loop and shared across every branch and every state. C29 assigned back into them -- obs_exact[slot], obs_rolled[slot] = ... -- so a promotion earned by one branch that did carry a cap leaked into all later branches, whose own capped_bases were empty. The engine side was already computed into per-branch locals, so only the observed side drifted, and the two sides then disagreed about which bucket an identical component belonged to.",
+   "fix": "Compute the observed split into per-branch locals; never mutate the shared split.",
+   "measured_effect": {
+    "rows_retested": 400,
+    "now_matched": 357,
+    "still_structural": 43,
+    "share_manufactured_by_the_leak": "89%"
+   },
+   "why_five_hypotheses_failed": "Every one reasoned about what the source must do. The bug was not in the logic I kept re-reading -- capped_bases, the promotion rule, the scoping -- but in a mutation two lines away that made the logic correct and the STATE wrong. Values found it in one attempt."
+  }
  }
 }

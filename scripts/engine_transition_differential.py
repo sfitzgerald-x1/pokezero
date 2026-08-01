@@ -1442,11 +1442,19 @@ def evaluate_boundary_strict(
                     + list(engine_components[label])
                     if component.source.endswith("_to_full")
                 }
+                # PER-BRANCH, never mutating the shared observed split. C29
+                # assigned back into obs_exact/obs_rolled, which are built once
+                # before this loop and shared by every branch AND every state --
+                # so a promotion earned by one branch leaked into all later
+                # branches, whose own capped_bases were empty. The engine side
+                # was already computed into locals per branch, so only the
+                # observed side drifted, and the two sides then disagreed about
+                # which bucket an identical component belonged to.
+                obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
                 if capped_bases:
-                    observed_split[slot] = _split_component_events(
+                    obs_exact_branch, obs_rolled_branch = _split_component_events(
                         observed_components[slot], capped_bases=capped_bases
                     )
-                    obs_exact[slot], obs_rolled[slot] = observed_split[slot]
                     eng_exact, eng_rolled = _split_component_events(
                         engine_components[label], capped_bases=capped_bases
                     )
@@ -1454,7 +1462,7 @@ def evaluate_boundary_strict(
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.
                 if not roll_component_events_agree(
-                    obs_rolled[slot],
+                    obs_rolled_branch,
                     eng_rolled,
                     support=branch_support,
                     target_side=label,
@@ -1462,14 +1470,14 @@ def evaluate_boundary_strict(
                 ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={[(c.source, c.delta) for c in obs_rolled[slot]]} "
+                        f"observed={[(c.source, c.delta) for c in obs_rolled_branch]} "
                         f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
-                if eng_exact != obs_exact[slot]:
-                    only_obs = obs_exact[slot] - eng_exact
-                    only_eng = eng_exact - obs_exact[slot]
+                if eng_exact != obs_exact_branch:
+                    only_obs = obs_exact_branch - eng_exact
+                    only_eng = eng_exact - obs_exact_branch
                     reason = (
                         f"{slot} attributed components differ: "
                         f"observed_only={sorted(only_obs.elements())} "
