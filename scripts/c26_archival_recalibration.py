@@ -101,10 +101,47 @@ def _tracked_engine_identity() -> dict[str, Any]:
     return {"fingerprint": printed["fingerprint"], "patch_count": printed["count"]}
 
 
-def _source_commit() -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True
+CLASSIFIER_SOURCES = (
+    "scripts/cert_sweep_readout.py",
+    "scripts/cert_execution_manifest.py",
+    "scripts/engine_transition_differential.py",
+    "scripts/cert_sweep_reread.py",
+)
+
+
+def verify_source_commit(commit: str) -> str:
+    """Resolve the frozen build-source commit this calibration speaks for.
+
+    The calibration is written on a later branch than the commit it calibrates,
+    so recording HEAD would pin the wrong thing -- and pinning an unverified
+    commit would let the recorded identity drift from the bytes that actually
+    ran. Every classifier input must be byte-identical at that commit, and its
+    lifecycle record must already carry the engine identity being calibrated.
+    """
+
+    resolved = subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", f"{commit}^{{commit}}"], text=True
     ).strip()
+    for relative in CLASSIFIER_SOURCES:
+        committed = subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), "show", f"{resolved}:{relative}"]
+        )
+        working = (REPO_ROOT / relative).read_bytes()
+        if committed != working:
+            raise ValueError(
+                f"{relative} differs from its bytes at {resolved}; this working "
+                "tree does not run the frozen classifier"
+            )
+    lifecycle = json.loads(subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "show",
+         f"{resolved}:reports/certification_contract_lifecycle.json"], text=True
+    ))
+    if lifecycle.get("stage") != "build_source":
+        raise ValueError(
+            f"{resolved} is not a build-source freeze (stage "
+            f"{lifecycle.get('stage')!r})"
+        )
+    return resolved
 
 
 def verify_archive(shard_glob: str) -> tuple[list[Path], list[Mapping[str, Any]]]:
@@ -283,6 +320,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--shards", required=True)
     parser.add_argument("--json", required=True)
+    parser.add_argument(
+        "--source-commit",
+        required=True,
+        help="the frozen build-source commit this calibration speaks for",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -292,8 +334,10 @@ def main(argv=None) -> int:
         return 2
     try:
         engine = _tracked_engine_identity()
-    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
-        print(f"ENGINE IDENTITY REFUSED: {error}", file=sys.stderr)
+        source_commit = verify_source_commit(args.source_commit)
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError,
+            json.JSONDecodeError) as error:
+        print(f"SOURCE IDENTITY REFUSED: {error}", file=sys.stderr)
         return 2
 
     denominators = archive_denominators(paths)
@@ -324,7 +368,7 @@ def main(argv=None) -> int:
             "coverage_measured_fraction": round(
                 measured / denominators["boundaries_full_round"], 6
             ),
-            "current_classifier_source_commit": _source_commit(),
+            "current_classifier_source_commit": source_commit,
             "current_classifier_readout_sha256": _sha256(
                 REPO_ROOT / "scripts" / "cert_sweep_readout.py"
             ),
