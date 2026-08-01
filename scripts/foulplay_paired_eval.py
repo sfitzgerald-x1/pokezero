@@ -248,7 +248,13 @@ def seat_block(summary: dict, seat: str) -> dict:
     }
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The driver's CLI, exposed so tests can pin it.
+
+    Kept separate from main() because every test here builds a Namespace by
+    hand: without this, deleting or renaming an add_argument left the whole
+    suite green while a real run died with AttributeError inside bridge_argv.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--showdown-root", required=True)
@@ -280,7 +286,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--skip-build-check", action="store_true",
                     help="offline/dry use only; never for a scored shard")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
 
     # REFUSED, deliberately: the MAPPING is fixed, the CRATE-SIDE GATHER is not.
     #

@@ -121,6 +121,46 @@ class FoulplayPathTest(unittest.TestCase):
         self.assertNotIn("--foulplay-root", argv)
         self.assertNotIn("--foulplay-python", argv)
 
+    def test_empty_path_does_not_override_the_bridge_default(self) -> None:
+        # Truthiness, not `is not None`: forwarding "" hands the bridge Path("")
+        # and overrides its default with nothing. Review found this case asserted
+        # only in a comment, so the `is not None` mutant survived.
+        argv = _DRIVER.bridge_argv(args(foulplay_root="", foulplay_python=""), seat="p1")
+        self.assertNotIn("--foulplay-root", argv)
+        self.assertNotIn("--foulplay-python", argv)
+
+    def test_the_real_cli_yields_the_dests_bridge_argv_reads(self) -> None:
+        """Pin CLI -> Namespace -> bridge_argv, not bridge_argv alone.
+
+        Every other test here hand-builds a Namespace, so deleting or renaming an
+        add_argument left the suite green while a real run would die with
+        AttributeError inside bridge_argv -- the exact "only shows up in
+        production" failure these flags exist to prevent. Found by review.
+        """
+        parser = _DRIVER.build_parser()
+        ns = parser.parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "raw", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+            "--foulplay-root", "/opt/foul-play",
+            "--foulplay-python", "/opt/foul-play/.venv/bin/python",
+        ])
+        self.assertEqual(ns.foulplay_root, "/opt/foul-play")
+        self.assertEqual(ns.foulplay_python, "/opt/foul-play/.venv/bin/python")
+        # And they survive the trip through bridge_argv on a real parse.
+        built = _DRIVER.bridge_argv(ns, seat="p1")
+        self.assertEqual(built[built.index("--foulplay-root") + 1], "/opt/foul-play")
+
+    def test_the_cli_defaults_leave_both_paths_unset(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "raw", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+        ])
+        self.assertIsNone(ns.foulplay_root)
+        self.assertIsNone(ns.foulplay_python)
+        self.assertNotIn("--foulplay-root", _DRIVER.bridge_argv(ns, seat="p1"))
+
     def test_paths_are_forwarded_on_both_arms_and_seats(self) -> None:
         # The raw arm drives the same opponent, so it needs the same path.
         for arm in ("search", "raw"):
