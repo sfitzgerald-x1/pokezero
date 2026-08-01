@@ -1,0 +1,193 @@
+{
+ "schema": "c26-structural-residue-diagnosis/1",
+ "purpose": "Separate the classifier-scoping share of the structural residue from the share that survives every defensible scoping. The surviving share is the diagnosis queue; the rest is a rule that fires wider than its own stated semantics.",
+ "warning": "Reordering or rescoping a rule that emits UNATTRIBUTED will always reduce the unattributed count. These counterfactuals are evidence for a decision that must be pre-registered against a new source freeze, never a repair applied to a registered contract in place.",
+ "classifier_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
+ "populations": {
+  "fresh_sample": {
+   "shape": {
+    "count_mismatch_location": {
+     "minority_arm_only": 22,
+     "majority_arm": 7
+    },
+    "majority_miss_cap_shape": {
+     "no_cap_shape": 3,
+     "to_full_in_majority": 26
+    },
+    "majority_arm_mass_percent": {
+     "min": 46.88,
+     "median": 84.38,
+     "max": 100.0
+    }
+   },
+   "scopings": {
+    "registered": {
+     "rows": 64,
+     "unattributed": 29,
+     "structural": 29,
+     "families": {
+      "UNATTRIBUTED": 29,
+      "I1_cap_state_shape": 19,
+      "limit:roll_divergent_lethality": 8,
+      "limit:world_sample_drag_target": 4,
+      "LS_capped_lethal_shape": 2,
+      "I5_boundary_truncation": 2
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 29
+     },
+     "unattributed_per_game": 0.4833,
+     "projected_unattributed_per_10k_games": 4833
+    },
+    "majority_scoped": {
+     "rows": 64,
+     "unattributed": 7,
+     "structural": 7,
+     "families": {
+      "I1_cap_state_shape": 39,
+      "limit:roll_divergent_lethality": 8,
+      "UNATTRIBUTED": 7,
+      "limit:world_sample_drag_target": 4,
+      "I2_matcher_accounting": 2,
+      "LS_capped_lethal_shape": 2,
+      "I5_boundary_truncation": 2
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 7
+     },
+     "unattributed_per_game": 0.1167,
+     "projected_unattributed_per_10k_games": 1167
+    },
+    "majority_scoped_and_roll_tolerant_sibling": {
+     "rows": 64,
+     "unattributed": 4,
+     "structural": 4,
+     "families": {
+      "I1_cap_state_shape": 39,
+      "limit:roll_divergent_lethality": 8,
+      "limit:world_sample_drag_target": 4,
+      "UNATTRIBUTED": 4,
+      "LS_structural_arm_echo": 3,
+      "I2_matcher_accounting": 2,
+      "LS_capped_lethal_shape": 2,
+      "I5_boundary_truncation": 2
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 4
+     },
+     "unattributed_per_game": 0.0667,
+     "projected_unattributed_per_10k_games": 667
+    }
+   },
+   "games": 60
+  },
+  "retained_archive": {
+   "shape": {
+    "count_mismatch_location": {
+     "majority_arm": 495,
+     "minority_arm_only": 281
+    },
+    "majority_miss_cap_shape": {
+     "to_full_in_majority": 473,
+     "no_cap_shape": 303
+    },
+    "majority_arm_mass_percent": {
+     "min": 5.56,
+     "median": 84.38,
+     "max": 100.0
+    }
+   },
+   "scopings": {
+    "registered": {
+     "rows": 3496,
+     "unattributed": 883,
+     "structural": 776,
+     "families": {
+      "limit:roll_divergent_lethality": 1275,
+      "UNATTRIBUTED": 883,
+      "LS_capped_lethal_shape": 428,
+      "limit:world_sample_drag_target": 271,
+      "I3_roll_inherited": 233,
+      "I4_attribution_tie": 164,
+      "I5_boundary_truncation": 157,
+      "I1_cap_state_shape": 50,
+      "I6_sleeptalk_callee_union": 30,
+      "I2_matcher_accounting": 3,
+      "LS_crit_arm_pairing_echo": 1,
+      "LS_confusion_fan": 1
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 776,
+      "truant_loaf_phase_drift": 50,
+      "unattributed_generic": 20,
+      "same_turn_stat_event_gap": 17,
+      "recoil_vs_substitute_basis": 13,
+      "incapacitated_arm_pricing": 6,
+      "recharge_turn_residual_gap": 1
+     }
+    },
+    "majority_scoped": {
+     "rows": 3496,
+     "unattributed": 607,
+     "structural": 495,
+     "families": {
+      "limit:roll_divergent_lethality": 1275,
+      "UNATTRIBUTED": 607,
+      "LS_capped_lethal_shape": 440,
+      "limit:world_sample_drag_target": 271,
+      "I3_roll_inherited": 233,
+      "I1_cap_state_shape": 181,
+      "I4_attribution_tie": 164,
+      "I5_boundary_truncation": 157,
+      "I2_matcher_accounting": 90,
+      "I6_sleeptalk_callee_union": 58,
+      "LS_crit_arm_pairing_echo": 18,
+      "LS_confusion_fan": 2
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 495,
+      "truant_loaf_phase_drift": 50,
+      "unattributed_generic": 25,
+      "same_turn_stat_event_gap": 17,
+      "recoil_vs_substitute_basis": 13,
+      "incapacitated_arm_pricing": 6,
+      "recharge_turn_residual_gap": 1
+     }
+    },
+    "majority_scoped_and_roll_tolerant_sibling": {
+     "rows": 3496,
+     "unattributed": 451,
+     "structural": 339,
+     "families": {
+      "limit:roll_divergent_lethality": 1275,
+      "UNATTRIBUTED": 451,
+      "LS_capped_lethal_shape": 440,
+      "limit:world_sample_drag_target": 271,
+      "I3_roll_inherited": 233,
+      "I1_cap_state_shape": 181,
+      "I4_attribution_tie": 164,
+      "I5_boundary_truncation": 157,
+      "LS_structural_arm_echo": 156,
+      "I2_matcher_accounting": 90,
+      "I6_sleeptalk_callee_union": 58,
+      "LS_crit_arm_pairing_echo": 18,
+      "LS_confusion_fan": 2
+     },
+     "exclusion_counters": {
+      "structural_component_count_without_supported_sibling": 339,
+      "truant_loaf_phase_drift": 50,
+      "unattributed_generic": 25,
+      "same_turn_stat_event_gap": 17,
+      "recoil_vs_substitute_basis": 13,
+      "incapacitated_arm_pricing": 6,
+      "recharge_turn_residual_gap": 1
+     }
+    }
+   }
+  }
+ },
+ "probe_report": {
+  "path": "reports/c26_structural_probe_report.json",
+  "sha256": "cb36cd223f3ab9104aa23dbb71dde21e4c584e79169951679fbdca9e98e9a8e3"
+ }
+}
