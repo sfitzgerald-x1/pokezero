@@ -1,0 +1,18 @@
+{
+ "schema": "c38-sleep-talk-support-gap/1",
+ "builds_on": "reports/c37_branch_set_support_measurement.json",
+ "population": "the 37 Sleep Talk rows C37 confirmed unreachable -- no enumerated engine branch reaches the observed net HP delta",
+ "hypothesis_tested": "The engine's Sleep Talk fan is get_sleep_talk_choices (state.rs:1014), which reads the moves the ENGINE STATE knows the attacker has. Under partial observability the engine may not know the move the simulator called, in which case no branch can reach the outcome -- and that would be a world-construction comparison-limit, the same category as world_sample_drag_target, NOT an engine bug.",
+ "verdict": "REFUTED. This is a genuine engine-support gap.",
+ "evidence": {
+  "called_move_is_known_to_the_engine": 24,
+  "called_move_not_matched_by_my_normalizer": 5,
+  "no_called_move_parsed": 8,
+  "the_5_are_my_artifact_not_a_real_absence": "All 5 were Hidden Power. Engine move IDs carry a type-and-power suffix -- HIDDENPOWERICE70, HIDDENPOWERBUG70, HIDDENPOWERGRASS70 -- so normalizing the protocol's 'Hidden Power' to 'hiddenpower' never matched. Verified directly on s18001051/164. The engine does know the move.",
+  "so": "29 of 37 confirmed the engine knows the callee; 8 unparsed and not claimed either way."
+ },
+ "what_this_establishes": "The engine knows the move Sleep Talk called, fans a branch for it, and still no branch reaches the observed transition. So the gap is in how the callee's branch is PRICED or generated, not in which callees are enumerated and not in what the world model knows. That is an engine-gap in the fidelity objective's own terms: the engine's support does not contain a transition the simulator reaches.",
+ "not_yet_known": "WHY the callee branch misses. Candidates, none measured: the recursive generate_instructions_from_move call at generate_instructions.rs:2580 passing sleep_talk_move=true may suppress an effect the sim applies; the 1/num_choices mass split may not compose with the callee's own roll fan; or the |cant|...|slp line that precedes every one of these boundaries may mean the engine and sim disagree about whether the turn happened at all. Naming three candidates is not evidence for any of them -- the next cycle measures, it does not reason from the source. That is the same discipline the last two corrections were bought with.",
+ "search_impact_not_yet_measured": "Objective 4 ranks by rows x search-impact and the search term is unmeasured here. 37 rows is the row term only. A fix must not be registered on row count alone.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+}
