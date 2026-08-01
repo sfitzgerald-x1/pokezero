@@ -3206,6 +3206,112 @@ mod tests {
     }
 
     #[test]
+    fn forced_replacement_defers_hyper_beam_recharge_cant_until_next_turn() {
+        let fixture = MINIMAL
+            .trim()
+            .replacen("EMBER;false;32", "HYPERBEAM;false;8", 1);
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state.side_two.get_active().speed = 1;
+        state.side_two.pokemon[PokemonIndex::P1] = state.side_two.pokemon[PokemonIndex::P0].clone();
+        state.side_two.get_active().hp = 1;
+        let ctx = EventContext {
+            species: [
+                vec!["Charmander".to_string()],
+                vec!["Squirtle".to_string(), "Squirtle".to_string()],
+            ],
+            turn: 4,
+            hp_percent: [false, false],
+        };
+
+        // A guaranteed Hyper Beam KO opens the opponent's forced-replacement
+        // boundary while the attacker still owes its recharge turn.
+        let hyper_beam =
+            MoveChoice::from_string("hyperbeam", &state.side_one).expect("Hyper Beam is available");
+        let ko =
+            generate_instructions_from_move_pair(&mut state, &hyper_beam, &MoveChoice::None, true)
+                .into_iter()
+                .find(|branch| {
+                    branch.instruction_list.iter().any(|instruction| {
+                        matches!(instruction, Instruction::ToggleSideTwoForceSwitch)
+                    })
+                })
+                .expect("Hyper Beam KO creates a forced replacement");
+        state.apply_instructions(&ko.instruction_list);
+        assert!(state.side_two.force_switch);
+        assert!(state
+            .side_one
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::MUSTRECHARGE));
+
+        let forced_replacement = generate_instructions_from_move_pair(
+            &mut state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            true,
+        );
+        assert_eq!(forced_replacement.len(), 1);
+        assert!(end_of_turn_triggered(
+            &state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+        ));
+        let replacement = &forced_replacement[0].instruction_list;
+        let rendered_replacement = render_branch_events(
+            &mut state,
+            &MoveChoice::None,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            replacement,
+            true,
+            &ctx,
+        );
+        let replacement_text = rendered_replacement.lines.join("\n");
+        assert!(
+            replacement_text.contains("|switch|p2a: Squirtle|Squirtle|100/100"),
+            "{replacement_text}"
+        );
+        assert!(replacement_text.contains("|upkeep"), "{replacement_text}");
+        assert!(
+            !replacement_text.contains("|cant|p1a: Charmander|recharge"),
+            "the replacement is not the recharger turn: {replacement_text}"
+        );
+        state.apply_instructions(replacement);
+        assert!(!state.side_two.force_switch);
+        assert!(
+            state
+                .side_one
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::MUSTRECHARGE),
+            "recharge must survive until side one next acts"
+        );
+
+        let tackle =
+            MoveChoice::from_string("tackle", &state.side_two).expect("Tackle is available");
+        let recharge_turn =
+            generate_instructions_from_move_pair(&mut state, &MoveChoice::None, &tackle, true);
+        assert!(!recharge_turn.is_empty());
+        for branch in recharge_turn {
+            let rendered = render_branch_events(
+                &mut state,
+                &MoveChoice::None,
+                &tackle,
+                &branch.instruction_list,
+                true,
+                &EventContext {
+                    turn: 5,
+                    ..ctx.clone()
+                },
+            );
+            let text = rendered.lines.join("\n");
+            assert_eq!(
+                text.matches("|cant|p1a: Charmander|recharge").count(),
+                1,
+                "the next turn is the sole recharge render: {text}"
+            );
+        }
+    }
+
+    #[test]
     fn legal_roll_snapshot_includes_an_earlier_stat_boost_but_not_the_hit() {
         let fixture = MINIMAL
             .trim()
