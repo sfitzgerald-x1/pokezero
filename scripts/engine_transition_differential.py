@@ -845,6 +845,51 @@ def roll_components_agree(
     return True
 
 
+_MIN_DAMAGE_ROLL = 85
+_CASCADE_HEALS = frozenset({"itemleftovers", "heal", "movewish", "leechseed"})
+
+
+def _cascade_base(source: str) -> str:
+    return source[: -len("_to_full")] if source.endswith("_to_full") else source
+
+
+def _roll_cascade_equivalent(observed, engine) -> bool:
+    """Whether a component-COUNT difference is caused by a legal roll difference.
+
+    The engine may pick a legal damage roll the simulator did not. That
+    difference cascades: a Wish or Recover that would have capped the mon at
+    full no longer does, so a Leftovers tick which had nothing to do now has
+    room and emits a line. Same transition, same end HP, different component
+    COUNT -- and the length check rejected it before any roll tolerance applied.
+
+    This does NOT accept net equality. Net-equal lists can differ for unrelated
+    reasons, which is the false-match risk the exact comparison exists to
+    prevent. The shape is constrained: exactly one direct-damage component per
+    side and one legal roll apart, every other component a POSITIVE heal, and
+    equal totals. Measured against 200,000 crossed (observed, engine) pairs --
+    genuinely different transitions -- this fires on 0.018%, against 0.051% for
+    plain exact-list equality, so it is more selective than the check it
+    supplements. reports/c66_roll_cascade_count_mismatch.json.
+    """
+
+    observed_direct = [c.delta for c in observed if c.source == ""]
+    engine_direct = [c.delta for c in engine if c.source == ""]
+    if len(observed_direct) != 1 or len(engine_direct) != 1 or not engine_direct[0]:
+        return False
+    ratio = abs(observed_direct[0]) / abs(engine_direct[0])
+    if not (_MIN_DAMAGE_ROLL / 100 <= ratio <= 100 / _MIN_DAMAGE_ROLL):
+        return False
+    observed_heals = [(_cascade_base(c.source), c.delta) for c in observed if c.source != ""]
+    engine_heals = [(_cascade_base(c.source), c.delta) for c in engine if c.source != ""]
+    if not observed_heals and not engine_heals:
+        return False
+    if any(s not in _CASCADE_HEALS or d <= 0 for s, d in observed_heals + engine_heals):
+        return False
+    return (observed_direct[0] + sum(d for _, d in observed_heals)) == (
+        engine_direct[0] + sum(d for _, d in engine_heals)
+    )
+
+
 def roll_component_events_agree(
     observed: Sequence[DamageComponent],
     engine: Sequence[DamageComponent],
@@ -863,7 +908,7 @@ def roll_component_events_agree(
     """
 
     if len(observed) != len(engine):
-        return False
+        return _roll_cascade_equivalent(observed, engine)
     slot_scale = max(
         _roll_damage_scale([(c.source, c.delta) for c in observed]),
         _roll_damage_scale([(c.source, c.delta) for c in engine]),
