@@ -15,5 +15,28 @@
  },
  "what_this_audit_does_not_cover": "the other standing claims -- the 203 count-mismatch-only rows, the 70 majority-arm disagreements from C61, and the 82 same-Pokemon-different-HP rows -- are not yet audited against this bug class. C61's population was defined with an explicit switch check so it is probably sound; the 203 came from miss-string parsing and involves no HP arithmetic, so it is probably immune. Neither has been verified and 'probably' is what produced the three bugs.",
  "the_durable_fix_already_landed": "scripts/switch_safe_hp.py returns None rather than 0 for an uncomparable slot, so a future analysis that forgets the case raises instead of publishing. This audit used it, which is the first time the guard has been applied to an existing claim rather than a new one.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "audit_2_the_remaining_claims": {
+  "claim_203_count_mismatch_only": {
+   "verdict": "IMMUNE to the bug class",
+   "evidence": "the derivation parses miss strings and performs no HP arithmetic at all -- no pre_features, no observed HP, no subtraction across a boundary",
+   "a_number_that_needs_disambiguating": "recomputing 'majority-arm component count mismatch' gives 309, not 203. That is NOT a discrepancy: C60's 203 counts rows where exit 1 was the ONLY exit to fire across every branch, while 309 counts rows whose MAJORITY miss has a count mismatch regardless of what else fired. C60 also reported 323 rows where exit 1 fires anywhere, and 309 sits inside that. Three related numbers measuring three different things, and I am naming them because carrying '203' and '309' forward unlabelled is how the next confusion starts."
+  },
+  "claim_70_majority_arm_disagreements": {
+   "verdict": "SOUND",
+   "evidence": "the derivation contains an explicit active_changed check and reported its 37 switch rows separately rather than folding them in",
+   "off_by_one_resolved": "recomputing the comparable population gives 71 against C61's 70; C61 also reported 1 error row, and 70 + 1 = 71. Accounted for, not unexplained."
+  },
+  "claim_82_same_pokemon_different_hp": {
+   "verdict": "SOUND",
+   "evidence": "derived from the CORRECTED per-Pokemon test: it compares against end-of-boundary HP rather than the switch-line HP, and it requires the non-switched slot to agree as well"
+  }
+ },
+ "audit_status": "COMPLETE. Every standing claim about the 341-row residue has now been checked against the bug class that invalidated C58, C62 and C63.",
+ "summary": {
+  "C42 support gaps (50)": "clean, though by luck rather than a guard",
+  "count-mismatch rows": "immune, no HP arithmetic",
+  "C61 majority-arm (70)": "sound, guarded at derivation",
+  "same-Pokemon-different-HP (82)": "sound, uses the corrected field"
+ }
 }
