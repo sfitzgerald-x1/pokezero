@@ -1,0 +1,59 @@
+{
+ "schema": "c31-substitute-threshold-postmeasure/1",
+ "prediction": "reports/c31_substitute_threshold_prediction.json",
+ "prediction_outcome": "CONFIRMED on every registered number",
+ "engine": {
+  "before": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+  "after": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+  "patches": {
+   "before": 52,
+   "after": 53
+  }
+ },
+ "result": {
+  "seed_17000037_step_55": "matched",
+  "fresh": {
+   "matched": 45,
+   "divergent": 15,
+   "unattributed": 0
+  },
+  "families_after": {
+   "limit:roll_divergent_lethality": 6,
+   "limit:world_sample_drag_target": 4,
+   "I2_matcher_accounting": 2,
+   "LS_capped_lethal_shape": 2,
+   "I1_cap_state_shape": 1
+  },
+  "zero_unattributed_on_this_population": true
+ },
+ "gates": {
+  "behavioral_probes": "9/9 PASS",
+  "depth_tactics_suite": "5/5 OK - no forcing proof moved",
+  "cert_and_matcher_suites": "167 tests OK",
+  "walk_mass_rederivation": {
+   "exits_unchanged": "9/9",
+   "mass_moved": {
+    "1500050:33": "6.592% -> 5.859%"
+   },
+   "verdict": "The only mass that moved stayed far above the 1% floor, so no exit changed. Registered in advance as expected-to-hold, and it held."
+  }
+ },
+ "cost_finding": {
+  "branch_count_at_that_boundary": {
+   "before": 4,
+   "after": 64
+  },
+  "mass_sums_to": 100.0,
+  "registered_estimate": "up to 32 arms",
+  "actual": "64. My registered estimate of 32 was wrong: sixteen rolls x crit/non-crit is 32, and the Substitute succeed/fail outcomes then produce distinct instruction lists that do not combine, doubling it again. Substitute is a staple move, so this is a materially larger search cost than the Flail/Reversal case the mechanism was built for.",
+  "consequence": "The 2-way partition follow-up moves from optional to likely necessary. It is a second mechanism, so it needs its own registration -- but 64 arms on a common move is a different proposition from 64 arms on Flail. The search-side cost measurement, already owed for C27, now gates this too."
+ },
+ "kpi": {
+  "in_support_percent": 99.683,
+  "note": "This one IS an engine change, so the delta is a genuine fidelity gain -- but it is measured on the C30 matcher, so it may only be compared against the C30 reading (99.662%), not against the pre-C29 readings taken on the old matcher."
+ },
+ "certification_status": {
+  "zero_unattributed_on_the_60_game_probe": true,
+  "still_not_a_pass": "A PASS is a property of the registered 10,000-game sweep under a registered contract, not of a 60-game diagnostic probe. C26's contract pins the 51-patch engine and the pre-C28 readout, so it cannot certify this build. A successor contract carrying C27-C31 plus the KPI must be registered, and the sweep run, before any PASS exists."
+ }
+}
