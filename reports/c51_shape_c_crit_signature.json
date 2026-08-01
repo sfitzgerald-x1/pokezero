@@ -36,14 +36,26 @@
   "what_this_kills": "the tempting headline -- '81 rows where the engine cannot reach the observed crit' -- is not supported. The baseline comparison removes it."
  },
  "what_is_established": [
-  "shape C has a real and distinctive signature: observed magnitude is ~2x the engine's shape-matched sibling, median 1.98",
-  "36 of 117 are pairing failures where the engine has the crit magnitude and the matcher did not use it",
-  "Sleep Talk is enriched 4.9x and is NOT the mechanism"
+  "shape C has a real and distinctive signature: observed magnitude is ~2x the engine's shape-matched sibling, median 1.98 over 125 pairs",
+  "Sleep Talk is enriched 4.9x and is NOT the mechanism (control: crit pairs are slightly MORE common on Sleep Talk boundaries)",
+  "40 of 117 have an engine branch reaching the observed magnitude on the complaining slot; 77 do not"
  ],
  "what_is_not": [
-  "whether the remaining 81 are an engine gap -- the crit-pair test does not discriminate them from baseline",
-  "why the shape-matching sibling test prefers the non-crit arm in the 36"
+  "whether any of the 117 is an engine gap -- lacking a 2x pair is the baseline condition (80% of all boundaries), so it does not discriminate",
+  "whether the 40 are matcher failures -- that needs a whole-boundary test, not a per-slot one",
+  "why the shape-matching sibling test prefers the non-crit arm"
  ],
- "next": "attack the 36 first: they are a definite instrument defect with a known cause shape, and fixing the sibling selection is a matcher change with a predictable row delta. The 81 need a test that discriminates against baseline, which the crit-pair test does not.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+ "next": "for the 40, re-run evaluate_boundary_strict per branch and record WHICH slot and component defeats the magnitude-matching branch. That is a whole-boundary test and it is the one that decides whether there is a matcher defect here at all.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "correction_to_the_split": {
+  "what_i_claimed": "36 of 117 are pairing failures where the engine has the crit magnitude and the matcher did not use it",
+  "why_that_test_was_wrong": "has_crit_pair asked whether ANY TWO engine branches differ by ~2x. That is not the question. The question is whether any branch REACHES the observed magnitude.",
+  "the_right_test": {
+   "EXACT branch reaches the observed magnitude": 6,
+   "a branch is within the legal roll window": 34,
+   "NO branch reaches it": 77
+  },
+  "and_it_still_does_not_prove_a_pairing_failure": "40 of 117 have a branch reaching the observed magnitude ON THE COMPLAINING SLOT. That does not mean the row should have matched: evaluate_boundary_strict requires a single branch to agree on BOTH slots and all components, so a branch that matches p1 can legitimately fail on p2. A per-slot test cannot establish a whole-boundary matching failure. The '36 pairing failures' framing is withdrawn; what is measured is 40 rows worth checking at boundary level, not 36 defects.",
+  "the_pattern_worth_naming": "Three tests in this one cycle, each answering a narrower question than the claim I wanted to make from it: crit-pair-exists for engine-gap, sleep-talk-enrichment for mechanism, reaches-magnitude-on-one-slot for pairing failure. Two were caught by a control and one by re-reading what the matcher actually requires."
+ }
 }
