@@ -1747,9 +1747,11 @@ class PlayerRelativeBattleState:
     self_items_removed: int = 0
     opponent_items_removed: int = 0
     # Matchup-conditional switch evidence, ALREADY conditioned on our current active:
-    # normalized opponent species -> (switched-out-before-attacking, opportunities) observed
-    # while that mon was facing the mon we have out now. Absent species have no history in
-    # this matchup and encode (0, 0).
+    # normalized opponent species -> (switched-out-before-attacking, stayed-and-attacked)
+    # observed while that mon was facing the mon we have out now. Absent species have no
+    # history in this matchup and encode (0, 0). The second slot is the complementary COUNT,
+    # not a denominator: an opportunities total cannot survive the incremental fold, which
+    # prunes turn_start_occupants, so both live hook points increment one counter or the other.
     opponent_matchup_switch_evidence: Mapping[str, tuple[int, int]] = field(
         default_factory=dict
     )
@@ -3906,7 +3908,7 @@ def _matchup_switch_evidence(
     tendency_stats: "TendencyStats | None",
     self_team: Sequence[ShowdownPokemon],
 ) -> dict[str, tuple[int, int]]:
-    """Per-opponent-mon (switched, opportunities) against the mon WE currently have out.
+    """Per-opponent-mon (switched, stayed) against the mon WE currently have out.
 
     Selects one column of the fold's (their mon x our mon) table. An empty result — no
     active mon resolvable, or no tendency stats — means every opponent token encodes (0, 0),
@@ -6120,7 +6122,7 @@ def _encode_pokemon_tokens(
     active_traced_ability: str | None = None,
     active_last_damage_dealt: float = 0.0,
     active_last_damage_taken: float = 0.0,
-    # Per-opponent-mon (switched, opportunities) against OUR current active; opponent
+    # Per-opponent-mon (switched, stayed) against OUR current active; opponent
     # tokens only, and empty under every schema below v4.
     matchup_switch_evidence: Mapping[str, tuple[int, int]] | None = None,
 ) -> None:
@@ -7146,7 +7148,9 @@ def _observation_metadata(
     state: PlayerRelativeBattleState,
     *,
     dex: "ShowdownDex | None" = None,
-    schema_version: str = OBSERVATION_SCHEMA_VERSION_V4,
+    # No default: this argument decides whether the v4 feature pack is disclosed, and a gate
+    # that defaults to the disclosing side fails open. Callers name the schema explicitly.
+    schema_version: str,
 ) -> dict[str, Any]:
     # The v4 pack block is SCHEMA-GATED, not unconditional. Publishing it on every schema was
     # not merely wasteful (field_credit_values walks the bench on each encode): the search lane
@@ -7253,7 +7257,6 @@ def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[st
     return candidates
 
 
-
 def _feature_pack_metadata(
     state: PlayerRelativeBattleState, *, dex: "ShowdownDex | None"
 ) -> dict[str, Any]:
@@ -7296,6 +7299,7 @@ def _feature_pack_metadata(
             for species, pair in state.opponent_matchup_switch_evidence.items()
         },
     }
+
 
 def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
     if pokemon is None:

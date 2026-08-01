@@ -48,9 +48,12 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # (docs/k0-feature-pack-plan.md Parts A and B). The motivating question is whether a pure-Markov
 # k0 policy (transition_token_budget=0) can match a k1 one once the facts k1's single history row
 # was carrying are named as current state.
-# NEW CONTRACT, NEW ARMS: every v4 column extends the numeric AND categorical censuses, so a v4
-# checkpoint can never share a cache, an env, or a run with a v3 one. That is enforced at every
-# layer (schema validation, encode-time census floors, the checkpoint-provenance latch, the
+# NEW CONTRACT, NEW ARMS: v4 moves BOTH censuses, but not in the same direction — it adds numeric
+# columns while SHRINKING the categorical census (41 vs v3's 51), because dropping the transition
+# history region removes more categorical slots than the feature pack adds. So a v4 checkpoint can
+# never share a cache, an env, or a run with a v3 one. That is enforced at every layer (schema
+# validation, an encode-time census EXACT match at v4 — a floor cannot catch a census that shrinks,
+# which is why v4 is exact where v3/v2.2 still floor — the checkpoint-provenance latch, the
 # search-lane contract pin) exactly as the v2->v2.1->v2.2->v3 breaks were.
 OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
