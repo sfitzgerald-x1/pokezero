@@ -1,0 +1,19 @@
+{
+ "schema": "c64-bucket-validation-audit/1",
+ "why": "three analyses this session were invalidated by the same bug class -- a check reading the wrong field or covering part of a boundary, producing a plausible number that aggregates cannot detect. Before extending the analysis further, the standing claims were audited against that class. C42 was audited first because it is a stop-condition artifact: objectives 3 and 4 rest on it.",
+ "audit_1_the_C42_support_gap_population": {
+  "exposure": "the C37/C42 support test compares a per-SLOT HP delta, which is meaningless when the active changed. 76 of the 309 structural rows have a switch on the complaining slot, so the exposure is real and large.",
+  "method": "re-ran the support test with slot_hp_comparable guarding every verdict",
+  "result": {
+   "unreachable rows invalidated by a switch": 0,
+   "sleeptalk unreachable": 13,
+   "other unreachable": 37,
+   "total": 50
+  },
+  "verdict": "CLEAN. None of the 50 confirmed support gaps sits on a switched slot. The C42 adjudication, and with it the objective-3 and objective-4 evidence, survives the bug class unchanged.",
+  "why_it_escaped": "the support test runs on the D-with-count-evidence subset, not the full structural population. The 76 switch rows are all outside that subset. That is luck rather than design -- the test had no guard and would have been wrong if they had fallen inside."
+ },
+ "what_this_audit_does_not_cover": "the other standing claims -- the 203 count-mismatch-only rows, the 70 majority-arm disagreements from C61, and the 82 same-Pokemon-different-HP rows -- are not yet audited against this bug class. C61's population was defined with an explicit switch check so it is probably sound; the 203 came from miss-string parsing and involves no HP arithmetic, so it is probably immune. Neither has been verified and 'probably' is what produced the three bugs.",
+ "the_durable_fix_already_landed": "scripts/switch_safe_hp.py returns None rather than 0 for an uncomparable slot, so a future analysis that forgets the case raises instead of publishing. This audit used it, which is the first time the guard has been applied to an existing claim rather than a new one.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+}
