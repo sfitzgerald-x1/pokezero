@@ -23,5 +23,30 @@
  "coverage_is_closer_than_i_reported": "0.9657 against the 0.97 floor, short by about 3,400 boundaries at certification scale. Better than both C32 (0.9587) and the 200-game run (0.9534). The 200-game figure was the outlier and I reported it as though it were the trend.",
  "what_this_means_for_a_certification_attempt": "a fresh sweep would land near 125 unattributed, not 268 and not 255. Still not a PASS, but half what I told the user one cycle ago, and the coverage gap is also smaller than the corpus suggested. If anyone is deciding whether to spend the cluster shards, the honest input is that the run would fail on both gates but by a materially smaller margin than the corpus measurement implies.",
  "what_did_not_change": "the shape census. The fresh unattributed rows are 8 structural_component_count and 2 unattributed_generic -- the same two counters that dominate the corpus residue. No new shape, on a fourth independent seed range.",
- "zero_engine_errors_across_1000_fresh_games": "200 + 800 games, 78,070 boundaries, no engine error"
+ "zero_engine_errors_across_1000_fresh_games": "200 + 800 games, 78,070 boundaries, no engine error",
+ "the_ten_fresh_unattributed_rows": {
+  "composition": {
+   "engine side empty, observed has damage": 7,
+   "observed side empty, engine has damage": 1,
+   "both populated, magnitude differs": 2
+  },
+  "verdict": "8 of 10 are the one-side-empty shape, which is exactly what dominates the corpus residue. Fresh data at a fourth seed range, and the composition matches.",
+  "the_two_magnitude_rows": {
+   "one": "observed -146 against engine -160. That ratio is 0.9125, inside the 0.85-1.176 span a gen3 roll covers -- but roll_components_agree uses a NARROWER window, 0.92 to 1.09 around the engine's ~92% representative roll, giving a floor of 146.2. The row is rejected by 0.2 HP. A genuine borderline, not a defect: the narrower window is deliberate and documented.",
+   "two": "observed -56 against engine -111, a factor of two and well outside anything a roll explains"
+  },
+  "no_new_shape": "across 1,000 fresh games at two independent seed ranges, every unattributed row falls into a shape the corpus already contains and this session already examined."
+ },
+ "closing_position": {
+  "what_the_fresh_data_settled": [
+   "the four fixes hold on data they were not derived from: divergence 0.921% -> 0.385%",
+   "the corpus OVERSTATES the unattributed fraction, 8.24% against a fresh 4.13% [1.6, 6.6]",
+   "a real certification sweep would land near 125 unattributed, not the 255 the corpus shows",
+   "coverage is 0.9657, closer to the 0.97 floor than the corpus suggested",
+   "no shape exists in fresh data that the corpus analysis missed",
+   "zero engine errors across 78,070 fresh boundaries"
+  ],
+  "what_it_did_not_change": "the residue is still dominated by one-side-empty rows, which C61 examined and judged a genuine disagreement about where probability mass sits, and which no matcher work should absorb. A PASS still requires the contract's exits with per-shape evidence, or engine work.",
+  "the_correction_i_would_lead_with": "I spent most of this session measuring a corpus that was selected against the fixes I was applying, and told the user a sweep needed cluster time when a local one was available throughout. Both the 255 figure and the ~268 projection were biased by that, and the honest number is ~125."
+ }
 }
