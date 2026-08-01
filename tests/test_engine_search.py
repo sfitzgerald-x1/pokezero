@@ -289,6 +289,34 @@ class RechargeSignalTests(unittest.TestCase):
         ])
         self.assertEqual(self._slots(context, rounds), ())
 
+    def test_parser_tracker_is_preferred_over_the_reconstruction(self) -> None:
+        # ONE PARSER TRUTH, TWO CONSUMERS (spec v4 pack A1): when the observation carries the
+        # parser's ``must_recharge`` tracker, the world seeds from IT, not from the round-record
+        # reconstruction. The tracker reads the ``-mustrecharge`` line the sim emits only on a
+        # LANDED recharge move, so it is strictly stronger evidence.
+        context, rounds = self._context(prev_action=None, events=[])
+        context.observation.metadata["opponent_must_recharge"] = True
+        self.assertEqual(self._slots(context, rounds), ("p2",))
+
+    def test_parser_tracker_false_is_a_proof_not_an_absent_signal(self) -> None:
+        # An explicit False must not be overridden by the weaker fallback: the tracker saw the
+        # whole stream and there was no lock. (Here the reconstruction WOULD have locked.)
+        context, rounds = self._context(events=[
+            "|move|p2a: Slaking|Hyper Beam|p1a: Blissey",
+            "|-damage|p1a: Blissey|100/300",
+        ])
+        context.observation.metadata["opponent_must_recharge"] = False
+        self.assertEqual(self._slots(context, rounds), ())
+
+    def test_missing_tracker_key_still_falls_back(self) -> None:
+        # Cached rollouts and hand-built contexts predate the pack; they keep the old behaviour.
+        context, rounds = self._context(events=[
+            "|move|p2a: Slaking|Hyper Beam|p1a: Blissey",
+            "|-damage|p1a: Blissey|100/300",
+        ])
+        self.assertNotIn("opponent_must_recharge", context.observation.metadata)
+        self.assertEqual(self._slots(context, rounds), ("p2",))
+
 
 class PublicEffectSignalTests(unittest.TestCase):
     """The item-mutation split: removals/consumptions clear, confirmed swaps

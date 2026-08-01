@@ -1284,6 +1284,11 @@ class TrainMaskFlagsTest(unittest.TestCase):
                 "transition_token_budget": 32,
                 "tier2_residuals": True,
                 "tier2_investment": False,
+                # The v4 pack's A2 ablation switch, pack-whole by default. Recorded here like
+                # every other mask so the train-side cross-check can refuse a cache collected
+                # under a different pack shape; caches predating the field are defaulted to
+                # True on read, the same asymmetry tier2_investment uses.
+                "feature_pack_last_move": True,
             },
         )
 

@@ -43,8 +43,11 @@ from pokezero.actions import ACTION_COUNT, MOVE_ACTION_COUNT, SWITCH_ACTION_COUN
 from pokezero.category_vocab import normalize_category_value  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
     ObservationFeatureMasks,
 )
 from pokezero.randbat_vocab import gen3_category_vocabulary  # noqa: E402
@@ -57,7 +60,11 @@ from pokezero.showdown import (  # noqa: E402
 TABLES_SCHEMA_VERSION = "pokezero.encoder-tables.v1"
 
 
-def _vocab_payload(showdown_root: str, trained_tokens: Any = None) -> dict[str, Any]:
+def _vocab_payload(
+    showdown_root: str,
+    trained_tokens: Any = None,
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
+) -> dict[str, Any]:
     """Emit the token->row map the LEAF encoder will use.
 
     ``trained_tokens`` is the checkpoint's own ``category_vocab`` and is authoritative
@@ -72,7 +79,14 @@ def _vocab_payload(showdown_root: str, trained_tokens: Any = None) -> dict[str, 
     config (neural_policy.py:399), so no vocab-less checkpoint contract exists; the
     build enumeration below is reached only when exporting without a checkpoint at all.
     """
-    vocab = gen3_category_vocabulary(showdown_root, include_turn_merged=True)
+    vocab = gen3_category_vocabulary(
+        showdown_root,
+        include_turn_merged=True,
+        # The v4 feature pack's two categorical families are opt-in because they change the
+        # vocabulary SIZE. This build-enumeration path is only reached when exporting without a
+        # checkpoint; with one, ``trained_tokens`` below overrides it wholesale.
+        include_feature_pack_v4=schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    )
     if trained_tokens:
         vocab = replace(vocab, tokens=tuple(str(t) for t in trained_tokens))
     index: dict[str, int] = {}
@@ -102,7 +116,10 @@ def _numeric_column_payload(schema_version: str) -> dict[str, int]:
         value = getattr(showdown, name)
         if not name.startswith("NUMERIC_") or not isinstance(value, int):
             continue
-        if schema_version != OBSERVATION_SCHEMA_VERSION_V3 and not (
+        # A grouped-layout schema (v3, v4) resolves every named column through its projection
+        # map, which also reports the ones it does not carry; the v2 family instead range-checks
+        # against its own census, since later columns all sit above it.
+        if schema_version not in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS and not (
             0 <= value < spec.numeric_feature_count
         ):
             continue
@@ -196,7 +213,7 @@ def _layout_payload(
             "trap_abilities": sorted(showdown._TRAP_ABILITIES),
             "pinch_berries": sorted(showdown._PINCH_BERRIES),
             "weather_reveal_order": list(showdown._WEATHER_REVEAL_ORDER)[
-                : 3 if schema_version == OBSERVATION_SCHEMA_VERSION_V3 else None
+                : 3 if schema_version in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS else None
             ],
             "boost_stat_slots": [
                 [stat, _numeric_slot(schema_version, slot)]
@@ -284,7 +301,7 @@ def build_tables(
 ) -> dict[str, Any]:
     return {
         "schema_version": TABLES_SCHEMA_VERSION,
-        "vocab": _vocab_payload(showdown_root, trained_tokens),
+        "vocab": _vocab_payload(showdown_root, trained_tokens, observation_schema_version),
         "layout": _layout_payload(observation_schema_version, spec=spec, masks=masks),
         "dex": _dex_payload(showdown_root),
     }
@@ -295,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument(
         "--observation-schema",
-        choices=("v2.2", "v3"),
+        choices=("v2.2", "v3", "v4"),
         default="v2.2",
         help="Observation layout to export (default: v2.2 for compatibility).",
     )
@@ -313,7 +330,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     schema_version = observation_schema_version_from_choice(args.observation_schema)
-    if schema_version not in {OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3}:
+    if schema_version not in {
+        OBSERVATION_SCHEMA_VERSION_V2_2,
+        OBSERVATION_SCHEMA_VERSION_V3,
+        OBSERVATION_SCHEMA_VERSION_V4,
+    }:
         parser.error(f"unsupported encoder-table schema: {args.observation_schema!r}")
     spec = None
     masks = None
