@@ -66,5 +66,17 @@
   "why_the_principled_bound_is_still_too_loose_in_practice": "cap_slack is exact but not small. Two direct components can sit one legal roll apart and still differ by tens of HP on a big hit -- -300 against -260 is inside the window and yields a slack of 40. The bound then licenses capped ticks 40 apart, which is principled and far wider than the 2 HP the motivating row needs.",
   "the_disproportion_is_the_disqualifier": "the diagnosis targets 17 rows. The change alters roughly 760. A fix whose blast radius is 45x its target population is not explained by its own diagnosis, whatever the reasoning behind the bound. Converting 760 divergences into matches would need a false-match measurement at least as strong as C66's before it could be trusted, and the target does not justify the exercise.",
   "what_i_would_need_to_scope_it": "restrict the relaxation to boundaries where BOTH sides actually killed -- the condition the diagnosis rests on. The current predicate fires whenever the observed component is capped_lethal, without checking that the ENGINE's is too. That is likely the whole disproportion, and it is one condition, not a new bound."
- }
+ },
+ "null_control": "before trusting the family shrinkage I ran the null: the same cap_slack threading with the capped_lethal branch UNCHANGED. Result: matched 4,156 and unattributed 255 in both arms, no family moved. The harness is sound and the shrinkage is caused by the relaxation, not by the measurement. Worth running given three measurement bugs earlier this session.",
+ "reframing_that_the_null_permitted": "LS_capped_lethal_shape is a COMPARISON-LIMIT family named for precisely this shape -- rows the matcher cannot decide. If a fix makes them decidable, the family dissolving is the point rather than laundering. So family shrinkage alone could not settle this, and the false-match gate had to decide it.",
+ "false_match_gate_DECISIVE": {
+  "method": "harvested 1,561 real capped_lethal component pairs, then CROSSED them -- an observed value from one boundary against an engine value from another. Unrelated by construction, so every acceptance is a false match. 100,000 crossings.",
+  "result": {
+   "current one-sided test": "45,572/100,000 = 45.57%",
+   "relaxed test with cap_slack=40": "86,569/100,000 = 86.57%"
+  },
+  "verdict": "REJECTED DEFINITIVELY. The relaxation accepts 87% of unrelated capped_lethal pairs. It is barely a test. Nearly doubling an already-permissive check to recover 17 rows is not a trade worth making, and no scoping condition rescues a predicate this weak."
+ },
+ "an_incidental_finding_worth_recording": "the CURRENT one-sided capped_lethal test already accepts 45.6% of unrelated pairs. That is a weak check in the shipped matcher, discovered while measuring a replacement for it. It is not something to change on this evidence -- tightening it would move rows the other way and needs its own registration -- but it belongs in the record: LS_capped_lethal_shape's 464 rows rest on a comparison that a coin-flip beats only slightly.",
+ "closing_position_on_the_17": "three cycles, two rejected bounds and one rejected scoping. The diagnosis stands -- the one-sided test is wrong when both sides cap -- and every repair for it is either too loose to be safe or too narrow to matter. 17 rows does not justify weakening the check further, and the honest conclusion is that this shape stays unattributed."
 }
