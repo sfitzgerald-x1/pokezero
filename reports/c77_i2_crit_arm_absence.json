@@ -1,0 +1,32 @@
+{
+ "schema": "c77-i2-crit-arm-absence/1",
+ "follows": "reports/c75 -- I2_matcher_accounting was the largest candidate-not-finding family with a decisive signature (403 rows, 99% magnitude-only)",
+ "the_signature": {
+  "components": "394 direct damage, 8 recoil",
+  "observed_over_engine_ratio": {
+   "n": 402,
+   "min": 0.692,
+   "median": 1.95,
+   "max": 5.0
+  },
+  "inside the matcher's 0.92-1.09 window": "8 of 402 = 2%",
+  "inside a full gen3 roll 0.85-1.176": "11 of 402 = 3%",
+  "majority_arm_mass": "median 89.1%",
+  "reading": "a median of 1.950 is the gen3 crit multiplier, and 97% of components are outside anything a roll explains. The observation is the crit of the engine's non-crit arm."
+ },
+ "the_decisive_measurement": {
+  "question": "does the engine render a crit arm on these boundaries?",
+  "result": {
+   "sim crit, engine renders NO crit arm": 390,
+   "sim no crit, engine renders one": 9,
+   "neither": 2,
+   "both": 2
+  },
+  "share": "390 of 403 = 96.8%",
+  "context": "C65 measured the engine rendering a crit line on 29.3% of non-Sleep-Talk boundaries generally. Here it is under 1%."
+ },
+ "the_family_is_misnamed_and_misbucketed": "I2_matcher_accounting is bucketed candidate-not-finding and its name attributes the divergence to branch-set accounting. The evidence says otherwise: the simulator crit, the engine offers no crit arm, and the magnitude ratio is the crit multiplier. This is not the matcher accounting for branch mass -- it is the engine's branch set missing an arm the simulator reached. 403 rows, the largest single family in the residue.",
+ "one_ambiguity_i_am_not_resolving_here": "my test looks for a rendered |-crit| line. Absence could mean the engine does not ENUMERATE the crit branch (an engine support gap) or enumerates it without RENDERING the tag (a renderer gap, the C55 class). Those have different fixes and different buckets -- engine-gap versus instrument-artifact -- and distinguishing them needs a magnitude test over the branch set, not a tag search. I have been wrong about crits twice this session, in C51 by using a magnitude proxy for a structural question, so I am naming the ambiguity rather than picking.",
+ "why_this_matters_more_than_the_gate": "these 403 rows are counted as ATTRIBUTED by the certification gate. C74 showed 35% of fresh divergences sit in families with no established mechanism; this is the largest of them, and the mechanism turns out to be a missing crit arm rather than accounting. A gate that counts them as explained is not measuring what it claims to.",
+ "status": "DIAGNOSED to a mechanism, with one ambiguity named. Not re-bucketed."
+}
