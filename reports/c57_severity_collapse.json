@@ -1,0 +1,24 @@
+{
+ "schema": "c57-severity-collapse/1",
+ "question": "C56 found 90 residue rows whose match sits in an excluded branch. Which of those exclusions does the PRODUCER itself consider blocking?",
+ "the_producer_distinguishes_two_severities": {
+  "mark_lossy": "telemetry is incomplete; the action window is still exact",
+  "mark_attribution_unsafe": "calls mark_lossy AND records an attribution_unsafe reason -- the action attribution is not observable from the engine delta",
+  "exposed_as": "the branch JSON carries lossy (list), attribution_unsafe (bool) and attribution_unsafe_reasons (list) as separate fields"
+ },
+ "the_consumer_collapses_them": "engine_transition_differential.py:1396 reads only branch['lossy'], which mark_attribution_unsafe also writes to. So a branch the renderer flagged as merely telemetry-incomplete is skipped exactly as if its attribution were unobservable. The severity the producer took care to express is discarded at the boundary.",
+ "measured_split_of_the_90": {
+  "matching excluded branch is ATTRIBUTION-UNSAFE": 63,
+  "matching excluded branch is LOSSY-ONLY": 27,
+  "error": 1
+ },
+ "markers_on_the_lossy_only_matches": {
+  "attract_immobilization_source_unknown": 33
+ },
+ "the_63_should_stay_excluded": "For those the renderer is right: the attribution genuinely is not observable, and admitting them could manufacture a false MATCH, which hides a real difference. C56 warned against exactly this and the warning survives -- it applies to 63 of the 90, not to all of them.",
+ "the_27_are_the_finding": "Their only marker is attract_immobilization_source_unknown, whose own source comment says: 'That omission is telemetry-only because the public action window itself is exact.' The renderer emits a full |cant|...|Attract line for these branches. It states they are exact for comparison and the consumer discards them anyway.",
+ "the_fix": "make the skip decision read attribution_unsafe rather than lossy. It is a matcher change, so no rebuild and no fingerprint movement, and it is justified by the producer's own published contract rather than by a judgement about what is safe to admit.",
+ "ceiling": "27 is a CANDIDATE population. The test is net HP on both slots while the matcher compares component decompositions, so some of the 27 may still diverge. Not a predicted delta.",
+ "a_measurement_error_worth_recording": "My first pass reported 122 errors and 20 lossy-only, because I read attribution_unsafe as a list when it is a bool -- list(True) raises. The 122 'errors' were the attribution-unsafe branches, i.e. the majority answer, silently discarded into an error bucket. Had I not checked what the field actually contained I would have reported 20 as the finding and missed that 63 of the 90 must stay excluded.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 366"
+}
