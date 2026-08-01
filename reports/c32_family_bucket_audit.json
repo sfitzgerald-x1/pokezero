@@ -167,7 +167,9 @@
   "limit:roll_divergent_lethality": {
    "bucket": "engine-gap (partially resolved)",
    "evidence": "reports/c27_kill_split_postmeasure.json",
-   "finding": "C27 moved 285 archive rows out of this family by applying the existing kill-split identity to the crit arm. The family's own code comment claimed it was a limit of the comparison and not an engine fault; that was wrong for at least 14% of it. What remains is unmeasured.",
+   "finding": "C27 moved 285 archive rows out of this family by applying the existing kill-split identity to the crit arm. The family's own code comment claimed it was a limit of the comparison and not an engine fault; that was wrong for at least 14% of it.",
+   "remainder_measured": "1,082 rows survive on the C32 build. 73 of them (6.7%) have their observed damage inside the engine's own enumerated legal roll set, so the engine prices that roll and simply did not emit it: a confirmed support gap of the C27/C31 class, at the residual-lethality threshold. The remaining 1,009 are NOT thereby disagreements, and claiming so would repeat the error the matcher warns against in its own comment: the legal set is computed from the pre-state with an assumed move order, so it is 'an ADDITIONAL accept path, never a veto'. 758 rows fall outside it, 134 carry no observed damage component and 117 have no recoverable legal set -- all three are undiscriminated by this measurement, not resolved by it.",
+   "next": "The 73 confirmed rows are objective 4's next engine-gap work: extend the threshold partition to residual lethality, the third threshold after KO (C27) and Substitute viability (C31). The other 1,009 need a discriminator that does not rest on the legal set.",
    "source": "shipped, measured change",
    "archive_rows": 1082,
    "signatures": {
