@@ -43,7 +43,7 @@
   "note_on_the_row_list": "5 of the 9 identified by seed/step here; the full set is recoverable from the cohort filter in the same way"
  },
  "why_this_one_is_registrable_when_the_74_were_not": "The 74 support gaps are heterogeneous with no mechanism spanning them, so any patch would be scoped to a shape. This has a named mechanism, a single call site, a one-directional rule that held 11 of 11, and a predicted row delta. That is what the pre-registration gate is asking for.",
- "prediction_outcome": "FALSIFIED",
+ "prediction_outcome": "SPLIT: the engine gap is CONFIRMED and fixed; the registered ROW DELTA is FALSIFIED (0 rows cleared, predicted 9).",
  "measured": {
   "unattributed_generic": "36 -> 36 (predicted 27)",
   "total_unattributed": "485 -> 485 (predicted 476)",
@@ -61,5 +61,37 @@
   "verified_restored": "the full re-read reproduces 485 unattributed = 444 structural + 36 generic + 5 same_turn, identical to the pre-C46 state",
   "why_revert_rather_than_keep": "The change is probably correct gen3 behaviour, but it delivered nothing measurable and its justification is refuted. Keeping it would change the engine fingerprint, which by the program's own era rule VOIDS every era-stamped adjudication -- C42, the family audit, the C45 re-derivation. Paying that for an unproven fix with a zero measured delta inverts the cost/benefit the pre-registration gate exists to protect."
  },
- "what_this_cycle_was_worth": "The prediction gate did its job. A plausible mechanism, an 80x enrichment, a rule holding 11 of 11, a clean single call site -- and it was still wrong, caught by the registered row delta rather than by review. Had the change been made without a registered prediction it would have shipped as a fidelity improvement and nobody would have learned that the Leftovers discrepancy in these 9 rows has nothing to do with Trick."
+ "what_this_cycle_was_worth": "The prediction gate did its job. A plausible mechanism, an 80x enrichment, a rule holding 11 of 11, a clean single call site -- and it was still wrong, caught by the registered row delta rather than by review. Had the change been made without a registered prediction it would have shipped as a fidelity improvement and nobody would have learned that the Leftovers discrepancy in these 9 rows has nothing to do with Trick.",
+ "i_reverted_this_once_on_a_wrong_reading": "After the first build I dumped the anchor row's branch, saw no ChangeItem and no p1 heal, and concluded the defect never existed -- so I reverted. That dump was of the PATCHED build. I read my own working fix as evidence there was nothing to fix. The arithmetic was there to catch it and I did not do it: engine p1 went 85 -> 21 on the pre-fix build, which is -80 damage +16 heal, and Kecleon's item is NONE, so a 16 HP Leftovers tick could only come from the swap.",
+ "instruction_level_proof": {
+  "pre_fix": [
+   "ChangeItem SideOne: NONE -> LEFTOVERS",
+   "ChangeItem SideTwo: LEFTOVERS -> NONE",
+   "Heal SideOne: 16"
+  ],
+  "post_fix": "no ChangeItem, no Heal SideOne",
+  "hp_outcome": "engine p1 85 -> 21 pre-fix against an observed 5; 85 -> 5 post-fix, an exact match",
+  "sim_behaviour": "|move|p1a: Kecleon|Trick||[still] followed by |-fail|p1a: Kecleon",
+  "verdict": "the engine executed a Trick the simulator failed. Confirmed at instruction level, not inferred."
+ },
+ "why_the_rows_still_do_not_clear": {
+  "measured": "485 -> 485, unattributed_generic 36 -> 36",
+  "cause": "In a SINGLE process, the direct probe shows the corrected instruction stream (Heal SideTwo 14, no ChangeItem, p1 85->5) while evaluate_boundary_strict on the same row and the same states still reports p1 engine_only=[('itemleftovers', 16)]. The miss is therefore not derived from the engine's instruction stream. The differential's component attribution reports a Leftovers tick the engine does not emit.",
+  "consequence": "these 9 rows carry TWO independent defects. The engine one is fixed. The remaining one is an instrument defect in the component decomposition and is the reason the row count did not move."
+ },
+ "disposition": {
+  "patch": "KEPT. It is a proven engine fidelity divergence -- the engine reached a transition the simulator does not -- which is objective 2's own definition, and the p1 slot now matches exactly.",
+  "cost_paid": "the engine fingerprint changed to d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd, which voids every era stamp and forces re-derivation",
+  "re_derived_not_carried_forward": {
+   "family_audit": "reports/c46_family_bucket_audit.json -- no family bucketed OPEN; buckets unchanged",
+   "c42_support_measurement": "re-run at the new fingerprint: identical 74 unreachable rows (37 Sleep Talk, 37 other) from the same 179-row population"
+  },
+  "tests": "64 pass, tactics gate green"
+ },
+ "era": {
+  "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
+  "engine_patch_count": 54,
+  "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
+  "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+ }
 }

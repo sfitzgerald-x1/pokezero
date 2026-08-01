@@ -1,0 +1,13 @@
+{
+ "schema": "c47-component-attribution-defect/1",
+ "found_by": "reports/c46_trick_attacker_item_gap.json, as the reason a confirmed engine fix cleared zero rows",
+ "the_defect": "evaluate_boundary_strict reports an engine-side itemleftovers component that the engine's instruction stream does not contain. Demonstrated in a single process on s18100475/78: generate_instructions returns [Switch SideTwo, SetLastUsedMove x2, Heal SideTwo 14, Damage SideOne 80, ChangeSideCondition SideOne ToxicCount] with the engine's p1 going 85 -> 5, exactly matching the observed 5 -- while the differential on the same row and the same states reports p1 attributed components differ: observed_only=[] engine_only=[('itemleftovers', 16)].",
+ "why_it_matters": "The component decomposition is what the whole certification residue is measured in. A phantom component means some unattributed rows describe a disagreement that does not exist in the engine, and no engine fix can ever clear them.",
+ "scope_not_yet_known": "9 rows are confirmed to carry it. Whether it reaches further into the 485 is unmeasured and must not be assumed.",
+ "next": "trace how the differential derives itemleftovers -- from the instruction stream, from an HP-delta heuristic, or from maxhp/16 inference -- and on which state it evaluates it.",
+ "era": {
+  "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
+  "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
+  "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+ }
+}
