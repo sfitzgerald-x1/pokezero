@@ -1503,14 +1503,44 @@ fn render_move_phase(
                     );
                 }
                 None => {
-                    // The called move is not provable from this delta. Keep
-                    // the simulated state exact, but do not emit its HP,
-                    // status, or side effects without a public action owner.
-                    // Callers reject before fold/encoder so post-state cannot
-                    // silently diverge from the event stream.
+                    // The called move is not provable from this delta, so its
+                    // HP change gets no public action owner. It must still be
+                    // DESCRIBED. Emitting nothing left the consumer's running
+                    // HP baseline stale, and the next end-of-turn heal absorbed
+                    // the whole drop -- surfacing as an impossible component
+                    // such as a Leftovers tick of -134 on a mon that was at
+                    // full HP (reports/c52_impossible_heal_component.json).
+                    //
+                    // This block's old comment asserted "callers reject before
+                    // fold/encoder", but the differential deliberately does NOT
+                    // reject a branch whose only lossy marker is this one --
+                    // it treats the damage as real and generically attributed,
+                    // and passes unattributed_damage_as_roll so that
+                    // damage_component_events can retag it. The two sides
+                    // disagreed about the contract; this satisfies the
+                    // consumer's half by emitting the generic tag it already
+                    // knows how to read
+                    // (reports/c54_sleeptalk_render_contract_mismatch.json).
                     out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    let before = [
+                        sim.active_hp(SideReference::SideOne).0,
+                        sim.active_hp(SideReference::SideTwo).0,
+                    ];
                     for instruction in &called_tail {
                         sim.apply(instruction);
+                    }
+                    for (index, hp_side) in [SideReference::SideOne, SideReference::SideTwo]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if sim.active_hp(hp_side).0 < before[index] {
+                            let ident = ctx.active_ident(sim.state, hp_side);
+                            let condition = sim.hp_condition(hp_side);
+                            out.lines.push(format!(
+                                "|-damage|{ident}|{condition}|[from] residual"
+                            ));
+                            emit_faint_if_dead(sim, hp_side, ctx, out);
+                        }
                     }
                 }
             }

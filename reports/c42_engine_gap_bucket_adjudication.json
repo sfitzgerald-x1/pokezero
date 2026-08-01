@@ -2,7 +2,7 @@
  "schema": "engine-gap-bucket-adjudication/1",
  "cycle": "C42",
  "era": {
-  "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
+  "engine_fingerprint": "c50da60afb967bd133815c085deec66c3e88c359a539771ae2817e0e51fa56b8",
   "engine_patch_count": 54,
   "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
   "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a",
@@ -11,7 +11,7 @@
  },
  "family": "structural_component_count_without_supported_sibling -> the confirmed engine-support-gap sub-population",
  "bucket": "engine-gap",
- "rows": 74,
+ "rows": 50,
  "of_which_certification_relevant": "part of the 485 unattributed rows on the C32 sweep population",
  "evidence_chain_by_the_c27_method": [
   "C37: enumerated the engine's real branch set with generate_instructions on each row's own states. 74 of 179 have NO branch reaching the observed net HP delta. The test is asymmetric -- decisive in the negative, only suggestive in the positive -- so exactly these 74 are claimed.",
@@ -35,5 +35,6 @@
   "a mechanism that spans one of the sub-shapes (engine-smaller n=37, engine-larger n=17, bracketing n=18), which would make that sub-shape registrable on its own",
   "a fresh sweep whose support-gap population is materially larger, which would raise the row term"
  ],
- "does_not_reach_a_pass": "This adjudicates the engine-gap bucket. It does not certify. 485 rows remain unattributed against a required zero, and certification additionally needs the coverage shortfall (0.9587 vs 0.97) and the family-bound/class-set recalibration, neither of which any cycle from C35 to C42 touched."
+ "does_not_reach_a_pass": "This adjudicates the engine-gap bucket. It does not certify. 485 rows remain unattributed against a required zero, and certification additionally needs the coverage shortfall (0.9587 vs 0.97) and the family-bound/class-set recalibration, neither of which any cycle from C35 to C42 touched.",
+ "SUPERSEDED_POPULATION": "re-derived at fingerprint c50da60a after the C55 render fix: 74 -> 50 (Sleep Talk 37 -> 13, other 37). The adjudication's reasoning stands but 24 of its rows were a rendering defect rather than a support gap. See reports/c55_sleeptalk_render_prediction.json."
 }

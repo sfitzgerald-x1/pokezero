@@ -33,5 +33,30 @@
  },
  "why_the_numbers_are_approximate": "This is a SIMULATION, not the fix. I reconstructed the split by sizing the Leftovers tick as maxhp//16; the real renderer will emit the engine's own magnitudes, which may differ by a point or by more where the heal is not Leftovers. The direction and rough scale are predicted; the exact count is not, and I am registering '~400' rather than 400 so that a near miss is not read as a pass.",
  "cost": "a crate change, so the engine fingerprint moves and C42, C45 and C46's era stamps must be mechanically re-derived, not carried forward",
- "status": "REGISTERED, NOT IMPLEMENTED"
+ "status": "IMPLEMENTED AND VERIFIED",
+ "prediction_outcome": "CONFIRMED in direction and invariants; the MAGNITUDE was underestimated.",
+ "measured": {
+  "unattributed": "476 -> 366 (registered ~400; actual is 34 better)",
+  "matched": "3,711 -> 4,042; rows cleared 331 (registered ~81)",
+  "structural": "443 -> 333",
+  "unattributed_generic": "28 -> 28",
+  "same_turn": "5 -> 5",
+  "I6_sleeptalk_callee_union": "97 -> 49"
+ },
+ "invariants": {
+  "no family may grow": "HELD -- every family is flat or down, I6 included",
+  "matched -> divergent must be zero": "HELD, and verified properly. My first check was too weak -- it only confirmed the divergent set was a subset of the retained corpus, which is trivially true. I had overwritten the baseline snapshot, so I reverted events.rs, rebuilt, re-snapshotted, and compared identities: 331 cleared, 0 matched -> divergent. Then restored and rebuilt.",
+  "tactics gate": "GREEN, 64 tests pass"
+ },
+ "why_the_simulation_underestimated": "I modelled only the Leftovers case, sizing the heal as maxhp//16 and splitting one component. The real renderer emits the missing damage line wherever the callee dealt damage, which also repairs branches whose next HP line was not a Leftovers tick at all -- and repairs the branch SUPPORT, not just the decomposition, so rows clear that the simulation could not model. Registering '~400' rather than 400 was the right call; the direction and mechanism were correct and the magnitude was not predictable from the simulation.",
+ "era": {
+  "engine_fingerprint": "c50da60afb967bd133815c085deec66c3e88c359a539771ae2817e0e51fa56b8",
+  "previous": "d739faa2",
+  "engine_patch_count": 54,
+  "note": "the crate changed, not the vendored engine, but the two-consumer fingerprint moves either way"
+ },
+ "era_rederivation": {
+  "family_audit": "reports/c55_family_bucket_audit.json -- re-derived, no family OPEN, buckets unchanged",
+  "c42_support_measurement": "RE-DERIVED AND MATERIALLY CHANGED. The confirmed support-gap population falls from 74 to 50: Sleep Talk unreachable 37 -> 13, other unchanged at 37. Most of what C42 adjudicated as Sleep Talk engine-support gaps were this rendering defect, not gaps. This is exactly what the era rule exists to catch, and it would have been missed by carrying the adjudication forward."
+ }
 }
