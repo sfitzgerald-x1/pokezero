@@ -782,6 +782,7 @@ def roll_components_agree(
     observed: Sequence[tuple[str, int]],
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
+    scale: int | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -793,6 +794,8 @@ def roll_components_agree(
 
     if len(observed) != len(engine):
         return False
+    if scale is None:
+        scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
     for (obs_source, obs), (_eng_source, eng) in zip(
         sorted(observed, key=lambda pair: pair[1]),
         sorted(engine, key=lambda pair: pair[1]),
@@ -812,7 +815,6 @@ def roll_components_agree(
             # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
             # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
             # of flooring slack.
-            scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
             if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
                 continue
             return False
@@ -862,6 +864,10 @@ def roll_component_events_agree(
 
     if len(observed) != len(engine):
         return False
+    slot_scale = max(
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
     for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
@@ -884,6 +890,7 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
+            scale=slot_scale,
         ):
             return False
     return True
