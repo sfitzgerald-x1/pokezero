@@ -64,5 +64,14 @@
   "this_supersedes_the_KO_guard_reading": "C77's chase found the KO guard explains 50 of 173 and left 122 unexplained. The instrumentation shows the exact-match condition fails on 99.6% of evaluations, so it is the dominant blocker and the KO guard is secondary. My hypothesis was right in kind and wrong in rank -- I picked the condition that reads most suspiciously rather than the one that fires.",
   "what_a_fix_would_look_like": "match the crit within the legal roll window rather than exactly, or carry the branch's own roll representative into crit_collapsed so the two are comparable by construction. The second is better: it removes the mismatch rather than tolerating it. Either needs the full gate -- counterfactual, identity falsifiers, no-family-shrinks, and a false-match measurement, since loosening a tag condition can mislabel non-crits as crits.",
   "status": "the 173-row renderer gap now has its exact mechanism identified. Not fixed."
+ },
+ "what_fixing_it_would_and_would_not_do": {
+  "measured": {
+   "rows whose protocol contains a crit, attributed to a family": 606,
+   "rows whose protocol contains a crit, UNATTRIBUTED": 77
+  },
+  "the_point": "the 403 I2 rows, and the 173 renderer-gap subset within them, are ATTRIBUTED. Fixing the crit tag moves them from I2_matcher_accounting to matched. It does NOT reduce the unattributed count, which is what the certification gate measures.",
+  "why_it_is_still_worth_doing": "C74 established that 35% of divergences sit in families with no established mechanism, and that the gate counts them as explained. The 173 are the clearest case: attributed to a family named for branch accounting, actually a suppressed crit tag. Fixing them removes 173 rows from the explained-in-name-only category by making them genuinely matched. That improves the honesty of the measurement without improving the number.",
+  "the_expectation_to_set": "anyone taking this on should expect the unattributed count to stay at 255 and the divergence count to fall by up to 173. If the unattributed count MOVES, something unintended happened and that is the signal to stop -- which is the invariant this fix should be registered with."
  }
 }
