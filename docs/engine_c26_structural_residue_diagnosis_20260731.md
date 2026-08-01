@@ -10,9 +10,10 @@ predicted-zero in `reports/c26_current_engine_resweep_spec.json`. On a fresh
 rows — 0.48 per game**, which projects to roughly **4,800 unattributed rows** in
 the registered 10,000-game sweep. The certification standard requires zero.
 
-Most of that residue is the rule firing wider than its own stated semantics.
-Replaying what survives resolves the rest: it is the matcher's handling of
-capped heals, not an engine fidelity gap. `C27 fix specification` below.
+Most of that residue is the rule firing wider than its own stated semantics,
+and the bulk of what survives is the matcher's handling of capped heals. But a
+small, hard core is a real engine gap: the branch set does not contain the
+transition Showdown took. Fix specification below.
 
 ## Evidence
 
@@ -100,8 +101,8 @@ the two tolerances removes 3 more fresh rows and 156 archive rows.
 ## What survives, and what it turned out to be
 
 Four fresh rows (~0.07/game → ~**670 per 10,000 games**) and 339 archive rows
-survive every scoping above. Replaying them against the engine resolves the
-question the first pass left open: **this is not an engine fidelity gap.**
+survive every scoping above. Replaying them against the engine splits them in
+two: **most are a matcher artifact, and a hard core is a genuine engine gap.**
 
 **26 of the 29 fresh rows carry a capped-heal component** (`heal_to_full` or
 `itemleftovers_to_full`), and **21 of 29 have a majority arm whose net HP is
@@ -156,8 +157,8 @@ where the roll changes a downstream discrete outcome:
   Leftovers; the engine's crit arm prices the same hit as lethal, so it emits no
   Leftovers heal at all.
 
-  The branch set is not the problem. Replaying the state gives exactly the right
-  three arms:
+  The crit *rate* is not the problem. Replaying the state gives exactly the
+  right three arms:
 
   ```
   pct=84.38  Switch SideOne: P0 -> P5 | Damage SideOne: 106 | Heal SideOne: 13
@@ -175,18 +176,22 @@ where the roll changes a downstream discrete outcome:
   roll set or within ±9%. But a roll difference that crosses a **discrete
   threshold** cannot be absorbed by a magnitude tolerance. 209 ≥ Alakazam's 209
   HP faints it and cancels the Leftovers tick; 205 leaves it at 4 and the tick
-  happens. One HP of roll changes the whole downstream event sequence. That is
-  the standing reason `limit:roll_divergent_lethality` exists and carries the
-  largest registered bound of any family.
+  happens. One HP of roll changes the whole downstream event sequence.
+
+  This is where `limit:roll_divergent_lethality` normally catches such rows —
+  and the category that family asserts is itself questionable. See
+  "Is roll-divergent lethality a comparison limit at all?" below.
 - 17000028/53 — the same shape on a crit Hidden Power into Banette.
 - 17000037/55 — Gyarados is crit to 58/258, which is below ¼ max, so its
   Substitute *fails*; in the engine's non-crit arm Gyarados is at 154 and
   Substitute succeeds, costing 64. Hence `engine=[('', -88), ('', -64)]` against
   `observed=[('', -184)]`.
 
-These are roll-divergent lethality and its Substitute-viability cousin — the
+These are roll-divergent lethality and its Substitute-viability cousin. The
 `limit:roll_divergent_lethality` family already exists and is registered with a
-bound. The structural rule files them as an unexplained mechanism instead.
+bound, and the structural rule files them as an unexplained mechanism instead —
+but routing them to that family is at best a better label, not a fix, for the
+reason set out below.
 
 The reason they never reach that family is worth stating precisely: the
 lethality difference surfaces as an **absent residual component** (no Leftovers
@@ -197,11 +202,71 @@ family is consulted. A boundary whose whole story is "the representative roll
 landed on the other side of a KO threshold" is reported as an unexplained
 mechanism.
 
-Detecting that shape is a fourth candidate change, and it is detection rather
-than attribution-widening: the family already exists with a registered bound,
-and `poke_engine.calculate_damage(..., True)` already returns the legal roll
-vector the matcher uses elsewhere, so "is there a legal roll on the other side
-of this threshold?" is answerable from data already on hand.
+## Is roll-divergent lethality a comparison limit at all?
+
+`classify_divergence` files these rows with an explicit category claim:
+
+```python
+# This is a limit of the comparison, not an engine fault; named so it can be
+# excluded explicitly rather than sitting in an anonymous bucket.
+return "limit:roll_divergent_lethality"
+```
+
+That claim should not be taken on trust, because it decides whether ~1,275 rows
+per 10,000 games — the largest registered family in the contract — are tolerated
+divergence or unfixed engine infidelity.
+
+The differential's own stated question is whether the transition Showdown took
+*lies in the branch support* `generate_instructions` enumerates. For these rows
+it does not. And the reason it does not is a property of the engine, not of the
+comparison: `generate_instructions` enumerates the crit dimension with exact
+mass (6.25%) and the secondary-effect dimension with exact mass (10% paralysis),
+then **collapses the 16-value damage roll dimension to one representative**.
+Where that collapse only moves a magnitude, the matcher's legal-roll window
+absorbs it and nothing is lost. Where it crosses a discrete threshold, the
+support is genuinely missing a reachable state.
+
+So within the engine's own design language — branches carrying probability mass
+— omitting the roll dimension is an incompleteness of the support. Calling the
+resulting mismatch a limit of the comparison records the symptom in the wrong
+category. Collapsing rolls is defensible as a search-tractability decision; it
+is not a reason the engine is faithful.
+
+The consequence for the program is concrete: a PASS under the current contract
+would certify an engine while tolerating roughly 1,275 transitions per 10,000
+games that its branch support does not contain. The registered bound is not bad
+arithmetic — it is the wrong category, and it is the largest one.
+
+There is one residual sense in which "comparison limit" is fair: from a single
+boundary you cannot distinguish "the engine cannot reach this state" from "the
+engine could reach it but this branch did not." Enumerating the threshold split
+resolves exactly that ambiguity, which is why the fix is a branch-set change
+rather than a wider tolerance.
+
+### The fourth candidate change is an engine patch, not a classifier tweak
+
+Split a damage branch **only** where the legal roll set straddles a discrete
+threshold — principally `damage ≥ the defender's current HP`. The split is exact
+rather than sampled: the rolls are the 16 legal values, and the masses are
+`(#lethal)/16` and `(#non-lethal)/16`. It costs nothing at the boundaries where
+it changes nothing. `poke_engine.calculate_damage(state, c1, c2, True)` already
+returns that roll vector and the matcher already consumes it via
+`legal_roll_damages`; the information simply does not reach
+`generate_instructions`.
+
+On 17000001/1 this turns one 6.25% arm asserting a KO into two arms — crit and
+it dies, crit and it survives to take the Leftovers tick — and the observed
+transition lands inside the branch support instead of outside it.
+
+Sampling rolls is not an alternative. The certification rests on exact replay:
+`cert_sweep_reread.py` re-evaluates retained rows against a rebuilt engine and
+its validation gate requires every archived row to re-read identically on the
+same fingerprint. A sampled branch set would make the same row classify
+differently on two runs, and no clearance could be distinguished from noise.
+
+This is an engine change, so it needs a new fingerprint, a new source freeze,
+and a re-registration — the sequence the handoff already prescribes for a patch
+that resolves a certification failure.
 
 ### Where the archive disagrees, and why that is expected
 
