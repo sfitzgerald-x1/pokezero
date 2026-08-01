@@ -1,0 +1,13 @@
+{
+ "schema_version": "pokezero.engine-cert-contract-attestation/v1",
+ "contract_source_commit": "125fc991144b3e098e2d22b99c87712a88348706",
+ "contract_path": "reports/c26_current_engine_resweep_spec.json",
+ "contract_sha256": "65414a51d3e4c3ca0268f09e54fbb371c6519b8eb822dab4121f909390d5e047",
+ "launch_source_commit": "47c221834123f0e8d0669289e37c8ffa5f646c62",
+ "required_engine_fingerprint": "776fa1e15cec731d3223b493fab992dc042fd3da8bdee6d4b8c9dc1a1d192c9c",
+ "registration": {
+  "pull_request": 1006,
+  "fresh_c26_measurements_inspected": 0,
+  "purpose": "Bind the registered C26 contract to immutable tracked bytes while keeping its executable build source and image commit non-circular. This attests the CONTRACT only; the C26 sweep result attestation is reports/c26_current_engine_attestation.json and does not exist until a fresh sweep completes."
+ }
+}

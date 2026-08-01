@@ -1,5 +1,39 @@
 # Engine Certification Continuation Handoff
 
+## Status update (successor pass, 2026-07-31)
+
+Read this before acting on the Remaining Work below; most of it is done and one
+item is deliberately held.
+
+- **Remaining Work 1 — done.** C26 is registered:
+  `reports/c26_current_engine_resweep_spec.json` and
+  `reports/c26_current_engine_calibration.json` landed in one commit, the
+  lifecycle is at `contract_registered_attestation_pending`, and C15/C25 bytes
+  are unchanged. Eight fresh blocks from 16,000,000. The calibration is C26's
+  own, produced by `scripts/c26_archival_recalibration.py`; nothing was copied
+  from C15. The launcher now derives seed identity from the registered contract,
+  rejects malformed / duplicate / overlapping reservations, and records the
+  selected reservation in shard and aggregate provenance (private repo).
+- **Remaining Work 2 — done for the contract attestation.**
+  `reports/c26_cert_contract_attestation.json` is in a later commit than the
+  registration, and the existing `engine-cert-contract-attestation/v1` schema
+  fit C26 unchanged, so no historical check was touched or weakened. The
+  *sweep-result* attestation schema is still open and belongs with the sweep.
+- **Remaining Work 3 — HELD, and the reason matters.** A 60-game fresh probe of
+  the frozen build fires the predicted-zero counter
+  `structural_component_count_without_supported_sibling` on 29 of 64 divergent
+  rows, projecting ~4,800 unattributed rows in the registered sweep. C26 would
+  FAIL. See `docs/engine_c26_structural_residue_diagnosis_20260731.md`. The
+  registered contract is untouched and its blocks are unspent.
+- **Remaining Work 4 and 5 — blocked** on 3 by construction.
+
+The next real question is the surviving residue (~670 rows per 10,000 games
+after every defensible rule rescoping), whose shape is a damage component and a
+cancelling `heal_to_full` / `itemleftovers_to_full` component decomposed
+differently by the two sides. Any repair changes `cert_sweep_readout.py` or the
+engine, which invalidates the frozen C26 source identity: freeze a new source,
+re-register contract plus calibration, then sweep. Do not amend C26 in place.
+
 ## Purpose
 
 Continue the engine-certification program from the immutable C26 build-source

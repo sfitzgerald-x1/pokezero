@@ -1,0 +1,433 @@
+{
+ "schema": "c26-current-engine-archival-calibration/1",
+ "purpose": "C26's own archival calibration: the retained certification archive re-read and re-attributed on the frozen 51-patch build. This is historical calibration evidence, not a certification measurement -- an archive of recorded divergences can only show which of them the current engine clears, never which new ones it introduces.",
+ "source_evidence": {
+  "archive": "The complete 10,000-game C14 certification archive whose shard hashes are recorded in docs/engine_divergence_ledger_20260728.md Appendix Z12.6.",
+  "archive_role": "historical_calibration_only",
+  "archive_shard_sha256": [
+   "b4a0d2c2a182e693554b3fbe2b241126d367178319cd6d9f690e28e8d524dd59",
+   "3259aa315252f505002b5570343f74b2f305ed00f30e1437ad19d081590e2c3a",
+   "8003fbc80d86c7d07b2fbb9f39c521093d047ce98b2cb4c2c9497d0df4722d7b",
+   "442417c845c9046d7b7e4855dcdc4cba9d20f17a3acf76a447cddfa61882786c",
+   "486b635854c62e6eecf0eae54c98dcf53f49940404f14b96c9d2ab5994985d0d",
+   "5a9e87fd694da86a7fa36a2c8db0f05b424485328769b1729aee7fca28073a95",
+   "962ac6efd52cd4b689154ac083678ae8ba6e28c96465c1b963c4453cbcb953c4",
+   "5c0235d98fbc91f72338e51001a4b82506899c46eae3cbdfdfe9d86c5e9e462d"
+  ],
+  "population": 3821,
+  "games": 10000,
+  "boundaries_full_round": 810125,
+  "boundaries_measured": 791757,
+  "coverage_measured_fraction": 0.977327,
+  "current_classifier_source_commit": "47c221834123f0e8d0669289e37c8ffa5f646c62",
+  "current_classifier_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
+  "current_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
+  "current_engine_fingerprint": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+  "current_engine_patch_count": 52,
+  "fresh_measurements_inspected": 0
+ },
+ "method": {
+  "reread": "Every retained transition row is re-evaluated by the current build's own evaluate_boundary_strict, imported from scripts/engine_transition_differential.py.",
+  "reattribution": "A row that still diverges is re-classified and re-attributed from the CURRENT reread's misses (windowed to the shard writer's retained misses[:12]), never from the class the archiving build recorded.",
+  "clearance": "A row the current build now matches is counted as a clearance against its recorded class, not as a current family member.",
+  "lossy_rows": "A row whose stored payload cannot be reconstructed is recorded as SKIPPED with its identity. It is never counted as a match and never silently dropped from the population.",
+  "upper_rate_policy": "Wilson-95 count intervals are computed from these current-build counts at the archive's measured-boundary denominator. Only upper counts are binding; lower counts are advisory and are set to zero except for the two long-standing comparison limits."
+ },
+ "reread_tally": {
+  "diverged": 3211,
+  "matched": 609,
+  "skip_lossy": 1
+ },
+ "archive_recorded_totals": {
+  "transitions_diverged": 3821,
+  "transitions_matched": 787888,
+  "engine_errors": 0
+ },
+ "skipped_rows": [
+  {
+   "seed": 2400797,
+   "step": 39,
+   "recorded_class": "limit:roll_divergent_lethality",
+   "verdict": "skip_lossy"
+  }
+ ],
+ "reread_errors": [],
+ "current_engine_family_counts": {
+  "limit:roll_divergent_lethality": 1093,
+  "LS_capped_lethal_shape": 432,
+  "I3_roll_inherited": 233,
+  "limit:world_sample_drag_target": 271,
+  "I5_boundary_truncation": 92,
+  "UNATTRIBUTED": 855,
+  "I4_attribution_tie": 164,
+  "I6_sleeptalk_callee_union": 30,
+  "I1_cap_state_shape": 37,
+  "LS_crit_arm_pairing_echo": 1,
+  "LS_confusion_fan": 1,
+  "I2_matcher_accounting": 2
+ },
+ "current_engine_exclusion_counts": {
+  "structural_component_count_without_supported_sibling": 749,
+  "recoil_vs_substitute_basis": 13,
+  "truant_loaf_phase_drift": 49,
+  "incapacitated_arm_pricing": 6,
+  "same_turn_stat_event_gap": 17,
+  "unattributed_generic": 20,
+  "recharge_turn_residual_gap": 1
+ },
+ "current_engine_class_counts": {
+  "limit:roll_divergent_lethality": 1093,
+  "component_missing_in_engine:psn": 73,
+  "component_mismatch:brn,movepainsplit|movepainsplit": 1,
+  "component_magnitude:movepainsplit": 212,
+  "component_missing_in_engine:movepainsplit": 16,
+  "limit:world_sample_drag_target": 271,
+  "component_extra_in_engine:itemleftovers": 75,
+  "roll_scaled_component": 835,
+  "component_missing_in_engine:itemleftovers,sandstorm": 34,
+  "component_mismatch:itemleftovers|leechseed": 45,
+  "component_missing_in_engine:itemleftovers": 221,
+  "component_extra_in_engine:itemleftovers,sandstorm": 9,
+  "component_extra_in_engine:psn": 7,
+  "component_missing_in_engine:heal": 15,
+  "component_mismatch:heal|leechseed": 50,
+  "component_missing_in_engine:itemleftovers,psn": 79,
+  "component_extra_in_engine:itemleftovers,psn": 9,
+  "component_missing_in_engine:brn": 6,
+  "component_mismatch:leechseed|psn": 6,
+  "component_missing_in_engine:heal,itemleftovers": 10,
+  "component_missing_in_engine:abilityliquidooze": 8,
+  "component_magnitude:heal": 15,
+  "component_missing_in_engine:sandstorm": 19,
+  "component_missing_in_engine:brn,itemleftovers": 5,
+  "component_missing_in_engine:leechseed": 29,
+  "component_extra_in_engine:spikes": 15,
+  "component_mismatch:sandstorm|psn": 5,
+  "component_missing_in_engine:brn,heal": 2,
+  "component_mismatch:itemleftovers,psn|leechseed": 2,
+  "component_missing_in_engine:itemleftovers,psn,sandstorm": 3,
+  "component_mismatch:movepainsplit,psn|movepainsplit": 1,
+  "component_mismatch:partialtrap|psn": 1,
+  "component_mismatch:heal,itemleftovers|leechseed": 5,
+  "component_mismatch:leechseed|brn": 2,
+  "component_mismatch:partialtrap|brn": 2,
+  "component_mismatch:heal,itemleftovers,psn|leechseed": 1,
+  "component_extra_in_engine:itemleftovers,movepainsplit": 1,
+  "component_missing_in_engine:itemleftovers,leechseed": 2,
+  "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit": 2,
+  "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed": 1,
+  "component_extra_in_engine:brn": 4,
+  "component_missing_in_engine:abilityvoltabsorb": 1,
+  "component_missing_in_engine:itemleftovers,movewish": 4,
+  "component_missing_in_engine:brn,itemleftovers,sandstorm": 1,
+  "component_extra_in_engine:itemleftovers,psn,sandstorm": 2,
+  "component_missing_in_engine:abilityliquidooze,itemleftovers": 2,
+  "component_missing_in_engine:heal,itemleftovers,psn": 3,
+  "component_extra_in_engine:leechseed": 1,
+  "component_magnitude:abilityliquidooze": 2,
+  "component_magnitude:psn": 1,
+  "component_missing_in_engine:itemleftovers,movepainsplit": 1,
+  "component_mismatch:heal|itemleftovers": 1
+ },
+ "cleared_by_recorded_class": {
+  "limit:roll_divergent_lethality": 184,
+  "roll_scaled_component": 216,
+  "component_extra_in_engine:itemleftovers": 57,
+  "component_extra_in_engine:itemleftovers,sandstorm": 3,
+  "component_missing_in_engine:heal,itemleftovers,psn": 1,
+  "component_extra_in_engine:abilitywaterabsorb": 36,
+  "component_extra_in_engine:psn": 7,
+  "component_missing_in_engine:heal,itemleftovers": 5,
+  "component_missing_in_engine:abilitywaterabsorb": 1,
+  "component_extra_in_engine:abilityvoltabsorb": 5,
+  "component_extra_in_engine:itemleftovers,psn": 8,
+  "component_missing_in_engine:itemleftovers": 37,
+  "component_missing_in_engine:psn": 23,
+  "component_missing_in_engine:sandstorm": 3,
+  "component_missing_in_engine:itemleftovers,psn,sandstorm": 1,
+  "component_missing_in_engine:itemleftovers,psn": 7,
+  "component_missing_in_engine:heal": 3,
+  "component_magnitude:movepainsplit": 1,
+  "component_missing_in_engine:brn": 4,
+  "component_missing_in_engine:leechseed": 1,
+  "component_missing_in_engine:itemleftovers,leechseed": 1,
+  "component_missing_in_engine:itemleftovers,movewish": 2,
+  "component_extra_in_engine:brn,itemleftovers": 1,
+  "component_extra_in_engine:movepainsplit": 1,
+  "component_extra_in_engine:partialtrap": 1
+ },
+ "calibration_boundaries": 791757,
+ "registered_family_count_intervals": {
+  "I1_cap_state_shape": [
+   0.0,
+   51.0
+  ],
+  "I2_matcher_accounting": [
+   0.0,
+   7.3
+  ],
+  "I3_roll_inherited": [
+   0.0,
+   264.9
+  ],
+  "I4_attribution_tie": [
+   0.0,
+   191.1
+  ],
+  "I5_boundary_truncation": [
+   0.0,
+   112.8
+  ],
+  "I6_sleeptalk_callee_union": [
+   0.0,
+   42.8
+  ],
+  "LS_capped_lethal_shape": [
+   0.0,
+   474.7
+  ],
+  "LS_confusion_fan": [
+   0.0,
+   5.7
+  ],
+  "LS_crit_arm_pairing_echo": [
+   0.0,
+   5.7
+  ],
+  "LS_structural_arm_echo": [
+   0.0,
+   3.8
+  ],
+  "limit:roll_divergent_lethality": [
+   1030.1,
+   1159.7
+  ],
+  "limit:world_sample_drag_target": [
+   240.6,
+   305.2
+  ]
+ },
+ "registered_non_empirical_upper_rates": {
+  "limit:world_substitute_health_unknown": {
+   "upper_full_round_rate": 0.0001,
+   "upper_rate_basis": "pre_registered_risk_budget",
+   "anchor_identities": 13,
+   "anchor_boundaries_full_round": 810125,
+   "anchor_observed_rate": 1.60469e-05,
+   "anchor_wilson95_upper_rate": 2.74574e-05,
+   "budget_multiple_of_anchor_upper": 3.64,
+   "risk_budget_rationale": "The retained archive predates the archive-wide Substitute-health counter, so C26 registers a risk budget rather than a measured bound. The nearest anchor the frozen 51-patch build produces on the same archive is 13 retained recoil-vs-Substitute identities over 810125 full-round boundaries (Wilson-95 upper rate 0.0000274574). The registered ceiling of 0.0001 per full-round boundary is 3.64 times that upper anchor and permits at most one unknown-Substitute boundary per 10,000 full rounds."
+  }
+ },
+ "predicted_class_count_intervals": {
+  "limit:roll_divergent_lethality": [
+   1030.1,
+   1159.7
+  ],
+  "component_missing_in_engine:psn": [
+   0.0,
+   91.8
+  ],
+  "component_mismatch:brn,movepainsplit|movepainsplit": [
+   0.0,
+   5.7
+  ],
+  "component_magnitude:movepainsplit": [
+   0.0,
+   242.5
+  ],
+  "component_missing_in_engine:movepainsplit": [
+   0.0,
+   26.0
+  ],
+  "limit:world_sample_drag_target": [
+   240.6,
+   305.2
+  ],
+  "component_extra_in_engine:itemleftovers": [
+   0.0,
+   94.0
+  ],
+  "roll_scaled_component": [
+   0.0,
+   893.6
+  ],
+  "component_missing_in_engine:itemleftovers,sandstorm": [
+   0.0,
+   47.5
+  ],
+  "component_mismatch:itemleftovers|leechseed": [
+   0.0,
+   60.2
+  ],
+  "component_missing_in_engine:itemleftovers": [
+   0.0,
+   252.1
+  ],
+  "component_extra_in_engine:itemleftovers,sandstorm": [
+   0.0,
+   17.1
+  ],
+  "component_extra_in_engine:psn": [
+   0.0,
+   14.5
+  ],
+  "component_missing_in_engine:heal": [
+   0.0,
+   24.8
+  ],
+  "component_mismatch:heal|leechseed": [
+   0.0,
+   65.9
+  ],
+  "component_missing_in_engine:itemleftovers,psn": [
+   0.0,
+   98.4
+  ],
+  "component_extra_in_engine:itemleftovers,psn": [
+   0.0,
+   17.1
+  ],
+  "component_missing_in_engine:brn": [
+   0.0,
+   13.1
+  ],
+  "component_mismatch:leechseed|psn": [
+   0.0,
+   13.1
+  ],
+  "component_missing_in_engine:heal,itemleftovers": [
+   0.0,
+   18.4
+  ],
+  "component_missing_in_engine:abilityliquidooze": [
+   0.0,
+   15.8
+  ],
+  "component_magnitude:heal": [
+   0.0,
+   24.8
+  ],
+  "component_missing_in_engine:sandstorm": [
+   0.0,
+   29.7
+  ],
+  "component_missing_in_engine:brn,itemleftovers": [
+   0.0,
+   11.7
+  ],
+  "component_missing_in_engine:leechseed": [
+   0.0,
+   41.6
+  ],
+  "component_extra_in_engine:spikes": [
+   0.0,
+   24.8
+  ],
+  "component_mismatch:sandstorm|psn": [
+   0.0,
+   11.7
+  ],
+  "component_missing_in_engine:brn,heal": [
+   0.0,
+   7.3
+  ],
+  "component_mismatch:itemleftovers,psn|leechseed": [
+   0.0,
+   7.3
+  ],
+  "component_missing_in_engine:itemleftovers,psn,sandstorm": [
+   0.0,
+   8.8
+  ],
+  "component_mismatch:movepainsplit,psn|movepainsplit": [
+   0.0,
+   5.7
+  ],
+  "component_mismatch:partialtrap|psn": [
+   0.0,
+   5.7
+  ],
+  "component_mismatch:heal,itemleftovers|leechseed": [
+   0.0,
+   11.7
+  ],
+  "component_mismatch:leechseed|brn": [
+   0.0,
+   7.3
+  ],
+  "component_mismatch:partialtrap|brn": [
+   0.0,
+   7.3
+  ],
+  "component_mismatch:heal,itemleftovers,psn|leechseed": [
+   0.0,
+   5.7
+  ],
+  "component_extra_in_engine:itemleftovers,movepainsplit": [
+   0.0,
+   5.7
+  ],
+  "component_missing_in_engine:itemleftovers,leechseed": [
+   0.0,
+   7.3
+  ],
+  "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit": [
+   0.0,
+   7.3
+  ],
+  "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed": [
+   0.0,
+   5.7
+  ],
+  "component_extra_in_engine:brn": [
+   0.0,
+   10.3
+  ],
+  "component_missing_in_engine:abilityvoltabsorb": [
+   0.0,
+   5.7
+  ],
+  "component_missing_in_engine:itemleftovers,movewish": [
+   0.0,
+   10.3
+  ],
+  "component_missing_in_engine:brn,itemleftovers,sandstorm": [
+   0.0,
+   5.7
+  ],
+  "component_extra_in_engine:itemleftovers,psn,sandstorm": [
+   0.0,
+   7.3
+  ],
+  "component_missing_in_engine:abilityliquidooze,itemleftovers": [
+   0.0,
+   7.3
+  ],
+  "component_missing_in_engine:heal,itemleftovers,psn": [
+   0.0,
+   8.8
+  ],
+  "component_extra_in_engine:leechseed": [
+   0.0,
+   5.7
+  ],
+  "component_magnitude:abilityliquidooze": [
+   0.0,
+   7.3
+  ],
+  "component_magnitude:psn": [
+   0.0,
+   5.7
+  ],
+  "component_missing_in_engine:itemleftovers,movepainsplit": [
+   0.0,
+   5.7
+  ],
+  "component_mismatch:heal|itemleftovers": [
+   0.0,
+   5.7
+  ]
+ },
+ "unattributed_risk_statement": "The frozen build still leaves 855 of 3211 surviving archival divergences unattributed, concentrated in the exclusion counters recorded above. Every one of those counters is registered at predicted-zero for the fresh sweep, so this archival residue is a declared certification risk, not a licence to widen attribution. If the fresh sweep reproduces it, C26 fails and the residue is the diagnosis queue."
+}

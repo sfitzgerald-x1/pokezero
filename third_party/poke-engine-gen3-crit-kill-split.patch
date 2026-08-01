@@ -1,0 +1,99 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1024,7 +1024,13 @@
+         if damage < health_f32 {
+             total_less_than += damage as i16;
+             num_less_than += 1;
+-        } else if damage > health_f32 {
++        } else {
++            // A roll landing EXACTLY on the defender's remaining HP is lethal:
++            // HP reaches zero. The previous `> health` test dropped it from
++            // both buckets, so its 1/16 of mass fell through to the survive
++            // branch (which takes 1 - branch_chance) without contributing to
++            // that branch's damage average -- an exactly-lethal roll priced as
++            // a survival.
+             num_greater_than += 1;
+         }
+         damage += increment;
+@@ -2805,8 +2811,10 @@
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     let defender_active = defender_side.get_active();
+     let mut does_damage = false;
+-    let (mut branch_damage, mut regular_damage) = (0, 0);
+-    let mut branch_instructions: Option<StateInstructions> = None;
++    let mut regular_damage = 0;
++    // Case B can now emit TWO extra arms (crit-kills / crit-survives), so the
++    // single-slot Option becomes a short vector. Case A still pushes one.
++    let mut extra_branches: Vec<(StateInstructions, i16)> = Vec::new();
+     if let Some((max_damage_dealt, max_crit_damage)) = damage {
+         does_damage = true;
+         // Fixed damage has no 85-100 roll and cannot crit (sim: damageCallback
+@@ -2845,8 +2853,7 @@
+ 
+             let mut branch_ins = incoming_instructions.clone();
+             branch_ins.update_percentage(branch_chance);
+-            branch_instructions = Some(branch_ins);
+-            branch_damage = defender_active.hp;
++            extra_branches.push((branch_ins, defender_active.hp));
+ 
+             incoming_instructions.update_percentage(1.0 - branch_chance);
+             regular_damage = average_non_kill_damage;
+@@ -2865,12 +2872,40 @@
+             } else {
+                 BASE_CRIT_CHANCE
+             };
+-            let mut branch_ins = incoming_instructions.clone();
+-            branch_ins.update_percentage(crit_rate);
+-            branch_instructions = Some(branch_ins);
+-            branch_damage = (max_crit_damage as f32 * 0.925) as i16;
+-            incoming_instructions.update_percentage(1.0 - crit_rate);
++            // The non-crit roll can never kill here, so it keeps its average.
+             regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
++            let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
++            if crit_rate > 0.0
++                && max_crit_damage >= defender_active.hp
++                && min_crit_damage < defender_active.hp
++            {
++                // The CRIT roll range straddles the KO threshold while the
++                // non-crit range does not. Collapsing this arm to its average
++                // roll puts the whole crit mass on one side of the threshold
++                // and leaves the other side absent from the branch support --
++                // the engine then asserts a KO that a legal crit roll would not
++                // have scored, or the reverse. Partition it with the identity
++                // Case A already uses; do not introduce a second one.
++                let (average_non_kill_crit_damage, num_crit_kill_rolls) =
++                    compare_health_with_damage_multiples(max_crit_damage, defender_active.hp);
++                let crit_kill_chance = crit_rate * (num_crit_kill_rolls as f32 / 16.0);
++                let crit_survive_chance = crit_rate - crit_kill_chance;
++                if crit_kill_chance > 0.0 {
++                    let mut kill_ins = incoming_instructions.clone();
++                    kill_ins.update_percentage(crit_kill_chance);
++                    extra_branches.push((kill_ins, defender_active.hp));
++                }
++                if crit_survive_chance > 0.0 {
++                    let mut survive_ins = incoming_instructions.clone();
++                    survive_ins.update_percentage(crit_survive_chance);
++                    extra_branches.push((survive_ins, average_non_kill_crit_damage));
++                }
++            } else {
++                let mut branch_ins = incoming_instructions.clone();
++                branch_ins.update_percentage(crit_rate);
++                extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
++            }
++            incoming_instructions.update_percentage(1.0 - crit_rate);
+         } else {
+             regular_damage = avg_damage_dealt;
+         }
+@@ -2893,8 +2928,10 @@
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+     }
+ 
+-    // A branch representing either a roll that kills the opponent or a crit
+-    if let Some(branch_ins) = branch_instructions {
++    // Branches representing a roll that kills the opponent, a crit, or -- when
++    // the crit range straddles the KO threshold -- each side of that threshold.
++    // run_move reverses the state it applies, so each arm re-applies first.
++    for (branch_ins, branch_damage) in extra_branches {
+         if branch_ins.percentage != 0.0 {
+             state.apply_instructions(&branch_ins.instruction_list);
+             run_move(
