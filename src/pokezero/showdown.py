@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import re
+import warnings
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
@@ -547,21 +548,36 @@ V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V3_LEGACY_NUMERIC_BASE + V3_LEGACY_NUM
 # The columns sit above the v3 writer census, so v3 (and every legacy mode) stays byte-frozen:
 # the v3 projection table never names them and the v3 encode path never writes them.
 V4_NUMERIC_BASE = V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT
-# Pack A1 — FORCED RECHARGE on the ACTIVE mon (both sides), 1/0. The Hyper Beam aftermath.
+# Pack A1 — FORCED RECHARGE. Encoded as ``volatile:mustrecharge`` in the ACTIVE mon's
+# volatile bag (both sides), NOT as a numeric column.
 #
-# This was the pack's highest-priority gap and the plan's §2 correction: `mustrecharge` is NOT in
-# TRACKED_VOLATILES, so no `volatile:mustrecharge` categorical can be emitted and no numeric
-# column existed. The SELF side was already visible by accident — a recharging mon's request
-# offers exactly one action, so the action tokens collapse to a lone legal ``move:recharge`` — but
-# a k0 policy is blind on the OPPONENT side, where it decides whether this is a free turn. The
-# search lane already re-derives the fact and seeds the world's ``mustrecharge`` volatile
-# (``engine_world`` — "without it, searched worlds hand the recharging mon a free action"); this
-# column is the observation twin, from the SAME parser tracker (ONE PARSER TRUTH, TWO CONSUMERS).
+# This was the pack's highest-priority gap and the plan's §2 correction: `mustrecharge` is
+# NOT in TRACKED_VOLATILES, so no `volatile:mustrecharge` categorical could ever be emitted and
+# no numeric column existed. The SELF side was covered by accident — a recharging mon's request
+# offers exactly one action, so the action tokens collapse to a lone legal ``move:recharge`` —
+# but a k0 policy is blind on the OPPONENT side, where it decides whether this is a free turn.
+# The search lane already re-derives the fact and seeds the world's ``mustrecharge`` volatile;
+# this is the observation twin, from the SAME parser tracker (ONE PARSER TRUTH, TWO CONSUMERS).
 #
-# Written on BOTH sides' active tokens, not just the opponent's. The parser rule is side-symmetric
-# and exact, and the self-side value is redundant-but-free next to the request collapse; a
-# one-sided column would be the only asymmetric per-mon scalar in the layout.
-NUMERIC_MUST_RECHARGE = V4_NUMERIC_BASE + 0
+# WHY THE BAG AND NOT A DEDICATED COLUMN. The two are the same function: categorical columns are
+# SUMMED into the token embedding (``category_embedding(ids).sum(dim=3)`` with padding_idx=0), so
+# a present volatile contributes one learned vector exactly as a 0/1 numeric column would
+# contribute one column of the numeric projection. Position in the bag is already semantically
+# irrelevant. Given that, the bag wins on cost — no new numeric column on all 87 tokens — and on
+# consistency: ``solarbeam``, the CHARGE half of this very move family, is already a tracked
+# volatile precisely so mid-charge commitment is public state. The recharge half now matches.
+#
+# The one thing a dedicated column would have bought is immunity from bucket overflow, and that
+# risk is measured, not assumed: over 160 random-legal self-play games (337,314 slot
+# observations) the maximum simultaneous tracked-volatile count on one mon was TWO, against six
+# buckets — and 23 of the 38 tracked volatiles have no carrier in the gen3 randbat pool at all.
+# Overflow is nonetheless made LOUD rather than silent; see _encode_active_volatiles.
+#
+# NOT added to TRACKED_VOLATILES: that set is the closed list ``_update_volatiles`` accepts from
+# ``|-start|``/``|-end|`` lines, and mustrecharge never arrives that way (the sim emits a bespoke
+# ``|-mustrecharge|SLOT``). It is injected into the bag at encode time from the parser tracker,
+# under schema v4 only, so v3's bag is untouched. Its vocabulary row rides the feature-pack latch.
+MUST_RECHARGE_VOLATILE = "mustrecharge"
 # Pack A3 — TRUANT LOAF PHASE on the ACTIVE mon (both sides), 1 = loafs on its next move attempt.
 #
 # The parser already runs the exact gen3 free-running-toggle state machine (``truant_phase``:
@@ -570,7 +586,7 @@ NUMERIC_MUST_RECHARGE = V4_NUMERIC_BASE + 0
 # saw it. 0 encodes BOTH "no Truant holder" and "phase unknown" — mirroring the world's None
 # fallback, which never asserts a phase it cannot prove; the ability itself is separately visible
 # through the ability channel, so the model can tell the two zeros apart in the cases that matter.
-NUMERIC_TRUANT_LOAF = V4_NUMERIC_BASE + 1
+NUMERIC_TRUANT_LOAF = V4_NUMERIC_BASE + 0
 # Pack A5 — LAST-ROUND DAMAGE point evidence, two per-mon scalars on the ACTIVE mon (both sides).
 #
 # DEALT: the fraction of the DEFENDER's max HP this mon removed with its own move damage in the
@@ -584,8 +600,8 @@ NUMERIC_TRUANT_LOAF = V4_NUMERIC_BASE + 1
 # Point observation ONLY. The range/stat/variant inference this evidence feeds is the belief
 # layer's job (Tier-2 residual lane) and is explicitly out of scope for the pack: these columns
 # state what happened, they do not conclude anything from it.
-NUMERIC_LAST_DAMAGE_DEALT = V4_NUMERIC_BASE + 2
-NUMERIC_LAST_DAMAGE_TAKEN = V4_NUMERIC_BASE + 3
+NUMERIC_LAST_DAMAGE_DEALT = V4_NUMERIC_BASE + 1
+NUMERIC_LAST_DAMAGE_TAKEN = V4_NUMERIC_BASE + 2
 # Part B1 — ENTRY-HAZARD CREDIT ACCRUED, per side, on the FIELD token.
 #
 # The credit-assignment fix. Spikes pay off turns after they are laid, in nobody's visible state,
@@ -597,8 +613,8 @@ NUMERIC_LAST_DAMAGE_TAKEN = V4_NUMERIC_BASE + 3
 # ORIENTATION (the whole hazard block shares it with NUMERIC_SELF_HAZARDS/NUMERIC_OPP_HAZARDS):
 # SELF_* is about OUR OWN ground — layers on our side, damage our mons suffered. OPP_* is the
 # opponent's ground, i.e. the payoff OUR Spikes have realized.
-NUMERIC_SELF_HAZARD_CREDIT = V4_NUMERIC_BASE + 4
-NUMERIC_OPP_HAZARD_CREDIT = V4_NUMERIC_BASE + 5
+NUMERIC_SELF_HAZARD_CREDIT = V4_NUMERIC_BASE + 3
+NUMERIC_OPP_HAZARD_CREDIT = V4_NUMERIC_BASE + 4
 # Part B2 — EXPECTED REMAINING HAZARD VALUE, per side, on the FIELD token: the forward-looking
 # twin of B1. ``healthy GROUNDED bench count x current layer damage fraction``, normalized by the
 # same six-mon team-HP denominator so it is directly comparable with the credit columns.
@@ -608,8 +624,8 @@ NUMERIC_OPP_HAZARD_CREDIT = V4_NUMERIC_BASE + 5
 # Grounding is evaluated from PUBLIC knowledge only — for the opponent that means revealed
 # species types plus a revealed/uniquely-implied Levitate, so an unrevealed bench mon counts as
 # grounded (the encoder's conservative default; it never claims an immunity it cannot see).
-NUMERIC_SELF_HAZARD_EXPECTED = V4_NUMERIC_BASE + 6
-NUMERIC_OPP_HAZARD_EXPECTED = V4_NUMERIC_BASE + 7
+NUMERIC_SELF_HAZARD_EXPECTED = V4_NUMERIC_BASE + 5
+NUMERIC_OPP_HAZARD_EXPECTED = V4_NUMERIC_BASE + 6
 # Part B4 — ITEMS-REMOVED CREDIT, per side, on the FIELD token: how many of that side's held items
 # have been publicly removed by the OTHER side's actions (``-enditem … [from] move: Knock Off``).
 # Per-mon removal state is already encoded (NUMERIC_REVEALED_ITEM goes to 0 while the named item
@@ -626,8 +642,8 @@ NUMERIC_OPP_HAZARD_EXPECTED = V4_NUMERIC_BASE + 7
 # ADJUDICATION CAVEAT (plan §4 item 4, binding): FoulPlay's knock-off rate is NOT automatically
 # the target. Before any training reads this column as a deficiency signal, a G4-style
 # counterfactual probe must adjudicate whether self-play's lower usage is actually worse.
-NUMERIC_SELF_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 8
-NUMERIC_OPP_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 9
+NUMERIC_SELF_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 7
+NUMERIC_OPP_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 8
 # Part B3+ — MATCHUP-CONDITIONAL switch tendency, two columns on EVERY opponent mon token,
 # conditioned on OUR CURRENT ACTIVE: the literal conditional form of the marginal triple's
 # (switched-out-before-attacking, stayed-and-attacked) pair — "in THIS matchup, how often did
@@ -660,9 +676,30 @@ NUMERIC_OPP_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 9
 # /64 suits whole-game counts that reach tens, while a single (their mon x our mon) cell is
 # visited a handful of times in one game. A cell with no history reads (0, 0) and the model
 # falls back to the marginal triple on the same token — the two are side by side by design.
-NUMERIC_MON_SWITCHED_VS_ACTIVE = V4_NUMERIC_BASE + 10
-NUMERIC_MON_STAYED_VS_ACTIVE = V4_NUMERIC_BASE + 11
-V4_NUMERIC_EXTRA = 12
+NUMERIC_MON_SWITCHED_VS_ACTIVE = V4_NUMERIC_BASE + 9
+NUMERIC_MON_STAYED_VS_ACTIVE = V4_NUMERIC_BASE + 10
+# Pack A4 addendum — the CHOICE LOCK and the item's provenance, on the ACTIVE mon (both sides).
+#
+# ``NUMERIC_CHOICE_LOCKED``: this mon publicly holds a choice item and has executed a move since
+# acquiring it, so gen3's SILENT ``choicelock`` volatile is on it and it can use nothing else
+# until it switches. Pairs with pack A2, which names the move it is stuck in — exactly the way
+# ``volatile:encore`` pairs with A2 to specify an Encore. The two are the same mechanic from the
+# model's point of view, and the asymmetry in how they were encoded is the leading explanation
+# for the observed usage gap: Encore's lock is announced (``-start|SLOT|Encore``), tracked
+# (``volatile:encore``), and timed (``NUMERIC_ENCORE_TURNS``), and its usage climbs generation
+# over generation; Trick's lock emitted nothing at all, and its usage sits near zero.
+#
+# ``NUMERIC_ITEM_SWAPPED``: the currently-held item arrived via Trick rather than being the
+# mon's own. Without it the lock bit is sign-ambiguous — a NATIVE Choice Band is assigned to
+# all-attacks sets and makes its holder stronger, while a Tricked one is a liability we
+# inflicted. Same item, opposite valence, and this is the public fact that separates them.
+#
+# Both are raw facts, not judgements: neither says the lock is good or bad. The move identity
+# (A2, sharing the action token's ``move:<id>`` embedding row, which carries the move's damage
+# class) is what supplies that.
+NUMERIC_CHOICE_LOCKED = V4_NUMERIC_BASE + 11
+NUMERIC_ITEM_SWAPPED = V4_NUMERIC_BASE + 12
+V4_NUMERIC_EXTRA = 13
 V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V4_NUMERIC_BASE + V4_NUMERIC_EXTRA
 # The writer columns that exist ONLY at v4. Asked about under v3 these are absent (not dropped,
 # not invalid) — the schema-keyed index resolver answers None so cross-schema audit/export code
@@ -676,7 +713,10 @@ V4_ONLY_NUMERIC_INDICES = frozenset(
 # Categorical columns embed as an unordered BAG per row (the model sums the per-column embeddings),
 # so every label must be self-describing within its row — the same constraint that gave the v2.2
 # second sub-block its ``tt2_`` prefixes.
-V4_CATEGORICAL_BASE = _V2_2_CATEGORICAL_FEATURE_COUNT
+# The pack's categorical columns sit on the PRE-v2.2 base: v4 has no transition region, so the
+# twelve turn-merged second-sub-block columns (CATEGORY_TM_*) describe rows that no longer exist
+# and are dropped with them.
+V4_CATEGORICAL_BASE = _CATEGORICAL_FEATURE_COUNT
 # Pack A2 — the ACTIVE mon's LAST EXECUTED MOVE (gen3 ``Pokemon.lastMove``), one column per side's
 # active token. The single largest surface in the pack: it is what Encore locks, what a Choice-lock
 # read corroborates, and the cadence anchor a k1 row was implicitly providing.
@@ -709,6 +749,9 @@ V4_CATEGORICAL_EXTRA = 2
 _V4_CATEGORICAL_FEATURE_COUNT = V4_CATEGORICAL_BASE + V4_CATEGORICAL_EXTRA
 # The ``lastmove:switch`` sentinel string (enumerated in randbat_vocab so it never hashes OOV).
 LAST_USED_MOVE_SWITCH_SENTINEL = "lastmove:switch"
+# The Baton-Pass arrival's own sentinel — see the write site for why it is not folded into the
+# plain switch sentinel.
+LAST_USED_MOVE_BATON_PASS_SENTINEL = "lastmove:batonpass"
 
 # Evidence-backed unreachable mechanics from docs/dead_observation_fields.md. These columns
 # remain part of every legacy schema's frozen layout but are intentionally absent from v3.
@@ -922,10 +965,11 @@ _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 # removed. No v4 column is dropped or rewritten relative to the v3 writer surface.
 _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
     "pokemon_state": (
-        NUMERIC_MUST_RECHARGE,
         NUMERIC_TRUANT_LOAF,
         NUMERIC_LAST_DAMAGE_DEALT,
         NUMERIC_LAST_DAMAGE_TAKEN,
+        NUMERIC_CHOICE_LOCKED,
+        NUMERIC_ITEM_SWAPPED,
     ),
     # The marginal tendency triple lives in "belief" (the per-opponent-mon surface), so its
     # matchup-conditional twin sits directly beside it.
@@ -942,10 +986,25 @@ _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
         NUMERIC_OPP_ITEMS_REMOVED_CREDIT,
     ),
 }
-V4_DROPPED_LEGACY_NUMERIC_INDICES = V3_DROPPED_LEGACY_NUMERIC_INDICES
+# V4 drops everything v3 dropped, PLUS the entire history group: the transition region is gone
+# from the contract, so every per-strike / per-turn column that only ever described a history row
+# has no surface left to sit on. What those rows were carrying is either named as current state
+# by the feature pack (recharge, last move, last-round damage) or deliberately let go.
+#
+# Two survivors from the tier2 family are NOT dropped, because they were never history columns:
+# NUMERIC_TIER2_CB_PINNED and NUMERIC_TIER2_INVESTMENT_PINNED live on the opponent MON token as
+# the authoritative CURRENT-STATE form of those conclusions. They are still derived from the
+# extracted token stream — extraction keeps running, only the ENCODING of the rows is gone.
+_V4_HISTORY_GROUP_INDICES = frozenset(
+    index for name, indices in _V3_NUMERIC_LAYOUT_GROUPS if name == "history" for index in indices
+)
+V4_DROPPED_LEGACY_NUMERIC_INDICES = (
+    V3_DROPPED_LEGACY_NUMERIC_INDICES | _V4_HISTORY_GROUP_INDICES
+)
 _V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = tuple(
     (name, indices + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()))
     for name, indices in _V3_NUMERIC_LAYOUT_GROUPS
+    if name != "history"
 )
 V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = _V4_NUMERIC_LAYOUT_GROUPS
 V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX = tuple(
@@ -966,10 +1025,13 @@ if set(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V4_DROPPED_LEGACY_NUMERIC_INDICES
     raise AssertionError("v4 numeric layout must account for every v4 writer column")
 
 _V4_NUMERIC_FEATURE_COUNT = len(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
-_V4_NUMERIC_FEATURE_COUNT_EXPECTED = _V3_NUMERIC_FEATURE_COUNT + V4_NUMERIC_EXTRA
+# v4 = the v3 public surface, MINUS the history group, PLUS the feature pack.
+_V4_NUMERIC_FEATURE_COUNT_EXPECTED = (
+    _V3_NUMERIC_FEATURE_COUNT - len(_V4_HISTORY_GROUP_INDICES) + V4_NUMERIC_EXTRA
+)
 if _V4_NUMERIC_FEATURE_COUNT != _V4_NUMERIC_FEATURE_COUNT_EXPECTED:
     raise AssertionError(
-        "v4 must be exactly the v3 public surface plus the feature pack "
+        "v4 must be the v3 public surface minus history plus the feature pack "
         f"({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), got {_V4_NUMERIC_FEATURE_COUNT}"
     )
 
@@ -1485,6 +1547,30 @@ class ShowdownReplayState:
     # per-mon fraction). The encoder divides by the six-mon team to get a team-HP fraction. Never
     # reset — the point of a credit ledger is that it accumulates.
     hazard_damage_suffered: Mapping[str, float] = field(default_factory=dict)
+    # Pack A2 addendum. Per slot: the mon currently in it arrived via BATON PASS rather than an
+    # ordinary switch. Only meaningful while ``last_used_move`` is still the ``switch`` sentinel
+    # (once the mon executes a move the sentinel is gone), and it exists because the two
+    # arrivals are genuinely different facts: a Baton-Pass arrival inherits boosts and the
+    # transferable volatiles. That difference IS partly recoverable from the boost columns, but
+    # only when something was actually passed, and only as an inference — the explicit
+    # ``SWITCH_REASON_BATON_PASS`` the transitions layer records is history-region-only and so
+    # invisible at k0. Engine-wise both are ``LastUsedMove::Switch``; the observation is simply
+    # allowed to be richer than the world here.
+    arrived_by_baton_pass: Mapping[str, bool] = field(default_factory=dict)
+    # Pack A4 addendum — the CHOICE LOCK, and where the item came from.
+    #
+    # ``choice_item_public``: this slot's occupant is publicly known to hold a choice item.
+    # ``choice_locked``: it has executed a move since acquiring that item, so gen3's silent
+    # ``choicelock`` volatile is now on it and it can use nothing else. That volatile emits NO
+    # protocol line at any point (``data/conditions.ts`` choicelock has no ``add``), so this is
+    # the only way the fact can reach either consumer.
+    # ``item_from_trick``: the currently-held item was SWAPPED on by Trick rather than being the
+    # mon's own. This is the valence discriminator: a native Choice Band is the holder's asset
+    # (+50% Atk on an all-attacks set), while a Tricked one is a liability we inflicted. Both
+    # produce the same "holds a Choice Band" reading without it.
+    choice_item_public: Mapping[str, bool] = field(default_factory=dict)
+    choice_locked: Mapping[str, bool] = field(default_factory=dict)
+    item_from_trick: Mapping[str, bool] = field(default_factory=dict)
     # Part B4. Per slot, how many of that side's held items have been publicly removed by the
     # OTHER side's action (``-enditem … [from] move: Knock Off``). Self-consumed berries and
     # Trick swaps are excluded — see NUMERIC_SELF_ITEMS_REMOVED_CREDIT.
@@ -1624,6 +1710,16 @@ class PlayerRelativeBattleState:
     # came in, or None for "never moved".
     self_last_used_move: Optional[str] = None
     opponent_last_used_move: Optional[str] = None
+    # A2 addendum: the active mon arrived by Baton Pass rather than an ordinary switch. Only
+    # meaningful while last_used_move is still the "switch" sentinel.
+    self_arrived_by_baton_pass: bool = False
+    opponent_arrived_by_baton_pass: bool = False
+    # A4 addendum: the active mon is publicly choice-locked into its last executed move, and
+    # whether the item that locked it was Tricked on rather than its own.
+    self_choice_locked: bool = False
+    opponent_choice_locked: bool = False
+    self_item_swapped: bool = False
+    opponent_item_swapped: bool = False
     # A4: the ability the active mon is CURRENTLY borrowing via Trace (transient, cleared on
     # switch-out), or None. Deliberately not the belief's persistent revealed-ability channel.
     self_traced_ability: Optional[str] = None
@@ -1775,6 +1871,10 @@ class _ReplayParser:
         self.current_damage_taken: dict[str, float] = {"p1": 0.0, "p2": 0.0}
         self.hazard_damage_suffered: dict[str, float] = {"p1": 0.0, "p2": 0.0}
         self.items_removed: dict[str, int] = {"p1": 0, "p2": 0}
+        self.arrived_by_baton_pass: dict[str, bool] = {"p1": False, "p2": False}
+        self.choice_item_public: dict[str, bool] = {"p1": False, "p2": False}
+        self.choice_locked: dict[str, bool] = {"p1": False, "p2": False}
+        self.item_from_trick: dict[str, bool] = {"p1": False, "p2": False}
         # Transient (NOT snapshotted, and deliberately so): which slot owns the move window the
         # next untagged ``-damage`` line belongs to. Set by ``|move|``, cleared by anything that
         # proves the damage is not the actor's move damage (a confusion self-hit marker, a
@@ -2030,6 +2130,18 @@ class _ReplayParser:
             slot: int(getattr(snapshot, "items_removed", {}).get(slot, 0) or 0)
             for slot in ("p1", "p2")
         }
+        for field_name in (
+            "arrived_by_baton_pass",
+            "choice_item_public",
+            "choice_locked",
+            "item_from_trick",
+        ):
+            restored = getattr(snapshot, field_name, {}) or {}
+            setattr(
+                parser,
+                field_name,
+                {slot: bool(restored.get(slot, False)) for slot in ("p1", "p2")},
+            )
         return parser
 
     def feed(self, lines: Sequence[str]) -> None:
@@ -2355,6 +2467,15 @@ class _ReplayParser:
                 # Any move window is closed by the switch: whatever damage follows (hazard chip on
                 # the way in, the next mover's strike) belongs to a different attribution.
                 self._damage_window_actor = None
+                # v4 pack A2 addendum: HOW this mon arrived. Read alongside the ``switch``
+                # sentinel that was just written to last_used_move.
+                self.arrived_by_baton_pass[pokemon.showdown_slot] = bool(is_baton_pass)
+                # v4 pack A4 addendum: the choice lock and the item's provenance both belong to
+                # the mon that left. ``choicelock`` is noCopy so it never rides a Baton Pass, and
+                # a Tricked item stays with its holder — but that holder is gone from this slot.
+                self.choice_item_public[pokemon.showdown_slot] = False
+                self.choice_locked[pokemon.showdown_slot] = False
+                self.item_from_trick[pokemon.showdown_slot] = False
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
@@ -2498,6 +2619,7 @@ class _ReplayParser:
         self._update_stall_counter(parts)
         _update_must_recharge(parts, self.must_recharge)
         self._update_items_removed(parts, line)
+        self._update_choice_lock(parts, line)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
 
@@ -3366,6 +3488,68 @@ class _ReplayParser:
                 self.hazard_damage_suffered.get(slot, 0.0) + fraction
             )
 
+    def _update_choice_lock(self, parts: Sequence[str], line: str) -> None:
+        """The public choice lock and the item's provenance (spec v4 pack A4 addendum).
+
+        Gen3's ``choicelock`` volatile is entirely SILENT — ``data/conditions.ts`` gives it no
+        ``add`` on start, end, or transfer — so no protocol line ever announces it and no
+        volatile tracker can catch it. It is reconstructed here from the two public facts that
+        determine it, both of which the sim does emit:
+
+        * WHICH item the mon holds. ``choiceband`` is gen3's only ``isChoice`` item (Scarf and
+          Specs are gen4+). It becomes public on an ``|-item|`` line — in practice a Trick, and
+          in gen3 randbats a Trick carrier ALWAYS holds a Choice Band (``teams.ts``:
+          ``if (moves.has('trick')) return 'Choice Band'``), so the strategy is deterministic.
+        * WHETHER it has moved since acquiring it. Choice Band's ``onStart`` REMOVES any existing
+          choicelock when the item arrives, and its ``onModifyMove`` re-adds one on the next move
+          used. So the lock attaches to the first move executed AFTER acquisition — which is
+          exactly what pack A2 (``CATEGORY_LAST_USED_MOVE``) names. Lock bit + last move fully
+          specify the lock, the same way ``volatile:encore`` + last move specify an Encore.
+
+        ``item_from_trick`` is the valence discriminator, and the reason a bare "holds a Choice
+        Band" reading is not enough: a NATIVE Choice Band is assigned to all-attacks sets
+        (``counter.get('Physical') >= 4``) and makes its holder stronger, whereas a Tricked one
+        is a liability we inflicted — often locking a support mon into a status move. Identical
+        item, opposite sign. The belief engine already audits this surface (it sets
+        ``item_mutated`` / ``current_public_item`` on the same line); this is the parser-side
+        twin so the fact reaches the observation without a belief round-trip.
+
+        Cleared on ``-enditem`` (the item is gone, so the lock goes with it) and on switch-out
+        (handled in the parse loop's switch block, where every per-mon tracker resets).
+        """
+
+        event_type = parts[1] if len(parts) > 1 else ""
+        if len(parts) < 3:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.choice_locked:
+            return
+        if event_type == "-item" and len(parts) >= 4:
+            # A fresh item resets the lock even when the new item is also a choice item:
+            # Choice Band's onStart deletes choicelock, so the holder is free until it moves.
+            self.choice_item_public[slot] = _normalize_identifier(parts[3]) in _CHOICE_ITEMS
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = "[from] move: Trick" in line
+            return
+        if event_type == "-enditem":
+            self.choice_item_public[slot] = False
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = False
+            return
+        if event_type == "move" and len(parts) >= 4:
+            # ``onModifyMove`` adds the lock on the move actually used. A ``|move|`` line is the
+            # public mirror of that, and a called move (Sleep Talk's callee) does not lock —
+            # the same ``[from]`` discriminator the last_used_move truth table uses.
+            if self.choice_item_public.get(slot) and not any(
+                part.startswith("[from]") for part in parts[4:]
+            ):
+                self.choice_locked[slot] = True
+            return
+        if event_type == "faint":
+            self.choice_item_public[slot] = False
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = False
+
     def _update_items_removed(self, parts: Sequence[str], line: str) -> None:
         """Per-side count of held items removed by the OPPOSING side's action (v4 part B4).
 
@@ -3468,6 +3652,10 @@ class _ReplayParser:
             current_damage_taken=dict(self.current_damage_taken),
             hazard_damage_suffered=dict(self.hazard_damage_suffered),
             items_removed=dict(self.items_removed),
+            arrived_by_baton_pass=dict(self.arrived_by_baton_pass),
+            choice_item_public=dict(self.choice_item_public),
+            choice_locked=dict(self.choice_locked),
+            item_from_trick=dict(self.item_from_trick),
         )
 
 
@@ -3672,6 +3860,16 @@ def normalize_for_player(
         opponent_truant_loaf=replay.truant_phase.get(opponent_slot) is True,
         self_last_used_move=replay.last_used_move.get(showdown_slot),
         opponent_last_used_move=replay.last_used_move.get(opponent_slot),
+        self_arrived_by_baton_pass=bool(
+            replay.arrived_by_baton_pass.get(showdown_slot, False)
+        ),
+        opponent_arrived_by_baton_pass=bool(
+            replay.arrived_by_baton_pass.get(opponent_slot, False)
+        ),
+        self_choice_locked=bool(replay.choice_locked.get(showdown_slot, False)),
+        opponent_choice_locked=bool(replay.choice_locked.get(opponent_slot, False)),
+        self_item_swapped=bool(replay.item_from_trick.get(showdown_slot, False)),
+        opponent_item_swapped=bool(replay.item_from_trick.get(opponent_slot, False)),
         self_traced_ability=replay.traced_ability.get(showdown_slot),
         opponent_traced_ability=replay.traced_ability.get(opponent_slot),
         self_last_damage_dealt=float(replay.last_damage_dealt.get(showdown_slot, 0.0) or 0.0),
@@ -3860,15 +4058,26 @@ def observation_from_player_state(
         )
     # V3 keeps the v2.2 turn-merged semantic surface but projects the private legacy writer
     # rows into its grouped public layout after all token writers complete.
-    schema_v2_2 = schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
-    # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
-    schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
-    if schema_v2_2 and state.transition_tokens and not state.turn_merged_tokens:
+    # TURN-MERGED is a property of the TRANSITION REGION, and v4 has none — so v4 is a
+    # grouped-layout (v3-lineage) schema that is NOT turn-merged. Keeping these two axes
+    # separate is what lets v4 write every v3 current-state signal while encoding no history.
+    schema_turn_merged = (not schema_v4) and (
+        schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    )
+    # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs. v4
+    # keeps those blocks too (PP-validity bits, sub HP, the per-mon pinned Tier-2 conclusions —
+    # all current-state surfaces that survive the region trim).
+    schema_v2_1 = (
+        schema_turn_merged
+        or schema_v4
+        or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
+    )
+    if schema_turn_merged and state.transition_tokens and not state.turn_merged_tokens:
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires the state's "
             "turn_merged_tokens — normalize with include_turn_merged=True."
         )
-    if schema_v2_2 and not category_vocab.is_enumerated("tt_phase:turn"):
+    if schema_turn_merged and not category_vocab.is_enumerated("tt_phase:turn"):
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires a vocabulary built "
             "with include_turn_merged=True — this one lacks the tt_phase/tt2_* families, "
@@ -3960,6 +4169,9 @@ def observation_from_player_state(
         active_must_recharge=state.self_must_recharge,
         active_truant_loaf=state.self_truant_loaf,
         active_last_used_move=state.self_last_used_move,
+        active_arrived_by_baton_pass=state.self_arrived_by_baton_pass,
+        active_choice_locked=state.self_choice_locked,
+        active_item_swapped=state.self_item_swapped,
         active_traced_ability=state.self_traced_ability,
         active_last_damage_dealt=state.self_last_damage_dealt,
         active_last_damage_taken=state.self_last_damage_taken,
@@ -3998,6 +4210,9 @@ def observation_from_player_state(
         active_must_recharge=state.opponent_must_recharge,
         active_truant_loaf=state.opponent_truant_loaf,
         active_last_used_move=state.opponent_last_used_move,
+        active_arrived_by_baton_pass=state.opponent_arrived_by_baton_pass,
+        active_choice_locked=state.opponent_choice_locked,
+        active_item_swapped=state.opponent_item_swapped,
         active_traced_ability=state.opponent_traced_ability,
         active_last_damage_dealt=state.opponent_last_damage_dealt,
         active_last_damage_taken=state.opponent_last_damage_taken,
@@ -4019,7 +4234,13 @@ def observation_from_player_state(
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
-    if schema_v2_2:
+    if schema_v4:
+        # No transition region exists at v4 — nothing to encode, and no budget to honour. The
+        # tokens are still EXTRACTED upstream (normalize_for_player), because the per-mon pinned
+        # Tier-2 conclusions and the tendency aggregates are derived from that stream; only the
+        # per-row ENCODING is gone.
+        pass
+    elif schema_turn_merged:
         _encode_turn_merged_transition_tokens(
             categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v3=schema_v3
         )
@@ -4798,6 +5019,11 @@ def _update_meanlook_trap(parts: Sequence[str], meanlook_trap: dict[str, bool]) 
         meanlook_trap[_OTHER_SLOT[slot]] = False
 
 
+# Gen3's only ``isChoice`` item (``data/items.ts`` choiceband, gen: 3). Choice Scarf and Choice
+# Specs are gen4+ and are not in the pool, so the lock has exactly one source.
+_CHOICE_ITEMS = frozenset({"choiceband"})
+
+
 def _update_must_recharge(parts: Sequence[str], must_recharge: dict[str, bool]) -> None:
     """Track the public forced-recharge lock per slot (spec v4 pack A1).
 
@@ -5508,9 +5734,51 @@ def _encode_active_boosts(num_row: list[float], boosts: Mapping[str, int] | None
             _set_numeric(num_row, slot, max(-1.0, min(1.0, float(stage) / 6.0)))
 
 
+class VolatileBucketOverflowWarning(UserWarning):
+    """A mon carried more tracked volatiles than the bag has buckets.
+
+    Non-fatal by design: the encode still produces a valid, correctly-shaped observation with
+    the overflow truncated, so no run, cache, or sample can be broken by it. But it is a real
+    loss of public state, so it is announced rather than swallowed — the silent-truncation
+    failure class the divergence ledger exists to eliminate.
+    """
+
+
+# Count of truncated volatile-bag overflows since process start. A warning is emitted once per
+# call site under Python's default filter, which is the right volume for a signal that should
+# never fire; this counter is what a long fleet run can actually poll to prove it did not.
+VOLATILE_BUCKET_OVERFLOWS = 0
+
+
 def _encode_active_volatiles(cat_row: list[str], volatiles: Sequence[str]) -> None:
-    """Place active-mon volatile statuses (sorted) positionally into the volatile columns."""
-    for index, name in enumerate(sorted(set(volatiles))[:VOLATILE_BUCKET_COUNT]):
+    """Place active-mon volatile statuses (sorted) positionally into the volatile columns.
+
+    OVERFLOW IS LOUD BUT NEVER FATAL. Six buckets cover every reachable simultaneous set: over
+    160 random-legal self-play games (337,314 slot observations) the observed maximum was TWO,
+    and 23 of the 38 tracked volatiles have no carrier in the gen3 randbat pool at all. If that
+    ever stops being true the excess is still truncated — an encode must not be able to abort a
+    collection run or corrupt a sample — but it warns and increments a counter so the condition
+    surfaces instead of silently dropping public state.
+
+    Position within the bag carries no meaning: the model SUMS the categorical embeddings, so a
+    volatile contributes the same vector from any column. Only membership matters, which is why
+    truncation (not ordering) is the whole risk here.
+    """
+
+    global VOLATILE_BUCKET_OVERFLOWS
+    names = sorted(set(volatiles))
+    if len(names) > VOLATILE_BUCKET_COUNT:
+        VOLATILE_BUCKET_OVERFLOWS += 1
+        dropped = names[VOLATILE_BUCKET_COUNT:]
+        warnings.warn(
+            f"volatile bag overflow: {len(names)} tracked volatiles on one mon exceeds the "
+            f"{VOLATILE_BUCKET_COUNT} buckets; dropping {dropped}. The observation is still "
+            "valid and the run continues, but this is public state the model cannot see — "
+            "raise VOLATILE_BUCKET_COUNT (a schema change) if it recurs.",
+            VolatileBucketOverflowWarning,
+            stacklevel=2,
+        )
+    for index, name in enumerate(names[:VOLATILE_BUCKET_COUNT]):
         column = CATEGORY_VOLATILE_OFFSET + index
         if column >= len(cat_row):
             break
@@ -5713,9 +5981,11 @@ def _encode_active_feature_pack(
     cat_row: list[str],
     num_row: list[float],
     *,
-    must_recharge: bool,
     truant_loaf: bool,
     last_used_move: str | None,
+    arrived_by_baton_pass: bool,
+    choice_locked: bool,
+    item_swapped: bool,
     traced_ability: str | None,
     last_damage_dealt: float,
     last_damage_taken: float,
@@ -5728,25 +5998,32 @@ def _encode_active_feature_pack(
     non-Trace-holder writes no ability, and a quiet round writes no damage.
     """
 
-    if must_recharge:
-        _set_numeric(num_row, NUMERIC_MUST_RECHARGE, 1.0)
     if truant_loaf:
         _set_numeric(num_row, NUMERIC_TRUANT_LOAF, 1.0)
     if last_damage_dealt > 0.0:
         _set_numeric(num_row, NUMERIC_LAST_DAMAGE_DEALT, min(1.0, last_damage_dealt))
     if last_damage_taken > 0.0:
         _set_numeric(num_row, NUMERIC_LAST_DAMAGE_TAKEN, min(1.0, last_damage_taken))
+    if choice_locked:
+        _set_numeric(num_row, NUMERIC_CHOICE_LOCKED, 1.0)
+    if item_swapped:
+        _set_numeric(num_row, NUMERIC_ITEM_SWAPPED, 1.0)
     if last_used_move:
         # The parser stores the ``"switch"`` sentinel in the same field as move ids; it maps to a
         # DISTINCT label so the bag can tell "came in this turn" (a fact Encore keys off) from a
-        # move identity, and both from the padding state "has never moved".
-        _set_category(
-            cat_row,
-            CATEGORY_LAST_USED_MOVE,
-            LAST_USED_MOVE_SWITCH_SENTINEL
-            if _normalize_identifier(last_used_move) == "switch"
-            else f"move:{_normalize_identifier(last_used_move)}",
-        )
+        # move identity, and both from the padding state "has never moved". A Baton-Pass arrival
+        # gets its OWN sentinel: it is a different arrival — boosts and the transferable
+        # volatiles came with it — and the explicit switch-reason that records this lives only
+        # in the history region, so at k0 the distinction would otherwise be lost.
+        if _normalize_identifier(last_used_move) == "switch":
+            label = (
+                LAST_USED_MOVE_BATON_PASS_SENTINEL
+                if arrived_by_baton_pass
+                else LAST_USED_MOVE_SWITCH_SENTINEL
+            )
+        else:
+            label = f"move:{_normalize_identifier(last_used_move)}"
+        _set_category(cat_row, CATEGORY_LAST_USED_MOVE, label)
     if traced_ability:
         _set_category(cat_row, CATEGORY_TRACED_ABILITY, f"ability:{_normalize_identifier(traced_ability)}")
 
@@ -5782,6 +6059,9 @@ def _encode_pokemon_tokens(
     active_must_recharge: bool = False,
     active_truant_loaf: bool = False,
     active_last_used_move: str | None = None,
+    active_arrived_by_baton_pass: bool = False,
+    active_choice_locked: bool = False,
+    active_item_swapped: bool = False,
     active_traced_ability: str | None = None,
     active_last_damage_dealt: float = 0.0,
     active_last_damage_taken: float = 0.0,
@@ -5900,7 +6180,13 @@ def _encode_pokemon_tokens(
                 _set_numeric(numeric_features[token_index], NUMERIC_GENDER_FEMALE, 1.0)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
-            _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
+            # Spec v4 pack A1: mustrecharge joins the volatile bag from the parser tracker.
+            # Injected HERE rather than in the state field so v3's bag is untouched — the
+            # label has no v3 vocabulary row and would hash into the OOV band there.
+            bag = active_volatiles
+            if schema_v4 and active_must_recharge:
+                bag = tuple(bag) + (MUST_RECHARGE_VOLATILE,)
+            _encode_active_volatiles(categorical_ids[token_index], bag)
             if active_toxic_stage:
                 _set_numeric(numeric_features[token_index], NUMERIC_TOXIC_STAGE, min(1.0, active_toxic_stage / 15.0))
             # Spec v3 change 3: the public consecutive-stall counter, written on the ACTIVE mon
@@ -5951,13 +6237,15 @@ def _encode_pokemon_tokens(
                 _encode_active_feature_pack(
                     categorical_ids[token_index],
                     numeric_features[token_index],
-                    must_recharge=active_must_recharge,
                     truant_loaf=active_truant_loaf,
                     # A2 is separately maskable: the plan's arm pair is k0+pack vs
                     # k0+pack+lastmove, differing in exactly this column.
                     last_used_move=(
                         active_last_used_move if masks.feature_pack_last_move else None
                     ),
+                    arrived_by_baton_pass=active_arrived_by_baton_pass,
+                    choice_locked=active_choice_locked,
+                    item_swapped=active_item_swapped,
                     traced_ability=active_traced_ability,
                     last_damage_dealt=active_last_damage_dealt,
                     last_damage_taken=active_last_damage_taken,

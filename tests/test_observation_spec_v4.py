@@ -30,13 +30,18 @@ from pokezero.showdown import (
     CATEGORY_LAST_USED_MOVE,
     CATEGORY_TRACED_ABILITY,
     FIELD_TOKEN_OFFSET,
+    CATEGORY_VOLATILE_OFFSET,
+    MUST_RECHARGE_VOLATILE,
+    NUMERIC_CHOICE_LOCKED,
+    NUMERIC_ITEM_SWAPPED,
+    LAST_USED_MOVE_BATON_PASS_SENTINEL,
     LAST_USED_MOVE_SWITCH_SENTINEL,
+    VOLATILE_BUCKET_COUNT,
     NUMERIC_ACTIVE,
     NUMERIC_LAST_DAMAGE_DEALT,
     NUMERIC_LAST_DAMAGE_TAKEN,
     NUMERIC_MON_STAYED_VS_ACTIVE,
     NUMERIC_MON_SWITCHED_VS_ACTIVE,
-    NUMERIC_MUST_RECHARGE,
     NUMERIC_OPP_HAZARD_CREDIT,
     NUMERIC_OPP_HAZARD_EXPECTED,
     NUMERIC_OPP_HAZARDS,
@@ -151,11 +156,16 @@ class V4EncodeTestBase(unittest.TestCase):
 
     @staticmethod
     def _vocab(*, feature_pack: bool = True):
+        """v4's vocabulary: the feature-pack families, and NO turn-merged families.
+
+        v4 carries no transition region, so the tt_phase/tt2_* rows would describe rows that do
+        not exist. The two latches are independent for exactly this reason.
+        """
         from pokezero.randbat_vocab import gen3_category_vocabulary
 
         return gen3_category_vocabulary(
             SHOWDOWN_ROOT,
-            include_turn_merged=True,
+            include_turn_merged=not feature_pack,
             include_feature_pack_v4=feature_pack,
         )
 
@@ -214,9 +224,9 @@ class V4SchemaTableTest(unittest.TestCase):
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertEqual(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1], OBSERVATION_SCHEMA_VERSION_V4)
-        # V4 keeps v2.2's turn-merged transition surface and v3's grouped projection, and is the
-        # only member of the feature-pack vocabulary family.
-        self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
+        # V4 keeps v3's grouped projection but is NOT turn-merged — it has no transition
+        # region for a turn-merged surface to live in.
+        self.assertNotIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS)
         self.assertEqual(
             FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS, (OBSERVATION_SCHEMA_VERSION_V4,)
@@ -229,18 +239,16 @@ class V4SchemaTableTest(unittest.TestCase):
         spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V4)
         self.assertIs(spec, V4_REPLAY_OBSERVATION_SPEC)
         self.assertIs(REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION_V4], spec)
-        # Twelve numeric + two categorical columns on top of v3, and the SAME 64-row history
-        # tail: the pack arm runs at budget 0, so resizing the tail would confound the read.
-        self.assertEqual(
-            spec.numeric_feature_count, V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 12
-        )
-        self.assertEqual(
-            spec.categorical_feature_count,
-            V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count + 2,
-        )
-        self.assertEqual(
-            spec.transition_token_count, V3_REPLAY_OBSERVATION_SPEC.transition_token_count
-        )
+        # The history region is GONE — not budgeted to zero, removed from the contract.
+        self.assertEqual(spec.transition_token_count, 0)
+        self.assertEqual(spec.token_count, 23)
+        self.assertLess(spec.token_count, V3_REPLAY_OBSERVATION_SPEC.token_count)
+        # v3's surface, minus the 34-column history group and the 12 turn-merged categorical
+        # columns, plus the 13-column feature pack and its 2 categorical rows.
+        self.assertEqual(spec.numeric_feature_count, 134)
+        self.assertEqual(spec.categorical_feature_count, 41)
+        # v4 is a grouped-layout schema but NOT a turn-merged one: the two axes are separate.
+        self.assertNotIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
 
 class V4LayoutTest(unittest.TestCase):
@@ -249,13 +257,16 @@ class V4LayoutTest(unittest.TestCase):
     def test_layout_is_v3_plus_the_pack_in_semantic_groups(self) -> None:
         v3_groups = dict(V3_NUMERIC_LAYOUT_GROUPS)
         v4_groups = dict(V4_NUMERIC_LAYOUT_GROUPS)
-        self.assertEqual(list(v4_groups), list(v3_groups))
+        # Same groups as v3 except "history", which is gone with the region it described.
+        self.assertEqual(list(v4_groups), [n for n in v3_groups if n != "history"])
+        self.assertNotIn("history", v4_groups)
         expected_additions = {
             "pokemon_state": (
-                NUMERIC_MUST_RECHARGE,
                 NUMERIC_TRUANT_LOAF,
                 NUMERIC_LAST_DAMAGE_DEALT,
                 NUMERIC_LAST_DAMAGE_TAKEN,
+                NUMERIC_CHOICE_LOCKED,
+                NUMERIC_ITEM_SWAPPED,
             ),
             # The matchup-conditional pair joins the per-opponent-mon tendency triple, which
             # lives in "belief" — the two are read together, so they sit together.
@@ -273,6 +284,8 @@ class V4LayoutTest(unittest.TestCase):
             ),
         }
         for name, v3_indices in v3_groups.items():
+            if name == "history":
+                continue
             self.assertEqual(
                 v4_groups[name], v3_indices + expected_additions.get(name, ()), name
             )
@@ -284,11 +297,13 @@ class V4LayoutTest(unittest.TestCase):
             carried | V4_DROPPED_LEGACY_NUMERIC_INDICES,
             set(range(V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
         )
-        # V4 drops exactly what v3 dropped and nothing more: the pack adds signals, it does not
-        # revisit the dead-field audit.
-        self.assertEqual(
-            V4_DROPPED_LEGACY_NUMERIC_INDICES, {24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104}
+        # V4 drops everything v3 dropped, PLUS the whole history group.
+        self.assertLess(
+            {24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104},
+            set(V4_DROPPED_LEGACY_NUMERIC_INDICES),
         )
+        history = {i for n, idx in V3_NUMERIC_LAYOUT_GROUPS if n == "history" for i in idx}
+        self.assertTrue(history <= set(V4_DROPPED_LEGACY_NUMERIC_INDICES))
         self.assertEqual(
             V4_ONLY_NUMERIC_INDICES,
             frozenset(range(V4_NUMERIC_BASE, V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
@@ -301,14 +316,14 @@ class V4LayoutTest(unittest.TestCase):
         # asserted rather than left implicit.
         self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), v4_numeric_index(NUMERIC_STALL_COUNTER))
         self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
-        # +4 from the pokemon_state insertions, +2 more from the belief insertions, both of
-        # which are laid out before the field group.
+        # +5 from the pokemon_state insertions and +2 from the belief insertions, both laid
+        # out before the field group.
         self.assertEqual(
-            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 6
+            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 7
         )
 
     def test_schema_aware_lookup_reports_pack_columns_as_absent_under_v3(self) -> None:
-        for column in (NUMERIC_MUST_RECHARGE, NUMERIC_OPP_HAZARD_CREDIT):
+        for column in (NUMERIC_TRUANT_LOAF, NUMERIC_OPP_HAZARD_CREDIT):
             self.assertIsNone(
                 numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V3, column)
             )
@@ -442,28 +457,52 @@ class V4ParserTrackerTest(unittest.TestCase):
 class V4PackEncodeTest(V4EncodeTestBase):
     """Part A: the per-mon pack columns on each side's ACTIVE token."""
 
-    def test_recharge_bit_is_live_at_the_blind_decision_and_gone_after(self) -> None:
-        # From the OPPONENT's seat (p2), Slaking's lock is the fact a k0 policy could not see.
+    def _volatiles(self, observation, offset):
+        """The volatile bag on a side's ACTIVE mon token, as decoded vocabulary rows."""
+        token = self._active_token(observation, offset)
+        row = observation.categorical_ids[token]
+        return {
+            row[CATEGORY_VOLATILE_OFFSET + i]
+            for i in range(VOLATILE_BUCKET_COUNT)
+            if row[CATEGORY_VOLATILE_OFFSET + i]
+        }
+
+    def test_recharge_volatile_is_live_at_the_blind_decision_and_gone_after(self) -> None:
+        # A1 is a VOLATILE at v4, not a numeric column: categorical columns are summed into the
+        # token embedding, so a bag entry and a dedicated 0/1 column are the same function —
+        # and the bag costs no column and matches ``volatile:solarbeam``, the charge half of
+        # this very move family.
+        vocab = self._vocab()
+        want = vocab.encode(f"volatile:{MUST_RECHARGE_VOLATILE}")
         prefix = _RECHARGE_LINES[: _RECHARGE_LINES.index("|turn|2") + 1]
+
+        # From the OPPONENT's seat (p2), Slaking's lock is the fact a k0 policy could not see.
         locked = self._encode(self._state(prefix, player="p2"))
-        self.assertEqual(
-            self._pack(locked, OPPONENT_POKEMON_TOKEN_OFFSET, NUMERIC_MUST_RECHARGE), 1.0
-        )
-        # The SELF write path: the same lock on p1's own token (redundant with the request's
-        # lone-legal-action collapse, and encoded anyway so the column is side-symmetric).
+        self.assertIn(want, self._volatiles(locked, OPPONENT_POKEMON_TOKEN_OFFSET))
+
+        # The SELF write path, plus the negative: Blissey used no recharge move.
         own = self._encode(
             self._state(prefix + [_p1_request("Slaking", "80/100")], player="p1")
         )
-        self.assertEqual(
-            self._pack(own, SELF_POKEMON_TOKEN_OFFSET, NUMERIC_MUST_RECHARGE), 1.0
-        )
-        # Blissey, which used no recharge move, carries no bit on either side's write path.
-        self.assertEqual(
-            self._pack(own, OPPONENT_POKEMON_TOKEN_OFFSET, NUMERIC_MUST_RECHARGE), 0.0
-        )
+        self.assertIn(want, self._volatiles(own, SELF_POKEMON_TOKEN_OFFSET))
+        self.assertNotIn(want, self._volatiles(own, OPPONENT_POKEMON_TOKEN_OFFSET))
+
+        # Consumed by the following turn's ``cant``.
         cleared = self._encode(self._state(_RECHARGE_LINES, player="p2"))
-        self.assertEqual(
-            self._pack(cleared, OPPONENT_POKEMON_TOKEN_OFFSET, NUMERIC_MUST_RECHARGE), 0.0
+        self.assertNotIn(want, self._volatiles(cleared, OPPONENT_POKEMON_TOKEN_OFFSET))
+
+    def test_the_recharge_volatile_row_exists_only_under_the_feature_pack_latch(self) -> None:
+        # It is NOT in TRACKED_VOLATILES (the sim emits a bespoke ``|-mustrecharge|``, never a
+        # ``|-start|``), so it does not fall out of GEN3_VOLATILES and must be enumerated by the
+        # pack latch — which is also what keeps it out of every v2.2/v3 vocabulary.
+        from pokezero.showdown import TRACKED_VOLATILES
+
+        self.assertNotIn(MUST_RECHARGE_VOLATILE, TRACKED_VOLATILES)
+        self.assertTrue(self._vocab().is_enumerated(f"volatile:{MUST_RECHARGE_VOLATILE}"))
+        self.assertFalse(
+            self._vocab(feature_pack=False).is_enumerated(
+                f"volatile:{MUST_RECHARGE_VOLATILE}"
+            )
         )
 
     def test_last_used_move_has_three_distinct_states(self) -> None:
@@ -811,6 +850,228 @@ class V4MatchupSwitchTendencyTest(V4EncodeTestBase):
             )
 
 
+class V4BatonPassSentinelTest(V4EncodeTestBase):
+    """A2's fourth state: a Baton-Pass arrival is not an ordinary switch-in."""
+
+    _BP = [
+        "|player|p1|Alice|",
+        "|player|p2|Bob|",
+        "|switch|p1a: Slaking|Slaking, L74, M|100/100",
+        "|switch|p2a: Ninjask|Ninjask, L78, M|100/100",
+        "|turn|1",
+        "|move|p2a: Ninjask|Swords Dance|p2a: Ninjask",
+        "|-boost|p2a: Ninjask|atk|2",
+        "|upkeep",
+        "|turn|2",
+        "|move|p2a: Ninjask|Baton Pass|p2a: Ninjask",
+        "|switch|p2a: Blissey|Blissey, L78, F|100/100|[from] Baton Pass",
+        "|upkeep",
+        "|turn|3",
+    ]
+    _PLAIN = [
+        "|player|p1|Alice|",
+        "|player|p2|Bob|",
+        "|switch|p1a: Slaking|Slaking, L74, M|100/100",
+        "|switch|p2a: Ninjask|Ninjask, L78, M|100/100",
+        "|turn|1",
+        "|switch|p2a: Blissey|Blissey, L78, F|100/100",
+        "|upkeep",
+        "|turn|2",
+    ]
+
+    def _sentinel(self, lines):
+        observation = self._encode(self._state(lines, player="p1"))
+        token = self._active_token(observation, OPPONENT_POKEMON_TOKEN_OFFSET)
+        return observation.categorical_ids[token][CATEGORY_LAST_USED_MOVE]
+
+    def test_baton_pass_arrival_gets_its_own_sentinel(self) -> None:
+        vocab = self._vocab()
+        self.assertEqual(
+            self._sentinel(self._BP), vocab.encode(LAST_USED_MOVE_BATON_PASS_SENTINEL)
+        )
+        self.assertEqual(
+            self._sentinel(self._PLAIN), vocab.encode(LAST_USED_MOVE_SWITCH_SENTINEL)
+        )
+        # Three distinguishable arrival/never-moved states, none of them the padding row.
+        self.assertNotEqual(self._sentinel(self._BP), self._sentinel(self._PLAIN))
+        self.assertNotEqual(self._sentinel(self._BP), 0)
+
+    def test_the_engine_fact_is_unchanged_only_the_observation_is_richer(self) -> None:
+        # The parser still records the plain ``switch`` sentinel in last_used_move — that is
+        # what the WORLD reads, and gen3 gives a Baton-Pass recipient a null lastMove exactly
+        # like any other switch-in. Only the encoded label distinguishes them.
+        state = self._state(self._BP, player="p1")
+        self.assertEqual(state.opponent_last_used_move, "switch")
+        self.assertTrue(state.opponent_arrived_by_baton_pass)
+        self.assertFalse(self._state(self._PLAIN, player="p1").opponent_arrived_by_baton_pass)
+
+
+class V4ChoiceLockTest(V4EncodeTestBase):
+    """The silent choicelock, reconstructed — and its valence discriminator."""
+
+    # Furret always holds a Choice Band in gen3 randbats (teams.ts:
+    # ``if (moves.has('trick')) return 'Choice Band'``). It Tricks the band onto Blissey, who
+    # then uses Calm Mind and is locked into it for the rest of its stay.
+    _TRICK = [
+        "|player|p1|Alice|",
+        "|player|p2|Bob|",
+        "|switch|p1a: Furret|Furret, L84, M|100/100",
+        "|switch|p2a: Blissey|Blissey, L78, F|100/100",
+        "|turn|1",
+        "|move|p1a: Furret|Trick|p2a: Blissey",
+        "|-activate|p1a: Furret|move: Trick|[of] p2a: Blissey",
+        "|-item|p2a: Blissey|Choice Band|[from] move: Trick",
+        "|-item|p1a: Furret|Leftovers|[from] move: Trick",
+        "|upkeep",
+        "|turn|2",
+        "|move|p2a: Blissey|Calm Mind|p2a: Blissey",
+        "|-boost|p2a: Blissey|spa|1",
+        "|upkeep",
+        "|turn|3",
+    ]
+
+    def _bits(self, lines, offset=OPPONENT_POKEMON_TOKEN_OFFSET, player="p1"):
+        observation = self._encode(self._state(lines, player=player))
+        return (
+            self._pack(observation, offset, NUMERIC_CHOICE_LOCKED),
+            self._pack(observation, offset, NUMERIC_ITEM_SWAPPED),
+        )
+
+    def test_the_lock_attaches_to_the_first_move_after_the_item_arrives(self) -> None:
+        # Choice Band's onStart REMOVES any choicelock when the item lands, and onModifyMove
+        # re-adds it on the next move used — so immediately after the Trick there is no lock.
+        before = self._TRICK[: self._TRICK.index("|turn|2") + 1]
+        self.assertEqual(self._bits(before), (0.0, 1.0))
+        # …and after Calm Mind, the lock is on.
+        self.assertEqual(self._bits(self._TRICK), (1.0, 1.0))
+
+    def test_the_lock_names_its_move_through_A2(self) -> None:
+        # Lock bit + last-used-move fully specify the lock, exactly as volatile:encore + A2
+        # specify an Encore. This is the pair that was missing at v3.
+        observation = self._encode(self._state(self._TRICK, player="p1"))
+        token = self._active_token(observation, OPPONENT_POKEMON_TOKEN_OFFSET)
+        self.assertEqual(
+            observation.categorical_ids[token][CATEGORY_LAST_USED_MOVE],
+            self._vocab().encode("move:calmmind"),
+        )
+
+    def test_a_native_choice_band_is_not_marked_as_swapped(self) -> None:
+        # The valence discriminator. A band the mon owns is its asset; a Tricked one is a
+        # liability we inflicted. Both read "holds a Choice Band" without this bit.
+        native = [
+            "|player|p1|Alice|",
+            "|player|p2|Bob|",
+            "|switch|p1a: Slaking|Slaking, L74, M|100/100",
+            "|switch|p2a: Snorlax|Snorlax, L78, M|100/100",
+            "|turn|1",
+            "|-item|p2a: Snorlax|Choice Band|[from] ability: Frisk",
+            "|move|p2a: Snorlax|Body Slam|p1a: Slaking",
+            "|-damage|p1a: Slaking|70/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        locked, swapped = self._bits(native)
+        self.assertEqual(locked, 1.0)
+        self.assertEqual(swapped, 0.0)
+
+    def test_losing_the_item_clears_both_bits(self) -> None:
+        knocked = self._TRICK + [
+            "|move|p1a: Furret|Knock Off|p2a: Blissey",
+            "|-enditem|p2a: Blissey|Choice Band|[from] move: Knock Off|[of] p1a: Furret",
+            "|upkeep",
+            "|turn|4",
+        ]
+        self.assertEqual(self._bits(knocked), (0.0, 0.0))
+
+
+class V4HistoryIsGoneTest(V4EncodeTestBase):
+    """The region trim: v4 carries no transition history at all."""
+
+    def test_no_transition_tokens_and_no_history_columns(self) -> None:
+        observation = self._encode(self._state(_RECHARGE_LINES))
+        self.assertEqual(len(observation.numeric_features), 23)
+        self.assertEqual(V4_REPLAY_OBSERVATION_SPEC.transition_token_count, 0)
+        # Every history writer column resolves to "absent", not to a physical index.
+        from pokezero.showdown import NUMERIC_TT_DAMAGE_FRACTION, NUMERIC_TT_KO, NUMERIC_TM2_MISS
+
+        for column in (NUMERIC_TT_DAMAGE_FRACTION, NUMERIC_TT_KO, NUMERIC_TM2_MISS):
+            self.assertIsNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column)
+            )
+
+    def test_encoding_needs_no_turn_merged_stream_or_vocabulary(self) -> None:
+        # v3 raises without them; v4 must not, because it never reads either.
+        replay = parse_showdown_replay(_RECHARGE_LINES, complete_prefix=True)
+        state = normalize_for_player(
+            replay,
+            player_id="p1",
+            configured_showdown_slot="p1",
+            format_id="gen3randombattle",
+            include_turn_merged=False,
+        )
+        observation = observation_from_player_state(
+            state,
+            category_vocab=self._vocab(),
+            spec=V4_REPLAY_OBSERVATION_SPEC,
+            dex=self._dex(),
+        )
+        observation.validate(V4_REPLAY_OBSERVATION_SPEC)
+
+    def test_the_tier2_pinned_conclusions_survive_the_trim(self) -> None:
+        # They were never history columns — they live on the opponent MON token as the
+        # current-state form, derived from a stream that is still EXTRACTED, just not encoded.
+        from pokezero.showdown import NUMERIC_TIER2_CB_PINNED
+
+        self.assertIsNotNone(
+            numeric_index_if_present_for_schema(
+                OBSERVATION_SCHEMA_VERSION_V4, NUMERIC_TIER2_CB_PINNED
+            )
+        )
+
+
+class V4VolatileOverflowTest(unittest.TestCase):
+    """Overflow past the six buckets is loud, counted, and never fatal."""
+
+    def test_overflow_warns_counts_and_still_produces_a_valid_row(self) -> None:
+        import warnings as _warnings
+
+        from pokezero.showdown import (
+            VolatileBucketOverflowWarning,
+            _encode_active_volatiles,
+        )
+        import pokezero.showdown as showdown_module
+
+        row = [""] * 41
+        before = showdown_module.VOLATILE_BUCKET_OVERFLOWS
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _encode_active_volatiles(
+                row,
+                [
+                    "confusion", "curse", "encore", "leechseed",
+                    "substitute", "yawn", "perish3", MUST_RECHARGE_VOLATILE,
+                ],
+            )
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, VolatileBucketOverflowWarning)
+        self.assertEqual(showdown_module.VOLATILE_BUCKET_OVERFLOWS, before + 1)
+        # NON-FATAL: the row is still exactly six filled buckets and the right width, so no
+        # run, cache, or sample can be broken by the condition.
+        self.assertEqual(len(row), 41)
+        self.assertEqual(sum(1 for value in row if value), VOLATILE_BUCKET_COUNT)
+
+    def test_a_bag_within_budget_is_silent(self) -> None:
+        import warnings as _warnings
+
+        from pokezero.showdown import _encode_active_volatiles
+
+        row = [""] * 41
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _encode_active_volatiles(row, ["confusion", "substitute"])
+        self.assertEqual(caught, [])
+
+
 class V4FreezesV3Test(V4EncodeTestBase):
     """The invariant a new contract lives or dies by: v3 output is untouched."""
 
@@ -867,9 +1128,11 @@ class V4FreezesV3Test(V4EncodeTestBase):
             observation_from_player_state(
                 self._state(_LEADS), category_vocab=self._vocab(), spec=narrowed
             )
+        # v4's categorical census is NARROWER than v3's (the turn-merged block is gone), so the
+        # narrowing that must be refused is against v4's own floor, not v3's number.
         narrowed_categorical = replace(
             V4_REPLAY_OBSERVATION_SPEC,
-            categorical_feature_count=V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+            categorical_feature_count=V4_REPLAY_OBSERVATION_SPEC.categorical_feature_count - 1,
         )
         with self.assertRaisesRegex(ValueError, "requires at least"):
             observation_from_player_state(
@@ -921,7 +1184,11 @@ class V4VocabularyTest(unittest.TestCase):
         self.assertTrue(packed.is_enumerated("move:hyperbeam"))
         self.assertEqual(
             {token for token in added if not token.startswith("ability:")},
-            {LAST_USED_MOVE_SWITCH_SENTINEL},
+            {
+                LAST_USED_MOVE_SWITCH_SENTINEL,
+                LAST_USED_MOVE_BATON_PASS_SENTINEL,
+                f"volatile:{MUST_RECHARGE_VOLATILE}",
+            },
         )
 
 

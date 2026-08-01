@@ -311,6 +311,15 @@ def gen3_randbat_category_strings(
             # A2's switch sentinel: "this mon came in this turn, so lastMove is genuinely null" —
             # a positive fact (Encore fails against it), distinct from the padding "never moved".
             "lastmove:switch",
+            # …and the Baton-Pass arrival's own sentinel. A different arrival: boosts and the
+            # transferable volatiles came with it, and the explicit switch-reason recording that
+            # lives only in the history region, which v4 does not carry.
+            "lastmove:batonpass",
+            # A1: forced recharge, injected into the ACTIVE mon's volatile bag at encode time
+            # from the parser tracker. NOT in TRACKED_VOLATILES — the sim emits a bespoke
+            # ``|-mustrecharge|`` line, never a ``|-start|`` the generic tracker could catch —
+            # so the row is enumerated here rather than falling out of GEN3_VOLATILES.
+            "volatile:mustrecharge",
             # A4: the ability currently BORROWED via Trace, cleared on switch-out. A separate
             # family from belief:possible_ability, which is the persistent set-identity channel.
             *[f"ability:{_normalize_identifier(ability)}" for ability in entities["abilities"]],

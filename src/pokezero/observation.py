@@ -71,10 +71,11 @@ SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
 # normalize_for_player(include_turn_merged=True) and a vocabulary built with
 # include_turn_merged=True. v3 extends v2.2 without changing that surface, so every
 # ``schema == V2_2`` include_turn_merged/vocab latch is a membership test on this tuple.
+# V4 is deliberately ABSENT: it carries no transition region at all, so it needs neither the
+# turn-merged token stream nor the tt_phase/tt2_* vocabulary families.
 TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
-    OBSERVATION_SCHEMA_VERSION_V4,
 )
 # V3-lineage family: schemas whose numeric surface is the GROUPED projection of the private
 # writer rows (rather than the frozen legacy positions) and which write the v3 public signals.
@@ -109,11 +110,17 @@ STATS_TOKEN_COUNT = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
 TRANSITION_TOKEN_COUNT = 128
 # V3 shortens only the physical turn-merged history tail. The legacy constant above remains the
 # frozen V2/V2.1/V2.2 capacity and the maximum accepted feature-mask value for old checkpoints.
-# V4 inherits the same 64-row tail unchanged: the k0 feature pack is about what the CURRENT-state
-# region carries, and the probe arm it exists to serve runs at transition_token_budget=0, so
-# resizing the history tail would confound the very comparison (docs/observation_v4_spec.md).
 V3_TRANSITION_TOKEN_COUNT = 64
-V4_TRANSITION_TOKEN_COUNT = V3_TRANSITION_TOKEN_COUNT
+# V4 REMOVES THE HISTORY REGION ENTIRELY — the plan's stated end goal ("full region trim, no
+# synthesized history in search worlds, the simplest observation contract"). Not a budget of
+# zero over a region that still exists: the tokens, the history numeric group, and the
+# turn-merged categorical families are all gone from the contract. What the history rows were
+# carrying is either named as current state by the feature pack or deliberately dropped.
+#
+# Consequences that make this more than a mask: the sequence is 23 tokens instead of 87, so
+# every forward is ~3.8x shorter; there is no transition_token_budget knob to mis-set; and a
+# v4 checkpoint cannot silently be fed synthesized history, because there is nowhere to put it.
+V4_TRANSITION_TOKEN_COUNT = 0
 
 
 @dataclass(frozen=True)
@@ -193,7 +200,9 @@ class ObservationFeatureMasks:
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked
-        # (Markov-state-only ablations). The encoder fill/mask paths handle it.
+        # (Markov-state-only ablations). The encoder fill/mask paths handle it. Under v4 there
+        # is no region at all, so the budget is inert rather than meaningful — the encoder
+        # never reads it, and observation_spec.transition_token_count is 0.
         if not 0 <= self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
             raise ValueError(
                 f"transition_token_budget must be in 0..{TRANSITION_TOKEN_COUNT}, "
