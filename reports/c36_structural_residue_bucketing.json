@@ -33,5 +33,6 @@
   "era": "derived on readout post-C35; must be re-derived on the next fingerprint or readout change"
  },
  "does_not_reach_a_pass": "This is a diagnosis, not a fix. Unattributed stays at 485. No engine change is registered here and none should be until a single sub-population is picked and pre-measured by the C27 method.",
- "next_and_why": "Take D-with-count-evidence (179 rows) first: it is the largest, it has the cleanest signal, and 'the engine has no branch with this component count' is a checkable claim about generate_instructions rather than an inference about pricing."
+ "next_and_why": "Take D-with-count-evidence (179 rows) first: it is the largest, it has the cleanest signal, and 'the engine has no branch with this component count' is a checkable claim about generate_instructions rather than an inference about pricing.",
+ "CORRECTED_BY": "reports/c37_branch_set_support_measurement.json -- the D bucket's reading is WITHDRAWN. Enumerating the engine's real branch set shows 105 of the 179 D rows do have a branch reaching the observed net HP delta. 'No arm carries the component shape' was read from the recorded miss strings and is not the same claim as 'the engine cannot reach this transition'. 74 rows survive as confirmed support gaps."
 }
