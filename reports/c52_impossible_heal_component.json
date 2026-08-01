@@ -18,5 +18,19 @@
  },
  "why_this_is_registrable_when_the_earlier_shape_C_claims_were_not": "It has a named mechanism, a physically impossible signature that cannot be a matter of degree, a 21x enrichment against a matched control, and a bounded candidate population. It is also an INSTRUMENT fix, so it needs no engine rebuild and no fingerprint change, which means it cannot void the era-stamped adjudications.",
  "next": "find where damage_component_events folds a damage delta onto a heal source -- the Pain Split precedent says a missing or misread event line lets the next delta inherit the previous source -- then register a prediction with identity-level falsifiers over the 79.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "mechanism_CONFIRMED": {
+  "walkthrough": "s18000869/18. The engine state has Ninetales at 254/254 and the observed pre-state agrees. The rendered branch events are: Fire Blast misses, p1 is asleep and uses Sleep Talk, then |-heal|p2a: Ninetales|120/254|[from] item: Leftovers. A mon at full HP cannot heal to 120, so the Sleep Talk callee's damage happened and was NEVER RENDERED as an event. damage_component_events tracks running HP per slot and takes the source from the current line, so it computes 120 - 254 = -134 and labels the whole drop itemleftovers.",
+  "measured_over_all_79": {
+   "sleeptalk in the defective branch": 79,
+   "not sleeptalk": 0,
+   "no -damage line at all despite HP dropping": 52,
+   "has a -damage line": 27
+  },
+  "verdict": "100% of the defective branches are Sleep Talk branches, and 65% render no damage line whatsoever. The callee's damage is missing from the event stream and the next heal absorbs it."
+ },
+ "sleep_talk_nuance_stated_explicitly": "I twice concluded Sleep Talk was NOT the mechanism -- in C39 for branch reachability, and in C51 for crit-arm presence. Both stand: Sleep Talk boundaries reach transitions and carry crit arms at normal rates. This is a THIRD question, event RENDERING, and here Sleep Talk is the mechanism at 100%. The earlier refutations were not wrong; they were about different things, and the enrichment that kept pointing at Sleep Talk was pointing at this all along.",
+ "why_the_existing_lossy_handling_does_not_catch_it": "The differential already knows callee rendering is lossy: it carries a _SLEEPTALK_LOSSY_MARKER and an unattributed_damage_as_roll path that retags generically-tagged callee damage as _UNKNOWN_CALLEE_SOURCE. That handles damage rendered with a generic tag. It cannot handle damage rendered with NO LINE AT ALL, which is what 52 of these branches do.",
+ "the_fix_shape": "Either render the callee's damage event, or make damage_component_events refuse to attribute a NEGATIVE delta to a heal source -- a heal cannot reduce HP, so that is a check the instrument can make locally without knowing about Sleep Talk. The second is narrower and testable offline; the first is the actual defect.",
+ "ceiling_unchanged": "79 candidates, expected clearance AT MOST 79. Confirming the mechanism does not raise the ceiling."
 }
