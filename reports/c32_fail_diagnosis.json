@@ -22,7 +22,7 @@
  "leading_hypothesis": {
   "claim": "C29's cap promotion is scoped too widely and is inflating this counter. It promotes a base source to roll-scaled when ANY component on that SLOT carries a cap, rather than when the paired component does. An UNCAPPED itemleftovers tick belongs in the exact bucket; it reaches the roll-scaled comparison only through that promotion, where the length check then rejects it before any tolerance applies.",
   "why_it_matters": "If true, C29 moved rows that would have been reported as exact-bucket differences into the structural counter -- changing how they are CLASSIFIED without changing whether they diverge, and inflating the very counter I then declared resolved.",
-  "status": "HYPOTHESIS, not established. Consistent with every sample examined, but I have not confirmed that a cap exists elsewhere on the slot in these rows, which is what the claim requires. Two over-readings this session were caught only by checking; this one is not yet checked.",
+  "status": "NARROWED, still unsettled. See hypothesis_testing below.",
   "how_to_settle_it": "Re-read a sample of these boundaries with capped_bases scoped to the component pair instead of the slot, and compare verdicts. Offline, no engine change, no sweep."
  },
  "independent_of_that": {
@@ -40,5 +40,19 @@
   "diagnose the coverage shortfall",
   "fix the predicted-class shape defect",
   "C33 residual-lethality partition for the 73 confirmed support gaps"
- ]
+ ],
+ "hypothesis_testing": {
+  "established": {
+   "fresh_structural_rows": 3779,
+   "majority_count_mismatch_no_cap_in_pair": 3433,
+   "observed_has_more": 3323,
+   "itemleftovers_on_longer_side": 2874,
+   "sample_400_no_cap_anywhere_on_OBSERVED_slot": 392,
+   "sample_150_uncapped_itemleftovers_present_in_the_ROLL_SCALED_list": 113
+  },
+  "the_anomaly": "An uncapped itemleftovers tick appears in the ROLL-SCALED comparison list in 113 of 150 sampled rows, while no cap exists anywhere on the observed slot in 392 of 400. Reading _split_component_events, that should be impossible: itemleftovers is not in _ROLL_SCALED_SOURCES, does not end with _to_full, and with capped_bases empty the C29 recut is skipped entirely by its `if capped_bases:` guard.",
+  "remaining_explanation": "capped_bases unions the observed AND ENGINE component lists. So the promotion could be driven by an engine-side _to_full that the observed side does not carry. That is the only path left consistent with the code, and it is the one I have NOT measured.",
+  "why_i_stopped": "Three attempts at this check were under-specified in a row: the first ignored the engine side of capped_bases entirely, the second called a branch-component helper that does not exist and silently measured nothing. Settling it needs engine components computed per branch from the retained states -- straightforward, but it needs doing properly rather than in another quick pass. Recording the narrowed question is worth more than a fourth wrong answer.",
+  "how_to_settle": "For a sample of these rows, recompute engine components per branch via damage_component_events over generate_instructions output, and report whether an engine-side _to_full exists for the same base source. If yes, C29's slot-wide scoping is confirmed as the inflation path and the fix is to scope capped_bases to the component pair. If no, the promotion has another cause and _split_component_events needs re-reading."
+ }
 }
