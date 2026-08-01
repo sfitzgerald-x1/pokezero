@@ -1,0 +1,34 @@
+{
+ "schema": "c49-search-crate-rest-turns-panic/1",
+ "severity": "certification-infrastructure. This is a CRASH, not a divergence. It raises pyo3_runtime.PanicException out of Rust and kills the calling process -- it took down the C48 audit script on its first run. A sweep shard that reaches this state does not record a divergence, it dies.",
+ "found_by": "reports/c48_stale_consumer_audit.json, as the single state where the two engine consumers disagree",
+ "minimal_reproducer": {
+  "row": "s18600013/89, engine_states index 5",
+  "call": "pokezero_search.branch_events(state, 'extremespeed', 'reversal', ctx, branch_on_damage=True, include_post_state=<either>)",
+  "error": "PanicException: Invalid rest_turns value: 32, at gen3/generate_instructions.rs:2123",
+  "state": "p1 RAYQUAZA status=SLEEP rest_turns=1 (a VALID value); p2 HITMONLEE status=NONE rest_turns=0"
+ },
+ "isolation": {
+  "input_state_is_valid": "rest_turns=1 is in range 0..3, and the arm for 1 wakes the mon and decrements to 0. The 32 is produced DURING execution, not parsed from the state.",
+  "state_roundtrip_excluded": "the crate takes a string while poke_engine takes the object, so a round-trip bug was the first hypothesis. State.from_string(s).to_string() == s for all 7 states of this row. Refuted.",
+  "requires_BOTH_moves": {
+   "extremespeed + reversal": "PANIC",
+   "extremespeed + none": "ok",
+   "none + reversal": "ok",
+   "rockslide|hiddenpowerflying70|earthquake + reversal": "ok"
+  },
+  "requires_the_damage_fan": {
+   "branch_on_damage=True": "PANIC (with include_post_state either way)",
+   "branch_on_damage=False": "ok (either way)"
+  },
+  "consumer_asymmetry": "poke_engine.generate_instructions handles the identical state and choices without error; only the crate path panics"
+ },
+ "untested_hypothesis": {
+  "claim": "the DecrementRestTurns instruction may be reversed without being re-applied once per damage branch, so the counter accumulates to the branch count.",
+  "the_arithmetic_that_suggests_it": "gen3 has 16 damage rolls, and 16 x 2 = 32, the exact panic value",
+  "status": "NOT TESTED. A numeric coincidence is not evidence, and this session has produced several confident readings that a measurement then refuted. Recorded as a lead for whoever fixes it, not as a diagnosis.",
+  "why_the_interaction_is_plausible": "Extreme Speed has priority, so it resolves first and changes the defender's HP; Reversal's power is a function of the attacker's remaining HP. With branch_on_damage the first move fans into many HP outcomes, each re-pricing the second. That is the only path here that multiplies branches, and it is the path the flag gates."
+ },
+ "why_it_was_missed_for_so_long": "It surfaced repeatedly in this session's logs as a bare 'thread panicked' line and was filed once as an incidental_finding footnote. It only affects the crate consumer, which is the one the sweep uses, and the reread path I was using for offline work mostly did not reach it.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+}
