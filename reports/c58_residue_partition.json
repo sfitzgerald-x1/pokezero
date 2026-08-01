@@ -77,5 +77,6 @@
   "why_they_differ_so_much": "HP-level agreement is far weaker than decomposition agreement. A branch can land the same net HP by a different split of sources, which the matcher rejects and my HP test accepted. So the HP reading OVERSTATED the instrument bucket and the decomposition reading understates it; the truth is between 17 and 132, and neither number is the answer.",
   "what_i_should_not_have_published": "a partition at all, from a test that was not the matcher's. Two corrections in two cycles came from the same root: I built a cheap proxy for 'does the engine reproduce this' and read its output as a bucketing. The only test whose verdict IS the bucketing is the matcher's own, and it is already available -- evaluate_boundary_strict returns exactly that.",
   "the_measurement_that_would_settle_it": "instrument evaluate_boundary_strict to report, per row, WHICH check rejected the best branch. That is the matcher's own verdict rather than a proxy for it, it needs no new tolerance decisions from me, and it partitions the residue by construction."
- }
+ },
+ "SUPERSEDED_BY": "reports/c59_matcher_verdict_partition.json -- all readings in this file are proxies for the matcher's decision and are withdrawn. The matcher's own verdict: 318 of 341 rejected by the roll-scaled check, 23 by the attributed check."
 }
