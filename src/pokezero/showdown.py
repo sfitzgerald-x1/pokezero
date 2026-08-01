@@ -628,7 +628,41 @@ NUMERIC_OPP_HAZARD_EXPECTED = V4_NUMERIC_BASE + 7
 # counterfactual probe must adjudicate whether self-play's lower usage is actually worse.
 NUMERIC_SELF_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 8
 NUMERIC_OPP_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 9
-V4_NUMERIC_EXTRA = 10
+# Part B3+ — MATCHUP-CONDITIONAL switch tendency, two columns on EVERY opponent mon token,
+# conditioned on OUR CURRENT ACTIVE: the literal conditional form of the marginal triple's
+# (switched-out-before-attacking, stayed-and-attacked) pair — "in THIS matchup, how often did
+# it bail and how often did it stand its ground". An evidence-mass pair, never a bare rate.
+#
+# The existing per-mon triple is keyed to the mon that switched out — correct — but it
+# marginalises over the thing that actually drives the behaviour: WHAT it was facing.
+# Switching in gen3 is almost entirely matchup-driven (a mon stays in on one threat and bails
+# from another), so "bailed 3 of 7" is a biased estimator of the only quantity that matters at
+# decision time: will this mon bail against the mon I have out RIGHT NOW.
+#
+# Why it belongs in the k0 pack: the marginal aggregate survives at k0 (it is a token column,
+# not a history row), but the matchup CONTEXT of each switch is carried solely by the
+# transition rows — so a k0 policy sees "bailed 3 times" with no way to recover what from. And
+# the raw form was fully available at k64, the worst and least stable arm; the model could not
+# use it. That is this pack's thesis in miniature: encode the sufficient statistic rather than
+# widening the window.
+#
+# Written on ALL SIX opponent tokens, not just their active, so the pair answers two questions
+# at once — will the mon in front of me bail, and which of their mons has historically been
+# willing to face what I have out (i.e. what they will bring IN).
+#
+# Chosen over (switched, opportunities) for two reasons: it is the stay-or-switch evidence
+# exactly (a ``cant`` turn is an opportunity but not a stay-or-switch datum), and both halves
+# are already accumulated at live hook points in BOTH the batch and the incremental fold, so
+# the parity twins cannot drift — an opportunity count would have had to be reconstructed from
+# a turn map the incremental fold prunes.
+#
+# NORMALIZED /8, not the /64 the global tendency pairs use. Same principle, different range:
+# /64 suits whole-game counts that reach tens, while a single (their mon x our mon) cell is
+# visited a handful of times in one game. A cell with no history reads (0, 0) and the model
+# falls back to the marginal triple on the same token — the two are side by side by design.
+NUMERIC_MON_SWITCHED_VS_ACTIVE = V4_NUMERIC_BASE + 10
+NUMERIC_MON_STAYED_VS_ACTIVE = V4_NUMERIC_BASE + 11
+V4_NUMERIC_EXTRA = 12
 V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V4_NUMERIC_BASE + V4_NUMERIC_EXTRA
 # The writer columns that exist ONLY at v4. Asked about under v3 these are absent (not dropped,
 # not invalid) — the schema-keyed index resolver answers None so cross-schema audit/export code
@@ -892,6 +926,12 @@ _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
         NUMERIC_TRUANT_LOAF,
         NUMERIC_LAST_DAMAGE_DEALT,
         NUMERIC_LAST_DAMAGE_TAKEN,
+    ),
+    # The marginal tendency triple lives in "belief" (the per-opponent-mon surface), so its
+    # matchup-conditional twin sits directly beside it.
+    "belief": (
+        NUMERIC_MON_SWITCHED_VS_ACTIVE,
+        NUMERIC_MON_STAYED_VS_ACTIVE,
     ),
     "field": (
         NUMERIC_SELF_HAZARD_CREDIT,
@@ -1601,6 +1641,13 @@ class PlayerRelativeBattleState:
     # B4: how many of each side's held items the OTHER side has publicly knocked off.
     self_items_removed: int = 0
     opponent_items_removed: int = 0
+    # Matchup-conditional switch evidence, ALREADY conditioned on our current active:
+    # normalized opponent species -> (switched-out-before-attacking, opportunities) observed
+    # while that mon was facing the mon we have out now. Absent species have no history in
+    # this matchup and encode (0, 0).
+    opponent_matchup_switch_evidence: Mapping[str, tuple[int, int]] = field(
+        default_factory=dict
+    )
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -3639,7 +3686,42 @@ def normalize_for_player(
         ),
         self_items_removed=int(replay.items_removed.get(showdown_slot, 0) or 0),
         opponent_items_removed=int(replay.items_removed.get(opponent_slot, 0) or 0),
+        # Conditioned HERE rather than at encode time: our own active is known at
+        # normalization, so the encoder receives one already-selected column of the
+        # (their mon x our mon) table instead of the whole table.
+        opponent_matchup_switch_evidence=_matchup_switch_evidence(
+            tendency_stats, self_team
+        ),
     )
+
+
+def _matchup_switch_evidence(
+    tendency_stats: "TendencyStats | None",
+    self_team: Sequence[ShowdownPokemon],
+) -> dict[str, tuple[int, int]]:
+    """Per-opponent-mon (switched, opportunities) against the mon WE currently have out.
+
+    Selects one column of the fold's (their mon x our mon) table. An empty result — no
+    active mon resolvable, or no tendency stats — means every opponent token encodes (0, 0),
+    which is the honest reading: this matchup has no history yet. The marginal triple on the
+    same token is the fallback the model already has.
+    """
+
+    if tendency_stats is None:
+        return {}
+    active = next((mon for mon in self_team if mon.active), None)
+    if active is None or not active.species:
+        return {}
+    ours = _normalize_identifier(active.species)
+    evidence: dict[str, tuple[int, int]] = {}
+    for cell in tendency_stats.opponent_mon_matchups:
+        if _normalize_identifier(cell.opposing_species) != ours:
+            continue
+        evidence[_normalize_identifier(cell.species)] = (
+            int(cell.switched_out_before_attacking),
+            int(cell.stayed_and_attacked),
+        )
+    return evidence
 
 
 def _weather_duration_features(replay: ShowdownReplayState) -> tuple[int, bool]:
@@ -3927,6 +4009,7 @@ def observation_from_player_state(
         transform_targets_by_species={
             _normalize_identifier(member.species): member for member in state.self_team
         },
+        matchup_switch_evidence=state.opponent_matchup_switch_evidence,
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
         schema_v3=schema_v3,
@@ -5702,6 +5785,9 @@ def _encode_pokemon_tokens(
     active_traced_ability: str | None = None,
     active_last_damage_dealt: float = 0.0,
     active_last_damage_taken: float = 0.0,
+    # Per-opponent-mon (switched, opportunities) against OUR current active; opponent
+    # tokens only, and empty under every schema below v4.
+    matchup_switch_evidence: Mapping[str, tuple[int, int]] | None = None,
 ) -> None:
     # Spec v3 change 7: reuse the determinization gender parser (single source of truth for the
     # ``, M`` / ``, F`` details convention). Imported lazily to avoid a module-load cycle
@@ -5950,6 +6036,30 @@ def _encode_pokemon_tokens(
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
             if tendency is not None:
                 _encode_mon_tendency(numeric_features[token_index], tendency)
+        # v4: the matchup-conditional twin of the triple above, on the same token and under
+        # the SAME tendency mask (it is the same channel, conditioned). Absent cells stay
+        # (0, 0) — no history in this matchup — and the marginal triple beside it carries on.
+        if (
+            schema_v4
+            and masks.opponent_tendency_stats_block
+            and role == "opponent"
+            and matchup_switch_evidence
+        ):
+            cell = matchup_switch_evidence.get(_normalize_identifier(candidate.species))
+            if cell is not None:
+                switched, stayed = cell
+                if switched:
+                    _set_numeric(
+                        numeric_features[token_index],
+                        NUMERIC_MON_SWITCHED_VS_ACTIVE,
+                        min(1.0, switched / _MATCHUP_COUNT_DIVISOR),
+                    )
+                if stayed:
+                    _set_numeric(
+                        numeric_features[token_index],
+                        NUMERIC_MON_STAYED_VS_ACTIVE,
+                        min(1.0, stayed / _MATCHUP_COUNT_DIVISOR),
+                    )
         # v2.1 pinned Tier-2 conclusions (current-state surface; the tt cb_bit and
         # tt investment code stay the as-of-strike history records). Gated upstream:
         # the CB set is empty unless the spec is v2.1, masks.tier2_residuals is on,
@@ -6268,6 +6378,13 @@ def _as_sequence(value: Any) -> Sequence[Any]:
     if isinstance(value, (list, tuple)):
         return value
     return ()
+
+
+# Evidence-mass divisor for the matchup-conditional pair. Deliberately NOT the /64 the
+# whole-game tendency counts use: a single (their mon x our mon) cell is visited a handful of
+# times per game, so /64 would pin the pair into the bottom few percent of its column for its
+# entire realistic range. Same principle as /64, matched to this quantity's actual scale.
+_MATCHUP_COUNT_DIVISOR = 8.0
 
 
 def _encode_mon_tendency(num_row: list[float], tendency: "OpponentMonTendency") -> None:

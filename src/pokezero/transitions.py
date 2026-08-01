@@ -273,6 +273,32 @@ class OpponentMonTendency:
 
 
 @dataclass(frozen=True)
+class OpponentMonMatchupTendency:
+    """Per-(opponent mon, our mon) switch evidence — the MATCHUP-CONDITIONAL twin of
+    ``OpponentMonTendency``.
+
+    The marginal triple is keyed to the mon that switched out, which is right, but it
+    averages over whatever matchups the game happened to present. Switching in gen3 is
+    almost entirely matchup-driven (a mon stays in on one threat and bails from another),
+    so the marginal rate is a biased estimator of the only quantity that matters at
+    decision time: will THIS mon bail against the mon I have out right now.
+
+    The pair is the literal conditional form of the marginal triple's first two members —
+    (bailed, stood its ground) in THIS matchup — rather than (bailed, opportunities). Two
+    reasons: it is the stay-or-switch evidence exactly (a ``cant`` turn is an opportunity but
+    not a stay-or-switch datum), and both halves are already accumulated at live hook points
+    in BOTH the batch and incremental folds, so the two cannot drift. ``opposing_species`` is
+    the occupant of the other seat at that instant.
+    """
+
+    slot: str
+    species: str
+    opposing_species: str
+    switched_out_before_attacking: int
+    stayed_and_attacked: int
+
+
+@dataclass(frozen=True)
 class OpponentWeatherReveal:
     """The opponent set this weather this game; ``from_ability`` marks a permanent
     (ability-sourced) reveal vs a 5-turn move weather."""
@@ -311,6 +337,10 @@ class TendencyStats:
     blocked_on_our_attack_count: int
     pursuit_intercept_predict_count: int
     my_switch_turn_count: int
+    # Matchup-conditional switch evidence, one entry per visited (opponent mon, our mon)
+    # cell. Defaulted (and therefore last) so every pre-existing positional construction
+    # site stays valid; only the v4 encode path reads it.
+    opponent_mon_matchups: tuple["OpponentMonMatchupTendency", ...] = ()
 
 
 @dataclass
@@ -388,6 +418,14 @@ class _MonCounters:
 
 
 @dataclass
+class _MatchupCounters:
+    """Per-(side, species, opposing species) switch evidence. See OpponentMonMatchupTendency."""
+
+    switched_out_before_attacking: int = 0
+    stayed_and_attacked: int = 0
+
+
+@dataclass
 class _FoldResult:
     tokens: tuple[TransitionToken, ...] = ()
     windows: tuple[_Window, ...] = ()
@@ -395,6 +433,8 @@ class _FoldResult:
     weather_reveals: tuple[tuple[str, str, bool], ...] = ()
     # (side, species) -> counters.
     mon_counters: dict[tuple[str, str], _MonCounters] = field(default_factory=dict)
+    # (side, species, opposing species) -> matchup-conditional counters.
+    matchup_counters: dict[tuple[str, str, str], _MatchupCounters] = field(default_factory=dict)
     # turn number -> {side: species active when |turn|N was announced}. Drag-safe (the
     # fold's occupant map tracks |drag| lines that emit no token); the turn-merged layer
     # uses it to name the mon whose declared action was consumed without a protocol
@@ -494,6 +534,18 @@ def _tendency_stats_from_fold(fold: _FoldResult, *, perspective_slot: str) -> Te
         if side == opponent
     )
 
+    mon_matchups = tuple(
+        OpponentMonMatchupTendency(
+            slot=side,
+            species=species,
+            opposing_species=facing,
+            switched_out_before_attacking=counters.switched_out_before_attacking,
+            stayed_and_attacked=counters.stayed_and_attacked,
+        )
+        for (side, species, facing), counters in sorted(fold.matchup_counters.items())
+        if side == opponent
+    )
+
     reveals_by_weather: dict[str, bool] = {}
     for side, weather, from_ability in fold.weather_reveals:
         if side != opponent:
@@ -510,6 +562,7 @@ def _tendency_stats_from_fold(fold: _FoldResult, *, perspective_slot: str) -> Te
         opponent_switch_count=opponent_switches,
         opponent_decision_opportunities=opportunities,
         opponent_mon_tendencies=mon_tendencies,
+        opponent_mon_matchups=mon_matchups,
         opponent_weather_reveals=weather_reveals,
         blocked_on_our_attack_count=blocked_on_our_attack,
         pursuit_intercept_predict_count=pursuit_predicts,
@@ -543,12 +596,18 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
     pending_confusion_selfhit_slot: Optional[str] = None
     weather_reveals: list[tuple[str, str, bool]] = []
     mon_counters: dict[tuple[str, str], _MonCounters] = {}
+    matchup_counters: dict[tuple[str, str, str], _MatchupCounters] = {}
     turn_start_occupants: dict[int, dict[str, str]] = {}
     completed_turns: set[int] = set()
     fainted_turns: set[int] = set()
 
     def counters_for(side: str, species: str) -> _MonCounters:
         return mon_counters.setdefault((side, species), _MonCounters())
+
+    def matchup_for(side: str, species: str, opposing_species: str) -> _MatchupCounters:
+        return matchup_counters.setdefault(
+            (side, species, opposing_species), _MatchupCounters()
+        )
 
     def open_window(window: _Window) -> None:
         nonlocal current, pending_confusion_selfhit_slot
@@ -617,6 +676,10 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             if stay is not None and not stay.moved:
                 stay.moved = True
                 counters_for(side, stay.species).stayed_and_attacked += 1
+                # …and the matchup-conditional twin: WHAT it stood its ground against.
+                facing_stay = occupant.get(_other_side(side))
+                if facing_stay is not None:
+                    matchup_for(side, stay.species, facing_stay.species).stayed_and_attacked += 1
             # Any non-Baton-Pass move clears a stale pending-BP flag (mirrors the parser).
             pending_baton_pass[side] = move_id == "batonpass"
             defender = (_slot_from_ident(parts[4]) if len(parts) > 4 else None) or _other_side(side)
@@ -678,6 +741,13 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             previous = occupant.get(side)
             if previous is not None and voluntary and not previous.moved:
                 counters_for(side, previous.species).switched_out_before_attacking += 1
+                # …and the matchup-conditional twin: WHAT it bailed from. The other seat's
+                # occupant at this instant is the mon it declined to face.
+                facing = occupant.get(_other_side(side))
+                if facing is not None:
+                    matchup_for(
+                        side, previous.species, facing.species
+                    ).switched_out_before_attacking += 1
             species = _species_from_details(parts[3]) or _species_from_ident(parts[2])
             occupant[side] = _StayRecord(species=species)
             transformed[side] = False
@@ -993,6 +1063,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         windows=tuple(windows),
         weather_reveals=tuple(weather_reveals),
         mon_counters=mon_counters,
+        matchup_counters=matchup_counters,
         turn_start_occupants=turn_start_occupants,
         completed_turns=completed_turns,
         fainted_turns=fainted_turns,

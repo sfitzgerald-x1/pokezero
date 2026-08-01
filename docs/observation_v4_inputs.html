@@ -117,7 +117,7 @@
 </p>
 
 <div class="kpis">
-  <div class="stat"><div class="v">165</div><div class="l">numeric columns</div><div class="d">v3: 155 &nbsp;<b>+10</b></div></div>
+  <div class="stat"><div class="v">167</div><div class="l">numeric columns</div><div class="d">v3: 155 &nbsp;<b>+12</b></div></div>
   <div class="stat"><div class="v">53</div><div class="l">categorical columns</div><div class="d">v3: 51 &nbsp;<b>+2</b></div></div>
   <div class="stat"><div class="v">87</div><div class="l">tokens</div><div class="d">unchanged</div></div>
   <div class="stat"><div class="v">64</div><div class="l">history rows</div><div class="d">unchanged — deliberately</div></div>
@@ -179,17 +179,18 @@
       <rect x="676.3"  y="0" width="186.7" height="22" rx="3" fill="var(--de-emphasis)"/>
     </g>
     <!-- v4 row -->
-    <text x="0" y="70" class="lbl">v4 · 165</text>
+    <text x="0" y="70" class="lbl">v4 · 167</text>
     <g transform="translate(78,56)">
       <rect x="0"      y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
       <rect x="34.9"   y="0" width="181.2" height="22" rx="3" fill="var(--de-emphasis)"/>
       <rect x="218.1"  y="0" width="22.0"  height="22" rx="3" fill="var(--series-1)"/>
       <rect x="242.1"  y="0" width="291.0" height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="535.1"  y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="570.0"  y="0" width="65.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="637.9"  y="0" width="32.9"  height="22" rx="3" fill="var(--series-1)"/>
-      <rect x="672.8"  y="0" width="60.4"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="735.2"  y="0" width="186.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="535.1"  y="0" width="11.0"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="548.1"  y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="583.0"  y="0" width="65.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="650.9"  y="0" width="32.9"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="685.8"  y="0" width="60.4"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="748.2"  y="0" width="186.7" height="22" rx="3" fill="var(--de-emphasis)"/>
     </g>
     <!-- group labels under the v4 row -->
     <g transform="translate(78,90)">
@@ -197,20 +198,20 @@
       <text x="16"   y="24" class="tick"    text-anchor="middle">6</text>
       <text x="137"  y="10" class="lbl-mut" text-anchor="middle">pokemon_state</text>
       <text x="137"  y="24" class="tick"    text-anchor="middle">33 + 4</text>
-      <text x="387"  y="10" class="lbl-mut" text-anchor="middle">belief</text>
-      <text x="387"  y="24" class="tick"    text-anchor="middle">53</text>
-      <text x="551"  y="10" class="lbl-mut" text-anchor="middle">action</text>
-      <text x="551"  y="24" class="tick"    text-anchor="middle">6</text>
-      <text x="620"  y="10" class="lbl-mut" text-anchor="middle">field</text>
-      <text x="620"  y="24" class="tick"    text-anchor="middle">12 + 6</text>
-      <text x="703"  y="10" class="lbl-mut" text-anchor="middle">tendency</text>
-      <text x="703"  y="24" class="tick"    text-anchor="middle">11</text>
-      <text x="828"  y="10" class="lbl-mut" text-anchor="middle">history</text>
-      <text x="828"  y="24" class="tick"    text-anchor="middle">34</text>
+      <text x="393"  y="10" class="lbl-mut" text-anchor="middle">belief</text>
+      <text x="393"  y="24" class="tick"    text-anchor="middle">53 + 2</text>
+      <text x="564"  y="10" class="lbl-mut" text-anchor="middle">action</text>
+      <text x="564"  y="24" class="tick"    text-anchor="middle">6</text>
+      <text x="633"  y="10" class="lbl-mut" text-anchor="middle">field</text>
+      <text x="633"  y="24" class="tick"    text-anchor="middle">12 + 6</text>
+      <text x="716"  y="10" class="lbl-mut" text-anchor="middle">tendency</text>
+      <text x="716"  y="24" class="tick"    text-anchor="middle">11</text>
+      <text x="841"  y="10" class="lbl-mut" text-anchor="middle">history</text>
+      <text x="841"  y="24" class="tick"    text-anchor="middle">34</text>
     </g>
   </svg>
   <p class="cap">
-    Because the additions sit <em>inside</em> <code>pokemon_state</code> and <code>field</code>, every column laid
+    Because the additions sit <em>inside</em> <code>pokemon_state</code>, <code>belief</code> and <code>field</code>, every column laid
     out after them shifts: <code>v3_numeric_index</code> and <code>v4_numeric_index</code> disagree from index 39
     onward. That is the point of a new contract — no artifact is ever read under both layouts, and the machinery
     refuses to mix them at every layer.
@@ -730,10 +731,12 @@
 </div>
 
 <!-- ============================== PROPOSED ============================== -->
-<h2>Proposed, not built — matchup-conditional switch tendency</h2>
+<h2>Matchup-conditional switch tendency</h2>
 <div class="rowhead" style="margin-top:8px">
   <h3>Two columns on each opponent mon token</h3>
-  <span class="pill prop">proposed · decision needed before game 0</span>
+  <span class="pill built">built</span>
+  <span class="where"><code>NUMERIC_MON_SWITCHED_VS_ACTIVE</code> / <code>_STAYED_VS_ACTIVE</code>
+    · v4 indices 96–97 · all six opponent tokens</span>
 </div>
 <p>
   B3's per-mon triple is keyed to the right mon but still marginalises over the thing that determines the
@@ -782,15 +785,20 @@
       <text x="0" y="90" class="lbl-mut">from the aggregate. It lives only in the history region.</text>
     </g>
 
-    <text x="0" y="176" class="lbl">proposed &nbsp;<tspan class="lbl-mut">— 2 numeric columns on each of the six opponent mon tokens, conditioned on OUR CURRENT ACTIVE:</tspan></text>
-    <text x="18" y="198" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_SWITCHED_VS_ACTIVE &nbsp;&nbsp;&nbsp;&nbsp;times this mon bailed while facing our current active</text>
-    <text x="18" y="216" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_OPPORTUNITIES_VS_ACTIVE &nbsp;its decision opportunities under that same condition</text>
+    <text x="0" y="176" class="lbl">shipped &nbsp;<tspan class="lbl-mut">— 2 numeric columns on each of the six opponent mon tokens, conditioned on OUR CURRENT ACTIVE:</tspan></text>
+    <text x="18" y="198" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_SWITCHED_VS_ACTIVE &nbsp;times this mon BAILED while facing our current active</text>
+    <text x="18" y="216" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_STAYED_VS_ACTIVE &nbsp;&nbsp;&nbsp;times it STOOD ITS GROUND under that same condition</text>
   </svg>
   <p class="cap">
-    The conditioning variable is free — we know our own active at encode time — and this uses the evidence-mass
-    <b>(count, opportunity) pair</b> convention <em>correctly</em>, which is notably the convention B4 could not
-    use because it has no opportunity denominator. Writing it on all six tokens answers two questions at once:
-    will the mon in front of me bail, and which of their mons has historically been willing to face what I have out.
+    The conditioning variable is free — we know our own active at encode time — and the pair is the literal
+    conditional form of the marginal triple's first two members. (bailed, stayed) rather than
+    (bailed, opportunities) for two reasons: it is the stay-or-switch evidence exactly (a <code>cant</code> turn is
+    an opportunity but not a stay-or-switch datum), and both halves are accumulated at live hook points in
+    <b>both</b> the batch and the incremental fold, so the parity twins cannot drift — an opportunity count would
+    have had to be rebuilt from a turn map the incremental fold prunes. Normalized /8, and it rides the same
+    tendency mask as the triple: same channel, conditioned. Writing it on all six tokens answers two questions at
+    once: will the mon in front of me bail, and which of their mons has historically been willing to face what I
+    have out.
   </p>
 </div>
 
@@ -803,18 +811,15 @@
   is the useful form, encode the statistic rather than widening the window.
 </div>
 
-<p><b>The honest problems.</b></p>
+<p><b>The honest limits.</b></p>
 <ul>
-  <li><b>Sparsity.</b> A game visits maybe 10–25 of the 36 pairings at 1–5 turns each, so the conditional cell is
-    usually opportunity &isin; {0,1,2} and is empty early. Mitigated rather than solved by the pair encoding —
-    <code>(1,&nbsp;1)</code> and <code>(1,&nbsp;5)</code> stay distinguishable, which is exactly why the design doc
-    forbids bare rates — and it degrades cleanly to the marginal triple on the same token.</li>
-  <li><b>It is not in the plan.</b> The Part A table does not contain it and the §5 probe's bucket list does not
-    either. The plan is emphatic that the discipline is "probe first, then only features whose buckets showed up" —
-    though a matchup-conditional switch read is a plausible member of the probe's <em>residual bucket</em>, which
-    the plan calls "the falsifier" and "the probe's real product when the prediction misses."</li>
-  <li><b>Timing.</b> Two more columns is a census change. It has to land before game 0 of the arm, or it is v5 and
-    a separate run.</li>
+  <li><b>Sparsity.</b> A game visits maybe 10–25 of the 36 pairings at a few turns each, so a cell is usually small
+    and is empty early. Mitigated rather than solved by the pair encoding — <code>(1,&nbsp;0)</code> and
+    <code>(1,&nbsp;4)</code> stay distinguishable, which is exactly why the design doc forbids bare rates — and an
+    empty cell degrades cleanly to the marginal triple sitting on the same token.</li>
+  <li><b>It was not in the plan.</b> The Part A table does not contain it and the §5 probe's bucket list does not
+    either — it is an owner-approved addition on top. A matchup-conditional switch read is a plausible member of
+    the probe's <em>residual bucket</em>, which the plan calls "the falsifier."</li>
 </ul>
 
 <!-- ============================== TABLE VIEW ============================== -->
@@ -836,9 +841,9 @@
   <tr><td>B2</td><td><code>NUMERIC_OPP_HAZARD_EXPECTED</code></td><td>numeric</td><td class="num">117</td><td>field</td><td>same, their side</td><td><span class="pill built">built</span></td></tr>
   <tr><td>B4</td><td><code>NUMERIC_SELF_ITEMS_REMOVED_CREDIT</code></td><td>numeric</td><td class="num">118</td><td>field</td><td>our items knocked off &divide; 6</td><td><span class="pill built">built</span></td></tr>
   <tr><td>B4</td><td><code>NUMERIC_OPP_ITEMS_REMOVED_CREDIT</code></td><td>numeric</td><td class="num">119</td><td>field</td><td>their items we knocked off &divide; 6</td><td><span class="pill built">built</span></td></tr>
-  <tr><td>B3</td><td><code>NUMERIC_STAT_OPP_SWITCH_COUNT</code> + triple</td><td>—</td><td class="num">—</td><td>stats + opp mons</td><td>already encoded, /64 evidence mass — deliberately unchanged</td><td><span class="pill cov">covered</span></td></tr>
-  <tr><td>—</td><td><code>NUMERIC_MON_SWITCHED_VS_ACTIVE</code></td><td>numeric</td><td class="num">—</td><td>opponent mons</td><td>bails against our current active (count)</td><td><span class="pill prop">proposed</span></td></tr>
-  <tr><td>—</td><td><code>NUMERIC_MON_OPPORTUNITIES_VS_ACTIVE</code></td><td>numeric</td><td class="num">—</td><td>opponent mons</td><td>opportunities against our current active (denominator)</td><td><span class="pill prop">proposed</span></td></tr>
+  <tr><td>B3</td><td><code>NUMERIC_STAT_OPP_SWITCH_COUNT</code> + triple</td><td>—</td><td class="num">—</td><td>stats + opp mons</td><td>marginal form already encoded, /64 — unchanged; the conditional twin is below</td><td><span class="pill cov">covered</span></td></tr>
+  <tr><td>B3+</td><td><code>NUMERIC_MON_SWITCHED_VS_ACTIVE</code></td><td>numeric</td><td class="num">96</td><td>all six opponent mons</td><td>bailed while facing our current active, /8</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B3+</td><td><code>NUMERIC_MON_STAYED_VS_ACTIVE</code></td><td>numeric</td><td class="num">97</td><td>all six opponent mons</td><td>stood its ground under the same condition, /8</td><td><span class="pill built">built</span></td></tr>
 </table>
 
 <details>

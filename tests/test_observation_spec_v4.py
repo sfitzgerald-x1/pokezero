@@ -34,6 +34,8 @@ from pokezero.showdown import (
     NUMERIC_ACTIVE,
     NUMERIC_LAST_DAMAGE_DEALT,
     NUMERIC_LAST_DAMAGE_TAKEN,
+    NUMERIC_MON_STAYED_VS_ACTIVE,
+    NUMERIC_MON_SWITCHED_VS_ACTIVE,
     NUMERIC_MUST_RECHARGE,
     NUMERIC_OPP_HAZARD_CREDIT,
     NUMERIC_OPP_HAZARD_EXPECTED,
@@ -227,10 +229,10 @@ class V4SchemaTableTest(unittest.TestCase):
         spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V4)
         self.assertIs(spec, V4_REPLAY_OBSERVATION_SPEC)
         self.assertIs(REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION_V4], spec)
-        # Ten numeric + two categorical columns on top of v3, and the SAME 64-row history tail:
-        # the pack arm runs at budget 0, so resizing the tail would confound the comparison.
+        # Twelve numeric + two categorical columns on top of v3, and the SAME 64-row history
+        # tail: the pack arm runs at budget 0, so resizing the tail would confound the read.
         self.assertEqual(
-            spec.numeric_feature_count, V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 10
+            spec.numeric_feature_count, V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 12
         )
         self.assertEqual(
             spec.categorical_feature_count,
@@ -254,6 +256,12 @@ class V4LayoutTest(unittest.TestCase):
                 NUMERIC_TRUANT_LOAF,
                 NUMERIC_LAST_DAMAGE_DEALT,
                 NUMERIC_LAST_DAMAGE_TAKEN,
+            ),
+            # The matchup-conditional pair joins the per-opponent-mon tendency triple, which
+            # lives in "belief" — the two are read together, so they sit together.
+            "belief": (
+                NUMERIC_MON_SWITCHED_VS_ACTIVE,
+                NUMERIC_MON_STAYED_VS_ACTIVE,
             ),
             "field": (
                 NUMERIC_SELF_HAZARD_CREDIT,
@@ -293,8 +301,10 @@ class V4LayoutTest(unittest.TestCase):
         # asserted rather than left implicit.
         self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), v4_numeric_index(NUMERIC_STALL_COUNTER))
         self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
+        # +4 from the pokemon_state insertions, +2 more from the belief insertions, both of
+        # which are laid out before the field group.
         self.assertEqual(
-            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 4
+            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 6
         )
 
     def test_schema_aware_lookup_reports_pack_columns_as_absent_under_v3(self) -> None:
@@ -692,6 +702,113 @@ class V4LastMoveAblationMaskTest(V4EncodeTestBase):
         ]
         self.assertEqual(rows[0].categorical_ids, rows[1].categorical_ids)
         self.assertEqual(rows[0].numeric_features, rows[1].numeric_features)
+
+
+class V4MatchupSwitchTendencyTest(V4EncodeTestBase):
+    """The matchup-conditional switch pair: the marginal triple's missing conditioning."""
+
+    # Against Magneton: Skarmory bails BOTH times it is sent in and never attacks, while
+    # Blissey bails once and then stands its ground once. Encoded from p1's seat, so
+    # Magneton is "our current active".
+    _LINES = [
+        "|player|p1|Alice|",
+        "|player|p2|Bob|",
+        "|switch|p1a: Magneton|Magneton, L80|100/100",
+        "|switch|p2a: Skarmory|Skarmory, L76, M|100/100",
+        "|turn|1",
+        "|switch|p2a: Blissey|Blissey, L78, F|100/100",           # Skarmory bails (1)
+        "|move|p1a: Magneton|Thunderbolt|p2a: Blissey",
+        "|-damage|p2a: Blissey|70/100",
+        "|upkeep",
+        "|turn|2",
+        "|switch|p2a: Skarmory|Skarmory, L76, M|100/100",         # Blissey bails (1)
+        "|move|p1a: Magneton|Thunderbolt|p2a: Skarmory",
+        "|-damage|p2a: Skarmory|40/100",
+        "|upkeep",
+        "|turn|3",
+        "|switch|p2a: Blissey|Blissey, L78, F|70/100",            # Skarmory bails (2)
+        "|move|p1a: Magneton|Thunderbolt|p2a: Blissey",
+        "|-damage|p2a: Blissey|40/100",
+        "|upkeep",
+        "|turn|4",
+        "|move|p2a: Blissey|Seismic Toss|p1a: Magneton",          # Blissey STAYS (1)
+        "|-damage|p1a: Magneton|70/100",
+        "|move|p1a: Magneton|Thunderbolt|p2a: Blissey",
+        "|-damage|p2a: Blissey|20/100",
+        "|upkeep",
+        "|turn|5",
+        '|request|{"active":[{"moves":[{"move":"Thunderbolt","id":"thunderbolt"}]}],'
+        '"side":{"id":"p1","name":"Alice","pokemon":['
+        '{"ident":"p1a: Magneton","details":"Magneton, L80","condition":"70/100","active":true}]}}',
+    ]
+
+    def _by_species(self, observation, species):
+        vocab = self._vocab()
+        want = vocab.encode(f"species:{species}")
+        for index in range(OPPONENT_POKEMON_TOKEN_OFFSET, OPPONENT_POKEMON_TOKEN_OFFSET + 6):
+            if observation.categorical_ids[index][0] == want:
+                row = observation.numeric_features[index]
+                return (
+                    row[v4_numeric_index(NUMERIC_MON_SWITCHED_VS_ACTIVE)],
+                    row[v4_numeric_index(NUMERIC_MON_STAYED_VS_ACTIVE)],
+                )
+        raise AssertionError(f"no opponent token for {species}")
+
+    def test_conditioning_separates_two_mons_the_marginal_count_would_not(self) -> None:
+        state = self._state(self._LINES)
+        # (bailed, stood its ground) against Magneton. Skarmory always runs; Blissey ran
+        # once and then fought. A bare "bailed N times" cannot express that difference —
+        # which is the whole point of conditioning on what they were facing.
+        self.assertEqual(
+            dict(state.opponent_matchup_switch_evidence),
+            {"skarmory": (2, 0), "blissey": (1, 1)},
+        )
+        observation = self._encode(state)
+        # /8 evidence mass, count and opportunity on the same scale so the model reads a rate.
+        self.assertAlmostEqual(self._by_species(observation, "Skarmory")[0], 2 / 8, places=6)
+        self.assertEqual(self._by_species(observation, "Skarmory")[1], 0.0)
+        self.assertAlmostEqual(self._by_species(observation, "Blissey")[0], 1 / 8, places=6)
+        self.assertAlmostEqual(self._by_species(observation, "Blissey")[1], 1 / 8, places=6)
+
+    def test_an_unvisited_matchup_reads_zero_rather_than_borrowing_the_marginal(self) -> None:
+        # Same game, but our active is Snorlax — a matchup neither of their mons has faced.
+        # The pair must read (0, 0): no history HERE, not "no history at all".
+        lines = self._LINES[:-1] + [
+            "|switch|p1a: Snorlax|Snorlax, L78, M|100/100",
+            "|turn|6",
+            '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
+            '"side":{"id":"p1","name":"Alice","pokemon":['
+            '{"ident":"p1a: Snorlax","details":"Snorlax, L78, M","condition":"100/100",'
+            '"active":true}]}}',
+        ]
+        state = self._state(lines)
+        self.assertEqual(dict(state.opponent_matchup_switch_evidence), {})
+        observation = self._encode(state)
+        self.assertEqual(self._by_species(observation, "Skarmory"), (0.0, 0.0))
+        # The MARGINAL triple on the same token is untouched and still carries the fallback.
+        marginal = observation.numeric_features[
+            self._active_token(observation, OPPONENT_POKEMON_TOKEN_OFFSET)
+        ]
+        self.assertGreaterEqual(len(marginal), V4_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
+
+    def test_the_pair_rides_the_tendency_mask(self) -> None:
+        from pokezero.observation import ObservationFeatureMasks
+
+        observation = observation_from_player_state(
+            self._state(self._LINES),
+            category_vocab=self._vocab(),
+            spec=V4_REPLAY_OBSERVATION_SPEC,
+            dex=self._dex(),
+            feature_masks=ObservationFeatureMasks(opponent_tendency_stats_block=False),
+        )
+        # Same channel as the marginal triple, conditioned — so the same mask darkens it.
+        self.assertEqual(self._by_species(observation, "Skarmory"), (0.0, 0.0))
+
+    def test_v3_does_not_carry_the_pair(self) -> None:
+        for column in (NUMERIC_MON_SWITCHED_VS_ACTIVE, NUMERIC_MON_STAYED_VS_ACTIVE):
+            self.assertIsNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V3, column)
+            )
 
 
 class V4FreezesV3Test(V4EncodeTestBase):

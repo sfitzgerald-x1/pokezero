@@ -27,7 +27,7 @@ same audit run in the opposite direction: world-seeded facts the observation nev
 
 | | v3 | v4 |
 |---|---|---|
-| numeric | 155 | **165** |
+| numeric | 155 | **167** |
 | categorical | 51 | **53** |
 | transition tokens | 64 | 64 (unchanged) |
 
@@ -200,11 +200,47 @@ cannot see. Our own team is fully known, so the same code is exact on the self s
 The active mon is excluded from the bench count: it already paid, and will not pay again unless
 it leaves and returns — which is precisely the future this column prices.
 
-### B3 — opponent switch propensity: **already present, do not re-add**
+### B3 — opponent switch propensity: marginal already present; **conditional added**
 
 The global (switch count, decision opportunities) pair plus the per-mon (switched-before-attack,
-stayed-and-attacked, turns-active) triple, evidence-mass /64, never bare rates. It also already
-serves the phaze read. V4's contribution is noting it needs no work.
+stayed-and-attacked, turns-active) triple, evidence-mass /64, never bare rates, are already
+encoded and are unchanged. The triple is already keyed to **the mon that switched out**, which
+is right.
+
+What it lacked is the conditioning. The triple marginalises over the thing that actually drives
+the behaviour: **what the mon was facing.** Switching in gen3 is almost entirely matchup-driven —
+a mon stands its ground against one threat and bails from another — so "bailed 3 of 7" averages
+over whatever matchups the game happened to present, and is a biased estimator of the only
+quantity that matters at decision time: *will this mon bail against the mon I have out right now.*
+
+**`NUMERIC_MON_SWITCHED_VS_ACTIVE` / `NUMERIC_MON_STAYED_VS_ACTIVE`** — two columns on **each of
+the six** opponent mon tokens, conditioned on OUR CURRENT ACTIVE: the literal conditional form of
+the triple's first two members. Written on all six rather than just their active so the pair
+answers two questions at once — will the mon in front of me bail, and which of their mons has
+historically been willing to face what I have out (i.e. what they will bring *in*).
+
+Why this belongs in the k0 pack specifically: the marginal aggregate survives at k0 (a token
+column, not a history row), but the matchup *context* of each switch is carried solely by the
+transition rows. So a k0 policy sees "bailed 3 times" with no way to recover what from. And the
+raw form was fully available at **k64 — the worst and least stable arm**, where the model could
+not use it. That is the pack's thesis in miniature.
+
+Chosen as (switched, stayed) rather than (switched, opportunities) for two reasons: it is the
+stay-or-switch evidence exactly (a `cant` turn is an opportunity but not a stay-or-switch datum),
+and both halves are accumulated at live hook points in **both** the batch and the incremental
+fold, so the parity twins cannot drift — an opportunity count would have had to be reconstructed
+from a turn map the incremental fold prunes.
+
+Normalized **/8**, not /64: same principle, different range. A single (their mon x our mon) cell
+is visited a handful of times per game. A cell with no history reads (0, 0) — "no history in
+*this* matchup", not "no history at all" — and the marginal triple sits on the same token as the
+fallback. Rides the same `opponent_tendency_stats_block` mask as the triple; it is the same
+channel, conditioned.
+
+**Known limit: sparsity.** A game visits maybe 10–25 of the 36 pairings at a few turns each, so
+the cell is usually small and is empty early. The pair encoding makes that honest rather than
+misleading — `(1, 0)` and `(1, 4)` stay distinguishable, which is exactly why the design doc
+forbids bare rates.
 
 ### B4 — `NUMERIC_{SELF,OPP}_ITEMS_REMOVED_CREDIT`
 
