@@ -1,0 +1,49 @@
+{
+ "schema": "c51-shape-c-crit-signature/1",
+ "population": "the 117 shape-C rows -- a sibling arm carries the observed component SHAPE but at a magnitude no legal gen3 roll can reach",
+ "why_this_shape": "C50 showed 402 of the 476 residue rows have no registered hypothesis. This is the second largest of the four shapes and had the sharpest signature.",
+ "signature": {
+  "observed_over_engine_sibling_ratio": {
+   "n": 125,
+   "min": 0.11,
+   "median": 1.98,
+   "max": 8.69,
+   "in_crit_band_1.7_to_2.3": "87 of 125 (70%)"
+  },
+  "reading": "a median of 1.98 is the gen3 crit multiplier essentially exactly. The observed transition looks like a crit priced against the engine's non-crit arm.",
+  "enrichment_vs_all_other_survivors": {
+   "Sleep Talk": "94.0% vs 19.2% = 4.9x",
+   "|-crit| in protocol": "59.0% vs 19.5% = 3.0x"
+  }
+ },
+ "hypothesis_tested_and_refuted": {
+  "claim": "the engine's Sleep Talk callee branches lack crit arms -- the 1/num_choices mass split prunes them",
+  "why_it_was_attractive": "Sleep Talk is 94% of the shape and the callee union is the one place the engine divides branch mass",
+  "control": "measured whether the engine enumerates any 2x magnitude pair, on ALL 3,538 survivors, split by whether the boundary is a Sleep Talk one",
+  "result": {
+   "sleep_talk": "crit pair present at 25.8%",
+   "control": "20.0%"
+  },
+  "verdict": "REFUTED. Sleep Talk boundaries carry crit pairs slightly MORE often, not less. Sleep Talk is enriched in the shape without being the mechanism -- the same conclusion C39 reached for the D bucket, reached again independently."
+ },
+ "the_split_and_the_caveat_that_limits_it": {
+  "measured": {
+   "engine HAS a 2x pair somewhere in its branch set": 36,
+   "engine has NO 2x pair": 81
+  },
+  "the_36": "the engine does enumerate the crit magnitude; the matcher's shape-matching sibling test selected the non-crit arm. A pairing failure, so instrument-artifact.",
+  "the_81": "CANNOT be called an engine gap on this evidence. Lacking a 2x pair is the NORMAL state: only 20% of all control boundaries have one, so 69% of shape C lacking one is unremarkable against an 80% baseline. Shape C is in fact slightly LESS likely to lack a crit pair than the population at large.",
+  "what_this_kills": "the tempting headline -- '81 rows where the engine cannot reach the observed crit' -- is not supported. The baseline comparison removes it."
+ },
+ "what_is_established": [
+  "shape C has a real and distinctive signature: observed magnitude is ~2x the engine's shape-matched sibling, median 1.98",
+  "36 of 117 are pairing failures where the engine has the crit magnitude and the matcher did not use it",
+  "Sleep Talk is enriched 4.9x and is NOT the mechanism"
+ ],
+ "what_is_not": [
+  "whether the remaining 81 are an engine gap -- the crit-pair test does not discriminate them from baseline",
+  "why the shape-matching sibling test prefers the non-crit arm in the 36"
+ ],
+ "next": "attack the 36 first: they are a definite instrument defect with a known cause shape, and fixing the sibling selection is a matcher change with a predictable row delta. The 81 need a test that discriminates against baseline, which the crit-pair test does not.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+}
