@@ -55,9 +55,10 @@
   "coverage": 1,
   "families_over_registered_bound": 7,
   "predicted_zero_counters_nonzero": 3,
-  "contract_schema_defects_of_my_own_making": 18,
+  "contract_schema_defects_of_my_own_making": 0,
   "coverage_measured": 0.9587,
-  "coverage_floor": 0.97
+  "coverage_floor": 0.97,
+  "classes_observed_but_never_registered": 18
  },
  "retention": {
   "repros_complete_all_shards": true,
@@ -67,7 +68,7 @@
   "The 60-game probe that showed ZERO unattributed did not predict this; the sweep shows 3,882. One seed band at a 167th of the population was not representative, and the audit table's 'instrument-artifact (resolved)' verdict for the structural counter rested on it. C28-C30 fixed three real defects in that shape; they did not exhaust it.",
   "Seven of thirteen documented families exceeded their registered upper bounds. Those bounds came from the archive -- a pre-fix, divergence-conditioned population -- used to predict rates on a fresh one. limit:world_substitute_health_unknown at 0.0062 against a 0.0001 risk budget is 62x over: a non-empirical carry-over never tested on fresh data.",
   "Coverage came in at 0.9587 against the 0.97 floor, independent of attribution, with no advance signal.",
-  "Eighteen gate failures are a defect in the contract I generated: predicted_class_rates_10k carries bare interval lists for classes present in predicted_class_count_intervals but absent from current_engine_class_counts. validate_final_contract_schema passed at registration because it validates the registered shape; the readout rejects them only when observed classes bring them into play. No dry run could have surfaced this."
+  "CORRECTED: I recorded 18 gate failures as malformed predicted_class_rates_10k entries in the contract I generated. That was wrong -- all 49 entries are well-formed. The readout iterates observed-union-predicted classes and reports 'predicted class X is not an object' when a class was OBSERVED but never REGISTERED; the message describes a shape while the condition is absence. Those 18 are classes the fresh sweep produced that my archive-derived calibration never saw. That makes them the SAME root error as the seven exceeded family bounds -- calibrating a fresh population from the archive -- not a separate defect."
  ],
  "disposition": "Recorded as an honest FAIL. The contract forbids widening attribution after reading the run and forbids amending itself in place, so C32 stands and the residue is the diagnosis queue. A PASS requires a successor cycle: exhaust the structural shape, recalibrate family bounds against a fresh population rather than the archive, understand the coverage shortfall, and fix the predicted-class shape defect."
 }

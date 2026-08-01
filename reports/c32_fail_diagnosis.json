@@ -32,14 +32,14 @@
  "other_failures_to_diagnose": {
   "coverage": "0.9587 against a 0.97 floor, cause unknown, no advance signal",
   "family_bounds": "7 of 13 over, because they were calibrated on the archive and applied to a fresh population",
-  "contract_defect": "18 predicted_class_rates_10k entries carry bare interval lists"
+  "contract_defect": "CORRECTED: not a shape defect. 18 classes were OBSERVED in the sweep but never REGISTERED, because predicted_class_rates_10k was built from the archive's class set. Same root cause as the family-bound overruns."
  },
  "next_cycle": [
-  "settle the C29 scoping hypothesis offline",
-  "recalibrate family bounds from THIS fresh population, not the archive",
-  "diagnose the coverage shortfall",
-  "fix the predicted-class shape defect",
-  "C33 residual-lethality partition for the 73 confirmed support gaps"
+  "recalibrate BOTH the family bounds and the predicted class set from a fresh population -- these are one error, not two",
+  "diagnose the coverage shortfall (0.9587 vs 0.97)",
+  "diagnose the 515 unattributed rows remaining after C34",
+  "C33 residual-lethality partition for the 73 confirmed support gaps",
+  "identify a discriminator for the 1,009 rows that does not rest on the legal roll set"
  ],
  "hypothesis_testing": {
   "established": {
