@@ -30,9 +30,29 @@
   "measured_against": "the C32 sweep's own attribution, not the archive's",
   "decreases": 3701,
   "increases": 1,
-  "the_one_increase": "I4_attribution_tie 119 -> 120. One row gained. A fix of this kind should add nothing anywhere, so this is a real if tiny violation and is recorded as such rather than rounded away. It needs identifying before C34 ships into a registration.",
-  "my_first_reading_was_wrong": "I initially reported I1 and LS_capped_lethal_shape as RISING. That compared against the ARCHIVE's counts instead of the sweep's. Against the sweep both fall sharply -- I1 333 -> 96, LS_capped_lethal_shape 501 -> 461 -- which shows the leak was inflating four families at once, not only the structural one."
+  "the_one_increase": "RESOLVED and it was not a violation. Compared per-row against the correct pre-fix baseline (72e56cb2~1, verified to lack obs_rolled_branch), ZERO rows regressed from matched to divergent. The I4_attribution_tie +1 is one row moving LS_capped_lethal_shape -> I4_attribution_tie: a re-attribution between two documented families, both already divergent. The earlier apparent violation came from comparing the sweep's readout attribution against a local re-read -- two different measurement paths -- rather than the same path before and after.",
+  "my_first_reading_was_wrong": "I initially reported I1 and LS_capped_lethal_shape as RISING. That compared against the ARCHIVE's counts instead of the sweep's. Against the sweep both fall sharply -- I1 333 -> 96, LS_capped_lethal_shape 501 -> 461 -- which shows the leak was inflating four families at once, not only the structural one.",
+  "per_row_transitions": {
+   "structural -> matched": 3340,
+   "I1_cap_state_shape -> matched": 237,
+   "LS_capped_lethal_shape -> matched": 40,
+   "world_sample_drag_target -> matched": 39,
+   "unattributed_generic -> matched": 21,
+   "I6_sleeptalk_callee_union -> matched": 14,
+   "I3_roll_inherited -> matched": 4,
+   "I2_matcher_accounting -> matched": 3,
+   "roll_divergent_lethality -> matched": 2,
+   "structural -> I3_roll_inherited": 2,
+   "structural -> I6_sleeptalk_callee_union": 2,
+   "LS_capped_lethal_shape -> I4_attribution_tie": 1,
+   "matched -> divergent": 0
+  }
  },
  "does_not_reach_a_pass": "515 unattributed rows remain against a required zero, and the C32 run independently failed on coverage 0.9587 against a 0.97 floor, on seven family bounds calibrated from the archive, and on eighteen malformed predicted_class entries. This fix touches none of those.",
- "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+ "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a",
+ "incidental_finding": {
+  "engine_panic": "Invalid rest_turns value: 32 at gen3/generate_instructions.rs:2123",
+  "context": "Surfaced while re-reading retained states. Caught and counted rather than crashing the run, but it is a real panic on real states, and it is the shape open PR #1008 (contain poke-engine panics in the native search) addresses. Recorded here because it was found incidentally and would otherwise be lost."
+ },
+ "c34_clear_to_ship": "Yes on the invariant. Still needs a registration cycle -- freeze, contract, calibration, attestation -- before any sweep, and does not by itself reach a PASS."
 }
