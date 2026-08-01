@@ -132,5 +132,29 @@
    }
   },
   "sequencing_consequence": "Four distinct problems, not one. Only the 433 dominates, and it is not the shape C34 addressed. The 37 same-turn rows look like unpriced crits, which would put them in the engine-gap bucket alongside C27 and C31 rather than the instrument bucket. The 9 Truant rows matter out of proportion to their count: they are the first fresh-population evidence for a predicted-zero counter that the archive could never settle."
+ },
+ "coverage_diagnosis": {
+  "measured": 0.9587,
+  "floor": 0.97,
+  "full_round": 821320,
+  "measured_boundaries": 787376,
+  "unmeasured": 33944,
+  "boundaries_needed_to_clear_the_floor": 9304,
+  "coverage_reducing_skips": {
+   "struggle_not_submittable": 7909,
+   "rest_sleep_skipped_time_pending": 7476,
+   "self_moveset_mismatch": 5058,
+   "volatile_unsupported": 4799,
+   "self_request_state_unsupported": 643,
+   "strict_all_branches_lossy": 372,
+   "materialization_blocker": 362,
+   "encore_move_unknown": 76,
+   "transform_unexpressible": 23,
+   "status_unsupported": 2
+  },
+  "single_seat_boundary_is_not_coverage_reducing": "89,887 single-seat boundaries are recorded as a skip but are NOT full-round boundaries, so they never entered the denominator. Reading them as coverage loss would badly misstate the picture -- they exceed the entire unmeasured count on their own.",
+  "unaccounted": "7,224 unmeasured boundaries are not explained by the named skips (26,720 of 33,944). I cannot attribute those from the readout alone and am not going to guess at them.",
+  "tractability": "No single cause clears the floor: the two largest reach 0.9683 and 0.9678 against 0.97. Any TWO of the top four clear it comfortably. These are world-construction limits rather than engine errors, so they are a different repair class from everything else in this cycle.",
+  "floor_provenance_worth_checking": "0.97 was registered on the basis of C14's 0.9773 and C6's 0.9765. This sweep reads 0.9587 on a different harness era, so the question is not only 'why is coverage low' but 'is the floor still calibrated to the same measurement'. Both need answering before the floor is either met or moved -- and moving it to fit a result is precisely what the contract forbids."
  }
 }
