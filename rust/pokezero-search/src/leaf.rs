@@ -1286,27 +1286,42 @@ impl LeafContext {
             "opponent_active_volatiles".into(),
             json!(tracked_volatiles(opp_side, self_side)),
         );
-        // V4 pack A1. MUSTRECHARGE is deliberately absent from VOLATILE_MAP (no tracked
-        // parser counterpart), so without these two writes the v4 encoder's
-        // `volatile:mustrecharge` bag entry would come from the ROOT's flag and go stale.
-        // That is not merely stale like the rest of the pack: this same function's action
-        // surface reads the volatile LIVE (see `recharging` below) to present the forced
-        // single "recharge" pseudo-move, so a stale flag makes one observation contradict
-        // itself — a branch that just fired Hyper Beam would show the forced move surface
+        // V4 pack A1, OPPONENT SIDE ONLY — the asymmetry is deliberate; see below.
+        //
+        // MUSTRECHARGE is absent from VOLATILE_MAP (no tracked parser counterpart), so without
+        // this write the v4 encoder's `volatile:mustrecharge` bag entry would come from the
+        // ROOT's flag and go stale. For the opponent that is not merely stale like the rest of
+        // the pack, it is self-contradictory: this same function's action surface reads the
+        // volatile LIVE (see `recharging` below) to present the forced single "recharge"
+        // pseudo-move, so a branch that just fired Hyper Beam would show the forced surface
         // with no recharge volatile, and a branch resuming from a recharging root would keep
-        // the volatile after the turn was consumed. The volatile is already read twice here,
-        // so making it live costs nothing.
-        for (key, side) in [
-            ("self_must_recharge", self_side),
-            ("opponent_must_recharge", opp_side),
-        ] {
-            md.insert(
-                key.into(),
-                json!(side
-                    .volatile_statuses
-                    .contains(&PokemonVolatileStatus::MUSTRECHARGE)),
-            );
-        }
+        // the volatile after the turn was consumed.
+        //
+        // The SELF side is deliberately NOT derived the same way, because the world it would
+        // read is not seeded for us. `MUSTRECHARGE` only enters a constructed world through
+        // engine_world.py's recharging_slots, and the live producer
+        // (engine_search.py::_recharging_slots) returns the OPPONENT slot or nothing — never
+        // ours. Since model.rs encodes the ROOT state to build root_priors, deriving the self
+        // flag from volatile_statuses would write `false` at depth 0 for a root where our own
+        // active must recharge, while Python's root encode writes the volatile from the parser
+        // tracker: a depth-0 parity regression in exchange for fixing a staleness. Passing the
+        // root flag through verbatim is correct there. Interior nodes are fine either way — the
+        // engine applies MUSTRECHARGE itself during simulation.
+        //
+        // BEWARE when revisiting: the depth-0 gate cannot catch this. leaf_root_parity.py
+        // (and leaf_vs_reality.py, prior_mapping_assert.py, fidelity_gate_events.py) derive
+        // `recharging` for BOTH slots from the recorded chosen candidate, so the gate's world
+        // carries self-side MUSTRECHARGE and would agree with a symmetric write rather than
+        // test it. Making the self side live requires teaching _recharging_slots to return our
+        // slot too (which also closes a real modelling gap: today the production root world
+        // lets our recharging mon pick any move) and that changes search-world construction,
+        // where engine_world.py treats mustrecharge as a hard lock like `trapped`.
+        md.insert(
+            "opponent_must_recharge".into(),
+            json!(opp_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::MUSTRECHARGE)),
+        );
 
         // --- team conditions + active flags ---
         for (key, engine_side, side) in [

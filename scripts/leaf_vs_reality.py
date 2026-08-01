@@ -175,13 +175,22 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # facing)), so it is frozen only because it is not yet surfaced through ProductsData. That one is
 # a genuine follow-up, not a permanent divergence.
 #
-# A1 (forced recharge) is DELIBERATELY ABSENT from this set, and its absence is the claim that
-# it is live rather than an oversight. It rides the CATEGORY_VOLATILE_* bag as
-# `volatile:mustrecharge`, not a column of its own, so it could not be listed here without
-# also sweeping every other volatile into the class. It was the one pack member that did not
-# merely go stale at a leaf but CONTRADICTED the same observation's action surface, which reads
-# the MUSTRECHARGE volatile live; leaf.rs now refreshes self_/opponent_must_recharge from the
-# branch's own volatile_statuses, so there is nothing left to accept.
+# A1 (forced recharge) is SPLIT BY SIDE and is not listed here, because it rides the
+# CATEGORY_VOLATILE_* bag as `volatile:mustrecharge` rather than owning a column — listing it
+# would mean sweeping every other volatile into the class too.
+#   - OPPONENT side: LIVE. It was the one pack member that did not merely go stale at a leaf but
+#     contradicted the same observation's action surface, which reads the MUSTRECHARGE volatile
+#     live; leaf.rs refreshes opponent_must_recharge from the branch's own volatile_statuses.
+#   - SELF side: ROOT-FROZEN, and deliberately so. MUSTRECHARGE only enters a world through
+#     recharging_slots, and the live producer (engine_search.py::_recharging_slots) never returns
+#     our own slot — so deriving it from volatile_statuses would write False at depth 0 for a
+#     genuinely recharging self mon and REGRESS root/leaf parity. Frozen is correct until
+#     _recharging_slots is made symmetric.
+# NOTE for anyone testing this area: the depth-0 gates below (and leaf_root_parity.py,
+# prior_mapping_assert.py, fidelity_gate_events.py) all derive `recharging` for BOTH slots from
+# the recorded chosen candidate. That is NOT what production builds, so these gates would ratify
+# a symmetric self-side write rather than catch it. Verify against engine_search's world, not
+# the gate's.
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
     {
         "NUMERIC_TRUANT_LOAF",
