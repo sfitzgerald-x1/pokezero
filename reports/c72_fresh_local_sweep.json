@@ -1,0 +1,42 @@
+{
+ "schema": "c72-fresh-local-sweep/1",
+ "why": "every measurement this session was a re-read of the single C32 corpus, captured on the old build. The fixes were derived from that corpus, so validating them against it is circular. Showdown turned out to be installed locally at /Users/scott/workspace/pokerena/vendor/pokemon-showdown, so a 200-game sweep on the CURRENT build at a non-colliding seed range was available -- and had been all along.",
+ "run": {
+  "games": 200,
+  "seed_start": 19000000,
+  "build": "c50da60a with C55, C57, C66 and C68",
+  "boundaries_measured": 15224,
+  "boundaries_full_round": 15968,
+  "engine_errors": 0
+ },
+ "headline": {
+  "divergence_rate": "67/15,224 = 0.440%, against C32's 7,249/787,376 = 0.921%",
+  "reading": "roughly half, on data none of the four fixes was derived from. The rate was stable from the first 700 boundaries through all 15,224, so this is not a small sample settling.",
+  "the_comparison_is_indicative_not_exact": "different seed range, different build, and C32's retained corpus was conditioned on divergence. The rate comparison is suggestive; the SHAPE comparison below is what carries weight."
+ },
+ "no_new_shapes": {
+  "divergence_classes_seen": {
+   "limit:roll_divergent_lethality": 24,
+   "roll_scaled_component": 21,
+   "component_missing_in_engine:itemleftovers": 5,
+   "component_magnitude:movepainsplit": 4,
+   "component_missing_in_engine:sandstorm": 2,
+   "component_missing_in_engine:psn": 2,
+   "component_mismatch:itemleftovers|leechseed": 2,
+   "component_extra_in_engine:itemleftovers": 2,
+   "limit:world_sample_drag_target": 1
+  },
+  "verdict": "every class present in the fresh data is one the C32 corpus already contains. No shape is invisible to this session's analysis for want of appearing in the corpus, which was the specific risk of having worked from a single population."
+ },
+ "coverage_did_not_improve": {
+  "fresh": "15,224/15,968 = 0.9534",
+  "c32": "0.9587",
+  "floor": "0.97",
+  "reading": "still short, and marginally worse than C32 on a different seed range. The top skips are unchanged in character: rest_sleep_skipped_time_pending 215, volatile_unsupported 142, struggle_not_submittable 116. C43's diagnosis and C44's finding -- that the cheap Struggle repair would corrupt the unattributed gate -- both still stand."
+ },
+ "what_this_does_and_does_not_establish": {
+  "does": "the four landed fixes hold up on data they were not derived from, and the corpus was not hiding a shape from the analysis",
+  "does_not": "certify anything. 200 games is not the contract's 10,000, there is no registered contract for this run, no attestation, and no seed reservation. It is a validation probe, not a certification sweep, and must not be read as one."
+ },
+ "a_miss_worth_recording": "I told the user repeatedly that a sweep required cluster time. That is true at certification scale -- 10,000 games across eight shards -- but a 200-game local validation run was available on this machine the entire session, and fresh-data validation was the standing weakness in every result I reported. I did not check whether the tool was there."
+}
