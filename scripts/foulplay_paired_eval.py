@@ -126,6 +126,17 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         "--policy-mode", "raw" if args.arm == "raw" else "engine-mcts",
         "--summary-out", str(seat_summary_path(args, seat)),
     ]
+    # The bridge defaults these to a REPO-RELATIVE checkout
+    # (DEFAULT_FOULPLAY_ROOT = <repo>/third_party/foul-play) and there is no
+    # environment fallback, so a deployment that ships foul-play anywhere else
+    # cannot reach it. Every other harness passes them explicitly; this driver
+    # could not, which cost a full campaign probe:
+    #   FileNotFoundError: foul-play Python not found at
+    #   /opt/pokezero/third_party/foul-play/.venv/bin/python
+    if args.foulplay_root:
+        argv += ["--foulplay-root", str(args.foulplay_root)]
+    if args.foulplay_python:
+        argv += ["--foulplay-python", str(args.foulplay_python)]
     if args.arm != "raw":
         argv += [
             "--engine-depth", str(args.depth),
@@ -257,6 +268,13 @@ def main(argv=None) -> int:
                     help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
                          "distinct when two checkpoints share a filename, which the "
                          "campaign copies do.")
+    ap.add_argument("--foulplay-root", default=None,
+                    help="foul-play checkout. Defaults to the bridge's repo-relative "
+                         "third_party/foul-play, which is wrong for any image that "
+                         "ships it elsewhere.")
+    ap.add_argument("--foulplay-python", default=None,
+                    help="foul-play venv interpreter. Defaults to "
+                         "<foulplay-root>/.venv/bin/python.")
     ap.add_argument("--engine-model-path", default=None)
     ap.add_argument("--engine-tables-path", default=None)
     ap.add_argument("--out", required=True)
