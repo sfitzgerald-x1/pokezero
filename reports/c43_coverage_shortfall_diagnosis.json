@@ -70,7 +70,8 @@
    "'none' makes the engine SUBSTITUTE Struggle": "UNTESTED"
   },
   "why_untested": "That needs a state whose active has every move at 0 PP, and poke_engine.Move.pp is not writable from Python, so the state cannot be constructed through the binding. It needs a crafted state string or a Rust-side probe.",
-  "status": "the repair is MECHANICALLY AVAILABLE but its behaviour is unverified. Not claimed as a fix."
+  "status": "the repair is MECHANICALLY AVAILABLE but its behaviour is unverified. Not claimed as a fix.",
+  "SETTLED_BY": "reports/c44_struggle_repair_probe.json -- REFUTED. The no-move sentinel does not make the engine substitute Struggle; side one simply takes no action. Applying it would convert 7,909 skips into 7,909 measured rows asserting the mon did nothing, raising coverage while destroying the zero-unattributed gate."
  },
  "cause_2_rest_sleep": {
   "source": "src/pokezero/engine_world.py:1641-1644",
