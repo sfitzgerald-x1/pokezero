@@ -143,6 +143,7 @@ struct Layout {
     transition_token_budget: usize,
     tier2_residuals: bool,
     tier2_investment: bool,
+    feature_pack_last_move: bool,
 }
 
 impl Layout {
@@ -273,6 +274,7 @@ impl Tables {
         let buckets = get(layout_value, "belief_buckets");
         let masks = get(layout_value, "default_feature_masks");
         let schema_version = str_or_empty(get(layout_value, "schema_version"));
+        let tables_schema_is_v4 = schema_version == "pokezero.observation.v4";
         if !matches!(
             schema_version.as_str(),
             "pokezero.observation.v2.2" | "pokezero.observation.v3" | "pokezero.observation.v4"
@@ -299,9 +301,21 @@ impl Tables {
             stat_count_divisor: as_f64(get(constants, "stat_count_divisor")),
             // /8, not the tendency block's /64: a single (their mon x our mon) cell is visited
             // a handful of times per game. Exported so the two encoders cannot disagree.
+            // No fallback ON PURPOSE: this constant is exported precisely so the two encoders
+            // cannot disagree about it, and a silent default would reintroduce the drift it
+            // exists to prevent. Absent or non-positive is a malformed table.
             matchup_count_divisor: {
                 let value = as_f64(get(constants, "matchup_count_divisor"));
-                if value > 0.0 { value } else { 8.0 }
+                if value > 0.0 {
+                    value
+                } else if tables_schema_is_v4 {
+                    return Err(err(
+                        "v4 encoder tables are missing constants.matchup_count_divisor",
+                    ));
+                } else {
+                    // Pre-v4 tables never carry it and never read it.
+                    f64::NAN
+                }
             },
             timed_condition_duration: as_i64(get(constants, "timed_condition_duration")),
             hazard_conditions: string_list(get(constants, "hazard_conditions")),
@@ -331,6 +345,13 @@ impl Tables {
             transition_token_budget: as_i64(get(masks, "transition_token_budget")).max(0) as usize,
             tier2_residuals: as_bool(get(masks, "tier2_residuals")),
             tier2_investment: as_bool(get(masks, "tier2_investment")),
+            // v4 pack A2 ablation. Absent in pre-v4 tables, where the column does not exist,
+            // so default TRUE (pack-whole) rather than false — a missing key must not silently
+            // blank a column every v4 checkpoint expects.
+            feature_pack_last_move: match masks.get("feature_pack_last_move") {
+                Some(value) => as_bool(value),
+                None => true,
+            },
         };
         if layout.token_count == 0 || layout.categorical_width == 0 || layout.numeric_width == 0 {
             return Err(err("tables layout census is incomplete"));
@@ -1743,7 +1764,7 @@ fn encode_pokemon_tokens(
                 // A2: three arrival/identity states. The switch and Baton-Pass sentinels are
                 // positive facts, not padding — see the Python write site.
                 let last_move = str_or_empty(get(md, &format!("{prefix}_last_used_move")));
-                if !last_move.is_empty() {
+                if !last_move.is_empty() && layout.feature_pack_last_move {
                     let label = if normalize_identifier(&last_move) == "switch" {
                         if as_bool(get(md, &format!("{prefix}_arrived_by_baton_pass"))) {
                             "lastmove:batonpass".to_string()
@@ -1764,6 +1785,35 @@ fn encode_pokemon_tokens(
                         layout.cat_col("CATEGORY_TRACED_ABILITY")?,
                         format!("ability:{}", normalize_identifier(&traced)),
                     );
+                }
+            }
+        }
+        // The matchup-conditional pair, on ALL SIX opponent tokens (not just the active one):
+        // it answers "which of their mons has been willing to face what I have out", which is
+        // a question about their bench too. Written in the always-run path because its source
+        // is the observation METADATA — already conditioned on our current active by
+        // normalize — not FoldProducts; behind the products gate it silently read zero on the
+        // boundary-surface encode while Python wrote real values. Shares the tendency block's
+        // mask: same channel, conditioned.
+        if layout.is_v4() && role == Role::Opponent && layout.stats_block {
+            let matchup_key = normalize_identifier(&candidate.species());
+            let evidence = get(md, "opponent_matchup_switch_evidence");
+            if let Some(cell) = evidence.get(&matchup_key).and_then(|v| v.as_array()) {
+                for (index, column) in [
+                    "NUMERIC_MON_SWITCHED_VS_ACTIVE",
+                    "NUMERIC_MON_STAYED_VS_ACTIVE",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let count = cell.get(index).map(as_i64).unwrap_or(0);
+                    if count != 0 {
+                        grid.set_num(
+                            token,
+                            layout.num_col(column)?,
+                            (count as f64 / layout.matchup_count_divisor).min(1.0),
+                        );
+                    }
                 }
             }
         }
@@ -2838,31 +2888,6 @@ fn write_opponent_mon_history(
                             token,
                             layout.num_col(column)?,
                             (count as f64 / layout.stat_count_divisor).min(1.0),
-                        );
-                    }
-                }
-            }
-        }
-        if layout.is_v4() && layout.stats_block {
-            // The matchup-conditional twin of the triple above, ALREADY conditioned on our
-            // current active by the Python normalize step. It rides the metadata rather than
-            // FoldProducts, which deliberately carries only the encoder-consumed tendency
-            // surface, and it shares the triple's stats_block mask: same channel, conditioned.
-            let evidence = get(md, "opponent_matchup_switch_evidence");
-            if let Some(cell) = evidence.get(&species_key).and_then(|v| v.as_array()) {
-                for (index, column) in [
-                    "NUMERIC_MON_SWITCHED_VS_ACTIVE",
-                    "NUMERIC_MON_STAYED_VS_ACTIVE",
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let count = cell.get(index).map(as_i64).unwrap_or(0);
-                    if count != 0 {
-                        grid.set_num(
-                            token,
-                            layout.num_col(column)?,
-                            (count as f64 / layout.matchup_count_divisor).min(1.0),
                         );
                     }
                 }

@@ -183,7 +183,16 @@ def materialize_search_artifacts(
         if produced and produced != model_path:
             produced.rename(model_path)
     if not tables_path.is_file():
-        schema = "v3" if contract.schema_version.endswith("v3") else "v2.2"
+        # Map the checkpoint's schema to the exporter's CLI choice. A bare
+        # "everything else is v2.2" default silently exported the wrong tables for any newer
+        # schema — v4 got past the resolver's schema gate and then died in
+        # validate_encoder_tables on a v2.2-vs-v4 mismatch, making the gate a dead end.
+        if contract.schema_version.endswith("v4"):
+            schema = "v4"
+        elif contract.schema_version.endswith("v3"):
+            schema = "v3"
+        else:
+            schema = "v2.2"
         subprocess.run(
             # Always derive the layout from the checkpoint, never from the schema
             # default: a region-trimmed model has a narrower transition region, so

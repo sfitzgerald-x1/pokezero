@@ -311,6 +311,11 @@ def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Pat
         "stats_block": contract_masks.get("opponent_tendency_stats_block"),
         "tier2_residuals": contract_masks.get("tier2_residuals"),
         "tier2_investment": contract_masks.get("tier2_investment"),
+        # v4 pack A2 ablation: the crate gates a real column on it, so tables that disagree
+        # with the checkpoint would write a column the model was trained to never see.
+        # Checkpoints predating the field are pack-whole by definition (see the config's
+        # from_dict default), which is what the `True` fallback encodes.
+        "feature_pack_last_move": contract_masks.get("feature_pack_last_move", True),
         # The exporter clamps the budget to the physical region, so compare against
         # the same clamp rather than the raw config value.
         "transition_token_budget": min(
@@ -318,11 +323,21 @@ def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Pat
             contract.transition_token_count,
         ),
     }
+    # Tables predating a mask field carry no key for it. Apply the SAME asymmetric default on
+    # both sides — absent means pack-whole — so an older table is compared on its true meaning
+    # rather than reading as None and failing against a checkpoint that is also pack-whole.
+    table_mask_defaults = {"feature_pack_last_move": True}
+
+    def _table_mask(key: str) -> Any:
+        if key in table_masks:
+            return table_masks[key]
+        return table_mask_defaults.get(key)
+
     mismatches.update(
         {
-            f"default_feature_masks.{key}": (table_masks.get(key), expected)
+            f"default_feature_masks.{key}": (_table_mask(key), expected)
             for key, expected in expected_masks.items()
-            if expected is not None and table_masks.get(key) != expected
+            if expected is not None and _table_mask(key) != expected
         }
     )
     # Compare against the CHECKPOINT, not against this build. Getting that
