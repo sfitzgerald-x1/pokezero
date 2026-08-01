@@ -44,6 +44,7 @@ from pokezero.category_vocab import normalize_category_value  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
@@ -79,9 +80,10 @@ def _vocab_payload(
     config (neural_policy.py:399), so no vocab-less checkpoint contract exists; the
     build enumeration below is reached only when exporting without a checkpoint at all.
     """
+    turn_merged = schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     vocab = gen3_category_vocabulary(
         showdown_root,
-        include_turn_merged=True,
+        include_turn_merged=turn_merged,
         # The v4 feature pack's two categorical families are opt-in because they change the
         # vocabulary SIZE. This build-enumeration path is only reached when exporting without a
         # checkpoint; with one, ``trained_tokens`` below overrides it wholesale.
@@ -97,7 +99,7 @@ def _vocab_payload(
         if base_row is not None:
             index[normalize_category_value(alias)] = base_row
     return {
-        "include_turn_merged": True,
+        "include_turn_merged": turn_merged,
         "tokens": list(vocab.tokens),
         "index": index,
         "oov_buckets": vocab.oov_buckets,
@@ -206,6 +208,7 @@ def _layout_payload(
         "constants": {
             "actual_stat_divisor": showdown._ACTUAL_STAT_DIVISOR,
             "stat_count_divisor": showdown._STAT_COUNT_DIVISOR,
+            "matchup_count_divisor": showdown._MATCHUP_COUNT_DIVISOR,
             "timed_condition_duration": showdown._TIMED_CONDITION_DURATION,
             "timed_side_conditions": list(showdown._TIMED_SIDE_CONDITIONS),
             "hazard_conditions": list(showdown._HAZARD_CONDITIONS),

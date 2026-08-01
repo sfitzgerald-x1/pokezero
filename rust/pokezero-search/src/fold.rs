@@ -877,6 +877,16 @@ struct MonCounters {
     turns_active: i64,
 }
 
+/// Matchup-conditional twin of `MonCounters`, keyed by (side, species, opposing species).
+/// Accumulated at the SAME two live hook points as the marginal counters so the Rust and
+/// Python folds cannot drift — the reason the pair is (switched, stayed) rather than
+/// (switched, opportunities), which would have needed a turn map the folds prune.
+#[derive(Clone, Debug, Default)]
+struct MatchupCounters {
+    switched_out_before_attacking: i64,
+    stayed_and_attacked: i64,
+}
+
 type AnnotationValues = (Option<f64>, bool, bool, f64);
 
 // ---------------------------------------------------------------------------
@@ -1272,6 +1282,7 @@ pub struct FoldStateInner {
     pursuit_intercept_predict_count: i64,
     my_switch_turn_count: i64,
     mon_counters: BTreeMap<(u8, String), MonCounters>,
+    matchup_counters: BTreeMap<(u8, String, String), MatchupCounters>,
     weather_reveals: BTreeMap<(u8, String), bool>,
 
     // --- bounded recent-turn slices (probe #7) ---
@@ -1324,6 +1335,7 @@ impl FoldStateInner {
             pursuit_intercept_predict_count: 0,
             my_switch_turn_count: 0,
             mon_counters: BTreeMap::new(),
+            matchup_counters: BTreeMap::new(),
             weather_reveals: BTreeMap::new(),
             turn_start_occupants: BTreeMap::new(),
             completed_turns: BTreeSet::new(),
@@ -1369,6 +1381,23 @@ impl FoldStateInner {
             .get("spikes")
             .unwrap_or(&0);
         (own, opp, self.weather.clone())
+    }
+
+    fn matchup_for(
+        &mut self,
+        side: u8,
+        species: &str,
+        opposing: &str,
+    ) -> &mut MatchupCounters {
+        self.matchup_counters
+            .entry((side, species.to_string(), opposing.to_string()))
+            .or_default()
+    }
+
+    fn opposing_species(&self, side: u8) -> Option<String> {
+        self.occupant[(1 - side) as usize]
+            .as_ref()
+            .map(|stay| stay.species.clone())
     }
 
     fn counters_for(&mut self, side: u8, species: &str) -> &mut MonCounters {
@@ -1463,6 +1492,9 @@ impl FoldStateInner {
             }
             if let Some(stayed) = stayed_species {
                 self.counters_for(side, &stayed).stayed_and_attacked += 1;
+                if let Some(facing) = self.opposing_species(side) {
+                    self.matchup_for(side, &stayed, &facing).stayed_and_attacked += 1;
+                }
             }
             self.pending_baton_pass[side as usize] = move_id == "batonpass";
             let defender = parts
@@ -1544,6 +1576,10 @@ impl FoldStateInner {
             if let Some(prev_species) = switched_out_species {
                 self.counters_for(side, &prev_species)
                     .switched_out_before_attacking += 1;
+                if let Some(facing) = self.opposing_species(side) {
+                    self.matchup_for(side, &prev_species, &facing)
+                        .switched_out_before_attacking += 1;
+                }
             }
             let species = {
                 let from_details = species_from_details(parts[3]);
@@ -2745,6 +2781,21 @@ impl FoldStateInner {
         )?;
         out.set_item("my_switch_turn_count", self.my_switch_turn_count)?;
 
+        let matchup_counters = PyDict::new(py);
+        for ((side, species, facing), counters) in &self.matchup_counters {
+            let values = PyList::new(
+                py,
+                [
+                    counters.switched_out_before_attacking,
+                    counters.stayed_and_attacked,
+                ],
+            )?;
+            matchup_counters.set_item(
+                format!("{}|{}|{}", side_str(*side), species, facing),
+                values,
+            )?;
+        }
+        out.set_item("matchup_counters", matchup_counters)?;
         let mon_counters = PyDict::new(py);
         for ((side, species), counters) in &self.mon_counters {
             let values = PyList::new(
@@ -2955,6 +3006,37 @@ impl FoldStateInner {
                     turns_active: values[2],
                 },
             );
+        }
+
+        // Matchup counters must RESTORE, not just serialize: validate_fold_chains resumes
+        // each pair from the recorded row-n state, and a resumed fold that started these empty
+        // would diverge from the batch fold on the very next switch.
+        if let Ok(matchup_counters) = py_get(payload, "matchup_counters") {
+            for (key, values) in matchup_counters.downcast::<PyDict>()?.iter() {
+                let key = key.extract::<String>()?;
+                let mut parts = key.splitn(3, '|');
+                let side = parts.next().unwrap_or_default();
+                let species = parts.next().unwrap_or_default();
+                let facing = parts.next().unwrap_or_default();
+                if species.is_empty() || facing.is_empty() {
+                    return Err(PyValueError::new_err(format!(
+                        "malformed matchup_counters key {key:?}"
+                    )));
+                }
+                let values = values.extract::<Vec<i64>>()?;
+                if values.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "matchup_counters entry must have 2 ints",
+                    ));
+                }
+                state.matchup_counters.insert(
+                    (parse_side(side)?, species.to_string(), facing.to_string()),
+                    MatchupCounters {
+                        switched_out_before_attacking: values[0],
+                        stayed_and_attacked: values[1],
+                    },
+                );
+            }
         }
 
         let weather_reveals = py_get(payload, "weather_reveals")?;

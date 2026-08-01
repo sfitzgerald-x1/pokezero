@@ -47,7 +47,14 @@ from typing import Any, Mapping
 EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v4"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
-SUPPORTED_OBSERVATION_SCHEMAS = ("pokezero.observation.v2.2", "pokezero.observation.v3")
+SUPPORTED_OBSERVATION_SCHEMAS = (
+    "pokezero.observation.v2.2",
+    "pokezero.observation.v3",
+    # v4 (the k0 feature pack, history-free): the native encoder reads the pack's boundary
+    # facts off the observation metadata — the same route it already uses for the V3 public
+    # signals — and skips the transition rows entirely, because the contract has none.
+    "pokezero.observation.v4",
+)
 
 TABLES_SCHEMA_VERSION = "pokezero.encoder-tables.v1"
 
