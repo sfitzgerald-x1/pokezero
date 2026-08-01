@@ -1169,3 +1169,14 @@ poke-engine-gen3-review-compositions.patch
 # frozen fixture-refresh entry remains unmodified.
 poke-engine-gen3-wrap-substitute-lifecycle.patch
 poke-engine-gen3-toxic-stage-cap.patch
+
+# gen3 forced-replacement recharge timing. A Hyper Beam KO makes the defender
+# replace before the waiting attacker reaches Showdown's onBeforeMove hook.
+# The engine removed MUSTRECHARGE during that compulsory replacement, then
+# skipped the attacker's actual recharge turn. Defer removal while the opponent
+# still has force_switch; the existing pending-force-switch mapper path already
+# owns that replacement boundary. Pinned by the real KO/replacement sequence in
+# tests/test_engine_recharge_absorb_fidelity.py. This entry must remain after
+# the frozen stack above because older zero-context fallback patches retain
+# their exact application positions.
+poke-engine-gen3-recharge-forced-replacement.patch
