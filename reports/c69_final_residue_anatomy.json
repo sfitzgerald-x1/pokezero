@@ -28,5 +28,25 @@
  "the_80_are_not_instrument_work": "same sources but a magnitude no legal roll can bridge. That is a genuine quantitative disagreement between engine and simulator, and no tolerance change should absorb it.",
  "the_142_are_the_shape_three_cycles_have_judged_genuine": "count mismatch on every miss, dominated by one side being entirely empty. C61 examined them, found the engine's majority arm places its mass on nothing happening while the simulator's roll landed elsewhere, and declined to absorb them into an accounting family.",
  "honest_ceiling_for_matcher_work": "17 rows of 255. Even a perfect fix to the legal-roll derivation leaves 238 unattributed, and the goal needs zero. The instrument seam really is worked out; what remains is either real disagreement or needs the contract's exits with evidence that does not yet exist.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 255"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 255",
+ "attempted_fix_REJECTED": {
+  "diagnosis": "the capped_lethal rule in roll_components_agree is one-sided: `if abs(obs) <= abs(eng) + 1`. It assumes the ENGINE's tick is uncapped, which holds when only the observation killed. When BOTH sides kill, both are clipped by DIFFERENT remaining HP because the preceding damage roll differed -- a larger preceding roll leaves less HP and makes the capped tick SMALLER, so obs > eng is legitimate. s18000534/77 p2: observed -67 and -24 against engine -69 and -22. The engine dealt 2 more, so 2 less remained, so its cap is 2 smaller. The one-sided test rejects a boundary the two sims agree on to the HP point.\\n\\nThe `_to_full` branch immediately above documents having fixed this exact inversion for capped heals. The same form still stood here.",
+  "the_fix_i_tried": "add the same two-sided bound the _to_full branch uses: abs difference <= 0.18 * scale + 1",
+  "measured": {
+   "unattributed": "255 -> 249 (-6)",
+   "matched -> divergent": 0,
+   "families that SHRANK": {
+    "limit:roll_divergent_lethality": "1095 -> 474",
+    "LS_capped_lethal_shape": "464 -> 270",
+    "I5_boundary_truncation": "94 -> 77",
+    "limit:world_sample_drag_target": "264 -> 262",
+    "I2_matcher_accounting": "403 -> 402",
+    "I1_cap_state_shape": "87 -> 86"
+   }
+  },
+  "verdict": "REJECTED. It clears 6 unattributed rows and reclassifies roughly 820 out of documented families into matched.",
+  "why": "the bound is wrong even if the diagnosis is right. `scale` is the slot's maximum roll damage, so 0.18 * scale is large in absolute terms and admits differences far beyond what a cap difference can produce. The correct bound is the difference in PRECEDING damage on that slot -- which for the motivating row is 2, not 0.18 * 67. I reached for the neighbouring branch's constant instead of deriving the bound this case actually needs.",
+  "the_invariant_earned_its_place": "'no existing family may shrink' is the invariant I failed to register for C68 and added afterwards. It caught this on the first measurement. Without it the headline -- 255 -> 249, zero matched-to-divergent regressions -- would have looked like a clean small win.",
+  "what_a_correct_fix_needs": "bound the capped_lethal difference by the observed difference in the preceding direct damage on the same slot, not by a fraction of the slot's roll scale. That is computable from the component lists already in hand and would admit the motivating row while rejecting the 820."
+ }
 }
