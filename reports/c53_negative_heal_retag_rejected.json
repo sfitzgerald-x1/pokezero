@@ -20,5 +20,18 @@
   "not_yet_measured": true
  },
  "the_real_fix": "render the Sleep Talk callee's damage event in the crate. That removes the cause instead of relabelling its symptom, and it is an engine-consumer change rather than a matcher one, so it would change the fingerprint and force era re-derivation.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "alternative_measured_coverage_cost": {
+  "question": "C53 rejected the retag and named marking the branch LOSSY as the honest alternative, with an unmeasured coverage cost. This measures that cost.",
+  "method": "over the 476 unattributed rows, counted how many have EVERY branch carrying an impossible heal component -- those boundaries would become skip_lossy and leave the measured set",
+  "result": {
+   "no defective branch (unaffected)": 377,
+   "some branches defective, usable ones remain": 83,
+   "ALL branches defective -> boundary becomes skip_lossy": 15,
+   "error": 1
+  },
+  "coverage_cost": "15 boundaries out of the 476 unattributed. Against 787,376 measured boundaries that is 0.002%, so the coverage gate at 0.9587 is not materially moved by the loss itself.",
+  "the_extrapolation_i_am_NOT_making": "This is measured over the unattributed set only. The lossy rule would apply to every boundary in a sweep, including the matched majority. C52's control gives the base rate -- 0.8% of attributed rows carry a defective branch against 16.6% of unattributed -- and matched boundaries by definition had a branch that matched, so all-branches-defective should be rarer still. That is a reasoned expectation, not a measurement, and the sweep-wide cost is unknown.",
+  "what_is_still_unmeasured": "The BENEFIT. I measured what the lossy rule costs and not what it clears. Removing a defective branch only helps if another branch then matches, and I have not run that. The decision between lossy-marking and rendering the callee event cannot be made on a cost figure alone, and I am not going to present a half-measured trade as though it were a recommendation."
+ }
 }
