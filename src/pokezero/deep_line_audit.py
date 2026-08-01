@@ -25,7 +25,11 @@ from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .category_vocab import CategoryVocabulary
 from .dex import load_showdown_dex_cached
 from .local_showdown import LocalShowdownEnv, LocalShowdownSnapshot
-from .observation import PokeZeroObservationV0, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+from .observation import (
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    PokeZeroObservationV0,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+)
 from .randbat import canonical_gen3_randbat_species_id
 from .randbat_vocab import gen3_category_vocabulary
 from .belief import PublicBattleBeliefEngine
@@ -1868,6 +1872,10 @@ def _category_vocab_for_env(env: LocalShowdownEnv) -> CategoryVocabulary:
         include_turn_merged=(
             env.config.observation_spec.schema_version
             in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+        ),
+        include_feature_pack_v4=(
+            env.config.observation_spec.schema_version
+            in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
         ),
     )
 

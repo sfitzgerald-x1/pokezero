@@ -62,6 +62,7 @@ from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
 from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
@@ -463,13 +464,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # different observation content — the #492 mismatch class).
     train.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2", "v3"),
+        choices=("v2.1", "v2.2", "v3", "v4"),
         default=None,
         help=(
             "Observation schema for a FRESH train: v2.1, v2.2 (default; turn-merged "
             "transition tokens; stamps the model config, sizes the widths, and flips the "
-            "schema-derived vocabulary), or v3 (turn-merged grouped layout with the V3 public "
-            "signals). With --initial-checkpoint the checkpoint's stamped "
+            "schema-derived vocabulary), v3 (turn-merged grouped layout with the V3 public "
+            "signals), or v4 (v3 plus the k0 feature pack — forced recharge, last executed "
+            "move, Truant phase, current traced ability, last-round damage, and the "
+            "entry-hazard credit/expected-value pair; also flips the feature-pack "
+            "vocabulary). With --initial-checkpoint the checkpoint's stamped "
             "schema wins and an explicitly disagreeing flag hard-fails (mask-conflict "
             "semantics)."
         ),
@@ -509,6 +513,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "fresh train: OFF (byte-identical to the pre-investment encoder). Only meaningful "
             "under --observation-schema v2.1/v2.2/v3; a no-op under v2. With --initial-checkpoint "
             "the checkpoint's value wins and an explicitly disagreeing flag hard-fails."
+        ),
+    )
+    train.add_argument(
+        "--feature-pack-last-move",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "v4 k0 feature pack, A2 ablation: whether the ACTIVE mon's LAST EXECUTED MOVE "
+            "column is written. Default ON (the pack is whole). --no-feature-pack-last-move "
+            "is the plan's k0+pack arm against the k0+pack+lastmove default, isolating the "
+            "pack's largest single surface. Only meaningful under --observation-schema v4; "
+            "inert under every earlier schema, where the column does not exist."
         ),
     )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
@@ -1855,13 +1871,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # see the same masked observations (never a train/eval mask mismatch).
     iterate.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2", "v3"),
+        choices=("v2.1", "v2.2", "v3", "v4"),
         default=None,
         help=(
             "Observation schema for a FRESH iterate run: v2.1, v2.2 (default; "
             "turn-merged transition tokens; sizes the model config, the env spec, and the "
-            "schema-derived vocabulary), or v3 (turn-merged grouped layout with the V3 public "
-            "signals). On --resume the run's stored model config wins; a "
+            "schema-derived vocabulary), v3 (turn-merged grouped layout with the V3 public "
+            "signals), or v4 (v3 plus the k0 feature pack; also flips the feature-pack "
+            "vocabulary). On --resume the run's stored model config wins; a "
             "disagreeing explicit flag fails the model-config equality validation."
         ),
     )
@@ -1898,6 +1915,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Only meaningful under v2.1/v2.2 (no-op under v2). On --resume the run's stored "
             "model config wins; a disagreeing explicit flag fails the model-config equality "
             "validation."
+        ),
+    )
+    iterate.add_argument(
+        "--feature-pack-last-move",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "v4 k0 feature pack, A2 ablation: whether the ACTIVE mon's LAST EXECUTED MOVE "
+            "column is written. Default ON (the pack is whole). --no-feature-pack-last-move "
+            "is the plan's k0+pack arm against the k0+pack+lastmove default, isolating the "
+            "pack's largest single surface. Only meaningful under --observation-schema v4; "
+            "inert under every earlier schema, where the column does not exist."
         ),
     )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
@@ -2593,6 +2622,7 @@ _MASK_FLAG_FIELDS = (
     ("--no-exact-state", "exact_state_enabled"),
     ("--tier2-residuals/--no-tier2-residuals", "tier2_residuals"),
     ("--tier2-investment/--no-tier2-investment", "tier2_investment"),
+    ("--feature-pack-last-move/--no-feature-pack-last-move", "feature_pack_last_move"),
 )
 
 
@@ -2609,6 +2639,8 @@ def _explicit_mask_requests(args: argparse.Namespace) -> dict[str, object]:
         requested["tier2_residuals"] = bool(args.tier2_residuals)
     if getattr(args, "tier2_investment", None) is not None:
         requested["tier2_investment"] = bool(args.tier2_investment)
+    if getattr(args, "feature_pack_last_move", None) is not None:
+        requested["feature_pack_last_move"] = bool(args.feature_pack_last_move)
     return requested
 
 
@@ -2690,13 +2722,16 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         # getattr: duck-typed/legacy config objects without the field are
         # pre-investment by definition (same asymmetric default as the payload latch).
         "tier2_investment": getattr(model_config, "tier2_investment", False),
+        # getattr: the v4-only pack switch; a config without it predates v4 entirely, and
+        # the pack-whole default is what such a run would have encoded had it had the column.
+        "feature_pack_last_move": getattr(model_config, "feature_pack_last_move", True),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
             continue
         # Caches collected before the investment channel record no field; they were
         # encoded with the column constant zero, i.e. tier2_investment=False.
-        masks = {"tier2_investment": False, **masks}
+        masks = {"tier2_investment": False, "feature_pack_last_move": True, **masks}
         if masks != expected:
             raise ValueError(
                 f"training cache {cache_path} was collected under feature masks {masks!r} "
@@ -2880,6 +2915,11 @@ def _train(args: argparse.Namespace) -> int:
             # byte-identically to the pre-investment encoder). Only meaningful under
             # v2.1/v2.2 — the encoder schema-gates the columns, so under v2 this is a no-op.
             tier2_investment=False if args.tier2_investment is None else bool(args.tier2_investment),
+            # v4-only pack switch: absent flag resolves ON (the pack is whole). Inert under
+            # every earlier schema, where the A2 column does not exist.
+            feature_pack_last_move=(
+                True if args.feature_pack_last_move is None else bool(args.feature_pack_last_move)
+            ),
             reward_shaping=shaping_weights_json,
         )
         # Fresh train: --observation-schema SETS the stamped schema + widths (default
@@ -2902,6 +2942,7 @@ def _train(args: argparse.Namespace) -> int:
             args.showdown_root,
             oov_buckets=args.category_oov_buckets,
             include_turn_merged=schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+            include_feature_pack_v4=schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
         )
         model_config = TransformerPolicyConfig.compact_category(
             category_vocab=category_vocab.tokens,
@@ -5411,6 +5452,7 @@ def _iterate(args: argparse.Namespace) -> int:
         args.showdown_root,
         oov_buckets=args.category_oov_buckets,
         include_turn_merged=iterate_schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+        include_feature_pack_v4=iterate_schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -5483,6 +5525,9 @@ def _iterate(args: argparse.Namespace) -> int:
         # config, so a disagreeing tier2_investment hard-fails there. Encoder schema-gates
         # the investment columns, so enabling under v2 is a clean no-op.
         tier2_investment=False if args.tier2_investment is None else bool(args.tier2_investment),
+        feature_pack_last_move=(
+            True if args.feature_pack_last_move is None else bool(args.feature_pack_last_move)
+        ),
         reward_shaping=iterate_shaping_json,
         observation_schema_version=iterate_schema_version,
         categorical_feature_count=iterate_schema_spec.categorical_feature_count,

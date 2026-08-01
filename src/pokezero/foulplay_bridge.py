@@ -62,6 +62,7 @@ from .neural_policy import (
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     OBSERVATION_SCHEMA_VERSION_V3,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     PokeZeroObservationV0,
@@ -3341,6 +3342,7 @@ async def _handle_decision_boundary(
             player,
             set_source=belief_set_source,
             include_turn_merged=observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+            include_feature_pack_v4=observation_spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
         )
         for player in requested_players
     }
