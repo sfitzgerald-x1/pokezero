@@ -297,24 +297,35 @@ class ContractAttestationTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
-    def test_lifecycle_registers_this_contract_and_still_awaits_attestation(self) -> None:
+    def test_c26_is_superseded_without_ever_having_been_executed(self) -> None:
+        """C26 was registered, held, and then superseded — all three recorded.
+
+        This used to assert the lifecycle still pointed at C26. It no longer
+        does: C27/C31 moved the engine and C28/C29/C30 moved the readout, so a
+        new build source is frozen. What must stay true is that C26's own
+        artifacts survive as evidence, that the supersession is explicit rather
+        than implied, and that its sweep attestation never appeared — because the
+        sweep was deliberately never run.
+        """
+
         lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(lifecycle["stage"], "contract_registered_attestation_pending")
+        superseded = lifecycle["supersedes"]
+        self.assertEqual(superseded["registration"], "C26")
+        self.assertEqual(superseded["status"], "registered_never_executed")
+        self.assertEqual(superseded["contract"], str(CONTRACT_PATH.relative_to(ROOT)))
         self.assertEqual(
-            lifecycle["registered_contract_path"], str(CONTRACT_PATH.relative_to(ROOT))
+            superseded["calibration"], str(CALIBRATION_PATH.relative_to(ROOT))
         )
-        self.assertEqual(
-            lifecycle["registered_contract_sha256"],
-            hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest(),
-        )
-        self.assertEqual(
-            lifecycle["registered_calibration_path"], str(CALIBRATION_PATH.relative_to(ROOT))
-        )
-        self.assertEqual(
-            lifecycle["required_absent_artifacts"],
-            [str(ATTESTATION_PATH.relative_to(ROOT))],
-        )
+        for relative in (superseded["contract"], superseded["calibration"],
+                         superseded["contract_attestation"], superseded["diagnosis"]):
+            self.assertTrue((ROOT / relative).is_file(), relative)
+        # The SWEEP attestation is the one that must never have appeared.
         self.assertFalse(ATTESTATION_PATH.exists())
+        self.assertNotIn(
+            str(ATTESTATION_PATH.relative_to(ROOT)),
+            lifecycle["required_absent_artifacts"],
+            "C26's sweep attestation is no longer pending; it is abandoned",
+        )
 
 
 if __name__ == "__main__":

@@ -1,19 +1,29 @@
 {
   "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "contract_registered_attestation_pending",
+  "stage": "build_source",
   "launchable": false,
-  "launchable_note": "The lifecycle is launchable only once a validated attestation exists. The registered contract is what authorises the fresh sweep; this flag tracks whether the repository holds a completed certification package, and it stays false until reports/c26_current_engine_attestation.json is written against the immutable contract below.",
-  "purpose": "The C26 contract and its archival calibration are registered together against the frozen 51-patch build source. The attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
+  "launchable_note": "The lifecycle is launchable only once a validated attestation exists. This commit freezes a new build source; the successor contract, calibration and attestation are intentionally absent so a later registration can pin this source without circular Git metadata.",
+  "purpose": "Freezes the C32 build source: the 53-patch engine after C27 (crit-arm kill split) and C31 (Substitute quarter-HP gate), and the certification consumers after C28 (majority-arm scoping of the structural rule), C29 (cap marking no longer changes bucket membership), C30 (the capped-heal bound receives the step's damage scale) and the fidelity KPI. Every one of those changes invalidated the C26 source identity by construction.",
+  "supersedes": {
+    "registration": "C26",
+    "contract": "reports/c26_current_engine_resweep_spec.json",
+    "calibration": "reports/c26_current_engine_calibration.json",
+    "contract_attestation": "reports/c26_cert_contract_attestation.json",
+    "status": "registered_never_executed",
+    "why": "C26 pinned the 51-patch engine and the pre-C28 readout. It was registered, its launcher enforcement and contract attestation were completed, and then a pre-launch diagnostic showed it would fail with roughly 4,800 unattributed rows. The sweep was deliberately held rather than spent, so its eight 1,250-game blocks from 16,000,000 remain unconsumed. Its artifacts stay as immutable evidence and its seed blocks stay burned rather than recycled.",
+    "diagnosis": "docs/engine_c26_structural_residue_diagnosis_20260731.md"
+  },
   "required_absent_artifacts": [
-    "reports/c26_current_engine_attestation.json"
+    "reports/c32_current_engine_resweep_spec.json",
+    "reports/c32_current_engine_calibration.json",
+    "reports/c32_current_engine_attestation.json"
   ],
-  "registered_contract_path": "reports/c26_current_engine_resweep_spec.json",
-  "registered_contract_sha256": "65414a51d3e4c3ca0268f09e54fbb371c6519b8eb822dab4121f909390d5e047",
-  "registered_calibration_path": "reports/c26_current_engine_calibration.json",
   "source_code_identity": {
     "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
-    "readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
-    "engine_fingerprint": "776fa1e15cec731d3223b493fab992dc042fd3da8bdee6d4b8c9dc1a1d192c9c",
-    "engine_patch_count": 51
-  }
+    "readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
+    "differential_sha256": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c",
+    "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+    "engine_patch_count": 53
+  },
+  "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash."
 }
