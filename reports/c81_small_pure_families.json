@@ -1,0 +1,25 @@
+{
+ "schema": "c81-small-pure-families/1",
+ "completes": "the four candidate-not-finding families C75 identified as having a decisive reject signature",
+ "LS_crit_arm_pairing_echo": {
+  "n": 4,
+  "evidence": "all four carry |-crit| in the protocol, with observed/engine ratios 1.87, 1.84, 1.91, 1.98",
+  "diagnosis": "identical to I2_matcher_accounting: the simulator crit and the engine's arm is the non-crit. Four rows, same mechanism, separately named. It should be folded into the I2 finding rather than tracked as its own family.",
+  "bucket": "whatever I2 resolves to -- 217 engine-gap / 173 renderer gap on that evidence"
+ },
+ "LS_confusion_fan": {
+  "n": 3,
+  "evidence": "all three have confusion in the protocol. The observation carries a `confusion` source component; the engine carries TWO untagged direct components. Magnitudes agree within a roll -- ratios 0.99, 0.91, 0.93.",
+  "diagnosis": "the engine does not TAG confusion self-damage. It computes the right magnitude and renders it as generic direct damage, so the source sets differ and the exact-component comparison rejects. This is the `confusion -> (direct)` substitution C71's census found.",
+  "bucket": "instrument-artifact -- a renderer tagging gap, not an engine error"
+ },
+ "the_unifying_observation": "I2's 173-row renderer subset, these 4 crit rows and these 3 confusion rows are ONE class: the engine computes the correct magnitude and fails to tag its source, so the matcher compares correct arithmetic under the wrong label. The crit case is blocked by an exact-value equality at events.rs:2054; the confusion case has no tag emitted at all. 180 rows across three separately-named families, all fixable at the renderer.",
+ "all_four_shapes_now_carry_evidence": {
+  "I3_roll_inherited (244)": "Pain Split inheriting a preceding roll -- comparison-limit",
+  "I2_matcher_accounting (403)": "217 engine-gap, crit arm absent; 173 renderer gap, crit arm untagged",
+  "I5_boundary_truncation (94)": "PARTIAL -- residual without observation, switch-correlated, 31 unexplained",
+  "LS_crit_arm_pairing_echo (4)": "same as I2",
+  "LS_confusion_fan (3)": "confusion self-damage untagged"
+ },
+ "coverage": "748 of the 1,261 rows in candidate-not-finding families now carry a mechanism, against zero when the audit deferred them with 'profile recorded for the next pass'."
+}
