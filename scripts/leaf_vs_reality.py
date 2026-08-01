@@ -174,6 +174,14 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # exist at the leaf (fold.rs::matchup_counters is branch-advanced, keyed by (side, species,
 # facing)), so it is frozen only because it is not yet surfaced through ProductsData. That one is
 # a genuine follow-up, not a permanent divergence.
+#
+# A1 (forced recharge) is DELIBERATELY ABSENT from this set, and its absence is the claim that
+# it is live rather than an oversight. It rides the CATEGORY_VOLATILE_* bag as
+# `volatile:mustrecharge`, not a column of its own, so it could not be listed here without
+# also sweeping every other volatile into the class. It was the one pack member that did not
+# merely go stale at a leaf but CONTRADICTED the same observation's action surface, which reads
+# the MUSTRECHARGE volatile live; leaf.rs now refreshes self_/opponent_must_recharge from the
+# branch's own volatile_statuses, so there is nothing left to accept.
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
     {
         "NUMERIC_TRUANT_LOAF",

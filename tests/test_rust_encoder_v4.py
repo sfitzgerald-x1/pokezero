@@ -71,7 +71,17 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                 "numeric_feature_count": 134,
             }
         )
-        inputs = self.backends.row_inputs_from_decision_row(self.corpus.decision_rows[0])
+        # DEEPCOPY, and not optional: row_inputs_from_decision_row returns
+        # row.observation_metadata VERBATIM (golden_encoder_backends.py:82-86), so the
+        # `metadata[...]` writes below — especially opponent_team.append — would write
+        # THROUGH to the shared class-level corpus row. Without this, consecutive tests
+        # inherit each other's mutations: team sizes 3, 5, 7, 9, 11 with duplicated
+        # species, which is species-clause-illegal, collapses the per-mon matchup cells
+        # (evidence is keyed by normalized species, so duplicates share one entry), and
+        # saturates the divisor via the index rather than the formula.
+        inputs = copy.deepcopy(
+            self.backends.row_inputs_from_decision_row(self.corpus.decision_rows[0])
+        )
         inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V4
         metadata = inputs["observation_metadata"]
         # Every pack surface, on both seats, so a column the Rust port forgot cannot pass.
@@ -266,9 +276,10 @@ class RustEncoderV4ParityTest(unittest.TestCase):
         column = tables["layout"]["numeric_columns"]["NUMERIC_MON_SWITCHED_VS_ACTIVE"]
         stayed_column = tables["layout"]["numeric_columns"]["NUMERIC_MON_STAYED_VS_ACTIVE"]
         offset = tables["layout"]["token_offsets"]["opponent_pokemon"]
-        # Bound by the BLOCK WIDTH, not len(opponent_team): the fixture's metadata team can
-        # carry more entries than the six-slot opponent block can represent, and running off
-        # the end would read action-candidate rows and call them missing matchup writes.
+        # Bound by the BLOCK WIDTH as well as the team length. With the fixture leak fixed the
+        # team is 3 and this never clamps, but a metadata team longer than the six-slot block
+        # would otherwise walk into action-candidate rows and report them as missing matchup
+        # writes — a test failure that blames the encoder for the fixture's mistake.
         block_width = (
             tables["layout"]["token_offsets"]["action_candidates"] - offset
         )

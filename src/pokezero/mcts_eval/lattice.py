@@ -173,6 +173,31 @@ def materialize_search_artifacts(
     tables_path = root / "encoder_tables.json"
     repo = _Path(__file__).resolve().parents[3]
 
+    # Map the checkpoint's schema to the exporter's CLI choice, BEFORE the TorchScript export
+    # below: an unmapped schema is a terminal contract error either way, and resolving it first
+    # means it fails in milliseconds instead of after burning a full model trace.
+    # A bare "everything else is v2.2" default silently exported the wrong tables for any newer
+    # schema — v4 got past the resolver's schema gate and then died in validate_encoder_tables
+    # on a v2.2-vs-v4 mismatch, making the gate a dead end. Raising closes the CLASS, not the
+    # instance: otherwise the only thing standing between the next schema and that same dead
+    # end is SUPPORTED_OBSERVATION_SCHEMAS upstream, an implicit coupling one edit away from
+    # being wrong again.
+    _EXPORTER_SCHEMA_CHOICES = {
+        OBSERVATION_SCHEMA_VERSION_V4: "v4",
+        OBSERVATION_SCHEMA_VERSION_V3: "v3",
+        OBSERVATION_SCHEMA_VERSION_V2_2: "v2.2",
+    }
+    try:
+        schema = _EXPORTER_SCHEMA_CHOICES[contract.schema_version]
+    except KeyError:
+        raise ContractError(
+            f"no encoder-table exporter choice for observation schema "
+            f"{contract.schema_version!r} (known: "
+            f"{', '.join(sorted(_EXPORTER_SCHEMA_CHOICES))}). Add the mapping when "
+            f"adding the schema; exporting v2.2 tables by default silently produces "
+            f"the wrong string->row map."
+        ) from None
+
     if not model_path.is_file():
         subprocess.run(
             # TorchScript traces bake device constants (see model.rs: "Artifacts
@@ -188,29 +213,6 @@ def materialize_search_artifacts(
         if produced and produced != model_path:
             produced.rename(model_path)
     if not tables_path.is_file():
-        # Map the checkpoint's schema to the exporter's CLI choice. A bare
-        # "everything else is v2.2" default silently exported the wrong tables for any newer
-        # schema — v4 got past the resolver's schema gate and then died in
-        # validate_encoder_tables on a v2.2-vs-v4 mismatch, making the gate a dead end.
-        # Closing the CLASS, not the instance: an unmapped schema now raises instead of
-        # quietly exporting v2.2 tables. Without this, the only thing standing between the
-        # next schema and the same dead end is SUPPORTED_OBSERVATION_SCHEMAS upstream, which
-        # is an implicit coupling one edit away from being wrong again.
-        _EXPORTER_SCHEMA_CHOICES = {
-            OBSERVATION_SCHEMA_VERSION_V4: "v4",
-            OBSERVATION_SCHEMA_VERSION_V3: "v3",
-            OBSERVATION_SCHEMA_VERSION_V2_2: "v2.2",
-        }
-        try:
-            schema = _EXPORTER_SCHEMA_CHOICES[contract.schema_version]
-        except KeyError:
-            raise ContractError(
-                f"no encoder-table exporter choice for observation schema "
-                f"{contract.schema_version!r} (known: "
-                f"{', '.join(sorted(_EXPORTER_SCHEMA_CHOICES))}). Add the mapping when "
-                f"adding the schema; exporting v2.2 tables by default silently produces "
-                f"the wrong string->row map."
-            ) from None
         subprocess.run(
             # Always derive the layout from the checkpoint, never from the schema
             # default: a region-trimmed model has a narrower transition region, so
