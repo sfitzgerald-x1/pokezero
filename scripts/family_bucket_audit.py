@@ -83,14 +83,23 @@ ESTABLISHED: dict[str, dict[str, str]] = {
         ),
     },
     "structural_component_count_without_supported_sibling": {
-        "bucket": "instrument-artifact (resolved)",
+        "bucket": "instrument-artifact (partially resolved)",
         "evidence": "reports/c28_structural_rule_postmeasure.json, "
-                    "reports/c29_cap_bucket_postmeasure.json, "
-                    "reports/c30_capped_heal_scale_postmeasure.json",
+                    "reports/c30_capped_heal_scale_postmeasure.json, "
+                    "reports/c34_aliasing_fix_postmeasure.json, "
+                    "reports/c32_current_engine_attestation.json",
         "finding": (
-            "Three separate instrument defects: the rule fired from minority arms, "
-            "cap marking changed bucket membership, and the capped-heal bound was "
-            "denied its scale input. Fresh unattributed 29 -> 0 across C28-C31."
+            "Four instrument defects found so far: the rule fired from minority arms (C28), the "
+            "capped-heal bound was denied its scale input (C30), and C29's own fix aliased the "
+            "shared observed split (C34). On the FRESH C32 sweep the counter reached 3,779 and "
+            "C34 brought it to 433."
+        ),
+        "corrected": (
+            "This entry previously read 'resolved', on the strength of a 60-game probe reaching "
+            "zero. The C32 sweep produced 3,779 -- the probe was a 167th of the population and "
+            "sampled the opposite shape. 433 rows survive C34, and their dominant sample inverts "
+            "C34's: the ENGINE side is the longer one, splitting into damage plus a capped Leech "
+            "Seed. Not resolved."
         ),
     },
     "limit:world_sample_drag_target": {
@@ -107,14 +116,19 @@ ESTABLISHED: dict[str, dict[str, str]] = {
         ),
     },
     "truant_loaf_phase_drift": {
-        "bucket": "comparison-limit (on this population only)",
-        "evidence": "reports/c32_current_engine_calibration.json",
+        "bucket": "OPEN -- predicted-zero counter with fresh nonzero evidence",
+        "evidence": "reports/c32_current_engine_attestation.json",
         "finding": (
-            "Registered at predicted-zero for a FRESH sweep, and its 48 archive rows are "
-            "expected: the retained archive predates the #970 Truant fix, so a pre-fix "
-            "population still carries the shape. Its bucket cannot be settled on this "
-            "population at all -- only a fresh sweep can, and the fresh 60-game probe shows "
-            "zero. Recorded here so the archive count is not misread as a live residue."
+            "The escape clause in the previous entry has been cashed. That entry said the bucket "
+            "could not be settled on the archive and only a fresh sweep could decide it. The C32 "
+            "sweep decided it: NINE rows, shape observed=[] against engine=[('', -163)] -- the "
+            "engine damages where Showdown does nothing, which is the loaf-phase signature the "
+            "counter is named for. The archive's 48 were dismissible as pre-#970; these are not."
+        ),
+        "consequence": (
+            "A counter registered at predicted-zero is nonzero on a fresh population, so it is a "
+            "certification failure in its own right and needs its own diagnosis rather than "
+            "inheriting the structural work."
         ),
     },
     "I1_cap_state_shape": {
@@ -226,7 +240,11 @@ def bucket_from_signatures(tally: Counter, rows: int) -> tuple[str, str]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--shards", required=True)
+    parser.add_argument("--shards", default=None, help="retained-archive glob")
+    parser.add_argument("--rows", default=None,
+                        help="a JSON list of retained divergent rows from a FRESH sweep; "
+                             "preferred over --shards, because the archive is a pre-fix, "
+                             "divergence-conditioned population and a fresh sweep is not")
     parser.add_argument("--json", required=True)
     args = parser.parse_args(argv)
 
@@ -240,11 +258,18 @@ def main(argv=None) -> int:
     from cert_sweep_reread import reread_row
     from engine_transition_differential import classify_divergence
 
-    try:
-        _paths, retained = verify_archive(args.shards)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        print(f"ARCHIVE INPUT REFUSED: {error}", file=sys.stderr)
-        return 2
+    if args.rows:
+        retained = json.loads(Path(args.rows).read_text(encoding="utf-8"))
+        population_kind = "fresh_sweep"
+    elif args.shards:
+        try:
+            _paths, retained = verify_archive(args.shards)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"ARCHIVE INPUT REFUSED: {error}", file=sys.stderr)
+            return 2
+        population_kind = "retained_archive"
+    else:
+        parser.error("need --rows or --shards")
 
     per_family: dict[str, Counter] = defaultdict(Counter)
     counts: Counter = Counter()
@@ -310,7 +335,8 @@ def main(argv=None) -> int:
             ).hexdigest(),
         },
         "population": {
-            "archive_rows": len(retained),
+            "kind": population_kind,
+            "rows": len(retained),
             "cleared_or_skipped_on_this_build": skipped,
             "divergent_rows_measured": sum(counts.values()),
         },
