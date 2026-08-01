@@ -120,7 +120,20 @@
     "count_matched": 29,
     "count_mismatch": 7,
     "sample": "observed=[('', -229)] engine=[('', -124)]",
-    "reading": "Mostly count-MATCHED, so not structural at all: a magnitude disagreement of nearly 2x, which is the ratio of a crit. Plausibly a crit the engine did not price on this boundary -- the C27/C31 family, at a third site."
+    "reading": "Mostly count-MATCHED, so not structural at all: a magnitude disagreement of nearly 2x, which is the ratio of a crit. Plausibly a crit the engine did not price on this boundary -- the C27/C31 family, at a third site.",
+    "crit_hypothesis": {
+     "measured": {
+      "count_matched": 30,
+      "count_mismatch": 7,
+      "ratio_samples": 31,
+      "median_ratio": 1.86,
+      "in_crit_band_1.7_to_2.3": 21
+     },
+     "status": "SUGGESTIVE, not established.",
+     "the_tension": "The magnitudes cluster at roughly 2x, which is the gen3 crit multiplier and would place these rows in the engine-gap bucket beside C27 and C31. But the counter's own rule fires on 0.70 <= observed/engine <= 0.96 -- observed SMALLER than engine -- and the ratios I measured are observed LARGER. So the pairs I measured and the pair that actually triggers the rule may not be the same pair: I averaged across all component pairs instead of isolating the deciding one.",
+     "how_to_settle": "Measure the ratio of the DECIDING pair only -- the one the rule inspects -- rather than every pair on the arm. If that pair also sits near 2x, the crit reading holds and this is an engine-gap. If it sits in 0.70-0.96 as the rule requires, the 2x clustering is coming from other components and says nothing about the trigger.",
+     "why_recorded_this_way": "Five hypotheses on the structural shape were confidently wrong this session, every one from a check cheaper than the question. This one is cheap in the same way."
+    }
    },
    "unattributed_generic": {
     "sample": "engine_only=[('psn', -32)]",
