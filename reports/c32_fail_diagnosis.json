@@ -22,7 +22,7 @@
  "leading_hypothesis": {
   "claim": "C29's cap promotion is scoped too widely and is inflating this counter. It promotes a base source to roll-scaled when ANY component on that SLOT carries a cap, rather than when the paired component does. An UNCAPPED itemleftovers tick belongs in the exact bucket; it reaches the roll-scaled comparison only through that promotion, where the length check then rejects it before any tolerance applies.",
   "why_it_matters": "If true, C29 moved rows that would have been reported as exact-bucket differences into the structural counter -- changing how they are CLASSIFIED without changing whether they diverge, and inflating the very counter I then declared resolved.",
-  "status": "CONFIRMED on the fourth, properly specified test.",
+  "status": "RETRACTED. The confirmation was measured at the wrong scope.",
   "how_to_settle_it": "Re-read a sample of these boundaries with capped_bases scoped to the component pair instead of the slot, and compare verdicts. Offline, no engine change, no sweep."
  },
  "independent_of_that": {
@@ -62,10 +62,25 @@
     "cap_on_both": 1,
     "checked": 120
    },
-   "conclusion": "CONFIRMED. capped_bases unions the observed and engine component lists, so an engine-side _to_full promotes that base source to roll-scaled on BOTH sides. The observed side's plain, uncapped itemleftovers tick is dragged into the roll-scaled comparison, where roll_component_events_agree rejects on LENGTH before any tolerance applies -- because the engine arm carries the cap and the observed arm does not.",
+   "conclusion": "RETRACTED. The check asked whether ANY branch carried an engine-side cap; capped_bases is computed PER BRANCH inside the comparison loop, so only the complaining branch matters. Re-measured at the correct scope: 71 of 80 rows have NO cap on the complaining branch. The earlier 103-of-120 result is real but answers a question that does not bear on the mechanism.",
    "the_defect_is_mine": "C29 scoped capped_bases to the SLOT. The differential's stated intent for the _to_full tag is 'only the magnitude is relaxed, and only in the capped direction', which calls for scoping to the COMPONENT PAIR. Slot-wide scoping relaxes membership for components that have nothing to do with the cap.",
    "fix": "Scope capped_bases per paired base source rather than per slot: promote a base source only where THAT source is capped on at least one side AND appears on both. Registered as C34, pre-measured offline before implementation, like every change before it.",
    "expected_effect": "Up to 3,433 of the 3,779 structural rows -- the no-cap-in-pair majority -- should stop being count-mismatches. That is a PREDICTION to register, not a result: C29's own identity-level falsifier caught counts matching while the rows did not."
-  }
+  },
+  "c34_measured": {
+   "design": "narrow capped_bases to base sources present on BOTH sides",
+   "result": "NO-OP. 400 of 400 sampled rows unchanged.",
+   "why": "_bases() normalises the _to_full suffix, so itemleftovers is in both sets and the intersection retains it. The variant cannot change a shape whose two sides differ only by the cap suffix.",
+   "value": "A registered prediction that failed cleanly, before any code shipped."
+  },
+  "count_of_wrong_answers": 5,
+  "what_is_actually_established": [
+   "3,433 of 3,779 fresh structural rows: majority-arm count mismatch, no cap in the pair.",
+   "3,323 are 'observed has more'; itemleftovers appears 2,874 times on the longer side.",
+   "71 of 80: no cap on the complaining branch, so slot-wide promotion is NOT the path.",
+   "C34 as designed is a no-op, measured on 400 rows.",
+   "The mechanism placing an uncapped itemleftovers into the roll-scaled list remains UNEXPLAINED."
+  ],
+  "next_step": "Stop hypothesising and instrument directly: for one row, dump obs_exact, obs_rolled, eng_exact, eng_rolled and capped_bases as evaluate_boundary_strict actually computes them. Five inferences from reading the source have now failed; the next answer should come from the values, not the code."
  }
 }
