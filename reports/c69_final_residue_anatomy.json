@@ -1,0 +1,32 @@
+{
+ "schema": "c69-final-residue-anatomy/1",
+ "population": "the 255 unattributed rows at fingerprint c50da60a after C55, C57, C66 and C68",
+ "method": "classify each row by the strongest relationship any of its misses achieves between the observed and engine component lists",
+ "anatomy": {
+  "count mismatch on every miss": {
+   "rows": 142,
+   "share": "55.7%"
+  },
+  "same sources, a magnitude outside the legal roll window": {
+   "rows": 80,
+   "share": "31.4%"
+  },
+  "SAME sources, every magnitude within a legal roll, yet rejected": {
+   "rows": 17,
+   "share": "6.7%"
+  },
+  "same count, different sources": {
+   "rows": 16,
+   "share": "6.3%"
+  }
+ },
+ "the_17_are_the_only_clear_instrument_defect_left": {
+  "example": "s18000534/77 p2 -- observed [('', -67), ('itemleftovers', 18), ('capped_lethal', -24)] against engine [('', -69), ('itemleftovers', 18), ('capped_lethal', -22)]. Identical sources; -67/-69 is 0.971 and -24/-22 is 1.09, both inside the 0.85 to 1.176 window a gen3 roll spans. The matcher should accept this and does not.",
+  "where_it_must_be": "branch_component_legal_rolls derives a per-component legal set rather than using the bare window, so a magnitude inside the window can still fall outside the set the branch supports. That derivation is the suspect, and it is the same exit C60 measured firing on 69 rows.",
+  "why_it_is_worth_pursuing_and_the_others_are_not": "it is the one shape where the two lists agree on everything the comparison claims to care about -- same components, same sources, magnitudes a legal roll apart -- and the rejection still happens. Everything else in the residue disagrees about something real."
+ },
+ "the_80_are_not_instrument_work": "same sources but a magnitude no legal roll can bridge. That is a genuine quantitative disagreement between engine and simulator, and no tolerance change should absorb it.",
+ "the_142_are_the_shape_three_cycles_have_judged_genuine": "count mismatch on every miss, dominated by one side being entirely empty. C61 examined them, found the engine's majority arm places its mass on nothing happening while the simulator's roll landed elsewhere, and declined to absorb them into an accounting family.",
+ "honest_ceiling_for_matcher_work": "17 rows of 255. Even a perfect fix to the legal-roll derivation leaves 238 unattributed, and the goal needs zero. The instrument seam really is worked out; what remains is either real disagreement or needs the contract's exits with evidence that does not yet exist.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 255"
+}
