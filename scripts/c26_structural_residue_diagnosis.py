@@ -164,6 +164,53 @@ def shape_breakdown(
     }
 
 
+def capped_heal_breakdown(
+    registered: types.ModuleType, rows: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Why the majority arm complains at all, once the arm is the right one.
+
+    A heal that lands exactly on the HP cap absorbs the damage roll by
+    construction: a bigger roll leaves a bigger heal, and the end state is the
+    same. So the interesting question for a capped-heal boundary is not whether
+    the components match but whether the NET agrees -- and when it does, the
+    row is a strict-matcher-only divergence over a documented cap shape, not an
+    unexplained mechanism.
+    """
+
+    outcome: Counter = Counter()
+    carries_cap = 0
+    net_differs: list[dict[str, Any]] = []
+    for row in rows:
+        family, _basis, counter = registered.classify_row(row)
+        if family != "UNATTRIBUTED" or counter != STRUCTURAL_COUNTER:
+            continue
+        misses = row.get("branch_misses") or []
+        if any(source.endswith("_to_full")
+               for miss in misses
+               for source, _value in registered._miss_pairs(miss)[0]
+               + registered._miss_pairs(miss)[1]):
+            carries_cap += 1
+        majority = registered._majority_miss(misses)
+        observed, engine = registered._miss_pairs(majority)
+        observed_net = sum(value for _source, value in observed)
+        engine_net = sum(value for _source, value in engine)
+        capped = any(source.endswith("_to_full") for source, _v in observed + engine)
+        if observed_net == engine_net:
+            outcome["identical_net_capped_decomposition"
+                    if capped else "identical_net_no_cap"] += 1
+        else:
+            outcome["net_differs_capped" if capped else "net_differs_no_cap"] += 1
+            net_differs.append({
+                "seed": row.get("seed"), "step": row.get("step"),
+                "observed_net": observed_net, "engine_net": engine_net,
+            })
+    return {
+        "rows_carrying_a_capped_heal_component": carries_cap,
+        "majority_arm_outcome": dict(outcome),
+        "majority_arm_net_differs": net_differs,
+    }
+
+
 def divergent_rows(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     retention = report.get("repro_retention")
     if not isinstance(retention, Mapping) or retention.get("repros_complete") is not True:
@@ -249,6 +296,7 @@ def main(argv=None) -> int:
     for population, rows in populations.items():
         entry: dict[str, Any] = {
             "shape": shape_breakdown(modules["registered"], rows),
+            "capped_heal": capped_heal_breakdown(modules["registered"], rows),
             "scopings": {name: _tally(module, rows) for name, module in modules.items()},
         }
         if population == "fresh_sample" and games:

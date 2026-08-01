@@ -10,9 +10,9 @@ predicted-zero in `reports/c26_current_engine_resweep_spec.json`. On a fresh
 rows — 0.48 per game**, which projects to roughly **4,800 unattributed rows** in
 the registered 10,000-game sweep. The certification standard requires zero.
 
-Most of that residue is the rule firing wider than its own stated semantics. A
-real residue survives underneath, and that surviving residue — not the count —
-is the diagnosis queue.
+Most of that residue is the rule firing wider than its own stated semantics.
+Replaying what survives resolves the rest: it is the matcher's handling of
+capped heals, not an engine fidelity gap. `C27 fix specification` below.
 
 ## Evidence
 
@@ -97,19 +97,104 @@ The second arm carries the observed component labels exactly; only the roll
 differs, and the matcher already treats that roll as interchangeable. Aligning
 the two tolerances removes 3 more fresh rows and 156 archive rows.
 
-## What survives
+## What survives, and what it turned out to be
 
 Four fresh rows (~0.07/game → ~**670 per 10,000 games**) and 339 archive rows
-survive every scoping above. Their shape is consistent: a damage component and a
-`heal_to_full` / `itemleftovers_to_full` component that cancel each other, where
-the engine's arm carries one component and Showdown's slice carries two (or the
-reverse) — seeds 17000013/12, 17000016/38, 17000026/41, and the two-component
-split at 17000037/55.
+survive every scoping above. Replaying them against the engine resolves the
+question the first pass left open: **this is not an engine fidelity gap.**
 
-That is the same decomposition question the rejected damage-composition
-experiment probed (`reports/c26_damage_composition_tail_readout.json`,
-`production_code_survives: false`). It is a genuine WHAT-level gap and is the
-right next investigation.
+**26 of the 29 fresh rows carry a capped-heal component** (`heal_to_full` or
+`itemleftovers_to_full`), and **21 of 29 have a majority arm whose net HP is
+identical to the observed transition**. Those rows differ only in how a capped
+heal is decomposed, because a heal that lands exactly on the HP cap absorbs the
+damage roll by construction:
+
+```
+pct=93.75: observed=[('', -105), ('heal_to_full', 165)]   # net +60
+           engine  =[('', -98),  ('heal_to_full', 158)]   # net +60
+```
+
+Same end state, same status, same weather. Only the intra-turn roll differs,
+and the cap swallows it. Under the banded matcher these boundaries match; they
+are strict-matcher-only divergences over a documented cap shape — I1's
+territory, exactly as its own basis string says ("capped-heal component shape in
+the majority miss (avg-roll world evolution)"). They are made UNATTRIBUTED by a
+6.25%-mass `capped_lethal` sibling arm, not by the majority complaint.
+
+### The count-mismatch subset is a bucket-migration bug
+
+`_split_component_events` routes a component into the roll-scaled list iff its
+source is in `_ROLL_SCALED_SOURCES` **or ends with `_to_full`**. Whether a heal
+caps is a function of the damage roll — so *the length of the roll-scaled list
+is itself roll-dependent*. `roll_component_events_agree` then rejects on length
+before applying any tolerance:
+
+```python
+if len(observed) != len(engine):
+    return False
+```
+
+Seed 17000013/12, replayed: Delcatty at 214, Earthquake for -84, a pending Wish
+for +145, Leftovers +15 landing exactly on 290/290. Observed rolled list is
+`[('', -84), ('itemleftovers_to_full', 15)]`. The engine's 93.75% arm rolls -90,
+so after Wish the mon sits at 269 and Leftovers does *not* cap — the same
+Leftovers heal is labelled plain `itemleftovers` and lands in the **exact**
+bucket instead. Rolled lengths become 2 vs 1 and the row is rejected as
+structurally different.
+
+It is not. -84 is inside the engine's own tolerance for -90 (0.919·90−1 = 81.7 ≤
+84 ≤ 1.09·90+1 = 99.1), so the matcher would have accepted the roll had it ever
+compared them. Two arms differing only by a legal roll are declared structurally
+different because the cap label moved a component between buckets.
+
+### The three genuine outliers are a documented limit, mis-filed
+
+Seeds 17000001/1, 17000028/53 and 17000037/55 are all **crit-arm** boundaries
+where the roll changes a downstream discrete outcome:
+
+- 17000001/1 — Alakazam takes a crit Thunderbolt to 4/209 and survives to take
+  Leftovers; the engine's crit arm prices the same hit as lethal, so it emits no
+  Leftovers heal at all.
+- 17000028/53 — the same shape on a crit Hidden Power into Banette.
+- 17000037/55 — Gyarados is crit to 58/258, which is below ¼ max, so its
+  Substitute *fails*; in the engine's non-crit arm Gyarados is at 154 and
+  Substitute succeeds, costing 64. Hence `engine=[('', -88), ('', -64)]` against
+  `observed=[('', -184)]`.
+
+These are roll-divergent lethality and its Substitute-viability cousin — the
+`limit:roll_divergent_lethality` family already exists and is registered with a
+bound. The structural rule files them as an unexplained mechanism instead.
+
+### Where the archive disagrees, and why that is expected
+
+On the retained archive the same breakdown gives only 36 net-identical majority
+arms out of 776, against 21 of 29 on fresh games. That difference is a sampling
+artifact and should not be read as two contradictory results: archive rows are
+*conditioned on the 41-patch engine having diverged there*, which enriches for
+large disagreements, while a fresh sample sees the current engine's actual
+divergence mix. The fresh sample is the population the certification measures,
+so it is the one that predicts the sweep.
+
+## Fix specification for C27
+
+Three independent changes, each justified from the code's own stated semantics
+rather than from the count it produces:
+
+1. **Scope the structural rule to the majority arm**, matching I4's stated
+   rationale that a minority arm cannot explain the majority-arm complaint.
+2. **Make bucket membership roll-independent.** Classify a heal by its source,
+   not by whether it happened to cap, so the roll-scaled list length stops
+   varying with the roll — or pair components by cap-normalized source before
+   the length check.
+3. **Align the sibling-carry tolerance with the matcher's** — labels plus the
+   legal-roll window, not exact magnitudes.
+
+A fourth question is open and should not be bundled in: whether crit-arm
+lethality and Substitute-viability divergences belong in
+`limit:roll_divergent_lethality` or need their own registered family.
+
+Predict each change's effect **before** measuring it. These counterfactuals were
+computed after the fact and are diagnosis, not a registered prediction.
 
 ## Consequences for the certification program
 
