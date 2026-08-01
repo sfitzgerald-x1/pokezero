@@ -1,0 +1,44 @@
+{
+ "schema": "c32-fail-diagnosis/1",
+ "source": "reports/c32_current_engine_attestation.json (run cert-c32-20260801b)",
+ "population": "3,779 structural rows from a FRESH 10,000-game sweep -- the first non-archive, non-probe corpus this program has had for this shape",
+ "measured": {
+  "majority_count_mismatch_no_cap": 3433,
+  "majority_count_mismatch_with_cap": 346,
+  "direction": {
+   "observed_has_more": 3323,
+   "engine_has_more": 110
+  },
+  "sources_on_the_longer_side": {
+   "(direct)": 3412,
+   "itemleftovers": 2874,
+   "heal": 127,
+   "movewish": 110,
+   "capped_lethal": 23,
+   "recoil": 17
+  }
+ },
+ "dominant_shape": "observed=[('', -60), ('itemleftovers', 17)]  engine=[('', -60)]",
+ "leading_hypothesis": {
+  "claim": "C29's cap promotion is scoped too widely and is inflating this counter. It promotes a base source to roll-scaled when ANY component on that SLOT carries a cap, rather than when the paired component does. An UNCAPPED itemleftovers tick belongs in the exact bucket; it reaches the roll-scaled comparison only through that promotion, where the length check then rejects it before any tolerance applies.",
+  "why_it_matters": "If true, C29 moved rows that would have been reported as exact-bucket differences into the structural counter -- changing how they are CLASSIFIED without changing whether they diverge, and inflating the very counter I then declared resolved.",
+  "status": "HYPOTHESIS, not established. Consistent with every sample examined, but I have not confirmed that a cap exists elsewhere on the slot in these rows, which is what the claim requires. Two over-readings this session were caught only by checking; this one is not yet checked.",
+  "how_to_settle_it": "Re-read a sample of these boundaries with capped_bases scoped to the component pair instead of the slot, and compare verdicts. Offline, no engine change, no sweep."
+ },
+ "independent_of_that": {
+  "engine_side_shape": "3,323 rows where the observed transition has a component the engine's arm lacks -- most often a Leftovers tick the engine did not emit. Whatever bucket it is reported in, the engine's arm not carrying a residual the simulator emitted is an engine-support question, not a presentation one.",
+  "the_60_game_probe_missed_this_entirely": "The probe's structural rows were 26/29 cap-carrying; the sweep's are 346/3,779. The probe sampled the opposite shape."
+ },
+ "other_failures_to_diagnose": {
+  "coverage": "0.9587 against a 0.97 floor, cause unknown, no advance signal",
+  "family_bounds": "7 of 13 over, because they were calibrated on the archive and applied to a fresh population",
+  "contract_defect": "18 predicted_class_rates_10k entries carry bare interval lists"
+ },
+ "next_cycle": [
+  "settle the C29 scoping hypothesis offline",
+  "recalibrate family bounds from THIS fresh population, not the archive",
+  "diagnose the coverage shortfall",
+  "fix the predicted-class shape defect",
+  "C33 residual-lethality partition for the 73 confirmed support gaps"
+ ]
+}
