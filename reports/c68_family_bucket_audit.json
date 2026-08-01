@@ -1,0 +1,287 @@
+{
+ "schema": "family-bucket-audit/1",
+ "purpose": "The registered family table does not record WHY a family diverges, and that gap\nis what let `limit:roll_divergent_lethality` sit under the comment \"a limit of\nthe comparison, not an engine fault\" while C27 moved 285 rows out of it. Three\nprior adjudications turned out to rest on incomplete branch support. So each\nfamily needs evidence for its bucket, not a label.",
+ "era": {
+  "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+  "readout_sha256": "c56f8a67d3b54adf2a41dc3779150595203c055f49234fb5f4f17d37b0967aa1",
+  "differential_sha256": "f5e9287f31879902f653231a9e17cc02cd54dd2f70aae9a7361ae18b78d56560"
+ },
+ "population": {
+  "kind": "fresh_sweep",
+  "rows": 3093,
+  "cleared_or_skipped_on_this_build": 0,
+  "divergent_rows_measured": 3093
+ },
+ "buckets": {
+  "instrument-artifact": 5,
+  "candidate-not-finding": 10,
+  "no-rows": 5,
+  "engine-gap": 1,
+  "comparison-limit": 1
+ },
+ "families": {
+  "I1_cap_state_shape": {
+   "bucket": "instrument-artifact (largely resolved)",
+   "evidence": "reports/c30_capped_heal_scale_postmeasure.json",
+   "finding": "Fell 39 -> 1 on the fresh sample and 167 -> 42 on the archive when the capped-heal bound received the step's damage scale. This family IS the capped-heal shape by its own definition, so a silently-zero bound is precisely what manufactured it.",
+   "source": "shipped, measured change",
+   "archive_rows": 87,
+   "signatures": {
+    "measured": 87,
+    "labels_align_cap_normalised": 80,
+    "carries_cap": 87,
+    "net_identical": 69,
+    "rolls_inside_tolerance": 59,
+    "count_mismatch": 4
+   }
+  },
+  "I2_matcher_accounting": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/403, tolerance-passing 7/403, count-mismatch 3/403. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 403,
+   "signatures": {
+    "measured": 403,
+    "labels_align_cap_normalised": 399,
+    "rolls_inside_tolerance": 7,
+    "count_mismatch": 3
+   }
+  },
+  "I3_roll_inherited": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/244, tolerance-passing 210/244, count-mismatch 6/244. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "tolerance-passing-majority-arm",
+   "archive_rows": 244,
+   "signatures": {
+    "measured": 244,
+    "labels_align_cap_normalised": 238,
+    "rolls_inside_tolerance": 210,
+    "count_mismatch": 6
+   }
+  },
+  "I4_attribution_tie": {
+   "bucket": "instrument-artifact",
+   "finding": "120/120 majority arms reach an IDENTICAL net HP: the end states agree and only the decomposition differs",
+   "source": "mechanical signatures",
+   "signature_profile": "net-identical-dominated",
+   "archive_rows": 120,
+   "signatures": {
+    "measured": 120,
+    "net_identical": 120,
+    "rolls_inside_tolerance": 113
+   }
+  },
+  "I5_boundary_truncation": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 25/94, tolerance-passing 11/94, count-mismatch 78/94. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "count-mismatch-dominated",
+   "archive_rows": 94,
+   "signatures": {
+    "measured": 94,
+    "net_identical": 25,
+    "labels_align_cap_normalised": 16,
+    "count_mismatch": 78,
+    "rolls_inside_tolerance": 11
+   }
+  },
+  "I6_sleeptalk_callee_union": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 1/49, tolerance-passing 1/49, count-mismatch 21/49. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 49,
+   "signatures": {
+    "measured": 49,
+    "count_mismatch": 21,
+    "labels_align_cap_normalised": 20,
+    "carries_cap": 6,
+    "net_identical": 1,
+    "rolls_inside_tolerance": 1
+   }
+  },
+  "LS_capped_lethal_shape": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 179/464, tolerance-passing 109/464, count-mismatch 272/464. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "mixed-with-a-partial-signature",
+   "archive_rows": 464,
+   "signatures": {
+    "measured": 464,
+    "net_identical": 179,
+    "labels_align_cap_normalised": 190,
+    "rolls_inside_tolerance": 109,
+    "count_mismatch": 272
+   }
+  },
+  "LS_confusion_fan": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/3, tolerance-passing 0/3, count-mismatch 0/3. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 3,
+   "signatures": {
+    "measured": 3
+   }
+  },
+  "LS_crit_arm_pairing_echo": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/4, tolerance-passing 0/4, count-mismatch 0/4. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 4,
+   "signatures": {
+    "measured": 4,
+    "labels_align_cap_normalised": 4
+   }
+  },
+  "LS_structural_arm_echo": {
+   "bucket": "instrument-artifact",
+   "finding": "1/2 majority arms reach an IDENTICAL net HP: the end states agree and only the decomposition differs",
+   "source": "mechanical signatures",
+   "signature_profile": "net-identical-dominated",
+   "archive_rows": 2,
+   "signatures": {
+    "measured": 2,
+    "count_mismatch": 2,
+    "net_identical": 1,
+    "carries_cap": 1
+   }
+  },
+  "absorb_through_protect_or_miss": {
+   "bucket": "no-rows",
+   "finding": "no rows on this population to measure",
+   "source": "mechanical signatures",
+   "signature_profile": "no-rows",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "followup:engine_support_gap": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/9, tolerance-passing 0/9, count-mismatch 1/9. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 9,
+   "signatures": {
+    "measured": 9,
+    "labels_align_cap_normalised": 7,
+    "count_mismatch": 1
+   }
+  },
+  "incapacitated_arm_pricing": {
+   "bucket": "no-rows",
+   "finding": "no rows on this population to measure",
+   "source": "mechanical signatures",
+   "signature_profile": "no-rows",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "limit:roll_divergent_lethality": {
+   "bucket": "engine-gap (partially resolved)",
+   "evidence": "reports/c27_kill_split_postmeasure.json",
+   "finding": "C27 moved 285 archive rows out of this family by applying the existing kill-split identity to the crit arm. The family's own code comment claimed it was a limit of the comparison and not an engine fault; that was wrong for at least 14% of it.",
+   "remainder_measured": "1,082 rows survive on the C32 build. 73 of them (6.7%) have their observed damage inside the engine's own enumerated legal roll set, so the engine prices that roll and simply did not emit it: a confirmed support gap of the C27/C31 class, at the residual-lethality threshold. The remaining 1,009 are NOT thereby disagreements, and claiming so would repeat the error the matcher warns against in its own comment: the legal set is computed from the pre-state with an assumed move order, so it is 'an ADDITIONAL accept path, never a veto'. 758 rows fall outside it, 134 carry no observed damage component and 117 have no recoverable legal set -- all three are undiscriminated by this measurement, not resolved by it.",
+   "next": "The 73 confirmed rows are objective 4's next engine-gap work: extend the threshold partition to residual lethality, the third threshold after KO (C27) and Substitute viability (C31). The other 1,009 need a discriminator that does not rest on the legal set.",
+   "source": "shipped, measured change",
+   "archive_rows": 1095,
+   "signatures": {
+    "measured": 1095,
+    "count_mismatch": 562,
+    "carries_cap": 11,
+    "net_identical": 518,
+    "labels_align_cap_normalised": 501,
+    "rolls_inside_tolerance": 278
+   }
+  },
+  "limit:world_sample_drag_target": {
+   "bucket": "comparison-limit",
+   "evidence": "docs/engine_divergence_ledger_20260728.md (drag-target determinization)",
+   "finding": "Documented, not inferred: when Showdown's realized drag target is not the one a branch dragged, the entry-hazard arithmetic lands on a different mon with a different max HP, so the component diff reads as a hazard/residual disagreement that it is not. The ledger records that the engine lane verified these as determinization limits and not engine bugs, by feeding the exact repro state back and getting correct fan-out including the observed tick. The harness samples one target; no same-transition enumeration changes which one Showdown picked.",
+   "source": "shipped, measured change",
+   "archive_rows": 264,
+   "signatures": {
+    "measured": 264,
+    "count_mismatch": 247,
+    "carries_cap": 11,
+    "net_identical": 1,
+    "labels_align_cap_normalised": 4,
+    "rolls_inside_tolerance": 1
+   }
+  },
+  "limit:world_substitute_health_unknown": {
+   "bucket": "no-rows",
+   "finding": "no rows on this population to measure",
+   "source": "mechanical signatures",
+   "signature_profile": "no-rows",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "recharge_turn_residual_gap": {
+   "bucket": "no-rows",
+   "finding": "no rows on this population to measure",
+   "source": "mechanical signatures",
+   "signature_profile": "no-rows",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "recoil_vs_substitute_basis": {
+   "bucket": "no-rows",
+   "finding": "no rows on this population to measure",
+   "source": "mechanical signatures",
+   "signature_profile": "no-rows",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "same_turn_stat_event_gap": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/5, tolerance-passing 4/5, count-mismatch 0/5. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "tolerance-passing-majority-arm",
+   "archive_rows": 5,
+   "signatures": {
+    "measured": 5,
+    "labels_align_cap_normalised": 5,
+    "rolls_inside_tolerance": 4
+   }
+  },
+  "structural_component_count_without_supported_sibling": {
+   "bucket": "instrument-artifact (partially resolved)",
+   "evidence": "reports/c28_structural_rule_postmeasure.json, reports/c30_capped_heal_scale_postmeasure.json, reports/c34_aliasing_fix_postmeasure.json, reports/c32_current_engine_attestation.json",
+   "finding": "Four instrument defects found so far: the rule fired from minority arms (C28), the capped-heal bound was denied its scale input (C30), and C29's own fix aliased the shared observed split (C34). On the FRESH C32 sweep the counter reached 3,779 and C34 brought it to 433.",
+   "corrected": "This entry previously read 'resolved', on the strength of a 60-game probe reaching zero. The C32 sweep produced 3,779 -- the probe was a 167th of the population and sampled the opposite shape. 433 rows survive C34, and their dominant sample inverts C34's: the ENGINE side is the longer one, splitting into damage plus a capped Leech Seed. Not resolved.",
+   "source": "shipped, measured change",
+   "archive_rows": 232,
+   "signatures": {
+    "measured": 232,
+    "count_mismatch": 232,
+    "carries_cap": 51,
+    "net_identical": 18
+   }
+  },
+  "truant_loaf_phase_drift": {
+   "bucket": "instrument-artifact",
+   "evidence": "reports/c45_truant_counter_adjudication.json",
+   "finding": "The C32 sweep's 9 rows are NOT loaf boundaries. 8 of 9 are switch boundaries and 8 of 9 have the Slaking on a different slot than the one being compared; the 3 that carry a TRUANT volatile carry it only because RemoveVolatileStatus TRUANT fires as the Slaking leaves the field, and the complaining slot's HP delta belongs to the incoming mon. The rule gated on the protocol MENTIONING a Slaking, so any switch boundary in a game containing one qualified.",
+   "consequence": "The previous entry read this as an engine-side loaf-phase drift surviving #970 and a certification failure in its own right. That was a false alarm produced by the counter's own breadth. The rule is narrowed to the loaf signature -- |cant| truant with the Slaking active on the compared slot -- which preserves sensitivity to a genuine drift while ending the false positives. The 9 rows move to the structural counter; total unattributed is unchanged at 485, so this is a relabel and not a residue reduction.",
+   "source": "shipped, measured change",
+   "archive_rows": 0,
+   "signatures": {}
+  },
+  "unattributed_generic": {
+   "bucket": "candidate-not-finding",
+   "finding": "no decisive signature: net-identical 0/18, tolerance-passing 3/18, count-mismatch 13/18. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.",
+   "source": "mechanical signatures",
+   "signature_profile": "no-signature",
+   "archive_rows": 18,
+   "signatures": {
+    "measured": 18,
+    "count_mismatch": 13,
+    "labels_align_cap_normalised": 3,
+    "rolls_inside_tolerance": 3
+   }
+  }
+ },
+ "era_discipline": "Every adjudication here is stamped with the engine fingerprint, readout hash and differential hash above, and must be mechanically re-derived when any of the three changes. An adjudication without a current-era stamp is stale by construction."
+}

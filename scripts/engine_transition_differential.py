@@ -1359,6 +1359,43 @@ def _active_maxhp_by_slot(state: Any, slot_sides: Mapping[str, str]) -> dict[str
     }
 
 
+_CONTRACT_LIMIT_MARKER = "contract-exit: only an attribution-unsafe branch reproduces the observation"
+_CONTRACT_FOLLOWUP_MARKER = "contract-exit: no enumerated branch reaches the observation"
+
+
+def _branch_reproduces_observation(branch, observed) -> bool:
+    """Whether a branch's post-state reaches the observed HP within a legal roll.
+
+    Tolerance matters. The first version of this demanded an EXACT match on both
+    slots, which almost no branch of a divergent boundary achieves -- so "no
+    branch reaches the observation" became true nearly everywhere and the marker
+    swallowed 1,273 rows. gen3 damage is floor(base * random(85,100) / 100), so
+    two rolls of one base differ by at most 100/85; a branch inside that window
+    HAS reached the transition, at a different roll.
+    """
+
+    post = branch.get("post_state")
+    if not post:
+        return False
+    try:
+        state = poke_engine.State.from_string(post)
+    except BaseException:  # noqa: BLE001
+        return False
+    after = engine_features_by_slot(state, {"p1": "side_one", "p2": "side_two"})
+    for slot in ("p1", "p2"):
+        want = getattr(observed, f"{slot}_hp", None)
+        got = getattr(after, f"{slot}_hp", None)
+        if want is None or got is None:
+            return False
+        if want == got:
+            continue
+        if not want or not got:
+            return False
+        if not (85 / 100 <= abs(want) / abs(got) <= 100 / 85):
+            return False
+    return True
+
+
 def evaluate_boundary_strict(
     *,
     states: Sequence[Any],
@@ -1400,6 +1437,8 @@ def evaluate_boundary_strict(
     misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
+    reproducing_branches = False
+    reproducing_included = False
     for state in states:
         try:
             rendered = json.loads(
@@ -1433,6 +1472,10 @@ def evaluate_boundary_strict(
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
             lossy = list(branch.get("lossy") or [])
+            if _branch_reproduces_observation(branch, observed):
+                reproducing_branches = True
+                if not branch.get("attribution_unsafe"):
+                    reproducing_included = True
             # A branch whose ONLY defect is the known Sleep Talk callee-identity
             # gap is still usable: its damage is real, only its attribution is
             # generic. Any other lossy marker is a different insufficiency and
@@ -1564,6 +1607,17 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
+    # CONTRACT EXIT MARKERS. Evidence for the contract's follow-up and limit
+    # exits is only available here, where the branch set is enumerated. These
+    # do NOT suppress a divergence and do NOT decide attribution: the readout
+    # consults them ONLY after every documented family has declined the row, so
+    # a marker can never claim something another rule explains. The first
+    # attempt checked them FIRST and swallowed 1,273 rows, most already
+    # correctly attributed. reports/c68_contract_exit_closure.json.
+    if reproducing_branches and not reproducing_included:
+        ordered = ordered + [_CONTRACT_LIMIT_MARKER]
+    elif not reproducing_branches:
+        ordered = ordered + [_CONTRACT_FOLLOWUP_MARKER]
     return "diverged", ordered, branch_total
 
 
