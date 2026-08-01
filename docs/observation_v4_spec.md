@@ -27,9 +27,11 @@ same audit run in the opposite direction: world-seeded facts the observation nev
 
 | | v3 | v4 |
 |---|---|---|
-| numeric | 155 | **167** |
-| categorical | 51 | **53** |
-| transition tokens | 64 | 64 (unchanged) |
+| numeric | 155 | **134** |
+| categorical | 51 | **41** |
+| transition tokens | 64 | **0 — the region is gone** |
+| tokens in the sequence | 87 | **23** |
+| vocabulary rows | 1289 | **899** |
 
 V4 is the v3 grouped layout with the pack columns **appended inside their semantic group**,
 not bolted onto the end. The v3 table's own rule is that grouping follows the token encoder's
@@ -43,8 +45,28 @@ The same drop set applies: the fourteen evidence-backed unreachable fields v3 re
 or rewritten relative to the v3 writer surface, so every v3 column carries the same VALUE at a
 different index — asserted directly in `tests/test_observation_spec_v4.py`.
 
-The **history tail is deliberately unchanged at 64 rows.** The pack exists to serve an arm that
-runs at `transition_token_budget=0`; resizing the tail would confound that comparison.
+## The history region is REMOVED, not masked
+
+V4 carries no transition history at all. This is the plan's stated end goal — "full region trim,
+no synthesized history in search worlds, the simplest observation contract" — and it is a
+stronger statement than a budget of zero over a region that still exists:
+
+- the 64 transition tokens are gone from the sequence (87 → 23);
+- the 34-column `history` numeric group is gone;
+- the 12 turn-merged categorical columns (`CATEGORY_TM_*`) are gone, and with them the
+  `tt_phase` / `tt2_*` vocabulary families (1289 → 899 rows).
+
+Consequences that a mask could not give: every forward is ~3.8× shorter; there is no
+`transition_token_budget` knob left to mis-set; and a v4 checkpoint cannot be fed synthesized
+history, because there is nowhere to put it.
+
+**TURN-MERGED and GROUPED-LAYOUT are separate axes.** v4 is v3-lineage for every current-state
+writer while being not-turn-merged. Both the Python and the native encoder keep those flags
+distinct (`schema_v3` / `schema_turn_merged`, `is_v3()` / `is_v4()`).
+
+**What survives the trim.** The transition tokens are still EXTRACTED — the per-mon pinned
+Tier-2 conclusions and the tendency aggregates derive from that stream, and both live on real
+mon tokens as current state. Only the per-row encoding is gone.
 
 `showdown.v4_numeric_index()` is the physical-layout authority. `NUMERIC_*` constants are
 writer-semantic identifiers, never physical v4 positions.

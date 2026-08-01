@@ -117,16 +117,20 @@
 </p>
 
 <div class="kpis">
-  <div class="stat"><div class="v">167</div><div class="l">numeric columns</div><div class="d">v3: 155 &nbsp;<b>+12</b></div></div>
-  <div class="stat"><div class="v">53</div><div class="l">categorical columns</div><div class="d">v3: 51 &nbsp;<b>+2</b></div></div>
-  <div class="stat"><div class="v">87</div><div class="l">tokens</div><div class="d">unchanged</div></div>
-  <div class="stat"><div class="v">64</div><div class="l">history rows</div><div class="d">unchanged — deliberately</div></div>
+  <div class="stat"><div class="v">134</div><div class="l">numeric columns</div><div class="d">v3: 155 &nbsp;<b>&minus;21</b></div></div>
+  <div class="stat"><div class="v">41</div><div class="l">categorical columns</div><div class="d">v3: 51 &nbsp;<b>&minus;10</b></div></div>
+  <div class="stat"><div class="v">23</div><div class="l">tokens</div><div class="d">v3: 87 &nbsp;<b>&minus;64</b></div></div>
+  <div class="stat"><div class="v">0</div><div class="l">history rows</div><div class="d">the region is <b>gone</b></div></div>
 </div>
 
 <div class="note">
-  <b>Why the history tail is not touched.</b> The pack exists to serve an arm that runs at
-  <code>transition_token_budget = 0</code>. Resizing the history region would confound the exact
-  comparison the pack is built to make, so v4 inherits v3's 64-row tail byte-for-byte.
+  <b>The history region is removed, not masked.</b> A budget of zero still leaves the region —
+  and the knob — in the contract. v4 deletes both: the 64 transition tokens, the 34-column history
+  numeric group, and the 12 turn-merged categorical columns with their <code>tt2_*</code> vocabulary.
+  Every forward is ~3.8&times; shorter, there is no budget left to mis-set, and a v4 checkpoint
+  cannot be fed synthesized history because there is nowhere to put it. The tokens are still
+  <em>extracted</em> — the pinned Tier-2 conclusions and the tendency aggregates derive from that
+  stream onto real mon tokens — only the per-row encoding is gone.
 </div>
 
 <h2>The question v4 exists to answer</h2>
@@ -151,7 +155,7 @@
 <h2>Where the new columns land</h2>
 <p>
   v4 is v3's grouped layout with the pack appended <em>inside</em> its semantic group, not bolted onto the end.
-  Three of the seven groups grow; the other four are untouched.
+  Three groups grow, three are untouched — and the seventh, <b>history</b>, is deleted outright.
 </p>
 
 <div class="card">
@@ -164,50 +168,49 @@
        de-emphasis gray and only the additions take the accent hue. 2px surface
        gaps between adjacent fills; every segment directly labelled. -->
   <svg viewBox="0 0 1000 132" role="img" aria-label="Numeric layout by group: pokemon_state grows 33 to 37, field grows 12 to 18, five other groups unchanged.">
-    <!-- Both rows share one scale: 5.49px per column, 2px surface gaps. So the two rows
-         are directly comparable, the v3 row ends visibly short, and the segments before
-         the first insertion line up exactly. -->
+    <!-- Both rows share one scale: 5.87px per column, 2px surface gaps. So the two rows are
+         directly comparable and v4's row ends visibly SHORT — the region trim is the story. -->
     <!-- v3 row -->
     <text x="0" y="24" class="lbl-mut">v3 · 155</text>
     <g transform="translate(78,10)">
-      <rect x="0"      y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="34.9"   y="0" width="181.2" height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="218.1"  y="0" width="291.0" height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="511.1"  y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="546.0"  y="0" width="65.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="613.9"  y="0" width="60.4"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="676.3"  y="0" width="186.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="0"     y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="37.2"  y="0" width="193.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="232.9" y="0" width="311.2" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="546.1" y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="583.3" y="0" width="70.5"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="655.8" y="0" width="64.6"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="722.4" y="0" width="199.6" height="22" rx="3" fill="none"
+            stroke="var(--critical)" stroke-width="1.5" stroke-dasharray="0"/>
+      <text x="822" y="15" text-anchor="middle" style="font-size:10.5px;font-weight:600"
+            fill="var(--critical)">history · 34 — REMOVED at v4</text>
     </g>
     <!-- v4 row -->
-    <text x="0" y="70" class="lbl">v4 · 167</text>
+    <text x="0" y="70" class="lbl">v4 · 134</text>
     <g transform="translate(78,56)">
-      <rect x="0"      y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="34.9"   y="0" width="181.2" height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="218.1"  y="0" width="22.0"  height="22" rx="3" fill="var(--series-1)"/>
-      <rect x="242.1"  y="0" width="291.0" height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="535.1"  y="0" width="11.0"  height="22" rx="3" fill="var(--series-1)"/>
-      <rect x="548.1"  y="0" width="32.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="583.0"  y="0" width="65.9"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="650.9"  y="0" width="32.9"  height="22" rx="3" fill="var(--series-1)"/>
-      <rect x="685.8"  y="0" width="60.4"  height="22" rx="3" fill="var(--de-emphasis)"/>
-      <rect x="748.2"  y="0" width="186.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="0"     y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="37.2"  y="0" width="193.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="232.9" y="0" width="29.4"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="264.3" y="0" width="311.2" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="577.5" y="0" width="11.7"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="591.2" y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="628.4" y="0" width="70.5"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="700.9" y="0" width="35.2"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="738.1" y="0" width="64.6"  height="22" rx="3" fill="var(--de-emphasis)"/>
     </g>
     <!-- group labels under the v4 row -->
     <g transform="translate(78,90)">
-      <text x="16"   y="10" class="lbl-mut" text-anchor="middle">core</text>
-      <text x="16"   y="24" class="tick"    text-anchor="middle">6</text>
-      <text x="137"  y="10" class="lbl-mut" text-anchor="middle">pokemon_state</text>
-      <text x="137"  y="24" class="tick"    text-anchor="middle">33 + 4</text>
-      <text x="393"  y="10" class="lbl-mut" text-anchor="middle">belief</text>
-      <text x="393"  y="24" class="tick"    text-anchor="middle">53 + 2</text>
-      <text x="564"  y="10" class="lbl-mut" text-anchor="middle">action</text>
-      <text x="564"  y="24" class="tick"    text-anchor="middle">6</text>
-      <text x="633"  y="10" class="lbl-mut" text-anchor="middle">field</text>
-      <text x="633"  y="24" class="tick"    text-anchor="middle">12 + 6</text>
-      <text x="716"  y="10" class="lbl-mut" text-anchor="middle">tendency</text>
-      <text x="716"  y="24" class="tick"    text-anchor="middle">11</text>
-      <text x="841"  y="10" class="lbl-mut" text-anchor="middle">history</text>
-      <text x="841"  y="24" class="tick"    text-anchor="middle">34</text>
+      <text x="17"  y="10" class="lbl-mut" text-anchor="middle">core</text>
+      <text x="17"  y="24" class="tick"    text-anchor="middle">6</text>
+      <text x="165" y="10" class="lbl-mut" text-anchor="middle">pokemon_state</text>
+      <text x="165" y="24" class="tick"    text-anchor="middle">33 + 5</text>
+      <text x="427" y="10" class="lbl-mut" text-anchor="middle">belief</text>
+      <text x="427" y="24" class="tick"    text-anchor="middle">53 + 2</text>
+      <text x="609" y="10" class="lbl-mut" text-anchor="middle">action</text>
+      <text x="609" y="24" class="tick"    text-anchor="middle">6</text>
+      <text x="682" y="10" class="lbl-mut" text-anchor="middle">field</text>
+      <text x="682" y="24" class="tick"    text-anchor="middle">12 + 6</text>
+      <text x="770" y="10" class="lbl-mut" text-anchor="middle">tendency</text>
+      <text x="770" y="24" class="tick"    text-anchor="middle">11</text>
     </g>
   </svg>
   <p class="cap">
@@ -226,7 +229,7 @@
     <div class="tok pack" style="flex:6 0 150px">7–12<br>opponent team</div>
     <div class="tok"      style="flex:9 0 150px">13–21<br>action candidates</div>
     <div class="tok"      style="flex:1 0 66px">22<br>stats</div>
-    <div class="tok"      style="flex:14 0 200px">23–86<br>transition history (64)</div>
+    <div class="tok" style="flex:14 0 200px;background:none;border:1.5px solid var(--critical);color:var(--critical)">transition history<br>REMOVED (was 64)</div>
   </div>
   <div class="legend">
     <span><span class="sw" style="background:var(--series-1)"></span>carries pack columns</span>
