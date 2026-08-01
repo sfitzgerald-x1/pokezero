@@ -1,0 +1,40 @@
+{
+ "schema": "c74-attributed-but-unexplained/1",
+ "why": "the fresh sweep retained 232 ATTRIBUTED rows and I had only examined the 10 unattributed. If families the audit itself calls unevidenced are absorbing fresh rows, the unattributed count understates what is actually unexplained.",
+ "measured_on_the_242_fresh_divergences": {
+  "candidate-not-finding": {
+   "rows": 86,
+   "share": "35.5%"
+  },
+  "engine-gap (partially resolved)": {
+   "rows": 84,
+   "share": "34.7%"
+  },
+  "comparison-limit": {
+   "rows": 42,
+   "share": "17.4%"
+  },
+  "instrument-artifact": {
+   "rows": 11,
+   "share": "4.5%"
+  },
+  "UNATTRIBUTED": {
+   "rows": 10,
+   "share": "4.1%"
+  },
+  "instrument-artifact (largely resolved)": {
+   "rows": 7,
+   "share": "2.9%"
+  },
+  "followup:engine_support_gap": {
+   "rows": 2,
+   "share": "0.8%"
+  }
+ },
+ "what_candidate_not_finding_means": "the audit's own entry for I2_matcher_accounting reads: 'no decisive signature: net-identical 0/403, tolerance-passing 7/403, count-mismatch 3/403. Profile recorded for the next pass; resolving it needs the reject reason, which these signatures do not measure.' It is a holding label, not an explanation -- the family names a shape whose mechanism was investigated and not established.",
+ "the_finding": "10 rows are UNATTRIBUTED and another 86 are attributed to families with no established mechanism. On fresh data 96 of 242 divergences -- 39.7% -- lack a real explanation, against the 4.1% the certification gate counts. The gate measures whether a row reached a registered family, and the audit measures whether that family explains anything. Those are different questions and this session has been reporting the first as though it answered the second.",
+ "this_is_the_risk_the_audit_was_created_to_catch": "its purpose statement says the family table 'does not record WHY a family diverges, and that gap is what let limit:roll_divergent_lethality sit under the comment a limit of the comparison, not an engine fault while C27 moved 285 rows out of it'. The audit found the gap and bucketed it honestly; what nobody then did was carry the bucket back into how the residue is reported.",
+ "the_blocker_the_audit_named_has_since_been_removed": "I2's entry says resolution 'needs the reject reason, which these signatures do not measure'. C59 and C60 measured exactly that -- the matcher's own rejection reason per row, and the per-row exit census inside roll_component_events_agree. The candidate-not-finding families can now be re-derived against evidence that did not exist when they were bucketed.",
+ "what_this_does_to_the_projection": "~125 unattributed at 10,000 games stands as a projection of the GATE. The projection of what is genuinely unexplained is roughly ten times that. Both numbers are real and they answer different questions; only the first is what the contract counts.",
+ "does_not_reach_a_pass": "unchanged; this widens what a PASS would have to mean, it does not move the gate"
+}
