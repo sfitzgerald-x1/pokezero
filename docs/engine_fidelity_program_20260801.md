@@ -184,3 +184,106 @@ as results of the change that overturned them, with the reasoning that failed.
   differential's integer `base * roll // 100` on 20 of 7,484 pairs. Its own
   registered change: it moves emitted damage on every case-A hit.
 - C27 is an era boundary for any eval campaign in flight.
+
+---
+
+# Program state, end of the 2026-08-01 session
+
+This section is the current picture. Where it contradicts an earlier section or
+an earlier report, this section is right and the reason is given.
+
+## The number
+
+| | value |
+| --- | --- |
+| unattributed, C32 corpus, session start | 3,882 |
+| unattributed, C32 corpus, now | 255 |
+| divergence rate, C32 sweep (old build) | 0.921% |
+| divergence rate, 800 fresh games (current build) | 0.385% |
+| unattributed fraction, C32 corpus | 8.24% |
+| unattributed fraction, 800 fresh games | 4.13%, 95% CI [1.6%, 6.6%] |
+| **projected unattributed at 10,000 games** | **~125, band [49, 201]** |
+| coverage, fresh | 0.9657 against a 0.97 floor |
+| engine errors, 78,070 fresh boundaries | 0 |
+
+## The correction that matters most
+
+Nearly every measurement in this session was taken on the C32 retained corpus.
+That corpus was retained **conditional on divergence under the old build**. Four
+fixes then cleared whole classes from it, so what survives is enriched for rows
+that resisted those very fixes. The corpus therefore **overstates** the
+unattributed fraction — 8.24% against a fresh 4.13%, outside the fresh interval.
+
+The practical effect: the headline 255 is not the number a real sweep would
+produce. ~125 is. Anyone planning engine work off 255 is planning off a biased
+population.
+
+A local Showdown install at `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`
+makes fresh sweeps available without cluster time. This was true for the whole
+session and was not checked until the end. Certification scale still needs the
+cluster; validation does not.
+
+## What landed
+
+| cycle | change | effect | verified by |
+| --- | --- | --- | --- |
+| C55 | render the Sleep Talk callee's damage event | 476 → 366 | 331 rows cleared, 0 regressions |
+| C57 | skip on `attribution_unsafe`, not `lossy` | 366 → 341 | 27 rows, ceiling exact |
+| C66 | roll-cascade fallback for count mismatches | 341 → 264 | 77 rows, exactly as registered |
+| C68 | contract-exit closure, second attempt | 264 → 255 | 9 rows, no family shrank |
+
+## What was built and rejected, and why it matters
+
+Seven repairs were measured and rejected. Two would have reported large
+improvements:
+
+- **C53 retag** — a clean-looking −17 that was 48 rows laundered into
+  `I6_sleeptalk_callee_union`, a family bucketed *candidate-not-finding*.
+- **C68 first attempt** — 264 → 44, which would have read as near-certification.
+  It relabelled 1,273 rows, most already correctly attributed, as engine support
+  gaps.
+
+The invariant that catches this class is **no existing family may shrink**. It
+was not registered for C68's first attempt and was added afterwards; it then
+caught the C69 capped_lethal repairs immediately.
+
+## Where the residue actually is
+
+Of 255 (corpus basis; ~125 projected fresh):
+
+- **142** count mismatch on every miss, dominated by one side being entirely
+  empty. The engine's majority arm places its mass on nothing happening while
+  the simulator's roll landed elsewhere. Examined in C61 and judged a genuine
+  disagreement about probability mass. Absorbing it would launder a real
+  difference.
+- **80** same sources, magnitude beyond any legal roll — genuine quantitative
+  disagreement.
+- **17** the `capped_lethal` one-sided test. Diagnosis confirmed; three repairs
+  measured and all rejected, the best at 87% acceptance on unrelated pairs.
+- **16** same count, different sources — no mechanism.
+
+Fresh data confirms the composition: 8 of 10 fresh unattributed rows are the
+one-side-empty shape, and no shape appears that the corpus lacks.
+
+## What a PASS requires, honestly
+
+Not more matcher work. The instrument seam that produced C55, C57 and C66 is
+worked out, and the largest remaining opportunity was 17 rows and closed as
+unsafe. A PASS requires:
+
+1. The contract's follow-up and limit exits applied to the 142 and the 80, with
+   per-shape evidence that does not yet exist. C68 demonstrates what happens
+   when a closure fires without it.
+2. Engine work widening support, ranked by the search impact C40 measured
+   (75.7% n-hit-KO threshold shift against a 22.1% baseline).
+3. A cluster sweep to verify, under the registered contract.
+
+## Open, specified, not started
+
+- `rest_turns` panic: two-line reproducer, four hypotheses eliminated
+  (`reports/c49_*`). Crate-path only; kills the calling process.
+- Struggle coverage: 7,909 boundaries. C44 proved the cheap mapping repair
+  would corrupt the unattributed gate.
+- The 0.2 HP borderline: `roll_components_agree` uses a 0.92–1.09 window where a
+  gen3 roll spans 0.85–1.176. Deliberate, documented, and it rejects at least
+  one fresh row by 0.2 HP.
