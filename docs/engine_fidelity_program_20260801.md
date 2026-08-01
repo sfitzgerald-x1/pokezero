@@ -46,8 +46,18 @@ Measured baseline, same 60 fresh games, seed band 17,000,000:
 | 51-patch `776fa1e1` | 98.649% | 10,667 |
 | 52-patch `2054cf3b` (C27) | 98.734% | 10,000 |
 
-The readout change forces a source freeze, so it rides the capped-heal fix
-rather than spending a cycle of its own.
+**Shipped.** `cert_sweep_readout.py` emits a `fidelity` block carrying both
+framings and its era stamp:
+
+```json
+"fidelity": {
+  "in_support_rate": 0.99,
+  "out_of_support_per_10k_games": 1000,
+  "era": {"engine_fingerprint": "...", "differential_sha256": "..."}
+}
+```
+
+Pinned by `tests/test_cert_sweep_readout_contract.py::FidelityKpiTests`.
 
 ### The KPI is comparable only within a matcher era
 

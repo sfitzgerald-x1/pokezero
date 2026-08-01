@@ -80,6 +80,16 @@ _MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components d
 _PROBE_PASS_RE = re.compile(r"^\[[^]]+\] PASS\b", re.MULTILINE)
 _PROBE_FAIL_RE = re.compile(r"^\[[^]]+\] FAIL\b", re.MULTILINE)
 
+def _differential_sha256() -> str:
+    """Hash of the matcher this readout consumed, for the KPI's era stamp."""
+
+    path = Path(__file__).resolve().parent / "engine_transition_differential.py"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:
         return 0.0, 0.0
@@ -1478,9 +1488,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     skip_counter_rates = {
         key: value / full_rounds for key, value in skip_counters.items()
     }
+    # FIDELITY KPI. Certification asks whether every difference is EXPLAINED;
+    # this asks whether the engine's support CONTAINS the transition the sim
+    # took. They are different questions and the ledger keeps them apart, so the
+    # number that tracks the second is emitted here rather than derived by hand
+    # from the aggregate.
+    #
+    # It is comparable only within a MATCHER era. Both terms come from the
+    # differential, so a matcher change moves this without the engine changing --
+    # which is why the era stamp carries the differential's own hash alongside
+    # the engine fingerprint. A reading may only be compared against another
+    # sharing that differential hash.
+    measured = max(1, agg["boundaries_measured"])
+    games = max(1, agg["games"])
+    fidelity = {
+        "in_support_rate": round((measured - agg["transitions_diverged"]) / measured, 6),
+        "out_of_support_per_10k_games": round(
+            agg["transitions_diverged"] / games * 10_000
+        ),
+        "era": {
+            "engine_fingerprint": (
+                (pred.get("certification_gates") or {}).get(
+                    "required_engine_fingerprint", ""
+                )
+            ),
+            "differential_sha256": _differential_sha256(),
+        },
+        "comparability": (
+            "in_support_rate is comparable only against a reading with the same "
+            "differential_sha256; a matcher change opens a new era and requires "
+            "re-baselining the prior engine before any delta is claimed"
+        ),
+    }
     out = {
         "verdict": verdict,
         "aggregate": agg,
+        "fidelity": fidelity,
         "coverage_measured_fraction": round(coverage, 4),
         "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
         "skip_counters": skip_counters,
