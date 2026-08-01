@@ -9,6 +9,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -24,4 +26,4 @@ jobs:
         run: python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
 
       - name: Run fan-in crash matrix
-        run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant
+        run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant tests.test_cert_historical_attestation
