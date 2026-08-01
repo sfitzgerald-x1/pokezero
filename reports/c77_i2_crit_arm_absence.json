@@ -28,5 +28,16 @@
  "the_family_is_misnamed_and_misbucketed": "I2_matcher_accounting is bucketed candidate-not-finding and its name attributes the divergence to branch-set accounting. The evidence says otherwise: the simulator crit, the engine offers no crit arm, and the magnitude ratio is the crit multiplier. This is not the matcher accounting for branch mass -- it is the engine's branch set missing an arm the simulator reached. 403 rows, the largest single family in the residue.",
  "one_ambiguity_i_am_not_resolving_here": "my test looks for a rendered |-crit| line. Absence could mean the engine does not ENUMERATE the crit branch (an engine support gap) or enumerates it without RENDERING the tag (a renderer gap, the C55 class). Those have different fixes and different buckets -- engine-gap versus instrument-artifact -- and distinguishing them needs a magnitude test over the branch set, not a tag search. I have been wrong about crits twice this session, in C51 by using a magnitude proxy for a structural question, so I am naming the ambiguity rather than picking.",
  "why_this_matters_more_than_the_gate": "these 403 rows are counted as ATTRIBUTED by the certification gate. C74 showed 35% of fresh divergences sit in families with no established mechanism; this is the largest of them, and the mechanism turns out to be a missing crit arm rather than accounting. A gate that counts them as explained is not measuring what it claims to.",
- "status": "DIAGNOSED to a mechanism, with one ambiguity named. Not re-bucketed."
+ "status": "DIAGNOSED AND SPLIT: 217 engine-gap, 173 instrument-artifact, 13 other.",
+ "ambiguity_resolved": {
+  "method": "for each row where the sim crit and no |-crit| line was rendered, ask whether ANY enumerated branch REACHES the observed crit magnitude within a legal roll. Reaching it means the branch exists and only the tag is missing; not reaching it means the arm is absent.",
+  "result": {
+   "no crit line and NO branch reaches the crit magnitude (not enumerated)": 217,
+   "no crit line but a branch REACHES it (enumerated, not rendered)": 173,
+   "engine rendered a crit line": 1
+  },
+  "verdict": "the family SPLITS, roughly evenly. 217 rows are an engine support gap -- the crit arm is not in the branch set at all. 173 are a renderer gap -- the branch exists and reaches the observed magnitude, but carries no |-crit| tag, which is the C55 class at a new site.",
+  "why_the_split_matters": "these need different fixes and land in different buckets. The 217 are engine-gap and belong in objective 4's burndown ranked by search impact. The 173 are instrument-artifact and are plausibly the cheaper repair -- C55 fixed exactly this shape for Sleep Talk callees and cleared 331 rows. Treating the 403 as one family, as the current audit does, guarantees whichever fix is attempted will explain at most half of it.",
+  "the_ambiguity_was_worth_naming": "I declined to pick in C77 because a tag search cannot distinguish enumeration from rendering. Had I guessed, either answer would have been wrong for about half the family."
+ }
 }
