@@ -1,0 +1,81 @@
+{
+ "schema": "c27-walk-mass-rederivation/1",
+ "prediction": "reports/c27_walk_mass_rederivation_prediction.json",
+ "prediction_outcome": "FALSIFIED: 8/9 exits unchanged, not 9/9",
+ "prior_build_fingerprint": "bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5",
+ "current_build_fingerprint": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+ "standard": "Appendix X as amended (#951): mass floor 1%, per-move roll consistency, four exits",
+ "rows": {
+  "1500012:24": {
+   "verdict_36_patch": "limit_not_established",
+   "mass_pct_36_patch": 0.34332275390625,
+   "verdict_52_patch": "limit_not_established",
+   "mass_pct_52_patch": 0.34332275390625,
+   "exit_changed": false
+  },
+  "1500050:33": {
+   "verdict_36_patch": "limit:roll_divergent_lethality",
+   "mass_pct_36_patch": 6.591796875,
+   "verdict_52_patch": "limit:roll_divergent_lethality",
+   "mass_pct_52_patch": 6.591796875,
+   "exit_changed": false
+  },
+  "1500105:111": {
+   "verdict_36_patch": "limit_not_established",
+   "mass_pct_36_patch": 0.34332275390625,
+   "verdict_52_patch": "limit_not_established",
+   "mass_pct_52_patch": 0.34332275390625,
+   "exit_changed": false
+  },
+  "1500168:97": {
+   "verdict_36_patch": "limit:roll_divergent_lethality",
+   "mass_pct_36_patch": 4.98046875,
+   "verdict_52_patch": "limit:roll_divergent_lethality",
+   "mass_pct_52_patch": 4.98046875,
+   "exit_changed": false
+  },
+  "1500219:62": {
+   "verdict_36_patch": "limit:roll_divergent_lethality",
+   "mass_pct_36_patch": 5.859375,
+   "verdict_52_patch": "limit:roll_divergent_lethality",
+   "mass_pct_52_patch": 5.859375,
+   "exit_changed": false
+  },
+  "1500242:56": {
+   "verdict_36_patch": "limit:roll_divergent_lethality",
+   "mass_pct_36_patch": 4.98046875,
+   "verdict_52_patch": "limit:roll_divergent_lethality",
+   "mass_pct_52_patch": 4.98046875,
+   "exit_changed": false
+  },
+  "1500242:60": {
+   "verdict_36_patch": "limit_not_established",
+   "mass_pct_36_patch": 0.6591796875,
+   "verdict_52_patch": "limit_not_established",
+   "mass_pct_52_patch": 0.652313232421875,
+   "exit_changed": false
+  },
+  "1500251:56": {
+   "verdict_36_patch": "damage_calc",
+   "mass_pct_36_patch": 0.0,
+   "verdict_52_patch": "limit_not_established",
+   "mass_pct_52_patch": 0.21457672119140625,
+   "exit_changed": true
+  },
+  "1500255:55": {
+   "verdict_36_patch": "limit:roll_divergent_lethality",
+   "mass_pct_36_patch": 5.859375,
+   "verdict_52_patch": "limit:roll_divergent_lethality",
+   "mass_pct_52_patch": 5.859375,
+   "exit_changed": false
+  }
+ },
+ "flip": {
+  "row": "1500251:56",
+  "from": "damage_calc (mass 0.000%)",
+  "to": "limit_not_established (mass 0.215%)",
+  "meaning": "damage_calc asserts Showdown's outcome is reachable under NO legal roll or ordering the engine prices -- a claimed engine arithmetic defect. Post-C27 it IS reachable, at 0.215%, which is below the 1% floor so the verdict is limit_not_established and the row keeps its current label. The residue is unchanged either way; what changed is that a standing damage_calc claim is now contradicted. The outcome was reachable all along and the old branch support could not represent it -- the same shape as the perish-clock erratum."
+ },
+ "no_verdict_weakened": "No limit verdict fell below the floor. The five limit rows kept their masses to the third decimal (6.592, 4.980, 5.859, 4.980, 5.859), so none of their reproducing assignments sat on a straddling crit arm. Only 1500242:60 moved at all among the survivors, 0.659 -> 0.652, which does not approach its exit boundary.",
+ "walk_artifact_sha256": "8ecc31ad8a8e5d4bc2c25a30d3bf3eaf141f5548ddf1f431081296eb22425190"
+}

@@ -1,0 +1,1795 @@
+[
+ {
+  "seed": 1500012,
+  "step": 24,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "psychic",
+   "p2": "hiddenpowerbug70"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 170,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    100,
+    113
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 79.1015625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         102
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         130
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.308990478515625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 102,
+        "rolls": [
+         86,
+         87,
+         88,
+         89,
+         90,
+         91,
+         92,
+         93,
+         94,
+         95,
+         96,
+         97,
+         98,
+         99,
+         100,
+         102
+        ]
+       },
+       {
+        "move": 1,
+        "base": 130,
+        "rolls": [
+         110,
+         111,
+         113,
+         114,
+         115,
+         117,
+         118,
+         119,
+         120,
+         122,
+         123,
+         124,
+         126,
+         127,
+         128,
+         130
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 8.7890625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         102
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         130
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.034332275390625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 102,
+        "rolls": [
+         86,
+         87,
+         88,
+         89,
+         90,
+         91,
+         92,
+         93,
+         94,
+         95,
+         96,
+         97,
+         98,
+         99,
+         100,
+         102
+        ]
+       },
+       {
+        "move": 1,
+        "base": 130,
+        "rolls": [
+         110,
+         111,
+         113,
+         114,
+         115,
+         117,
+         118,
+         119,
+         120,
+         122,
+         123,
+         124,
+         126,
+         127,
+         128,
+         130
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 5.859375,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         102
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         261
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 6.25,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         304
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 0.34332275390625,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 0.34332275390625,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit_not_established"
+ },
+ {
+  "seed": 1500050,
+  "step": 33,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "thunderbolt",
+   "p2": "substitute"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 143,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    56
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 52.734375,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         66
+        ],
+        "source": "calculate_damage(kill-split)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 2,
+      "assignments_total": 16,
+      "mass_pct": 6.591796875,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 66,
+        "rolls": [
+         56,
+         56,
+         57,
+         58,
+         58,
+         59,
+         60,
+         60,
+         61,
+         62,
+         62,
+         63,
+         64,
+         64,
+         65,
+         66
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 47.265625,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         133
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 6.591796875,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 6.591796875,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit:roll_divergent_lethality"
+ },
+ {
+  "seed": 1500105,
+  "step": 111,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "hiddenpowerrock70",
+   "p2": "psychic"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 133,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    82,
+    113
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 79.1015625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         91
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         118
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.308990478515625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 91,
+        "rolls": [
+         77,
+         78,
+         79,
+         80,
+         80,
+         81,
+         82,
+         83,
+         84,
+         85,
+         86,
+         87,
+         88,
+         89,
+         90,
+         91
+        ]
+       },
+       {
+        "move": 1,
+        "base": 118,
+        "rolls": [
+         100,
+         101,
+         102,
+         103,
+         105,
+         106,
+         107,
+         108,
+         109,
+         110,
+         112,
+         113,
+         114,
+         115,
+         116,
+         118
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 5.2734375,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         91
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         236
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 8.7890625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         91
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         118
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.034332275390625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 91,
+        "rolls": [
+         77,
+         78,
+         79,
+         80,
+         80,
+         81,
+         82,
+         83,
+         84,
+         85,
+         86,
+         87,
+         88,
+         89,
+         90,
+         91
+        ]
+       },
+       {
+        "move": 1,
+        "base": 118,
+        "rolls": [
+         100,
+         101,
+         102,
+         103,
+         105,
+         106,
+         107,
+         108,
+         109,
+         110,
+         112,
+         113,
+         114,
+         115,
+         116,
+         118
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 0.5859375,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         91
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         236
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 5.2734375,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         183
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         118
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.3515625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         183
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         236
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.5859375,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         183
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         118
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.0390625,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         183
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         236
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 0.34332275390625,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 0.34332275390625,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit_not_established"
+ },
+ {
+  "seed": 1500168,
+  "step": 97,
+  "divergence_class": "component_missing_in_engine:psn",
+  "choices": {
+   "p1": "return",
+   "p2": "toxic"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 316,
+    "p2": 3
+   },
+   "fainted": [],
+   "non_residual_move_damage": [
+    259
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 14.062498092651367,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         295
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 79.6875,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         295
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 16,
+      "mass_pct": 4.98046875,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 295,
+        "rolls": [
+         250,
+         253,
+         256,
+         259,
+         262,
+         265,
+         268,
+         271,
+         274,
+         277,
+         280,
+         283,
+         286,
+         289,
+         292,
+         295
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 6.25,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         591
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 4.98046875,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 4.98046875,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit:roll_divergent_lethality"
+ },
+ {
+  "seed": 1500219,
+  "step": 62,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "thunderbolt",
+   "p2": "calmmind"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 0,
+    "p2": 0
+   },
+   "fainted": [
+    "p1",
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    28
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 93.75,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         28
+        ],
+        "source": "inverted-0.925"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 16,
+      "mass_pct": 5.859375,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 28,
+        "rolls": [
+         23,
+         24,
+         24,
+         24,
+         24,
+         25,
+         25,
+         25,
+         26,
+         26,
+         26,
+         26,
+         27,
+         27,
+         27,
+         28
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 6.25,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         135
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 5.859375,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 5.859375,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit:roll_divergent_lethality"
+ },
+ {
+  "seed": 1500242,
+  "step": 56,
+  "divergence_class": "component_missing_in_engine:psn",
+  "choices": {
+   "p1": "hiddenpowerfire70",
+   "p2": "toxic"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 111,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    71
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 14.062498092651367,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         82
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 79.6875,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         82
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 16,
+      "mass_pct": 4.98046875,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 82,
+        "rolls": [
+         69,
+         70,
+         71,
+         72,
+         72,
+         73,
+         74,
+         75,
+         76,
+         77,
+         77,
+         78,
+         79,
+         80,
+         81,
+         82
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 6.25,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         164
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 4.98046875,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 4.98046875,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit:roll_divergent_lethality"
+ },
+ {
+  "seed": 1500242,
+  "step": 60,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "hiddenpowerfire70",
+   "p2": "icebeam"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 92,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    45,
+    67
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 39.55078125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         70
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 2,
+      "assignments_total": 256,
+      "mass_pct": 0.308990478515625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 54,
+        "rolls": [
+         45,
+         46,
+         46,
+         47,
+         48,
+         48,
+         49,
+         49,
+         50,
+         50,
+         51,
+         51,
+         52,
+         52,
+         53,
+         54
+        ]
+       },
+       {
+        "move": 1,
+        "base": 70,
+        "rolls": [
+         59,
+         60,
+         60,
+         61,
+         62,
+         63,
+         63,
+         64,
+         65,
+         65,
+         66,
+         67,
+         67,
+         68,
+         69,
+         70
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 4.39453125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         70
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 2,
+      "assignments_total": 256,
+      "mass_pct": 0.034332275390625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 54,
+        "rolls": [
+         45,
+         46,
+         46,
+         47,
+         48,
+         48,
+         49,
+         49,
+         50,
+         50,
+         51,
+         51,
+         52,
+         52,
+         53,
+         54
+        ]
+       },
+       {
+        "move": 1,
+        "base": 70,
+        "rolls": [
+         59,
+         60,
+         60,
+         61,
+         62,
+         63,
+         63,
+         64,
+         65,
+         65,
+         66,
+         67,
+         67,
+         68,
+         69,
+         70
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 2.63671875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         140
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.29296875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         140
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 3.125,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         108
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 39.55078125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         70
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 2,
+      "assignments_total": 256,
+      "mass_pct": 0.308990478515625,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 70,
+        "rolls": [
+         59,
+         60,
+         60,
+         61,
+         62,
+         63,
+         63,
+         64,
+         65,
+         65,
+         66,
+         67,
+         67,
+         68,
+         69,
+         70
+        ]
+       },
+       {
+        "move": 1,
+        "base": 54,
+        "rolls": [
+         45,
+         46,
+         46,
+         47,
+         48,
+         48,
+         49,
+         49,
+         50,
+         50,
+         51,
+         51,
+         52,
+         52,
+         53,
+         54
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 2.63671875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         70
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         108
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 4.6875,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         70
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 2.63671875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         140
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         54
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.17578125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         140
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         108
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.3125,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         140
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 0.652313232421875,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 0.652313232421875,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit_not_established"
+ },
+ {
+  "seed": 1500251,
+  "step": 56,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "surf",
+   "p2": "shadowball"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 166,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    116,
+    165
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 43.9453125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         178
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         135
+        ],
+        "source": "calculate_damage(kill-split)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.171661376953125,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 178,
+        "rolls": [
+         151,
+         153,
+         154,
+         156,
+         158,
+         160,
+         161,
+         163,
+         165,
+         167,
+         169,
+         170,
+         172,
+         174,
+         176,
+         177
+        ]
+       },
+       {
+        "move": 1,
+        "base": 135,
+        "rolls": [
+         114,
+         116,
+         117,
+         118,
+         120,
+         121,
+         122,
+         124,
+         125,
+         126,
+         128,
+         129,
+         130,
+         132,
+         133,
+         135
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 31.0546875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         178
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         270
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 10.986328125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         178
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         135
+        ],
+        "source": "calculate_damage(kill-split)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 256,
+      "mass_pct": 0.04291534423828125,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 178,
+        "rolls": [
+         151,
+         153,
+         154,
+         156,
+         158,
+         160,
+         161,
+         163,
+         165,
+         167,
+         169,
+         170,
+         172,
+         174,
+         176,
+         177
+        ]
+       },
+       {
+        "move": 1,
+        "base": 135,
+        "rolls": [
+         114,
+         116,
+         117,
+         118,
+         120,
+         121,
+         122,
+         124,
+         125,
+         126,
+         128,
+         129,
+         130,
+         132,
+         133,
+         135
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 7.763671875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         178
+        ],
+        "source": "calculate_damage"
+       },
+       "1": {
+        "options": [
+         270
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 5.859375,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         357
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.18310546875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         357
+        ],
+        "source": "calculate_damage(kill-split)"
+       },
+       "1": {
+        "options": [
+         135
+        ],
+        "source": "calculate_damage(kill-split)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.12939453125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         357
+        ],
+        "source": "calculate_damage(kill-split)"
+       },
+       "1": {
+        "options": [
+         270
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.0457763671875,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         357
+        ],
+        "source": "calculate_damage(kill-split)"
+       },
+       "1": {
+        "options": [
+         135
+        ],
+        "source": "calculate_damage(kill-split)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     },
+     {
+      "pct": 0.0323486328125,
+      "n_roll_moves": 2,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         357
+        ],
+        "source": "calculate_damage(kill-split)"
+       },
+       "1": {
+        "options": [
+         270
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 0.21457672119140625,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 0.21457672119140625,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit_not_established"
+ },
+ {
+  "seed": 1500255,
+  "step": 55,
+  "divergence_class": "component_missing_in_engine:itemleftovers",
+  "choices": {
+   "p1": "healbell",
+   "p2": "doubleedge"
+  },
+  "observed_target": {
+   "post_hp": {
+    "p1": 20,
+    "p2": 0
+   },
+   "fainted": [
+    "p2"
+   ],
+   "non_residual_move_damage": [
+    48,
+    146
+   ]
+  },
+  "candidates": [
+   {
+    "candidate": 0,
+    "branches": [
+     {
+      "pct": 93.75,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         146
+        ],
+        "source": "calculate_damage"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 1,
+      "assignments_total": 16,
+      "mass_pct": 5.859375,
+      "roll_ladder": [
+       {
+        "move": 0,
+        "base": 146,
+        "rolls": [
+         124,
+         125,
+         127,
+         128,
+         129,
+         131,
+         132,
+         134,
+         135,
+         137,
+         138,
+         140,
+         141,
+         143,
+         144,
+         146
+        ]
+       }
+      ]
+     },
+     {
+      "pct": 6.25,
+      "n_roll_moves": 1,
+      "warnings": [],
+      "roll_bases": {
+       "0": {
+        "options": [
+         292
+        ],
+        "source": "calculate_damage(capped)"
+       }
+      },
+      "indeterminate_base": false,
+      "reproducing_assignments": 0,
+      "assignments_total": 0,
+      "mass_pct": 0.0,
+      "roll_ladder": []
+     }
+    ],
+    "mass_pct": 5.859375,
+    "indeterminate_mass_pct": 0.0,
+    "unresolved_assignments": 0
+   }
+  ],
+  "mass_pct": 5.859375,
+  "mass_candidate": 0,
+  "unresolved_assignments": 0,
+  "verdict": "limit:roll_divergent_lethality"
+ }
+]

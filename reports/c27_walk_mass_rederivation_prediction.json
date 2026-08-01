@@ -1,0 +1,24 @@
+{
+ "schema": "c27-walk-mass-rederivation-prediction/1",
+ "purpose": "Registered BEFORE re-deriving the nine capped-lethal walk verdicts at the 52-patch C27 build. C27 changed the exact quantity the mass gate rests on -- branch percentages -- so the prior re-derivation at the 36-patch build is stale in its load-bearing number, not merely in detail.",
+ "prior_artifact": "reports/c12_walk_rederivation.json",
+ "prior_build": "bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5",
+ "current_build": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+ "rows": [
+  "1500012:24",
+  "1500050:33",
+  "1500105:111",
+  "1500168:97",
+  "1500219:62",
+  "1500242:56",
+  "1500242:60",
+  "1500251:56",
+  "1500255:55"
+ ],
+ "prediction": {
+  "exits_unchanged": "9/9",
+  "reasoning": "The Appendix X floor is 1% and the surviving verdicts sat at 1.32-6.59%. C27 only redistributes mass WITHIN a crit arm, and only where the crit roll range straddles the defender's HP; a reproducing assignment on a non-straddling branch keeps its mass exactly. Where an assignment does sit on a split crit arm, its mass is multiplied by that class's share of the sixteen rolls, so a row at the 1.32% floor could in principle fall below 1%.",
+  "at_risk": "any row whose reproducing assignment sits on a case-B straddling crit arm",
+  "falsifier": "Any exit that changes -- in particular a limit verdict dropping to limit_not_established because its mass fell under 1% -- falsifies this prediction and must be reported as a C27 consequence, not quietly absorbed."
+ }
+}

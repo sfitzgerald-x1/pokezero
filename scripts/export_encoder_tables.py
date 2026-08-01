@@ -44,6 +44,7 @@ from pokezero.category_vocab import normalize_category_value  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
@@ -79,9 +80,10 @@ def _vocab_payload(
     config (neural_policy.py:399), so no vocab-less checkpoint contract exists; the
     build enumeration below is reached only when exporting without a checkpoint at all.
     """
+    turn_merged = schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     vocab = gen3_category_vocabulary(
         showdown_root,
-        include_turn_merged=True,
+        include_turn_merged=turn_merged,
         # The v4 feature pack's two categorical families are opt-in because they change the
         # vocabulary SIZE. This build-enumeration path is only reached when exporting without a
         # checkpoint; with one, ``trained_tokens`` below overrides it wholesale.
@@ -97,7 +99,7 @@ def _vocab_payload(
         if base_row is not None:
             index[normalize_category_value(alias)] = base_row
     return {
-        "include_turn_merged": True,
+        "include_turn_merged": turn_merged,
         "tokens": list(vocab.tokens),
         "index": index,
         "oov_buckets": vocab.oov_buckets,
@@ -163,13 +165,47 @@ def _layout_payload(
     # budget-0 Markov checkpoint was fed 64 synthesized history tokens it was
     # trained to never attend to.
     masks = masks if masks is not None else ObservationFeatureMasks()
+    # A range check alone is not enough once a schema REUSES indices the previous schema
+    # spent elsewhere: at v4 the twelve turn-merged columns are gone and the pack sits on
+    # their old base, so CATEGORY_LAST_USED_MOVE (39) and CATEGORY_TM_FIRST_KIND (39) would
+    # both land in the map and one would silently win. The numeric map avoids this because it
+    # resolves through the projection, which reports absent columns; the categorical map needs
+    # the exclusion stated.
+    # v4 REUSES the indices v2.2/v3 spend on the turn-merged block: the pack sits on the
+    # pre-v2.2 base, so CATEGORY_LAST_USED_MOVE and CATEGORY_TM_FIRST_KIND are both 39. A pure
+    # range check puts both in the map for either schema and lets one silently win, so each
+    # schema must exclude the family it does not carry.
+    pack_categoricals = {"CATEGORY_LAST_USED_MOVE", "CATEGORY_TRACED_ABILITY"}
+    turn_merged_categoricals = {
+        name
+        for name in dir(showdown)
+        if name.startswith("CATEGORY_TM_") and isinstance(getattr(showdown, name), int)
+    }
+    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+        excluded_categoricals = turn_merged_categoricals
+    else:
+        excluded_categoricals = pack_categoricals
     categorical_columns = {
         name: int(getattr(showdown, name))
         for name in dir(showdown)
         if name.startswith("CATEGORY_")
+        and name not in excluded_categoricals
         and isinstance(getattr(showdown, name), int)
         and 0 <= int(getattr(showdown, name)) < spec.categorical_feature_count
     }
+    duplicates = {}
+    for name, column in categorical_columns.items():
+        duplicates.setdefault(column, []).append(name)
+    # Index 9 is a KNOWN benign alias in every schema: CATEGORY_BELIEF_ABILITY_OFFSET is
+    # DEFINED as CATEGORY_FIXED_COUNT, so the belief block starting exactly where the fixed
+    # block ends is the invariant, not a clash.
+    benign_alias = int(showdown.CATEGORY_FIXED_COUNT)
+    collisions = {c: n for c, n in duplicates.items() if len(n) > 1 and c != benign_alias}
+    if collisions:
+        raise ValueError(
+            f"encoder tables for {schema_version!r} map a categorical index to more than one "
+            f"name: {collisions}. A consumer resolving by name would get whichever won."
+        )
     numeric_columns = _numeric_column_payload(schema_version)
     return {
         "schema_version": spec.schema_version,
@@ -206,6 +242,7 @@ def _layout_payload(
         "constants": {
             "actual_stat_divisor": showdown._ACTUAL_STAT_DIVISOR,
             "stat_count_divisor": showdown._STAT_COUNT_DIVISOR,
+            "matchup_count_divisor": showdown._MATCHUP_COUNT_DIVISOR,
             "timed_condition_duration": showdown._TIMED_CONDITION_DURATION,
             "timed_side_conditions": list(showdown._TIMED_SIDE_CONDITIONS),
             "hazard_conditions": list(showdown._HAZARD_CONDITIONS),
@@ -246,6 +283,11 @@ def _layout_payload(
             ),
             "tier2_residuals": masks.tier2_residuals,
             "tier2_investment": masks.tier2_investment,
+            # v4 pack A2 ablation. Emitted for the SAME reason tier2_investment is: the crate
+            # gates real encode work on these, so a table that omits the field lets a leaf
+            # write a column the checkpoint masks off — the exact class that once blanked the
+            # investment slots at every leaf and fed a budget-0 model 64 synthesized rows.
+            "feature_pack_last_move": masks.feature_pack_last_move,
         },
     }
 
