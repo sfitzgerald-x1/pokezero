@@ -82,6 +82,9 @@ class EncoderTablesLayoutTest(unittest.TestCase):
                 "transition_token_budget": 128,
                 "tier2_residuals": True,
                 "tier2_investment": False,
+                # v4 pack A2 ablation. Exported for every schema because the crate gates a
+                # real column on it; inert below v4, where the column does not exist.
+                "feature_pack_last_move": True,
             },
         )
 
