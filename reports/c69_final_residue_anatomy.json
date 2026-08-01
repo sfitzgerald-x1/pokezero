@@ -48,5 +48,23 @@
   "why": "the bound is wrong even if the diagnosis is right. `scale` is the slot's maximum roll damage, so 0.18 * scale is large in absolute terms and admits differences far beyond what a cap difference can produce. The correct bound is the difference in PRECEDING damage on that slot -- which for the motivating row is 2, not 0.18 * 67. I reached for the neighbouring branch's constant instead of deriving the bound this case actually needs.",
   "the_invariant_earned_its_place": "'no existing family may shrink' is the invariant I failed to register for C68 and added afterwards. It caught this on the first measurement. Without it the headline -- 255 -> 249, zero matched-to-divergent regressions -- would have looked like a clean small win.",
   "what_a_correct_fix_needs": "bound the capped_lethal difference by the observed difference in the preceding direct damage on the same slot, not by a fraction of the slot's roll scale. That is computable from the component lists already in hand and would admit the motivating row while rejecting the 820."
+ },
+ "second_attempt_ALSO_REJECTED": {
+  "the_corrected_bound": "cap_slack = the difference in PRECEDING direct damage on the slot, computed in roll_component_events_agree from the full component lists and threaded into roll_components_agree. Principled: a capped residual is clipped by what the preceding damage left, so that difference is exactly how far apart the two capped ticks may legitimately sit.",
+  "measured": {
+   "unattributed": "255 -> 252 (-3)",
+   "matched -> divergent": 0,
+   "families that SHRANK": {
+    "limit:roll_divergent_lethality": "1095 -> 522",
+    "LS_capped_lethal_shape": "464 -> 277",
+    "I5_boundary_truncation": "94 -> 91",
+    "limit:world_sample_drag_target": "264 -> 262",
+    "I1_cap_state_shape": "87 -> 86"
+   }
+  },
+  "verdict": "REJECTED. Tighter than 0.18 * scale and still moves roughly 760 rows out of documented families into matched, while clearing 3 unattributed.",
+  "why_the_principled_bound_is_still_too_loose_in_practice": "cap_slack is exact but not small. Two direct components can sit one legal roll apart and still differ by tens of HP on a big hit -- -300 against -260 is inside the window and yields a slack of 40. The bound then licenses capped ticks 40 apart, which is principled and far wider than the 2 HP the motivating row needs.",
+  "the_disproportion_is_the_disqualifier": "the diagnosis targets 17 rows. The change alters roughly 760. A fix whose blast radius is 45x its target population is not explained by its own diagnosis, whatever the reasoning behind the bound. Converting 760 divergences into matches would need a false-match measurement at least as strong as C66's before it could be trusted, and the target does not justify the exercise.",
+  "what_i_would_need_to_scope_it": "restrict the relaxation to boundaries where BOTH sides actually killed -- the condition the diagnosis rests on. The current predicate fires whenever the observed component is capped_lethal, without checking that the ENGINE's is too. That is likely the whole disproportion, and it is one condition, not a new bound."
  }
 }
