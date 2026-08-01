@@ -26,9 +26,23 @@
  "untested_hypothesis": {
   "claim": "the DecrementRestTurns instruction may be reversed without being re-applied once per damage branch, so the counter accumulates to the branch count.",
   "the_arithmetic_that_suggests_it": "gen3 has 16 damage rolls, and 16 x 2 = 32, the exact panic value",
-  "status": "NOT TESTED. A numeric coincidence is not evidence, and this session has produced several confident readings that a measurement then refuted. Recorded as a lead for whoever fixes it, not as a diagnosis.",
+  "status": "TESTED AND REFUTED -- see hypothesis_tests below",
   "why_the_interaction_is_plausible": "Extreme Speed has priority, so it resolves first and changes the defender's HP; Reversal's power is a function of the attacker's remaining HP. With branch_on_damage the first move fans into many HP outcomes, each re-pricing the second. That is the only path here that multiplies branches, and it is the path the flag gates."
  },
  "why_it_was_missed_for_so_long": "It surfaced repeatedly in this session's logs as a bare 'thread panicked' line and was filed once as an incidental_finding footnote. It only affects the crate consumer, which is the one the sweep uses, and the reread path I was using for offline work mostly did not reach it.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "hypothesis_tests": {
+  "method": "rest_turns is field 19 of the serialized mon record, so it can be varied directly on the state string. Held everything else fixed and swept it.",
+  "result": {
+   "rest_turns=0": "ok",
+   "rest_turns=1": "PANIC, reports 32",
+   "rest_turns=2": "ok",
+   "rest_turns=3": "ok"
+  },
+  "kills_the_accumulation_lead": "If the counter accumulated once per damage branch from its starting value, rest_turns=2 and 3 would panic too and the reported value would shift with the input. Neither happens: only 1 panics, and the value is a constant 32. The 16 x 2 = 32 arithmetic was a coincidence, exactly as the registration warned it might be.",
+  "kills_a_misindexed_read": "A wrong field offset would surface some other value from the record. 32 does not appear anywhere in this state as a field -- zero occurrences. The value is generated during execution, not read from the input.",
+  "what_the_sweep_localises": "rest_turns == 1 is the WAKE-UP arm (generate_instructions.rs:2083): it is the only arm that changes status, setting SLEEP -> NONE and decrementing to 0. So the trigger is a mid-turn status change interacting with the damage fan, not the counter's magnitude."
+ },
+ "current_best_characterisation": "A constant, input-independent 32 appearing only when the wake-up arm runs under branch_on_damage, only for a priority move followed by an HP-dependent one, and only in the crate consumer. Constant-and-generated points at state reuse across branches rather than arithmetic drift -- but that is a direction, not a diagnosis, and the last two directions in this file were both refuted by a five-minute sweep.",
+ "what_would_settle_it": "A Rust-side print of rest_turns at entry to each branch iteration, or an assertion on the apply/reverse pairing for ChangeStatus and DecrementRestTurns. Both need a crate rebuild with instrumentation; neither needs the sweep or the cluster."
 }
