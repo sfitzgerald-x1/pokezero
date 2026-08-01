@@ -324,6 +324,16 @@ class EngineMctsConfig:
     # Self-side model priors in selection (the opponent side stays uniform in
     # this integration; docs/crate_search_design.md "Model priors").
     model_priors: bool = True
+    # Seed the OPPONENT seat's PUCT priors from the checkpoint's opponent
+    # action head instead of leaving them uniform. Default OFF: flag-off is
+    # the uniform-opponent search every recorded result was produced under.
+    #
+    # The opponent head has always been exported and batched (export_model.py
+    # OUTPUT_NAMES) and was discarded in the crate; the uniform-opponent design
+    # is a known modelling gap that findings 13.4 cleared of causing the SEAT
+    # RESIDUAL but did not clear as harmless against an EXTERNAL opponent,
+    # whose non-uniform policy is exactly what uniform play mismodels.
+    use_opponent_priors: bool = False
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -547,6 +557,61 @@ class EngineMctsStats:
         if self.decisions:
             payload["wall_per_decision"] = self.decision_wall_seconds / self.decisions
         return payload
+
+
+def opponent_request_order(context, party_species) -> list[str] | None:
+    """The opponent's Showdown request order at this decision, or None.
+
+    Showdown keeps a player's active at request slot 0 and swaps the incoming
+    mon into slot 0 on every switch-in (`sim/battle-actions.ts` `switchIn`, an
+    unconditional slot swap that also fires for forced replacements and for
+    `dragIn`). The resulting order is the label space of the model's opponent
+    action head, so the crate needs it to gather opponent priors onto the right
+    arms -- and the crate cannot derive it, having no pre-root protocol lines.
+
+    This REUSES `determinization._public_opponent_team_index_walk`, which
+    already maintains exactly this permutation as `current_order` while
+    decoding recorded opponent switch actions. Reuse is the point: five
+    hand-rolled reconstructions were each wrong, and the fifth -- diffing the
+    opponent's public active across OUR decision rounds -- was wrong on 170 of
+    811 decisions across 12 live games because the opponent also acts at rounds
+    we are not requested at (a forced replacement after a faint), which that
+    diff cannot see. The walk consumes the opponent's trajectory steps directly
+    and reconciles them against the next observed active, so it sees those
+    rounds; it is also the code that already handles Roar/Whirlwind drags and
+    same-chunk faint replacements.
+
+    Fails closed rather than guessing: the walk returns None when the public
+    data is inconsistent, and sets `active_position` to None when it loses
+    track of the permutation. Either means no order. A wrong order silently
+    permutes opponent switch priors, which is strictly worse than the crate's
+    documented one-swap fallback.
+    """
+    from .determinization import _public_opponent_team_index_walk
+
+    party = [normalize_id(str(name)) for name in party_species]
+    if not party:
+        return None
+    if len(set(party)) != len(party):
+        # Slot swaps are resolved by species name downstream, so a duplicated
+        # species makes the mapping ambiguous.
+        return None
+    opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
+    try:
+        walk = _public_opponent_team_index_walk(
+            context, opponent_slot=opponent_slot, team_size=len(party)
+        )
+    except Exception:  # noqa: BLE001 - never break search over telemetry
+        return None
+    if walk is None:
+        return None
+    _constraints, current_order, active_position = walk
+    if active_position is None:
+        # The walk stopped trusting its own permutation.
+        return None
+    if sorted(current_order) != list(range(len(party))):
+        return None
+    return [party[index] for index in current_order]
 
 
 class EngineMctsPolicy:
@@ -1216,13 +1281,20 @@ class EngineMctsPolicy:
                     config.deep_ko_split,
                     config.model_priors,
                 ]
-                if early_stop_min_sims:
+                if early_stop_min_sims or config.use_opponent_priors:
                     # Preserve the old native call contract while the feature
                     # is disabled, so a stale image cannot break default
                     # full-budget search merely because Python was updated.
                     search_args.extend(
                         [early_stop_min_sims, record["side_key"] == "side_one"]
                     )
+                if config.use_opponent_priors:
+                    # Positional, and it follows the early-stop pair in the
+                    # native signature -- hence the combined guard above: the
+                    # pair must be present for this to land in the right slot.
+                    # Appended ONLY when set, so a flag-off run makes exactly
+                    # the call it always did.
+                    search_args.append(True)
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
@@ -1290,6 +1362,16 @@ class EngineMctsPolicy:
                     # The leaf context consumes this outside model metadata.
                     "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
                         replay
+                    ),
+                    **(
+                        {"opponent_request_order": opponent_order}
+                        if (opponent_order := opponent_request_order(
+                            context,
+                            world.party_species[
+                                "p2" if context.player_id == "p1" else "p1"
+                            ],
+                        ))
+                        else {}
                     ),
                 }
             )
@@ -1969,6 +2051,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "batch": args.batch,
             "depth": args.depth,
             "model_priors": config.model_priors,
+            "use_opponent_priors": config.use_opponent_priors,
             "early_stop": config.early_stop,
             "early_stop_min_sims": config.early_stop_min_sims,
         },

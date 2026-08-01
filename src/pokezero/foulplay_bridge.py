@@ -139,6 +139,9 @@ class ControlledFoulPlayConfig:
     engine_worlds: int = 4
     engine_c_puct: float = 1.4
     engine_model_priors: bool = True
+    # Opponent-side model priors in the native search (campaign cells B/E).
+    # Default OFF -- flag-off must reproduce the uniform-opponent search.
+    engine_opponent_priors: bool = False
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -357,6 +360,14 @@ class ControlledFoulPlayGameResult:
     pokezero_decisions: int
     root_puct_searches: int
     root_puct_fallbacks: int
+    # engine-mcts (policy_mode='engine-mcts') counterparts. The native searcher
+    # records its own fallbacks in decision metadata exactly as Root-PUCT does;
+    # without these the FoulPlay summary reported no fallback at all for that
+    # mode, so a run could not tell a clean measurement from one where the
+    # searcher was playing uniform-legal on FoulPlay-side states.
+    engine_mcts_decisions: int = 0
+    engine_mcts_fallbacks: int = 0
+    engine_mcts_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     # Actual planner identities emitted by executed Root-PUCT decisions. This
     # is evidence for the primary hidden-information capstone contract.
     root_puct_opponent_action_policies: Mapping[str, int] = field(default_factory=dict)
@@ -561,6 +572,20 @@ class ControlledFoulPlayOpponentCrash:
         }
 
 
+def _engine_policy_stats(policy: Any, policy_mode: str) -> Mapping[str, Any] | None:
+    """``EngineMctsStats.to_dict()`` for an engine-mcts run, else None.
+
+    Deliberately NOT a ``hasattr`` probe over an arbitrary policy: outside
+    engine-mcts there is no engine searcher and None is the honest answer,
+    while inside it a missing serializer is a contract break that should raise
+    rather than quietly produce an empty telemetry block (the failure mode that
+    left every acceptance shard with ``"policy_stats": {}``).
+    """
+    if policy_mode != "engine-mcts":
+        return None
+    return policy.stats.to_dict()
+
+
 @dataclass(frozen=True)
 class ControlledFoulPlayBenchmarkResult:
     config: ControlledFoulPlayConfig
@@ -569,6 +594,13 @@ class ControlledFoulPlayBenchmarkResult:
     checkpoint_sha256: str | None = None
     foulplay_random_seed_schedule: tuple[int, ...] | None = None
     value_leaf_provenance: Mapping[str, object] | None = None
+    # EngineMctsStats.to_dict() for the run's engine policy, or None outside
+    # engine-mcts mode. This is the ONLY path by which
+    # search_wall_per_searched_decision -- the field the 20 s/turn rejection
+    # rule is defined on -- reaches a shard summary; policy_timing measures the
+    # bridge-level per-decision wall, which is a different quantity (it counts
+    # non-searched decisions too).
+    policy_stats: Mapping[str, Any] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -601,6 +633,12 @@ class ControlledFoulPlayBenchmarkResult:
     def to_dict(self) -> dict[str, Any]:
         root_searches = sum(game.root_puct_searches for game in self.games)
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
+        engine_decisions = sum(game.engine_mcts_decisions for game in self.games)
+        engine_fallbacks = sum(game.engine_mcts_fallbacks for game in self.games)
+        engine_fallback_reasons: dict[str, int] = {}
+        for game in self.games:
+            for reason, count in (game.engine_mcts_fallback_reasons or {}).items():
+                engine_fallback_reasons[reason] = engine_fallback_reasons.get(reason, 0) + count
         root_total_visits = sum(game.root_puct_total_visits for game in self.games)
         root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
@@ -723,6 +761,34 @@ class ControlledFoulPlayBenchmarkResult:
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
             "belief_set_source": self.config.belief_set_source_enabled(),
+            # Sibling of root_puct, populated only when policy_mode is
+            # engine-mcts. Fallback here means the native searcher could not
+            # construct a single belief world and played uniform-legal instead,
+            # so a run without this block cannot distinguish a clean strength
+            # measurement from a contaminated one.
+            "engine_mcts": {
+                "decisions": engine_decisions,
+                "fallback_decisions": engine_fallbacks,
+                "fallback_rate": (engine_fallbacks / engine_decisions) if engine_decisions else None,
+                "fallback_reasons": dict(sorted(engine_fallback_reasons.items())),
+                "depth": self.config.engine_depth,
+                "sims": self.config.engine_sims,
+                "batch": self.config.engine_batch,
+                "worlds": self.config.engine_worlds,
+                # Part of the cell's identity, not a footnote: cells B and E
+                # are read entirely against whether this was on.
+                "opponent_priors": self.config.engine_opponent_priors,
+                # The searcher's own telemetry. `search_wall_per_searched_decision`
+                # is lifted to the top of this block because it, not
+                # policy_timing.average_elapsed_seconds, is what the 20 s/turn
+                # rejection rule is defined on: policy_timing averages over ALL
+                # decisions including un-searched ones, so it reads low exactly
+                # when the fallback rate is high.
+                "search_wall_per_searched_decision": (
+                    (self.policy_stats or {}).get("search_wall_per_searched_decision")
+                ),
+                "policy_stats": self.policy_stats,
+            } if self.config.policy_mode == "engine-mcts" else None,
             "root_puct": {
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
@@ -1701,6 +1767,7 @@ async def _run_controlled_foulplay_games(
                         checkpoint_sha256=checkpoint_sha256,
                         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
                         value_leaf_provenance=value_leaf_provenance,
+                        policy_stats=_engine_policy_stats(policy, config.policy_mode),
                     )
                 )
     finally:
@@ -1714,6 +1781,7 @@ async def _run_controlled_foulplay_games(
         checkpoint_sha256=checkpoint_sha256,
         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
         value_leaf_provenance=value_leaf_provenance,
+        policy_stats=_engine_policy_stats(policy, config.policy_mode),
     )
 
 
@@ -2393,11 +2461,15 @@ def _build_policy(
 
         return EngineMctsPolicy(
             dex=load_showdown_dex_cached(config.showdown_root),
-            set_source=(
-                load_gen3_randbat_source_cached(config.showdown_root)
-                if belief_set_source_env_enabled()
-                else None
-            ),
+            # Always attached, NOT env-gated. The candidate-set source is what
+            # the belief sampler draws determinized opponent teams from, so
+            # engine-mcts cannot construct a single world without it -- passing
+            # None is not a degraded mode, it is an AttributeError on the first
+            # decision (determinization._gen3_randbat_belief_start_override_result
+            # calls set_source.supports). The env flip point governs whether the
+            # belief FEATURES are in the observation, which is a separate
+            # question from whether the searcher can sample worlds at all.
+            set_source=load_gen3_randbat_source_cached(config.showdown_root),
             policy_id=f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}",
             config=EngineMctsConfig(
                 leaf_eval="model",
@@ -2411,6 +2483,7 @@ def _build_policy(
                 search_depth=config.engine_depth,
                 c_puct=config.engine_c_puct,
                 model_priors=config.engine_model_priors,
+                use_opponent_priors=config.engine_opponent_priors,
             ),
         )
 
@@ -2733,6 +2806,16 @@ async def _run_single_game(
         and not decision.metadata.get("root_puct_fallback")
     )
     root_fallbacks = sum(1 for decision in state.decisions if decision.metadata.get("root_puct_fallback"))
+    engine_decisions = sum(
+        1 for decision in state.decisions if "engine_mcts" in (decision.metadata or {})
+    )
+    engine_fallback_reasons: dict[str, int] = {}
+    for decision in state.decisions:
+        block = (decision.metadata or {}).get("engine_mcts") or {}
+        reason = block.get("fallback") if isinstance(block, Mapping) else None
+        if reason:
+            engine_fallback_reasons[str(reason)] = engine_fallback_reasons.get(str(reason), 0) + 1
+    engine_fallbacks = sum(engine_fallback_reasons.values())
     root_fallback_reasons: dict[str, int] = {}
     root_fallback_categories: dict[str, int] = {}
     root_opponent_action_policies: dict[str, int] = {}
@@ -2942,6 +3025,9 @@ async def _run_single_game(
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
         root_puct_fallbacks=root_fallbacks,
+        engine_mcts_decisions=engine_decisions,
+        engine_mcts_fallbacks=engine_fallbacks,
+        engine_mcts_fallback_reasons=dict(engine_fallback_reasons),
         root_puct_opponent_action_policies=root_opponent_action_policies,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
@@ -3758,7 +3844,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-time-ms", type=int, default=1000, help="foul-play search time per move.")
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
-    parser.add_argument("--policy-mode", choices=("raw", "root-puct"), default="root-puct")
+    parser.add_argument(
+        "--policy-mode", choices=("raw", "root-puct", "engine-mcts"), default="root-puct",
+        help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
+             "engine-mcts = the native Rust search over sampled belief worlds.",
+    )
+    # engine-mcts axes. Every one changes search semantics or wall time, so the
+    # config treats them as a frozen contract -- surfaced here rather than
+    # defaulted silently, so a run's config_id is reconstructable from argv.
+    parser.add_argument("--engine-model-path", type=Path, default=None,
+                        help="TorchScript trace for the in-crate leaf evaluator.")
+    parser.add_argument("--engine-tables-path", type=Path, default=None,
+                        help="Encoder tables JSON matching the checkpoint's contract.")
+    parser.add_argument("--engine-depth", type=int, default=4)
+    parser.add_argument("--engine-sims", type=int, default=1024)
+    parser.add_argument("--engine-batch", type=int, default=64)
+    parser.add_argument("--engine-worlds", type=int, default=4)
+    parser.add_argument("--engine-c-puct", type=float, default=1.4)
+    parser.add_argument("--no-engine-model-priors", action="store_true",
+                        help="Disable model priors in the native search (default: enabled).")
+    parser.add_argument("--engine-opponent-priors", action="store_true",
+                        help="Seed the OPPONENT seat's priors from the checkpoint's "
+                             "opponent action head (default: uniform, as every recorded "
+                             "result was produced).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -4046,6 +4154,15 @@ def _config_from_args(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
+        engine_model_path=getattr(args, "engine_model_path", None),
+        engine_tables_path=getattr(args, "engine_tables_path", None),
+        engine_depth=getattr(args, "engine_depth", 4),
+        engine_sims=getattr(args, "engine_sims", 1024),
+        engine_batch=getattr(args, "engine_batch", 64),
+        engine_worlds=getattr(args, "engine_worlds", 4),
+        engine_c_puct=getattr(args, "engine_c_puct", 1.4),
+        engine_model_priors=not getattr(args, "no_engine_model_priors", False),
+        engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,

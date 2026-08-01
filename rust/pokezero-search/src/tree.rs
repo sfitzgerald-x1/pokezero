@@ -104,6 +104,16 @@ pub(crate) struct ChanceBranch {
     /// Applied when the child decision node is created — priors reweight
     /// exploration only, never values.
     pub child_self_priors: Option<(bool, Vec<f32>)>,
+    /// Same, for the NON-acting (opponent) seat's options at this branch's
+    /// child, from the model's opponent action head. Written only when
+    /// `MultiPlyConfig::use_opponent_priors` is set; `None` keeps that seat
+    /// uniform, which is the historical behaviour.
+    ///
+    /// Stored SEPARATELY from `child_self_priors` rather than replacing it:
+    /// the two describe different seats' arms and are applied to different
+    /// stat vectors. Sharing one field would force a reflection at exactly
+    /// the boundary #937 warns about.
+    pub child_opponent_priors: Option<(bool, Vec<f32>)>,
 }
 
 impl ChanceBranch {
@@ -214,6 +224,11 @@ pub(crate) struct MultiPlyConfig {
     /// Enable KO-threshold damage splits past the engine's ply-1/2 horizon
     /// (straddle-triggered `branch_on_damage`; see `deep_ko_straddle`).
     pub deep_ko_split: bool,
+    /// Seed the OPPONENT seat's PUCT priors from the model's opponent action
+    /// head instead of leaving them uniform. Default OFF: with it off the
+    /// search is behaviourally identical to the uniform-opponent design that
+    /// every recorded result was produced under.
+    pub use_opponent_priors: bool,
 }
 
 #[derive(Default)]
@@ -423,6 +438,17 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                         {
                             apply_self_priors(&mut tree.decisions[child], side_one, &priors);
                         }
+                        // Opponent seat, same lazily-applied path. `side_one`
+                        // here is already the OPPONENT's side (the writer
+                        // stored the seat that owns these arms), so this is a
+                        // plain application to that seat's stat vector -- no
+                        // negation of the flag and no reflection of the values.
+                        if let Some((side_one, priors)) = tree.chances[chance_idx].branches[k]
+                            .child_opponent_priors
+                            .clone()
+                        {
+                            apply_self_priors(&mut tree.decisions[child], side_one, &priors);
+                        }
                         tree.chances[chance_idx].branches[k].child = Some(child);
                         child
                     }
@@ -552,6 +578,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             pending_row,
             child: None,
             child_self_priors: None,
+child_opponent_priors: None,
         });
     } else {
         let total: f32 = generated.iter().map(|b| b.percentage).sum();
@@ -588,6 +615,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                 pending_row,
                 child: None,
                 child_self_priors: None,
+child_opponent_priors: None,
             });
         }
     }
@@ -851,6 +879,8 @@ pub(crate) fn puct_search_multi(
         max_depth,
         c_puct,
         deep_ko_split,
+        // No model in this core, so there is no opponent head to gather.
+        use_opponent_priors: false,
     };
     let evaluator = HpFractionEval;
     let outcome = multiply_search_with_eval(&mut state, iterations, &cfg, seed, &evaluator)?;
@@ -949,6 +979,7 @@ mod tests {
             max_depth,
             c_puct: 1.4,
             deep_ko_split,
+            use_opponent_priors: false,
         };
         multiply_search_with_eval(&mut state, iterations, &cfg, seed, &HpFractionEval)
             .expect("search runs")
@@ -1156,6 +1187,7 @@ mod tests {
                 max_depth: 1,
                 c_puct: 1.4,
                 deep_ko_split: true,
+                use_opponent_priors: false,
             };
             let mut tree = Tree::from_root(&state).expect("root builds");
             let toxic = tree.decisions[0]
@@ -1357,6 +1389,7 @@ mod tests {
             max_depth: 3,
             c_puct: 1.4,
             deep_ko_split: true,
+            use_opponent_priors: false,
         };
         let mut tree = Tree::from_root(&state).expect("root builds");
         let mut counters = SearchCounters::default();

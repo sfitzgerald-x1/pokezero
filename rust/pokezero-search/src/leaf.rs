@@ -819,6 +819,8 @@ pub(crate) struct LeafContext {
     /// benched mons' cached request-history PP is stale by their last
     /// stint's final action, so their base is the belief ledger below).
     root_active_party: [usize; 2],
+    /// Caller-supplied opponent root request order (empty when absent).
+    root_opponent_request_order: Vec<String>,
     /// The SELF side's belief-ledger PP charges per (species key, move id)
     /// (`belief_view.self_pokemon[*].move_uses` — the parser's public
     /// charging count, exact where the cached request-history PP is stale).
@@ -1010,6 +1012,24 @@ impl LeafContext {
             }
         }
         let root_turn = ctx.get("turn").and_then(Value::as_i64).unwrap_or(0);
+        // The opponent's ROOT REQUEST ORDER, supplied by the caller when it can
+        // compute it. This is the channel attempts 2 and 3 lacked: the crate
+        // never receives pre-root protocol lines, so it cannot replay the
+        // opponent's switch history itself, and every in-crate approximation
+        // has been wrong beyond one switch. Python already maintains exactly
+        // this permutation (determinization's `current_order`), so it is passed
+        // in rather than guessed.
+        let root_opponent_request_order: Vec<String> = ctx
+            .get("opponent_request_order")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(normalize_identifier)
+                    .collect()
+            })
+            .unwrap_or_default();
         let root_weather = md
             .get("weather")
             .and_then(Value::as_str)
@@ -1032,6 +1052,7 @@ impl LeafContext {
             root_meta,
             meta_ctx,
             root_active_party,
+            root_opponent_request_order,
             self_ledger_uses,
             root_turn,
             root_weather,
@@ -1619,7 +1640,17 @@ impl LeafContext {
                 // its base is the belief ledger's public charging count
                 // (maxpp − ledger uses — the same |move|-line rules the
                 // request follows).
-                let ledger_base = if active_party != self.root_active_party[self_engine] {
+                // SELF SIDE ONLY. `self_ledger_uses` is keyed by the self
+                // team's species keys (belief_view.self_pokemon), so an
+                // opponent-side lookup would MISS rather than fail, yielding
+                // `max - 0` = full PP and silently overriding the (correct)
+                // root-snapshot base with a too-generous one. The opponent has
+                // no public charging ledger, so it must fall through to
+                // root_base -- see `opponent_action_map`.
+                let ledger_side_is_self = self_engine == self.engine_side_index(true);
+                let ledger_base = if ledger_side_is_self
+                    && active_party != self.root_active_party[self_engine]
+                {
                     self.tables.move_max_pp(&sd_id).filter(|max| *max > 0).map(|max| {
                         let uses = self
                             .self_ledger_uses
@@ -1656,8 +1687,16 @@ impl LeafContext {
                 }
                 MoveChoice::Switch(index) => {
                     let party = index.serialize().parse::<usize>().unwrap_or(0);
-                    let engine_side = self.engine_side_index(true);
-                    if let Some(key) = self.species_keys[engine_side].get(party) {
+                    // `self_engine`, NOT engine_side_index(true). This function
+                    // is seat-generic and is called for the opponent too;
+                    // hardcoding the self side here resolved the OPPONENT's
+                    // switch options against the SELF team's species keys,
+                    // which then failed to match `self_team_order` below --
+                    // silently mapping every opponent switch to None (node
+                    // falls back to uniform, so the cell measures nothing), or
+                    // worse, matching a same-species mon on the other team and
+                    // binding the arm to the wrong physical Pokemon.
+                    if let Some(key) = self.species_keys[self_engine].get(party) {
                         legal_switch_keys.push(key.clone());
                     }
                 }
@@ -1842,9 +1881,122 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(state, options, self_order, meta, engine_authoritative, true)
+    }
+
+    /// The OPPONENT seat's option list mapped onto action-block slots.
+    ///
+    /// Exists so the model's `opponent_action_logits` head can be gathered onto
+    /// the arms the opponent actually owns. Orientation (the #937 lesson):
+    /// priors are per-seat action distributions applied to the seat that owns
+    /// the actions and are NEVER reflected — only *values* flip at the seat
+    /// boundary. So this maps the opponent's own `get_all_options()` through
+    /// the opponent's own action block; there is no `1-x` and no index remap
+    /// through the self block anywhere in this path.
+    ///
+    /// Two conventions differ from the self side, both forced by the opponent
+    /// being BELIEF state rather than known state:
+    ///
+    /// * **Display order.** Same shape as the self side, different base. The
+    ///   root base is the sampled world's ENGINE PARTY order (the only base
+    ///   that resolves engine `Switch(party)` indices), and it is then evolved
+    ///   through the branch's switches by `evolve_self_order` with
+    ///   `opponent_prefix()`, exactly as the self order is. Measured on the
+    ///   golden corpus, that reproduces the opponent seat's own request order
+    ///   — which is the head's training label space
+    ///   (`rollout.py::_opponent_action_index`). Two nearby wrong answers,
+    ///   both tried and both measured: `md["opponent_team"]` is the partial
+    ///   belief view and resolves almost nothing, and the unevolved party
+    ///   order is correct only until the opponent's first switch.
+    /// * **PP base.** The self side can correct a switched-in mon's stale
+    ///   cached PP from the public charging ledger (`self_ledger_uses`). There
+    ///   is no such ledger for the opponent, so its base falls back to the
+    ///   sampled world's own root-snapshot PP. A disagreement can only make an
+    ///   engine-offered option fail to find a legal action slot, which returns
+    ///   `None` for that option and leaves the whole node uniform — the
+    ///   existing node-level fallback, i.e. it fails safe rather than shaping
+    ///   priors from a wrong surface.
+    pub(crate) fn opponent_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        opponent_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(
+            state,
+            options,
+            opponent_order,
+            meta,
+            engine_authoritative,
+            false,
+        )
+    }
+
+    /// The opponent's ROOT display order: the sampled world's engine party
+    /// order. Always six entries and always resolves engine `Switch(party)`
+    /// indices, unlike `md["opponent_team"]`, which is the partial belief view.
+    /// Callers evolve this through a branch's switches with
+    /// [`evolve_self_order`] and `opponent_prefix()`.
+    pub(crate) fn root_opponent_order(&self) -> Vec<String> {
+        // ACTIVE-FIRST, not the raw packed party order. The head's label space
+        // is that seat's own Showdown request order, which keeps the active at
+        // slot 0 and accumulates a slot-0 swap on every switch-in; the self
+        // side gets this free because `root_self_order` comes from
+        // `md["self_team"]`, the real request. The opponent has no request, so
+        // the packed order must be corrected the same way before
+        // `evolve_self_order` layers further swaps on top of it.
+        //
+        // Measured on the golden corpus: without this swap the crate's switch
+        // slots disagree with `rollout.py::_opponent_action_index` on every row
+        // whose opponent has already switched -- i.e. from the opponent's first
+        // switch onward, which is most of a gen3 randbat. Applying the swap
+        // reproduces the label order exactly.
+        // Prefer the caller's explicit order. The fallback below -- packed
+        // party order with the active swapped to slot 0 -- reproduces the
+        // request order only while the opponent has made AT MOST ONE
+        // switch-in, and is transposed from the second onward. Four review
+        // rounds landed on that; it is kept only so ad-hoc callers that cannot
+        // supply the order degrade to a documented approximation rather than
+        // to nothing.
+        if !self.root_opponent_request_order.is_empty() {
+            return self.root_opponent_request_order.clone();
+        }
+        let engine_side = self.engine_side_index(false);
+        let mut order = self.species_keys[engine_side].clone();
+        let active = self.root_active_party[engine_side];
+        if active < order.len() && active != 0 {
+            order.swap(0, active);
+        }
+        order
+    }
+
+    pub(crate) fn opponent_prefix(&self) -> &'static str {
+        if self.self_is_p1 {
+            "p2"
+        } else {
+            "p1"
+        }
+    }
+
+    /// Seat-generic core of the action map. `slot_is_self` picks which seat's
+    /// side, engine index, party order and snapshot are read; every lookup
+    /// below is already indexed by engine side, so the two seats differ only in
+    /// that index and in the display-order convention documented above.
+    fn seat_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+        slot_is_self: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
         let meta = meta.unwrap_or(&self.root_meta);
-        let self_side = side_ref_for(state, self.self_is_p1);
-        let self_engine = self.engine_side_index(true);
+        let side_is_p1 = if slot_is_self { self.self_is_p1 } else { !self.self_is_p1 };
+        let self_side = side_ref_for(state, side_is_p1);
+        let self_engine = self.engine_side_index(slot_is_self);
         let force_switch_shape =
             self_side.force_switch || self_side.get_active_immutable().hp <= 0;
         let recharging = self_side
@@ -1853,7 +2005,25 @@ impl LeafContext {
         // The (evolved) self-team display order with active flags — the same
         // derivation leaf_row_inputs writes into the md team before
         // action_surface reads it back.
-        let order: &[String] = self_order.unwrap_or(&self.root_self_order);
+        //
+        // The opponent uses the same shape: the sampled world's engine party
+        // order at the root, EVOLVED through the branch's switches by the
+        // caller. Both halves matter. The engine party order is the only base
+        // that resolves engine `Switch(party)` indices -- `md["opponent_team"]`
+        // is the partial belief view and resolves almost nothing. But leaving
+        // it UNEVOLVED is also wrong: measured against the head's training
+        // label (`rollout.py` `_opponent_action_index`, that seat's own
+        // request-order action block), the two agree until the opponent's
+        // first switch and are rotated by one from then on -- which in a gen3
+        // randbat is most of the game, and permutes every opponent switch
+        // prior.
+        let root_opponent: Vec<String> =
+            if slot_is_self { Vec::new() } else { self.root_opponent_order() };
+        let order: &[String] = if slot_is_self {
+            self_order.unwrap_or(&self.root_self_order)
+        } else {
+            self_order.unwrap_or(&root_opponent)
+        };
         let active_party = active_index_usize(self_side);
         let team_flags: Vec<(String, bool)> = order
             .iter()
@@ -2162,6 +2332,64 @@ impl PyLeafEncoder {
             &state,
             &options,
             order.as_deref(),
+            meta.as_ref(),
+            engine_authoritative,
+        )?;
+        Ok(options
+            .iter()
+            .zip(map)
+            .map(|(choice, index)| (crate::move_display(side, choice), index))
+            .collect())
+    }
+
+    /// The OPPONENT seat's option→action-index correspondence, the mirror of
+    /// `self_action_map`. Exposed so the orientation contract can be pinned
+    /// from Python without a libtorch build: the opponent head must be
+    /// gathered onto the arms the opponent owns, never reflected through the
+    /// self block. See [`LeafContext::opponent_action_map`] for the two
+    /// belief-state conventions (display order, PP base) that differ from the
+    /// self side.
+    #[pyo3(signature = (state_str, lines = None, root = false, engine_authoritative = false))]
+    fn opponent_action_map(
+        &self,
+        state_str: &str,
+        lines: Option<Vec<String>>,
+        root: bool,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<(String, Option<usize>)>> {
+        let state = parse_state(state_str)?;
+        let (_order, meta) = self.branch_context(lines.as_deref());
+        let (s1_options, s2_options) = if root || engine_authoritative {
+            state.root_get_all_options()
+        } else {
+            state.get_all_options()
+        };
+        // The OPPONENT's options and the OPPONENT's side -- the whole point of
+        // the mirror. `self_is_side_one()` selects the self seat, so both
+        // picks below are inverted relative to `self_action_map`.
+        let options = if self.ctx.self_is_side_one() {
+            s2_options
+        } else {
+            s1_options
+        };
+        let side = if self.ctx.self_is_side_one() {
+            &state.side_two
+        } else {
+            &state.side_one
+        };
+        // Evolve over the same branch lines the self side uses, with the
+        // OPPONENT's protocol prefix.
+        let opponent_order = lines.as_deref().map(|lines| {
+            evolve_self_order(
+                &self.ctx.root_opponent_order(),
+                lines,
+                self.ctx.opponent_prefix(),
+            )
+        });
+        let map = self.ctx.opponent_action_map(
+            &state,
+            &options,
+            opponent_order.as_deref(),
             meta.as_ref(),
             engine_authoritative,
         )?;
