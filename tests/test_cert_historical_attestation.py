@@ -140,11 +140,26 @@ class HistoricalCertificationAttestationTests(unittest.TestCase):
             identity = lifecycle["source_code_identity"]
             live = _sha256(ROOT / "scripts" / "cert_sweep_readout.py")
             if live != identity["readout_sha256"]:
+                # A boolean flag is NOT a binding. Review passed four tampers
+                # with `successor_registration_pending` set -- including one
+                # that laundered every real unattributed row into a documented
+                # family -- because the guard was gated on a self-declared
+                # value living in the file it was meant to guard. Pin the
+                # divergent BYTES instead, so any further classifier edit
+                # breaks this and forces a reviewable update.
                 self.assertTrue(
                     lifecycle.get("successor_registration_pending"),
                     "the working readout has diverged from the registered "
                     "source_code_identity, so the lifecycle must record an "
                     "explicit successor-pending divergence",
+                )
+                pending = lifecycle.get("successor_pending_identity") or {}
+                self.assertEqual(
+                    live,
+                    pending.get("readout_sha256"),
+                    "the readout has changed since the divergence was declared; "
+                    "re-derive the certification numbers and update "
+                    "successor_pending_identity.readout_sha256",
                 )
             return
         if lifecycle["stage"] == "build_source":

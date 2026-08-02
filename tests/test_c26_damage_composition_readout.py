@@ -211,6 +211,16 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
                     "source_code_identity, so the lifecycle must record an "
                     "explicit successor-pending divergence",
                 )
+                # Pin the divergent bytes, not just the flag -- see the same
+                # guard in tests/test_cert_historical_attestation.py.
+                pending = lifecycle.get("successor_pending_identity") or {}
+                self.assertEqual(
+                    current,
+                    pending.get("differential_sha256"),
+                    "the matcher has changed since the divergence was declared; "
+                    "re-derive and update "
+                    "successor_pending_identity.differential_sha256",
+                )
         self.assertEqual(
             self.readout["rejected_experiment"]["production_code_survives"], False
         )
