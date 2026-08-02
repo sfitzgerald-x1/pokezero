@@ -6,7 +6,9 @@
  "contract_attestation": "reports/c32_cert_contract_attestation.json",
  "source_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
  "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
- "readout_sha256": "a8a4c7248327a736c76a423b72a4195d5da6e194678cd6672351d551401835b2",
+ "readout_report_sha256": "a8a4c7248327a736c76a423b72a4195d5da6e194678cd6672351d551401835b2",
+ "runtime_readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
+ "runtime_readout_provenance": "scripts/cert_sweep_readout.py self-hashes __file__ and gates the run against certification_gates.required_readout_sha256; the run recorded enforcement_status=enforced with no hash-mismatch gate failure, so the registered classifier is what executed.",
  "run": {
   "run_id": "cert-c32-20260801b",
   "image_digest": "sha256:7b51a6d2d7cc6519343707e57c458c78cb24c6ced28379bf3d4654bb6e6819e8",

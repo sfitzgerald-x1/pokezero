@@ -12,10 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 C25_ATTESTATION_SOURCE_COMMIT = "a3e16f2a49cf55197f026e912c8afa31fc5334ac"
 C25_ATTESTATION_BLOB_SHA = "9cc357a9872f6b5fc633e97e97fb85165077e8f7"
+# The sweep attestation is deliberately NOT here. C26 was registered and never
+# executed, and tests/test_cert_contract_registration.py asserts that its
+# attestation must never appear. Listing it made this guard unsatisfiable: the
+# two tests required opposite things, and this one fires the moment the
+# lifecycle marker is removed -- which is exactly the documented trigger.
 C26_SUCCESSOR_ARTIFACTS = (
     "reports/c26_current_engine_resweep_spec.json",
     "reports/c26_current_engine_calibration.json",
-    "reports/c26_current_engine_attestation.json",
 )
 
 
@@ -104,6 +108,44 @@ class HistoricalCertificationAttestationTests(unittest.TestCase):
             self.assertEqual(payload["verdict"], "FAIL")
             self.assertEqual(lifecycle["result"]["verdict"], "FAIL")
             self.assertIs(lifecycle["launchable"], False)
+
+            # The attestation must name the classifier that actually RAN, and it
+            # must be the registered one. Before this, the only readout field in
+            # the attestation held the hash of the readout REPORT under the name
+            # every other artifact uses for the SCRIPT -- so it read as a
+            # contradiction of its own contract, and no test looked at it.
+            contract = _json.loads(
+                (ROOT / payload["contract_path"]).read_text(encoding="utf-8")
+            )
+            gates = contract["certification_gates"]
+            self.assertEqual(
+                payload["runtime_readout_sha256"], gates["required_readout_sha256"]
+            )
+            self.assertEqual(payload["source_commit"], gates["required_source_commit"])
+            self.assertEqual(
+                payload["engine_fingerprint"], gates["required_engine_fingerprint"]
+            )
+            self.assertNotEqual(
+                payload["readout_report_sha256"], gates["required_readout_sha256"],
+                "the report hash and the script hash are different quantities; "
+                "if they are equal one of them is mislabelled again",
+            )
+
+            # POSITIVE binding for the live tree. The early return used to skip
+            # the build_source branch below, which held the only assertion tying
+            # the running classifier to a registered hash -- so a tampered
+            # cert_sweep_readout.py passed the whole suite green. The live file
+            # may legitimately have moved past the frozen record, but then the
+            # lifecycle has to SAY so rather than leaving it unstated.
+            identity = lifecycle["source_code_identity"]
+            live = _sha256(ROOT / "scripts" / "cert_sweep_readout.py")
+            if live != identity["readout_sha256"]:
+                self.assertTrue(
+                    lifecycle.get("successor_registration_pending"),
+                    "the working readout has diverged from the registered "
+                    "source_code_identity, so the lifecycle must record an "
+                    "explicit successor-pending divergence",
+                )
             return
         if lifecycle["stage"] == "build_source":
             for field in (

@@ -1,35 +1,37 @@
 {
-  "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "attested_fail",
-  "launchable": false,
-  "launchable_note": "The C32 sweep ran to completion and FAILED. The lifecycle records an attested negative result; it is not launchable and must not be read as certified.",
-  "purpose": "The C32 contract and its archival calibration are registered together against the frozen 53-patch build source. The sweep attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
-  "supersedes": {
-    "registration": "C26",
-    "contract": "reports/c26_current_engine_resweep_spec.json",
-    "calibration": "reports/c26_current_engine_calibration.json",
-    "contract_attestation": "reports/c26_cert_contract_attestation.json",
-    "status": "registered_never_executed",
-    "why": "C26 pinned the 51-patch engine and the pre-C28 readout. It was registered, its launcher enforcement and contract attestation were completed, and then a pre-launch diagnostic showed it would fail with roughly 4,800 unattributed rows. The sweep was deliberately held rather than spent, so its eight 1,250-game blocks from 16,000,000 remain unconsumed. Its artifacts stay as immutable evidence and its seed blocks stay burned rather than recycled.",
-    "diagnosis": "docs/engine_c26_structural_residue_diagnosis_20260731.md"
-  },
-  "required_absent_artifacts": [],
-  "source_code_identity": {
-    "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
-    "readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
-    "differential_sha256": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c",
-    "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
-    "engine_patch_count": 53
-  },
-  "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash.",
-  "registered_contract_path": "reports/c32_current_engine_resweep_spec.json",
-  "registered_contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
-  "registered_calibration_path": "reports/c32_current_engine_calibration.json",
-  "registered_sweep_attestation_path": "reports/c32_current_engine_attestation.json",
-  "result": {
-    "verdict": "FAIL",
-    "unattributed_rows": 3882,
-    "coverage": 0.9587,
-    "run_id": "cert-c32-20260801b"
-  }
+ "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
+ "stage": "attested_fail",
+ "launchable": false,
+ "launchable_note": "The C32 sweep ran to completion and FAILED. The lifecycle records an attested negative result; it is not launchable and must not be read as certified.",
+ "purpose": "The C32 contract and its archival calibration are registered together against the frozen 53-patch build source. The sweep attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
+ "supersedes": {
+  "registration": "C26",
+  "contract": "reports/c26_current_engine_resweep_spec.json",
+  "calibration": "reports/c26_current_engine_calibration.json",
+  "contract_attestation": "reports/c26_cert_contract_attestation.json",
+  "status": "registered_never_executed",
+  "why": "C26 pinned the 51-patch engine and the pre-C28 readout. It was registered, its launcher enforcement and contract attestation were completed, and then a pre-launch diagnostic showed it would fail with roughly 4,800 unattributed rows. The sweep was deliberately held rather than spent, so its eight 1,250-game blocks from 16,000,000 remain unconsumed. Its artifacts stay as immutable evidence and its seed blocks stay burned rather than recycled.",
+  "diagnosis": "docs/engine_c26_structural_residue_diagnosis_20260731.md"
+ },
+ "required_absent_artifacts": [],
+ "source_code_identity": {
+  "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
+  "readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
+  "differential_sha256": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c",
+  "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+  "engine_patch_count": 53
+ },
+ "matcher_era_note": "differential_sha256 is pinned here as well as the readout hash, because the fidelity KPI's two terms both come from the differential. A KPI reading is comparable only against another sharing this hash.",
+ "registered_contract_path": "reports/c32_current_engine_resweep_spec.json",
+ "registered_contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
+ "registered_calibration_path": "reports/c32_current_engine_calibration.json",
+ "registered_sweep_attestation_path": "reports/c32_current_engine_attestation.json",
+ "result": {
+  "verdict": "FAIL",
+  "unattributed_rows": 3882,
+  "coverage": 0.9587,
+  "run_id": "cert-c32-20260801b"
+ },
+ "successor_registration_pending": true,
+ "successor_registration_note": "source_code_identity is a frozen, CORRECT snapshot of the classifier at 7d85f4b242d2 -- the classifier the C32 sweep actually executed (the attestation's runtime_readout_sha256 matches it under enforcement_status enforced). The working tree has since moved past it: C45 narrowed three attribution rules, so the live readout is 267d8fc9d61a. C32 is therefore an ATTESTED HISTORICAL result and no longer the active registration. A successor contract must be registered before another sweep runs, and C32 must never be re-scored with the current classifier -- the contract forbids widening attribution after reading the run."
 }
