@@ -5,9 +5,16 @@ physically impossible pairs. The design here is the reviewer's, which they
 implemented and measured at 99.99% recovery of realizable cap-bearing pairs
 against 99.89% for the version that shipped -- strictly better AND sound.
 
-The load-bearing measurement: without the promotion, the same 200-game window
-measures 208 divergent; with it, 67. The whole 141-row delta is
-roll_scaled_component. So these cannot simply be deleted.
+Measured decomposition of the 144-row reduction (208 on main -> 64 here), each
+by single-variable sweep on one tree:
+
+    damage_scales threading   123 rows
+    capped_bases promotion     17 rows
+    bound shape                 3 rows
+    severity change             0 rows
+
+The threading is the substance. The bound redesign, which took four rounds of
+wrong attribution to get right, is worth 3 of 144.
 """
 
 from __future__ import annotations
@@ -21,6 +28,8 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 from engine_transition_differential import (  # noqa: E402
     DamageComponent,
+    branch_render_is_usable,
+    roll_component_events_agree,
     _roll_damage_scale,
     _split_component_events,
     roll_components_agree,
@@ -118,9 +127,6 @@ class CapToleranceIsTheDamageDifference(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class DamageDifferenceIsSlotWide(unittest.TestCase):
     """The bound is a property of the SLOT's damage, not of one component.
@@ -163,3 +169,131 @@ class DamageDifferenceIsSlotWide(unittest.TestCase):
                 [obs[1]], [eng[1]], None, damage_scales=scales
             )
         )
+
+
+class ThreadingIsPinnedAtTheCallSite(unittest.TestCase):
+    """The 123-row fix, pinned where it can actually be reverted.
+
+    Review: dropping `damage_scales=_slot_damage` at the
+    roll_component_events_agree call site passed all 91 tests. The existing
+    pins exercise roll_components_agree's SIGNATURE, never the call site, so
+    the entire headline fix could be reverted silently.
+    """
+
+    def test_the_event_level_comparator_threads_the_slot_damage(self) -> None:
+        """A capped heal whose difference exceeds 1 HP but sits inside the
+        slot's damage difference. Passes only if the caller threads."""
+
+        observed = [comp("", -155, 0), comp("heal_to_full", 160, 1)]
+        engine = [comp("", -165, 0), comp("heal_to_full", 170, 1)]
+        self.assertTrue(
+            roll_component_events_agree(
+                observed, engine, support=None, target_side="side_one",
+                pre_legal=None,
+            )
+        )
+
+    def test_the_cascade_path_also_threads(self) -> None:
+        """Same, through the length-mismatch path."""
+
+        observed = [comp("", -155, 0), comp("heal_to_full", 160, 1)]
+        engine = [
+            comp("", -165, 0),
+            comp("heal", 160, 1),
+            comp("itemleftovers_to_full", 10, 2),
+        ]
+        self.assertTrue(
+            roll_component_events_agree(
+                observed, engine, support=None, target_side="side_one",
+                pre_legal=None,
+            )
+        )
+
+
+class PromotionDoesNotLeakThroughTheMirror(unittest.TestCase):
+    """The cap tolerance must key on EITHER side being capped.
+
+    Review F1: keying on obs_source alone let an observed PLAIN deterministic
+    heal match an engine `_to_full` through the +/-9% roll window -- the same
+    masking class promotion was supposedly fixed to prevent, alive in the
+    mirror direction, and reachable only because promotion puts the plain
+    component in the rolled list at all.
+    """
+
+    def test_a_plain_observed_heal_cannot_match_a_capped_engine_heal(self) -> None:
+        """Identical -100 on both arms, so the deficits are identical: a capped
+        engine 30 forces deficit 30, and an observed 33 is impossible."""
+
+        # 31 is inside the deliberate 1 HP flooring slack, so the first
+        # genuinely impossible value is 32.
+        for observed_value in (32, 33, 40):
+            with self.subTest(observed=observed_value):
+                self.assertFalse(
+                    roll_components_agree(
+                        [("", -100), ("itemleftovers", observed_value)],
+                        [("", -100), ("itemleftovers_to_full", 30)],
+                        None,
+                        damage_scales=(100, 100),
+                    )
+                )
+
+    def test_the_mirror_cascade_still_agrees_when_damage_differs(self) -> None:
+        self.assertTrue(
+            roll_components_agree(
+                [("", -165), ("heal", 170)],
+                [("", -155), ("heal_to_full", 160)],
+                None,
+                damage_scales=(165, 155),
+            )
+        )
+
+
+class SeverityIsAnAllowlist(unittest.TestCase):
+    """A branch is usable only if EVERY marker it carries is telemetry-only.
+
+    This change shipped with zero coverage and as the exclusion form its own
+    comment condemned; reverting it broke no test. An exclusion fails open as
+    the renderer grows, which is the whole reason for the allowlist.
+    """
+
+    def test_a_clean_render_is_usable(self) -> None:
+        self.assertTrue(branch_render_is_usable([]))
+
+    def test_the_two_telemetry_only_markers_are_usable(self) -> None:
+        self.assertTrue(branch_render_is_usable(["sleeptalk_called_unidentified"]))
+        self.assertTrue(
+            branch_render_is_usable(["attract_immobilization_source_unknown"])
+        )
+        self.assertTrue(
+            branch_render_is_usable(
+                ["sleeptalk_called_unidentified",
+                 "attract_immobilization_source_unknown"]
+            )
+        )
+
+    def test_the_synthetic_empty_placeholder_is_never_usable(self) -> None:
+        """It carries events ["|"], so it compares empty component lists on
+        both slots and would MATCH any HP-free boundary against a branch that
+        verified nothing."""
+
+        self.assertFalse(branch_render_is_usable(["empty_instruction_list"]))
+        self.assertFalse(
+            branch_render_is_usable(
+                ["sleeptalk_called_unidentified", "empty_instruction_list"]
+            )
+        )
+
+    def test_an_unknown_future_marker_fails_CLOSED(self) -> None:
+        """The point of the allowlist. An exclusion-shaped rule would admit
+        this silently the moment the renderer grows a new mark_lossy call."""
+
+        self.assertFalse(branch_render_is_usable(["some_future_marker"]))
+        self.assertFalse(
+            branch_render_is_usable(
+                ["sleeptalk_called_unidentified", "some_future_marker"]
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

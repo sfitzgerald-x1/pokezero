@@ -355,6 +355,19 @@ _TELEMETRY_ONLY_LOSSY_MARKERS = frozenset({
     _SLEEPTALK_LOSSY_MARKER,
     "attract_immobilization_source_unknown",
 })
+
+
+def branch_render_is_usable(lossy: Sequence[str]) -> bool:
+    """Whether a branch's render is complete enough to match against.
+
+    ALLOWLIST, extracted so it can be pinned. This shipped as an exclusion
+    (`attribution_unsafe or empty_instruction_list`) while a constant claiming
+    to be the allowlist sat unused beside it, under a comment asserting the
+    allowlist had been chosen deliberately. The comment described code that did
+    not exist, and reverting the exclusion broke no test.
+    """
+
+    return not lossy or set(lossy) <= _TELEMETRY_ONLY_LOSSY_MARKERS
 _UNATTRIBUTED_DAMAGE_SOURCE = "residual"
 _UNKNOWN_CALLEE_SOURCE = "move_unknown_callee"
 # Sources whose rendering the mapper is known not to reproduce line-for-line;
@@ -849,7 +862,7 @@ def roll_components_agree(
             # nothing about it is roll-scaled. Granting it the roll window is
             # how 20 vs 18 started matching.
             return False
-        if obs_source.endswith("_to_full"):
+        if obs_source.endswith("_to_full") or _eng_source.endswith("_to_full"):
             # A heal that tops the mon out restores `maxhp - hp_before`, so the
             # two sims differ by exactly their difference in `hp_before` — which
             # is bounded by the 85-100 % spread of the damage that preceded it in
@@ -1795,8 +1808,19 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            _empty_render = "empty_instruction_list" in lossy
-            if (bool(branch.get("attribution_unsafe")) or _empty_render) and not sleeptalk_union:
+            # ACTUALLY the allowlist now. This shipped as the exclusion form
+            # while a constant named _TELEMETRY_ONLY_LOSSY_MARKERS sat unused
+            # above it, under a comment claiming the allowlist was chosen
+            # deliberately because an exclusion "fails open as the renderer
+            # grows". The comment described code that did not exist.
+            #
+            # A branch is usable only if EVERY marker it carries is one whose
+            # telemetry is incomplete while the public action window is still
+            # exact. Anything else -- including the synthetic
+            # empty_instruction_list placeholder, which carries events ["|"]
+            # and would match any HP-free boundary against a branch that
+            # verified nothing -- disqualifies it.
+            if not branch_render_is_usable(lossy):
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:

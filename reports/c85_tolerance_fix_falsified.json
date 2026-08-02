@@ -2,46 +2,21 @@
  "schema": "c85-tolerance-fix-falsified/1",
  "what_was_proposed": "Review round nine implemented and measured a corrected form of #1025's tolerance changes -- promote for LENGTH only, compare promoted-but-uncapped components EXACTLY, and bound a cap difference by the DIFFERENCE of the two arms' damage rather than 0.18x its magnitude. On 75,630 simulated realizable cap-bearing pairs it measured 99.99% recovery against 99.89% for the version that shipped, while rejecting both physically impossible pairs. I implemented exactly that design.",
  "what_the_real_corpus_says": {
-  "window": "200 games, seeds 19000000-19000199, 15,224 boundaries, engine rebuilt per state",
-  "no_tolerance_changes": {
-   "diverged": 208,
-   "roll_scaled_component": 162
-  },
-  "loose_version_as_shipped": {
-   "diverged": 67,
-   "roll_scaled_component": 21
-  },
-  "corrected_sound_version": {
-   "diverged": 187,
-   "roll_scaled_component": 141
-  },
-  "recovery": "21 of 141 rows, not 141 of 141"
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
  },
- "the_finding": "The corrected design is SOUND -- it rejects both impossible pairs, and all four of its rules are mutation-pinned -- but on real data it recovers only 15% of what the loose version recovered. The synthetic estimate of 99.99% did not transfer. A simulated corpus of realizable pairs is not the corpus the matcher actually sees.",
+ "the_finding": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
  "which_explanation_is_right_is_NOT_established": {
-  "possibility_a": "the 120 unrecovered rows are REAL engine defects that the loose version was masking, in which case the sound version is correct and 67 was never an honest number",
-  "possibility_b": "the exact-magnitude rule is firing on MISPAIRED components. Promotion moves a component out of the order-insensitive Counter comparison into roll_component_events_agree's POSITIONAL zip, which sorts by magnitude; review flagged this as a known hazard of promotion. If pairing is wrong, the magnitudes being compared are not counterparts at all.",
-  "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences.",
-  "RESOLVED": "hypothesis A"
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
  },
- "status": "RESOLVED -- see $.RESOLVED. #1025 measures 64 against main's 208.",
+ "status": "RESOLVED. 208 -> 64, decomposed by single-variable sweep. Falsified sections above are marked.",
  "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet.",
  "the_experiment": {
-  "method": "Classify every equal-length magnitude disagreement in the 187-row sweep's recorded branch_misses by whether the two components share a base source. Mispairing (hypothesis B) predicts systematically MISMATCHED sources; real differences (hypothesis A) predict MATCHED sources with differing magnitudes.",
-  "same_source_pairs": 706,
-  "different_source_pairs": 21,
-  "mispairing_share": 0.029,
-  "same_source_breakdown": {
-   "<direct>": 368,
-   "heal": 230,
-   "movewish": 39,
-   "capped_lethal": 36,
-   "itemleftovers": 29,
-   "recoil": 4
-  },
-  "verdict": "Mispairing accounts for about 3%. The components the exact rule rejects ARE genuine counterparts, and their magnitudes genuinely differ."
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
  },
- "what_this_means_for_the_67": "The loose version reached 67 by tolerating magnitude differences between matched, largely DETERMINISTIC components -- 230 of the disagreements are on `heal`, whose gen3 amount is floor(maxhp/2), and 29 on itemleftovers, which is maxhp/16. Those are the rounding class this program exists to detect. So the 141 rows are not obviously artifacts the matcher should absorb; on this evidence a substantial share are differences the loose tolerance was MASKING. The sound version's 187 may be nearer the truth than the 67, and 67 should stop being quoted as the target.",
+ "what_this_means_for_the_67": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
  "CORRECTION": {
   "what_i_got_wrong": "c85's first two readings were both wrong, and the second one -- 'the loose tolerance was substantially MASKING' -- was wrong in a way that would have misdirected the engine-gap burndown.",
   "error_1_the_heals_are_not_deterministic": {
@@ -82,14 +57,11 @@
  },
  "method_note": "Every attribution error here came from comparing two sweeps that differed in more than one way and crediting the difference to the change of interest. The fix is what settled the #1020 question: mutate exactly one thing on one tree and re-sweep. Eight minutes, and it overturned three rounds of reasoning.",
  "ELIMINATED_CANDIDATES": {
-  "note": "Four single-variable sweeps, each mutating exactly one thing on one tree. All four eliminated.",
-  "exact_comparison_rule": "rejects 0 pairs in the residue (no pair has neither side capped)",
-  "difference_bound": "ACCEPTS MORE than the 0.18*scale bound it replaced -- 300 vs 180 -- and rejects nothing the old bound accepted",
-  "c1020_guards": "disabling all three gives 208, identical to main -- inert in this window",
-  "severity_form": "allowlist vs original exclusion both give 187"
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
  },
- "STILL_UNLOCATED": "The old loose stack measured 67 on the old predicate; every reconstruction on the current tree measures 187. All four differences I could name are eliminated. The gap is real and I have not found it. What I will NOT do is name a fifth candidate from reasoning -- four in a row were wrong that way. The next step is mechanical, not inferential: check out the exact tree that produced the 67, diff scripts/engine_transition_differential.py against the current one, and bisect the differences by single-variable sweep. That is bounded work with a guaranteed answer.",
- "what_is_safe_to_say": "On the CURRENT tree, measured cleanly: main is 208 and #1025 is 187, a real 21-row improvement, sound and pinned. Every number quoted from the old stack -- including 67 -- is from a predicate that no longer exists and should not be used as a target until the gap is located.",
+ "STILL_UNLOCATED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+ "what_is_safe_to_say": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
  "RESOLVED": {
   "the_cause": "My own bug, and it was in the code the whole time. `_damage_difference` was computed INSIDE roll_components_agree from its `observed`/`engine` arguments -- but the equal-length caller passes ONE component at a time, and _roll_damage_scale excludes heals. For a heal pair the local value is therefore 0 and the bound collapses to 1 HP.",
   "why_it_evaded_four_rounds": "The bound was far TIGHTER than intended, which is the opposite of what I asserted for three rounds. My offline analysis computed the damage difference from the FULL miss lists and concluded the sound bound was LOOSER (300 accepts vs 180) -- a correct calculation of a quantity the code never computes. The proxy disagreed with the program and I trusted the proxy.",
@@ -102,5 +74,20 @@
   },
   "the_result": "64 divergent -- BETTER than the loose version's 67, with a bound that is sound. All five impossible pairs still reject and all 88 tests pass. So the sound design was right all along; my implementation of it was wrong, and every conclusion I drew from that measurement was an artifact of my own defect.",
   "found_by": "the mechanical step I should have taken first: diff the tree that produced the 67 against the current one and read what actually differs, instead of naming candidates from reasoning. It took one diff."
+ },
+ "DECOMPOSITION": {
+  "source": "independent review, single-variable sweeps on one tree, engine byte-identical throughout",
+  "main": 208,
+  "this_pr": 64,
+  "reduction": 144,
+  "attribution": {
+   "damage_scales_threading": 123,
+   "capped_bases_promotion": 17,
+   "bound_shape_difference_vs_fraction": 3,
+   "severity_change": 0,
+   "prefix_correctness": 0
+  },
+  "the_correction": "The bound redesign I made the centrepiece -- and got wrong across four rounds -- is worth 3 of 144 rows. The substance is threading a slot-wide damage budget into a comparison that was operating on 1 HP. Main's 0.18*scale+1 was never operative either: its caller does not pass scale, so production ran at 1 HP too.",
+  "the_67_was_never_a_mystery": "reconstructing main's fraction bound WITH the threading scores 67 on the current tree, to the row. The 'unlocated gap' of the previous four rounds was this."
  }
 }
