@@ -1,0 +1,99 @@
+{
+ "schema": "c86-current-era-family-adjudication/1",
+ "why": "Objective 4 asks that the engine-gap bucket be empty OR that every remaining family carry a current-era adjudication. This is that adjudication, at the era and the matcher the stack actually produces.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "patches": 53,
+  "matcher": "main + #1025 (slot-wide damage bound threaded)"
+ },
+ "sample": {
+  "games": 200,
+  "seed_start": 19000000,
+  "boundaries_measured": 15224,
+  "transitions_diverged": 64,
+  "engine_errors": 0,
+  "repros_complete": true
+ },
+ "families": {
+  "limit:roll_divergent_lethality": {
+   "rows": 24,
+   "bucket": "comparison-limit",
+   "adjudication": "self-attributing documented limit; the observed and engine arms differ on whether a roll was lethal, which the branch snapshot cannot settle.",
+   "evidence": "reports/c41_lethality_claim_retraction.json",
+   "era_current": true
+  },
+  "limit:world_sample_drag_target": {
+   "rows": 1,
+   "bucket": "comparison-limit",
+   "adjudication": "self-attributing documented limit; the drag target is world-sampled and not observable from the branch.",
+   "era_current": true
+  },
+  "LS_capped_lethal_shape": {
+   "rows": 12,
+   "bucket": "candidate-not-finding",
+   "adjudication": "NOT ADJUDICATED. reports/c68 records no decisive signature; reports/c75 profiled it (count 201/464, magnitude 180, exact 81) and explicitly declined to re-bucket. Largest unresolved family.",
+   "era_current": false
+  },
+  "I2_matcher_accounting": {
+   "rows": 10,
+   "bucket": "candidate-not-finding",
+   "adjudication": "NOT ADJUDICATED. c75 measured it 99% magnitude-only across 403 rows -- a single shape, therefore diagnosable -- but a reject signature says WHICH check fires, not what caused it.",
+   "era_current": false
+  },
+  "I3_roll_inherited": {
+   "rows": 3,
+   "bucket": "candidate-not-finding",
+   "adjudication": "NOT ADJUDICATED. c75: 100% exact-component mismatch across 244 rows.",
+   "era_current": false
+  },
+  "I5_boundary_truncation": {
+   "rows": 3,
+   "bucket": "candidate-not-finding",
+   "adjudication": "NOT ADJUDICATED. c75: 77% exact-component, dominant but not clean.",
+   "era_current": false
+  },
+  "I4_attribution_tie": {
+   "rows": 3,
+   "bucket": "instrument-artifact",
+   "adjudication": "ADJUDICATED. 120/120 majority arms reach an IDENTICAL net HP: the end states agree and only the decomposition differs.",
+   "evidence": "reports/c68_family_bucket_audit.json",
+   "era_current": true
+  },
+  "UNATTRIBUTED": {
+   "rows": 8,
+   "bucket": "unattributed",
+   "adjudication": "NOT A FAMILY. reports/c84 decomposes these into at least four mechanisms: 3 crit-arm-absent-from-support, 1 crit at a non-doubling ratio, 2 empty-engine-arm accuracy shapes, 1 count difference at matching magnitude, 1 reverse direction. The uniform basis string is the classifier's fall-through text.",
+   "era_current": true
+  }
+ },
+ "what_the_threading_fix_changed": {
+  "loose_original": 67,
+  "sound_threaded": 64,
+  "difference": "I1_cap_state_shape fell from 3 to 0. Every other family is unchanged row-for-row.",
+  "reading": "the threading fix is worth 3 rows against the loose version and 144 against main. The residue's COMPOSITION is unchanged by it."
+ },
+ "objective_4_status": {
+  "bucket_empty": false,
+  "every_family_current_era_adjudicated": false,
+  "adjudicated": [
+   "limit:roll_divergent_lethality",
+   "limit:world_sample_drag_target",
+   "I4_attribution_tie"
+  ],
+  "adjudicated_rows": 28,
+  "not_adjudicated": [
+   "LS_capped_lethal_shape",
+   "I2_matcher_accounting",
+   "I3_roll_inherited",
+   "I5_boundary_truncation"
+  ],
+  "not_adjudicated_rows": 28,
+  "unattributed_rows": 8,
+  "honest_summary": "28 of 64 rows carry a current-era adjudication. 28 sit in four candidate-not-finding families that c75 established need evidence the current signatures do not measure. 8 are unattributed across four-plus mechanisms. Objective 4 is NOT satisfied, and the blocker is the same one c75 named: converting a reject signature into a cause."
+ },
+ "certification_verdict": {
+  "gate": "zero unattributed",
+  "measured": 8,
+  "result": "FAILS"
+ }
+}
