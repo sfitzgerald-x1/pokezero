@@ -253,9 +253,14 @@ class PhysicalFloorTests(unittest.TestCase):
     """Pins for the two constraints added after review round six.
 
     Round six built an independent physical-realizability oracle and found two
-    shapes the predicate accepted that cannot happen. Both are pinned here, and
-    both pins were mutation-checked: deleting the constraint makes the matching
-    test fail.
+    shapes the predicate accepted that cannot happen. Both are pinned here.
+
+    NOT both individually pinned any more. Round eight's pre-direct-hit guard
+    now also catches test_the_extra_must_sit_on_the_larger_roll_side, so
+    deleting the `extra_is_observed is smaller_is_observed` constraint alone
+    leaves the suite green. The two guards overlap on that shape; the
+    larger-roll rule still matters for extras AFTER the direct hit, which no
+    test currently isolates.
     """
 
     def test_the_extra_must_sit_on_the_larger_roll_side(self) -> None:
@@ -446,11 +451,15 @@ class PreDirectHitTests(unittest.TestCase):
         """The guard must reject DISAGREEMENT, not the mere presence of an
         earlier component. Both arms carry the same Leftovers tick at @0."""
 
-        observed = [comp("itemleftovers", 6, 0), comp("", -100, 1), comp("heal_to_full", 94, 2)]
+        # Realizable at h0=90, maxhp=100 -- the reviewer's oracle confirmed it.
+        # The earlier fixture here was itself physically impossible: it needed
+        # an uncapped Leftovers (h0 + 6 < maxhp) AND a heal_to_full returning to
+        # exactly maxhp at net zero (maxhp == h0), which contradict.
+        observed = [comp("heal", 5, 0), comp("", -44, 1), comp("heal_to_full", 49, 2)]
         engine = [
-            comp("itemleftovers", 6, 0),
-            comp("", -106, 1),
-            comp("heal", 94, 2),
-            comp("leechseed_to_full", 6, 3),
+            comp("heal", 5, 0),
+            comp("", -47, 1),
+            comp("heal", 50, 2),
+            comp("itemleftovers_to_full", 2, 3),
         ]
         self.assertTrue(cascade(observed, engine))

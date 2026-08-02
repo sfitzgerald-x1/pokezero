@@ -1731,24 +1731,6 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
-                # CAP MARKING RELAXES MAGNITUDE, NEVER MEMBERSHIP.
-                #
-                # `_to_full` is encoded in the source NAME, which also moves the
-                # component between buckets — something the tag was never meant
-                # to do ("only the magnitude is relaxed, and only in the capped
-                # direction", above). Whether a heal caps depends on the damage
-                # roll, so membership, and therefore the roll-scaled list's
-                # LENGTH, became roll-dependent — and the comparison below
-                # rejects on length before any tolerance applies. Two arms
-                # differing only by a legal roll then read as structurally
-                # different (seed 17000013 step 12: Leftovers caps at 290/290
-                # against the observed -84 roll and does not against the
-                # engine's -90).
-                #
-                # So if EITHER side marks a base source as capped on this slot,
-                # both sides treat that base source as roll-scaled here. The
-                # magnitude tolerance still applies only where a cap is
-                # involved; nothing else changes bucket.
                 obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
