@@ -1343,6 +1343,34 @@ def _repro_integrity_gates(
     return failures
 
 
+def certification_verdict(
+    *,
+    unattributed,
+    engine_errors: int,
+    retention_ok: bool,
+    rows_retained: int,
+    transitions_diverged: int,
+    gate_failures,
+) -> str:
+    """PASS only when every gate holds. Extracted so it can be PINNED.
+
+    Review round eleven: nothing in the cert suite exercised this expression
+    against a run carrying unattributed rows, so a one-token tamper
+    (``not unattributed`` -> ``(not unattributed or True)``) made the readout
+    emit PASS on C32's real 3,882 unattributed rows and no behavioural test
+    caught it. The only thing standing in the way was a source-hash pin, which
+    is provenance, not behaviour. This is the behaviour.
+    """
+
+    return "PASS" if (
+        not unattributed
+        and engine_errors == 0
+        and retention_ok
+        and rows_retained == transitions_diverged
+        and not gate_failures
+    ) else "FAIL"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--shards", nargs="+", required=True)
@@ -1525,13 +1553,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     repro_failures = _repro_integrity_gates(rows, shards)
     gate_failures = input_failures + contract_failures + family_failures + repro_failures
-    verdict = "PASS" if (
-        not unattributed
-        and agg["engine_errors"] == 0
-        and retention_ok
-        and len(rows) == agg["transitions_diverged"]
-        and not gate_failures
-    ) else "FAIL"
+    verdict = certification_verdict(
+        unattributed=unattributed,
+        engine_errors=agg["engine_errors"],
+        retention_ok=retention_ok,
+        rows_retained=len(rows),
+        transitions_diverged=agg["transitions_diverged"],
+        gate_failures=gate_failures,
+    )
     skip_counters = {
         key: value for key, value in sorted(aggregate_counters.items())
         if key.startswith("skip:")

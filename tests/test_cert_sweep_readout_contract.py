@@ -929,3 +929,44 @@ class FidelityKpiTests(unittest.TestCase):
         fidelity = self._readout(measured=1000, diverged=0, games=100)["fidelity"]
         self.assertEqual(fidelity["in_support_rate"], 1.0)
         self.assertEqual(fidelity["out_of_support_per_10k_games"], 0)
+
+
+class CertificationVerdictTests(unittest.TestCase):
+    """The verdict expression itself, which nothing exercised before.
+
+    A one-token tamper made the readout emit PASS on C32's real 3,882
+    unattributed rows and the whole cert suite stayed green -- the only defence
+    was a source-hash pin, which is provenance rather than behaviour.
+    """
+
+    OK = dict(
+        unattributed=[], engine_errors=0, retention_ok=True,
+        rows_retained=7, transitions_diverged=7, gate_failures=[],
+    )
+
+    def test_a_clean_run_passes(self) -> None:
+        self.assertEqual(readout.certification_verdict(**self.OK), "PASS")
+
+    def test_a_single_unattributed_row_fails(self) -> None:
+        self.assertEqual(
+            readout.certification_verdict(**{**self.OK, "unattributed": [{"seed": 1}]}), "FAIL"
+        )
+
+    def test_the_real_c32_shape_fails(self) -> None:
+        """3,882 unattributed rows must never read PASS."""
+
+        self.assertEqual(
+            readout.certification_verdict(**{**self.OK, "unattributed": [{}] * 3882}), "FAIL"
+        )
+
+    def test_every_other_gate_also_forces_fail(self) -> None:
+        for override in (
+            {"engine_errors": 1},
+            {"retention_ok": False},
+            {"rows_retained": 6},
+            {"gate_failures": ["a gate tripped"]},
+        ):
+            with self.subTest(**override):
+                self.assertEqual(
+                    readout.certification_verdict(**{**self.OK, **override}), "FAIL"
+                )
