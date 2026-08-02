@@ -93,8 +93,54 @@ class HistoricalCertificationAttestationTests(unittest.TestCase):
         # binding lived only in the attested_fail branch, so a tampered
         # classifier passed green. A stage field inside the guarded file must
         # not be able to disable the guard. Hoisted above every branch.
-        _identity = lifecycle.get("source_code_identity") or {}
-        if "readout_sha256" in _identity:
+        # FAIL CLOSED ON THE KEY TOO. Round ten switched this off with two
+        # edits inside the guarded file: delete source_code_identity
+        # .readout_sha256 (this guard fail-open on `in`) AND flip stage away
+        # from attested_fail (which skips the second leg below). With both, an
+        # arbitrarily tampered classifier passed -- including a semantic tamper
+        # that made the readout emit PASS on C32's real 3,882 unattributed
+        # rows, which no other test in the suite caught.
+        _identity = lifecycle["source_code_identity"]
+        self.assertIn("readout_sha256", _identity)
+        self.assertTrue(_identity["readout_sha256"])
+        if True:
+            # ANCHOR THE "FROZEN SNAPSHOT" TO THE PINNED COMMIT.
+            #
+            # Rewriting source_code_identity's two hashes to the tampered
+            # digests defeated both bindings, because nothing checked that the
+            # block describes the commit it claims to. Both values ARE exactly
+            # the blobs at required_source_commit, so assert that. The contract
+            # itself is blob-pinned by
+            # test_registered_hashes_are_the_bytes_at_the_pinned_source, so
+            # this closes the loop.
+            _spec = ROOT / "reports" / "c32_current_engine_resweep_spec.json"
+            if _spec.is_file():
+                _gates = json.loads(_spec.read_text(encoding="utf-8"))[
+                    "certification_gates"
+                ]
+                self.assertEqual(
+                    _identity["readout_sha256"],
+                    _gates["required_readout_sha256"],
+                    "source_code_identity.readout_sha256 must be the registered "
+                    "classifier at the pinned certification commit, not an "
+                    "arbitrary value",
+                )
+                _pinned_differential = hashlib.sha256(
+                    subprocess.check_output(
+                        (
+                            "git", "-C", str(ROOT), "show",
+                            f"{_gates['required_source_commit']}:"
+                            "scripts/engine_transition_differential.py",
+                        ),
+                        stderr=subprocess.DEVNULL,
+                    )
+                ).hexdigest()
+                self.assertEqual(
+                    _identity["differential_sha256"],
+                    _pinned_differential,
+                    "source_code_identity.differential_sha256 must be the "
+                    "matcher at the pinned certification commit",
+                )
             _live = _sha256(ROOT / "scripts" / "cert_sweep_readout.py")
             if _live != _identity["readout_sha256"]:
                 _pending = lifecycle.get("successor_pending_identity") or {}
