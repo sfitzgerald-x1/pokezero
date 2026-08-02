@@ -41,9 +41,10 @@ Evidence discipline (same as base Tier 2's CB bit):
   (belief-elimination alone never fires the bit — mirrors ``cb-pinned-by-elimination``);
 - an observation consistent with NO candidate variant is off-model and yields no
   evidence in either direction (the precision guard);
-- monotone accrual with a TWO-STRIKE rule: the same value must pin on two independent
-  clean strikes; any conflicting pin or margin-rejection of a previously pinned value
-  before conclusion permanently blocks that axis for the mon.
+- monotone accrual, concluding on the FIRST clean pin (``required_pin_strikes``, default 1
+  — see the config field for the deductive rationale and the k=1/k=2 measurement); any
+  conflicting pin or margin-rejection of a previously pinned value before conclusion
+  permanently blocks that axis for the mon.
 """
 
 from __future__ import annotations
@@ -114,9 +115,23 @@ class InvestmentConfig:
     # by at least this many HP points beyond the tolerance window; the in-between band
     # is treated as ambiguous and yields no pin from the strike.
     rejection_margin_hp: float = 0.25
-    # Two-strike rule (mirrors Tier2Config.required_cb_strikes): one lattice edge case
-    # cannot conclude an axis.
-    required_pin_strikes: int = 2
+    # Corroborating clean strikes required before an axis concludes. ONE, unlike
+    # Tier2Config.required_cb_strikes, because the two inferences are not the same KIND of
+    # inference: the CB bit is a magnitude-exceedance judgement (an unusually hard hit is
+    # EVIDENCE FOR a Choice Band, and a second one makes it likelier), whereas this module's
+    # lattice test is DEDUCTIVE. A candidate variant admits exactly 16 legal per-hit values;
+    # an observed damage that misses all of them by more than the rejection margin makes that
+    # variant IMPOSSIBLE, not merely unlikely, so corroboration cannot make the exclusion more
+    # sound. A second strike only DELAYS freezing the conclusion — the sole thing it buys is a
+    # window in which a later contradicting strike can still block the axis, and the axis
+    # ledger already blocks on contradiction whenever it arrives before the freeze.
+    #
+    # Measured (runs/investment-gate-strikes-20260802/, seed 11, 120 games, source hash
+    # f9e35e1f, k=1 vs k=2 on the same replays): precision 1.000 on every conclusion type
+    # under BOTH settings — 54/54 hp_value, 52/52 hp_class, 40/40 defense at k=1 against
+    # 10/10, 10/10, 6/6 at k=2 — with zero blocked mons either way. k=2 bought no precision
+    # and cost 5.4x HP / 6.7x defense coverage (31.4% vs 5.8% of mixed-family HP mons).
+    required_pin_strikes: int = 1
     # Passed through to the shared damage core (our own pinch abilities / Flail
     # breakpoints; own-side fractions are exact but the band costs nothing).
     pinch_ambiguity_band: float = 0.04

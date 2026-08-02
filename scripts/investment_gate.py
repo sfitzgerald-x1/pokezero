@@ -94,13 +94,27 @@ def main() -> int:
     parser.add_argument("--move-bias", type=float, default=0.75)
     parser.add_argument("--showdown-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--required-pin-strikes",
+        type=int,
+        default=InvestmentConfig.required_pin_strikes,
+        help=(
+            "Corroborating clean strikes needed to conclude an axis (default: the shipped "
+            "InvestmentConfig value). The lattice test is deductive, so this does not make "
+            "an exclusion more sound — it only delays freezing the conclusion so a "
+            "contradicting later strike can still block it. This flag is what produced "
+            "runs/investment-gate-strikes-20260802 (k=1 vs k=2 on identical replays): "
+            "precision 1.000 both ways, zero blocked mons both ways, 5.4x more HP coverage "
+            "at k=1 — which is why the default is now 1."
+        ),
+    )
     args = parser.parse_args()
 
     root = args.showdown_root.expanduser().resolve()
     dex = load_showdown_dex_cached(root)
     source = load_gen3_randbat_source_cached(root)
     rng = random.Random(args.seed)
-    config = InvestmentConfig()
+    config = InvestmentConfig(required_pin_strikes=args.required_pin_strikes)
 
     # Precision ledgers per conclusion type.
     hp_value_tp = hp_value_fp = 0

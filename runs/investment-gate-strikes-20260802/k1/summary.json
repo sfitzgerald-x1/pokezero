@@ -1,0 +1,269 @@
+{
+  "generated": "2026-08-02",
+  "harness": "scripts/investment_gate.py",
+  "policy": "move-biased random-legal (move_bias=0.75), both seats",
+  "games_requested": 120,
+  "games_completed": 120,
+  "seed": 11,
+  "mean_turns": 48.91,
+  "randbat_source_hash": "f9e35e1fddae5064",
+  "config": {
+    "lattice_tolerance_hp": 1e-06,
+    "fraction_granularity": 0.0,
+    "rejection_margin_hp": 0.25,
+    "required_pin_strikes": 1
+  },
+  "strikes_assessed": 5435,
+  "strikes_clean": 3425,
+  "strikes_hp_pin": 64,
+  "strikes_defense_pin": 46,
+  "strike_disqualifier_histogram": {
+    "ko-clipped": 908,
+    "no-damage-event": 790,
+    "ability-overridden": 90,
+    "unmodeled-damage": 45,
+    "called": 42,
+    "margin-ambiguity": 34,
+    "transformed-defender": 24,
+    "transformed-attacker": 24,
+    "item-mutated": 23,
+    "type-changed": 21,
+    "conditioning-ambiguity": 3,
+    "truncated-outcome": 2,
+    "multi-hit": 2,
+    "struggle": 2
+  },
+  "conclusions": {
+    "hp_value": {
+      "predictions": 54,
+      "true_positives": 54,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "hp_class": {
+      "predictions": 52,
+      "true_positives": 52,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "defense": {
+      "predictions": 40,
+      "true_positives": 40,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "blocked_mons": {
+      "hp": 0,
+      "defense": 0
+    },
+    "unmatched_conclusions": 0,
+    "unmatched_detail": [],
+    "false_positive_detail": [],
+    "true_positive_sample": [
+      {
+        "game": 0,
+        "perspective": "p2",
+        "mon": "breloom",
+        "true_maxhp": 238,
+        "true_moves": [
+          "substitute",
+          "hiddenpowerrock",
+          "focuspunch",
+          "spore"
+        ],
+        "true_item": "leftovers",
+        "type": "hp",
+        "pinned": 238,
+        "class": "full",
+        "turns": [
+          3
+        ]
+      },
+      {
+        "game": 3,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 238,
+        "true_moves": [
+          "rockslide",
+          "brickbreak",
+          "surf",
+          "swordsdance"
+        ],
+        "true_item": "salacberry",
+        "type": "hp",
+        "pinned": 238,
+        "class": "full",
+        "turns": [
+          10
+        ]
+      },
+      {
+        "game": 3,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 238,
+        "true_moves": [
+          "rockslide",
+          "brickbreak",
+          "surf",
+          "swordsdance"
+        ],
+        "true_item": "salacberry",
+        "type": "defense-def",
+        "pinned": 225,
+        "class": "full"
+      },
+      {
+        "game": 3,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 238,
+        "true_moves": [
+          "rockslide",
+          "brickbreak",
+          "surf",
+          "swordsdance"
+        ],
+        "true_item": "salacberry",
+        "type": "defense-spd",
+        "pinned": 166,
+        "class": "full"
+      },
+      {
+        "game": 4,
+        "perspective": "p1",
+        "mon": "magmar",
+        "true_maxhp": 246,
+        "true_moves": [
+          "thunderpunch",
+          "focuspunch",
+          "substitute",
+          "fireblast"
+        ],
+        "true_item": "leftovers",
+        "type": "hp",
+        "pinned": 246,
+        "class": "full",
+        "turns": [
+          1
+        ]
+      },
+      {
+        "game": 4,
+        "perspective": "p1",
+        "mon": "magmar",
+        "true_maxhp": 246,
+        "true_moves": [
+          "thunderpunch",
+          "focuspunch",
+          "substitute",
+          "fireblast"
+        ],
+        "true_item": "leftovers",
+        "type": "defense-def",
+        "pinned": 144,
+        "class": "full"
+      },
+      {
+        "game": 4,
+        "perspective": "p1",
+        "mon": "venusaur",
+        "true_maxhp": 262,
+        "true_moves": [
+          "sleeppowder",
+          "earthquake",
+          "sludgebomb",
+          "swordsdance"
+        ],
+        "true_item": "leftovers",
+        "type": "defense-spd",
+        "pinned": 209,
+        "class": "full"
+      },
+      {
+        "game": 5,
+        "perspective": "p1",
+        "mon": "breloom",
+        "true_maxhp": 238,
+        "true_moves": [
+          "hiddenpowerghost",
+          "skyuppercut",
+          "spore",
+          "machpunch"
+        ],
+        "true_item": "leftovers",
+        "type": "defense-spd",
+        "pinned": 148,
+        "class": "reduced"
+      },
+      {
+        "game": 5,
+        "perspective": "p2",
+        "mon": "charizard",
+        "true_maxhp": 252,
+        "true_moves": [
+          "hiddenpowerflying",
+          "bellydrum",
+          "substitute",
+          "earthquake"
+        ],
+        "true_item": "salacberry",
+        "type": "hp",
+        "pinned": 252,
+        "class": "full",
+        "turns": [
+          61
+        ]
+      },
+      {
+        "game": 5,
+        "perspective": "p2",
+        "mon": "typhlosion",
+        "true_maxhp": 252,
+        "true_moves": [
+          "thunderpunch",
+          "substitute",
+          "hiddenpowerice",
+          "fireblast"
+        ],
+        "true_item": "petayaberry",
+        "type": "hp",
+        "pinned": 252,
+        "class": "trimmed",
+        "turns": [
+          66
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "opponent_mons_seen": 1403,
+    "hp_mixed_family_mons_seen": 172,
+    "hp_mixed_family_mons_concluded": 54,
+    "hp_conclusion_rate_on_mixed": 0.313953488372093,
+    "trimmed_truth_mons_seen": 67,
+    "trimmed_truth_mons_concluded": 16
+  },
+  "calibration_known_set": {
+    "clean_strikes": 3459,
+    "off_model_strikes": 0,
+    "true_variant_consistency": 1.0,
+    "mismatch_examples": [],
+    "spread_mons_checked": 1440,
+    "spread_stat_mismatches": 0,
+    "spread_mismatch_examples": [],
+    "hp_denominator_mismatches": 0,
+    "hp_denominator_examples": []
+  },
+  "gate": {
+    "precision_pass": true,
+    "calibration_pass": true,
+    "verdict": "PASS",
+    "criteria": {
+      "precision": "zero false pins across all conclusion types, zero unmatched conclusions (every conclusion scored against truth), and >= 3 hp-value conclusions",
+      "calibration": ">= 200 clean control strikes, true-variant consistency >= 0.98, zero spread mismatches, zero HP-denominator mismatches"
+    },
+    "mask_recommendation": "populate NUMERIC_TT_INVESTMENT_BIT behind tier2_investment"
+  }
+}
