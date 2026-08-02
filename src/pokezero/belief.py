@@ -101,8 +101,11 @@ class RevealedPokemonBelief:
     sleep_skipped_turns: int = 0
     # Turns this mon has been active in its current stint (reset on entry).
     turns_active: int = 0
-    # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries). Frozen once the
-    # held item is mutated (Trick / Knock Off): pruning applies to the original assignment only.
+    # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries / Choice Band).
+    # The first three are end-of-turn NON-PROCS — an opportunity the item had and did not take;
+    # Choice Band is the same shape read off the move stream instead, since two different moves
+    # in one stay are an opportunity the ``choicelock`` volatile would have denied. Frozen once
+    # the held item is mutated (Trick / Knock Off): pruning applies to the original assignment.
     ruled_out_items: tuple[str, ...] = ()
     item_mutated: bool = False
     # Removal vs swap, the distinction ``item_mutated`` alone cannot carry: True while the
@@ -467,6 +470,10 @@ class PublicBattleBeliefEngine:
         # Any key still unresolved at ``|upkeep`` was a plain sleep turn, which resets skip to 0.
         self._sleep_cant_pending: set[str] = set()
         self._hp_after_actions: dict[str, Optional[float]] = {}
+        # Choice-lock bookkeeping: belief key -> the FIRST freely selected move of the mon's
+        # current stay on the field, which is the move a Choice Band would have locked it into.
+        # Cleared on switch-in. See ``_note_choice_lock_selection``.
+        self._stay_locked_move: dict[str, str] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
         self._pending_mudshot: Optional[dict[str, Any]] = None
         # The Trick pairing published by the ``-activate`` line, consumed by the two ``-item``
@@ -626,6 +633,11 @@ class PublicBattleBeliefEngine:
                     # max-entropy fallback (full pool, uncertainty 1.0) and wiping a hard-won endgame
                     # read for the rest of the game. It spends none of the mon's own PP either.
                     return
+                # Everything that reaches here without ``sleep_talk_called`` is a move the
+                # PLAYER chose: called moves, locked continuations and Struggle have all
+                # returned above. That is exactly the set the Choice lock constrains.
+                if not sleep_talk_called:
+                    belief = self._note_choice_lock_selection(belief, move_id)
                 # A Sleep-Talk-called move spends none of the callee's PP (the Sleep Talk |move| line
                 # already charged the caller); everything else that reaches here charges normally.
                 if not sleep_talk_called:
@@ -1201,6 +1213,7 @@ class PublicBattleBeliefEngine:
         twin._sleep_clause_holder = dict(self._sleep_clause_holder)
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
         twin._hp_after_actions = dict(self._hp_after_actions)
+        twin._stay_locked_move = dict(self._stay_locked_move)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
         twin._shed_skin_activated_this_turn = set(self._shed_skin_activated_this_turn)
         twin._sleep_cant_pending = set(self._sleep_cant_pending)
@@ -1366,6 +1379,9 @@ class PublicBattleBeliefEngine:
     ) -> RevealedPokemonBelief:
         changes: dict[str, Any] = {"turns_active": 0}
         self._hp_after_actions[belief.key] = _hp_fraction_from_condition(condition)
+        # ``choiceband.onStart`` removes the ``choicelock`` volatile, so entering the field
+        # clears the lock and the next move selected becomes the new locked one.
+        self._stay_locked_move.pop(belief.key, None)
         condition_status = _status_token_from_condition(condition)
         if belief.status_on_exit and condition_status is None:
             # Natural Cure elimination: carried a status out, returned clean, and no public
@@ -1437,6 +1453,54 @@ class PublicBattleBeliefEngine:
                 belief.evidence,
                 BeliefEvidence(kind="ruled-out-item", detail=detail, source_line=None),
             ),
+        )
+
+    def _note_choice_lock_selection(
+        self, belief: RevealedPokemonBelief, move_id: str
+    ) -> RevealedPokemonBelief:
+        """Two different FREELY SELECTED moves in one stay rule Choice Band out.
+
+        ``data/conditions.ts`` choicelock (gen3 inherits it — ``data/mods/gen3`` overrides
+        neither the volatile nor the item) records ``activeMove.id`` in ``onStart`` and fails
+        any later move whose id differs in ``onBeforeMove``. ``choiceband.onModifyMove`` adds
+        the volatile on the holder's first move and ``choiceband.onStart`` removes it on
+        switch-in, so the lock spans exactly one stay on the field. A mon seen selecting two
+        different moves without leaving therefore cannot have been holding one.
+
+        The negative direction only, and the same evidence class as the Leftovers / Lum /
+        pinch-berry non-proc pruning it joins: certain, free, and derived from public
+        ``|move|`` lines with no damage analysis and so no precision gate. Choice Band is the
+        pool's second most common item (160 variants, behind Leftovers' 1371), so this is the
+        only non-proc rule that moves a large share of the pool.
+
+        "Freely selected" is what the caller has already established: called moves, locked
+        continuations (Solar Beam's release — the pool's only two-turn move), Struggle and
+        moves used while transformed have all returned before this point, and Sleep Talk's
+        callee is excluded by the caller because Sleep Talk chose it, not the player. The one
+        remaining way a differing move could reach the protocol under an active lock is
+        choicelock's own failure line (``|move|<mon>|<other>|[still]`` + ``|-fail|``), and it
+        is unreachable here: ``onDisableMove`` removes the other moves from the request, so
+        neither a bot nor a ladder client can select one.
+
+        The bookkeeping runs in every switch state; only the CONCLUSION is gated, so a
+        switch-off engine is byte-identical. Frozen once the held item is mutated, exactly
+        like the rest of the family: after a Trick the mon is locked (or not) by somebody
+        else's item, which says nothing about its own assignment.
+        """
+
+        locked = self._stay_locked_move.get(belief.key)
+        if locked is None:
+            self._stay_locked_move[belief.key] = move_id
+            return belief
+        if locked == move_id or not self.item_belief_narrowing:
+            return belief
+        if belief.item_mutated or belief.revealed_item:
+            return belief
+        return self._rule_out_items(
+            belief,
+            ("choiceband",),
+            "Selected two different moves in one stay on the field; the Choice Band lock "
+            "forbids that, so Choice Band variants were removed.",
         )
 
     def _sweep_end_of_turn_non_procs(self) -> None:
