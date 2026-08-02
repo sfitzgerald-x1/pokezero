@@ -853,7 +853,9 @@ def _cascade_base(source: str) -> str:
     return source[: -len("_to_full")] if source.endswith("_to_full") else source
 
 
-def _roll_cascade_equivalent(observed, engine) -> bool:
+def _roll_cascade_equivalent(
+    observed, engine, *, support, target_side: str, pre_legal: set[int] | None
+) -> bool:
     """Whether a component-COUNT difference is caused by a legal roll difference.
 
     The engine may pick a legal damage roll the simulator did not. That
@@ -862,31 +864,73 @@ def _roll_cascade_equivalent(observed, engine) -> bool:
     room and emits a line. Same transition, same end HP, different component
     COUNT -- and the length check rejected it before any roll tolerance applied.
 
-    This does NOT accept net equality. Net-equal lists can differ for unrelated
-    reasons, which is the false-match risk the exact comparison exists to
-    prevent. The shape is constrained: exactly one direct-damage component per
-    side and one legal roll apart, every other component a POSITIVE heal, and
-    equal totals. Measured against 200,000 crossed (observed, engine) pairs --
-    genuinely different transitions -- this fires on 0.018%, against 0.051% for
-    plain exact-list equality, so it is more selective than the check it
-    supplements. reports/c66_roll_cascade_count_mismatch.json.
+    THREE constraints, all necessary. Review of #1010 found the first version
+    had only the third, which let an observed Leftovers tick match an engine
+    Wish plus Leech Seed on equal nets -- different mechanics, not one
+    transition at two rolls -- and let the direct component skip the legal-roll
+    set entirely by returning before the per-component loop.
+
+    1. The heal SOURCES must agree as a multiset except for exactly one extra
+       component on the longer side. Without this, any heals summing alike pass.
+    2. The direct component must clear the same ``legal``/``support`` check every
+       other roll-scaled component clears. A proportional band is not roll-set
+       membership.
+    3. The totals must agree, which is what makes the extra component a
+       cap-filling residual rather than an unrelated difference.
     """
 
-    observed_direct = [c.delta for c in observed if c.source == ""]
-    engine_direct = [c.delta for c in engine if c.source == ""]
-    if len(observed_direct) != 1 or len(engine_direct) != 1 or not engine_direct[0]:
+    observed_direct = [c for c in observed if c.source == ""]
+    engine_direct = [c for c in engine if c.source == ""]
+    if len(observed_direct) != 1 or len(engine_direct) != 1:
         return False
-    ratio = abs(observed_direct[0]) / abs(engine_direct[0])
-    if not (_MIN_DAMAGE_ROLL / 100 <= ratio <= 100 / _MIN_DAMAGE_ROLL):
+
+    observed_heals = [c for c in observed if c.source != ""]
+    engine_heals = [c for c in engine if c.source != ""]
+    all_heals = observed_heals + engine_heals
+    if not all_heals:
         return False
-    observed_heals = [(_cascade_base(c.source), c.delta) for c in observed if c.source != ""]
-    engine_heals = [(_cascade_base(c.source), c.delta) for c in engine if c.source != ""]
-    if not observed_heals and not engine_heals:
+    if any(_cascade_base(c.source) not in _CASCADE_HEALS or c.delta <= 0 for c in all_heals):
         return False
-    if any(s not in _CASCADE_HEALS or d <= 0 for s, d in observed_heals + engine_heals):
+
+    # (1) source multisets agree bar exactly one extra on the longer side
+    longer, shorter = (
+        (engine_heals, observed_heals)
+        if len(engine_heals) > len(observed_heals)
+        else (observed_heals, engine_heals)
+    )
+    if len(longer) - len(shorter) != 1:
         return False
-    return (observed_direct[0] + sum(d for _, d in observed_heals)) == (
-        engine_direct[0] + sum(d for _, d in engine_heals)
+    remaining = Counter(_cascade_base(c.source) for c in shorter)
+    extra = 0
+    for component in longer:
+        base = _cascade_base(component.source)
+        if remaining.get(base):
+            remaining[base] -= 1
+        else:
+            extra += 1
+    if extra != 1 or any(remaining.values()):
+        return False
+
+    # (2) the direct component faces the ordinary legal-roll check
+    engine_component = engine_direct[0]
+    legal = branch_component_legal_rolls(
+        support, target_side=target_side, component=engine_component, pre_legal=pre_legal
+    )
+    scale = max(
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
+    if not roll_components_agree(
+        [(observed_direct[0].source, observed_direct[0].delta)],
+        [(engine_component.source, engine_component.delta)],
+        legal,
+        scale=scale,
+    ):
+        return False
+
+    # (3) conservation: the extra healing absorbs the extra damage exactly
+    return (observed_direct[0].delta + sum(c.delta for c in observed_heals)) == (
+        engine_direct[0].delta + sum(c.delta for c in engine_heals)
     )
 
 
@@ -908,7 +952,9 @@ def roll_component_events_agree(
     """
 
     if len(observed) != len(engine):
-        return _roll_cascade_equivalent(observed, engine)
+        return _roll_cascade_equivalent(
+            observed, engine, support=support, target_side=target_side, pre_legal=pre_legal
+        )
     slot_scale = max(
         _roll_damage_scale([(c.source, c.delta) for c in observed]),
         _roll_damage_scale([(c.source, c.delta) for c in engine]),
@@ -1359,43 +1405,6 @@ def _active_maxhp_by_slot(state: Any, slot_sides: Mapping[str, str]) -> dict[str
     }
 
 
-_CONTRACT_LIMIT_MARKER = "contract-exit: only an attribution-unsafe branch reproduces the observation"
-_CONTRACT_FOLLOWUP_MARKER = "contract-exit: no enumerated branch reaches the observation"
-
-
-def _branch_reproduces_observation(branch, observed) -> bool:
-    """Whether a branch's post-state reaches the observed HP within a legal roll.
-
-    Tolerance matters. The first version of this demanded an EXACT match on both
-    slots, which almost no branch of a divergent boundary achieves -- so "no
-    branch reaches the observation" became true nearly everywhere and the marker
-    swallowed 1,273 rows. gen3 damage is floor(base * random(85,100) / 100), so
-    two rolls of one base differ by at most 100/85; a branch inside that window
-    HAS reached the transition, at a different roll.
-    """
-
-    post = branch.get("post_state")
-    if not post:
-        return False
-    try:
-        state = poke_engine.State.from_string(post)
-    except BaseException:  # noqa: BLE001
-        return False
-    after = engine_features_by_slot(state, {"p1": "side_one", "p2": "side_two"})
-    for slot in ("p1", "p2"):
-        want = getattr(observed, f"{slot}_hp", None)
-        got = getattr(after, f"{slot}_hp", None)
-        if want is None or got is None:
-            return False
-        if want == got:
-            continue
-        if not want or not got:
-            return False
-        if not (85 / 100 <= abs(want) / abs(got) <= 100 / 85):
-            return False
-    return True
-
-
 def evaluate_boundary_strict(
     *,
     states: Sequence[Any],
@@ -1437,8 +1446,6 @@ def evaluate_boundary_strict(
     misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
-    reproducing_branches = False
-    reproducing_included = False
     for state in states:
         try:
             rendered = json.loads(
@@ -1472,10 +1479,6 @@ def evaluate_boundary_strict(
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
             lossy = list(branch.get("lossy") or [])
-            if _branch_reproduces_observation(branch, observed):
-                reproducing_branches = True
-                if not branch.get("attribution_unsafe"):
-                    reproducing_included = True
             # A branch whose ONLY defect is the known Sleep Talk callee-identity
             # gap is still usable: its damage is real, only its attribution is
             # generic. Any other lossy marker is a different insufficiency and
@@ -1607,17 +1610,6 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
-    # CONTRACT EXIT MARKERS. Evidence for the contract's follow-up and limit
-    # exits is only available here, where the branch set is enumerated. These
-    # do NOT suppress a divergence and do NOT decide attribution: the readout
-    # consults them ONLY after every documented family has declined the row, so
-    # a marker can never claim something another rule explains. The first
-    # attempt checked them FIRST and swallowed 1,273 rows, most already
-    # correctly attributed. reports/c68_contract_exit_closure.json.
-    if reproducing_branches and not reproducing_included:
-        ordered = ordered + [_CONTRACT_LIMIT_MARKER]
-    elif not reproducing_branches:
-        ordered = ordered + [_CONTRACT_FOLLOWUP_MARKER]
     return "diverged", ordered, branch_total
 
 

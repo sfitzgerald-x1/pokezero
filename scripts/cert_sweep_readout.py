@@ -389,19 +389,6 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                 "observed crit outcome paired against the non-crit majority "
                 "arm (branch-set accounting; the crit arm carries the shape)")
 
-    # CONTRACT EXITS, LAST. Every documented family has declined this row, so a
-    # marker here can only claim what nothing else explains. The first attempt
-    # checked these FIRST and absorbed 1,273 rows out of families that already
-    # explained them. reports/c68_contract_exit_closure.json.
-    if any("contract-exit: no enumerated branch reaches" in m for m in misses):
-        return ("followup:engine_support_gap",
-                "no enumerated engine branch reaches the observed transition within a legal "
-                "roll (documented follow-up: an engine defect, tracked, not matcher-fixable)")
-    if any("contract-exit: only an attribution-unsafe branch" in m for m in misses):
-        return ("limit:attribution_not_observable",
-                "the only branch reproducing the observation carries the renderer's own "
-                "attribution_unsafe flag (evidence-backed limit: the comparison cannot be made)")
-
     return "UNATTRIBUTED", f"no documented signature matched (class {cls}; majority: {majority[:120]})"
 
 
