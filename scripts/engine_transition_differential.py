@@ -846,6 +846,7 @@ def roll_components_agree(
 
 
 _MIN_DAMAGE_ROLL = 85
+_ONCE_PER_TURN_HEALS = frozenset({"itemleftovers", "leechseed"})
 _CASCADE_HEALS = frozenset({"itemleftovers", "heal", "movewish", "leechseed"})
 
 
@@ -952,43 +953,84 @@ def _roll_cascade_equivalent(
     #     "some base flipped" admitted two shared heals flipping in OPPOSITE
     #     directions, and a Counter over bases collapsed duplicates so that one
     #     instance of a repeated source could supply the flip for another.
-    # At most ONE capped heal per side. If a heal tops the mon out, every later
-    # heal on that side restores zero and cannot appear as a positive component,
-    # so two positive `_to_full` heals on one side is unrealizable. This is the
-    # physical rule behind a case a fourth review found: `_to_full` on both
-    # sides of a shared base at EQUAL magnitude, which would require equal
-    # deficits on two sides whose rolls differ.
+    # Once-per-turn residuals may not repeat on a side. Leftovers and Leech
+    # Seed tick exactly once per turn, so two instances on one slot cannot both
+    # be real; that is how a synthetic case slipped a duplicate past the
+    # instance pairing, one copy matching and the other supplying the flip.
+    # Generic `heal` and `movewish` are NOT in this set: two untagged -heal
+    # lines in one step are ordinary, and banning them cost two genuine corpus
+    # cascades in an earlier round (s18500122/85, s18100033/60).
     for side_heals in (observed_heals, engine_heals):
-        if sum(1 for c in side_heals if c.source.endswith("_to_full")) > 1:
+        once_per_turn = [
+            _cascade_base(c.source)
+            for c in side_heals
+            if _cascade_base(c.source) in _ONCE_PER_TURN_HEALS
+        ]
+        if len(once_per_turn) != len(set(once_per_turn)):
             return False
 
-    observed_bases = [_cascade_base(c.source) for c in observed_heals]
-    engine_bases = [_cascade_base(c.source) for c in engine_heals]
-    if len(set(observed_bases)) != len(observed_bases) or len(set(engine_bases)) != len(
-        engine_bases
+    # Two capped heals on one side are possible ONLY with damage between them.
+    # A heal that tops the mon out leaves nothing for a later heal to restore,
+    # so a second positive `_to_full` requires the mon to have been damaged in
+    # between -- cap, hit, cap is an ordinary line (Recover to full, take the
+    # hit, Leftovers tops out again) and an earlier version of this predicate
+    # wrongly banned it outright. Order is what distinguishes the two, and
+    # event_index carries it.
+    for side_heals, side_direct in (
+        (observed_heals, observed_direct),
+        (engine_heals, engine_direct),
     ):
-        return False
+        caps = sorted(
+            (c.event_index for c in side_heals if c.source.endswith("_to_full"))
+        )
+        if len(caps) < 2:
+            continue
+        damage_indices = [c.event_index for c in side_direct]
+        if not all(
+            any(first < hit < second for hit in damage_indices)
+            for first, second in zip(caps, caps[1:])
+        ):
+            return False
+
     smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
     capped_side, uncapped_side = (
         (observed_heals, engine_heals)
         if smaller_is_observed
         else (engine_heals, observed_heals)
     )
-    capped_by_base = {_cascade_base(c.source): c for c in capped_side}
-    uncapped_by_base = {_cascade_base(c.source): c for c in uncapped_side}
-    flips = [
-        base
-        for base in set(capped_by_base) & set(uncapped_by_base)
-        if capped_by_base[base].source.endswith("_to_full")
-        != uncapped_by_base[base].source.endswith("_to_full")
-    ]
-    if len(flips) != 1:
+    # Pair the two sides' heals as INSTANCES, matching identical (base, delta)
+    # first, so a repeated source cannot have one of its instances supply the
+    # flip for another. Banning repeated bases outright was the previous
+    # attempt and it was wrong: two untagged `-heal` lines on one slot in one
+    # step both normalise to `heal`, which is ordinary. Review measured it
+    # rejecting two genuine two-roll cascades on the corpus -- s18500122/85 and
+    # s18100033/60 -- each reproducible from a single common start.
+    # The extra is already accounted for; pair only the SHARED instances.
+    unmatched_capped = [c for c in capped_side if c is not extra]
+    unmatched_uncapped = [c for c in uncapped_side if c is not extra]
+    for component in list(unmatched_capped):
+        twin = next(
+            (
+                other
+                for other in unmatched_uncapped
+                if other.source == component.source and other.delta == component.delta
+            ),
+            None,
+        )
+        if twin is not None:
+            unmatched_capped.remove(component)
+            unmatched_uncapped.remove(twin)
+    # Exactly one instance may remain on each side, and they must be the same
+    # base differing only in whether it capped.
+    if len(unmatched_capped) != 1 or len(unmatched_uncapped) != 1:
         return False
-    flipped = flips[0]
-    if not capped_by_base[flipped].source.endswith("_to_full"):
+    capped, uncapped = unmatched_capped[0], unmatched_uncapped[0]
+    if _cascade_base(capped.source) != _cascade_base(uncapped.source):
+        return False
+    if not capped.source.endswith("_to_full") or uncapped.source.endswith("_to_full"):
         return False
     # the capped instance cannot exceed the nominal it was clipped from
-    if capped_by_base[flipped].delta > uncapped_by_base[flipped].delta:
+    if capped.delta > uncapped.delta:
         return False
 
     # (4) the direct component faces the ordinary legal-roll check, INCLUDING

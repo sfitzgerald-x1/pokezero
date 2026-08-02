@@ -24,5 +24,6 @@
   "engine work widening support, which is objective 4's domain and needs the search-impact ranking C40 established"
  ],
  "the_integrity_position": "the 255 figure has been checked against the two ways it could be wrong. It is not inflated by false matches -- C70 tightened the weakest check in the matcher and only 4 of 4,156 matched rows depended on it. And it is not deflated by laundering -- seven repairs were built and rejected, every one on a measurement, including two that would have reported large improvements.",
- "does_not_reach_a_pass": "255 unattributed against a required zero"
+ "does_not_reach_a_pass": "255 unattributed against a required zero",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED BY REVIEW. The numbers in this file were measured before five rounds of adversarial review changed the cascade predicate and reverted C68. In particular any figure of 255 unattributed, and any projection derived from it, predates those rounds. Kept as the record of what was measured when. Current differential_sha256: b7b83904fe40baed025e237c83fff79d196f84c7202ec61f5b22b342372b3e59"
 }

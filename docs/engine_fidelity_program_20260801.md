@@ -189,6 +189,13 @@ as results of the change that overturned them, with the reasoning that failed.
 
 # Program state, end of the 2026-08-01 session
 
+> **SUPERSEDED IN PART BY REVIEW.** Five adversarial review rounds on #1010 followed this
+> section. They found a certification deadlock, a false-match hole, a render fix that emitted
+> lines for the wrong Pokemon, a silent reversion to a rejected predicate, and a predicate that
+> MASKED real engine defects. C68 was reverted, so the `264 -> 255` row below did not land and
+> every figure of 255 here is stale. The residue after review is in the PR description; the
+> reviews are the current record, not this table.
+
 This section is the current picture. Where it contradicts an earlier section or
 an earlier report, this section is right and the reason is given.
 

@@ -283,5 +283,6 @@
    }
   }
  },
- "era_discipline": "Every adjudication here is stamped with the engine fingerprint, readout hash and differential hash above, and must be mechanically re-derived when any of the three changes. An adjudication without a current-era stamp is stale by construction."
+ "era_discipline": "Every adjudication here is stamped with the engine fingerprint, readout hash and differential hash above, and must be mechanically re-derived when any of the three changes. An adjudication without a current-era stamp is stale by construction.",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED BY REVIEW. The numbers in this file were measured before five rounds of adversarial review changed the cascade predicate and reverted C68. In particular any figure of 255 unattributed, and any projection derived from it, predates those rounds. Kept as the record of what was measured when. Current differential_sha256: b7b83904fe40baed025e237c83fff79d196f84c7202ec61f5b22b342372b3e59"
 }

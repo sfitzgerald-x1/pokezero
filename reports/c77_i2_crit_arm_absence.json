@@ -72,6 +72,7 @@
   },
   "the_point": "the 403 I2 rows, and the 173 renderer-gap subset within them, are ATTRIBUTED. Fixing the crit tag moves them from I2_matcher_accounting to matched. It does NOT reduce the unattributed count, which is what the certification gate measures.",
   "why_it_is_still_worth_doing": "C74 established that 35% of divergences sit in families with no established mechanism, and that the gate counts them as explained. The 173 are the clearest case: attributed to a family named for branch accounting, actually a suppressed crit tag. Fixing them removes 173 rows from the explained-in-name-only category by making them genuinely matched. That improves the honesty of the measurement without improving the number.",
-  "the_expectation_to_set": "anyone taking this on should expect the unattributed count to stay at 255 and the divergence count to fall by up to 173. If the unattributed count MOVES, something unintended happened and that is the signal to stop -- which is the invariant this fix should be registered with."
+  "the_expectation_to_set": "anyone taking this on should expect the unattributed count to stay at 255 and the divergence count to fall by up to 173. If the unattributed count MOVES, something unintended happened and that is the signal to stop -- which is the invariant this fix should be registered with.",
+  "SUPERSEDED_INVARIANT": "This registered 'expect unattributed to stay at 255; if it MOVES, stop'. 255 predates five review rounds and anyone following that invariant on a correct run would now abort. The invariant's INTENT stands -- a crit-tag fix should move divergences, not the unattributed count -- but it must be re-baselined against the residue at the time it is attempted."
  }
 }

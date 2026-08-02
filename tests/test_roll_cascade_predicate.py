@@ -153,6 +153,70 @@ class RollCascadeTests(unittest.TestCase):
             [comp("", -106), comp("itemleftovers", 25), comp("itemleftovers_to_full", 6)],
         ))
 
+    def test_the_two_corpus_rows_a_previous_round_regressed(self) -> None:
+        """Both are exact two-roll cascades, reproducible from a single common
+        start, and a no-repeated-base rule rejected them. Two untagged -heal
+        lines on one slot both normalise to `heal`; that is ordinary."""
+
+        self.assertTrue(cascade(  # s18500122/85, gap 13 = heal gap 12 + extra 1
+            [comp("", -149, 0), comp("heal", 132, 1), comp("heal_to_full", 17, 2)],
+            [comp("", -162, 0), comp("heal", 132, 1), comp("heal", 29, 2),
+             comp("itemleftovers_to_full", 1, 3)],
+        ))
+        self.assertTrue(cascade(  # s18100033/60, gap 2 = heal gap 0 + extra 2
+            [comp("", -111, 0), comp("heal", 170, 1), comp("heal_to_full", 32, 2)],
+            [comp("", -113, 0), comp("heal", 170, 1), comp("heal", 32, 2),
+             comp("itemleftovers_to_full", 2, 3)],
+        ))
+
+    def test_cap_damage_cap_is_allowed(self) -> None:
+        """Recover to full, take the hit, Leftovers tops out again. An earlier
+        round banned two caps per side outright, which is physically false."""
+
+        self.assertTrue(cascade(
+            [comp("heal_to_full", 20, 0), comp("", -25, 1), comp("itemleftovers_to_full", 25, 2)],
+            [comp("heal_to_full", 20, 0), comp("", -28, 1), comp("itemleftovers", 25, 2),
+             comp("leechseed_to_full", 3, 3)],
+        ))
+
+    def test_two_caps_with_no_damage_between_are_rejected(self) -> None:
+        """A heal that tops the mon out leaves nothing for a later heal, so a
+        second positive _to_full needs damage in between. Order decides it."""
+
+        self.assertFalse(cascade(
+            [comp("", -99, 0), comp("movewish_to_full", 100, 1), comp("leechseed_to_full", 10, 2)],
+            [comp("", -105, 0), comp("movewish", 103, 1), comp("leechseed_to_full", 10, 2),
+             comp("itemleftovers_to_full", 3, 3)],
+        ))
+
+    def test_a_once_per_turn_residual_may_not_repeat(self) -> None:
+        """Leftovers ticks once per turn, so a duplicate cannot be real -- one
+        copy matched under instance pairing and the other supplied the flip."""
+
+        self.assertFalse(cascade(
+            [comp("", -99, 0), comp("itemleftovers_to_full", 10, 1), comp("itemleftovers", 10, 2)],
+            [comp("", -105, 0), comp("itemleftovers", 13, 1), comp("itemleftovers", 10, 2),
+             comp("movewish_to_full", 3, 3)],
+        ))
+
+    def test_the_extra_may_not_exceed_the_roll_gap(self) -> None:
+        """A capped heal equals the deficit and the uncapped instance is the
+        nominal that overshot it, so extra <= gap. Without this the predicate
+        MASKED a real engine defect: a Leech Seed healing 21 where the simulator
+        healed 25 from an identical state."""
+
+        self.assertFalse(cascade(
+            [comp("", -64), comp("movewish", 118), comp("leechseed_to_full", 25)],
+            [comp("", -65), comp("movewish", 118), comp("leechseed", 21),
+             comp("itemleftovers_to_full", 5)],
+        ))
+
+    def test_the_capped_instance_may_not_exceed_its_nominal(self) -> None:
+        self.assertFalse(cascade(
+            [comp("", -99), comp("movewish_to_full", 150)],
+            [comp("", -105), comp("movewish", 141), comp("itemleftovers_to_full", 15)],
+        ))
+
     def test_unequal_totals_are_rejected(self) -> None:
         observed = [comp("", -41), comp("movewish_to_full", 119)]
         engine = [comp("", -45), comp("movewish", 119), comp("itemleftovers_to_full", 40)]

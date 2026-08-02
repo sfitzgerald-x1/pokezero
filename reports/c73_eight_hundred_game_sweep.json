@@ -48,5 +48,6 @@
   ],
   "what_it_did_not_change": "the residue is still dominated by one-side-empty rows, which C61 examined and judged a genuine disagreement about where probability mass sits, and which no matcher work should absorb. A PASS still requires the contract's exits with per-shape evidence, or engine work.",
   "the_correction_i_would_lead_with": "I spent most of this session measuring a corpus that was selected against the fixes I was applying, and told the user a sweep needed cluster time when a local one was available throughout. Both the 255 figure and the ~268 projection were biased by that, and the honest number is ~125."
- }
+ },
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED BY REVIEW. The numbers in this file were measured before five rounds of adversarial review changed the cascade predicate and reverted C68. In particular any figure of 255 unattributed, and any projection derived from it, predates those rounds. Kept as the record of what was measured when. Current differential_sha256: b7b83904fe40baed025e237c83fff79d196f84c7202ec61f5b22b342372b3e59"
 }
