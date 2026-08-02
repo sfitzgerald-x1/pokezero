@@ -1,0 +1,17 @@
+{
+ "schema": "c65-sleep-talk-crit-arm-direct-test/1",
+ "prompted_by": "s18000815/100, where the sim crit a Sleep-Talk-called Hidden Power for -152 while the engine's three branches offer 0, -76 and a KO. -152 is EXACTLY 2 x -76, so the observed outcome is the crit of an arm the engine priced only at non-crit.",
+ "why_a_new_test_was_needed": "C51 already asked this and its control said Sleep Talk boundaries carry crit pairs slightly MORE often than others, 25.8% vs 20.0%. But that control asked whether ANY two branch magnitudes stand in a ~2x ratio, which two DIFFERENT callees can satisfy without either carrying a crit arm. It was a magnitude proxy for a structural question.",
+ "the_direct_test": {
+  "method": "does the engine RENDER a |-crit| line on a branch that also carries a [from] Sleep Talk callee line",
+  "sleep_talk_callees_with_a_crit_arm": "45 of 177 = 25.4%",
+  "non_sleep_talk_control_emitting_a_crit_line": "805 of 2747 = 29.3%",
+  "two_proportion_z": -1.1,
+  "verdict": "REFUTED. Sleep Talk callees do get crit arms, at a rate statistically indistinguishable from ordinary moves (z = -1.10, well inside noise). The anchor row lacks one, but that does not generalise."
+ },
+ "what_this_means_for_the_anchor_row": "s18000815/100 remains a real divergence -- the sim's crit is not in the engine's branch set for that boundary -- but it is an instance rather than a class. Whatever causes it is not 'Sleep Talk suppresses crit arms'.",
+ "the_methodological_point": "This is the third Sleep Talk hypothesis to die: C39 killed it for branch reachability, C51 for crit-arm presence by magnitude proxy, and this one for crit-arm presence directly. Sleep Talk is enriched in the residue because it is common and it fans branches, not because it is a defect. The reason it keeps resurfacing is that enrichment feels like causation, and the only cure has been asking the structural question directly rather than through a proxy.",
+ "also_worth_noting": "C51's control was not merely weak, it pointed the WRONG WAY -- it reported Sleep Talk as slightly crit-richer when the direct test reports slightly crit-poorer. Both differences are inside noise, so neither is a finding, but a proxy that inverts the sign of a non-effect would have inverted a real one too.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
+}

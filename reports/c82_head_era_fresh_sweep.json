@@ -1,0 +1,65 @@
+{
+ "schema": "c82-head-era-fresh-sweep/1",
+ "why": "Every prior residue number in this ledger was measured either on the C32 corpus (retained conditional on divergence under an OLDER engine build, so it overstates the unattributed fraction) or against a build whose fingerprint no longer exists. This is the first sweep at the current HEAD with a verified-current engine and FULL repro retention, so every divergent row can actually be classified instead of only the first 25.",
+ "era": {
+  "engine_fingerprint": "625cb059c21a8de6",
+  "patches": 54,
+  "supersedes_fingerprint": "c50da60afb967bd133815c085deec66c3e88c359a539771ae2817e0e51fa56b8",
+  "note": "adjudications stamped against the superseded fingerprint are void and must be mechanically re-derived"
+ },
+ "sample": {
+  "games": 200,
+  "seed_start": 19000000,
+  "seed_end": 19000199,
+  "boundaries_measured": 15224,
+  "transitions_matched": 15151,
+  "transitions_diverged": 67,
+  "engine_errors": 0,
+  "repros_complete": true,
+  "divergence_rate_per_boundary": 0.0044
+ },
+ "attribution_of_all_67": {
+  "limit:roll_divergent_lethality": 24,
+  "LS_capped_lethal_shape": 12,
+  "I2_matcher_accounting": 10,
+  "UNATTRIBUTED": 8,
+  "I3_roll_inherited": 3,
+  "I5_boundary_truncation": 3,
+  "I1_cap_state_shape": 3,
+  "I4_attribution_tie": 3,
+  "limit:world_sample_drag_target": 1
+ },
+ "the_unattributed_eight": {
+  "count": 8,
+  "single_shape": false,
+  "divergence_class": "roll_scaled_component",
+  "basis": "structural component-count mismatch without a sibling engine arm carrying the observed components (WHAT-level candidate, WHY open)",
+  "SUPERSEDED_BY_C84": "'one shape' was reading the classifier's FALL-THROUGH basis string as a diagnosis. reports/c84_unattributed_anatomy.json decomposes the same 8 rows into at least four mechanisms: 3 crit-arm-absent, 1 crit at a non-doubling ratio, 2 empty-engine-arm accuracy shapes, 1 count difference at matching magnitude, 1 mirror direction."
+ },
+ "certification_verdict": {
+  "gate": "zero unattributed",
+  "measured_unattributed": 8,
+  "result": "FAILS",
+  "distance_to_pass": "8 rows across four or more mechanisms (see c84)"
+ },
+ "the_honest_number_is_worse_than_the_gate": {
+  "claim": "8 unattributed understates how much is unexplained, because the gate counts a family LABEL as an explanation.",
+  "candidate_not_finding_rows": 28,
+  "breakdown": {
+   "LS_capped_lethal_shape": 12,
+   "I2_matcher_accounting": 10,
+   "I3_roll_inherited": 3,
+   "I5_boundary_truncation": 3
+  },
+  "basis": "reports/c68_family_bucket_audit.json buckets all four as candidate-not-finding -- 'no decisive signature'. reports/c75 supplied reject profiles for them but explicitly states it does NOT re-bucket: a reject signature says WHICH check fires, not what the cause is.",
+  "genuinely_explained": 31,
+  "not_explained": 36,
+  "not_explained_fraction": 0.537
+ },
+ "what_this_revises": {
+  "the_265_figure": "265 is the C32-corpus residue and should not be read as a fresh-data expectation. On fresh data at this era the unattributed count is 8 in 15,224 boundaries. The corpus overstates because rows entered it conditional on diverging under a superseded build.",
+  "unchanged_conclusion": "certification still FAILS, and the program's stopping condition of zero unattributed is still not met."
+ },
+ "reproduce": "scripts/engine_transition_differential.py --games 200 --seed-start 19000000 --keep-repro 100000 --repros-per-game 100000  NOTE: this yields 8 only WITH #1021's readout narrowings; without them the same 67 rows classify as 16.",
+ "VOIDED_BY_ERA_CHANGE": "By this file's own era.note, adjudications stamped against 625cb059 are void once the fingerprint moves. It moved to e5f4c7b1 when the Trick patch was dropped. c83 re-measured and got an identical result, so nothing here is WRONG -- but this artifact is superseded, not current."
+}

@@ -1,0 +1,84 @@
+{
+ "schema": "c69-final-residue-anatomy/1",
+ "population": "the 255 unattributed rows at fingerprint c50da60a after C55, C57, C66 and C68",
+ "method": "classify each row by the strongest relationship any of its misses achieves between the observed and engine component lists",
+ "anatomy": {
+  "count mismatch on every miss": {
+   "rows": 142,
+   "share": "55.7%"
+  },
+  "same sources, a magnitude outside the legal roll window": {
+   "rows": 80,
+   "share": "31.4%"
+  },
+  "SAME sources, every magnitude within a legal roll, yet rejected": {
+   "rows": 17,
+   "share": "6.7%"
+  },
+  "same count, different sources": {
+   "rows": 16,
+   "share": "6.3%"
+  }
+ },
+ "the_17_are_the_only_clear_instrument_defect_left": {
+  "example": "s18000534/77 p2 -- observed [('', -67), ('itemleftovers', 18), ('capped_lethal', -24)] against engine [('', -69), ('itemleftovers', 18), ('capped_lethal', -22)]. Identical sources; -67/-69 is 0.971 and -24/-22 is 1.09, both inside the 0.85 to 1.176 window a gen3 roll spans. The matcher should accept this and does not.",
+  "where_it_must_be": "branch_component_legal_rolls derives a per-component legal set rather than using the bare window, so a magnitude inside the window can still fall outside the set the branch supports. That derivation is the suspect, and it is the same exit C60 measured firing on 69 rows.",
+  "why_it_is_worth_pursuing_and_the_others_are_not": "it is the one shape where the two lists agree on everything the comparison claims to care about -- same components, same sources, magnitudes a legal roll apart -- and the rejection still happens. Everything else in the residue disagrees about something real."
+ },
+ "the_80_are_not_instrument_work": "same sources but a magnitude no legal roll can bridge. That is a genuine quantitative disagreement between engine and simulator, and no tolerance change should absorb it.",
+ "the_142_are_the_shape_three_cycles_have_judged_genuine": "count mismatch on every miss, dominated by one side being entirely empty. C61 examined them, found the engine's majority arm places its mass on nothing happening while the simulator's roll landed elsewhere, and declined to absorb them into an accounting family.",
+ "honest_ceiling_for_matcher_work": "17 rows of 255. Even a perfect fix to the legal-roll derivation leaves 238 unattributed, and the goal needs zero. The instrument seam really is worked out; what remains is either real disagreement or needs the contract's exits with evidence that does not yet exist.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 255",
+ "attempted_fix_REJECTED": {
+  "diagnosis": "the capped_lethal rule in roll_components_agree is one-sided: `if abs(obs) <= abs(eng) + 1`. It assumes the ENGINE's tick is uncapped, which holds when only the observation killed. When BOTH sides kill, both are clipped by DIFFERENT remaining HP because the preceding damage roll differed -- a larger preceding roll leaves less HP and makes the capped tick SMALLER, so obs > eng is legitimate. s18000534/77 p2: observed -67 and -24 against engine -69 and -22. The engine dealt 2 more, so 2 less remained, so its cap is 2 smaller. The one-sided test rejects a boundary the two sims agree on to the HP point.\\n\\nThe `_to_full` branch immediately above documents having fixed this exact inversion for capped heals. The same form still stood here.",
+  "the_fix_i_tried": "add the same two-sided bound the _to_full branch uses: abs difference <= 0.18 * scale + 1",
+  "measured": {
+   "unattributed": "255 -> 249 (-6)",
+   "matched -> divergent": 0,
+   "families that SHRANK": {
+    "limit:roll_divergent_lethality": "1095 -> 474",
+    "LS_capped_lethal_shape": "464 -> 270",
+    "I5_boundary_truncation": "94 -> 77",
+    "limit:world_sample_drag_target": "264 -> 262",
+    "I2_matcher_accounting": "403 -> 402",
+    "I1_cap_state_shape": "87 -> 86"
+   }
+  },
+  "verdict": "REJECTED. It clears 6 unattributed rows and reclassifies roughly 820 out of documented families into matched.",
+  "why": "the bound is wrong even if the diagnosis is right. `scale` is the slot's maximum roll damage, so 0.18 * scale is large in absolute terms and admits differences far beyond what a cap difference can produce. The correct bound is the difference in PRECEDING damage on that slot -- which for the motivating row is 2, not 0.18 * 67. I reached for the neighbouring branch's constant instead of deriving the bound this case actually needs.",
+  "the_invariant_earned_its_place": "'no existing family may shrink' is the invariant I failed to register for C68 and added afterwards. It caught this on the first measurement. Without it the headline -- 255 -> 249, zero matched-to-divergent regressions -- would have looked like a clean small win.",
+  "what_a_correct_fix_needs": "bound the capped_lethal difference by the observed difference in the preceding direct damage on the same slot, not by a fraction of the slot's roll scale. That is computable from the component lists already in hand and would admit the motivating row while rejecting the 820."
+ },
+ "second_attempt_ALSO_REJECTED": {
+  "the_corrected_bound": "cap_slack = the difference in PRECEDING direct damage on the slot, computed in roll_component_events_agree from the full component lists and threaded into roll_components_agree. Principled: a capped residual is clipped by what the preceding damage left, so that difference is exactly how far apart the two capped ticks may legitimately sit.",
+  "measured": {
+   "unattributed": "255 -> 252 (-3)",
+   "matched -> divergent": 0,
+   "families that SHRANK": {
+    "limit:roll_divergent_lethality": "1095 -> 522",
+    "LS_capped_lethal_shape": "464 -> 277",
+    "I5_boundary_truncation": "94 -> 91",
+    "limit:world_sample_drag_target": "264 -> 262",
+    "I1_cap_state_shape": "87 -> 86"
+   }
+  },
+  "verdict": "REJECTED. Tighter than 0.18 * scale and still moves roughly 760 rows out of documented families into matched, while clearing 3 unattributed.",
+  "why_the_principled_bound_is_still_too_loose_in_practice": "cap_slack is exact but not small. Two direct components can sit one legal roll apart and still differ by tens of HP on a big hit -- -300 against -260 is inside the window and yields a slack of 40. The bound then licenses capped ticks 40 apart, which is principled and far wider than the 2 HP the motivating row needs.",
+  "the_disproportion_is_the_disqualifier": "the diagnosis targets 17 rows. The change alters roughly 760. A fix whose blast radius is 45x its target population is not explained by its own diagnosis, whatever the reasoning behind the bound. Converting 760 divergences into matches would need a false-match measurement at least as strong as C66's before it could be trusted, and the target does not justify the exercise.",
+  "what_i_would_need_to_scope_it": "restrict the relaxation to boundaries where BOTH sides actually killed -- the condition the diagnosis rests on. The current predicate fires whenever the observed component is capped_lethal, without checking that the ENGINE's is too. That is likely the whole disproportion, and it is one condition, not a new bound."
+ },
+ "null_control": "before trusting the family shrinkage I ran the null: the same cap_slack threading with the capped_lethal branch UNCHANGED. Result: matched 4,156 and unattributed 255 in both arms, no family moved. The harness is sound and the shrinkage is caused by the relaxation, not by the measurement. Worth running given three measurement bugs earlier this session.",
+ "reframing_that_the_null_permitted": "LS_capped_lethal_shape is a COMPARISON-LIMIT family named for precisely this shape -- rows the matcher cannot decide. If a fix makes them decidable, the family dissolving is the point rather than laundering. So family shrinkage alone could not settle this, and the false-match gate had to decide it.",
+ "false_match_gate_DECISIVE": {
+  "method": "harvested 1,561 real capped_lethal component pairs, then CROSSED them -- an observed value from one boundary against an engine value from another. Unrelated by construction, so every acceptance is a false match. 100,000 crossings.",
+  "result": {
+   "current one-sided test": "45,572/100,000 = 45.57%",
+   "relaxed test with cap_slack=40": "86,569/100,000 = 86.57%"
+  },
+  "verdict": "REJECTED DEFINITIVELY. The relaxation accepts 87% of unrelated capped_lethal pairs. It is barely a test. Nearly doubling an already-permissive check to recover 17 rows is not a trade worth making, and no scoping condition rescues a predicate this weak."
+ },
+ "an_incidental_finding_worth_recording": "the CURRENT one-sided capped_lethal test already accepts 45.6% of unrelated pairs. That is a weak check in the shipped matcher, discovered while measuring a replacement for it. It is not something to change on this evidence -- tightening it would move rows the other way and needs its own registration -- but it belongs in the record: LS_capped_lethal_shape's 464 rows rest on a comparison that a coin-flip beats only slightly.",
+ "closing_position_on_the_17": "three cycles, two rejected bounds and one rejected scoping. The diagnosis stands -- the one-sided test is wrong when both sides cap -- and every repair for it is either too loose to be safe or too narrow to matter. 17 rows does not justify weakening the check further, and the honest conclusion is that this shape stays unattributed.",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED. Measured under an earlier version of _roll_cascade_equivalent. Four review rounds changed that predicate; the row counts and composition in this file describe a matcher that no longer exists. Kept as the record of what was measured when, not as a current statement. Current differential_sha256: 66b6d85e5545312020c2ce2d9bc7cf09b9b36b135448462a9502e98fa6dbd4a0",
+ "ERA_STAMP_NOTE": "Era note: this stamp names the differential at the round it was written, not the current one. Stamps of 66b6d85e (round four) and b7b83904 (round five) both appear across these artifacts and NEITHER is main, which is ae1bf51d32983937. Compare era stamps against the tree you are reading, not against each other."
+}

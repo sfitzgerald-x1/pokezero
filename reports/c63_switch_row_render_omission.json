@@ -1,0 +1,20 @@
+{
+ "schema": "c63-switch-row-render-omission/1",
+ "population": "the 35 switch rows where C62 showed the engine reproduces the incoming Pokemon exactly, species and HP, on both slots -- yet the row is reported divergent",
+ "a_hypothesis_refuted_before_it_was_published": {
+  "claim": "the observed/engine components differ only by the _to_full suffix. One sample showed itemleftovers 12 against itemleftovers_to_full 12, and the differential's own comment warns that the suffix 'moves the component between buckets -- something the tag was never meant to do'.",
+  "measured": "0 of 341 rows have a miss whose differing pairs are ALL suffix-only at equal magnitude",
+  "verdict": "REFUTED. The sample that suggested it also carried a partialtrap component and a direct hit; the suffix was not the whole difference. Measured before claiming rather than after."
+ },
+ "what_is_actually_there": {
+  "branch emits NO components for a slot whose outcome it reproduced": 29,
+  "components differ in content": 12
+ },
+ "the_29_are_the_C55_class_in_a_population_C61_did_not_cover": "C61 measured render omission on the non-switch, empty-majority-arm population and found ZERO, and I reported that the C55 class does not extend to the residue. That was true of the population I measured and false as a general statement. On switch rows the class is present: the engine's branch reproduces the incoming Pokemon at exactly the right HP -- so the state transition is right -- while emitting no HP events for that slot at all. The outcome is modelled and not described, which is precisely the C55 defect.",
+ "why_the_earlier_negative_was_not_wrong_but_was_over_stated": "C61 restricted to rows whose MAJORITY arm was empty and whose slots did not switch. This population is defined by a switch and judged on any included branch. Two disjoint slices, two different answers, and I generalised from the first.",
+ "next": "locate where the renderer drops HP events on a switch boundary. C55's fix was in the Sleep Talk block; this is a different site, and the same discipline applies -- find where an outcome is applied without being described, rather than relaxing the comparison.",
+ "ceiling": "29 candidate rows. Not a predicted delta: the row may still diverge on the other slot or on a component the outcome check does not cover.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "CORRECTED": "Both this file and C62 rest on a measurement bug I found while dumping the event stream for s18000815/100. I parsed the incoming Pokemon's HP from the SWITCH LINE -- its HP at the moment it entered, 266/266 -- and compared the engine's FINAL post-state against it. The correct target is the boundary-end HP, 130. So 'engine reproduces the incoming Pokemon exactly' actually meant 'the engine's final HP equals the sim's HP at switch time', which is only true when nothing happened to the mon afterwards.\n\nRe-measured with the end-of-boundary HP: 23 rows reproduce exactly, not 35. The 29 'render omission' rows in C63 are derived from the same broken set and are WITHDRAWN.\n\nWhat the dump actually showed for s18000815/100: the sim rolled a CRIT on a Sleep-Talk-called Hidden Power (damage to 114, then Leftovers to 130). The engine enumerates a non-crit callee at 33.3% that renders its damage line correctly, and a 40% branch that is attribution-unsafe and renders nothing. That is not an unrendered outcome the engine modelled -- it is the engine not enumerating the crit arm of the callee, which is the C51 question, not the C55 one.",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
+}

@@ -1,0 +1,26 @@
+{
+ "schema": "c34-aliasing-fix-prediction/1",
+ "bucket": "instrument-artifact (differential-side), repairing a defect I introduced in C29",
+ "defect": "obs_exact and obs_rolled are built once before the branch loop and shared across every branch and every state. C29 assigned back into them, so a cap promotion earned by one branch leaked into all later branches whose own capped_bases were empty. The engine side was already computed into per-branch locals, so only the observed side drifted and the two sides disagreed about which bucket an identical component belonged to.",
+ "fix": "Compute the observed split into per-branch locals; never mutate the shared split.",
+ "found_by": "Dumping actual values at the comparison site. Five prior hypotheses, all inferred from re-reading the source, were wrong -- the logic was correct and the STATE was wrong, which source-reading cannot see.",
+ "pilot": {
+  "rows": 400,
+  "now_matched": 357,
+  "still_structural": 43
+ },
+ "prediction": {
+  "population": "all retained transition rows from the C32 sweep (7,249)",
+  "structural_rows_before": 3779,
+  "expected_now_matched": "roughly 89% of the 3,779, i.e. about 3,360, by scaling the pilot",
+  "expected_structural_after": "roughly 400",
+  "expected_total_unattributed_after": "roughly 500, against 3,882",
+  "does_this_reach_a_PASS": "NO, and it must not be claimed to. Even at zero structural rows the C32 run also failed on coverage 0.9587 against a 0.97 floor, on seven family bounds, and on eighteen malformed predicted_class entries. Those are independent failures this fix does not touch."
+ },
+ "falsifiers": [
+  "any row that MATCHED under C29 now diverging -- the fix must only remove false divergences",
+  "the matched share differing materially from the pilot's 89%",
+  "any change to boundaries_measured"
+ ],
+ "differential_sha256_after_fix": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+}
