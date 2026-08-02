@@ -21,7 +21,8 @@ emit_tasks() {
   for lin in $ACTIVE; do
     for opp in self foulplay; do
       d="$TRAITS_ROOT/traits/phase2/$lin/$opp"
-      ls "$d"/events-*.jsonl.gz >/dev/null 2>&1 && printf '%s %s %s %s\n' "$d" "$lin" 500000 "$opp"
+      ls "$d"/events-*.jsonl.gz >/dev/null 2>&1 && shard_set_complete "$d" \
+        && printf '%s %s %s %s\n' "$d" "$lin" 500000 "$opp"
     done
   done
   # Milestone tree: self and (where run) foul-play per (lineage, milestone)
@@ -30,11 +31,33 @@ emit_tasks() {
       for d in $TRAITS_ROOT/traits/phase1/$lin/*/$opp; do
         [ -d "$d" ] || continue
         ls "$d"/events-*.jsonl.gz >/dev/null 2>&1 || continue
+        shard_set_complete "$d" || continue
         mk=$(basename "$(dirname "$d")")            # e.g. 0100k
         printf '%s %s %s %s\n' "$d" "$lin" "$(( 10#${mk%k} * 1000 ))" "$opp"
       done
     done
   done
+}
+
+# An events-*.jsonl.gz file is CREATED when a shard starts, not when it finishes, so file presence
+# says nothing about completeness. Extracting mid-write yields a set with a handful of games that
+# still looks like a valid metrics file, which then silently becomes a data point in the report.
+# The shard's own log records the finished game count, so require that line for every shard.
+shard_set_complete() {
+  local d="$1" n_ev n_done
+  n_ev=$(ls "$d"/events-*.jsonl.gz 2>/dev/null | wc -l)
+  n_done=$(grep -l '^WROTE .* games=' "$d"/log-*.txt 2>/dev/null | wc -l)
+  [ "$n_ev" -gt 0 ] && [ "$n_done" -ge "$n_ev" ] && return 0
+  # Short of a full set. That is either a sweep still in flight (must NOT be extracted) or a shard
+  # that died and never will finish — foul-play shards crash at a few percent, and those sets were
+  # accepted with the games that did land. Write recency separates the two: if nothing has been
+  # written for a while, whatever is on disk is final and extracting it is correct.
+  if [ -z "$(find "$d" -name 'events-*.jsonl.gz' -newermt '-20 minutes' 2>/dev/null)" ]; then
+    [ "$n_done" -lt "$n_ev" ] && echo "  note: $d settled with $n_done/$n_ev shards finished" >&2
+    return 0
+  fi
+  echo "  in flight (skipping): $d ($n_done/$n_ev shards finished, still being written)" >&2
+  return 1
 }
 
 # Re-extraction is the expensive step: ~6s of single-core protocol-walk per (lineage, milestone)
