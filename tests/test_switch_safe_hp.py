@@ -81,3 +81,24 @@ class FailClosedTests(unittest.TestCase):
         row = dict(self.ROW, active_changed={"p1": False, "p2": False})
         self.assertEqual(comparable_slots(row), ("p1", "p2"))
         self.assertEqual(slot_hp_delta(row, "p2"), 55)
+
+
+class NonBooleanFlagTests(unittest.TestCase):
+    """An explicit `null` is absence of evidence, not evidence of stillness."""
+
+    ROW = {
+        "pre_features": {"p1_hp": 244, "p2_hp": 184},
+        "observed": {"p1_hp": 229, "p2_hp": 239},
+    }
+
+    def test_a_null_flag_is_not_comparable(self) -> None:
+        row = dict(self.ROW, active_changed={"p1": None, "p2": None})
+        self.assertFalse(slot_hp_comparable(row, "p2"))
+        self.assertIsNone(slot_hp_delta(row, "p2"))
+        self.assertEqual(comparable_slots(row), ())
+
+    def test_non_boolean_truthy_and_falsy_values_are_not_comparable(self) -> None:
+        for bad in (None, 0, 1, "", "false", [], {}):
+            with self.subTest(flag=bad):
+                row = dict(self.ROW, active_changed={"p1": bad, "p2": bad})
+                self.assertFalse(slot_hp_comparable(row, "p2"))

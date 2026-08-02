@@ -171,9 +171,24 @@ def signatures(readout, row: Mapping[str, Any]) -> dict[str, Any]:
     observed, engine = readout._miss_pairs(majority)
     if not observed and not engine:
         return {"measurable": False}
-    net_identical = sum(v for _s, v in observed) == sum(v for _s, v in engine)
+    # net_identical requires BOTH sides to carry components. sum([]) == 0, so
+    # an empty observation against engine components that happen to cancel --
+    # sandstorm -6 with a Leftovers +6, both max_hp/16 in gen3, so exact
+    # cancellation is common rather than contrived -- scored as "the end states
+    # agree". They do not; that is an I5_boundary_truncation shape. This is the
+    # ONLY signature bucket_from_signatures treats as decisive, so a false
+    # positive here becomes a published adjudication.
+    net_identical = (
+        bool(observed)
+        and bool(engine)
+        and sum(v for _s, v in observed) == sum(v for _s, v in engine)
+    )
     labels_align = [_norm(s) for s, _v in observed] == [_norm(s) for s, _v in engine]
-    rolls_inside = all(
+    # Gate the tolerance check on label agreement. zip() pairs by POSITION, so a
+    # transposed pair -- observed [recoil -20, damage -100] against engine
+    # [damage -20, recoil -100] -- scored as tolerance-passing. That is an
+    # I4_attribution_tie shape, not a roll difference.
+    rolls_inside = labels_align and all(
         _in_window(o, e)
         for (_os, o), (_es, e) in zip(observed, engine)
     ) if len(observed) == len(engine) else False
@@ -210,6 +225,9 @@ def signature_profile(tally: Counter, rows: int) -> str:
     return "no-signature"
 
 
+_MIN_MEASURED_FOR_A_VERDICT = 5
+
+
 def bucket_from_signatures(tally: Counter, rows: int) -> tuple[str, str]:
     """Assign a bucket only where a signature is unambiguous.
 
@@ -230,6 +248,16 @@ def bucket_from_signatures(tally: Counter, rows: int) -> tuple[str, str]:
 
     if not rows:
         return "no-rows", "no rows on this population to measure"
+    # A bucket verdict needs enough measured rows to mean anything. Without a
+    # floor, one measurable row in a thousand-row family published a confident
+    # instrument-artifact verdict off a 1/1 majority -- and this audit exists
+    # because three prior adjudications turned out to rest on incomplete branch
+    # support.
+    if rows < _MIN_MEASURED_FOR_A_VERDICT:
+        return "candidate-not-finding", (
+            f"only {rows} measurable row(s), below the {_MIN_MEASURED_FOR_A_VERDICT}-row "
+            "floor for a bucket verdict"
+        )
     if tally["net_identical"] / rows >= 0.5:
         return "instrument-artifact", (
             f"{tally['net_identical']}/{rows} majority arms reach an IDENTICAL net HP: "
@@ -315,7 +343,17 @@ def main(argv=None) -> int:
         measured = tally.get("measured", 0)
         if family in ESTABLISHED:
             entry = dict(ESTABLISHED[family])
-            entry["source"] = "shipped, measured change"
+            # These are ASSERTED, not derived on this run. Labelling them
+            # "measured change" put a hardcoded verdict beside measured
+            # signatures that can contradict it, under an era_discipline header
+            # promising mechanical re-derivation -- the "label, not evidence"
+            # this module's own docstring condemns. Say what they are, and say
+            # whether the evidence each cites is actually present.
+            entry["source"] = "asserted from a prior measurement, not re-derived here"
+            evidence = entry.get("evidence")
+            if evidence:
+                entry["evidence_present"] = (ROOT / evidence).is_file()
+            entry["measured_signatures_may_disagree"] = True
         else:
             bucket, why = bucket_from_signatures(tally, measured)
             entry = {"bucket": bucket, "finding": why, "source": "mechanical signatures",

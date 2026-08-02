@@ -42,7 +42,14 @@ def slot_hp_comparable(row: Mapping[str, Any], slot: str) -> bool:
     active_changed = row.get("active_changed")
     if not isinstance(active_changed, Mapping) or slot not in active_changed:
         return False
-    return not bool(active_changed[slot])
+    flag = active_changed[slot]
+    # The value must be an explicit boolean. A JSON `null` from a producer that
+    # encodes "unknown" that way is absence of evidence, and `not bool(None)`
+    # would read it as "the active did not change" -- the same fail-open this
+    # guard exists to close, one level down.
+    if not isinstance(flag, bool):
+        return False
+    return not flag
 
 
 def slot_hp_delta(row: Mapping[str, Any], slot: str) -> int | None:
