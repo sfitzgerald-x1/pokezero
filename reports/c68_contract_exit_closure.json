@@ -24,7 +24,7 @@
   "invariant": "matched -> divergent must be ZERO; a closure reclassifies, it must not change any verdict"
  },
  "what_this_still_does_not_reach": "177 rows remain unattributed and a PASS needs zero. The largest remaining block is the ~106 rows where an INCLUDED branch reproduces the observation, which are instrument-side and not closeable by any exit -- they are a difference the matcher should not be reporting. Applying every exit I have evidence for still leaves a PASS out of reach, and saying so now is better than discovering it after the change.",
- "status": "RE-IMPLEMENTED CORRECTLY AND KEPT",
+ "status": "REVERTED -- see SUPERSEDED_BY_REVIEW. The previous value, 'RE-IMPLEMENTED CORRECTLY AND KEPT', contradicted this file's own record that the change was reverted for creating a certification deadlock. followup:engine_support_gap exists nowhere in the tree.",
  "outcome": {
   "predicted": "unattributed 264 -> 177, 87 rows closed, no row moves into an existing family",
   "actual": "unattributed 264 -> 44, and followup:engine_support_gap absorbed 1,273 rows against a predicted 37. LS_capped_lethal_shape fell 463 -> 138, I2_matcher_accounting 403 -> 23, I5_boundary_truncation 94 -> 28, I3_roll_inherited 244 -> 28.",

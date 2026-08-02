@@ -43,7 +43,7 @@
   "gate": "zero unattributed",
   "measured": 8,
   "result": "FAILS",
-  "single_shape": "roll_scaled_component -- structural component-count mismatch without a sibling engine arm carrying the observed components"
+  "single_shape": "SUPERSEDED BY c84 -- the uniform basis string is the classifier's fall-through text, not a mechanism. The 8 rows are four or more shapes."
  },
  "honest_reading": {
   "unattributed": 8,
@@ -55,7 +55,7 @@
   "note": "the gate counts 8 because it treats a family LABEL as an explanation. reports/c68 buckets LS_capped_lethal_shape, I2, I3 and I5 as candidate-not-finding -- no decisive signature."
  },
  "what_the_era_change_did_to_the_residue": {
-  "answer": "nothing measurable. The attribution is row-for-row identical to C82 at the previous era: same 8 unattributed, same single shape, same 28 candidate-not-finding, same 25 limits.",
+  "answer": "nothing measurable. Attribution is row-for-row identical to C82: same 8 unattributed, same 28 candidate-not-finding, same 25 limits. (The earlier wording 'same single shape' is retracted by c84 -- the count is identical, the 'single shape' reading was wrong.)",
   "interpretation": "the work in this PR stack was correctness work -- soundness of the cascade predicate, regression pins, provenance bindings, a falsified engine patch removed. None of it was residue reduction, and the measurement says so plainly rather than crediting it with an improvement it did not produce."
  },
  "reproduce": "merge the open splits, scripts/build_search_crate_engine.sh, then scripts/engine_transition_differential.py --games 200 --seed-start 19000000 --keep-repro 100000 --repros-per-game 100000"

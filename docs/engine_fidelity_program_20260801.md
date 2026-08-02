@@ -189,12 +189,22 @@ as results of the change that overturned them, with the reasoning that failed.
 
 # Program state, end of the 2026-08-01 session
 
-> **SUPERSEDED IN PART BY REVIEW.** Five adversarial review rounds on #1010 followed this
-> section. They found a certification deadlock, a false-match hole, a render fix that emitted
-> lines for the wrong Pokemon, a silent reversion to a rejected predicate, and a predicate that
-> MASKED real engine defects. C68 was reverted, so the `264 -> 255` row below did not land and
-> every figure of 255 here is stale. The residue after review is in the PR description; the
-> reviews are the current record, not this table.
+> **SUPERSEDED IN PART BY REVIEW.** Eight adversarial review rounds followed this section.
+> They found a certification deadlock, a false-match hole, a render fix that emitted lines for
+> the wrong Pokemon, a silent reversion to a rejected predicate, a predicate that MASKED real
+> engine defects, a rubber-stamp provenance guard, and pins that exercised the wrong code path.
+>
+> **THREE ROWS IN THE TABLE BELOW DID NOT LAND.** C68 was reverted (`264 -> 255`). C57 was
+> reverted (`366 -> 341`) — `attribution_unsafe` exists in no branch; the change moved to
+> #1025 and is unmerged, so every downstream figure that starts from 341 inherits the error.
+> C66's real effect is **+1, not −77**: its own report records `264 -> 265`, the shipped
+> version admitted cross-mechanism false matches, and it landed only as #1020 after eight
+> rounds. Read the reports, not this table.
+>
+> Current measured position is `reports/c83_era_rederivation.json` and
+> `reports/c84_unattributed_anatomy.json`: 67 divergent of 15,224 boundaries at engine
+> fingerprint `e5f4c7b1`, 8 unattributed across four or more mechanisms, 36 of 67 not
+> actually explained.
 
 This section is the current picture. Where it contradicts an earlier section or
 an earlier report, this section is right and the reason is given.
@@ -235,9 +245,9 @@ cluster; validation does not.
 | cycle | change | effect | verified by |
 | --- | --- | --- | --- |
 | C55 | render the Sleep Talk callee's damage event | 476 → 366 | 331 rows cleared, 0 regressions |
-| C57 | skip on `attribution_unsafe`, not `lossy` | 366 → 341 | 27 rows, ceiling exact |
-| C66 | roll-cascade fallback for count mismatches | 341 → 264 | 77 rows, exactly as registered |
-| C68 | contract-exit closure, second attempt | 264 → 255 | 9 rows, no family shrank |
+| ~~C57~~ | ~~skip on `attribution_unsafe`, not `lossy`~~ | **DID NOT LAND** | reverted; exists in no branch, moved to #1025 |
+| ~~C66~~ | ~~roll-cascade fallback for count mismatches~~ | **264 → 265 (+1)** | the −77 was the version review rejected for false matches |
+| ~~C68~~ | ~~contract-exit closure, second attempt~~ | **DID NOT LAND** | reverted: created a certification deadlock |
 
 ## What was built and rejected, and why it matters
 

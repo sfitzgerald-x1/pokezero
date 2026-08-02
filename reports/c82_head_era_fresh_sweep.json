@@ -31,15 +31,16 @@
  },
  "the_unattributed_eight": {
   "count": 8,
-  "single_shape": true,
+  "single_shape": false,
   "divergence_class": "roll_scaled_component",
-  "basis": "structural component-count mismatch without a sibling engine arm carrying the observed components (WHAT-level candidate, WHY open)"
+  "basis": "structural component-count mismatch without a sibling engine arm carrying the observed components (WHAT-level candidate, WHY open)",
+  "SUPERSEDED_BY_C84": "'one shape' was reading the classifier's FALL-THROUGH basis string as a diagnosis. reports/c84_unattributed_anatomy.json decomposes the same 8 rows into at least four mechanisms: 3 crit-arm-absent, 1 crit at a non-doubling ratio, 2 empty-engine-arm accuracy shapes, 1 count difference at matching magnitude, 1 mirror direction."
  },
  "certification_verdict": {
   "gate": "zero unattributed",
   "measured_unattributed": 8,
   "result": "FAILS",
-  "distance_to_pass": "one shape, 8 rows"
+  "distance_to_pass": "8 rows across four or more mechanisms (see c84)"
  },
  "the_honest_number_is_worse_than_the_gate": {
   "claim": "8 unattributed understates how much is unexplained, because the gate counts a family LABEL as an explanation.",
@@ -59,5 +60,6 @@
   "the_265_figure": "265 is the C32-corpus residue and should not be read as a fresh-data expectation. On fresh data at this era the unattributed count is 8 in 15,224 boundaries. The corpus overstates because rows entered it conditional on diverging under a superseded build.",
   "unchanged_conclusion": "certification still FAILS, and the program's stopping condition of zero unattributed is still not met."
  },
- "reproduce": "scripts/engine_transition_differential.py --games 200 --seed-start 19000000 --keep-repro 100000 --repros-per-game 100000"
+ "reproduce": "scripts/engine_transition_differential.py --games 200 --seed-start 19000000 --keep-repro 100000 --repros-per-game 100000  NOTE: this yields 8 only WITH #1021's readout narrowings; without them the same 67 rows classify as 16.",
+ "VOIDED_BY_ERA_CHANGE": "By this file's own era.note, adjudications stamped against 625cb059 are void once the fingerprint moves. It moved to e5f4c7b1 when the Trick patch was dropped. c83 re-measured and got an identical result, so nothing here is WRONG -- but this artifact is superseded, not current."
 }
