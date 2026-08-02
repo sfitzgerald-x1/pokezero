@@ -1,0 +1,47 @@
+{
+ "schema": "c30-capped-heal-scale-prediction/1",
+ "bucket": "instrument-artifact (differential-side)",
+ "defect": "The capped-heal tolerance is abs(abs(obs)-abs(eng)) <= 0.18 * scale + 1, and its derivation is stated in the code: a capped heal restores maxhp-hp, so the two sims differ by their difference in hp_before, which is bounded by the 85-100% spread of the damage that preceded it in THIS step -- 0.15*base <= 0.176*d, rounded to 0.18 with a flooring slack. scale is computed by _roll_damage_scale, which sums only NEGATIVE deltas. But roll_component_events_agree calls the comparison with ONE component per side, so for a heal pair both lists are positive, scale is 0, and the bound collapses to +/-1. The events path has been asserting 'there was no preceding damage' at every boundary.",
+ "fix": "roll_component_events_agree holds both full lists, so it computes the slot's damage scale once and passes it to each per-pair comparison. The parameter defaults to the existing behaviour, so every other caller is unchanged.",
+ "per_shape_argument": "Argued from the bound's own derivation, which names the step's damage as its input. The per-component call site deprives it of that input; the tests pin the CORRECT semantics for a genuinely heal-only list (100 vs 101 accepted, 100 vs 140 rejected) and the events path was silently taking that branch always. This restores the documented bound rather than widening it.",
+ "guards_verified": [
+  "motivating Rest 251 vs 247 at scale 251: accepted",
+  "absurdly small heal 10 vs 247: rejected",
+  "absurdly large heal 900 vs 247: rejected",
+  "genuinely no preceding damage 100 vs 101: accepted; 100 vs 140: rejected",
+  "events path, heal 400 vs 18 at scale 90 (bound 17.2): rejected"
+ ],
+ "engine_fingerprint": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+ "differential_sha256_before": "b92e839e387edb91a3a08c76ee2a9b991c5db21a8ed030af1e47261412a3692d",
+ "prediction": {
+  "fresh_60_previously_divergent_rows": {
+   "matched": 44,
+   "still_divergent": 16,
+   "unattributed": 1
+  },
+  "fresh_family_after": {
+   "limit:roll_divergent_lethality": 6,
+   "limit:world_sample_drag_target": 4,
+   "I2_matcher_accounting": 2,
+   "LS_capped_lethal_shape": 2,
+   "I1_cap_state_shape": 1,
+   "UNATTRIBUTED": 1
+  },
+  "archive": {
+   "diverged": 2871,
+   "matched": 949,
+   "unattributed": 385
+  },
+  "magnitude_warning": "44 of 60 fresh rows clearing is exactly the magnitude that should trigger suspicion, and it is why the guards above were checked before registering. I1_cap_state_shape falls 39 -> 1 on the fresh sample and 167 -> 42 on the archive: that family is BY ITS OWN DEFINITION the capped-heal shape, so a bound that was silently zero is precisely what would manufacture it.",
+  "kpi_era": {
+   "in_support_after": 99.662,
+   "claim": "Another matcher era. This is NOT a fidelity gain -- the engine is untouched. No delta may be claimed until the 51-patch engine is re-baselined on this matcher."
+  },
+  "certification": "One unattributed row would remain on the fresh sample. That is not yet a PASS, and the remaining row must be closed on its own evidence."
+ },
+ "falsifiers": [
+  "any count differing from the numbers above",
+  "any matcher test in tests/test_transition_differential_matcher.py failing",
+  "boundaries_measured changing"
+ ]
+}

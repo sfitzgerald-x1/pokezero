@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -866,3 +867,106 @@ class CertificationContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FidelityKpiTests(unittest.TestCase):
+    """The fidelity KPI is a different question from the certification gate.
+
+    Certification asks whether every difference is EXPLAINED; this asks whether
+    the engine's support CONTAINS the transition the simulator took. The readout
+    emits the second so it cannot drift from the measurement it describes, and
+    stamps it with a matcher era because both of its terms come from the
+    differential -- a matcher change moves it without the engine changing.
+    """
+
+    def _readout(self, *, measured: int, diverged: int, games: int) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shard = root / "shard-0.json"
+            shard.write_text(json.dumps({
+                "boundaries_measured": measured,
+                "boundaries_full_round": measured,
+                "transitions_matched": measured - diverged,
+                "transitions_diverged": diverged,
+                "engine_errors": 0,
+                "games": games,
+                "counters": {},
+                "divergence_classes": {},
+                "repros": [],
+                "repro_retention": {
+                    "repros_complete": True,
+                    "repros_retained": 0,
+                    "transitions_diverged": diverged,
+                },
+                "build_check": "gated",
+                "matcher": "strict",
+                "seeds": {"min": 0, "max": games - 1, "distinct": games},
+            }), encoding="utf-8")
+            prediction = root / "prediction.json"
+            prediction.write_text(json.dumps({"predicted_class_rates_10k": {}}), encoding="utf-8")
+            output = root / "out.json"
+            readout.main([
+                "--shards", str(shard), "--prediction", str(prediction), "--json", str(output),
+            ])
+            return json.loads(output.read_text(encoding="utf-8"))
+
+    def test_kpi_is_emitted_with_both_framings(self) -> None:
+        fidelity = self._readout(measured=1000, diverged=10, games=100)["fidelity"]
+        self.assertEqual(fidelity["in_support_rate"], 0.99)
+        self.assertEqual(fidelity["out_of_support_per_10k_games"], 1000)
+
+    def test_kpi_carries_a_matcher_era_stamp(self) -> None:
+        era = self._readout(measured=1000, diverged=10, games=100)["fidelity"]["era"]
+        differential = (
+            Path(readout.__file__).resolve().parent / "engine_transition_differential.py"
+        )
+        self.assertEqual(
+            era["differential_sha256"],
+            hashlib.sha256(differential.read_bytes()).hexdigest(),
+        )
+
+    def test_a_perfect_run_reads_one_and_zero(self) -> None:
+        fidelity = self._readout(measured=1000, diverged=0, games=100)["fidelity"]
+        self.assertEqual(fidelity["in_support_rate"], 1.0)
+        self.assertEqual(fidelity["out_of_support_per_10k_games"], 0)
+
+
+class CertificationVerdictTests(unittest.TestCase):
+    """The verdict expression itself, which nothing exercised before.
+
+    A one-token tamper made the readout emit PASS on C32's real 3,882
+    unattributed rows and the whole cert suite stayed green -- the only defence
+    was a source-hash pin, which is provenance rather than behaviour.
+    """
+
+    OK = dict(
+        unattributed=[], engine_errors=0, retention_ok=True,
+        rows_retained=7, transitions_diverged=7, gate_failures=[],
+    )
+
+    def test_a_clean_run_passes(self) -> None:
+        self.assertEqual(readout.certification_verdict(**self.OK), "PASS")
+
+    def test_a_single_unattributed_row_fails(self) -> None:
+        self.assertEqual(
+            readout.certification_verdict(**{**self.OK, "unattributed": [{"seed": 1}]}), "FAIL"
+        )
+
+    def test_the_real_c32_shape_fails(self) -> None:
+        """3,882 unattributed rows must never read PASS."""
+
+        self.assertEqual(
+            readout.certification_verdict(**{**self.OK, "unattributed": [{}] * 3882}), "FAIL"
+        )
+
+    def test_every_other_gate_also_forces_fail(self) -> None:
+        for override in (
+            {"engine_errors": 1},
+            {"retention_ok": False},
+            {"rows_retained": 6},
+            {"gate_failures": ["a gate tripped"]},
+        ):
+            with self.subTest(**override):
+                self.assertEqual(
+                    readout.certification_verdict(**{**self.OK, **override}), "FAIL"
+                )

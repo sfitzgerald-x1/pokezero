@@ -1,0 +1,38 @@
+{
+ "schema": "c29-cap-bucket-postmeasure/1",
+ "prediction": "reports/c29_cap_bucket_prediction.json",
+ "prediction_outcome": "FALSIFIED on identities. Counts matched exactly; the rows did not.",
+ "counts": {
+  "cleared": 4,
+  "cleared_predicted": 4,
+  "divergent_after": 56,
+  "divergent_predicted": 56,
+  "unattributed_after": 3,
+  "unattributed_predicted": 3
+ },
+ "identities": {
+  "predicted": [
+   "17000013/12",
+   "17000016/38",
+   "17000026/41",
+   "17000025/32"
+  ],
+  "actual": [
+   "17000016/38",
+   "17000026/41",
+   "17000042/68",
+   "17000045/123"
+  ],
+  "why_it_matters": "A count-only check would have declared success. Two of the four predicted rows did not clear, and two rows I had not predicted did -- including 17000045/123, which I had adjudicated as a candidate-not-finding, and 17000042/68, which was already attributed to a documented family and was therefore a false divergence nobody had flagged. The registered identity-level falsifier is what caught this."
+ },
+ "second_defect_found": {
+  "row": "17000013/12 (the anchor)",
+  "membership_fix_worked": "The engine's Leftovers tick now appears in the roll-scaled list, so lengths agree: observed [('', -84), ('itemleftovers_to_full', 15)] against engine [('', -90), ('itemleftovers', 18)].",
+  "what_still_rejects": "The capped-heal tolerance in roll_components_agree is abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1, where scale is max(_roll_damage_scale(observed), _roll_damage_scale(engine)). _roll_damage_scale sums only NEGATIVE deltas -- 'heals are positive and excluded; only damage carries a roll'. But roll_component_events_agree calls this function with ONE component per side, so for a heal pair both lists are positive, scale is 0, and the bound collapses to +/-1. The anchor needs 3 (15 against 18, explained by the -84/-90 roll difference).",
+  "diagnosis": "The bound's own derivation is 'the spread of the damage that preceded it in THIS step'. The per-component call site deprives it of that step's damage, so the tolerance is structurally unavailable in the events path -- distinct from the bucket-membership defect and not fixed by it.",
+  "fix": "roll_component_events_agree holds both full lists and can compute the slot's damage scale once, then pass it to each per-pair comparison. Registered as C30 before implementation."
+ },
+ "shipped": "bucket membership no longer depends on the roll; net 4 rows cleared, unattributed 7 -> 3",
+ "kpi_era_note": "This opens a new matcher era per the charter. No fidelity delta may be claimed until the 51-patch engine is re-baselined on this matcher.",
+ "differential_sha256_after": "b92e839e387edb91a3a08c76ee2a9b991c5db21a8ed030af1e47261412a3692d"
+}

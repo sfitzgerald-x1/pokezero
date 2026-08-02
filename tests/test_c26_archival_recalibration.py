@@ -173,7 +173,10 @@ class EmittedArtifactTests(unittest.TestCase):
         if not path.is_file():
             self.skipTest("C26 calibration is not registered in this commit")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["schema"], RECAL.SCHEMA)
+        # The committed C26 artifact records the label it was produced under;
+        # the instrument has since been made cycle-agnostic for reuse, so pin
+        # the historical literal rather than the live constant.
+        self.assertEqual(payload["schema"], "c26-current-engine-archival-calibration/1")
         self.assertEqual(
             payload["source_evidence"]["archive_shard_sha256"],
             list(RECAL.PINNED_ARCHIVE_SHARDS),
@@ -182,11 +185,19 @@ class EmittedArtifactTests(unittest.TestCase):
         self.assertEqual(payload["source_evidence"]["fresh_measurements_inspected"], 0)
         self.assertEqual(payload["source_evidence"]["archive_role"], "historical_calibration_only")
         self.assertEqual(payload["reread_errors"], [])
+        # The calibration records the readout it was PRODUCED on. This commit
+        # moves the working tree's readout past that point, so pin the historical
+        # value against the contract that consumed it rather than against a file
+        # that has since moved on. Comparing to the live file would assert that
+        # the readout may never change again.
+        contract = json.loads(
+            (ROOT / "reports" / "c26_current_engine_resweep_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertEqual(
             payload["source_evidence"]["current_classifier_readout_sha256"],
-            hashlib.sha256(
-                (ROOT / "scripts" / "cert_sweep_readout.py").read_bytes()
-            ).hexdigest(),
+            contract["certification_gates"]["required_readout_sha256"],
         )
         # Every lossily stored row is accounted for by identity, and the tally's
         # non-diverged, non-matched rows are exactly those skipped rows.

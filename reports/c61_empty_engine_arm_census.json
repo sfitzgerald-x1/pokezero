@@ -1,0 +1,23 @@
+{
+ "schema": "c61-empty-engine-arm-census/1",
+ "follows": "reports/c60_gate_exit_census.json -- 203 of 341 rows die on the component-count check alone",
+ "question": "the dominant sub-shape is an observed component against an empty engine arm. Is that another C55-style render omission?",
+ "answer": "NO. Zero rows. The C55 class is absent from this population.",
+ "measured_over_the_108_such_rows": {
+  "engine HP moved and some branch DOES emit a component": 70,
+  "slot SWITCHED, HP endpoints are different mons and not comparable": 37,
+  "engine HP genuinely unchanged (real divergence)": 1,
+  "engine HP moved but NO branch emits a component (the C55 shape)": 0
+ },
+ "what_the_70_actually_are": "the MAJORITY arm carries no component on that slot while sibling branches do. The engine's most-likely outcome is 'nothing happened here' -- a miss, a Protect, an immunity -- and the simulator's roll landed on a different arm.",
+ "why_i_am_not_calling_them_instrument_artifacts": "It is tempting: sibling arms carry the observed damage, and families like I2_matcher_accounting and LS_structural_arm_echo exist for exactly that shape. They did not fire because I2 requires the miss mass under 50% and the sibling test demands exact magnitudes. But loosening either is not obviously right. If the engine assigns MAJORITY mass to 'no damage' and the simulator dealt damage, that is a disagreement about where the probability mass sits, not a presentation difference. Absorbing it into an accounting family would launder a real disagreement -- the same objection that killed the C53 retag.",
+ "the_switch_problem_is_systematic": "37 of 108 rows here are uncomparable because a slot switched, and the same limitation invalidated 105 of 341 rows in C58. Any per-slot HP comparison in this program is unreliable on roughly a third of the residue. That is worth fixing once, in a shared helper that compares per-Pokemon rather than per-slot, instead of being rediscovered per analysis.",
+ "what_this_cycle_establishes": [
+  "the C55 render-omission defect does not extend to the count-mismatch residue: 0 of 108",
+  "70 rows are majority-versus-minority arm disagreements that the existing families deliberately decline to absorb",
+  "1 row is a genuine divergence with the engine's HP unchanged",
+  "37 are unmeasurable by per-slot comparison and need the per-Pokemon fix"
+ ],
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
+}

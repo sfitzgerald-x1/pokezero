@@ -1,0 +1,30 @@
+{
+ "schema": "c71-residue-exhaustion/1",
+ "purpose": "record that every population in the 255-row residue has now been examined, and what each one is",
+ "the_last_unexamined_population": {
+  "name": "same component count, different sources (16 rows)",
+  "substitutions_found": {
+   "itemleftovers <-> itemleftovers_to_full": 4,
+   "confusion -> (direct)": 2,
+   "itemleftovers_to_full -> leechseed_to_full": 1,
+   "(direct) -> move_unknown_callee": 1
+  },
+  "verdict": "a grab-bag with no mechanism. The cap-flag flips are the expected consequence of a roll difference; the confusion tagging gap is 2 rows; and several samples are genuine outcome differences wearing a source label, such as s18000815/100 where the observation is -152 and the engine's branch is capped_lethal -266, a kill against a survival.",
+  "actionable": false
+ },
+ "every_population_now_accounted_for": {
+  "142 count mismatch on every miss": "dominated by one side entirely empty. Examined in C61: the engine's majority arm places its mass on nothing happening while the simulator's roll landed elsewhere. Judged a genuine probability-mass disagreement across three separate cycles.",
+  "80 same sources, magnitude outside the legal roll window": "a genuine quantitative disagreement. No tolerance change should absorb it.",
+  "17 same sources, all magnitudes within a legal roll": "the capped_lethal one-sided test. Diagnosis confirmed, three repairs measured and all rejected -- two bounds too loose, one scoping ineffective, and the false-match gate put the best of them at 87% acceptance on unrelated pairs.",
+  "16 same count, different sources": "this cycle. No mechanism."
+ },
+ "what_would_still_move_the_number": [
+  "a cluster sweep, which is the only way to confirm any of this on fresh data",
+  "the contract's follow-up and limit exits applied to the 142 and the 80, which needs evidence per shape that does not exist yet -- C68 showed what happens when a closure fires without it",
+  "engine work widening support, which is objective 4's domain and needs the search-impact ranking C40 established"
+ ],
+ "the_integrity_position": "the 255 figure has been checked against the two ways it could be wrong. It is not inflated by false matches -- C70 tightened the weakest check in the matcher and only 4 of 4,156 matched rows depended on it. And it is not deflated by laundering -- seven repairs were built and rejected, every one on a measurement, including two that would have reported large improvements.",
+ "does_not_reach_a_pass": "255 unattributed against a required zero",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED BY REVIEW. The numbers in this file were measured before five rounds of adversarial review changed the cascade predicate and reverted C68. In particular any figure of 255 unattributed, and any projection derived from it, predates those rounds. Kept as the record of what was measured when. Current differential_sha256: b7b83904fe40baed025e237c83fff79d196f84c7202ec61f5b22b342372b3e59",
+ "ERA_STAMP_NOTE": "Era note: this stamp names the differential at the round it was written, not the current one. Stamps of 66b6d85e (round four) and b7b83904 (round five) both appear across these artifacts and NEITHER is main, which is ae1bf51d32983937. Compare era stamps against the tree you are reading, not against each other."
+}

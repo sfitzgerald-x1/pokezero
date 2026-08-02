@@ -1,0 +1,16 @@
+{
+ "schema": "c44-struggle-repair-probe/1",
+ "settles": "the untested claim in reports/c43_coverage_shortfall_diagnosis.json that the no-move sentinel is a mechanically available repair for skip:unmappable_choice:struggle_not_submittable (7,909 boundaries, the largest single coverage skip)",
+ "how_the_state_was_built": "C43 recorded this as untested because poke_engine.Move.pp is not writable from Python. It did not need to be: the serialized state carries PP as NAME;disabled;pp, so zeroing every move with a regex on the state string and re-parsing produces a genuine all-PP-exhausted active. No Rust probe required.",
+ "controlled_for": "The first probe used an active that was ASLEEP -- p1 doing nothing was explained by the sleep, not by the sentinel. Re-run on two actives with status NONE and positive HP (CLOYSTER, FLYGON).",
+ "result": {
+  "engine rejects 'struggle' as a choice": "CONFIRMED (ValueError: Invalid move for s1: struggle)",
+  "engine accepts 'none' as a choice": "CONFIRMED (generate_instructions returns a branch)",
+  "'none' makes the engine substitute Struggle": "REFUTED",
+  "evidence": "With every move at 0 PP and s1='none', side one takes no action in either probe. CLOYSTER: [DecrementPP SideTwo, Boost SideTwo Attack, Heal SideOne 13, Damage SideTwo 28, ChangeSideCondition SideTwo ToxicCount] -- the Heal is Leftovers and the Damage is the Toxic residual, both end-of-turn; there is no Struggle hit and no Struggle recoil. FLYGON: side one contributes nothing at all."
+ },
+ "why_the_inference_was_wrong": "recharge and Struggle look alike at the mapping layer -- neither has a submittable move id -- but they are opposites at the semantic layer. On a recharge turn the mon genuinely does nothing, so 'none' is correct. On a Struggle turn the mon attacks and takes recoil, so 'none' is a false statement about the turn.",
+ "the_repair_would_have_made_BOTH_gates_worse": "Applying it would convert 7,909 skipped boundaries into 7,909 MEASURED boundaries that record 'p1 did nothing' against a simulator where p1 Struggled. Coverage would rise past the floor and the unattributed count would rise with it, by up to 7,909 rows against a gate that requires zero. It would have read as closing the coverage blocker while destroying the certification one.",
+ "corrected_status_of_the_skip": "skip:unmappable_choice:struggle_not_submittable is a genuine harness limitation needing engine-side support -- a way to submit Struggle, or a Rust-side entry point that forces the substitution. It is not a mapping fix and should not be ranked as cheap. With it removed from the cheap list, the remaining counted skips are 18,811 against 9,305 needed, so the floor is still reachable but no longer by the two largest items alone.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485 and coverage stays at 0.9587"
+}

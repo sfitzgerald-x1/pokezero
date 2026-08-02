@@ -1,0 +1,58 @@
+{
+ "schema": "c84-unattributed-anatomy/1",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "patches": 53,
+  "readout": "requires #1021; without its narrowings the same 67 rows give 16 unattributed, not 8"
+ },
+ "corrects": "I described the residue twice as '8 unattributed, ONE shape'. That was reading the classifier's basis string as a diagnosis. The basis string is uniform because it is the FALL-THROUGH text -- 'structural component-count mismatch without a sibling engine arm carrying the observed components' is what the classifier says when nothing matched, not a statement about mechanism. Opened up, the 8 rows are at least four different mechanisms.",
+ "anatomy": {
+  "crit_arm_absent_from_support": {
+   "rows": 3,
+   "identities": [
+    "19000038/66",
+    "19000141/35",
+    "19000175/103"
+   ],
+   "signature": "the observation carries |-crit| and its magnitude is ~2x the LARGEST magnitude any engine arm offers (measured ratios 2.13, 2.19, 2.05)",
+   "reading": "a gen3 crit is exactly 2x, so the engine enumerated the non-crit rolls and no arm in the branch support carries the crit. This is reports/c77_i2_crit_arm_absence.json, now measured at the current era.",
+   "example": "19000038/66 -- Sleep Talk into Ice Beam, |-crit|, observed -98; engine arms offer -46, -46, -23 and two empty. 98 = 2 x 49, and 46 is the non-crit roll."
+  },
+  "crit_present_but_not_a_clean_doubling": {
+   "rows": 1,
+   "identities": [
+    "19000065/123"
+   ],
+   "signature": "|-crit| present, observed -118 against a best engine arm of -84, ratio 1.40",
+   "reading": "not a crit-doubling gap. Separate cause, undiagnosed."
+  },
+  "engine_majority_arm_carries_no_damage": {
+   "rows": 2,
+   "identities": [
+    "19000093/51",
+    "19000093/53"
+   ],
+   "signature": "no |-crit|; every complaining arm has an EMPTY engine component list, and the arms hold tiny mass (7.5%, 2.0%, 0.5%)",
+   "reading": "accuracy/miss arms. The complaint is decided by a branch that models the move failing while the observation landed it."
+  },
+  "structural_count_difference_at_matching_magnitude": {
+   "rows": 1,
+   "identities": [
+    "19000073/1"
+   ],
+   "signature": "observed [-127, -130] against engine [-135]; totals 257 vs 261, within 1.5%, but the COUNT differs 2 vs 1",
+   "reading": "the observation decomposes one engine hit into two components. A multi-hit or a same-turn second source the engine folded into one event."
+  },
+  "reverse_direction": {
+   "rows": 1,
+   "identities": [
+    "19000152/53"
+   ],
+   "signature": "observation has NO roll-scaled components; the engine arm carries ('capped_lethal', -132)",
+   "reading": "the mirror of every other row here -- the engine models a lethal hit the observation did not take."
+  }
+ },
+ "why_this_matters_for_the_burndown": "the program's objective 4 orders the engine-gap bucket by rows x search-impact. An 8-row bucket of one shape is one fix. An 8-row bucket of five mechanisms with a maximum of 3 rows each is five investigations, and the largest of them -- crit arm absence -- is already a registered candidate that C77 could not close. Treating the fall-through text as a shape would have produced a burndown plan for work that does not exist.",
+ "the_tractable_one": "crit_arm_absent_from_support, 3 rows, is the only sub-shape with a mechanical signature sharp enough to act on: |-crit| in the observation AND observed magnitude within the roll band of 2x the best engine arm. That is checkable offline against the retained repros and is the natural next pre-registered fix.",
+ "method": "scripts/engine_transition_differential.py --games 200 --seed-start 19000000 with full repro retention, classified through cert_sweep_readout.attribute_row at the union of the open splits."
+}
