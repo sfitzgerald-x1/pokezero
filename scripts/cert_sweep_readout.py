@@ -80,6 +80,16 @@ _MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components d
 _PROBE_PASS_RE = re.compile(r"^\[[^]]+\] PASS\b", re.MULTILINE)
 _PROBE_FAIL_RE = re.compile(r"^\[[^]]+\] FAIL\b", re.MULTILINE)
 
+def _differential_sha256() -> str:
+    """Hash of the matcher this readout consumed, for the KPI's era stamp."""
+
+    path = Path(__file__).resolve().parent / "engine_transition_differential.py"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:
         return 0.0, 0.0
@@ -115,6 +125,14 @@ def _sibling_arm_carries_observed_components(
     evidence of a carried shape.
     """
 
+    # EXACT magnitudes deliberately. This is stricter than the primary matcher,
+    # which accepts a roll-scaled component at any legal roll -- and that
+    # asymmetry is the ledger's own rule (Appendix X.3.3): "only the verdict that
+    # *reduces* the residue has to clear a bar." LS_structural_arm_echo reduces
+    # the residue, so it clears a higher bar than a match does. Relaxing this to
+    # the matcher's tolerance was considered under C28 and withdrawn:
+    # tests/test_cert_sweep_readout_attribution.py pins the near-miss sibling
+    # case, and the pin is right.
     observed_components = Counter(observed)
     anchor_side = _MISS_SIDE_RE.search(anchor)
     if not observed_components or anchor_side is None:
@@ -165,7 +183,30 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # Truant loaf-phase drift (validation: s2000059/11 — Slaking attacks in
     # the sim, engine's branch loafed; also the inverse s2000054/49). The
     # structural-arm echo rule below would eat both directions.
-    if ("Slaking" in proto or "Slakoth" in proto or "Truant" in proto) and (
+    # NARROWED to the actual loaf signature. This used to gate on the protocol
+    # merely MENTIONING a Slaking, with no requirement that the boundary be a
+    # loaf turn or that the Slaking be active on the slot being compared -- so
+    # any switch boundary in a game containing a Slaking qualified. On the C32
+    # sweep that was 8 of its 9 rows: switch boundaries whose complaining slot
+    # held a different mon entirely, with RemoveVolatileStatus TRUANT firing
+    # because the Slaking was leaving the field. A predicted-zero counter is a
+    # fail-closed alarm, and one that fires on unrelated boundaries manufactures
+    # certification failures. The narrowed predicate is the loaf signature
+    # itself, so a genuine loaf-phase drift still surfaces.
+    _truant_slot = _MISS_SIDE_RE.search(majority)
+    # The |cant| and the Truant attribution must be on the SAME line. Checking
+    # them independently over the whole protocol lets a paralysis |cant| in any
+    # turn that mentions Truant anywhere satisfy both (#1010 review, comment 15).
+    _truant_loaf = (
+        _truant_slot is not None
+        and any(
+            line.startswith("|cant|")
+            and "truant" in line.lower()
+            and f"{_truant_slot.group(1)}a: Slak" in line
+            for line in protocol
+        )
+    )
+    if _truant_loaf and (
             (not obs_c and eng_c) or (obs_c and not eng_c)):
         return ("UNATTRIBUTED",
                 "Truant boundary with one-sided damage components: loaf-phase "
@@ -204,7 +245,14 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                     "move (sweep NEW absorb mechanism; capped variant)")
 
     if "|-boost|" in proto or "|-unboost|" in proto or "|-status|" in proto:
-        for miss in misses:
+        # MAJORITY ARM ONLY -- the same correction C28 made to
+        # roll_scaled_component below, at the site it missed. This rule used to
+        # scan every arm, so a minority branch decided 32 of the 37 rows this
+        # counter held on the C32 sweep, while the majority arm complained about
+        # something a documented family already explains (24 of them I2). I4
+        # states the reason: a tie confined to a minority arm cannot explain the
+        # majority-arm complaint.
+        for miss in [majority]:
             miss_obs, miss_eng = _miss_pairs(miss)
             if len(miss_obs) == 1 and len(miss_eng) == 1 and miss_eng[0][1] != 0:
                 miss_ratio = abs(miss_obs[0][1]) / max(1, abs(miss_eng[0][1]))
@@ -214,7 +262,14 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                             "boost/status boundary (WHAT-level candidate, WHY open)")
 
     if cls == "roll_scaled_component":
-        for miss in misses:
+        # MAJORITY ARM ONLY. This rule used to scan every arm, so a 6%-mass
+        # branch could decide the row while the majority arm complained about
+        # something a documented family explains -- 22 of 29 structural rows on
+        # the 52-patch build. I4 below states the reason in its own words: "A tie
+        # confined to a minority arm cannot explain the majority-arm complaint."
+        # This rule was the only documented-family-preempting rule outside the
+        # marked new-mechanism block that reasoned from a minority arm.
+        for miss in [majority]:
             miss_obs, miss_eng = _miss_pairs(miss)
             if len(miss_obs) != len(miss_eng):
                 if _sibling_arm_carries_observed_components(misses, miss, miss_obs):
@@ -1463,9 +1518,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     skip_counter_rates = {
         key: value / full_rounds for key, value in skip_counters.items()
     }
+    # FIDELITY KPI. Certification asks whether every difference is EXPLAINED;
+    # this asks whether the engine's support CONTAINS the transition the sim
+    # took. They are different questions and the ledger keeps them apart, so the
+    # number that tracks the second is emitted here rather than derived by hand
+    # from the aggregate.
+    #
+    # It is comparable only within a MATCHER era. Both terms come from the
+    # differential, so a matcher change moves this without the engine changing --
+    # which is why the era stamp carries the differential's own hash alongside
+    # the engine fingerprint. A reading may only be compared against another
+    # sharing that differential hash.
+    measured = max(1, agg["boundaries_measured"])
+    games = max(1, agg["games"])
+    fidelity = {
+        "in_support_rate": round((measured - agg["transitions_diverged"]) / measured, 6),
+        "out_of_support_per_10k_games": round(
+            agg["transitions_diverged"] / games * 10_000
+        ),
+        "era": {
+            "engine_fingerprint": (
+                (pred.get("certification_gates") or {}).get(
+                    "required_engine_fingerprint", ""
+                )
+            ),
+            "differential_sha256": _differential_sha256(),
+        },
+        "comparability": (
+            "in_support_rate is comparable only against a reading with the same "
+            "differential_sha256; a matcher change opens a new era and requires "
+            "re-baselining the prior engine before any delta is claimed"
+        ),
+    }
     out = {
         "verdict": verdict,
         "aggregate": agg,
+        "fidelity": fidelity,
         "coverage_measured_fraction": round(coverage, 4),
         "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
         "skip_counters": skip_counters,
