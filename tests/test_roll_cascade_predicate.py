@@ -232,3 +232,76 @@ class RollCascadeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhysicalFloorTests(unittest.TestCase):
+    """Pins for the two constraints added after review round six.
+
+    Round six built an independent physical-realizability oracle and found two
+    shapes the predicate accepted that cannot happen. Both are pinned here, and
+    both pins were mutation-checked: deleting the constraint makes the matching
+    test fail.
+    """
+
+    def test_the_extra_must_sit_on_the_larger_roll_side(self) -> None:
+        """Conservation would force the cap BELOW its physical floor.
+
+        At event 0 both sims are at the same HP, so a heal cannot top out at 100
+        on one side while paying 120 on the other. capped = uncapped - gap -
+        extra = 100, but the floor is uncapped - gap = 110.
+        """
+
+        observed = [comp("movewish", 120, 0), comp("", -210, 1)]
+        engine = [
+            comp("movewish_to_full", 100, 0),
+            comp("", -200, 1),
+            comp("itemleftovers_to_full", 10, 2),
+        ]
+        self.assertEqual(sum(c.delta for c in observed), sum(c.delta for c in engine))
+        self.assertFalse(cascade(observed, engine))
+
+    def test_a_cap_may_not_be_smaller_than_the_damage_before_it(self) -> None:
+        """A `_to_full` restores maxhp - hp_before, so it is bounded BELOW by the
+        damage already taken. 150 after a -200 is impossible, not merely small.
+
+        This is the residual the PR body called out and said needed component
+        ordering the renderer does not emit. event_index already carries it.
+        """
+
+        observed = [comp("", -200, 0), comp("movewish_to_full", 150, 1)]
+        engine = [
+            comp("", -212, 0),
+            comp("movewish", 160, 1),
+            comp("itemleftovers_to_full", 2, 2),
+        ]
+        self.assertEqual(sum(c.delta for c in observed), sum(c.delta for c in engine))
+        self.assertFalse(cascade(observed, engine))
+
+    def test_a_cap_flip_before_the_only_damage_is_rejected(self) -> None:
+        """Constraint 4 orders caps against damage only when a side has TWO. With
+        a single cap there was no floor, so a flip could sit before the damage
+        that supposedly caused it."""
+
+        observed = [comp("movewish", 120, 0), comp("", -210, 1), comp("heal", 250, 2)]
+        engine = [
+            comp("movewish_to_full", 100, 0),
+            comp("", -200, 1),
+            comp("heal", 250, 2),
+            comp("itemleftovers_to_full", 10, 3),
+        ]
+        self.assertFalse(cascade(observed, engine))
+
+    def test_a_genuine_repeated_heal_cascade_still_passes(self) -> None:
+        """The guard against over-tightening. hp0 = maxhp, base 112, rolls
+        100/106: two untagged heals on one slot is ordinary, and this pair IS
+        realizable. An earlier round banned repeated bases outright and
+        regressed two real corpus rows."""
+
+        observed = [comp("", -100, 0), comp("heal", 40, 1), comp("heal_to_full", 60, 2)]
+        engine = [
+            comp("", -106, 0),
+            comp("heal", 40, 1),
+            comp("heal", 60, 2),
+            comp("itemleftovers_to_full", 6, 3),
+        ]
+        self.assertTrue(cascade(observed, engine))

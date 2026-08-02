@@ -993,6 +993,45 @@ def _roll_cascade_equivalent(
             return False
 
     smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
+
+    # The extra residual must sit on the side that took the LARGER direct roll.
+    #
+    # A cascade is one physical story told twice: the same start, one damage
+    # roll differing, and a cap absorbing the difference. The side that took
+    # MORE damage has the deeper deficit, so it is the side with room for an
+    # additional top-up. Nothing previously tied the extra's side to the roll
+    # direction -- `extra` was picked from whichever side had more heals, and
+    # `capped_side` from whichever had the smaller roll, independently.
+    #
+    # When they disagree, conservation forces capped = uncapped - gap - extra,
+    # strictly below the physical floor of uncapped - gap. Review's oracle
+    # found this accepts e.g.
+    #   obs = [movewish 120 @0, direct -210 @1]
+    #   eng = [movewish_to_full 100 @0, direct -200 @1, itemleftovers_to_full 10 @2]
+    # where at event 0 both sims are at the SAME HP, so one cannot top out at
+    # 100 while the other pays 120.
+    extra_is_observed = any(component is extra for component in observed_heals)
+    if extra_is_observed is smaller_is_observed:
+        return False
+
+    # No `_to_full` may be reached at a negative running total.
+    #
+    # A heal that tops the mon out restores maxhp - hp_before, so it is bounded
+    # BELOW by the damage already taken at that point in the turn. A cap of 150
+    # after a -200 is not a small number, it is an impossible one. Constraint 4
+    # only orders caps against damage when a side carries two or more of them;
+    # with a single cap there was no floor at all. This closes the residual the
+    # PR body called out -- and refutes its stated reason for leaving it open,
+    # since event_index is already present, already monotonic (enumerate over
+    # the protocol lines) and already used by constraint 4.
+    for side in (observed, engine):
+        running = 0
+        for component in sorted(side, key=lambda c: c.event_index):
+            if component.source.endswith("_to_full") and running < 0:
+                if component.delta < -running:
+                    return False
+            running += component.delta
+
     capped_side, uncapped_side = (
         (observed_heals, engine_heals)
         if smaller_is_observed
