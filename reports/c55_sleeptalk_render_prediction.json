@@ -33,7 +33,7 @@
  },
  "why_the_numbers_are_approximate": "This is a SIMULATION, not the fix. I reconstructed the split by sizing the Leftovers tick as maxhp//16; the real renderer will emit the engine's own magnitudes, which may differ by a point or by more where the heal is not Leftovers. The direction and rough scale are predicted; the exact count is not, and I am registering '~400' rather than 400 so that a near miss is not read as a pass.",
  "cost": "a crate change, so the engine fingerprint moves and C42, C45 and C46's era stamps must be mechanically re-derived, not carried forward",
- "status": "IMPLEMENTED AND VERIFIED",
+ "status": "IMPLEMENTED AND VERIFIED FOR HP DECREASES ONLY",
  "prediction_outcome": "CONFIRMED in direction and invariants; the MAGNITUDE was underestimated.",
  "measured": {
   "unattributed": "476 -> 366 (registered ~400; actual is 34 better)",
@@ -58,5 +58,6 @@
  "era_rederivation": {
   "family_audit": "reports/c55_family_bucket_audit.json -- re-derived, no family OPEN, buckets unchanged",
   "c42_support_measurement": "RE-DERIVED AND MATERIALLY CHANGED. The confirmed support-gap population falls from 74 to 50: Sleep Talk unreachable 37 -> 13, other unchanged at 37. Most of what C42 adjudicated as Sleep Talk engine-support gaps were this rendering defect, not gaps. This is exactly what the era rule exists to catch, and it would have been missed by carrying the adjudication forward."
- }
+ },
+ "scope_correction": "Re-review: this report recorded IMPLEMENTED AND VERIFIED with the_fix_shape 'render the callee's damage event', unscoped. The shipped walk renders DECREASES only -- the guard is `active_hp < before` and before[] is not updated on a rise. Verified live: an ambiguous Recover/Soft-Boiled callee heals 40 -> 90 with ZERO rendered lines, so the consumer's running HP stays at 40 and a following Leftovers tick decomposes to ('itemleftovers', +56) -- C52's impossible component, mirrored. That direction is NOT closed. It cannot manufacture a false match (an unrendered heal only leaves the row divergent), so it is a coverage gap rather than a soundness hole, but the unscoped claim overstated what shipped."
 }

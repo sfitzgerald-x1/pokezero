@@ -1551,6 +1551,10 @@ fn render_move_phase(
                     // roll-scaled bucket, so the two never compared and the row
                     // could not match -- on "Roar into Spikes", which is the
                     // very line this walk was written to render.
+                    // gen3-only inference: Spikes is the sole entry hazard that
+                    // deals damage in this generation, and the crate is built
+                    // with features = ["gen3"]. Under a gen4+ build this would
+                    // need to distinguish Stealth Rock and Toxic Spikes.
                     let mut dragged = [false, false];
                     macro_rules! emit_residuals {
                         () => {
@@ -1559,6 +1563,14 @@ fn render_move_phase(
                                     .into_iter()
                                     .enumerate()
                             {
+                                // DECREASES ONLY, deliberately. Rendering the heal
+                                // direction was shipped once and emitted lines for
+                                // the wrong Pokemon; it needs the same per-side
+                                // re-baselining this walk now has, plus its own pin.
+                                // Until then an unrendered rise leaves the row
+                                // divergent, which is safe -- it cannot manufacture
+                                // a false match -- but it does leave C52's impossible
+                                // component alive in mirror image.
                                 if sim.active_hp(hp_side).0 < before[index] {
                                     let ident = ctx.active_ident(sim.state, hp_side);
                                     let condition = sim.hp_condition(hp_side);

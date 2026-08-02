@@ -58,7 +58,7 @@ def _mon(species, moves, *, hp=100, speed=100, status="none", item=None):
 
 
 class SleepTalkPhazeDragTests(unittest.TestCase):
-    def _branch(self, benched_hp: int):
+    def _branch(self, benched_hp: int, spikes: int = 0):
         spec = BattleSpec(
             side_one=SideSpec(
                 pokemon=(_mon("rattata", ("sleeptalk", "roar", "whirlwind"),
@@ -68,7 +68,9 @@ class SleepTalkPhazeDragTests(unittest.TestCase):
             side_two=SideSpec(
                 pokemon=(_mon("chansey", ("splash",), hp=50),
                          _mon("snorlax", ("splash",), hp=benched_hp, item="leftovers")),
-                volatile_statuses=(), side_conditions={}, boosts={},
+                volatile_statuses=(),
+                side_conditions={"spikes": spikes} if spikes else {},
+                boosts={},
             ),
         )
         state = build_poke_engine_state(spec).to_string()
@@ -125,7 +127,7 @@ class SleepTalkPhazeDragTests(unittest.TestCase):
         rebuilt, and all 23 tests stayed green. The mutant emits
 
             |drag|p2a: Snorlax|Snorlax|30/100
-            |-damage|p2a: Snorlax|30/100|[from] residual
+            |-damage|p2a: Snorlax|30/100|[from] Spikes
 
         -- a damage line for a mon that took none, because before[] still held
         the OUTGOING Chansey's 50. It survived because
@@ -157,6 +159,37 @@ class SleepTalkPhazeDragTests(unittest.TestCase):
             [],
             branch,
         )
+
+    def test_post_drag_hazard_damage_is_tagged_spikes_not_residual(self) -> None:
+        """THE SOURCE-TAG PIN.
+
+        Re-review deleted `dragged[side] = true`, rebuilt, and all 25 tests
+        stayed green -- the tag silently reverted to `[from] residual`, the
+        exact pre-fix defect, because no fixture had Spikes. That is the same
+        unpinned-fix failure the re-baseline pin was added for, reproduced one
+        commit later on the other half of the change.
+
+        The tag is not cosmetic. `[from] Spikes` puts the line in the
+        differential's EXACT bucket as ("spikes", -n), matching Showdown;
+        `[from] residual` is retagged move_unknown_callee into the ROLL-SCALED
+        bucket, so the two lists differ in length and the row cannot match --
+        on "Roar into Spikes", the line this walk exists to render.
+        """
+
+        branch = self._branch(90, spikes=3)
+        damage = [l for l in branch["events"] if l.startswith("|-damage|")]
+        self.assertEqual(len(damage), 1, branch)
+        self.assertIn("[from] Spikes", damage[0], branch)
+        self.assertNotIn("residual", damage[0], branch)
+        self.assertTrue(damage[0].startswith("|-damage|p2a: Snorlax|"), branch)
+
+    def test_the_undragged_side_is_still_tagged_residual(self) -> None:
+        """The other direction: `dragged` must not tag everything Spikes."""
+
+        branch = self._branch(30)
+        for line in branch["events"]:
+            if line.startswith("|-damage|"):
+                self.assertNotIn("[from] Spikes", line, branch)
 
 
 if __name__ == "__main__":
