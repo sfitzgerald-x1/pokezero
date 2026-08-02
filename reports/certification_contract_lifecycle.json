@@ -1,13 +1,15 @@
 {
   "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "build_source",
+  "stage": "contract_registered_attestation_pending",
   "launchable": false,
-  "purpose": "This commit freezes the current 51-patch engine and certification-consumer inputs for the successor re-sweep. The successor contract, archival calibration, and attestation are intentionally absent so a later registration can pin this source without circular Git metadata or mutating the historical C15/C25 evidence.",
+  "launchable_note": "The lifecycle is launchable only once a validated attestation exists. The registered contract is what authorises the fresh sweep; this flag tracks whether the repository holds a completed certification package, and it stays false until reports/c26_current_engine_attestation.json is written against the immutable contract below.",
+  "purpose": "The C26 contract and its archival calibration are registered together against the frozen 51-patch build source. The attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
   "required_absent_artifacts": [
-    "reports/c26_current_engine_resweep_spec.json",
-    "reports/c26_current_engine_calibration.json",
     "reports/c26_current_engine_attestation.json"
   ],
+  "registered_contract_path": "reports/c26_current_engine_resweep_spec.json",
+  "registered_contract_sha256": "65414a51d3e4c3ca0268f09e54fbb371c6519b8eb822dab4121f909390d5e047",
+  "registered_calibration_path": "reports/c26_current_engine_calibration.json",
   "source_code_identity": {
     "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
     "readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",

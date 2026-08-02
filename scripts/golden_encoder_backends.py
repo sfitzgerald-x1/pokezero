@@ -46,6 +46,8 @@ from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import load_showdown_dex_cached
 from pokezero.golden_corpus import GOLDEN_ARRAY_FIELDS, GoldenObservationArrays
 from pokezero.observation import (
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     ObservationFeatureMasks,
@@ -402,6 +404,46 @@ def state_from_row_inputs(row_inputs: Mapping[str, Any]) -> PlayerRelativeBattle
         opponent_wrap_trap_elapsed=int(metadata.get("opponent_wrap_trap_elapsed") or 0),
         self_meanlook_trap=bool(metadata.get("self_meanlook_trap")),
         opponent_meanlook_trap=bool(metadata.get("opponent_meanlook_trap")),
+        # v4 k0 feature pack. Absent keys resolve to the inert value, so a v2.x/v3 row
+        # rebuilds exactly as before.
+        self_must_recharge=bool(metadata.get("self_must_recharge")),
+        opponent_must_recharge=bool(metadata.get("opponent_must_recharge")),
+        self_truant_loaf=bool(metadata.get("self_truant_loaf")),
+        opponent_truant_loaf=bool(metadata.get("opponent_truant_loaf")),
+        self_last_used_move=metadata.get("self_last_used_move") or None,
+        opponent_last_used_move=metadata.get("opponent_last_used_move") or None,
+        self_arrived_by_baton_pass=bool(metadata.get("self_arrived_by_baton_pass")),
+        opponent_arrived_by_baton_pass=bool(
+            metadata.get("opponent_arrived_by_baton_pass")
+        ),
+        self_choice_locked=bool(metadata.get("self_choice_locked")),
+        opponent_choice_locked=bool(metadata.get("opponent_choice_locked")),
+        self_item_swapped=bool(metadata.get("self_item_swapped")),
+        opponent_item_swapped=bool(metadata.get("opponent_item_swapped")),
+        self_traced_ability=metadata.get("self_traced_ability") or None,
+        opponent_traced_ability=metadata.get("opponent_traced_ability") or None,
+        self_last_damage_dealt=float(metadata.get("self_last_damage_dealt") or 0.0),
+        self_last_damage_taken=float(metadata.get("self_last_damage_taken") or 0.0),
+        opponent_last_damage_dealt=float(
+            metadata.get("opponent_last_damage_dealt") or 0.0
+        ),
+        opponent_last_damage_taken=float(
+            metadata.get("opponent_last_damage_taken") or 0.0
+        ),
+        self_hazard_damage_suffered=float(
+            metadata.get("self_hazard_damage_suffered") or 0.0
+        ),
+        opponent_hazard_damage_suffered=float(
+            metadata.get("opponent_hazard_damage_suffered") or 0.0
+        ),
+        self_items_removed=int(metadata.get("self_items_removed") or 0),
+        opponent_items_removed=int(metadata.get("opponent_items_removed") or 0),
+        opponent_matchup_switch_evidence={
+            str(species): (int(pair[0]), int(pair[1]))
+            for species, pair in (
+                metadata.get("opponent_matchup_switch_evidence") or {}
+            ).items()
+        },
     )
 
 
@@ -412,12 +454,19 @@ class PythonReferenceBackend:
 
     def __init__(self, *, showdown_root: Path | str, header: Mapping[str, Any]) -> None:
         self._spec, self._masks = observation_contract_from_header(header)
-        include_turn_merged = self._spec.schema_version in {
-            OBSERVATION_SCHEMA_VERSION_V2_2,
-            OBSERVATION_SCHEMA_VERSION_V3,
-        }
+        # Both vocabulary latches are schema-driven. They are INDEPENDENT: v4 takes the
+        # feature-pack families and NOT the turn-merged ones, because it has no transition
+        # region for a turn-merged surface to live in.
+        include_turn_merged = (
+            self._spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+        )
+        include_feature_pack_v4 = (
+            self._spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
+        )
         cached_vocab = gen3_category_vocabulary(
-            showdown_root, include_turn_merged=include_turn_merged
+            showdown_root,
+            include_turn_merged=include_turn_merged,
+            include_feature_pack_v4=include_feature_pack_v4,
         )
         # OOV observations are mutable diagnostics. Keep corpus validation from
         # polluting the process-wide cached vocabulary used by unrelated tests.

@@ -24,6 +24,7 @@ from .dex import load_showdown_dex_cached, normalize_id
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     ObservationSpec,
@@ -587,6 +588,10 @@ class LocalShowdownEnv:
             include_turn_merged=(
                 self.config.observation_spec.schema_version
                 in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+            ),
+            include_feature_pack_v4=(
+                self.config.observation_spec.schema_version
+                in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
             ),
         )
         try:

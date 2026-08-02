@@ -1,0 +1,39 @@
+{
+ "schema": "c31-substitute-threshold-prediction/1",
+ "bucket": "engine-gap",
+ "objective": "4 - burn down the engine-gap bucket",
+ "defect": "C27 partitions the crit roll range only against defender_active.hp. Substitute's success is conditioned on the user's HP AFTER the incoming hit (gen3 requires hp > maxhp/4), so a crit roll range that straddles that threshold decides a discrete outcome the representative roll does not determine. Seed 17000037/55: Psychic crit rolls 163..192 into Gyarados at 242/258 with the threshold at 64.5 -- eight of sixteen rolls leave Substitute failing and eight leave it succeeding. The engine's representative 177 leaves 65 and pays the 64 cost; Showdown's 184 leaves 58 and Substitute fails outright, emitting no -start and no cost.",
+ "grep_before_designing": "The mechanism already exists. gen3's brancher already preserves all sixteen rolls when `choice.first_move && pending_dynamic_base_power(defender_choice) && fixed_damage.is_none()`, for exactly this reason: 'A first-move hit can move a pending Flail/Reversal user across one of its HP-based base-power bands. The ordinary branch normally keeps only an average damage roll, which erases those reachable positions before the second move reads HP.' Substitute reads the same HP for the same reason. pending_dynamic_base_power matches only FLAIL | REVERSAL.",
+ "fix": "Add SUBSTITUTE to pending_dynamic_base_power, renaming it to say what it now means. Reuses the existing exact 16-roll preservation rather than standing a second partitioner beside C27's kill-split -- and being exact, it cannot be subtly wrong about where gen3 puts the quarter-HP boundary, which a hand-computed threshold could.",
+ "cost_note": "Substitute is far more common than Flail/Reversal, and this path emits up to 32 arms (sixteen rolls x crit/non-crit) before duplicate combination, against C27's 2-3. If the branch-count cost proves material in search, the follow-up is a 2-way partition at the single threshold -- cheaper, but a second mechanism, so it needs the measurement first.",
+ "prediction": {
+  "seed_17000037_step_55": "matches",
+  "fresh_unattributed": {
+   "before": 1,
+   "after": 0
+  },
+  "fresh_divergent": {
+   "before": 16,
+   "after": 15
+  },
+  "certification_on_this_population": "zero unattributed reached",
+  "engine_fingerprint_changes": true,
+  "patch_count": {
+   "before": 52,
+   "after": 53
+  }
+ },
+ "gates": [
+  "9/9 behavioral probes",
+  "tests/test_search_depth_tactics.py - the tactics-suite regression gate",
+  "the C27 anchor row must still split; the kill-split must not regress",
+  "walk-mass re-derivation, since branch masses move again"
+ ],
+ "falsifiers": [
+  "the row not matching",
+  "any other fresh row changing verdict",
+  "any tactics-suite forcing proof changing"
+ ],
+ "differential_sha256": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c",
+ "engine_fingerprint_before": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29"
+}

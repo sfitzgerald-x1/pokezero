@@ -1180,3 +1180,33 @@ poke-engine-gen3-toxic-stage-cap.patch
 # the frozen stack above because older zero-context fallback patches retain
 # their exact application positions.
 poke-engine-gen3-recharge-forced-replacement.patch
+
+# C27 crit-arm kill split. The gen3 brancher already partitions the KO
+# threshold when the NON-CRIT roll range straddles it, using
+# compare_health_with_damage_multiples for exact masses and an exact non-kill
+# representative. The sibling path -- non-crit can never kill -- split crit from
+# non-crit but collapsed the crit arm to its AVERAGE roll, so when the crit
+# range straddled the defender's HP the other side of that threshold was absent
+# from the branch support entirely. The engine then asserted a KO a legal crit
+# roll would not have scored (or the reverse), which the tree prices as full
+# crit mass on one outcome at exactly the tactical margins. Applies the existing
+# identity to the crit arm rather than standing a second partitioner beside it,
+# and fixes that identity dropping a roll landing EXACTLY on the defender's HP
+# from both buckets -- exact-equal is lethal, and its mass was silently priced
+# as a survival. Measured before the patch in
+# reports/c27_kill_split_premeasure.json.
+poke-engine-gen3-crit-kill-split.patch
+
+# C31 Substitute quarter-HP gate. gen3 already preserved all sixteen damage rolls
+# when the defender had a pending Flail or Reversal, because an average roll
+# "erases those reachable positions before the second move reads HP". Substitute
+# reads the same HP for the same reason -- gen3 refuses it unless the user is
+# above a quarter of its maximum -- and the predicate simply did not list it. So a
+# crit range straddling that quarter had the representative roll decide whether
+# the Substitute happened at all, dropping the other side from the branch support
+# (seed 17000037 step 55: eight of sixteen Psychic crit rolls leave Gyarados'
+# Substitute failing; the representative roll succeeds, Showdown's roll did not).
+# Extends the existing predicate rather than adding a second partitioner beside
+# C27's kill split. Registered in reports/c31_substitute_threshold_prediction.json.
+poke-engine-gen3-substitute-hp-gate.patch
+
