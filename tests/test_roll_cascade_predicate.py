@@ -21,9 +21,24 @@ def comp(source: str, delta: int, index: int = 0):
     return D.DamageComponent(source=source, delta=delta, event_index=index)
 
 
-def cascade(observed, engine, legal=None):
+def cascade(observed, engine, legal=None, observed_all=None, engine_all=None):
+    """Exercise the REAL call path by default.
+
+    Round eight: 22 of 25 tests omitted observed_all/engine_all, so they took
+    the `is not None` fallback -- the roll-scaled-subset walk that round seven
+    had just established was wrong. The pins were covering the code path the
+    production caller does not use. Default them to the component lists, which
+    is what evaluate_boundary_strict passes.
+    """
+
     return D._roll_cascade_equivalent(
-        observed, engine, support=None, target_side="side_one", pre_legal=legal
+        observed,
+        engine,
+        support=None,
+        target_side="side_one",
+        pre_legal=legal,
+        observed_all=observed_all if observed_all is not None else observed,
+        engine_all=engine_all if engine_all is not None else engine,
     )
 
 
@@ -389,3 +404,53 @@ class PrefixWalkScopeTests(unittest.TestCase):
                 engine_all=engine,
             )
         )
+
+
+class PreDirectHitTests(unittest.TestCase):
+    """Nothing may differ before the roll that caused the difference.
+
+    Round eight's finding, and the last unsound accept class the review's
+    oracle could find. Two arms of one cascade share a start; the direct hit is
+    the only roll-dependent event, so below its event_index both arms sit at
+    identical HP and identical deficit. A cap cannot flip there and an extra
+    cannot appear there.
+    """
+
+    def test_a_cap_flip_before_the_direct_hit_is_rejected(self) -> None:
+        observed = [comp("movewish_to_full", 100, 0), comp("", -102, 2)]
+        engine = [
+            comp("movewish", 104, 0),
+            comp("itemleftovers_to_full", 4, 1),
+            comp("", -110, 2),
+        ]
+        self.assertFalse(cascade(observed, engine))
+
+    def test_an_extra_before_the_direct_hit_is_rejected(self) -> None:
+        """From the review's unbiased 181k sweep -- one of only two accepts,
+        and its oracle called both unrealizable."""
+
+        observed = [comp("movewish", 49, 0), comp("heal_to_full", 1, 1), comp("", -37, 2)]
+        engine = [comp("movewish_to_full", 43, 0), comp("", -30, 2)]
+        self.assertFalse(cascade(observed, engine))
+
+    def test_the_other_sweep_accept_is_rejected(self) -> None:
+        observed = [
+            comp("leechseed", 44, 0),
+            comp("", -24, 1),
+            comp("itemleftovers_to_full", 4, 2),
+        ]
+        engine = [comp("leechseed_to_full", 43, 0), comp("", -19, 1)]
+        self.assertFalse(cascade(observed, engine))
+
+    def test_agreeing_components_before_the_direct_hit_are_fine(self) -> None:
+        """The guard must reject DISAGREEMENT, not the mere presence of an
+        earlier component. Both arms carry the same Leftovers tick at @0."""
+
+        observed = [comp("itemleftovers", 6, 0), comp("", -100, 1), comp("heal_to_full", 94, 2)]
+        engine = [
+            comp("itemleftovers", 6, 0),
+            comp("", -106, 1),
+            comp("heal", 94, 2),
+            comp("leechseed_to_full", 6, 3),
+        ]
+        self.assertTrue(cascade(observed, engine))

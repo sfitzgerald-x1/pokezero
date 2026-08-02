@@ -1009,6 +1009,45 @@ def _roll_cascade_equivalent(
     if extra_is_observed is smaller_is_observed:
         return False
 
+    # NOTHING MAY DIFFER BEFORE THE ROLL THAT CAUSED THE DIFFERENCE.
+    #
+    # Two arms of one cascade share a start. The only roll-dependent event is
+    # the direct hit, so at every event_index BELOW it both arms are at
+    # identical HP and therefore at identical deficit. A heal cannot cap on one
+    # arm and pay uncapped on the other there, and an extra residual cannot
+    # appear there either -- whatever produced it had not happened yet.
+    #
+    # Round eight found this as the last unsound accept class:
+    #   obs = [movewish_to_full 100 @0,                          direct -102 @2]
+    #   eng = [movewish         104 @0, itemleftovers_to_full 4 @1, direct -110 @2]
+    # accepted, and impossible. In a directed family of 21,216 accepts, 19,296
+    # (91%) were provably unrealizable with this signature; in an unbiased sweep
+    # of 181,203 synthetic pairs it was both of the only two accepts, and an
+    # independent oracle called both unrealizable.
+    #
+    # The prefix floor does not catch it (running is >= 0 that early), and
+    # constraint 4 needs two caps on one side.
+    _first_direct = min(
+        observed_direct[0].event_index, engine_direct[0].event_index
+    )
+    if extra.event_index < _first_direct:
+        return False
+    _obs_by_base = {}
+    for component in observed_heals:
+        _obs_by_base.setdefault(_cascade_base(component.source), []).append(component)
+    for engine_component in engine_heals:
+        if engine_component.event_index >= _first_direct:
+            continue
+        twins = _obs_by_base.get(_cascade_base(engine_component.source)) or []
+        for observed_component in twins:
+            if observed_component.event_index != engine_component.event_index:
+                continue
+            capped_disagrees = observed_component.source.endswith(
+                "_to_full"
+            ) is not engine_component.source.endswith("_to_full")
+            if capped_disagrees or observed_component.delta != engine_component.delta:
+                return False
+
     # No `_to_full` may be reached at a negative running total.
     #
     # A heal that tops the mon out restores maxhp - hp_before, so it is bounded
