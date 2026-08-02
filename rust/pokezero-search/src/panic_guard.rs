@@ -107,8 +107,6 @@ mod panic_containment_tests {
         });
     }
 
-
-
     /// A `panic!("literal")` payload is a `&'static str`.
     #[test]
     fn static_str_payload_is_preserved() {
