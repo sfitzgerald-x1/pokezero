@@ -564,6 +564,19 @@ class V3Traits(unittest.TestCase):
         ], movesets=ms2)
         self.assertEqual(gp2.ev["p1"]["nc_switchin_on_status"], 0)
 
+    def test_encore_and_trick_counted(self):
+        # Both are in the gen3 randbats pool (encore 16 carrier species, trick 2) — reachable is
+        # the bar for tracking, so they get gated usage categories like any other carried move.
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: Alakazam|Encore|p2a: Blissey",
+            "|move|p2a: Kecleon|Trick|p1a: Alakazam",
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_encore"], 1)
+        self.assertEqual(gp.ev["p1"]["cat_trick"], 0)
+        self.assertEqual(gp.ev["p2"]["cat_trick"], 1)
+        self.assertEqual(gp.ev["p2"]["cat_encore"], 0)
+
     def test_struggle_counted(self):
         gp = parse(["|turn|1", "|move|p1a: X|Struggle|p2a: Y"])
         self.assertEqual(gp.ev["p1"]["cat_struggle"], 1)
@@ -1251,3 +1264,40 @@ class EndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingInputGuard(unittest.TestCase):
+    """A path that matches nothing must fail loudly, not write an n_games=0 metrics file.
+
+    The old resolver fell back to the literal path when a glob matched nothing, so a typo'd or
+    renamed shard produced a valid-looking metrics file with every rate zeroed — which silently
+    blanks a lineage in the report instead of erroring.
+    """
+
+    def _run(self, events, out):
+        import sys
+        argv = sys.argv
+        sys.argv = ["trait_extract.py", "--events", *events, "--out", out]
+        try:
+            TE.main()
+        finally:
+            sys.argv = argv
+
+    def test_missing_events_file_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "m.json")
+            with self.assertRaises(SystemExit) as cm:
+                self._run([os.path.join(d, "events-nope.jsonl.gz")], out)
+            self.assertIn("no such events file", str(cm.exception))
+            self.assertFalse(os.path.exists(out), "must not write a metrics file")
+
+    def test_zero_game_input_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(src, "wt") as fh:
+                fh.write("")
+            out = os.path.join(d, "m.json")
+            with self.assertRaises(SystemExit) as cm:
+                self._run([src], out)
+            self.assertIn("0 games parsed", str(cm.exception))
+            self.assertFalse(os.path.exists(out), "must not write a metrics file")
