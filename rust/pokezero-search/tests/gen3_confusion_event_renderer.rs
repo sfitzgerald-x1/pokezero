@@ -990,3 +990,100 @@ fn collapsed_crash_collision_is_rejected_without_causeless_damage() {
         "{events}"
     );
 }
+
+/// The deferred snap-out must render `-end` where Showdown renders it, with NO
+/// fabricated `-activate`.
+///
+/// This is the assertion the sentinel collision failed. At the first attempt the
+/// pending marker's restore amount was `+1` -- bit-for-bit the ladder's "the
+/// confusion check ran" marker -- so the renderer took the self-hit arm, emitted
+/// `|-activate|...|confusion`, emitted no `-end` at all, and ACCEPTED the world.
+/// Fail-open, and strictly worse than the refusal it replaced: the observation
+/// layer only clears `volatile:confusion` on `-end`, so the volatile would stick
+/// and `confusion_elapsed` would ramp without bound.
+#[test]
+fn the_deferred_snap_out_emits_end_and_no_activation() {
+    // Drive the ladder until a branch parks a pending snap-out, then take the
+    // victim's next move attempt -- the ply Showdown snaps out on.
+    let mut state = confused_state(Choices::SPLASH);
+    let mut pending = None;
+    for _ in 0..6 {
+        let branches = generate(&mut state);
+        if let Some(branch) = branches.iter().find(|b| {
+            b.instruction_list.iter().any(|i| matches!(
+                i,
+                Instruction::ChangeVolatileStatusDuration(c)
+                    if c.volatile_status == PokemonVolatileStatus::CONFUSION && c.amount < 0
+            ))
+        }) {
+            state.apply_instructions(&branch.instruction_list);
+            pending = Some(());
+            break;
+        }
+        let first = branches.into_iter().next().expect("a branch");
+        state.apply_instructions(&first.instruction_list);
+    }
+    pending.expect("the ladder must park a pending snap-out within six plies");
+
+    let branches = generate(&mut state);
+    let snap = branches
+        .iter()
+        .find(|b| {
+            b.instruction_list.iter().any(|i| matches!(
+                i,
+                Instruction::RemoveVolatileStatus(r)
+                    if r.volatile_status == PokemonVolatileStatus::CONFUSION
+            ))
+        })
+        .expect("the next move attempt must consume the pending snap-out")
+        .clone();
+    let events = render(&mut state, &snap);
+    assert!(
+        events.contains("|-end|") && events.contains("confusion"),
+        "Showdown emits -end on the snap-out turn: {events}"
+    );
+    assert!(
+        !events.contains("|-activate|p2a: Opponent|confusion"),
+        "no activation on the snap-out turn -- onBeforeMove returns before it: {events}"
+    );
+}
+
+
+/// The mirror of the collision, and the assertion that actually catches it.
+///
+/// An ORDINARY confused turn emits the ladder's `+1` "check ran" marker. If the
+/// snap-out restore amount equals that marker, the renderer misreads a normal
+/// check as a snap-out: spurious `-end`, missing `-activate`, and the world
+/// layer clears a volatile that is still attached. Testing only the snap-out
+/// direction misses this entirely -- my first attempt did, and the mutant that
+/// restores the collision passed it.
+#[test]
+fn an_ordinary_confusion_check_is_not_misread_as_a_snap_out() {
+    let mut state = confused_state(Choices::SPLASH);
+    let branches = generate(&mut state);
+    // The surviving (move-goes-through) arm carries the +1 marker and no removal.
+    let ordinary = branches
+        .iter()
+        .find(|b| {
+            b.instruction_list.iter().any(|i| matches!(
+                i,
+                Instruction::ChangeVolatileStatusDuration(c)
+                    if c.volatile_status == PokemonVolatileStatus::CONFUSION && c.amount == 1
+            )) && !b.instruction_list.iter().any(|i| matches!(
+                i,
+                Instruction::RemoveVolatileStatus(r)
+                    if r.volatile_status == PokemonVolatileStatus::CONFUSION
+            ))
+        })
+        .expect("an ordinary confused turn must carry the +1 check marker")
+        .clone();
+    let events = render(&mut state, &ordinary);
+    assert!(
+        !events.contains("|-end|p2a: Opponent|confusion"),
+        "a confusion CHECK must not render as a snap-out: {events}"
+    );
+    assert!(
+        events.contains("|-activate|p2a: Opponent|confusion"),
+        "a surviving confusion check announces itself: {events}"
+    );
+}

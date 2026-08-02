@@ -1209,4 +1209,21 @@ poke-engine-gen3-crit-kill-split.patch
 # Extends the existing predicate rather than adding a second partitioner beside
 # C27's kill split. Registered in reports/c31_substitute_threshold_prediction.json.
 poke-engine-gen3-substitute-hp-gate.patch
-
+# CONFUSION snap-out TIMING. The duration patch above forks the expiry ladder at
+# end of turn, but Showdown does not show it there: `confusion.onBeforeMove`
+# decrements, snaps out at zero and lets the move through, so `-end confusion`
+# lands on the victim's NEXT MOVE ATTEMPT. Publishing the removal at end of turn
+# put a state change a decision boundary early, and the renderer had to discard
+# the whole belief world as attribution-unsafe rather than leak it
+# (`confusion_expiry_timing_unobservable` -- 35% of residual fallback on the
+# restricted band). This splits the two: the PROBABILISTIC fork stays at end of
+# turn, where both outcomes are terminal and no move-generation restructuring is
+# needed, and only the OBSERVABLE instruction moves to the move attempt, where it
+# is DETERMINISTIC because the outcome is already decided. Carried as a negative
+# duration sentinel; `chance_confusion_ends` returns 0.0 for <= 0 so a pending
+# counter cannot re-enter the ladder, and the volatile stays visible in between --
+# which is what Showdown shows. Equivalence measured: per-rung snap-out mass,
+# per-rung self-hit mass and the turns-confused marginal are identical to the
+# unpatched ladder. Touches gen3/generate_instructions.rs only; authored against
+# the confusion-duration-patched tree.
+poke-engine-gen3-confusion-snapout-timing.patch
