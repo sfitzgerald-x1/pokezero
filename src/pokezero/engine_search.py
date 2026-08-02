@@ -1282,6 +1282,7 @@ class EngineMctsPolicy:
         turn = int(getattr(replay, "turn_number", 0) or 0)
         config = self._config
 
+        stop_floor = config.early_stop_min_sims if config.early_stop else 0
         world_runs: list[dict[str, Any]] = []
         # Duplicate belief completions, grouped per DECISION by search-problem
         # identity. Never shared across turns.
@@ -1352,10 +1353,16 @@ class EngineMctsPolicy:
             reached = report.get("max_depth_reached")
             if reached is not None:
                 reached = int(reached)
-                self.stats.depth_reached_samples += 1
-                self.stats.depth_reached_sum += reached
+                # Once per WORLD, not once per search. Collapsing duplicates into
+                # one search would otherwise silently redefine this counter --
+                # and it is what the depth ladder reads, so a redefinition makes
+                # the ladder incomparable to every historical run. `multiplicity`
+                # is 1 on the ordinary path.
+                weight = int(record.get("_collapse_multiplicity", 1))
+                self.stats.depth_reached_samples += weight
+                self.stats.depth_reached_sum += reached * weight
                 self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
-                self.stats.depth_reached_histogram[reached] += 1
+                self.stats.depth_reached_histogram[reached] += weight
             # Crate-measured phase walls are per-INVOCATION compute, exactly like
             # iterations/model_evals above: a conservatively replayed world spent
             # that encode/model/tree time twice and must report it.
@@ -1412,7 +1419,6 @@ class EngineMctsPolicy:
                 "seed": world_seed,
                 "side_key": side_key,
             }
-            stop_floor = config.early_stop_min_sims if config.early_stop else 0
             # CONCENTRATE duplicate belief completions instead of skipping them.
             #
             # Two worlds with the same serialized state, context and seat are one
@@ -1440,6 +1446,11 @@ class EngineMctsPolicy:
             multiplicity = len(records)
             lead = records[0]
             sims = None
+            # Stamp the multiplicity BEFORE the search: run_world accumulates
+            # per-world telemetry (depth samples) off this record, so setting it
+            # afterwards left those counters reading 1 and silently per-search.
+            lead = dict(lead)
+            lead["_collapse_multiplicity"] = multiplicity
             if multiplicity > 1:
                 self.stats.worlds_collapsed += multiplicity - 1
                 # The whole point: N draws of one completion buy N x the sims on
@@ -1450,13 +1461,15 @@ class EngineMctsPolicy:
                 continue
             self.stats.unique_worlds_searched += 1
             for record in records:
-                # A copy per record so a future in-place mutation of a report
-                # cannot reach its twins. NOTE: no current consumer mutates a
-                # report in place -- the replay path REBINDS record["report"] --
-                # so this line is forward-defence and is not covered by a test;
-                # a mutant that shares the reference passes the suite.
+                # SHALLOW copy: the top-level dicts are distinct but nested
+                # values -- notably report["side_one"], the visit list anyone
+                # would realistically mutate -- are STILL SHARED between twins.
+                # Safe today only because no consumer mutates a report in place
+                # (the replay path rebinds record["report"]). Do not read this as
+                # isolation; deepen it if that ever changes.
                 record["report"] = dict(report)
                 record["_collapse_key"] = cache_key
+                record["_collapse_multiplicity"] = multiplicity
                 world_runs.append(record)
 
         # Count each SEARCH once, not each record. Duplicate draws share one
@@ -1557,7 +1570,12 @@ class EngineMctsPolicy:
                     ),
                     "early_stop": {
                         "enabled": config.early_stop,
-                        "worlds_stopped": len(stopped_runs),
+                        # WORLDS, not searches: full_budget_replays counts
+                        # records, so counting searches here put the two on
+                        # different denominators for the same event.
+                        "worlds_stopped": sum(
+                            int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
+                        ),
                         "aggregate_locked": locked_choice is not None,
                         "locked_choice": locked_choice,
                         "full_budget_replays": full_budget_replays,

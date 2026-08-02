@@ -1706,10 +1706,24 @@ class WorldCollapseTest(unittest.TestCase):
             self._report(0, 100, stopped=False),
         ])
         worlds = [self._world("A"), self._world("A"), self._world("A"), self._world("B")]
-        self._run(policy, native, worlds)
+        decision = self._run(policy, native, worlds)
         self.assertEqual(len(native.calls), 2)
         self.assertEqual(policy.stats.worlds_collapsed, 2)
         self.assertEqual(policy.stats.unique_worlds_searched, 2)
+
+        # THE ASSERTION THAT MATTERS, and the one this test was missing: look at
+        # the AGGREGATE, not the counters. Review showed that replacing
+        # `for record in records:` with `records[:1]` -- appending one record per
+        # group instead of N, i.e. exactly the belief flattening this change is
+        # built to avoid -- passed all 112 tests. A 3:1 belief silently became
+        # 1:1 and nothing noticed.
+        meta = decision.metadata["engine_mcts"]
+        self.assertEqual(meta["worlds_searched"], 4, "all four DRAWS must reach the aggregator")
+        self.assertEqual(
+            meta["aggregated_choices"],
+            {"alpha": 3.0, "beta": 1.0},
+            "a 3:1 belief must aggregate 3:1, not be flattened to 1:1",
+        )
 
     def test_reports_are_not_shared_between_twins(self) -> None:
         policy = self._policy(early_stop=False)
@@ -1733,6 +1747,47 @@ class WorldCollapseTest(unittest.TestCase):
         self.assertEqual(
             policy.stats.early_stop_triggered_worlds, 1,
             "one search stopped, not three",
+        )
+
+    def test_depth_samples_stay_per_world_not_per_search(self) -> None:
+        """The depth ladder reads this counter; collapsing must not redefine it.
+
+        Concentration searches one tree per unique completion, so counting a
+        depth sample per SEARCH would silently turn a per-world counter into a
+        per-search one -- making the ladder incomparable to every historical run.
+        Found by review; the mutant that reverts it used to survive.
+        """
+        policy = self._policy(early_stop=False)
+        report = self._report(60, 40, stopped=False)
+        report["max_depth_reached"] = 5
+        native = self._Native([report, dict(report)])
+        # 3 draws of A, 1 of B -> 2 searches, but FOUR worlds.
+        self._run(policy, native, [self._world("A")] * 3 + [self._world("B")])
+        self.assertEqual(len(native.calls), 2, "two unique completions")
+        self.assertEqual(
+            policy.stats.depth_reached_samples, 4,
+            "one sample per WORLD (4), not per search (2)",
+        )
+        self.assertEqual(sum(policy.stats.depth_reached_histogram.values()), 4)
+
+    def test_worlds_stopped_counts_worlds_like_its_name_and_its_sibling(self) -> None:
+        """`worlds_stopped` and `full_budget_replays` must share a denominator.
+
+        Deduping the early-stop SAVINGS was the real fix (120 reported where 40
+        was true), but applying the same dedupe to `worlds_stopped` put it on a
+        different denominator from `full_budget_replays` for the same event.
+        """
+        policy = self._policy(early_stop=True)
+        # Decisive split so the aggregate LOCKS (leader - runner_up > remaining)
+        # and no full-budget replay follows: 58 - 2 = 56 > 40 remaining.
+        native = self._Native([self._report(58, 2, requested=100, stopped=True)])
+        decision = self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(len(native.calls), 1, "one search for three identical draws")
+        early = decision.metadata["engine_mcts"]["early_stop"]
+        self.assertEqual(early["worlds_stopped"], 3, "three WORLDS stopped, one search")
+        self.assertEqual(
+            policy.stats.early_stop_sims_saved, 40,
+            "savings are per SEARCH -- 40, not 3x40",
         )
 
     def test_telemetry_exposes_both_counters(self) -> None:
