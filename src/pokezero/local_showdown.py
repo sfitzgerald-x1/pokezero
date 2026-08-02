@@ -24,6 +24,7 @@ from .dex import load_showdown_dex_cached, normalize_id
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     ObservationSpec,
@@ -37,6 +38,8 @@ from .showdown import (
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
+    _is_active_protocol_ident,
+    _is_current_public_active,
     _normalize_identifier,
     _ReplayParser,
     normalize_for_player,
@@ -404,7 +407,11 @@ class LocalShowdownEnv:
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         # Shared, immutable candidate-set source (built once per process, cached). None when the
         # belief set source is disabled, in which case only protocol-revealed facts populate.
         self._belief_set_source = (
@@ -509,7 +516,11 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal = None
         self._last_step_had_error = False
-        self._parser = _ReplayParser(self._battle_id)
+        self._parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         self._belief_engine = PublicBattleBeliefEngine(
             format_id=self._observation_format_id, set_source=self._belief_set_source
         )
@@ -577,6 +588,10 @@ class LocalShowdownEnv:
             include_turn_merged=(
                 self.config.observation_spec.schema_version
                 in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+            ),
+            include_feature_pack_v4=(
+                self.config.observation_spec.schema_version
+                in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
             ),
         )
         try:
@@ -740,7 +755,11 @@ class LocalShowdownEnv:
         if set(direct_requests) != set(PLAYER_IDS):
             raise LocalShowdownError("Scenario materialization did not produce both player requests.")
         synthetic_lines = scenario_public_protocol_lines(state, direct_requests)
-        synthetic_parser = _ReplayParser(self._battle_id)
+        synthetic_parser = _ReplayParser(
+            self._battle_id,
+            complete_prefix=True,
+            hp_visibility={"p1": "exact", "p2": "exact"},
+        )
         synthetic_parser.feed(synthetic_lines)
         _seed_scenario_parser_state(synthetic_parser, state)
         synthetic_replay = synthetic_parser.snapshot()
@@ -1998,11 +2017,23 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
             raise LocalShowdownError(
                 f"Scenario materialization returned malformed {player} active status."
             )
-        parser.toxic_stage[player] = (
-            int(status.get("toxicStage") or 0)
-            if normalize_id(str(status.get("id") or "")) == "tox"
-            else 0
-        )
+        toxic = normalize_id(str(status.get("id") or "")) == "tox"
+        engine_stage = int(status.get("toxicStage") or 0) if toxic else 0
+        # Scenario materialization returns an ordinary action-request boundary. The parser's
+        # observation convention at that boundary is one ahead of Showdown's current
+        # statusState.stage. Internal value 16 preserves "current stage is already capped at
+        # 15"; the model-facing feature remains clamped to 15.
+        parser.toxic_stage[player] = min(16, engine_stage + 1) if toxic else 0
+        parser.toxic_stage_known[player] = True
+        # Scenario materialization always returns an ordinary action-request boundary. It
+        # cannot carry the replay-only proof for a replacement that arrived after a prior
+        # upkeep, so ensure a reused parser never retains one.
+        parser.toxic_stage_zero_after_upkeep[player] = False
+        parser.toxic_stage_zero_after_upkeep_expires_after_turn[player] = None
+        parser.toxic_stage_zero_after_upkeep_ident[player] = None
+        parser.toxic_faint_replacement_pending[player] = False
+        parser.toxic_faint_replacement_expected_ident[player] = None
+        parser.toxic_faint_replacement_invalid[player] = False
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:
@@ -2100,6 +2131,12 @@ def _public_materialization_payload(
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
+        toxic_stage = _materialization_toxic_stage(replay, player)
+        if toxic_stage is None:
+            # The policy can still observe status:tox with its legacy zero
+            # feature, but a sampled engine world may not turn an incomplete
+            # public prefix into a claimed ToxicCount=0.
+            blockers.add("toxic-stage-unknown")
         sides[player] = {
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
@@ -2110,9 +2147,10 @@ def _public_materialization_payload(
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
             "substituteDepletion": replay.substitute_depletion.get(player),
             "materializationBlockers": sorted(blockers),
-            # The parser's observation feature advances the toxic value at a new turn. The
-            # simulator state at the request boundary is one residual behind that feature.
-            "toxicStage": _materialization_toxic_stage(replay, player),
+            # At an ordinary request the observation feature names the next residual; at the
+            # post-upkeep forced-switch boundary it names the residual just paid. The helper
+            # converts both public boundaries into Showdown's current statusState.stage.
+            "toxicStage": toxic_stage,
             # Consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3
             # shares one `stall` volatile). The parser already derives this from
             # public protocol alone; the engine prices the NEXT attempt at
@@ -2128,10 +2166,9 @@ def _public_materialization_payload(
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
             # gen3 Truant loaf parity for the active mon: True = loafs on its next move
-            # attempt, False = acts, absent = no holder OR the phase is genuinely unknown
-            # (a truncated prefix whose switch-in was never observed). The world must keep
-            # those last two apart -- "no volatile" and "we don't know" produce the same
-            # engine behaviour but only one of them is a claim.
+            # attempt, False = acts, None = no holder OR a genuinely unknown phase. Unknown
+            # includes a truncated prefix and a full-prefix Trace acquisition whose residual
+            # event-queue membership cannot be recovered from public line order.
             #
             # This replaces a "moved last round -> loafs now" proxy computed downstream. The
             # sim's bit is a free-running toggle flipped at EVERY residual regardless of what
@@ -2221,11 +2258,96 @@ def _public_materialization_payload(
     }
 
 
-def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int:
-    """Return the public toxic counter in the simulator's request-boundary convention."""
+def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
+    """Return the engine's pre-tick Toxic counter for the next residual.
 
-    tracked_stage = int(replay.toxic_stage.get(player, 0))
-    return max(0, tracked_stage - 1)
+    ``None`` is intentional: a snapshot that lacks the public provenance for
+    an active Toxic counter is not allowed to silently materialize as stage 0.
+    Missing provenance on a clean active side is a harmless zero, which keeps
+    legacy snapshots from blocking worlds that have no Toxic counter.
+    """
+
+    def provenance_value(name: str, default: Any = None) -> tuple[bool, Any]:
+        values = getattr(replay, name, None)
+        if not isinstance(values, Mapping) or player not in values:
+            return False, default
+        return True, values[player]
+
+    active = replay.public_active.get(player)
+    proof_present, zero_after_upkeep = provenance_value("toxic_stage_zero_after_upkeep")
+    if proof_present and type(zero_after_upkeep) is not bool:
+        return None
+    if not _is_current_public_active(active):
+        return None
+    condition = getattr(active, "condition", None)
+    if not isinstance(condition, str):
+        return None
+    active_is_toxic = "tox" in condition.split()
+    if not active_is_toxic:
+        return None if zero_after_upkeep is True else 0
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    if type(post_upkeep_window) is not bool:
+        return None
+    known_present, known = provenance_value("toxic_stage_known")
+    if not known_present or known is not True:
+        return None
+    stage_present, tracked_stage = provenance_value("toxic_stage")
+    if not stage_present or type(tracked_stage) is not int:
+        return None
+    if tracked_stage == 0:
+        # A poisoned replacement that entered after upkeep missed the residual
+        # that just ran. Its next Toxic tick is stage 1, so the engine's
+        # pre-tick counter is correctly zero. No other active-Toxic zero has
+        # enough public chronology to distinguish that fact from an incomplete
+        # prefix, and therefore remains fail-closed.
+        if not proof_present or zero_after_upkeep is not True:
+            return None
+        ident_present, proof_ident = provenance_value("toxic_stage_zero_after_upkeep_ident")
+        deadline_present, deadline = provenance_value(
+            "toxic_stage_zero_after_upkeep_expires_after_turn"
+        )
+        invalid_present, invalid = provenance_value("toxic_faint_replacement_invalid")
+        pending_present, pending = provenance_value("toxic_faint_replacement_pending")
+        expected_present, expected_ident = provenance_value(
+            "toxic_faint_replacement_expected_ident"
+        )
+        active_ident = getattr(active, "ident", None)
+        turn_number = getattr(replay, "turn_number", None)
+        if (
+            not ident_present
+            or not isinstance(proof_ident, str)
+            or not _is_active_protocol_ident(proof_ident)
+            or not proof_ident.startswith(f"{player}a: ")
+            or active_ident != proof_ident
+            or not deadline_present
+            or type(deadline) is not int
+            or deadline < 1
+            or type(turn_number) is not int
+            or turn_number < 0
+            or deadline != turn_number + (1 if post_upkeep_window else 0)
+            or not invalid_present
+            or invalid is not False
+            or not pending_present
+            or pending is not False
+            or not expected_present
+            or expected_ident is not None
+        ):
+            return None
+        return 0
+    if zero_after_upkeep is True:
+        return None
+    if not 1 <= tracked_stage <= 16:
+        return None
+    if post_upkeep_window is True:
+        # Residuals have run but the next |turn| line has not. The raw public stage is the
+        # multiplier just paid, which is the counter needed for the NEXT tick. The engine's
+        # counter is pre-tick and must stay at 14 once Showdown's stage has saturated at 15.
+        return min(14, max(0, tracked_stage))
+    # At an ordinary action request, |turn| has advanced the public feature to the multiplier
+    # that will be charged at the next residual; the simulator still holds the prior count.
+    # Sentinel 16 distinguishes an already-saturated current stage from raw 15's current 14.
+    # Both produce pre-tick counter 14: the vendored engine computes stage = counter + 1.
+    return min(14, max(0, tracked_stage - 1))
 
 
 def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
@@ -2363,10 +2485,11 @@ def _apply_rest_sleep_provenance(
     with the resolved world's ability, because Early Bird burns two timer units per attempt
     while each skippedTime refund restores one.
 
-    An ACTIVE sleeper with a nonzero skipped run, or an attempt whose direct outcome is absent
-    in a truncated protocol prefix, cannot be represented by the Rust world (which has no
-    ``skippedTime`` field). Its row carries an explicit pending-refund marker so the downstream
-    constructor fails closed before approximate sleep handling can invent a generic timer.
+    An ACTIVE sleeper with a nonzero skipped run, an attempt whose direct outcome is absent in a
+    truncated protocol prefix, or malformed/inconsistent public Rest state cannot be represented
+    by the Rust world (which has no ``skippedTime`` field). Its row carries an explicit marker so
+    the downstream constructor fails closed before approximate sleep handling can invent a
+    generic timer.
 
     Until this the only sleep provenance crossing into world construction was the pair of
     aggregate booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``),
@@ -2381,11 +2504,12 @@ def _apply_rest_sleep_provenance(
     ``public_active``. A materialization row, by contrast, carries the SPECIES. The two
     coincide here only because gen3 randbats runs under Nickname Clause and never
     nicknames anything: reconstructing the key from the row's species is therefore exact
-    for this format and WRONG the moment nicknames are allowed. A miss is fail-soft in
-    the safe direction — the row simply carries no count, and world construction falls
-    back to its existing sleep handling — and keys are per-side and per-name, so a miss
-    can never collide with a DIFFERENT mon's entry. Do not extend this to a nicknamed
-    format without carrying the ident through the row.
+    for this format and WRONG the moment nicknames are allowed. A cosmetic base-form
+    fallback (``Unown`` -> ``Unown-Z``) is permitted only when it is one tracker key to
+    one sleeping row. A missing or ambiguous correspondence marks the affected known
+    sleeper rows unrepresentable; it must never fall through to generic sleep
+    approximation. Do not extend this to a nicknamed format without carrying the ident
+    through the row.
 
     Only a mon that is in the Rest map AND absent from the opposing side's induced-victim
     set is annotated, so the emitted field means exactly "this sleep is its own Rest's"
@@ -2396,20 +2520,85 @@ def _apply_rest_sleep_provenance(
     refunded_turns = replay.rest_sleep_refunded_turns
     skipped_turns = replay.rest_sleep_skipped_turns
     pending_attempts = replay.rest_sleep_pending_attempt
-    if not counts:
+    if not (counts or refunded_turns or skipped_turns or pending_attempts):
         return
+    tracker_keys = {
+        key
+        for tracker in (counts, refunded_turns, skipped_turns, pending_attempts)
+        for key in tracker
+        if isinstance(key, str) and key.startswith(f"{player}:")
+    }
+    known_rows = [
+        (index, species)
+        for index, row in enumerate(rows)
+        if isinstance(species := row.get("species"), str)
+    ]
+    sleeping_rows = [
+        (index, species)
+        for index, species in known_rows
+        if "slp" in str(rows[index].get("condition") or "").split()
+    ]
+    exact_known_keys = {f"{player}:{_normalize_identifier(species)}" for _, species in known_rows}
+    exact_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        key = f"{player}:{_normalize_identifier(species)}"
+        if key in tracker_keys:
+            exact_candidates.setdefault(key, []).append(index)
+
+    row_tracker_keys: dict[int, str] = {}
+    handled_tracker_keys: set[str] = set()
+    for key, candidates in exact_candidates.items():
+        if len(candidates) == 1:
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.add(key)
+
+    # Cosmetic base forms are safe only as a one-to-one reconciliation after exact
+    # matches claim their keys. Multiple sleeping formes for one base are ambiguous.
+    base_candidates: dict[str, list[int]] = {}
+    for index, species in sleeping_rows:
+        if index in row_tracker_keys:
+            continue
+        normalized = _normalize_identifier(species)
+        base = _normalize_identifier(species.split("-", 1)[0])
+        if base != normalized:
+            base_candidates.setdefault(base, []).append(index)
+    for base, candidates in base_candidates.items():
+        matching_keys = [
+            key
+            for key in tracker_keys - handled_tracker_keys
+            if key not in exact_known_keys and key.partition(":")[2] == base
+        ]
+        if not matching_keys:
+            continue
+        if len(matching_keys) == 1 and len(candidates) == 1:
+            key = matching_keys[0]
+            row_tracker_keys[candidates[0]] = key
+        else:
+            for index in candidates:
+                rows[index]["restSleepProvenanceUnrepresentable"] = True
+        handled_tracker_keys.update(matching_keys)
+
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
     # therefore recorded under its opponent.
     induced = set(replay.induced_sleep_victims.get(opponent_showdown_slot(player), ()))
-    for row in rows:
-        species = row.get("species")
-        if not isinstance(species, str):
+    for index, key in row_tracker_keys.items():
+        row = rows[index]
+        if key not in counts:
+            if key in refunded_turns or key in skipped_turns or key in pending_attempts:
+                row["restSleepProvenanceUnrepresentable"] = True
             continue
-        key = f"{player}:{_normalize_identifier(species)}"
-        count = counts.get(key)
-        if count is None or key in induced:
+        count = counts[key]
+        if key in induced:
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
-        if pending_attempts.get(key, False):
+        pending = pending_attempts.get(key, False)
+        if not isinstance(pending, bool):
+            row["restSleepProvenanceUnrepresentable"] = True
+            continue
+        if pending:
             row["restSleepRefundPending"] = True
             continue
         skipped = skipped_turns.get(key, 0)
@@ -2424,6 +2613,7 @@ def _apply_rest_sleep_provenance(
             or refunded < 0
             or skipped < 0
         ):
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         if skipped:
             if bool(row.get("active")):
@@ -2433,13 +2623,20 @@ def _apply_rest_sleep_provenance(
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible
-            # Rest counter. Leave the row unannotated so construction follows its fail-closed path.
+            # Rest counter. Mark it so construction cannot approximate it as induced sleep.
+            row["restSleepProvenanceUnrepresentable"] = True
             continue
         row["restSleepAttempts"] = count
         if refunded:
             row["restSleepRefundedTime"] = refunded
         if skipped:
             row["restSleepSkippedTime"] = skipped
+
+    if tracker_keys - handled_tracker_keys:
+        # A public Rest tracker that cannot be tied to a revealed row must not let any
+        # same-side sleeper pass through the generic approximation path.
+        for index, _ in sleeping_rows:
+            rows[index]["restSleepProvenanceUnrepresentable"] = True
 
 
 def _materialization_identifier(value: str) -> str:

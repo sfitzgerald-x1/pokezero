@@ -281,6 +281,13 @@ class TransformerPolicyConfig:
     # only when v2.1 training adopts it. from_dict also defaults False (pre-investment
     # payloads carry no field and trained on a constant-zero column).
     tier2_investment: bool = False
+    # v4 k0 feature pack, A2 ablation switch (the plan's k0+pack vs k0+pack+lastmove pair).
+    # Dataclass default True — the pack is whole unless an arm deliberately ablates its
+    # largest single surface. from_dict defaults True as well, and deliberately so: unlike
+    # the tier2 latches there is no pre-existing checkpoint population to protect, because
+    # the column only exists under v4 and no v4 checkpoint predates this field. Under every
+    # earlier schema the switch is inert.
+    feature_pack_last_move: bool = True
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -343,14 +350,39 @@ class TransformerPolicyConfig:
         schema_spec = observation_spec_for_schema(self.observation_schema_version)
         transition_token_capacity = schema_spec.transition_token_count
         if self.transition_token_count == 0:
-            # Sentinel: default to the stamped schema's full region.
+            # Sentinel: default to the stamped schema's full region. For a HISTORY-FREE schema
+            # that region is empty, so the sentinel resolves to 0 and stays there — 0 is the
+            # only valid width, not a missing value.
             object.__setattr__(self, "transition_token_count", transition_token_capacity)
-        if not 0 < self.transition_token_count <= transition_token_capacity:
+        if transition_token_capacity == 0:
+            # v4 and any successor that carries no transition region. Demanding >= 1 here made
+            # the config unconstructible: the sentinel resolves to 0 and every explicit value
+            # exceeds the capacity, so no v4 model could be built, trained, or loaded at all.
+            if self.transition_token_count != 0:
+                raise ValueError(
+                    f"observation schema {self.observation_schema_version!r} carries no "
+                    "transition region, so transition_token_count must be 0; got "
+                    f"{self.transition_token_count}."
+                )
+        elif not 0 < self.transition_token_count <= transition_token_capacity:
             raise ValueError(
                 "transition_token_count must be in "
                 f"1..{transition_token_capacity} for observation schema "
                 f"{self.observation_schema_version!r}."
             )
+        if transition_token_capacity == 0:
+            # A history-free schema has no region to budget. The dataclass default is the
+            # legacy full-region constant, i.e. "unset", so resolve that to 0; but an
+            # EXPLICIT non-zero budget is a real mistake — someone believing they configured a
+            # history horizon on a contract that has none — and must not pass silently.
+            if self.transition_token_budget == TRANSITION_TOKEN_COUNT:
+                object.__setattr__(self, "transition_token_budget", 0)
+            elif self.transition_token_budget != 0:
+                raise ValueError(
+                    f"observation schema {self.observation_schema_version!r} carries no "
+                    "transition region, so transition_token_budget must be 0; got "
+                    f"{self.transition_token_budget}. There is no history horizon to set."
+                )
         if not 0 <= self.transition_token_budget <= self.transition_token_count:
             raise ValueError(
                 "transition_token_budget must be in "
@@ -483,6 +515,9 @@ class TransformerPolicyConfig:
             # dataclass default.
             tier2_residuals=bool(payload.get("tier2_residuals", False)),
             tier2_investment=bool(payload.get("tier2_investment", False)),
+            # v4-only switch: no checkpoint predating it can have the column, so the
+            # dataclass default (pack whole) is the right resolution for a missing field.
+            feature_pack_last_move=bool(payload.get("feature_pack_last_move", True)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -2477,6 +2512,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
         transition_token_budget=config.transition_token_budget,
         tier2_residuals=config.tier2_residuals,
         tier2_investment=config.tier2_investment,
+        feature_pack_last_move=bool(getattr(config, "feature_pack_last_move", True)),
     )
 
 
@@ -2531,7 +2567,10 @@ def category_vocab_from_model_config(
     So aliases cannot shift a trained row; only ``tokens`` can, and those come from the checkpoint.
     """
     from .category_vocab import CategoryVocabulary
-    from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+    from .observation import (
+        FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+        TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    )
     from .randbat_vocab import gen3_category_string_aliases
 
     # getattr, not attribute access: a config-shaped stub without the field must get the
@@ -2552,6 +2591,10 @@ def category_vocab_from_model_config(
             include_turn_merged=(
                 getattr(config, "observation_schema_version", "")
                 in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+            ),
+            include_feature_pack_v4=(
+                getattr(config, "observation_schema_version", "")
+                in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
             ),
         ),
     )

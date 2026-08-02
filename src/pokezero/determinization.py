@@ -514,6 +514,19 @@ def _public_opponent_team_index_constraints(
     opponent_slot: str,
     team_size: int,
 ) -> dict[str, int] | None:
+    """Constraints only. See `_public_opponent_team_index_walk` for the walk."""
+    walk = _public_opponent_team_index_walk(
+        context, opponent_slot=opponent_slot, team_size=team_size
+    )
+    return None if walk is None else walk[0]
+
+
+def _public_opponent_team_index_walk(
+    context: PolicyContext,
+    *,
+    opponent_slot: str,
+    team_size: int,
+) -> tuple[dict[str, int], list[int], int | None] | None:
     """Map public opponent switch targets back to recorded packed-team indices.
 
     Replay submits historical opponent switch actions by action index. In Showdown, that action
@@ -635,7 +648,13 @@ def _public_opponent_team_index_constraints(
         elif active_species is not None and next_key != _normalize_species_id(active_species):
             active_species = next_active
             active_position = None
-    return constraints
+    # `current_order[p]` is the ORIGINAL team index sitting at request slot p --
+    # i.e. the permutation Showdown has built up through switch-ins. Returned
+    # alongside the constraints so callers that need the request ORDER (the
+    # opponent action head's label space) reuse this walk instead of writing a
+    # parallel one. `active_position is None` means the walk lost track and the
+    # order must not be trusted.
+    return constraints, current_order, active_position
 
 
 def _move_constrained_species_to_active_position(

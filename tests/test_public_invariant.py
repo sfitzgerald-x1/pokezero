@@ -48,6 +48,11 @@ _ALLOWED_FILES = {
 
 
 class PublicInvariantTest(unittest.TestCase):
+    def test_fleet_worker_workflow_runs_for_every_tracked_change(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "fleet-worker.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:\n", workflow)
+        self.assertNotIn("paths:", workflow)
+
     def test_no_internal_identifiers_in_tracked_files(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files"],

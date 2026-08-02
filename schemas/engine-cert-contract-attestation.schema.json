@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engine-cert-contract-attestation.schema.json",
+  "title": "Certification contract source attestation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_source_commit",
+    "contract_path",
+    "contract_sha256",
+    "launch_source_commit",
+    "required_engine_fingerprint",
+    "registration"
+  ],
+  "properties": {
+    "schema_version": {"const": "pokezero.engine-cert-contract-attestation/v1"},
+    "contract_source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "contract_path": {"const": "reports/c15_resweep_spec.json"},
+    "contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "launch_source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "required_engine_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "registration": {
+      "type": "object",
+      "required": [
+        "pull_request",
+        "fresh_sweep2_measurements_inspected",
+        "purpose"
+      ],
+      "properties": {
+        "pull_request": {"type": "integer", "minimum": 1},
+        "fresh_sweep2_measurements_inspected": {"const": 0},
+        "purpose": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

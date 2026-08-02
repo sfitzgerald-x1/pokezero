@@ -336,6 +336,37 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.spec.side_two.side_conditions["toxic_count"], 3)
         self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
 
+    def test_toxic_stage_zero_is_a_valid_first_residual_counter(self) -> None:
+        # The replay/materialization seam admits this only for a post-upkeep
+        # poisoned replacement. Once admitted, the Rust world convention is
+        # the same: no stored count means the next residual is Toxic stage 1.
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["toxicStage"] = 0
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
+        self.assertNotIn("toxic_count", world.spec.side_two.side_conditions)
+
+    def test_toxic_stage_fifteen_or_sentinel_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        payload["sides"]["p2"]["toxicStage"] = 15
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+        payload["sides"]["p2"]["toxicStage"] = 16
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+    def test_active_toxic_requires_explicit_public_counter(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
+        payload["sides"]["p2"]["toxicStage"] = None
+        self._assert_reason(payload, "toxic_stage_unknown")
+
+    def test_non_toxic_active_rejects_a_nonzero_toxic_counter(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["toxicStage"] = 2
+        self._assert_reason(payload, "toxic_stage_inconsistent")
+
     def test_ability_weather_is_indefinite(self) -> None:
         payload = _payload(self.dex, weather="sandstorm", weatherSetTurn=3, weatherFromAbility=True)
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)

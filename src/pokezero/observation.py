@@ -40,6 +40,24 @@ OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # checkpoint-driven resolution. V3 is NOT the fresh default until the Rust fold encoder mirrors it
 # and the golden corpus regenerates at v3.
 OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
+# v4 (checkpoint-driven, fifth entry in the same table; docs/observation_v4_spec.md): the k0
+# FEATURE PACK. V4 keeps the whole v3 semantic surface and adds enumerated CURRENT-STATE columns
+# for public facts that previously reached only the search world, or only the history region:
+# opponent forced recharge, per-side last executed move, Truant loaf phase, the currently TRACED
+# ability, last-round damage dealt/taken, and the entry-hazard credit / expected-value pair
+# (docs/k0-feature-pack-plan.md Parts A and B). The motivating question is whether a pure-Markov
+# k0 policy (transition_token_budget=0) can match a k1 one once the facts k1's single history row
+# was carrying are named as current state.
+# NEW CONTRACT, NEW ARMS: v4 SHRINKS BOTH public censuses — numeric 134 vs v3's 155, categorical
+# 41 vs 51 — because dropping the transition-history region removes more slots (34 numeric, 12
+# categorical) than the feature pack adds (13 numeric, 2 categorical). The private WRITER surface
+# grows; the public census does not, and the census is what every check below compares. So a v4
+# checkpoint can never share a cache, an env, or a run with a v3 one. That is enforced at every
+# layer (schema validation, an encode-time census EXACT match at v4 — a floor cannot catch a
+# census that shrinks, and BOTH v4 censuses shrink, so both exact matches are load-bearing,
+# which is why v4 is exact where v3/v2.2 still floor — the checkpoint-provenance latch, the
+# search-lane contract pin) exactly as the v2->v2.1->v2.2->v3 breaks were.
+OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
 # v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
@@ -51,16 +69,33 @@ SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
 )
 # Turn-merged transition-surface family: schemas whose transition block carries
 # pokezero.turn_merged.TurnMergedToken rows — their encode requires
 # normalize_for_player(include_turn_merged=True) and a vocabulary built with
 # include_turn_merged=True. v3 extends v2.2 without changing that surface, so every
 # ``schema == V2_2`` include_turn_merged/vocab latch is a membership test on this tuple.
+# V4 is deliberately ABSENT: it carries no transition region at all, so it needs neither the
+# turn-merged token stream nor the tt_phase/tt2_* vocabulary families.
 TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
 )
+# V3-lineage family: schemas whose numeric surface is the GROUPED projection of the private
+# writer rows (rather than the frozen legacy positions) and which write the v3 public signals.
+# V4 extends the projection with its own columns; every ``schema == V3`` writer gate is a
+# membership test on this tuple.
+GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS = (
+    OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
+)
+# k0-feature-pack family: schemas whose encode emits the pack's two categorical families (the
+# last-executed-move switch sentinel and ``ability:<id>`` for the current Trace copy). Those rows
+# change the vocabulary SIZE, hence every embedding table's shape, so the vocabulary builder takes
+# them as an opt-in latch (``gen3_category_vocabulary(include_feature_pack_v4=...)``) exactly as it
+# does the turn-merged families — and this tuple is what every such latch tests.
+FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 # Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
 # door, absent means unknown/legacy and must refuse — never "assume current spec".
@@ -81,6 +116,16 @@ TRANSITION_TOKEN_COUNT = 128
 # V3 shortens only the physical turn-merged history tail. The legacy constant above remains the
 # frozen V2/V2.1/V2.2 capacity and the maximum accepted feature-mask value for old checkpoints.
 V3_TRANSITION_TOKEN_COUNT = 64
+# V4 REMOVES THE HISTORY REGION ENTIRELY — the plan's stated end goal ("full region trim, no
+# synthesized history in search worlds, the simplest observation contract"). Not a budget of
+# zero over a region that still exists: the tokens, the history numeric group, and the
+# turn-merged categorical families are all gone from the contract. What the history rows were
+# carrying is either named as current state by the feature pack or deliberately dropped.
+#
+# Consequences that make this more than a mask: the sequence is 23 tokens instead of 87, so
+# every forward is ~3.8x shorter; there is no transition_token_budget knob to mis-set; and a
+# v4 checkpoint cannot silently be fed synthesized history, because there is nowhere to put it.
+V4_TRANSITION_TOKEN_COUNT = 0
 
 
 @dataclass(frozen=True)
@@ -140,6 +185,15 @@ class ObservationFeatureMasks:
       residuals live while the investment column was constant zero — one switch could not
       mask investment off for them without also darkening residuals. Default False until
       v2.1 training adopts the column; pre-v2.1 pipelines encode byte-identically.
+    - ``feature_pack_last_move``: whether the v4 k0 feature pack writes its A2 column, the
+      ACTIVE mon's last executed move (``CATEGORY_LAST_USED_MOVE``). Default True — the pack
+      is whole unless an arm deliberately ablates it.
+
+      This exists because A2 is the pack's LARGEST single surface, and the k0-feature-pack
+      plan's arm design is exactly ``k0+pack`` against ``k0+pack+lastmove``: two arms whose
+      only difference is this column, so the read attributes whatever moves to A2 rather than
+      to "the pack" as a bundle. Inert under every schema below v4, where the column does not
+      exist — so toggling it can never perturb a v2.x/v3 encode.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -147,10 +201,13 @@ class ObservationFeatureMasks:
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
     tier2_residuals: bool = True
     tier2_investment: bool = False
+    feature_pack_last_move: bool = True
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked
-        # (Markov-state-only ablations). The encoder fill/mask paths handle it.
+        # (Markov-state-only ablations). The encoder fill/mask paths handle it. Under v4 there
+        # is no region at all, so the budget is inert rather than meaningful — the encoder
+        # never reads it, and observation_spec.transition_token_count is 0.
         if not 0 <= self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
             raise ValueError(
                 f"transition_token_budget must be in 0..{TRANSITION_TOKEN_COUNT}, "

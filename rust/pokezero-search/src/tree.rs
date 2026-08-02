@@ -104,6 +104,16 @@ pub(crate) struct ChanceBranch {
     /// Applied when the child decision node is created — priors reweight
     /// exploration only, never values.
     pub child_self_priors: Option<(bool, Vec<f32>)>,
+    /// Same, for the NON-acting (opponent) seat's options at this branch's
+    /// child, from the model's opponent action head. Written only when
+    /// `MultiPlyConfig::use_opponent_priors` is set; `None` keeps that seat
+    /// uniform, which is the historical behaviour.
+    ///
+    /// Stored SEPARATELY from `child_self_priors` rather than replacing it:
+    /// the two describe different seats' arms and are applied to different
+    /// stat vectors. Sharing one field would force a reflection at exactly
+    /// the boundary #937 warns about.
+    pub child_opponent_priors: Option<(bool, Vec<f32>)>,
 }
 
 impl ChanceBranch {
@@ -121,10 +131,7 @@ impl ChanceNode {
     /// Exact expectation over the enumerated outcomes' current means.
     pub(crate) fn expectation(&self) -> f32 {
         debug_assert_probability_conservation(&self.branches);
-        self.branches
-            .iter()
-            .map(|b| b.probability * b.mean())
-            .sum()
+        self.branches.iter().map(|b| b.probability * b.mean()).sum()
     }
 }
 
@@ -217,6 +224,11 @@ pub(crate) struct MultiPlyConfig {
     /// Enable KO-threshold damage splits past the engine's ply-1/2 horizon
     /// (straddle-triggered `branch_on_damage`; see `deep_ko_straddle`).
     pub deep_ko_split: bool,
+    /// Seed the OPPONENT seat's PUCT priors from the model's opponent action
+    /// head instead of leaving them uniform. Default OFF: with it off the
+    /// search is behaviourally identical to the uniform-opponent design that
+    /// every recorded result was produced under.
+    pub use_opponent_priors: bool,
 }
 
 #[derive(Default)]
@@ -282,6 +294,20 @@ pub(crate) struct BranchSeam<'a> {
     /// (`depth + 1 >= max_depth`).
     #[allow(dead_code)]
     pub depth: u8,
+}
+
+impl BranchSeam<'_> {
+    /// Keep unsafe renderer branches out of the tree's fold/encoder seam.
+    /// Returning an error aborts the entire native world so the Python caller
+    /// takes its established whole-world fallback instead of dropping one
+    /// chance outcome from an expectation.
+    #[cfg_attr(not(feature = "model"), allow(dead_code))]
+    pub(crate) fn reject_attribution_unsafe(
+        &self,
+        rendered: &crate::events::RenderedEvents,
+    ) -> PyResult<()> {
+        crate::events::reject_attribution_unsafe(rendered, "tree/model fold")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +379,12 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
         match tree.decisions[node_idx].children.get(&key).copied() {
             None => {
                 // --- expansion: enumerate the engine's chance outcomes ---
-                let parent = path
-                    .last()
-                    .map(|step| (step.chance, step.branch.expect("descended steps carry a branch")));
+                let parent = path.last().map(|step| {
+                    (
+                        step.chance,
+                        step.branch.expect("descended steps carry a branch"),
+                    )
+                });
                 let chance_idx =
                     expand_edge(tree, state, node_idx, i, j, cfg, counters, price, parent);
                 tree.decisions[node_idx].children.insert(key, chance_idx);
@@ -403,8 +432,20 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                         // core priced this branch's observation (uniform
                         // otherwise — including a same-round pending eval,
                         // which the core re-applies after its batch returns).
-                        if let Some((side_one, priors)) =
-                            tree.chances[chance_idx].branches[k].child_self_priors.clone()
+                        if let Some((side_one, priors)) = tree.chances[chance_idx].branches[k]
+                            .child_self_priors
+                            .clone()
+                        {
+                            apply_self_priors(&mut tree.decisions[child], side_one, &priors);
+                        }
+                        // Opponent seat, same lazily-applied path. `side_one`
+                        // here is already the OPPONENT's side (the writer
+                        // stored the seat that owns these arms), so this is a
+                        // plain application to that seat's stat vector -- no
+                        // negation of the flag and no reflection of the values.
+                        if let Some((side_one, priors)) = tree.chances[chance_idx].branches[k]
+                            .child_opponent_priors
+                            .clone()
                         {
                             apply_self_priors(&mut tree.decisions[child], side_one, &priors);
                         }
@@ -537,6 +578,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             pending_row,
             child: None,
             child_self_priors: None,
+child_opponent_priors: None,
         });
     } else {
         let total: f32 = generated.iter().map(|b| b.percentage).sum();
@@ -573,6 +615,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                 pending_row,
                 child: None,
                 child_self_priors: None,
+child_opponent_priors: None,
             });
         }
     }
@@ -643,8 +686,8 @@ fn deep_ko_straddle(state: &State, s1_move: &MoveChoice, s2_move: &MoveChoice) -
     if c1.is_none() && c2.is_none() {
         return false;
     }
-    let s1_first = state.side_one.get_active_immutable().speed
-        >= state.side_two.get_active_immutable().speed;
+    let s1_first =
+        state.side_one.get_active_immutable().speed >= state.side_two.get_active_immutable().speed;
     let (rolls_s1, rolls_s2) = calculate_both_damage_rolls(
         state,
         c1.clone().unwrap_or_default(),
@@ -681,7 +724,10 @@ fn straddles_ko(rolls: &Option<Vec<i16>>, defender_hp: i16) -> bool {
 pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32]) -> f32 {
     // Resolve deferred branch prices on the expanded chance node (if any).
     if let TraversalEnd::Expanded = traversal.end {
-        let step = traversal.path.last().expect("expanded traversal has a path");
+        let step = traversal
+            .path
+            .last()
+            .expect("expanded traversal has a path");
         for branch in &mut tree.chances[step.chance].branches {
             if let Some(row) = branch.pending_row.take() {
                 branch.value_sum += row_values[row];
@@ -833,6 +879,8 @@ pub(crate) fn puct_search_multi(
         max_depth,
         c_puct,
         deep_ko_split,
+        // No model in this core, so there is no opponent head to gather.
+        use_opponent_priors: false,
     };
     let evaluator = HpFractionEval;
     let outcome = multiply_search_with_eval(&mut state, iterations, &cfg, seed, &evaluator)?;
@@ -854,6 +902,37 @@ pub(crate) fn puct_search_multi(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renderer_unsafe_branch_is_rejected_at_the_tree_fold_seam() {
+        Python::initialize();
+        let s1 = MoveChoice::None;
+        let s2 = MoveChoice::None;
+        let instructions: [Instruction; 0] = [];
+        let seam = BranchSeam {
+            s1: &s1,
+            s2: &s2,
+            instructions: &instructions,
+            parent: None,
+            chance: 0,
+            branch_index: 0,
+            branch_on_damage: false,
+            depth: 0,
+        };
+        let rendered = crate::events::RenderedEvents {
+            lines: Vec::new(),
+            turn_completed: false,
+            lossy: vec!["synthetic_test_ambiguity".to_string()],
+            attribution_unsafe: vec!["synthetic_test_ambiguity".to_string()],
+            active_status_transitions: Vec::new(),
+        };
+        let error = seam
+            .reject_attribution_unsafe(&rendered)
+            .expect_err("unsafe event text must not reach fold/encoder");
+        assert!(error
+            .to_string()
+            .contains("attribution-unsafe renderer branch rejected before tree/model fold"));
+    }
 
     /// Charmander (ember/tackle) vs Squirtle (watergun/tackle), 100 HP each —
     /// the crate's standard minimal fixture (`minimal_gen3_fixture`).
@@ -900,6 +979,7 @@ mod tests {
             max_depth,
             c_puct: 1.4,
             deep_ko_split,
+            use_opponent_priors: false,
         };
         multiply_search_with_eval(&mut state, iterations, &cfg, seed, &HpFractionEval)
             .expect("search runs")
@@ -1074,8 +1154,14 @@ mod tests {
         let new_moves: Vec<&str> = root.s1_stats.iter().map(|s| s.display.as_str()).collect();
         assert_eq!(old_moves, new_moves);
         assert_eq!(
-            s2_old.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
-            root.s2_stats.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
+            s2_old
+                .iter()
+                .map(|s| s.display.as_str())
+                .collect::<Vec<_>>(),
+            root.s2_stats
+                .iter()
+                .map(|s| s.display.as_str())
+                .collect::<Vec<_>>(),
         );
         let old_argmax = s1_old
             .iter()
@@ -1101,6 +1187,7 @@ mod tests {
                 max_depth: 1,
                 c_puct: 1.4,
                 deep_ko_split: true,
+                use_opponent_priors: false,
             };
             let mut tree = Tree::from_root(&state).expect("root builds");
             let toxic = tree.decisions[0]
@@ -1302,6 +1389,7 @@ mod tests {
             max_depth: 3,
             c_puct: 1.4,
             deep_ko_split: true,
+            use_opponent_priors: false,
         };
         let mut tree = Tree::from_root(&state).expect("root builds");
         let mut counters = SearchCounters::default();

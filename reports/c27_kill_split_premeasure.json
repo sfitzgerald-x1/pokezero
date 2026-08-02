@@ -1,0 +1,8078 @@
+{
+ "schema": "c27-kill-split-premeasure/1",
+ "purpose": "Pre-registered measurement of the crit-arm kill-split repair, derived offline from retained rows before any engine change. The gen3 brancher already partitions the KO threshold when the NON-CRIT roll range straddles it (case A) and applies no kill split at all when only the CRIT range straddles it (case B); the repair applies the existing compare_health_with_damage_multiples identity to the crit arm.",
+ "prediction_discipline": "convertible_upper_bound is an UPPER BOUND on clearance: it counts boundaries where the repair would place a reachable arm on the observed side of the threshold. Whether the rest of that arm's transition matches can only be settled by the patched engine. Rows whose threshold matters only through a LATER choice -- a Substitute that fails next turn because this hit left the mon below a quarter -- are not convertible by any same-transition partition and remain comparison limits.",
+ "gen3_brancher_sha256": "277d559baaed93e7fe32e2ee0270810a111f07fab7cf75bc317c644ccb68ef69",
+ "readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
+ "populations": {
+  "fresh_sample": {
+   "label": "fresh_sample",
+   "rows": 64,
+   "rows_skipped": 1,
+   "damage_branch_cases": {
+    "no_damage": 62,
+    "case_b_crit_never_kills": 42,
+    "case_b_crit_always_kills": 13,
+    "case_b_crit_straddle_unsplit": 7,
+    "case_a_non_crit_straddle_split": 1,
+    "non_crit_always_kills": 1
+   },
+   "rows_by_added_branches": {
+    "0": 56,
+    "1": 7
+   },
+   "rows_with_an_unreachable_crit_arm": 7,
+   "unreachable_crit_arm_by_current_family": {
+    "UNATTRIBUTED": 5,
+    "I5_boundary_truncation": 1,
+    "limit:roll_divergent_lethality": 1
+   },
+   "convertible_upper_bound": [
+    {
+     "seed": 17000004,
+     "step": 24,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 174,
+       "defender_hp": 163,
+       "emitted_crit_damage": 160,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 17000005,
+     "step": 7,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 214,
+       "defender_hp": 185,
+       "emitted_crit_damage": 197,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 17000016,
+     "step": 100,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 297,
+       "defender_hp": 262,
+       "emitted_crit_damage": 274,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 17000025,
+     "step": 62,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 312,
+       "defender_hp": 293,
+       "emitted_crit_damage": 288,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 17000030,
+     "step": 70,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 214,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 17000042,
+     "step": 68,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 255,
+       "defender_hp": 225,
+       "emitted_crit_damage": 235,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 17000045,
+     "step": 123,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 247,
+       "defender_hp": 215,
+       "emitted_crit_damage": 228,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    }
+   ]
+  },
+  "retained_archive": {
+   "label": "retained_archive",
+   "rows": 3821,
+   "rows_skipped": 131,
+   "damage_branch_cases": {
+    "no_damage": 3638,
+    "case_b_crit_never_kills": 1423,
+    "case_b_crit_always_kills": 1243,
+    "case_b_crit_straddle_unsplit": 443,
+    "non_crit_always_kills": 388,
+    "case_a_non_crit_straddle_split": 245
+   },
+   "rows_by_added_branches": {
+    "0": 3258,
+    "1": 421,
+    "2": 11
+   },
+   "rows_with_an_unreachable_crit_arm": 432,
+   "unreachable_crit_arm_by_current_family": {
+    "limit:roll_divergent_lethality": 175,
+    "UNATTRIBUTED": 125,
+    "I5_boundary_truncation": 49,
+    "LS_capped_lethal_shape": 40,
+    "I1_cap_state_shape": 12,
+    "I3_roll_inherited": 12,
+    "limit:world_sample_drag_target": 11,
+    "I4_attribution_tie": 6,
+    "I6_sleeptalk_callee_union": 2
+   },
+   "convertible_upper_bound": [
+    {
+     "seed": 2000040,
+     "step": 36,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 259,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000097,
+     "step": 88,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 110,
+       "defender_hp": 108,
+       "emitted_crit_damage": 101,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000105,
+     "step": 43,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 273,
+       "defender_hp": 255,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000112,
+     "step": 72,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 268,
+       "defender_hp": 266,
+       "emitted_crit_damage": 247,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000114,
+     "step": 42,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 57,
+       "defender_hp": 52,
+       "emitted_crit_damage": 52,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000140,
+     "step": 75,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 280,
+       "defender_hp": 260,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000230,
+     "step": 60,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 248,
+       "defender_hp": 236,
+       "emitted_crit_damage": 229,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000277,
+     "step": 40,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 140,
+       "defender_hp": 135,
+       "emitted_crit_damage": 129,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000291,
+     "step": 9,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 273,
+       "defender_hp": 252,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000336,
+     "step": 70,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 336,
+       "defender_hp": 335,
+       "emitted_crit_damage": 310,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000351,
+     "step": 19,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 194,
+       "defender_hp": 175,
+       "emitted_crit_damage": 179,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000380,
+     "step": 21,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 132,
+       "defender_hp": 129,
+       "emitted_crit_damage": 122,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000386,
+     "step": 5,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 303,
+       "defender_hp": 270,
+       "emitted_crit_damage": 280,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000405,
+     "step": 81,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 249,
+       "defender_hp": 245,
+       "emitted_crit_damage": 230,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000452,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 282,
+       "defender_hp": 263,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000470,
+     "step": 23,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 132,
+       "defender_hp": 128,
+       "emitted_crit_damage": 122,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000493,
+     "step": 65,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 139,
+       "defender_hp": 132,
+       "emitted_crit_damage": 128,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000591,
+     "step": 122,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_mismatch:itemleftovers|leechseed",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 100,
+       "defender_hp": 90,
+       "emitted_crit_damage": 92,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000591,
+     "step": 125,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_missing_in_engine:abilityliquidooze",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 100,
+       "defender_hp": 100,
+       "emitted_crit_damage": 92,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000629,
+     "step": 32,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 134,
+       "defender_hp": 127,
+       "emitted_crit_damage": 123,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000629,
+     "step": 48,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 218,
+       "defender_hp": 197,
+       "emitted_crit_damage": 201,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000701,
+     "step": 50,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 162,
+       "defender_hp": 159,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000735,
+     "step": 46,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 254,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000751,
+     "step": 16,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 280,
+       "defender_hp": 271,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000788,
+     "step": 49,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 336,
+       "defender_hp": 322,
+       "emitted_crit_damage": 310,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000791,
+     "step": 37,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 220,
+       "defender_hp": 217,
+       "emitted_crit_damage": 203,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000872,
+     "step": 19,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 154,
+       "defender_hp": 148,
+       "emitted_crit_damage": 142,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000888,
+     "step": 24,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 282,
+       "defender_hp": 273,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000899,
+     "step": 145,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 42,
+       "defender_hp": 39,
+       "emitted_crit_damage": 38,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000951,
+     "step": 25,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 267,
+       "defender_hp": 261,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000956,
+     "step": 43,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 135,
+       "defender_hp": 124,
+       "emitted_crit_damage": 124,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2000974,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 264,
+       "defender_hp": 253,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2000977,
+     "step": 135,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 162,
+       "defender_hp": 154,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001067,
+     "step": 23,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 364,
+       "defender_hp": 337,
+       "emitted_crit_damage": 336,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001081,
+     "step": 98,
+     "current_family": "I6_sleeptalk_callee_union",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 259,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001093,
+     "step": 78,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 332,
+       "defender_hp": 308,
+       "emitted_crit_damage": 307,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001105,
+     "step": 61,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 263,
+       "defender_hp": 255,
+       "emitted_crit_damage": 243,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001129,
+     "step": 63,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 98,
+       "defender_hp": 97,
+       "emitted_crit_damage": 90,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 236,
+       "defender_hp": 208,
+       "emitted_crit_damage": 218,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001146,
+     "step": 86,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 174,
+       "defender_hp": 161,
+       "emitted_crit_damage": 160,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001151,
+     "step": 72,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 255,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001152,
+     "step": 28,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 129,
+       "defender_hp": 123,
+       "emitted_crit_damage": 119,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001165,
+     "step": 16,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 324,
+       "defender_hp": 277,
+       "emitted_crit_damage": 299,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001165,
+     "step": 35,
+     "current_family": "I6_sleeptalk_callee_union",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 282,
+       "defender_hp": 249,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001178,
+     "step": 68,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 147,
+       "defender_hp": 142,
+       "emitted_crit_damage": 135,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001179,
+     "step": 136,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 271,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 165,
+       "defender_hp": 152,
+       "emitted_crit_damage": 152,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001186,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 239,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001188,
+     "step": 59,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 280,
+       "defender_hp": 248,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001199,
+     "step": 104,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 130,
+       "defender_hp": 121,
+       "emitted_crit_damage": 120,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001206,
+     "step": 38,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 282,
+       "defender_hp": 248,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2001215,
+     "step": 25,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 272,
+       "defender_hp": 259,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001228,
+     "step": 72,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 207,
+       "defender_hp": 196,
+       "emitted_crit_damage": 191,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2001236,
+     "step": 103,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 306,
+       "defender_hp": 275,
+       "emitted_crit_damage": 283,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100009,
+     "step": 62,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 260,
+       "defender_hp": 255,
+       "emitted_crit_damage": 240,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100018,
+     "step": 93,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 204,
+       "defender_hp": 189,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100028,
+     "step": 66,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 351,
+       "defender_hp": 345,
+       "emitted_crit_damage": 324,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100036,
+     "step": 40,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 246,
+       "defender_hp": 231,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100077,
+     "step": 61,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 138,
+       "defender_hp": 133,
+       "emitted_crit_damage": 127,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100087,
+     "step": 17,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 320,
+       "defender_hp": 292,
+       "emitted_crit_damage": 296,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100105,
+     "step": 16,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 246,
+       "defender_hp": 235,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100160,
+     "step": 51,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 150,
+       "defender_hp": 136,
+       "emitted_crit_damage": 138,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100167,
+     "step": 36,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 272,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100177,
+     "step": 3,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 286,
+       "defender_hp": 275,
+       "emitted_crit_damage": 264,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100230,
+     "step": 53,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 273,
+       "defender_hp": 264,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100249,
+     "step": 49,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 309,
+       "defender_hp": 272,
+       "emitted_crit_damage": 285,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100373,
+     "step": 58,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_extra_in_engine:abilitywaterabsorb",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 93,
+       "defender_hp": 85,
+       "emitted_crit_damage": 86,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100477,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 293,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100487,
+     "step": 52,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 244,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 338,
+       "defender_hp": 288,
+       "emitted_crit_damage": 312,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100571,
+     "step": 53,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 316,
+       "defender_hp": 282,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100574,
+     "step": 168,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 216,
+       "defender_hp": 202,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100578,
+     "step": 122,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 339,
+       "defender_hp": 329,
+       "emitted_crit_damage": 313,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100591,
+     "step": 58,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 298,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100597,
+     "step": 108,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 272,
+       "defender_hp": 252,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100598,
+     "step": 65,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 316,
+       "defender_hp": 293,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100606,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 120,
+       "defender_hp": 116,
+       "emitted_crit_damage": 111,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100653,
+     "step": 66,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 71,
+       "defender_hp": 61,
+       "emitted_crit_damage": 65,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100659,
+     "step": 27,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 276,
+       "defender_hp": 262,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100674,
+     "step": 93,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 144,
+       "defender_hp": 138,
+       "emitted_crit_damage": 133,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100682,
+     "step": 112,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 280,
+       "defender_hp": 261,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100687,
+     "step": 84,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 340,
+       "defender_hp": 319,
+       "emitted_crit_damage": 314,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100695,
+     "step": 135,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 264,
+       "defender_hp": 263,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100725,
+     "step": 13,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 232,
+       "defender_hp": 223,
+       "emitted_crit_damage": 214,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100734,
+     "step": 79,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 231,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100739,
+     "step": 44,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 126,
+       "defender_hp": 111,
+       "emitted_crit_damage": 116,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100795,
+     "step": 65,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 274,
+       "defender_hp": 252,
+       "emitted_crit_damage": 253,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100799,
+     "step": 164,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 114,
+       "defender_hp": 106,
+       "emitted_crit_damage": 105,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100808,
+     "step": 44,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 252,
+       "defender_hp": 232,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100826,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 207,
+       "defender_hp": 200,
+       "emitted_crit_damage": 191,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100841,
+     "step": 58,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 308,
+       "defender_hp": 284,
+       "emitted_crit_damage": 284,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100848,
+     "step": 1,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 210,
+       "defender_hp": 209,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100867,
+     "step": 36,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 261,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100886,
+     "step": 93,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 219,
+       "defender_hp": 200,
+       "emitted_crit_damage": 202,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100925,
+     "step": 42,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 300,
+       "defender_hp": 269,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2100991,
+     "step": 43,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 192,
+       "defender_hp": 187,
+       "emitted_crit_damage": 177,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2100992,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 228,
+       "defender_hp": 222,
+       "emitted_crit_damage": 210,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2101018,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 254,
+       "defender_hp": 246,
+       "emitted_crit_damage": 234,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2101034,
+     "step": 94,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 216,
+       "defender_hp": 185,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2101090,
+     "step": 36,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 204,
+       "defender_hp": 195,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2101125,
+     "step": 47,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 71,
+       "defender_hp": 61,
+       "emitted_crit_damage": 65,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2101136,
+     "step": 53,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 267,
+       "defender_hp": 253,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2101146,
+     "step": 183,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 292,
+       "defender_hp": 270,
+       "emitted_crit_damage": 270,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200005,
+     "step": 4,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 282,
+       "defender_hp": 268,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200022,
+     "step": 97,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 246,
+       "defender_hp": 232,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200023,
+     "step": 8,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 288,
+       "defender_hp": 264,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200026,
+     "step": 15,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 130,
+       "defender_hp": 123,
+       "emitted_crit_damage": 120,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200026,
+     "step": 51,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 216,
+       "defender_hp": 204,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200056,
+     "step": 48,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 238,
+       "defender_hp": 229,
+       "emitted_crit_damage": 220,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 180,
+       "defender_hp": 162,
+       "emitted_crit_damage": 166,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200065,
+     "step": 85,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 113,
+       "defender_hp": 105,
+       "emitted_crit_damage": 104,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200077,
+     "step": 84,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 98,
+       "defender_hp": 85,
+       "emitted_crit_damage": 90,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200137,
+     "step": 69,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 198,
+       "defender_hp": 171,
+       "emitted_crit_damage": 183,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200147,
+     "step": 50,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_missing_in_engine:heal",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 316,
+       "defender_hp": 290,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200147,
+     "step": 61,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_missing_in_engine:heal",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 118,
+       "defender_hp": 113,
+       "emitted_crit_damage": 109,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200203,
+     "step": 87,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 159,
+       "defender_hp": 149,
+       "emitted_crit_damage": 147,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200205,
+     "step": 42,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 196,
+       "defender_hp": 185,
+       "emitted_crit_damage": 181,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200209,
+     "step": 85,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 71,
+       "defender_hp": 62,
+       "emitted_crit_damage": 65,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200232,
+     "step": 51,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 222,
+       "defender_hp": 198,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200268,
+     "step": 66,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 262,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200307,
+     "step": 57,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 244,
+       "defender_hp": 233,
+       "emitted_crit_damage": 225,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200312,
+     "step": 41,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 156,
+       "defender_hp": 148,
+       "emitted_crit_damage": 144,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200318,
+     "step": 120,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 213,
+       "defender_hp": 210,
+       "emitted_crit_damage": 197,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200365,
+     "step": 75,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 87,
+       "defender_hp": 80,
+       "emitted_crit_damage": 80,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200374,
+     "step": 38,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:heal",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 73,
+       "defender_hp": 63,
+       "emitted_crit_damage": 67,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200391,
+     "step": 64,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 328,
+       "defender_hp": 304,
+       "emitted_crit_damage": 303,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200485,
+     "step": 64,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 246,
+       "defender_hp": 230,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200488,
+     "step": 213,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 153,
+       "defender_hp": 133,
+       "emitted_crit_damage": 141,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200545,
+     "step": 84,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 180,
+       "defender_hp": 173,
+       "emitted_crit_damage": 166,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200596,
+     "step": 27,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 248,
+       "defender_hp": 242,
+       "emitted_crit_damage": 229,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200610,
+     "step": 131,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 306,
+       "defender_hp": 290,
+       "emitted_crit_damage": 283,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200617,
+     "step": 34,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 153,
+       "defender_hp": 137,
+       "emitted_crit_damage": 141,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200618,
+     "step": 87,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 130,
+       "defender_hp": 118,
+       "emitted_crit_damage": 120,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200638,
+     "step": 80,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 134,
+       "defender_hp": 131,
+       "emitted_crit_damage": 123,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200659,
+     "step": 6,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 246,
+       "defender_hp": 239,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200670,
+     "step": 254,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 196,
+       "defender_hp": 168,
+       "emitted_crit_damage": 181,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200689,
+     "step": 70,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 522,
+       "defender_hp": 513,
+       "emitted_crit_damage": 482,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200705,
+     "step": 69,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 174,
+       "defender_hp": 174,
+       "emitted_crit_damage": 160,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200759,
+     "step": 81,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 111,
+       "defender_hp": 108,
+       "emitted_crit_damage": 102,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200797,
+     "step": 29,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 189,
+       "defender_hp": 181,
+       "emitted_crit_damage": 174,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200812,
+     "step": 68,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 165,
+       "defender_hp": 160,
+       "emitted_crit_damage": 152,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200816,
+     "step": 34,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 69,
+       "defender_hp": 67,
+       "emitted_crit_damage": 63,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200843,
+     "step": 34,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 282,
+       "defender_hp": 245,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200888,
+     "step": 9,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 204,
+       "defender_hp": 182,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200900,
+     "step": 36,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 82,
+       "defender_hp": 79,
+       "emitted_crit_damage": 75,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200906,
+     "step": 49,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 177,
+       "defender_hp": 168,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200916,
+     "step": 41,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 168,
+       "defender_hp": 166,
+       "emitted_crit_damage": 155,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200955,
+     "step": 72,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 162,
+       "defender_hp": 154,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2200987,
+     "step": 62,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 294,
+       "defender_hp": 261,
+       "emitted_crit_damage": 271,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2200988,
+     "step": 27,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 259,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201003,
+     "step": 54,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_mismatch:itemleftovers|leechseed",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 116,
+       "defender_hp": 110,
+       "emitted_crit_damage": 107,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201008,
+     "step": 65,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 47,
+       "defender_hp": 46,
+       "emitted_crit_damage": 43,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201036,
+     "step": 54,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 134,
+       "defender_hp": 123,
+       "emitted_crit_damage": 123,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201037,
+     "step": 44,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 267,
+       "defender_hp": 241,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201040,
+     "step": 78,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 276,
+       "defender_hp": 271,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201071,
+     "step": 39,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 79,
+       "defender_hp": 75,
+       "emitted_crit_damage": 73,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201071,
+     "step": 63,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 216,
+       "defender_hp": 215,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201080,
+     "step": 50,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 354,
+       "defender_hp": 319,
+       "emitted_crit_damage": 327,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201092,
+     "step": 63,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 294,
+       "defender_hp": 264,
+       "emitted_crit_damage": 271,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201113,
+     "step": 28,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 252,
+       "defender_hp": 238,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201143,
+     "step": 131,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 176,
+       "defender_hp": 152,
+       "emitted_crit_damage": 162,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201143,
+     "step": 219,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 78,
+       "defender_hp": 67,
+       "emitted_crit_damage": 72,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201198,
+     "step": 54,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 144,
+       "defender_hp": 130,
+       "emitted_crit_damage": 133,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201199,
+     "step": 33,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 272,
+       "defender_hp": 260,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201201,
+     "step": 50,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 222,
+       "defender_hp": 198,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2201218,
+     "step": 103,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 192,
+       "defender_hp": 178,
+       "emitted_crit_damage": 177,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2201228,
+     "step": 22,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:sandstorm",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 336,
+       "defender_hp": 319,
+       "emitted_crit_damage": 310,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300040,
+     "step": 71,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 316,
+       "defender_hp": 305,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300040,
+     "step": 83,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 116,
+       "defender_hp": 112,
+       "emitted_crit_damage": 107,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300041,
+     "step": 52,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 177,
+       "defender_hp": 166,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300061,
+     "step": 93,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_mismatch:heal|leechseed",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 236,
+       "defender_hp": 225,
+       "emitted_crit_damage": 218,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300090,
+     "step": 98,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 204,
+       "defender_hp": 195,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300154,
+     "step": 80,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 246,
+       "defender_hp": 220,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300185,
+     "step": 63,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 198,
+       "defender_hp": 191,
+       "emitted_crit_damage": 183,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300261,
+     "step": 51,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 233,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300273,
+     "step": 82,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 261,
+       "defender_hp": 239,
+       "emitted_crit_damage": 241,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300321,
+     "step": 37,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 201,
+       "defender_hp": 185,
+       "emitted_crit_damage": 185,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300335,
+     "step": 108,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 366,
+       "defender_hp": 341,
+       "emitted_crit_damage": 338,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300352,
+     "step": 54,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 166,
+       "defender_hp": 145,
+       "emitted_crit_damage": 153,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300353,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 253,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300359,
+     "step": 61,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 248,
+       "defender_hp": 236,
+       "emitted_crit_damage": 229,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 224,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300404,
+     "step": 35,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 177,
+       "defender_hp": 172,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300462,
+     "step": 114,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 189,
+       "defender_hp": 188,
+       "emitted_crit_damage": 174,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300467,
+     "step": 17,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 124,
+       "defender_hp": 120,
+       "emitted_crit_damage": 114,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300467,
+     "step": 21,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 242,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300469,
+     "step": 10,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 152,
+       "defender_hp": 145,
+       "emitted_crit_damage": 140,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300473,
+     "step": 12,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 312,
+       "defender_hp": 282,
+       "emitted_crit_damage": 288,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300473,
+     "step": 67,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 111,
+       "defender_hp": 105,
+       "emitted_crit_damage": 102,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300526,
+     "step": 43,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 96,
+       "defender_hp": 87,
+       "emitted_crit_damage": 88,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300571,
+     "step": 25,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 255,
+       "defender_hp": 253,
+       "emitted_crit_damage": 235,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300571,
+     "step": 62,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 115,
+       "defender_hp": 103,
+       "emitted_crit_damage": 106,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300621,
+     "step": 76,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 366,
+       "defender_hp": 330,
+       "emitted_crit_damage": 338,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300626,
+     "step": 65,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 244,
+       "defender_hp": 230,
+       "emitted_crit_damage": 225,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300666,
+     "step": 69,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 146,
+       "defender_hp": 128,
+       "emitted_crit_damage": 135,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300702,
+     "step": 55,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 271,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300715,
+     "step": 106,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 225,
+       "defender_hp": 217,
+       "emitted_crit_damage": 208,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300743,
+     "step": 9,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 312,
+       "defender_hp": 271,
+       "emitted_crit_damage": 288,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300752,
+     "step": 60,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 104,
+       "defender_hp": 95,
+       "emitted_crit_damage": 96,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300826,
+     "step": 30,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 201,
+       "defender_hp": 200,
+       "emitted_crit_damage": 185,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300835,
+     "step": 61,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 106,
+       "defender_hp": 91,
+       "emitted_crit_damage": 98,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300837,
+     "step": 55,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,sandstorm",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 135,
+       "defender_hp": 132,
+       "emitted_crit_damage": 124,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300866,
+     "step": 61,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 292,
+       "defender_hp": 272,
+       "emitted_crit_damage": 270,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300870,
+     "step": 102,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 226,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300872,
+     "step": 81,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 151,
+       "defender_hp": 146,
+       "emitted_crit_damage": 139,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 156,
+       "defender_hp": 147,
+       "emitted_crit_damage": 144,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300875,
+     "step": 14,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:brn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 63,
+       "defender_hp": 55,
+       "emitted_crit_damage": 58,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2300893,
+     "step": 7,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 279,
+       "defender_hp": 263,
+       "emitted_crit_damage": 258,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300920,
+     "step": 61,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 114,
+       "defender_hp": 108,
+       "emitted_crit_damage": 105,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300988,
+     "step": 66,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 164,
+       "defender_hp": 159,
+       "emitted_crit_damage": 151,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2300992,
+     "step": 126,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 106,
+       "defender_hp": 99,
+       "emitted_crit_damage": 98,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301000,
+     "step": 93,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 255,
+       "defender_hp": 243,
+       "emitted_crit_damage": 235,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301037,
+     "step": 75,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 130,
+       "defender_hp": 117,
+       "emitted_crit_damage": 120,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2301038,
+     "step": 19,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 222,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2301062,
+     "step": 72,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 248,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2301069,
+     "step": 58,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 204,
+       "defender_hp": 185,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2301081,
+     "step": 93,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 165,
+       "defender_hp": 159,
+       "emitted_crit_damage": 152,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301096,
+     "step": 123,
+     "current_family": "I4_attribution_tie",
+     "current_class": "component_mismatch:itemleftovers|leechseed",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 159,
+       "defender_hp": 158,
+       "emitted_crit_damage": 147,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301107,
+     "step": 51,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 183,
+       "defender_hp": 182,
+       "emitted_crit_damage": 169,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301137,
+     "step": 69,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 282,
+       "defender_hp": 273,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301157,
+     "step": 28,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 264,
+       "defender_hp": 252,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 267,
+       "defender_hp": 247,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301159,
+     "step": 54,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 228,
+       "defender_hp": 218,
+       "emitted_crit_damage": 210,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301161,
+     "step": 140,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 150,
+       "defender_hp": 143,
+       "emitted_crit_damage": 138,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301182,
+     "step": 224,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 327,
+       "defender_hp": 308,
+       "emitted_crit_damage": 302,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301198,
+     "step": 129,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 324,
+       "defender_hp": 293,
+       "emitted_crit_damage": 299,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2301214,
+     "step": 40,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 267,
+       "defender_hp": 249,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2301217,
+     "step": 62,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 70,
+       "defender_hp": 64,
+       "emitted_crit_damage": 64,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400015,
+     "step": 7,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 342,
+       "defender_hp": 335,
+       "emitted_crit_damage": 316,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400051,
+     "step": 17,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 276,
+       "defender_hp": 275,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400056,
+     "step": 86,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 164,
+       "defender_hp": 164,
+       "emitted_crit_damage": 151,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400061,
+     "step": 25,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 316,
+       "defender_hp": 293,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400097,
+     "step": 52,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 177,
+       "defender_hp": 153,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400097,
+     "step": 61,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 360,
+       "defender_hp": 325,
+       "emitted_crit_damage": 333,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400160,
+     "step": 67,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 264,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400167,
+     "step": 40,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 330,
+       "defender_hp": 293,
+       "emitted_crit_damage": 305,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400181,
+     "step": 28,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 89,
+       "defender_hp": 88,
+       "emitted_crit_damage": 82,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400226,
+     "step": 54,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 232,
+       "defender_hp": 215,
+       "emitted_crit_damage": 214,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400267,
+     "step": 80,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 200,
+       "defender_hp": 188,
+       "emitted_crit_damage": 185,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400293,
+     "step": 9,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 318,
+       "defender_hp": 318,
+       "emitted_crit_damage": 294,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400367,
+     "step": 70,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_magnitude:heal",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 239,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400386,
+     "step": 57,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 270,
+       "defender_hp": 264,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400452,
+     "step": 73,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 274,
+       "defender_hp": 255,
+       "emitted_crit_damage": 253,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400458,
+     "step": 103,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 261,
+       "defender_hp": 239,
+       "emitted_crit_damage": 241,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400485,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 160,
+       "defender_hp": 144,
+       "emitted_crit_damage": 148,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400507,
+     "step": 72,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 232,
+       "defender_hp": 220,
+       "emitted_crit_damage": 214,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400533,
+     "step": 59,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 176,
+       "defender_hp": 176,
+       "emitted_crit_damage": 162,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400540,
+     "step": 5,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 222,
+       "defender_hp": 215,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400553,
+     "step": 14,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 210,
+       "defender_hp": 194,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400560,
+     "step": 72,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 176,
+       "defender_hp": 166,
+       "emitted_crit_damage": 162,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400599,
+     "step": 108,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 328,
+       "defender_hp": 310,
+       "emitted_crit_damage": 303,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400602,
+     "step": 94,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 177,
+       "defender_hp": 167,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400605,
+     "step": 113,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 273,
+       "defender_hp": 266,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400638,
+     "step": 44,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 146,
+       "defender_hp": 140,
+       "emitted_crit_damage": 135,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400652,
+     "step": 65,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 180,
+       "defender_hp": 180,
+       "emitted_crit_damage": 166,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400659,
+     "step": 27,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 378,
+       "defender_hp": 360,
+       "emitted_crit_damage": 349,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400695,
+     "step": 9,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 195,
+       "defender_hp": 192,
+       "emitted_crit_damage": 180,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400734,
+     "step": 53,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 50,
+       "defender_hp": 49,
+       "emitted_crit_damage": 46,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400750,
+     "step": 188,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 74,
+       "defender_hp": 64,
+       "emitted_crit_damage": 68,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400772,
+     "step": 104,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 36,
+       "defender_hp": 34,
+       "emitted_crit_damage": 33,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400791,
+     "step": 84,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 207,
+       "defender_hp": 201,
+       "emitted_crit_damage": 191,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400799,
+     "step": 45,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 160,
+       "defender_hp": 154,
+       "emitted_crit_damage": 148,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400814,
+     "step": 5,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 280,
+       "defender_hp": 255,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400821,
+     "step": 25,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 171,
+       "defender_hp": 163,
+       "emitted_crit_damage": 158,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400837,
+     "step": 131,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 279,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400856,
+     "step": 84,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 141,
+       "defender_hp": 124,
+       "emitted_crit_damage": 130,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2400863,
+     "step": 70,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 278,
+       "defender_hp": 265,
+       "emitted_crit_damage": 257,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2400927,
+     "step": 101,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 130,
+       "defender_hp": 122,
+       "emitted_crit_damage": 120,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2401021,
+     "step": 32,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 280,
+       "defender_hp": 273,
+       "emitted_crit_damage": 259,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2401042,
+     "step": 18,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 105,
+       "defender_hp": 90,
+       "emitted_crit_damage": 97,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2401058,
+     "step": 40,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 268,
+       "defender_hp": 254,
+       "emitted_crit_damage": 247,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2401127,
+     "step": 30,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 92,
+       "defender_hp": 80,
+       "emitted_crit_damage": 85,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2401166,
+     "step": 75,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 226,
+       "defender_hp": 225,
+       "emitted_crit_damage": 209,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2401236,
+     "step": 24,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 300,
+       "defender_hp": 297,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500004,
+     "step": 121,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 492,
+       "defender_hp": 438,
+       "emitted_crit_damage": 455,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500008,
+     "step": 30,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 264,
+       "defender_hp": 255,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500052,
+     "step": 81,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 104,
+       "defender_hp": 90,
+       "emitted_crit_damage": 96,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500081,
+     "step": 9,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 304,
+       "defender_hp": 290,
+       "emitted_crit_damage": 281,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500084,
+     "step": 63,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_extra_in_engine:abilitywaterabsorb",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 168,
+       "defender_hp": 150,
+       "emitted_crit_damage": 155,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500148,
+     "step": 154,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 237,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500157,
+     "step": 76,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 178,
+       "defender_hp": 167,
+       "emitted_crit_damage": 164,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500188,
+     "step": 81,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 49,
+       "defender_hp": 44,
+       "emitted_crit_damage": 45,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500230,
+     "step": 87,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 272,
+       "defender_hp": 272,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500247,
+     "step": 46,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 315,
+       "defender_hp": 273,
+       "emitted_crit_damage": 291,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500315,
+     "step": 30,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 372,
+       "defender_hp": 322,
+       "emitted_crit_damage": 344,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500364,
+     "step": 81,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 151,
+       "defender_hp": 145,
+       "emitted_crit_damage": 139,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500379,
+     "step": 64,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 70,
+       "defender_hp": 64,
+       "emitted_crit_damage": 64,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500406,
+     "step": 37,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 300,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500441,
+     "step": 89,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 69,
+       "defender_hp": 67,
+       "emitted_crit_damage": 63,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500444,
+     "step": 51,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 219,
+       "defender_hp": 219,
+       "emitted_crit_damage": 202,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500484,
+     "step": 21,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,sandstorm",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 320,
+       "defender_hp": 307,
+       "emitted_crit_damage": 296,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500498,
+     "step": 51,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 24,
+       "defender_hp": 21,
+       "emitted_crit_damage": 22,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500531,
+     "step": 61,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 204,
+       "defender_hp": 186,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500533,
+     "step": 13,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 261,
+       "defender_hp": 248,
+       "emitted_crit_damage": 241,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500596,
+     "step": 68,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 270,
+       "defender_hp": 262,
+       "emitted_crit_damage": 249,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500651,
+     "step": 98,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 158,
+       "defender_hp": 154,
+       "emitted_crit_damage": 146,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500653,
+     "step": 52,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 216,
+       "defender_hp": 215,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500698,
+     "step": 12,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 288,
+       "defender_hp": 282,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500738,
+     "step": 83,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 230,
+       "defender_hp": 203,
+       "emitted_crit_damage": 212,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500743,
+     "step": 40,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 126,
+       "defender_hp": 123,
+       "emitted_crit_damage": 116,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500750,
+     "step": 62,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_missing_in_engine:sandstorm",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 303,
+       "defender_hp": 288,
+       "emitted_crit_damage": 280,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500758,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 174,
+       "defender_hp": 155,
+       "emitted_crit_damage": 160,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500788,
+     "step": 59,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 216,
+       "defender_hp": 207,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500798,
+     "step": 22,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 198,
+       "defender_hp": 184,
+       "emitted_crit_damage": 183,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500815,
+     "step": 17,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 207,
+       "defender_hp": 182,
+       "emitted_crit_damage": 191,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500824,
+     "step": 48,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 249,
+       "defender_hp": 220,
+       "emitted_crit_damage": 230,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500827,
+     "step": 78,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 309,
+       "defender_hp": 275,
+       "emitted_crit_damage": 285,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500857,
+     "step": 34,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 309,
+       "defender_hp": 266,
+       "emitted_crit_damage": 285,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500865,
+     "step": 6,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 294,
+       "defender_hp": 254,
+       "emitted_crit_damage": 271,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500901,
+     "step": 88,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 246,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 188,
+       "defender_hp": 175,
+       "emitted_crit_damage": 173,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500918,
+     "step": 136,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 216,
+       "defender_hp": 215,
+       "emitted_crit_damage": 199,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500922,
+     "step": 82,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 278,
+       "defender_hp": 254,
+       "emitted_crit_damage": 257,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2500923,
+     "step": 1,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:brn",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 260,
+       "defender_hp": 260,
+       "emitted_crit_damage": 240,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500948,
+     "step": 28,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 244,
+       "defender_hp": 239,
+       "emitted_crit_damage": 225,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500950,
+     "step": 49,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 291,
+       "defender_hp": 275,
+       "emitted_crit_damage": 269,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500959,
+     "step": 1,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 543,
+       "defender_hp": 513,
+       "emitted_crit_damage": 502,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500967,
+     "step": 41,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 210,
+       "defender_hp": 204,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2500982,
+     "step": 38,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 208,
+       "defender_hp": 197,
+       "emitted_crit_damage": 192,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2501021,
+     "step": 67,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 348,
+       "defender_hp": 335,
+       "emitted_crit_damage": 321,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2501035,
+     "step": 64,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 303,
+       "defender_hp": 277,
+       "emitted_crit_damage": 280,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2501081,
+     "step": 47,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 273,
+       "defender_hp": 258,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2501097,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 264,
+       "defender_hp": 255,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2501115,
+     "step": 52,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 444,
+       "defender_hp": 407,
+       "emitted_crit_damage": 410,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2501142,
+     "step": 33,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 303,
+       "defender_hp": 285,
+       "emitted_crit_damage": 280,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2501227,
+     "step": 27,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 120,
+       "defender_hp": 114,
+       "emitted_crit_damage": 111,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600003,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 188,
+       "defender_hp": 185,
+       "emitted_crit_damage": 173,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600003,
+     "step": 120,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 258,
+       "defender_hp": 246,
+       "emitted_crit_damage": 238,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600011,
+     "step": 17,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 239,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600049,
+     "step": 5,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 291,
+       "defender_hp": 277,
+       "emitted_crit_damage": 269,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600059,
+     "step": 100,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 240,
+       "defender_hp": 207,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600076,
+     "step": 78,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 237,
+       "defender_hp": 215,
+       "emitted_crit_damage": 219,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600094,
+     "step": 1,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 260,
+       "defender_hp": 248,
+       "emitted_crit_damage": 240,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600101,
+     "step": 113,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:heal",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 308,
+       "defender_hp": 273,
+       "emitted_crit_damage": 284,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600104,
+     "step": 52,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 256,
+       "defender_hp": 235,
+       "emitted_crit_damage": 236,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600205,
+     "step": 14,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 222,
+       "defender_hp": 202,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600215,
+     "step": 4,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 196,
+       "defender_hp": 188,
+       "emitted_crit_damage": 181,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600306,
+     "step": 105,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:sandstorm",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 176,
+       "defender_hp": 174,
+       "emitted_crit_damage": 162,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600326,
+     "step": 15,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 276,
+       "defender_hp": 264,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600341,
+     "step": 4,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 243,
+       "defender_hp": 227,
+       "emitted_crit_damage": 224,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600370,
+     "step": 45,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 276,
+       "defender_hp": 259,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600375,
+     "step": 16,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 294,
+       "defender_hp": 262,
+       "emitted_crit_damage": 271,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600380,
+     "step": 179,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_missing_in_engine:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 213,
+       "defender_hp": 209,
+       "emitted_crit_damage": 197,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600423,
+     "step": 71,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 297,
+       "defender_hp": 275,
+       "emitted_crit_damage": 274,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600425,
+     "step": 78,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers,psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 172,
+       "defender_hp": 163,
+       "emitted_crit_damage": 159,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600426,
+     "step": 96,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 222,
+       "defender_hp": 215,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600437,
+     "step": 43,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 231,
+       "defender_hp": 215,
+       "emitted_crit_damage": 213,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600452,
+     "step": 57,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 126,
+       "defender_hp": 109,
+       "emitted_crit_damage": 116,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600473,
+     "step": 28,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 339,
+       "defender_hp": 331,
+       "emitted_crit_damage": 313,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600501,
+     "step": 43,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 376,
+       "defender_hp": 371,
+       "emitted_crit_damage": 347,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600513,
+     "step": 87,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 219,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600535,
+     "step": 80,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 150,
+       "defender_hp": 131,
+       "emitted_crit_damage": 138,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 246,
+       "defender_hp": 229,
+       "emitted_crit_damage": 227,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600600,
+     "step": 98,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 162,
+       "defender_hp": 153,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600645,
+     "step": 57,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "component_missing_in_engine:itemleftovers,movewish",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 300,
+       "defender_hp": 262,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600652,
+     "step": 27,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 291,
+       "defender_hp": 275,
+       "emitted_crit_damage": 269,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600653,
+     "step": 7,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 267,
+       "defender_hp": 227,
+       "emitted_crit_damage": 246,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600658,
+     "step": 18,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 252,
+       "defender_hp": 223,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600704,
+     "step": 89,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 136,
+       "defender_hp": 136,
+       "emitted_crit_damage": 125,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600750,
+     "step": 98,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 288,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600768,
+     "step": 53,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 280,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600812,
+     "step": 69,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 180,
+       "defender_hp": 177,
+       "emitted_crit_damage": 166,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600835,
+     "step": 37,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 243,
+       "defender_hp": 241,
+       "emitted_crit_damage": 224,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600889,
+     "step": 77,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 252,
+       "defender_hp": 230,
+       "emitted_crit_damage": 233,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600903,
+     "step": 13,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 282,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600957,
+     "step": 5,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 279,
+       "defender_hp": 267,
+       "emitted_crit_damage": 258,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600968,
+     "step": 60,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 288,
+       "defender_hp": 271,
+       "emitted_crit_damage": 266,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600971,
+     "step": 18,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 306,
+       "defender_hp": 266,
+       "emitted_crit_damage": 283,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600976,
+     "step": 102,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 282,
+       "defender_hp": 266,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600979,
+     "step": 52,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 183,
+       "defender_hp": 167,
+       "emitted_crit_damage": 169,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600981,
+     "step": 43,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 249,
+       "defender_hp": 233,
+       "emitted_crit_damage": 230,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2600985,
+     "step": 5,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 366,
+       "defender_hp": 316,
+       "emitted_crit_damage": 338,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2600995,
+     "step": 40,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 294,
+       "defender_hp": 290,
+       "emitted_crit_damage": 271,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601008,
+     "step": 27,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 142,
+       "defender_hp": 138,
+       "emitted_crit_damage": 131,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601020,
+     "step": 228,
+     "current_family": "I3_roll_inherited",
+     "current_class": "component_magnitude:movepainsplit",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 243,
+       "defender_hp": 236,
+       "emitted_crit_damage": 224,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601034,
+     "step": 3,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 256,
+       "defender_hp": 241,
+       "emitted_crit_damage": 236,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601070,
+     "step": 61,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 249,
+       "defender_hp": 239,
+       "emitted_crit_damage": 230,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601080,
+     "step": 69,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 273,
+       "defender_hp": 254,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601112,
+     "step": 24,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 224,
+       "defender_hp": 224,
+       "emitted_crit_damage": 207,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601138,
+     "step": 92,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 316,
+       "defender_hp": 310,
+       "emitted_crit_damage": 292,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601185,
+     "step": 70,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 198,
+       "defender_hp": 196,
+       "emitted_crit_damage": 183,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601186,
+     "step": 6,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 273,
+       "defender_hp": 239,
+       "emitted_crit_damage": 252,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2601213,
+     "step": 53,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 222,
+       "defender_hp": 215,
+       "emitted_crit_damage": 205,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2601228,
+     "step": 44,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 52,
+       "defender_hp": 49,
+       "emitted_crit_damage": 48,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700051,
+     "step": 18,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 135,
+       "defender_hp": 125,
+       "emitted_crit_damage": 124,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700072,
+     "step": 18,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 272,
+       "defender_hp": 250,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700082,
+     "step": 96,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 237,
+       "defender_hp": 228,
+       "emitted_crit_damage": 219,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700084,
+     "step": 5,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 279,
+       "defender_hp": 261,
+       "emitted_crit_damage": 258,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700111,
+     "step": 120,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 110,
+       "defender_hp": 103,
+       "emitted_crit_damage": 101,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 116,
+       "defender_hp": 107,
+       "emitted_crit_damage": 107,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700136,
+     "step": 31,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 162,
+       "defender_hp": 152,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700182,
+     "step": 144,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:brn,itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 182,
+       "defender_hp": 172,
+       "emitted_crit_damage": 168,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700183,
+     "step": 41,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 248,
+       "defender_hp": 215,
+       "emitted_crit_damage": 229,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700218,
+     "step": 54,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 272,
+       "defender_hp": 268,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700218,
+     "step": 149,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 202,
+       "defender_hp": 177,
+       "emitted_crit_damage": 186,
+       "emitted_arm_kills": true,
+       "kill_rolls": 13,
+       "survive_rolls": 3,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700222,
+     "step": 68,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 82,
+       "defender_hp": 77,
+       "emitted_crit_damage": 75,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700251,
+     "step": 95,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 186,
+       "defender_hp": 185,
+       "emitted_crit_damage": 172,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700255,
+     "step": 27,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 166,
+       "defender_hp": 148,
+       "emitted_crit_damage": 153,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700290,
+     "step": 108,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 237,
+       "defender_hp": 209,
+       "emitted_crit_damage": 219,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700294,
+     "step": 91,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 162,
+       "defender_hp": 139,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700336,
+     "step": 94,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 304,
+       "defender_hp": 285,
+       "emitted_crit_damage": 281,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700346,
+     "step": 3,
+     "current_family": "I1_cap_state_shape",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 318,
+       "defender_hp": 308,
+       "emitted_crit_damage": 294,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700355,
+     "step": 88,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 276,
+       "defender_hp": 259,
+       "emitted_crit_damage": 255,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700377,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 312,
+       "defender_hp": 276,
+       "emitted_crit_damage": 288,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700382,
+     "step": 123,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 210,
+       "defender_hp": 192,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700443,
+     "step": 47,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 171,
+       "defender_hp": 156,
+       "emitted_crit_damage": 158,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700465,
+     "step": 52,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 206,
+       "defender_hp": 185,
+       "emitted_crit_damage": 190,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700466,
+     "step": 52,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 219,
+       "defender_hp": 206,
+       "emitted_crit_damage": 202,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700504,
+     "step": 57,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 201,
+       "defender_hp": 187,
+       "emitted_crit_damage": 185,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700539,
+     "step": 31,
+     "current_family": "I5_boundary_truncation",
+     "current_class": "component_extra_in_engine:psn",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 162,
+       "defender_hp": 154,
+       "emitted_crit_damage": 149,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700545,
+     "step": 80,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 96,
+       "defender_hp": 90,
+       "emitted_crit_damage": 88,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700549,
+     "step": 35,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 282,
+       "defender_hp": 262,
+       "emitted_crit_damage": 260,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700552,
+     "step": 115,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 72,
+       "defender_hp": 69,
+       "emitted_crit_damage": 66,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700572,
+     "step": 34,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 336,
+       "defender_hp": 335,
+       "emitted_crit_damage": 310,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700618,
+     "step": 50,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 190,
+       "defender_hp": 177,
+       "emitted_crit_damage": 175,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700618,
+     "step": 53,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 243,
+       "defender_hp": 229,
+       "emitted_crit_damage": 224,
+       "emitted_arm_kills": false,
+       "kill_rolls": 6,
+       "survive_rolls": 10,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700644,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 204,
+       "defender_hp": 198,
+       "emitted_crit_damage": 188,
+       "emitted_arm_kills": false,
+       "kill_rolls": 3,
+       "survive_rolls": 13,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700656,
+     "step": 74,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 234,
+       "defender_hp": 211,
+       "emitted_crit_damage": 216,
+       "emitted_arm_kills": true,
+       "kill_rolls": 10,
+       "survive_rolls": 6,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700702,
+     "step": 38,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 231,
+       "defender_hp": 215,
+       "emitted_crit_damage": 213,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700703,
+     "step": 12,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 376,
+       "defender_hp": 335,
+       "emitted_crit_damage": 347,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      },
+      {
+       "slot": "p1",
+       "crit_base": 264,
+       "defender_hp": 251,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 5,
+       "survive_rolls": 11,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700729,
+     "step": 59,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 210,
+       "defender_hp": 197,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700749,
+     "step": 38,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 114,
+       "defender_hp": 97,
+       "emitted_crit_damage": 105,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700762,
+     "step": 46,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 92,
+       "defender_hp": 80,
+       "emitted_crit_damage": 85,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700866,
+     "step": 56,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 300,
+       "defender_hp": 290,
+       "emitted_crit_damage": 277,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700926,
+     "step": 54,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 164,
+       "defender_hp": 153,
+       "emitted_crit_damage": 151,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700938,
+     "step": 22,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 198,
+       "defender_hp": 169,
+       "emitted_crit_damage": 183,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700943,
+     "step": 41,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 177,
+       "defender_hp": 162,
+       "emitted_crit_damage": 163,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700944,
+     "step": 42,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 272,
+       "defender_hp": 267,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": false,
+       "kill_rolls": 2,
+       "survive_rolls": 14,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700967,
+     "step": 81,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 202,
+       "defender_hp": 185,
+       "emitted_crit_damage": 186,
+       "emitted_arm_kills": true,
+       "kill_rolls": 9,
+       "survive_rolls": 7,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2700977,
+     "step": 31,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 207,
+       "defender_hp": 194,
+       "emitted_crit_damage": 191,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700978,
+     "step": 104,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 243,
+       "defender_hp": 225,
+       "emitted_crit_damage": 224,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2700995,
+     "step": 50,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 210,
+       "defender_hp": 188,
+       "emitted_crit_damage": 194,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701028,
+     "step": 36,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 102,
+       "defender_hp": 98,
+       "emitted_crit_damage": 94,
+       "emitted_arm_kills": false,
+       "kill_rolls": 4,
+       "survive_rolls": 12,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2701036,
+     "step": 39,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 264,
+       "defender_hp": 246,
+       "emitted_crit_damage": 244,
+       "emitted_arm_kills": false,
+       "kill_rolls": 7,
+       "survive_rolls": 9,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2701063,
+     "step": 106,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 122,
+       "defender_hp": 122,
+       "emitted_crit_damage": 112,
+       "emitted_arm_kills": false,
+       "kill_rolls": 1,
+       "survive_rolls": 15,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2701065,
+     "step": 24,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 186,
+       "defender_hp": 164,
+       "emitted_crit_damage": 172,
+       "emitted_arm_kills": true,
+       "kill_rolls": 12,
+       "survive_rolls": 4,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701085,
+     "step": 28,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 242,
+       "defender_hp": 209,
+       "emitted_crit_damage": 223,
+       "emitted_arm_kills": true,
+       "kill_rolls": 14,
+       "survive_rolls": 2,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701099,
+     "step": 28,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 141,
+       "defender_hp": 126,
+       "emitted_crit_damage": 130,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701185,
+     "step": 78,
+     "current_family": "limit:roll_divergent_lethality",
+     "current_class": "limit:roll_divergent_lethality",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 85,
+       "defender_hp": 79,
+       "emitted_crit_damage": 78,
+       "emitted_arm_kills": false,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "kill"
+      }
+     ]
+    },
+    {
+     "seed": 2701197,
+     "step": 100,
+     "current_family": "limit:world_sample_drag_target",
+     "current_class": "limit:world_sample_drag_target",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 240,
+       "defender_hp": 221,
+       "emitted_crit_damage": 222,
+       "emitted_arm_kills": true,
+       "kill_rolls": 8,
+       "survive_rolls": 8,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701239,
+     "step": 38,
+     "current_family": "LS_capped_lethal_shape",
+     "current_class": "component_missing_in_engine:itemleftovers",
+     "gaps": [
+      {
+       "slot": "p1",
+       "crit_base": 272,
+       "defender_hp": 233,
+       "emitted_crit_damage": 251,
+       "emitted_arm_kills": true,
+       "kill_rolls": 15,
+       "survive_rolls": 1,
+       "absent_side": "survive"
+      }
+     ]
+    },
+    {
+     "seed": 2701246,
+     "step": 47,
+     "current_family": "UNATTRIBUTED",
+     "current_class": "roll_scaled_component",
+     "gaps": [
+      {
+       "slot": "p2",
+       "crit_base": 336,
+       "defender_hp": 300,
+       "emitted_crit_damage": 310,
+       "emitted_arm_kills": true,
+       "kill_rolls": 11,
+       "survive_rolls": 5,
+       "absent_side": "survive"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

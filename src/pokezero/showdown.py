@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import re
+import warnings
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
@@ -36,16 +37,19 @@ from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
     OPPONENT_POKEMON_TOKEN_COUNT,
     OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
     V3_TRANSITION_TOKEN_COUNT,
+    V4_TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
     ObservationPerspective,
     ObservationSpec,
@@ -515,18 +519,16 @@ NUMERIC_MEANLOOK_TRAP = V3_LEGACY_NUMERIC_BASE + 10
 # above the v2.2 census — legacy modes stay byte-frozen; the v2.2 pending bits 56/57 are unchanged.
 NUMERIC_SELF_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 11
 NUMERIC_OPP_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 12
-# Change 10 — confusion self-hit damage-attribution correction, one 0/1 bit on the OPPONENT's
-# turn-merged move sub-block (the token whose damage was polluted), schema >= v3 only. When a
+# Change 10 — confusion self-hit marker, one 0/1 bit on the OPPONENT's
+# turn-merged move sub-block, schema >= v3 only. When a
 # SLOWER confused mon self-hits, the sim emits ``|-activate|SLOT|confusion`` then an UNTAGGED
-# ``|-damage|SLOT|…`` with no |move|/|cant| line; the fold folds that self-damage into the
-# opponent's still-open move window's ``damage_fraction`` (correct for the v2.2 field, which is
-# left FROZEN). Under v3 the encode writes the move's damage-fraction column as
-# ``damage_fraction - confusion_selfhit_fraction`` (the move's own damage, self-hit removed) and
-# sets this bit = "the defender self-hit from confusion after this move." A single column (not a
+# ``|-damage|SLOT|…`` with no |move|/|cant| line; the fold keeps that self-damage separate
+# from the opponent's still-open move window's damage and KO attribution. V3 sets this bit =
+# "the defender self-hit from confusion after this move." A single column (not a
 # first/second pair like the fail bit) because the correction always rides the FIRST sub-block in
 # practice — the confused mon must be SLOWER, so the opponent moved first; the write is mirrored
-# onto the second sub-block defensively. Additive/schema-agnostic at extraction (the token fields
-# are always populated); only a v3 encode reads them, so v2/v2.1/v2.2 output stays byte-identical.
+# onto the second sub-block defensively. Attribution is corrected schema-agnostically at
+# extraction; only V3 emits the additional marker.
 NUMERIC_TT_CONFUSION_SELFHIT = V3_LEGACY_NUMERIC_BASE + 13
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
 # encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
@@ -535,6 +537,230 @@ NUMERIC_TT_CONFUSION_SELFHIT = V3_LEGACY_NUMERIC_BASE + 13
 # private, pre-cutover writer surface; the public v3 width is derived from the layout map below.
 V3_LEGACY_NUMERIC_EXTRA = 14
 V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V3_LEGACY_NUMERIC_BASE + V3_LEGACY_NUMERIC_EXTRA
+
+# ---- v4 writer surface: the k0 FEATURE PACK (docs/observation_v4_spec.md, plan Parts A/B) ------
+#
+# Every column here is parser-derived PUBLIC information and Markov-legal: a function of the
+# current public state plus the immediately-preceding round's public record — the same window the
+# parser already holds. They exist because the campaign's world-side audit ran in the opposite
+# direction and found facts the SEARCH WORLD is seeded with (or that only the history region
+# carries) which the observation never sees. A pure-Markov k0 policy is blind to exactly those.
+#
+# The columns sit above the v3 writer census, so v3 (and every legacy mode) stays byte-frozen:
+# the v3 projection table never names them and the v3 encode path never writes them.
+V4_NUMERIC_BASE = V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT
+# Pack A1 — FORCED RECHARGE. Encoded as ``volatile:mustrecharge`` in the ACTIVE mon's
+# volatile bag (both sides), NOT as a numeric column.
+#
+# This was the pack's highest-priority gap and the plan's §2 correction: `mustrecharge` is
+# NOT in TRACKED_VOLATILES, so no `volatile:mustrecharge` categorical could ever be emitted and
+# no numeric column existed. The SELF side was covered by accident — a recharging mon's request
+# offers exactly one action, so the action tokens collapse to a lone legal ``move:recharge`` —
+# but a k0 policy is blind on the OPPONENT side, where it decides whether this is a free turn.
+# The search lane already re-derives the fact and seeds the world's ``mustrecharge`` volatile;
+# this is the observation twin, from the SAME parser tracker (ONE PARSER TRUTH, TWO CONSUMERS).
+#
+# WHY THE BAG AND NOT A DEDICATED COLUMN. The two are the same function: categorical columns are
+# SUMMED into the token embedding (``category_embedding(ids).sum(dim=3)`` with padding_idx=0), so
+# a present volatile contributes one learned vector exactly as a 0/1 numeric column would
+# contribute one column of the numeric projection. Position in the bag is already semantically
+# irrelevant. Given that, the bag wins on cost — no new numeric column on all 87 tokens — and on
+# consistency: ``solarbeam``, the CHARGE half of this very move family, is already a tracked
+# volatile precisely so mid-charge commitment is public state. The recharge half now matches.
+#
+# The one thing a dedicated column would have bought is immunity from bucket overflow, and that
+# risk is measured, not assumed: over 160 random-legal self-play games (337,314 slot
+# observations) the maximum simultaneous tracked-volatile count on one mon was TWO, against six
+# buckets — and 23 of the 38 tracked volatiles have no carrier in the gen3 randbat pool at all.
+# Overflow is nonetheless made LOUD rather than silent; see _encode_active_volatiles.
+#
+# NOT added to TRACKED_VOLATILES: that set is the closed list ``_update_volatiles`` accepts from
+# ``|-start|``/``|-end|`` lines, and mustrecharge never arrives that way (the sim emits a bespoke
+# ``|-mustrecharge|SLOT``). It is injected into the bag at encode time from the parser tracker,
+# under schema v4 only, so v3's bag is untouched. Its vocabulary row rides the feature-pack latch.
+MUST_RECHARGE_VOLATILE = "mustrecharge"
+# Pack A3 — TRUANT LOAF PHASE on the ACTIVE mon (both sides), 1 = loafs on its next move attempt.
+#
+# The parser already runs the exact gen3 free-running-toggle state machine (``truant_phase``:
+# switch-in seed ``this.turn !== 0``, unconditional per-residual flip, post-upkeep replacement
+# guard, and the Traced-Truant unknown state) because the WORLD needs it. The observation never
+# saw it. 0 encodes BOTH "no Truant holder" and "phase unknown" — mirroring the world's None
+# fallback, which never asserts a phase it cannot prove; the ability itself is separately visible
+# through the ability channel, so the model can tell the two zeros apart in the cases that matter.
+NUMERIC_TRUANT_LOAF = V4_NUMERIC_BASE + 0
+# Pack A5 — LAST-ROUND DAMAGE point evidence, two per-mon scalars on the ACTIVE mon (both sides).
+#
+# DEALT: the fraction of the DEFENDER's max HP this mon removed with its own move damage in the
+# previous round (untagged ``-damage`` inside its own move window; confusion self-hits and
+# ``[from]``-tagged chip are excluded, matching the transitions fold's attribution rules).
+# TAKEN: the fraction of THIS mon's max HP it lost to ANY source in the previous round — move
+# damage, residuals, hazards, recoil, confusion self-hit. The pair is deliberately not a mirror:
+# DEALT is move-attributed and TAKEN is total, and both are keyed to the MON, so a mon that just
+# switched in reads 0/0 even though its side dealt and took damage last round.
+#
+# Point observation ONLY. The range/stat/variant inference this evidence feeds is the belief
+# layer's job (Tier-2 residual lane) and is explicitly out of scope for the pack: these columns
+# state what happened, they do not conclude anything from it.
+NUMERIC_LAST_DAMAGE_DEALT = V4_NUMERIC_BASE + 1
+NUMERIC_LAST_DAMAGE_TAKEN = V4_NUMERIC_BASE + 2
+# Part B1 — ENTRY-HAZARD CREDIT ACCRUED, per side, on the FIELD token.
+#
+# The credit-assignment fix. Spikes pay off turns after they are laid, in nobody's visible state,
+# so the value head regresses on states that never contain the layers' realized payoff. These are
+# the cumulative ``[from] Spikes`` damage totals, expressed as a fraction of that side's TOTAL
+# team HP (the sum of per-mon max-HP fractions / 6 — six mons, and the opponent's real max HPs
+# are hidden, so an equal-share denominator is the only public normalization).
+#
+# ORIENTATION (the whole hazard block shares it with NUMERIC_SELF_HAZARDS/NUMERIC_OPP_HAZARDS):
+# SELF_* is about OUR OWN ground — layers on our side, damage our mons suffered. OPP_* is the
+# opponent's ground, i.e. the payoff OUR Spikes have realized.
+NUMERIC_SELF_HAZARD_CREDIT = V4_NUMERIC_BASE + 3
+NUMERIC_OPP_HAZARD_CREDIT = V4_NUMERIC_BASE + 4
+# Part B2 — EXPECTED REMAINING HAZARD VALUE, per side, on the FIELD token: the forward-looking
+# twin of B1. ``healthy GROUNDED bench count x current layer damage fraction``, normalized by the
+# same six-mon team-HP denominator so it is directly comparable with the credit columns.
+#
+# Gen3 grounding rule as the ENGINE applies it (engine_world): Flying types and Levitate are
+# exempt. Spikes is the pool's only entry hazard, at 1/8, 1/6, 1/4 of max HP for 1/2/3 layers.
+# Grounding is evaluated from PUBLIC knowledge only — for the opponent that means revealed
+# species types plus a revealed/uniquely-implied Levitate, so an unrevealed bench mon counts as
+# grounded (the encoder's conservative default; it never claims an immunity it cannot see).
+NUMERIC_SELF_HAZARD_EXPECTED = V4_NUMERIC_BASE + 5
+NUMERIC_OPP_HAZARD_EXPECTED = V4_NUMERIC_BASE + 6
+# Part B4 — ITEMS-REMOVED CREDIT, per side, on the FIELD token: how many of that side's held items
+# have been publicly removed by the OTHER side's actions (``-enditem … [from] move: Knock Off``).
+# Per-mon removal state is already encoded (NUMERIC_REVEALED_ITEM goes to 0 while the named item
+# bucket persists); what was missing is the CREDIT AGGREGATE — the side-level ledger the value head
+# needs to price a Knock Off whose payoff is spread over the rest of the game.
+#
+# Normalized /6 (items per team), NOT the /64 evidence-mass convention used by the tendency
+# (count, opportunity) pairs. Deliberate deviation from the plan's sketch: a team can lose at most
+# six items, so /64 would pin this column under 0.1 for its entire realistic range. /6 is the same
+# team-fraction denominator the hazard columns above use, which is what makes the whole Part-B
+# block read on one scale. Trick is excluded: it is a SWAP, and the giving half is unmodeled
+# (belief marks it item_mutated with no removal), so counting it as removal credit would be wrong.
+#
+# ADJUDICATION CAVEAT (plan §4 item 4, binding): FoulPlay's knock-off rate is NOT automatically
+# the target. Before any training reads this column as a deficiency signal, a G4-style
+# counterfactual probe must adjudicate whether self-play's lower usage is actually worse.
+NUMERIC_SELF_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 7
+NUMERIC_OPP_ITEMS_REMOVED_CREDIT = V4_NUMERIC_BASE + 8
+# Part B3+ — MATCHUP-CONDITIONAL switch tendency, two columns on EVERY opponent mon token,
+# conditioned on OUR CURRENT ACTIVE: the literal conditional form of the marginal triple's
+# (switched-out-before-attacking, stayed-and-attacked) pair — "in THIS matchup, how often did
+# it bail and how often did it stand its ground". An evidence-mass pair, never a bare rate.
+#
+# The existing per-mon triple is keyed to the mon that switched out — correct — but it
+# marginalises over the thing that actually drives the behaviour: WHAT it was facing.
+# Switching in gen3 is almost entirely matchup-driven (a mon stays in on one threat and bails
+# from another), so "bailed 3 of 7" is a biased estimator of the only quantity that matters at
+# decision time: will this mon bail against the mon I have out RIGHT NOW.
+#
+# Why it belongs in the k0 pack: the marginal aggregate survives at k0 (it is a token column,
+# not a history row), but the matchup CONTEXT of each switch is carried solely by the
+# transition rows — so a k0 policy sees "bailed 3 times" with no way to recover what from. And
+# the raw form was fully available at k64, the worst and least stable arm; the model could not
+# use it. That is this pack's thesis in miniature: encode the sufficient statistic rather than
+# widening the window.
+#
+# Written on ALL SIX opponent tokens, not just their active, so the pair answers two questions
+# at once — will the mon in front of me bail, and which of their mons has historically been
+# willing to face what I have out (i.e. what they will bring IN).
+#
+# Chosen over (switched, opportunities) for two reasons: it is the stay-or-switch evidence
+# exactly (a ``cant`` turn is an opportunity but not a stay-or-switch datum), and both halves
+# are already accumulated at live hook points in BOTH the batch and the incremental fold, so
+# the parity twins cannot drift — an opportunity count would have had to be reconstructed from
+# a turn map the incremental fold prunes.
+#
+# NORMALIZED /8, not the /64 the global tendency pairs use. Same principle, different range:
+# /64 suits whole-game counts that reach tens, while a single (their mon x our mon) cell is
+# visited a handful of times in one game. A cell with no history reads (0, 0) and the model
+# falls back to the marginal triple on the same token — the two are side by side by design.
+NUMERIC_MON_SWITCHED_VS_ACTIVE = V4_NUMERIC_BASE + 9
+NUMERIC_MON_STAYED_VS_ACTIVE = V4_NUMERIC_BASE + 10
+# Pack A4 addendum — the CHOICE LOCK and the item's provenance, on the ACTIVE mon (both sides).
+#
+# ``NUMERIC_CHOICE_LOCKED``: this mon publicly holds a choice item and has executed a move since
+# acquiring it, so gen3's SILENT ``choicelock`` volatile is on it and it can use nothing else
+# until it switches. Pairs with pack A2, which names the move it is stuck in — exactly the way
+# ``volatile:encore`` pairs with A2 to specify an Encore. The two are the same mechanic from the
+# model's point of view, and the asymmetry in how they were encoded is the leading explanation
+# for the observed usage gap: Encore's lock is announced (``-start|SLOT|Encore``), tracked
+# (``volatile:encore``), and timed (``NUMERIC_ENCORE_TURNS``), and its usage climbs generation
+# over generation; Trick's lock emitted nothing at all, and its usage sits near zero.
+#
+# ``NUMERIC_ITEM_SWAPPED``: the currently-held item arrived via Trick rather than being the
+# mon's own. In principle this is the sign discriminator — a NATIVE Choice Band is assigned to
+# all-attacks sets and makes its holder stronger, while a Tricked one is a liability we
+# inflicted, same item and opposite valence.
+#
+# HONEST LIMIT IN THIS POOL, do not read more into the pair than it carries: a native Band is
+# never announced (gen3 emits no Frisk/held-item reveal, and the only ``isChoice`` item is
+# Choice Band), so ``choice_item_public`` can only be set by a Trick's ``|-item|`` line. In
+# gen3 randbats today that makes the two columns COLLINEAR — locked implies swapped — and the
+# separate column earns its keep only if a native reveal surface ever appears. It is kept
+# distinct rather than folded in because collapsing two facts into one column is the harder
+# thing to undo later, and because the pair is what the model needs if that surface arrives.
+#
+# Both are raw facts, not judgements: neither says the lock is good or bad. The move identity
+# (A2, sharing the action token's ``move:<id>`` embedding row, which carries the move's damage
+# class) is what supplies that.
+NUMERIC_CHOICE_LOCKED = V4_NUMERIC_BASE + 11
+NUMERIC_ITEM_SWAPPED = V4_NUMERIC_BASE + 12
+V4_NUMERIC_EXTRA = 13
+V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V4_NUMERIC_BASE + V4_NUMERIC_EXTRA
+# The writer columns that exist ONLY at v4. Asked about under v3 these are absent (not dropped,
+# not invalid) — the schema-keyed index resolver answers None so cross-schema audit/export code
+# can iterate every named column once and let each schema report what it carries.
+V4_ONLY_NUMERIC_INDICES = frozenset(
+    range(V4_NUMERIC_BASE, V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
+)
+
+# ---- v4 categorical additions (the two pack rows that are identities, not scalars) ------------
+#
+# Categorical columns embed as an unordered BAG per row (the model sums the per-column embeddings),
+# so every label must be self-describing within its row — the same constraint that gave the v2.2
+# second sub-block its ``tt2_`` prefixes.
+# The pack's categorical columns sit on the PRE-v2.2 base: v4 has no transition region, so the
+# twelve turn-merged second-sub-block columns (CATEGORY_TM_*) describe rows that no longer exist
+# and are dropped with them.
+V4_CATEGORICAL_BASE = _CATEGORICAL_FEATURE_COUNT
+# Pack A2 — the ACTIVE mon's LAST EXECUTED MOVE (gen3 ``Pokemon.lastMove``), one column per side's
+# active token. The single largest surface in the pack: it is what Encore locks, what a Choice-lock
+# read corroborates, and the cadence anchor a k1 row was implicitly providing.
+#
+# THREE states, all positive facts:
+#   * unwritten (padding) — this mon has never executed a move (nothing is claimed);
+#   * ``lastmove:switch`` — the DISTINCT sentinel: the mon came in this turn, so ``lastMove`` is
+#     genuinely null. That is a FACT, not ignorance — Encore correctly FAILS against a fresh
+#     switch-in, and the engine models it as ``LastUsedMove::Switch``. Collapsing the sentinel into
+#     the padding state would relabel a fact as ignorance (the parser's own note on the field);
+#   * ``move:<id>`` — the executed move, reusing the EXISTING move family rather than a private
+#     ``lastmove:<id>`` one, so the identity shares an embedding row with the same move on an
+#     action token. The token-type embedding supplies the context, and the pokemon-token row's
+#     other move-ish labels are ``belief:possible_move:<id>`` — a different family — so the bag
+#     stays unambiguous.
+# The parser's truth table (record on ``|move|``, never on ``|cant|``, never for a ``[from]``-tagged
+# CALLED move) is transcribed from the same semantics the vendored engine patch obeys, so the two
+# consumers cannot disagree.
+CATEGORY_LAST_USED_MOVE = V4_CATEGORICAL_BASE + 0
+# Pack A4 — the ability the ACTIVE mon is CURRENTLY borrowing via Trace, ``ability:<id>``, cleared
+# on switch-out.
+#
+# Deliberately NOT the belief's ability channel, which is the WRONG source for this: belief holds
+# the LAST ability the mon ever traced, and Trace re-fires on every switch-in, so a stale entry
+# once handed a Gardevoir ``levitate`` from an earlier switch-in — silently granting it Spikes
+# immunity. This column is the observation twin of the world-side fix: the parser's transient
+# ``traced_ability``, which is the current copy or nothing.
+CATEGORY_TRACED_ABILITY = V4_CATEGORICAL_BASE + 1
+V4_CATEGORICAL_EXTRA = 2
+_V4_CATEGORICAL_FEATURE_COUNT = V4_CATEGORICAL_BASE + V4_CATEGORICAL_EXTRA
+# The ``lastmove:switch`` sentinel string (enumerated in randbat_vocab so it never hashes OOV).
+LAST_USED_MOVE_SWITCH_SENTINEL = "lastmove:switch"
+# The Baton-Pass arrival's own sentinel — see the write site for why it is not folded into the
+# plain switch sentinel.
+LAST_USED_MOVE_BATON_PASS_SENTINEL = "lastmove:batonpass"
 
 # Evidence-backed unreachable mechanics from docs/dead_observation_fields.md. These columns
 # remain part of every legacy schema's frozen layout but are intentionally absent from v3.
@@ -735,6 +961,107 @@ def v3_numeric_index(legacy_index: int) -> int:
         raise ValueError(f"legacy numeric column {legacy_index} is not part of v3") from exc
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
+# ---- the v4 public layout ---------------------------------------------------------------------
+#
+# V4 is the v3 layout with the feature-pack columns APPENDED INSIDE their semantic group, not
+# bolted onto the end. The v3 table's own rule is that grouping follows the token encoder's
+# semantic surfaces rather than the chronology in which columns were introduced; a v4 appendix
+# would break exactly that rule for the pack it exists to carry. The consequence — v4's physical
+# positions diverge from v3's from the first extended group onward — is free: v4 is a new
+# contract, so no artifact is ever read under both layouts (see the "new arms only" note below).
+#
+# The same drop set applies: the fourteen evidence-backed unreachable fields v3 removed stay
+# removed. No v4 column is dropped or rewritten relative to the v3 writer surface.
+_V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
+    "pokemon_state": (
+        NUMERIC_TRUANT_LOAF,
+        NUMERIC_LAST_DAMAGE_DEALT,
+        NUMERIC_LAST_DAMAGE_TAKEN,
+        NUMERIC_CHOICE_LOCKED,
+        NUMERIC_ITEM_SWAPPED,
+    ),
+    # The marginal tendency triple lives in "belief" (the per-opponent-mon surface), so its
+    # matchup-conditional twin sits directly beside it.
+    "belief": (
+        NUMERIC_MON_SWITCHED_VS_ACTIVE,
+        NUMERIC_MON_STAYED_VS_ACTIVE,
+    ),
+    "field": (
+        NUMERIC_SELF_HAZARD_CREDIT,
+        NUMERIC_OPP_HAZARD_CREDIT,
+        NUMERIC_SELF_HAZARD_EXPECTED,
+        NUMERIC_OPP_HAZARD_EXPECTED,
+        NUMERIC_SELF_ITEMS_REMOVED_CREDIT,
+        NUMERIC_OPP_ITEMS_REMOVED_CREDIT,
+    ),
+}
+# V4 drops everything v3 dropped, PLUS the entire history group: the transition region is gone
+# from the contract, so every per-strike / per-turn column that only ever described a history row
+# has no surface left to sit on. What those rows were carrying is either named as current state
+# by the feature pack (recharge, last move, last-round damage) or deliberately let go.
+#
+# Two survivors from the tier2 family are NOT dropped, because they were never history columns:
+# NUMERIC_TIER2_CB_PINNED and NUMERIC_TIER2_INVESTMENT_PINNED live on the opponent MON token as
+# the authoritative CURRENT-STATE form of those conclusions. They are still derived from the
+# extracted token stream — extraction keeps running, only the ENCODING of the rows is gone.
+_V4_HISTORY_GROUP_INDICES = frozenset(
+    index for name, indices in _V3_NUMERIC_LAYOUT_GROUPS if name == "history" for index in indices
+)
+V4_DROPPED_LEGACY_NUMERIC_INDICES = (
+    V3_DROPPED_LEGACY_NUMERIC_INDICES | _V4_HISTORY_GROUP_INDICES
+)
+_V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = tuple(
+    (name, indices + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()))
+    for name, indices in _V3_NUMERIC_LAYOUT_GROUPS
+    if name != "history"
+)
+V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = _V4_NUMERIC_LAYOUT_GROUPS
+V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX = tuple(
+    legacy_index for _, indices in V4_NUMERIC_LAYOUT_GROUPS for legacy_index in indices
+)
+V4_NUMERIC_INDEX_BY_LEGACY_INDEX = {
+    legacy_index: new_index
+    for new_index, legacy_index in enumerate(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
+}
+
+if set(_V4_NUMERIC_LAYOUT_ADDITIONS) - {name for name, _ in _V3_NUMERIC_LAYOUT_GROUPS}:
+    raise AssertionError("v4 layout additions name a group the v3 layout does not define")
+if len(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) != len(set(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)):
+    raise AssertionError("v4 numeric layout maps a writer column more than once")
+if set(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V4_DROPPED_LEGACY_NUMERIC_INDICES != set(
+    range(V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
+):
+    raise AssertionError("v4 numeric layout must account for every v4 writer column")
+
+_V4_NUMERIC_FEATURE_COUNT = len(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
+# v4 = the v3 public surface, MINUS the history group, PLUS the feature pack.
+_V4_NUMERIC_FEATURE_COUNT_EXPECTED = (
+    _V3_NUMERIC_FEATURE_COUNT - len(_V4_HISTORY_GROUP_INDICES) + V4_NUMERIC_EXTRA
+)
+if _V4_NUMERIC_FEATURE_COUNT != _V4_NUMERIC_FEATURE_COUNT_EXPECTED:
+    raise AssertionError(
+        "v4 must be the v3 public surface minus history plus the feature pack "
+        f"({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), got {_V4_NUMERIC_FEATURE_COUNT}"
+    )
+
+
+def v4_numeric_index(legacy_index: int) -> int:
+    """Physical v4 index for a named writer column (the v3 accessor's twin).
+
+    The ``NUMERIC_*`` constants are writer positions, not physical v4 positions: v4 projects the
+    private writer row through its own grouped layout, so a consumer inspecting a v4 tensor must
+    resolve through this map. ``v3_numeric_index`` and this function disagree for every column at
+    or after the first v4 addition — that is the point of a new contract, and why mixing the two
+    is refused everywhere rather than coerced.
+    """
+
+    try:
+        return V4_NUMERIC_INDEX_BY_LEGACY_INDEX[legacy_index]
+    except KeyError as exc:
+        if legacy_index in V4_DROPPED_LEGACY_NUMERIC_INDICES:
+            raise ValueError(f"legacy numeric column {legacy_index} was dropped from v4") from exc
+        raise ValueError(f"legacy numeric column {legacy_index} is not part of v4") from exc
+
 V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_V2_2_CATEGORICAL_FEATURE_COUNT,
     numeric_feature_count=_V2_2_NUMERIC_FEATURE_COUNT,
@@ -746,11 +1073,18 @@ V3_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     transition_token_count=V3_TRANSITION_TOKEN_COUNT,
     schema_version=OBSERVATION_SCHEMA_VERSION_V3,
 )
+V4_REPLAY_OBSERVATION_SPEC = ObservationSpec(
+    categorical_feature_count=_V4_CATEGORICAL_FEATURE_COUNT,
+    numeric_feature_count=_V4_NUMERIC_FEATURE_COUNT,
+    transition_token_count=V4_TRANSITION_TOKEN_COUNT,
+    schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+)
 REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
     OBSERVATION_SCHEMA_VERSION_V2: V2_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V2_2: V2_2_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V3: V3_REPLAY_OBSERVATION_SPEC,
+    OBSERVATION_SCHEMA_VERSION_V4: V4_REPLAY_OBSERVATION_SPEC,
 }
 DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
 # Encode-time census FLOOR per schema (#512 review, MED-LOW defense-in-depth): a spec
@@ -774,12 +1108,14 @@ _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2_1: _CATEGORICAL_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_CATEGORICAL_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V3: _V3_CATEGORICAL_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V4: _V4_CATEGORICAL_FEATURE_COUNT,
 }
 _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2: 119,
     OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_NUMERIC_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V3: _V3_NUMERIC_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V4: _V4_NUMERIC_FEATURE_COUNT,
 }
 
 
@@ -790,6 +1126,7 @@ OBSERVATION_SCHEMA_CLI_CHOICES: Mapping[str, str] = {
     "v2.1": OBSERVATION_SCHEMA_VERSION_V2_1,
     "v2.2": OBSERVATION_SCHEMA_VERSION_V2_2,
     "v3": OBSERVATION_SCHEMA_VERSION_V3,
+    "v4": OBSERVATION_SCHEMA_VERSION_V4,
 }
 
 
@@ -834,6 +1171,8 @@ def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
     """
 
     spec = observation_spec_for_schema(schema_version)
+    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+        return v4_numeric_index(legacy_index)
     if schema_version == OBSERVATION_SCHEMA_VERSION_V3:
         return v3_numeric_index(legacy_index)
     if legacy_index < 0 or legacy_index >= spec.numeric_feature_count:
@@ -851,13 +1190,22 @@ def numeric_index_if_present_for_schema(
 
     Invalid and out-of-range semantic indices still raise. This keeps audit code fail-closed
     while allowing one implementation to span schemas that intentionally omit a field.
+
+    Two kinds of omission are legitimate, and both answer None: a field the schema explicitly
+    DROPPED (v3's fourteen evidence-backed dead columns), and a field introduced by a LATER
+    schema (the v4 feature-pack columns, asked about under v3). The v2 family needs no such
+    case — every later column sits above its census, so the range check below already covers it.
     """
 
-    if (
-        schema_version == OBSERVATION_SCHEMA_VERSION_V3
-        and legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
-    ):
-        return None
+    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+        if legacy_index in V4_DROPPED_LEGACY_NUMERIC_INDICES:
+            return None
+    elif schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+        if (
+            legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
+            or legacy_index in V4_ONLY_NUMERIC_INDICES
+        ):
+            return None
     return numeric_index_for_schema(schema_version, legacy_index)
 
 
@@ -917,6 +1265,16 @@ class ShowdownPokemon:
     live_type_source: Optional[str] = None
 
 
+def _is_current_public_active(pokemon: object | None) -> bool:
+    """Whether a public record is explicitly the current active Pokemon.
+
+    Toxic proof latches authorize simulator-private state, so truthiness is not
+    sufficient here: snapshots can contain stale, partial, or malformed rows.
+    """
+
+    return getattr(pokemon, "active", None) is True
+
+
 @dataclass(frozen=True)
 class ShowdownReplayState:
     battle_id: str
@@ -930,6 +1288,10 @@ class ShowdownReplayState:
     volatiles: Mapping[str, tuple[str, ...]]
     direct_materialization_blockers: Mapping[str, tuple[str, ...]]
     future_sight: Mapping[str, int]
+    # Public Toxic chronology for the active slot. Values 0..15 are the
+    # model-facing multiplier; 16 is an internal saturation sentinel meaning
+    # Showdown's current stage is already capped at 15 at an ordinary request.
+    # Observation encoding still clamps this to the public maximum of 15.
     toxic_stage: Mapping[str, int]
     # Confusion turns-so-far per slot (spec v3 change 4, docs/observation_v3_spec.md): the
     # public elapsed-duration counter of the active mon's ``confusion`` volatile. Advances by 1
@@ -1032,6 +1394,11 @@ class ShowdownReplayState:
     # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
     # sees before its first move opportunity, so a lead and a switch-in both ACT first.
     truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
+    # Public parser chronology needed across snapshots taken after ``|upkeep`` but before a
+    # forced replacement and the following ``|turn|``. A replacement entered after that
+    # residual, so its next turn-boundary flip must be skipped.
+    post_upkeep_window: bool = False
+    truant_skip_next_flip: tuple[str, ...] = ()
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1112,6 +1479,111 @@ class ShowdownReplayState:
     # Cumulative exact depletion since creation when public fixed-damage
     # chronology derives it. This invariant is portable across sampled max HP.
     substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
+    # Whether ``toxic_stage`` is known from the public protocol. A zero alone is
+    # ambiguous: it can mean a fresh Toxic/Switch-in counter, or an incomplete
+    # prefix whose live toxic counter was never observed. The observation keeps
+    # its legacy zero encoding, but direct world construction must reject the
+    # latter rather than silently seed a false ``toxic_count = 0``.
+    toxic_stage_known: Mapping[str, bool] = field(default_factory=dict)
+    # A known stage-0 active ``tox`` counter is normally ambiguous at an
+    # action boundary. This proof is set only when a non-Baton-Pass ``switch``
+    # introduced the poisoned Pokemon after ``|upkeep``, after that turn's
+    # residual had already run. It permits the engine's legitimate pre-tick
+    # counter 0 without relaxing the fail-closed rule for every other stage-0
+    # snapshot. It is retired by the first Toxic residual and every active
+    # status/faint transition.
+    toxic_stage_zero_after_upkeep: Mapping[str, bool] = field(default_factory=dict)
+    # The next turn whose residual phase must contain the first Toxic tick for
+    # a post-upkeep replacement proof. Keeping this deadline in the snapshot
+    # makes a resumed parser reject a skipped residual just like a live fold.
+    toxic_stage_zero_after_upkeep_expires_after_turn: Mapping[str, int | None] = field(
+        default_factory=dict
+    )
+    # Exact active ident that entered under the bounded stage-zero proof. A
+    # boolean alone cannot survive a snapshot safely: the proof belongs to one
+    # canonical p1a/p2a occupant, not merely its side.
+    toxic_stage_zero_after_upkeep_ident: Mapping[str, str | None] = field(default_factory=dict)
+    # A public active faint is eligible to authorize exactly one same-seat
+    # post-upkeep replacement. This stays distinct from the materialization
+    # proof: a post-upkeep switch without a preceding same-seat faint is not
+    # known to be a forced replacement.
+    toxic_faint_replacement_pending: Mapping[str, bool] = field(default_factory=dict)
+    # Exact active ident that fainted to open a replacement window. This is
+    # separate from the pending bit so a restored parser can verify the same
+    # outgoing occupant before accepting a replacement.
+    toxic_faint_replacement_expected_ident: Mapping[str, str | None] = field(
+        default_factory=dict
+    )
+    # Malformed faint/turn chronology is terminal until the next clean turn.
+    # Retaining it across snapshots prevents a later duplicate faint from
+    # re-arming a cleared boolean latch.
+    toxic_faint_replacement_invalid: Mapping[str, bool] = field(default_factory=dict)
+    # Provenance for HP numerators/denominators in this protocol stream. ``exact`` means the
+    # denominator is the Pokemon's real max HP; ``percentage`` means Showdown's rounded /100
+    # player view; absent/``unknown`` means residual magnitude must not distinguish the two.
+    # Persisting this prevents a resumed incremental parser from reinterpreting an exact
+    # 100-HP Pokemon as percentage-form (or vice versa).
+    hp_visibility: Mapping[str, str] = field(default_factory=dict)
+    # ---- v4 k0 feature pack trackers (spec v4, docs/observation_v4_spec.md) --------------------
+    # Pack A1. Per slot: the mon in this slot is publicly FORCED to recharge — it spends its next
+    # move opportunity on ``cant … recharge`` and cannot act.
+    #
+    # Derived from the ``|-mustrecharge|SLOT`` line, which the vendored sim emits the moment a
+    # recharge move (Hyper Beam, the pool's only carrier) LANDS. That line is a strictly better
+    # source than the search lane's reconstruction from the round-indexed action record: a MISSED
+    # Hyper Beam never emits it (so the gen3 "a miss does not recharge" rule needs no special
+    # case), it names the actor directly (no species-continuity anchor needed), and it cannot
+    # scroll out of a rolling window (so there is no fail-open branch). The protocol inventory
+    # classifies the line as a semantic alias of the FOLLOWING turn's ``cant:recharge`` transition
+    # token — true for the history region, and exactly why the fact was invisible at k0: that row
+    # lands one decision too late, after the free turn has already resolved.
+    #
+    # SET on ``-mustrecharge``; CLEARED when the forced turn is consumed (``|cant|SLOT|recharge``),
+    # and on switch/drag out or faint (the volatile leaves with the mon).
+    must_recharge: Mapping[str, bool] = field(default_factory=dict)
+    # Pack A5. Per slot, for the mon CURRENTLY in it: HP fractions from the PREVIOUS round.
+    # ``last_damage_dealt`` is move-attributed damage this mon inflicted on the opposing active mon
+    # (fraction of the DEFENDER's max HP); ``last_damage_taken`` is everything this mon lost from
+    # any source (fraction of its OWN max HP). The ``current_*`` pair is the in-flight accumulator
+    # for the round in progress; the roll-over happens at ``|turn|``. All four reset to 0 on a
+    # switch/drag into the slot — these are per-MON facts, and a fresh mon has no record.
+    last_damage_dealt: Mapping[str, float] = field(default_factory=dict)
+    last_damage_taken: Mapping[str, float] = field(default_factory=dict)
+    current_damage_dealt: Mapping[str, float] = field(default_factory=dict)
+    current_damage_taken: Mapping[str, float] = field(default_factory=dict)
+    # Part B1. Per slot, cumulative entry-hazard damage SUFFERED by that side over the whole game,
+    # in units of "one mon's max HP" (each ``[from] Spikes`` ``-damage`` line contributes its own
+    # per-mon fraction). The encoder divides by the six-mon team to get a team-HP fraction. Never
+    # reset — the point of a credit ledger is that it accumulates.
+    hazard_damage_suffered: Mapping[str, float] = field(default_factory=dict)
+    # Pack A2 addendum. Per slot: the mon currently in it arrived via BATON PASS rather than an
+    # ordinary switch. Only meaningful while ``last_used_move`` is still the ``switch`` sentinel
+    # (once the mon executes a move the sentinel is gone), and it exists because the two
+    # arrivals are genuinely different facts: a Baton-Pass arrival inherits boosts and the
+    # transferable volatiles. That difference IS partly recoverable from the boost columns, but
+    # only when something was actually passed, and only as an inference — the explicit
+    # ``SWITCH_REASON_BATON_PASS`` the transitions layer records is history-region-only and so
+    # invisible at k0. Engine-wise both are ``LastUsedMove::Switch``; the observation is simply
+    # allowed to be richer than the world here.
+    arrived_by_baton_pass: Mapping[str, bool] = field(default_factory=dict)
+    # Pack A4 addendum — the CHOICE LOCK, and where the item came from.
+    #
+    # ``choice_item_public``: this slot's occupant is publicly known to hold a choice item.
+    # ``choice_locked``: it has executed a move since acquiring that item, so gen3's silent
+    # ``choicelock`` volatile is now on it and it can use nothing else. That volatile emits NO
+    # protocol line at any point (``data/conditions.ts`` choicelock has no ``add``), so this is
+    # the only way the fact can reach either consumer.
+    # ``item_from_trick``: the currently-held item was SWAPPED on by Trick rather than being the
+    # mon's own. This is the valence discriminator: a native Choice Band is the holder's asset
+    # (+50% Atk on an all-attacks set), while a Tricked one is a liability we inflicted. Both
+    # produce the same "holds a Choice Band" reading without it.
+    choice_item_public: Mapping[str, bool] = field(default_factory=dict)
+    choice_locked: Mapping[str, bool] = field(default_factory=dict)
+    item_from_trick: Mapping[str, bool] = field(default_factory=dict)
+    # Part B4. Per slot, how many of that side's held items have been publicly removed by the
+    # OTHER side's action (``-enditem … [from] move: Knock Off``). Self-consumed berries and
+    # Trick swaps are excluded — see NUMERIC_SELF_ITEMS_REMOVED_CREDIT.
+    items_removed: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1234,6 +1706,55 @@ class PlayerRelativeBattleState:
     # Mean Look / Spider Web.
     self_meanlook_trap: bool = False
     opponent_meanlook_trap: bool = False
+    # ---- spec v4: the k0 feature pack (docs/observation_v4_spec.md). Every field below is read
+    # from a _ReplayParser tracker (public protocol only) and encoded under schema v4 only.
+    # A1: the active mon is publicly locked into a recharge turn and cannot act.
+    self_must_recharge: bool = False
+    opponent_must_recharge: bool = False
+    # A3: the active mon is a Truant holder whose next move attempt LOAFS. False covers both "not
+    # a holder" and "phase unknown", mirroring the world's None fallback.
+    self_truant_loaf: bool = False
+    opponent_truant_loaf: bool = False
+    # A2: the active mon's last EXECUTED move id, the ``"switch"`` sentinel for a mon that just
+    # came in, or None for "never moved".
+    self_last_used_move: Optional[str] = None
+    opponent_last_used_move: Optional[str] = None
+    # A2 addendum: the active mon arrived by Baton Pass rather than an ordinary switch. Only
+    # meaningful while last_used_move is still the "switch" sentinel.
+    self_arrived_by_baton_pass: bool = False
+    opponent_arrived_by_baton_pass: bool = False
+    # A4 addendum: the active mon is publicly choice-locked into its last executed move, and
+    # whether the item that locked it was Tricked on rather than its own.
+    self_choice_locked: bool = False
+    opponent_choice_locked: bool = False
+    self_item_swapped: bool = False
+    opponent_item_swapped: bool = False
+    # A4: the ability the active mon is CURRENTLY borrowing via Trace (transient, cleared on
+    # switch-out), or None. Deliberately not the belief's persistent revealed-ability channel.
+    self_traced_ability: Optional[str] = None
+    opponent_traced_ability: Optional[str] = None
+    # A5: previous-round damage for the mon currently in the slot — move-attributed damage it
+    # DEALT (fraction of the defender's max HP) and total damage it TOOK (fraction of its own).
+    self_last_damage_dealt: float = 0.0
+    self_last_damage_taken: float = 0.0
+    opponent_last_damage_dealt: float = 0.0
+    opponent_last_damage_taken: float = 0.0
+    # B1: cumulative entry-hazard damage SUFFERED by each side, in units of one mon's max HP.
+    # Orientation matches self/opponent_side_conditions: self_* is damage OUR mons took.
+    self_hazard_damage_suffered: float = 0.0
+    opponent_hazard_damage_suffered: float = 0.0
+    # B4: how many of each side's held items the OTHER side has publicly knocked off.
+    self_items_removed: int = 0
+    opponent_items_removed: int = 0
+    # Matchup-conditional switch evidence, ALREADY conditioned on our current active:
+    # normalized opponent species -> (switched-out-before-attacking, stayed-and-attacked)
+    # observed while that mon was facing the mon we have out now. Absent species have no
+    # history in this matchup and encode (0, 0). The second slot is the complementary COUNT,
+    # not a denominator: an opportunities total cannot survive the incremental fold, which
+    # prunes turn_start_occupants, so both live hook points increment one counter or the other.
+    opponent_matchup_switch_evidence: Mapping[str, tuple[int, int]] = field(
+        default_factory=dict
+    )
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -1254,7 +1775,13 @@ class _ReplayParser:
     mutable accumulators, so a snapshot is unaffected by later ``feed()`` calls.
     """
 
-    def __init__(self, battle_id: str = "replay") -> None:
+    def __init__(
+        self,
+        battle_id: str = "replay",
+        *,
+        complete_prefix: bool = False,
+        hp_visibility: Mapping[str, str] | None = None,
+    ) -> None:
         self.battle_id = battle_id
         self.players: dict[str, str] = {}
         self.requests: dict[str, Mapping[str, Any]] = {}
@@ -1268,6 +1795,35 @@ class _ReplayParser:
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
+        # A fresh parser is safe for attach-midstream use: zero is not public proof of an
+        # active Toxic counter unless the caller attests that the prefix starts at reset.
+        complete_prefix_is_true = type(complete_prefix) is bool and complete_prefix
+        self.toxic_stage_known: dict[str, bool] = {
+            "p1": complete_prefix_is_true,
+            "p2": complete_prefix_is_true,
+        }
+        self.toxic_stage_zero_after_upkeep: dict[str, bool] = {"p1": False, "p2": False}
+        self.toxic_stage_zero_after_upkeep_expires_after_turn: dict[str, int | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_stage_zero_after_upkeep_ident: dict[str, str | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_faint_replacement_pending: dict[str, bool] = {"p1": False, "p2": False}
+        self.toxic_faint_replacement_expected_ident: dict[str, str | None] = {
+            "p1": None,
+            "p2": None,
+        }
+        self.toxic_faint_replacement_invalid: dict[str, bool] = {"p1": False, "p2": False}
+        self.hp_visibility: dict[str, str] = {"p1": "unknown", "p2": "unknown"}
+        for slot, visibility in (hp_visibility or {}).items():
+            if slot not in self.hp_visibility:
+                raise ValueError(f"unknown Showdown slot in hp_visibility: {slot!r}")
+            if visibility not in {"exact", "percentage", "unknown"}:
+                raise ValueError(f"invalid HP visibility for {slot}: {visibility!r}")
+            self.hp_visibility[slot] = visibility
         # Confusion turns-so-far per slot (spec v3 change 4). See ShowdownReplayState.confusion_elapsed.
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
@@ -1298,7 +1854,7 @@ class _ReplayParser:
         self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # See ShowdownReplayState.truant_phase. None = no holder / phase unknown.
         self.truant_phase: dict[str, Optional[bool]] = {"p1": None, "p2": None}
-        # True between |upkeep| and the next |turn| -- the window in which a faint
+        # True between |upkeep and the next |turn| -- the window in which a faint
         # replacement enters AFTER that turn's residual has already run.
         self._post_upkeep_window: bool = False
         # Slots whose next |turn| flip must be skipped (see _TRUANT replacement guard).
@@ -1318,12 +1874,36 @@ class _ReplayParser:
         self.stall_move_pending: dict[str, bool] = {"p1": False, "p2": False}
         # See ShowdownReplayState.last_used_move for the transcribed truth table.
         self.last_used_move: dict[str, str | None] = {"p1": None, "p2": None}
+        # ---- v4 k0 feature pack trackers. See the matching ShowdownReplayState fields. --------
+        self.must_recharge: dict[str, bool] = {"p1": False, "p2": False}
+        self.last_damage_dealt: dict[str, float] = {"p1": 0.0, "p2": 0.0}
+        self.last_damage_taken: dict[str, float] = {"p1": 0.0, "p2": 0.0}
+        self.current_damage_dealt: dict[str, float] = {"p1": 0.0, "p2": 0.0}
+        self.current_damage_taken: dict[str, float] = {"p1": 0.0, "p2": 0.0}
+        self.hazard_damage_suffered: dict[str, float] = {"p1": 0.0, "p2": 0.0}
+        self.items_removed: dict[str, int] = {"p1": 0, "p2": 0}
+        self.arrived_by_baton_pass: dict[str, bool] = {"p1": False, "p2": False}
+        self.choice_item_public: dict[str, bool] = {"p1": False, "p2": False}
+        self.choice_locked: dict[str, bool] = {"p1": False, "p2": False}
+        self.item_from_trick: dict[str, bool] = {"p1": False, "p2": False}
+        # Transient (NOT snapshotted, and deliberately so): which slot owns the move window the
+        # next untagged ``-damage`` line belongs to. Set by ``|move|``, cleared by anything that
+        # proves the damage is not the actor's move damage (a confusion self-hit marker, a
+        # ``cant``, a turn boundary). A snapshot taken mid-window resumes with no attribution
+        # rather than a guessed one: dropping one action's DEALT credit is a zero, whereas a
+        # wrong actor would be a false fact.
+        self._damage_window_actor: str | None = None
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
         """Hydrate parser state directly, without replaying its protocol prefix."""
 
-        parser = cls(snapshot.battle_id)
+        snapshot_post_upkeep_window = getattr(snapshot, "post_upkeep_window", None)
+        post_upkeep_window_is_valid = type(snapshot_post_upkeep_window) is bool
+        parser = cls(
+            snapshot.battle_id,
+            hp_visibility=getattr(snapshot, "hp_visibility", {}),
+        )
         parser.players = dict(snapshot.players)
         parser.requests = dict(snapshot.requests)
         parser.public_active = dict(snapshot.public_active)
@@ -1350,6 +1930,125 @@ class _ReplayParser:
         }
         parser.future_sight = dict(snapshot.future_sight)
         parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
+        snapshot_stage_known = getattr(snapshot, "toxic_stage_known", {})
+        parser.toxic_stage_known = {}
+        for slot in ("p1", "p2"):
+            if isinstance(snapshot_stage_known, Mapping) and slot in snapshot_stage_known:
+                parser.toxic_stage_known[slot] = snapshot_stage_known[slot] is True
+                continue
+            # Old snapshots did not preserve this provenance. A non-toxic active
+            # has no counter to reconstruct; an active tox mon must fail closed.
+            active = snapshot.public_active.get(slot)
+            parser.toxic_stage_known[slot] = (
+                _is_current_public_active(active)
+                and not _condition_has_status(getattr(active, "condition", None), "tox")
+            )
+        for slot, known in parser.toxic_stage_known.items():
+            if not known:
+                parser.toxic_stage[slot] = 0
+        snapshot_zero_after_upkeep = getattr(snapshot, "toxic_stage_zero_after_upkeep", {})
+        snapshot_faint_replacement_pending = getattr(
+            snapshot, "toxic_faint_replacement_pending", {}
+        )
+        snapshot_expected_ident = getattr(snapshot, "toxic_faint_replacement_expected_ident", {})
+        snapshot_invalid = getattr(snapshot, "toxic_faint_replacement_invalid", None)
+        authorization_maps_are_valid = all(
+            isinstance(values, Mapping)
+            and all(type(values.get(slot)) is bool for slot in ("p1", "p2"))
+            for values in (
+                snapshot_zero_after_upkeep,
+                snapshot_faint_replacement_pending,
+                snapshot_invalid,
+            )
+        )
+        parser.toxic_stage_zero_after_upkeep = {
+            slot: (
+                post_upkeep_window_is_valid
+                and authorization_maps_are_valid
+                and snapshot_zero_after_upkeep.get(slot) is True
+                if isinstance(snapshot_zero_after_upkeep, Mapping)
+                else False
+            )
+            for slot in ("p1", "p2")
+        }
+        snapshot_zero_after_upkeep_deadline = getattr(
+            snapshot, "toxic_stage_zero_after_upkeep_expires_after_turn", {}
+        )
+        if not isinstance(snapshot_zero_after_upkeep_deadline, Mapping):
+            snapshot_zero_after_upkeep_deadline = {}
+        parser.toxic_stage_zero_after_upkeep_expires_after_turn = {}
+        snapshot_zero_after_upkeep_ident = getattr(snapshot, "toxic_stage_zero_after_upkeep_ident", {})
+        if not isinstance(snapshot_zero_after_upkeep_ident, Mapping):
+            snapshot_zero_after_upkeep_ident = {}
+        for slot in ("p1", "p2"):
+            deadline = snapshot_zero_after_upkeep_deadline.get(slot)
+            proof_ident = snapshot_zero_after_upkeep_ident.get(slot)
+            active = parser.public_active.get(slot)
+            if (
+                parser.toxic_stage_zero_after_upkeep[slot] is True
+                and type(deadline) is int
+                and isinstance(proof_ident, str)
+                and _is_active_protocol_ident(proof_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == proof_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
+                and parser.toxic_stage_known[slot]
+                and parser.toxic_stage[slot] == 0
+            ):
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = deadline
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = proof_ident
+            else:
+                # Older snapshots lack the deadline, so their proof cannot be
+                # bounded to a single residual opportunity.
+                parser.toxic_stage_zero_after_upkeep[slot] = False
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = None
+        if not isinstance(snapshot_faint_replacement_pending, Mapping):
+            snapshot_faint_replacement_pending = {}
+        if not isinstance(snapshot_expected_ident, Mapping):
+            snapshot_expected_ident = {}
+        if not isinstance(snapshot_invalid, Mapping):
+            snapshot_invalid = {}
+        for slot in ("p1", "p2"):
+            expected_ident = snapshot_expected_ident.get(slot)
+            active = parser.public_active.get(slot)
+            parser.toxic_faint_replacement_invalid[slot] = (
+                True
+                if (
+                    not post_upkeep_window_is_valid
+                    or not authorization_maps_are_valid
+                    or not isinstance(snapshot_invalid, Mapping)
+                    or slot not in snapshot_invalid
+                    or slot not in snapshot_expected_ident
+                )
+                else snapshot_invalid.get(slot) is not False
+            )
+            parser.toxic_faint_replacement_pending[slot] = (
+                snapshot_faint_replacement_pending.get(slot) is True
+                and parser.toxic_faint_replacement_invalid[slot] is False
+                and snapshot_post_upkeep_window is False
+                and isinstance(expected_ident, str)
+                and _is_active_protocol_ident(expected_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == expected_ident
+            )
+            parser.toxic_faint_replacement_expected_ident[slot] = (
+                expected_ident if parser.toxic_faint_replacement_pending[slot] else None
+            )
+            if parser.toxic_stage_zero_after_upkeep[slot] is True and (
+                snapshot_faint_replacement_pending.get(slot) is not False
+                or snapshot_invalid.get(slot) is not False
+                or snapshot_expected_ident.get(slot) is not None
+            ):
+                # A materializable zero is the state *after* its one pending
+                # replacement has been consumed.  Never repair a conflicting
+                # snapshot by silently dropping the conflicting latch.
+                parser.toxic_stage_zero_after_upkeep[slot] = False
+                parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+                parser.toxic_stage_zero_after_upkeep_ident[slot] = None
+                parser.toxic_faint_replacement_pending[slot] = False
+                parser.toxic_faint_replacement_expected_ident[slot] = None
+                parser.toxic_faint_replacement_invalid[slot] = True
         parser.confusion_elapsed = {
             slot: int(snapshot.confusion_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
@@ -1386,6 +2085,14 @@ class _ReplayParser:
         parser.truant_phase = {
             slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
         }
+        # Toxic replacement proof is valid only at an exact protocol boundary.
+        # Never coerce malformed snapshot data into a boundary authorization.
+        parser._post_upkeep_window = (
+            snapshot_post_upkeep_window if post_upkeep_window_is_valid else False
+        )
+        parser._truant_skip_next_flip = {
+            slot for slot in snapshot.truant_skip_next_flip if slot in {"p1", "p2"}
+        }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
         }
@@ -1410,11 +2117,137 @@ class _ReplayParser:
         parser.last_used_move = {
             slot: (snapshot.last_used_move.get(slot) or None) for slot in ("p1", "p2")
         }
+        # v4 feature-pack trackers. ``getattr`` defaults keep a v3-era snapshot loadable: an
+        # older payload simply restores the zero state these counters start in, which is the
+        # honest answer (no evidence recorded) rather than a fabricated one.
+        parser.must_recharge = {
+            slot: bool(getattr(snapshot, "must_recharge", {}).get(slot, False))
+            for slot in ("p1", "p2")
+        }
+        for field_name in (
+            "last_damage_dealt",
+            "last_damage_taken",
+            "current_damage_dealt",
+            "current_damage_taken",
+            "hazard_damage_suffered",
+        ):
+            restored = getattr(snapshot, field_name, {}) or {}
+            setattr(
+                parser,
+                field_name,
+                {slot: float(restored.get(slot, 0.0) or 0.0) for slot in ("p1", "p2")},
+            )
+        parser.items_removed = {
+            slot: int(getattr(snapshot, "items_removed", {}).get(slot, 0) or 0)
+            for slot in ("p1", "p2")
+        }
+        for field_name in (
+            "arrived_by_baton_pass",
+            "choice_item_public",
+            "choice_locked",
+            "item_from_trick",
+        ):
+            restored = getattr(snapshot, field_name, {}) or {}
+            setattr(
+                parser,
+                field_name,
+                {slot: bool(restored.get(slot, False)) for slot in ("p1", "p2")},
+            )
         return parser
 
     def feed(self, lines: Sequence[str]) -> None:
         for raw_line in lines:
             self._feed_line(raw_line)
+
+    def _sanitize_toxic_replacement_provenance(self) -> None:
+        """Fail closed before a mutable proof latch can authorize a world zero.
+
+        These maps are parser internals, but live callers can retain and mutate a
+        parser between lines.  Do not let Python truthiness turn a forged ``1``
+        or ``0`` into an authorization bit while a replacement is in flight.
+        """
+
+        sentinel = object()
+        fields = (
+            "toxic_stage_zero_after_upkeep",
+            "toxic_faint_replacement_pending",
+            "toxic_faint_replacement_invalid",
+            "toxic_stage_zero_after_upkeep_expires_after_turn",
+            "toxic_stage_zero_after_upkeep_ident",
+            "toxic_faint_replacement_expected_ident",
+        )
+        values: dict[str, dict[str, object]] = {}
+        for field_name in fields:
+            source = getattr(self, field_name, None)
+            values[field_name] = {
+                slot: source.get(slot, sentinel) if isinstance(source, Mapping) else sentinel
+                for slot in ("p1", "p2")
+            }
+            setattr(self, field_name, values[field_name])
+
+        post_upkeep_window_is_valid = type(self._post_upkeep_window) is bool
+        if not post_upkeep_window_is_valid:
+            self._post_upkeep_window = False
+
+        for slot in ("p1", "p2"):
+            proof = values["toxic_stage_zero_after_upkeep"][slot]
+            pending = values["toxic_faint_replacement_pending"][slot]
+            invalid = values["toxic_faint_replacement_invalid"][slot]
+            deadline = values["toxic_stage_zero_after_upkeep_expires_after_turn"][slot]
+            proof_ident = values["toxic_stage_zero_after_upkeep_ident"][slot]
+            expected_ident = values["toxic_faint_replacement_expected_ident"][slot]
+            active = self.public_active.get(slot)
+            proof_is_complete = (
+                proof is True
+                and type(deadline) is int
+                and deadline >= 1
+                and isinstance(proof_ident, str)
+                and _is_active_protocol_ident(proof_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == proof_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
+                and isinstance(self.toxic_stage_known, Mapping)
+                and self.toxic_stage_known.get(slot) is True
+                and isinstance(self.toxic_stage, Mapping)
+                and type(self.toxic_stage.get(slot)) is int
+                and self.toxic_stage.get(slot) == 0
+                and type(self.turn_number) is int
+                and self.turn_number >= 0
+                and deadline
+                == self.turn_number + (1 if self._post_upkeep_window is True else 0)
+            )
+            pending_is_complete = (
+                pending is True
+                and isinstance(expected_ident, str)
+                and _is_active_protocol_ident(expected_ident)
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == expected_ident
+            )
+            clean_empty_proof = proof is False and deadline is None and proof_ident is None
+            clean_empty_pending = pending is False and expected_ident is None
+            authorization_bits_are_valid = all(
+                type(values[field_name][slot]) is bool
+                for field_name in (
+                    "toxic_stage_zero_after_upkeep",
+                    "toxic_faint_replacement_pending",
+                    "toxic_faint_replacement_invalid",
+                )
+            )
+            if (
+                post_upkeep_window_is_valid
+                and authorization_bits_are_valid
+                and (proof_is_complete or clean_empty_proof)
+                and (pending_is_complete or clean_empty_pending)
+                and not (proof is True and pending is True)
+                and not (invalid is True and (proof is True or pending is True))
+            ):
+                continue
+            self.toxic_stage_zero_after_upkeep[slot] = False
+            self.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+            self.toxic_stage_zero_after_upkeep_ident[slot] = None
+            self.toxic_faint_replacement_pending[slot] = False
+            self.toxic_faint_replacement_expected_ident[slot] = None
+            self.toxic_faint_replacement_invalid[slot] = True
 
     def _feed_line(self, raw_line: str) -> None:
         line = raw_line.strip()
@@ -1422,13 +2255,26 @@ class _ReplayParser:
             return
         if line.startswith(">"):
             return
+        self._sanitize_toxic_replacement_provenance()
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
+        canonical_turn = _canonical_turn_number(raw_line) if event_type == "turn" else None
+        canonical_upkeep = _canonical_upkeep_marker(raw_line)
+        canonical_faint = _canonical_faint_marker(raw_line, parts)
+        canonical_replacement = _canonical_replacement_marker(raw_line, event_type, parts)
         # BattleStream emits wall-clock timestamp lines (``|t:|...``). They are useful for raw
         # protocol debugging but are not battle state and would make replay-from-root observations
         # differ across otherwise identical deterministic simulations.
         if event_type == "t:":
             return
+        self._update_toxic_faint_replacement_latch(
+            event_type,
+            parts,
+            canonical_turn=canonical_turn,
+            canonical_upkeep=canonical_upkeep,
+            canonical_faint=canonical_faint,
+            canonical_replacement=canonical_replacement,
+        )
         if event_type == "player" and len(parts) >= 4:
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:
@@ -1444,53 +2290,46 @@ class _ReplayParser:
                 self.requests[showdown_slot] = payload
             return
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
-            pokemon = _pokemon_from_public_line(parts)
+            replacement_slot = _slot_from_ident(parts[2])
+            pending_faint_replacement = (
+                self.toxic_faint_replacement_pending.get(replacement_slot) is True
+            )
+            expected_fainted_ident = self.toxic_faint_replacement_expected_ident.get(
+                replacement_slot
+            )
+            replacement_is_canonical = canonical_replacement
+            replacement_active = self.public_active.get(replacement_slot)
+            replacement_matches_pending = (
+                pending_faint_replacement
+                and self.toxic_faint_replacement_invalid.get(replacement_slot) is False
+                and replacement_is_canonical
+                and isinstance(expected_fainted_ident, str)
+                and _is_current_public_active(replacement_active)
+                and getattr(replacement_active, "ident", None) == expected_fainted_ident
+            )
+            # Consume before parsing: malformed or duplicate replacement
+            # lines must never leave a faint proof reusable later.
+            if replacement_slot in self.toxic_faint_replacement_pending:
+                self.toxic_faint_replacement_pending[replacement_slot] = False
+                self.toxic_faint_replacement_expected_ident[replacement_slot] = None
+            # Switch, drag, and replace protocol lines name the active singles
+            # seat as p1a/p2a. Do not fold a malformed bench ident as a new
+            # active Pokemon, even though its side prefix is recognizable.
+            pokemon = _pokemon_from_public_line(parts) if replacement_is_canonical else None
             if pokemon is not None:
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
-                # gen3 Truant phase for the INCOMING mon. Truant's `onSwitchIn` runs only for
-                # a mon that already has the ability, and sets
-                # `truantTurn = this.turn !== 0` -- so a mid-battle switch-in starts on the
-                # LOAF side of the toggle and a turn-0 lead on the ACT side. Both then take
-                # one `onResidual` flip before their first move opportunity, which is why both
-                # end up ACTING on it. Seeded here rather than inferred from later behaviour
-                # because the switch line is the event the sim itself keys on.
-                #
-                # Species is sufficient and unambiguous: `slakoth` and `slaking` are the only
-                # gen3 Truant lines and both are MONO-ability, so no reveal is needed. A mon
-                # that acquires Truant later by Trace is handled at the `-ability` line, not
-                # here -- at ITS switch-in it did not have the ability, so Truant's onSwitchIn
-                # never ran for it and its `truantTurn` is still the `false` that
-                # `sim/pokemon.ts` resets on entry.
-                # gen3 seeds the phase at switch-in: `truantTurn = this.turn !== 0`. Both a
-                # turn-0 lead (False) and a mid-battle switch-in (True) then take exactly one
-                # `onResidual` flip before their first move opportunity, which is why both end
-                # up ACTING on it -- the `turn !== 0` term is that compensation.
-                #
-                # Reproducing it in a replay needs the flip to land on the same side of the
-                # residual boundary, and the per-`|turn|` flip below is skipped for turn 1
-                # because there is no end-of-turn-0 residual to mirror. Getting that wrong
-                # inverted the lead's parity and produced divergences at the first boundary.
-                #
-                # Species is decisive: `slakoth` and `slaking` are the only gen3 Truant lines
-                # and both are mono-ability. A mon that acquires Truant later by Trace is
-                # seeded at its `-ability` line instead.
-                #
-                # Deriving it was tried and withdrawn. gen3 seeds `truantTurn = this.turn != 0`
-                # at switch-in, which is correct for the sim but depends, in a REPLAY, on the
-                # flip landing on the right side of the residual boundary. It did not for a
-                # turn-0 lead -- there is no "end of turn 0" residual to flip -- and the
-                # resulting inverted parity produced divergences at the very first boundary,
-                # trading rows rather than fixing them.
-                #
-                # Unknown is the honest state and it is not a loss: per the same gen3 rule
-                # BOTH a lead and a mid-battle switch-in act on their first move opportunity,
-                # which is what the downstream proxy already assumes. The phase becomes known
-                # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
+                # Native Slakoth and Slaking are mono-ability, so species proves that Truant's
+                # switch-in hook ran and `truantTurn = this.turn !== 0` is an honest seed. A
+                # post-upkeep forced replacement missed the residual that just ran, so its
+                # first following `|turn|` must not flip the bit again. Trace acquisition is
+                # different: retained current-source cases prove that identical public line
+                # placement can produce opposite first phases, so the `-ability` handler leaves
+                # traced Truant UNKNOWN until a public move or Truant `cant` anchors it.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
-                    if self._post_upkeep_window:
+                    if self._post_upkeep_window is True:
                         self._truant_skip_next_flip.add(pokemon.showdown_slot)
                     else:
                         self._truant_skip_next_flip.discard(pokemon.showdown_slot)
@@ -1544,6 +2383,35 @@ class _ReplayParser:
                 self.substitute_depletion[pokemon.showdown_slot] = None
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
+                self.toxic_stage_known[pokemon.showdown_slot] = True
+                # A normal switch-in will take this turn's residual before its
+                # next action. Gen 3 writes ``|upkeep`` only after the residual
+                # phase, then emits the faint replacement as ``|switch|``. That
+                # replacement missed the just-finished residual, so its next
+                # Toxic tick has the legitimate pre-tick counter zero. A
+                # ``|drag|`` is an action-phase phaze, and Baton Pass is not a
+                # faint replacement; neither may manufacture this narrow proof.
+                self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot] = (
+                    event_type == "switch"
+                    and self._post_upkeep_window is True
+                    and replacement_matches_pending
+                    and not is_baton_pass
+                    and pokemon.ident == parts[2]
+                    and pokemon.showdown_slot == replacement_slot
+                    and _condition_has_status(pokemon.condition, "tox")
+                )
+                self.toxic_stage_zero_after_upkeep_expires_after_turn[
+                    pokemon.showdown_slot
+                ] = (
+                    self.turn_number + 1
+                    if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
+                self.toxic_stage_zero_after_upkeep_ident[pokemon.showdown_slot] = (
+                    pokemon.ident
+                    if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
                 # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
                 # flag too so no stale stall move carries onto the replacement.
@@ -1592,6 +2460,33 @@ class _ReplayParser:
                 # switch-in, so the borrowed ability belongs to the mon that just
                 # left. Not clearing it is what let a stale trace leak.
                 self.traced_ability[pokemon.showdown_slot] = None
+                # v4 pack A1: the ``mustrecharge`` volatile leaves with the mon. A recharging mon
+                # cannot switch voluntarily, but it CAN be dragged out (Roar/Whirlwind) or faint
+                # and be replaced, and neither the replacement nor a later occupant inherits the
+                # lock. Cleared unconditionally: it is ``noCopy``, so no Baton Pass carries it.
+                self.must_recharge[pokemon.showdown_slot] = False
+                # v4 pack A5: last-round damage is a per-MON fact. The incoming mon dealt and took
+                # nothing, so both the settled pair and the in-flight accumulators reset — a
+                # switch-in must not inherit the record of the mon it replaced.
+                self.last_damage_dealt[pokemon.showdown_slot] = 0.0
+                self.last_damage_taken[pokemon.showdown_slot] = 0.0
+                self.current_damage_dealt[pokemon.showdown_slot] = 0.0
+                self.current_damage_taken[pokemon.showdown_slot] = 0.0
+                # Entry-hazard chip lands on the incoming mon AFTER this switch line, so the
+                # cumulative side ledger (hazard_damage_suffered) is deliberately NOT touched
+                # here: it is a per-SIDE credit total for the whole game, not a per-mon counter.
+                # Any move window is closed by the switch: whatever damage follows (hazard chip on
+                # the way in, the next mover's strike) belongs to a different attribution.
+                self._damage_window_actor = None
+                # v4 pack A2 addendum: HOW this mon arrived. Read alongside the ``switch``
+                # sentinel that was just written to last_used_move.
+                self.arrived_by_baton_pass[pokemon.showdown_slot] = bool(is_baton_pass)
+                # v4 pack A4 addendum: the choice lock and the item's provenance both belong to
+                # the mon that left. ``choicelock`` is noCopy so it never rides a Baton Pass, and
+                # a Tricked item stays with its holder — but that holder is gone from this slot.
+                self.choice_item_public[pokemon.showdown_slot] = False
+                self.choice_locked[pokemon.showdown_slot] = False
+                self.item_from_trick[pokemon.showdown_slot] = False
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
@@ -1601,23 +2496,43 @@ class _ReplayParser:
             self.public_lines.append(line)
             return
         if event_type == "upkeep":
+            if not canonical_upkeep:
+                return
             # Residuals for this turn are done; anything switching in from here until the
             # next |turn| is a post-residual faint replacement.
             self._post_upkeep_window = True
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
-            try:
-                self.turn_number = int(parts[2])
-            except (TypeError, ValueError):
-                pass
+            next_turn = canonical_turn
+            turn_is_ordered = bool(
+                isinstance(next_turn, int)
+                and next_turn >= 1
+                and (
+                    (
+                        self.turn_number == 0
+                        and not any(self.toxic_stage_zero_after_upkeep.values())
+                        and not any(self.toxic_faint_replacement_pending.values())
+                    )
+                    or next_turn == self.turn_number + 1
+                )
+            )
+            if not turn_is_ordered:
+                # The latch already discarded proof provenance. Do not let an
+                # unordered marker mutate the parser's turn chronology.
+                return
+            self.turn_number = next_turn
             # A successful Baton Pass is consumed by its same-turn forced switch. Anything still
             # pending at a fresh turn belongs to a failed or truncated protocol sequence.
             self.pending_baton_pass.clear()
+            self.toxic_faint_replacement_pending = {"p1": False, "p2": False}
             self._settle_pending_rest_sleep_attempts()
-            # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
+            # Each turn a badly-poisoned mon stays in, its toxic damage escalates
+            # through 15/16. Preserve 16 as an internal sentinel after the
+            # simulator has already reached its stage-15 cap: raw 15 otherwise
+            # ambiguously means either "current 14, next 15" or "current 15".
             for slot, stage in self.toxic_stage.items():
-                if stage:
-                    self.toxic_stage[slot] = min(15, stage + 1)
+                if self.toxic_stage_known[slot] and stage:
+                    self.toxic_stage[slot] = min(16, stage + 1)
             # gen3 Truant: `onResidual` flips the bit every turn UNCONDITIONALLY. It is
             # deliberately NOT gated on the mon having moved, having a volatile, or anything
             # else -- that gating is exactly the proxy this replaces.
@@ -1663,6 +2578,17 @@ class _ReplayParser:
             for slot in self.wrap_trap_elapsed:
                 if "partiallytrapped" in self.volatiles.get(slot, ()):
                     self.wrap_trap_elapsed[slot] += 1
+            # v4 pack A5: settle the damage ledger at the turn boundary. Everything accumulated
+            # since the previous ``|turn|`` — both players' actions AND the residual phase that
+            # closed the turn — becomes "the previous round", and a fresh round starts at zero.
+            # This is the same per-``|turn|`` point every other elapsed counter advances at, so
+            # the pack's notion of "last round" agrees with the rest of the current-state layer.
+            for slot in ("p1", "p2"):
+                self.last_damage_dealt[slot] = self.current_damage_dealt.get(slot, 0.0)
+                self.last_damage_taken[slot] = self.current_damage_taken.get(slot, 0.0)
+                self.current_damage_dealt[slot] = 0.0
+                self.current_damage_taken[slot] = 0.0
+            self._damage_window_actor = None
         if event_type == "-fail" and len(parts) >= 3:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
@@ -1670,6 +2596,10 @@ class _ReplayParser:
         # Re-seed the toxic ramp from the PUBLIC end-of-turn residual BEFORE the condition update
         # overwrites the pre-damage HP (needed to measure the residual's magnitude).
         self._reseed_toxic_stage_from_residual(parts)
+        # v4 pack A5 / part B1: the damage ledger and the hazard-credit ledger measure magnitudes
+        # the same way, so they run in the same pre-update window — the public condition still
+        # holds the PRE-damage HP here, and the delta against the line's new value is the amount.
+        self._update_damage_ledgers(parts, line)
         _update_public_pokemon_condition(parts, self.public_active, self.public_revealed)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
@@ -1685,7 +2615,12 @@ class _ReplayParser:
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
-        _update_toxic_stage(parts, self.toxic_stage)
+        _update_toxic_stage(
+            parts,
+            self.toxic_stage,
+            self.toxic_stage_known,
+            self.toxic_stage_zero_after_upkeep,
+        )
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
         _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
@@ -1693,8 +2628,149 @@ class _ReplayParser:
         _flag_baton_pass(parts, self.pending_baton_pass)
         self._update_induced_sleep(parts, line)
         self._update_stall_counter(parts)
+        _update_must_recharge(parts, self.must_recharge)
+        self._update_items_removed(parts, line)
+        self._update_choice_lock(parts, line)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _update_toxic_faint_replacement_latch(
+        self,
+        event_type: str,
+        parts: Sequence[str],
+        *,
+        canonical_turn: int | None = None,
+        canonical_upkeep: bool = False,
+        canonical_faint: bool = False,
+        canonical_replacement: bool = False,
+    ) -> None:
+        """Bind the stage-zero exception to one exact, ordered forced replacement."""
+
+        def clear_zero_proof(slot: str) -> None:
+            self.toxic_stage_zero_after_upkeep[slot] = False
+            self.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
+            self.toxic_stage_zero_after_upkeep_ident[slot] = None
+
+        def clear_pending(slot: str) -> None:
+            self.toxic_faint_replacement_pending[slot] = False
+            self.toxic_faint_replacement_expected_ident[slot] = None
+
+        def invalidate_window(slot: str) -> None:
+            clear_pending(slot)
+            clear_zero_proof(slot)
+            self.toxic_faint_replacement_invalid[slot] = True
+
+        def clear_all_pending() -> None:
+            for slot in self.toxic_faint_replacement_pending:
+                clear_pending(slot)
+
+        def invalidate_all_windows() -> None:
+            for slot in ("p1", "p2"):
+                invalidate_window(slot)
+
+        if event_type == "turn":
+            # A missing replacement is a truncated/terminal sequence, not
+            # evidence for an ordinary switch on a later turn.
+            clear_all_pending()
+            next_turn = canonical_turn
+            if next_turn is None:
+                # Without an ordered turn boundary, a durable proof cannot be
+                # bounded to its one expected residual opportunity.
+                for slot in self.toxic_stage_zero_after_upkeep:
+                    invalidate_window(slot)
+                return
+            turn_is_ordered = bool(
+                next_turn >= 1
+                and (
+                    (
+                        self.turn_number == 0
+                        and not any(
+                            proof is True
+                            for proof in self.toxic_stage_zero_after_upkeep.values()
+                        )
+                        and not any(
+                            pending is True
+                            for pending in self.toxic_faint_replacement_pending.values()
+                        )
+                    )
+                    or next_turn == self.turn_number + 1
+                )
+            )
+            if not turn_is_ordered:
+                for slot in self.toxic_stage_zero_after_upkeep:
+                    invalidate_window(slot)
+                return
+            # A strictly ordered turn starts a clean replacement window. An
+            # earlier malformed faint cannot poison subsequent real history.
+            self.toxic_faint_replacement_invalid = {"p1": False, "p2": False}
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                deadline = self.toxic_stage_zero_after_upkeep_expires_after_turn.get(slot)
+                if proof is True and (type(deadline) is not int or next_turn != deadline):
+                    clear_zero_proof(slot)
+            return
+        if event_type == "upkeep":
+            if not canonical_upkeep:
+                # A look-alike marker has no residual chronology.  It also
+                # cannot coexist with a one-shot proof for either seat.
+                invalidate_all_windows()
+                return
+            # A proof created after the prior upkeep expects its first Toxic
+            # residual immediately before this marker. If it is still live,
+            # that residual was absent and the proof is spent.
+            for slot, proof in self.toxic_stage_zero_after_upkeep.items():
+                if proof is True:
+                    clear_zero_proof(slot)
+            if self._post_upkeep_window is True:
+                # A second upkeep cannot follow the one faint that is still
+                # awaiting its replacement; reject the malformed chronology.
+                for slot in self.toxic_faint_replacement_pending:
+                    invalidate_window(slot)
+            return
+        if event_type == "faint":
+            if not canonical_faint:
+                invalidate_all_windows()
+                return
+            slot = _slot_from_ident(parts[2])
+            if slot not in self.toxic_faint_replacement_pending:
+                return
+            active = self.public_active.get(slot)
+            if (
+                self._post_upkeep_window is False
+                and _is_active_protocol_ident(parts[2])
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == parts[2]
+                and self.toxic_faint_replacement_pending[slot] is False
+                and self.toxic_faint_replacement_invalid[slot] is False
+            ):
+                self.toxic_faint_replacement_pending[slot] = True
+                self.toxic_faint_replacement_expected_ident[slot] = parts[2]
+            else:
+                # Reversed, repeated, or forged active idents are not proof
+                # that this seat is awaiting a forced replacement. Keep the
+                # invalidity until a clean turn so a third duplicate cannot
+                # re-arm this replacement window.
+                invalidate_all_windows()
+            return
+        if event_type in {"switch", "drag", "replace"}:
+            # The replacement branch consumes this before parsing its payload,
+            # including malformed lines.
+            if not canonical_replacement:
+                invalidate_all_windows()
+            return
+        if event_type == "win":
+            clear_all_pending()
+            for slot in self.toxic_stage_zero_after_upkeep:
+                clear_zero_proof(slot)
+            return
+        if len(parts) >= 3:
+            slot = _slot_from_ident(parts[2])
+            if (
+                slot in self.toxic_faint_replacement_pending
+                and self.toxic_faint_replacement_pending[slot] is True
+            ):
+                # A same-seat state transition cannot belong to a pending
+                # forced replacement; fail closed rather than retain history.
+                invalidate_window(slot)
 
     def _update_substitute_health_state(self, parts: Sequence[str]) -> None:
         """Track canonical Substitute provenance and public exact HP cases."""
@@ -1770,14 +2846,12 @@ class _ReplayParser:
         per-``|turn|`` escalation (gated on ``if stage``) can never lift it off 0 — the encoder
         would emit the contradictory ``status:tox`` + ``toxic_stage == 0`` for the whole stint.
 
-        The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
-        ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
-        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …), so the observed residual
-        fraction gives ``stage = round(16 * damage / maxhp)``. Re-deriving here fixes the pivot,
-        the forced re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox``
-        (replay import / mid-battle observe start) uniformly, for both seats. Regular (non-badly)
-        poison also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the
-        residual's own status token, which is ``tox`` only for badly-poisoned mons.
+        Exact-HP streams can derive the counter from Gen 3's floored damage unit. Percentage
+        streams cannot reverse-round an arbitrary stage, but a public switch/drag reset proves
+        that the first subsequent Toxic residual is stage one. Unknown stream provenance fails
+        closed instead of treating a /100 denominator as either representation. Regular
+        (non-badly) poison also emits ``[from] psn`` but is gated out by the residual's ``tox``
+        status token.
         """
 
         if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
@@ -1792,19 +2866,65 @@ class _ReplayParser:
         # Only a BADLY-poisoned residual ramps; a plain ``psn`` residual carries no ``tox`` token.
         if "tox" not in new_condition.split():
             return
+        # This public residual consumes the one deferred first tick of a
+        # post-upkeep replacement. It is no longer evidence for materializing
+        # a stage-zero world, even if later exact recovery is impossible.
+        self.toxic_stage_zero_after_upkeep[slot] = False
         active = self.public_active.get(slot)
-        prev_condition = active.condition if active is not None and active.ident == parts[2] else None
+        prev_condition = (
+            getattr(active, "condition", None)
+            if _is_current_public_active(active) and getattr(active, "ident", None) == parts[2]
+            else None
+        )
         prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
         cur_hp, cur_max = _hp_numerator_denominator(new_condition)
         max_hp = prev_max or cur_max
-        if prev_hp is None or cur_hp is None or not max_hp:
+        if prev_hp is None or cur_hp is None or cur_hp <= 0 or not max_hp:
             return
         damage = prev_hp - cur_hp
         if damage <= 0:
             return
-        # round(16 * damage_fraction) recovers the sim's stage for every reachable stage (1..14;
-        # a mon never survives to stage 15). Clamp to [1, 15]: a tox residual is always >= stage 1.
-        self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
+        # Percentage-form protocol always uses /100. Any other denominator is therefore exact;
+        # only /100 needs stream/request provenance to distinguish representation from a real
+        # exact-100 HP Pokemon.
+        visibility = "exact" if max_hp != 100 else self._hp_visibility_for_slot(slot)
+        if visibility == "percentage":
+            if self.toxic_stage_known[slot] and self.toxic_stage[slot] == 0:
+                self.toxic_stage[slot] = 1
+            return
+        if visibility != "exact":
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        unit = max(1, max_hp // 16)
+        # A surviving exact-HP Toxic residual is a whole number of Gen 3 units. Do not infer a
+        # hidden stage from capped or otherwise non-exact public damage.
+        if damage % unit:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        stage = damage // unit
+        if not 1 <= stage <= 15:
+            if self.toxic_stage[slot] == 0:
+                self.toxic_stage_known[slot] = False
+            return
+        self.toxic_stage[slot] = stage
+        self.toxic_stage_known[slot] = True
+
+    def _hp_visibility_for_slot(self, slot: str) -> str:
+        """Resolve HP representation from explicit stream provenance or private requests."""
+
+        explicit = self.hp_visibility.get(slot, "unknown")
+        if explicit != "unknown":
+            return explicit
+        request_slots = {side for side in self.requests if side in {"p1", "p2"}}
+        if len(request_slots) == 2 or slot in request_slots:
+            return "exact"
+        if len(request_slots) == 1:
+            # A single private request identifies a player-perspective stream: own HP is exact,
+            # while the opposing side's public HP is rounded to /100.
+            return "percentage"
+        return "unknown"
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -1994,29 +3114,18 @@ class _ReplayParser:
             normalized = _normalize_identifier(copied)
             self.traced_ability[slot] = normalized
             if normalized == "truant":
-                # Traced Truant is deliberately NOT given a derived starting parity, even
-                # though the parity is derivable and was probed. Sim-verified behaviour:
+                # Do not derive a boolean phase from the Trace line. Current-source probes show
+                # that publicly similar pre-upkeep acquisitions can start on opposite phases:
+                # a one-sided action switch (3400443/2) loafs next turn, while a simultaneous
+                # Porygon2/Slaking switch (2200291/41) acts. Event-queue membership, not just
+                # line position, decides whether copied Truant receives that residual.
                 #
-                #   lead (turn 0) acquisition  -> ACTS on its first move turn
-                #   mid-battle acquisition     -> LOAFS on its first move turn
-                #   re-entry re-traces         -> fresh acquisition, parity resets
-                #
-                # which composes from patch 32 (a copied ability's Start event does not fire,
-                # so Truant's `onSwitchIn` never runs for a tracer), `sim/pokemon.ts` leaving
-                # `truantTurn` false on entry, and `onResidual` flipping every turn end.
-                #
-                # Seeding `false` here and counting `|turn|` flips reproduces that in the
-                # common case and MISSES when the acquisition switch-in is a mid-turn
-                # replacement after a faint: there is no `|turn|` boundary between the
-                # acquisition and the next move, so the flip count is short by one and the
-                # parity inverts for the rest of the stint. Measured: it cost one new
-                # divergence (2200291/41) while fixing three.
-                #
-                # The anchors below establish the traced parity from the sim's own published
-                # behaviour instead, which is exact and needs no flip accounting. Marking the
-                # holder is all that is required here.
-                if self.truant_phase.get(slot) is None:
-                    pass  # phase stays UNKNOWN until the first anchor; see _anchor_truant_phase
+                # Preserve only the public holder fact. The first own move or Truant ``cant``
+                # line anchors the phase exactly, after which normal public turn flips apply.
+                # This is the measured Z13.3 withdrawal: seeding here fixed selected rows but
+                # created 2200291/41, while leaving it unknown created no new identity.
+                self.truant_phase[slot] = None
+                self._truant_skip_next_flip.discard(slot)
             elif self.truant_phase.get(slot) is not None:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
@@ -2303,7 +3412,178 @@ class _ReplayParser:
                 self.stall_counter[slot] = 0
                 self.stall_move_pending[slot] = False
 
+    def _update_damage_ledgers(self, parts: Sequence[str], line: str) -> None:
+        """Per-mon last-round damage (v4 pack A5) + per-side hazard credit (v4 part B1).
+
+        Both read the magnitude of a ``-damage`` line the same way, and both must read it BEFORE
+        ``_update_public_pokemon_condition`` overwrites the pre-damage HP — the same ordering the
+        toxic-stage reseed relies on. The magnitude is a fraction of the struck mon's max HP,
+        which is exactly what the condition head gives on either stream form (exact ``170/362`` or
+        the opponent's rounded ``47/100``).
+
+        ATTRIBUTION, transcribed from the transitions fold's rules so the current-state pack and
+        the history region cannot disagree about who did what:
+
+        * DEALT is move damage only. An UNTAGGED ``-damage`` on the slot OPPOSITE the open move
+          window's actor is that actor's strike. Every other damage surface carries a ``[from]``
+          tag (residuals, hazards, recoil, items, drain) or has no window at all.
+        * The window is opened by a ``|move|`` line and closed by anything proving the next damage
+          is not the actor's strike: a confusion self-hit marker, a ``cant``, a switch, a turn
+          boundary. A slower confused mon self-hits with an UNTAGGED ``-damage`` and NO move line
+          of its own, so without the ``|-activate|SLOT|confusion`` latch that self-damage would be
+          credited to whoever moved first — the one attribution error this surface can make.
+        * TAKEN is total: every ``-damage`` on the mon counts, tagged or not. That is what makes
+          the pair non-redundant — DEALT is move-attributed, TAKEN includes the chip.
+
+        Self-damage (Substitute, Belly Drum, recoil, crash) lands on the ACTOR's own slot, so it
+        never reaches DEALT (which requires the opposite slot) but does reach that mon's TAKEN,
+        which is correct: it lost the HP.
+        """
+
+        event_type = parts[1] if len(parts) > 1 else ""
+        # The confusion self-hit latch: ``|-activate|SLOT|confusion`` immediately precedes the
+        # untagged self-damage. Closing the window here is what keeps that damage out of the
+        # previous mover's DEALT column (spec v3 change 10 documents the same protocol shape).
+        if (
+            event_type == "-activate"
+            and len(parts) >= 4
+            and _side_condition_identifier(parts[3]) == "confusion"
+        ):
+            self._damage_window_actor = None
+            return
+        if event_type == "move" and len(parts) >= 4:
+            slot = _slot_from_ident(parts[2])
+            self._damage_window_actor = slot if slot in {"p1", "p2"} else None
+            return
+        if event_type == "cant":
+            # No move executed, so no strike can follow from this seat.
+            self._damage_window_actor = None
+            return
+        if event_type != "-damage" or len(parts) < 4:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.current_damage_taken:
+            return
+        active = self.public_active.get(slot)
+        prev_condition = (
+            getattr(active, "condition", None)
+            if _is_current_public_active(active) and getattr(active, "ident", None) == parts[2]
+            else None
+        )
+        prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
+        cur_hp, cur_max = _hp_numerator_denominator(parts[3])
+        max_hp = prev_max or cur_max
+        if prev_hp is None or not max_hp:
+            # A faint line reads ``0 fnt`` with no denominator; when the PREVIOUS condition is
+            # unreadable too there is no public magnitude, so nothing is recorded rather than a
+            # guessed one. (``0 fnt`` as the NEW value is handled below: cur_hp is None -> 0.)
+            return
+        remaining = cur_hp if cur_hp is not None else 0
+        fraction = (prev_hp - remaining) / max_hp
+        if fraction <= 0:
+            return
+        self.current_damage_taken[slot] = self.current_damage_taken.get(slot, 0.0) + fraction
+        tagged = any(part.strip().startswith("[from]") for part in parts[4:])
+        if not tagged:
+            actor = self._damage_window_actor
+            if actor is not None and actor != slot and actor in self.current_damage_dealt:
+                self.current_damage_dealt[actor] = (
+                    self.current_damage_dealt.get(actor, 0.0) + fraction
+                )
+        elif "[from] Spikes" in line:
+            # Part B1: the entry-hazard credit ledger. Spikes is gen3's only entry hazard and the
+            # only pool member that tags this way, so the tag alone identifies the source; the
+            # credit belongs to the side that laid the layers, i.e. the OTHER slot, and is read
+            # off the victim's ledger at encode time.
+            self.hazard_damage_suffered[slot] = (
+                self.hazard_damage_suffered.get(slot, 0.0) + fraction
+            )
+
+    def _update_choice_lock(self, parts: Sequence[str], line: str) -> None:
+        """The public choice lock and the item's provenance (spec v4 pack A4 addendum).
+
+        Gen3's ``choicelock`` volatile is entirely SILENT — ``data/conditions.ts`` gives it no
+        ``add`` on start, end, or transfer — so no protocol line ever announces it and no
+        volatile tracker can catch it. It is reconstructed here from the two public facts that
+        determine it, both of which the sim does emit:
+
+        * WHICH item the mon holds. ``choiceband`` is gen3's only ``isChoice`` item (Scarf and
+          Specs are gen4+). It becomes public on an ``|-item|`` line — in practice a Trick, and
+          in gen3 randbats a Trick carrier ALWAYS holds a Choice Band (``teams.ts``:
+          ``if (moves.has('trick')) return 'Choice Band'``), so the strategy is deterministic.
+        * WHETHER it has moved since acquiring it. Choice Band's ``onStart`` REMOVES any existing
+          choicelock when the item arrives, and its ``onModifyMove`` re-adds one on the next move
+          used. So the lock attaches to the first move executed AFTER acquisition — which is
+          exactly what pack A2 (``CATEGORY_LAST_USED_MOVE``) names. Lock bit + last move fully
+          specify the lock, the same way ``volatile:encore`` + last move specify an Encore.
+
+        ``item_from_trick`` is the valence discriminator, and the reason a bare "holds a Choice
+        Band" reading is not enough: a NATIVE Choice Band is assigned to all-attacks sets
+        (``counter.get('Physical') >= 4``) and makes its holder stronger, whereas a Tricked one
+        is a liability we inflicted — often locking a support mon into a status move. Identical
+        item, opposite sign. The belief engine already audits this surface (it sets
+        ``item_mutated`` / ``current_public_item`` on the same line); this is the parser-side
+        twin so the fact reaches the observation without a belief round-trip.
+
+        Cleared on ``-enditem`` (the item is gone, so the lock goes with it) and on switch-out
+        (handled in the parse loop's switch block, where every per-mon tracker resets).
+        """
+
+        event_type = parts[1] if len(parts) > 1 else ""
+        if len(parts) < 3:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.choice_locked:
+            return
+        if event_type == "-item" and len(parts) >= 4:
+            # A fresh item resets the lock even when the new item is also a choice item:
+            # Choice Band's onStart deletes choicelock, so the holder is free until it moves.
+            self.choice_item_public[slot] = _normalize_identifier(parts[3]) in _CHOICE_ITEMS
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = "[from] move: Trick" in line
+            return
+        if event_type == "-enditem":
+            self.choice_item_public[slot] = False
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = False
+            return
+        if event_type == "move" and len(parts) >= 4:
+            # ``onModifyMove`` adds the lock on the move actually used. A ``|move|`` line is the
+            # public mirror of that, and a called move (Sleep Talk's callee) does not lock —
+            # the same ``[from]`` discriminator the last_used_move truth table uses.
+            if self.choice_item_public.get(slot) and not any(
+                part.startswith("[from]") for part in parts[4:]
+            ):
+                self.choice_locked[slot] = True
+            return
+        if event_type == "faint":
+            self.choice_item_public[slot] = False
+            self.choice_locked[slot] = False
+            self.item_from_trick[slot] = False
+
+    def _update_items_removed(self, parts: Sequence[str], line: str) -> None:
+        """Per-side count of held items removed by the OPPOSING side's action (v4 part B4).
+
+        Knock Off only. The public surface is ``|-enditem|SLOT|ITEM|[from] move: Knock Off`` — the
+        same discriminator the belief engine uses to set ``item_removed`` on that mon. Excluded on
+        purpose: a bare ``-enditem`` (a berry the holder ate, White Herb) is self-consumption and
+        nobody's credit, and ``[from] move: Trick`` is a SWAP whose giving half the belief layer
+        explicitly declines to model — counting it as removal credit would price a trade as a
+        theft. Counted on the VICTIM's slot; the encoder reads the opposite side's ledger as our
+        credit (see NUMERIC_OPP_ITEMS_REMOVED_CREDIT's orientation note).
+        """
+
+        if (parts[1] if len(parts) > 1 else "") != "-enditem" or len(parts) < 3:
+            return
+        if "[from] move: Knock Off" not in line:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot in self.items_removed:
+            self.items_removed[slot] = self.items_removed.get(slot, 0) + 1
+
     def snapshot(self) -> ShowdownReplayState:
+        # Do not serialize a malformed mutable latch as a future authorization.
+        self._sanitize_toxic_replacement_provenance()
         return ShowdownReplayState(
             battle_id=self.battle_id,
             players=dict(self.players),
@@ -2325,6 +3605,20 @@ class _ReplayParser:
             },
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
+            toxic_stage_known=dict(self.toxic_stage_known),
+            toxic_stage_zero_after_upkeep=dict(self.toxic_stage_zero_after_upkeep),
+            toxic_stage_zero_after_upkeep_expires_after_turn=dict(
+                self.toxic_stage_zero_after_upkeep_expires_after_turn
+            ),
+            toxic_stage_zero_after_upkeep_ident=dict(self.toxic_stage_zero_after_upkeep_ident),
+            toxic_faint_replacement_pending=dict(self.toxic_faint_replacement_pending),
+            toxic_faint_replacement_expected_ident=dict(
+                self.toxic_faint_replacement_expected_ident
+            ),
+            toxic_faint_replacement_invalid=dict(self.toxic_faint_replacement_invalid),
+            hp_visibility={
+                slot: self._hp_visibility_for_slot(slot) for slot in ("p1", "p2")
+            },
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
             wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
@@ -2347,6 +3641,8 @@ class _ReplayParser:
             live_type_override=dict(self.live_type_override),
             traced_ability=dict(self.traced_ability),
             truant_phase=dict(self.truant_phase),
+            post_upkeep_window=self._post_upkeep_window,
+            truant_skip_next_flip=tuple(sorted(self._truant_skip_next_flip)),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
@@ -2360,12 +3656,38 @@ class _ReplayParser:
                 slot: value for slot, value in self.last_used_move.items() if value
             },
             stall_move_pending=dict(self.stall_move_pending),
+            must_recharge=dict(self.must_recharge),
+            last_damage_dealt=dict(self.last_damage_dealt),
+            last_damage_taken=dict(self.last_damage_taken),
+            current_damage_dealt=dict(self.current_damage_dealt),
+            current_damage_taken=dict(self.current_damage_taken),
+            hazard_damage_suffered=dict(self.hazard_damage_suffered),
+            items_removed=dict(self.items_removed),
+            arrived_by_baton_pass=dict(self.arrived_by_baton_pass),
+            choice_item_public=dict(self.choice_item_public),
+            choice_locked=dict(self.choice_locked),
+            item_from_trick=dict(self.item_from_trick),
         )
 
 
-def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") -> ShowdownReplayState:
-    """Parse compact Showdown protocol lines into transport-level state."""
-    parser = _ReplayParser(battle_id=battle_id)
+def parse_showdown_replay(
+    lines: Sequence[str],
+    *,
+    battle_id: str = "replay",
+    complete_prefix: bool = False,
+    hp_visibility: Mapping[str, str] | None = None,
+) -> ShowdownReplayState:
+    """Parse compact Showdown protocol lines into transport-level state.
+
+    ``complete_prefix`` must be asserted only when the caller owns a stream that starts at battle
+    reset. Attach-midstream callers should keep the fail-closed default. ``hp_visibility`` records
+    whether each side's HP condition is exact or Showdown's rounded player-view percentage.
+    """
+    parser = _ReplayParser(
+        battle_id=battle_id,
+        complete_prefix=complete_prefix,
+        hp_visibility=hp_visibility,
+    )
     parser.feed(lines)
     return parser.snapshot()
 
@@ -2538,7 +3860,77 @@ def normalize_for_player(
         opponent_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(opponent_slot)),
         self_stall_counter=int(replay.stall_counter.get(showdown_slot, 0)),
         opponent_stall_counter=int(replay.stall_counter.get(opponent_slot, 0)),
+        # ---- spec v4 k0 feature pack. Read straight off the parser trackers; the schema gate
+        # lives at encode time, so these travel on every normalized state (and into the
+        # observation metadata) regardless of which schema the caller ends up encoding.
+        self_must_recharge=bool(replay.must_recharge.get(showdown_slot, False)),
+        opponent_must_recharge=bool(replay.must_recharge.get(opponent_slot, False)),
+        # ``truant_phase`` is tri-state (True loafs / False acts / None no-holder-or-unknown);
+        # ``is True`` collapses the two non-assertions onto the same 0 the world falls back to.
+        self_truant_loaf=replay.truant_phase.get(showdown_slot) is True,
+        opponent_truant_loaf=replay.truant_phase.get(opponent_slot) is True,
+        self_last_used_move=replay.last_used_move.get(showdown_slot),
+        opponent_last_used_move=replay.last_used_move.get(opponent_slot),
+        self_arrived_by_baton_pass=bool(
+            replay.arrived_by_baton_pass.get(showdown_slot, False)
+        ),
+        opponent_arrived_by_baton_pass=bool(
+            replay.arrived_by_baton_pass.get(opponent_slot, False)
+        ),
+        self_choice_locked=bool(replay.choice_locked.get(showdown_slot, False)),
+        opponent_choice_locked=bool(replay.choice_locked.get(opponent_slot, False)),
+        self_item_swapped=bool(replay.item_from_trick.get(showdown_slot, False)),
+        opponent_item_swapped=bool(replay.item_from_trick.get(opponent_slot, False)),
+        self_traced_ability=replay.traced_ability.get(showdown_slot),
+        opponent_traced_ability=replay.traced_ability.get(opponent_slot),
+        self_last_damage_dealt=float(replay.last_damage_dealt.get(showdown_slot, 0.0) or 0.0),
+        self_last_damage_taken=float(replay.last_damage_taken.get(showdown_slot, 0.0) or 0.0),
+        opponent_last_damage_dealt=float(replay.last_damage_dealt.get(opponent_slot, 0.0) or 0.0),
+        opponent_last_damage_taken=float(replay.last_damage_taken.get(opponent_slot, 0.0) or 0.0),
+        self_hazard_damage_suffered=float(
+            replay.hazard_damage_suffered.get(showdown_slot, 0.0) or 0.0
+        ),
+        opponent_hazard_damage_suffered=float(
+            replay.hazard_damage_suffered.get(opponent_slot, 0.0) or 0.0
+        ),
+        self_items_removed=int(replay.items_removed.get(showdown_slot, 0) or 0),
+        opponent_items_removed=int(replay.items_removed.get(opponent_slot, 0) or 0),
+        # Conditioned HERE rather than at encode time: our own active is known at
+        # normalization, so the encoder receives one already-selected column of the
+        # (their mon x our mon) table instead of the whole table.
+        opponent_matchup_switch_evidence=_matchup_switch_evidence(
+            tendency_stats, self_team
+        ),
     )
+
+
+def _matchup_switch_evidence(
+    tendency_stats: "TendencyStats | None",
+    self_team: Sequence[ShowdownPokemon],
+) -> dict[str, tuple[int, int]]:
+    """Per-opponent-mon (switched, stayed) against the mon WE currently have out.
+
+    Selects one column of the fold's (their mon x our mon) table. An empty result — no
+    active mon resolvable, or no tendency stats — means every opponent token encodes (0, 0),
+    which is the honest reading: this matchup has no history yet. The marginal triple on the
+    same token is the fallback the model already has.
+    """
+
+    if tendency_stats is None:
+        return {}
+    active = next((mon for mon in self_team if mon.active), None)
+    if active is None or not active.species:
+        return {}
+    ours = _normalize_identifier(active.species)
+    evidence: dict[str, tuple[int, int]] = {}
+    for cell in tendency_stats.opponent_mon_matchups:
+        if _normalize_identifier(cell.opposing_species) != ours:
+            continue
+        evidence[_normalize_identifier(cell.species)] = (
+            int(cell.switched_out_before_attacking),
+            int(cell.stayed_and_attacked),
+        )
+    return evidence
 
 
 def _weather_duration_features(replay: ShowdownReplayState) -> tuple[int, bool]:
@@ -2626,8 +4018,23 @@ def observation_from_player_state(
             f"observation encode: unsupported spec schema {spec.schema_version!r}; supported "
             f"schemas are {supported}."
         )
-    schema_v3 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
-    if schema_v3 and spec.numeric_feature_count != _V3_NUMERIC_FEATURE_COUNT:
+    # V4 is the v3 surface plus the k0 feature pack, so ``schema_v3`` stays the gate for every
+    # v3-era writer (it means "grouped-layout lineage", not "exactly v3") and ``schema_v4`` gates
+    # the pack columns on top. A v3 spec therefore never touches a pack column, and a v4 spec
+    # writes the complete v3 surface — the two projections differ, never the semantics they share.
+    schema_v4 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V4
+    schema_v3 = schema_v4 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
+    if schema_v4 and spec.numeric_feature_count != _V4_NUMERIC_FEATURE_COUNT:
+        raise ValueError(
+            "observation encode: the grouped v4 layout requires exactly "
+            f"{_V4_NUMERIC_FEATURE_COUNT} numeric columns, got {spec.numeric_feature_count}. "
+            "Its projection map defines the complete public surface."
+        )
+    if (
+        schema_v3
+        and not schema_v4
+        and spec.numeric_feature_count != _V3_NUMERIC_FEATURE_COUNT
+    ):
         raise ValueError(
             "observation encode: the grouped v3 layout requires exactly "
             f"{_V3_NUMERIC_FEATURE_COUNT} numeric columns, got {spec.numeric_feature_count}. "
@@ -2645,6 +4052,17 @@ def observation_from_player_state(
             "undeclared hybrid stamped with the wider version; the 119-column relic family "
             f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
         )
+    if schema_v4 and spec.categorical_feature_count != _V4_CATEGORICAL_FEATURE_COUNT:
+        # EXACT, not a floor. Every earlier schema was wider than its predecessor, so "at least
+        # my census" was sufficient; v4 is the first that SHRINKS (41 vs v3's 51), which makes
+        # a stale 51 look like a legal over-wide spec and silently emit ten dead columns on a
+        # tensor stamped v4.
+        raise ValueError(
+            "observation encode: the grouped v4 layout requires exactly "
+            f"{_V4_CATEGORICAL_FEATURE_COUNT} categorical columns, got "
+            f"{spec.categorical_feature_count}. v4 is NARROWER than v3 (the turn-merged block "
+            "is gone), so a v3-width spec is a mismatch, not a permissible superset."
+        )
     categorical_floor = _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA[spec.schema_version]
     if spec.categorical_feature_count < categorical_floor:
         raise ValueError(
@@ -2654,21 +4072,34 @@ def observation_from_player_state(
             f"({OBSERVATION_SCHEMA_VERSION_V2!r} and {OBSERVATION_SCHEMA_VERSION_V2_1!r}: "
             f"{_CATEGORICAL_FEATURE_COUNT}; {OBSERVATION_SCHEMA_VERSION_V2_2!r} and "
             f"{OBSERVATION_SCHEMA_VERSION_V3!r}: "
-            f"{_V2_2_CATEGORICAL_FEATURE_COUNT}); a narrower spec would silently "
+            f"{_V2_2_CATEGORICAL_FEATURE_COUNT}; {OBSERVATION_SCHEMA_VERSION_V4!r}: "
+            f"{_V4_CATEGORICAL_FEATURE_COUNT}); a narrower spec would silently "
             "bounds-drop the schema's own categorical surface (v2.2's whole second "
-            "sub-block) and encode an undeclared hybrid stamped with the wider version."
+            "sub-block, v4's last-move / traced-ability pair) and encode an undeclared "
+            "hybrid stamped with the wider version."
         )
     # V3 keeps the v2.2 turn-merged semantic surface but projects the private legacy writer
     # rows into its grouped public layout after all token writers complete.
-    schema_v2_2 = schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
-    # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
-    schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
-    if schema_v2_2 and state.transition_tokens and not state.turn_merged_tokens:
+    # TURN-MERGED is a property of the TRANSITION REGION, and v4 has none — so v4 is a
+    # grouped-layout (v3-lineage) schema that is NOT turn-merged. Keeping these two axes
+    # separate is what lets v4 write every v3 current-state signal while encoding no history.
+    schema_turn_merged = (not schema_v4) and (
+        schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    )
+    # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs. v4
+    # keeps those blocks too (PP-validity bits, sub HP, the per-mon pinned Tier-2 conclusions —
+    # all current-state surfaces that survive the region trim).
+    schema_v2_1 = (
+        schema_turn_merged
+        or schema_v4
+        or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
+    )
+    if schema_turn_merged and state.transition_tokens and not state.turn_merged_tokens:
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires the state's "
             "turn_merged_tokens — normalize with include_turn_merged=True."
         )
-    if schema_v2_2 and not category_vocab.is_enumerated("tt_phase:turn"):
+    if schema_turn_merged and not category_vocab.is_enumerated("tt_phase:turn"):
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires a vocabulary built "
             "with include_turn_merged=True — this one lacks the tt_phase/tt2_* families, "
@@ -2718,13 +4149,24 @@ def observation_from_player_state(
         spec,
         # The writer constants are the frozen v2.2-plus-v3-appendix positions. V3 projects
         # this internal row after encoding so its public 155-column layout can freely reorder
-        # and drop evidence-backed dead fields without perturbing a legacy writer.
+        # and drop evidence-backed dead fields without perturbing a legacy writer. V4 widens the
+        # same internal row by the feature-pack columns and projects through its own map.
         internal_numeric_feature_count=(
-            V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT if schema_v3 else spec.numeric_feature_count
+            V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT
+            if schema_v4
+            else V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT
+            if schema_v3
+            else spec.numeric_feature_count
         ),
     )
     _encode_field_token(
-        categorical_ids, numeric_features, state, masks=feature_masks, schema_v3=schema_v3
+        categorical_ids,
+        numeric_features,
+        state,
+        masks=feature_masks,
+        schema_v3=schema_v3,
+        schema_v4=schema_v4,
+        dex=dex,
     )
     # Exact-state per-mon fields come from the belief engine's ledgers for BOTH sides (it tracks
     # self and opponent); the opponent's belief-fact buckets keep their existing single source.
@@ -2746,11 +4188,21 @@ def observation_from_player_state(
         active_encore_elapsed=state.self_encore_elapsed,
         active_wrap_trap_elapsed=state.self_wrap_trap_elapsed,
         active_meanlook_trap=state.self_meanlook_trap,
+        active_must_recharge=state.self_must_recharge,
+        active_truant_loaf=state.self_truant_loaf,
+        active_last_used_move=state.self_last_used_move,
+        active_arrived_by_baton_pass=state.self_arrived_by_baton_pass,
+        active_choice_locked=state.self_choice_locked,
+        active_item_swapped=state.self_item_swapped,
+        active_traced_ability=state.self_traced_ability,
+        active_last_damage_dealt=state.self_last_damage_dealt,
+        active_last_damage_taken=state.self_last_damage_taken,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
         schema_v3=schema_v3,
+        schema_v4=schema_v4,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
     tendency_by_species = (
@@ -2777,6 +4229,15 @@ def observation_from_player_state(
         active_encore_elapsed=state.opponent_encore_elapsed,
         active_wrap_trap_elapsed=state.opponent_wrap_trap_elapsed,
         active_meanlook_trap=state.opponent_meanlook_trap,
+        active_must_recharge=state.opponent_must_recharge,
+        active_truant_loaf=state.opponent_truant_loaf,
+        active_last_used_move=state.opponent_last_used_move,
+        active_arrived_by_baton_pass=state.opponent_arrived_by_baton_pass,
+        active_choice_locked=state.opponent_choice_locked,
+        active_item_swapped=state.opponent_item_swapped,
+        active_traced_ability=state.opponent_traced_ability,
+        active_last_damage_dealt=state.opponent_last_damage_dealt,
+        active_last_damage_taken=state.opponent_last_damage_taken,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -2785,15 +4246,23 @@ def observation_from_player_state(
         transform_targets_by_species={
             _normalize_identifier(member.species): member for member in state.self_team
         },
+        matchup_switch_evidence=state.opponent_matchup_switch_evidence,
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
         schema_v3=schema_v3,
+        schema_v4=schema_v4,
         tier2_cb_pinned_species=tier2_cb_pinned_species,
         tier2_investment_pinned=tier2_investment_pinned,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
-    if schema_v2_2:
+    if schema_v4:
+        # No transition region exists at v4 — nothing to encode, and no budget to honour. The
+        # tokens are still EXTRACTED upstream (normalize_for_player), because the per-mon pinned
+        # Tier-2 conclusions and the tendency aggregates are derived from that stream; only the
+        # per-row ENCODING is gone.
+        pass
+    elif schema_turn_merged:
         _encode_turn_merged_transition_tokens(
             categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v3=schema_v3
         )
@@ -2801,7 +4270,9 @@ def observation_from_player_state(
         _encode_transition_tokens(
             categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v2_1=schema_v2_1
         )
-    if schema_v3:
+    if schema_v4:
+        numeric_features = _project_v4_numeric_rows(numeric_features)
+    elif schema_v3:
         numeric_features = _project_v3_numeric_rows(numeric_features)
     # Convert the raw category strings to compact embedding rows in one pass.
     categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
@@ -2814,7 +4285,9 @@ def observation_from_player_state(
         attention_mask=attention_mask,
         legal_action_mask=state.legal_action_mask,
         perspective=state.perspective,
-        metadata=_observation_metadata(state),
+        metadata=_observation_metadata(
+            state, dex=dex, schema_version=spec.schema_version
+        ),
         schema_version=spec.schema_version,
     )
 
@@ -3321,13 +4794,93 @@ def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], tur
         future_sight.pop(slot, None)
 
 
-def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
+def _is_active_protocol_ident(ident: str) -> bool:
+    """Whether a protocol ident names the current singles active slot.
+
+    Per-mon cure lines can name a benched team member as ``p1: Name``. A
+    Toxic counter belongs only to the active Pokemon, so treating every same-
+    side cure as a reset corrupts the live active counter.
+    """
+
+    return bool(re.fullmatch(r"p[12]a: \S(?:.*\S)?", ident))
+
+
+def _canonical_turn_number(line: str) -> int | None:
+    """Return a strictly canonical positive ``|turn|N`` marker."""
+
+    match = re.fullmatch(r"\|turn\|([1-9][0-9]*)", line)
+    return int(match.group(1)) if match is not None else None
+
+
+def _canonical_upkeep_marker(line: str) -> bool:
+    """Whether ``line`` is the unique no-payload Showdown upkeep boundary."""
+
+    return line == "|upkeep"
+
+
+def _canonical_faint_marker(line: str, parts: Sequence[str]) -> bool:
+    """Whether a faint line can open the one-seat replacement proof."""
+
+    return (
+        line == "|".join(parts)
+        and len(parts) == 3
+        and parts[0] == ""
+        and parts[1] == "faint"
+        and _is_active_protocol_ident(parts[2])
+    )
+
+
+def _canonical_replacement_marker(
+    line: str,
+    event_type: str,
+    parts: Sequence[str],
+) -> bool:
+    """Whether a switch-family line has a canonical active-slot payload.
+
+    Baton Pass is the only optional switch suffix accepted by this parser
+    boundary.  It remains ineligible for the Toxic proof, but accepting its
+    canonical wire form keeps ordinary switch accounting intact.
+    """
+
+    has_baton_pass_suffix = (
+        event_type == "switch"
+        and len(parts) == 6
+        and parts[5] == "[from] Baton Pass"
+    )
+    if len(parts) != 5 and not has_baton_pass_suffix:
+        return False
+    return (
+        line == "|".join(parts)
+        and parts[0] == ""
+        and parts[1] == event_type
+        and event_type in {"switch", "drag", "replace"}
+        and _is_active_protocol_ident(parts[2])
+        and all(parts[index] for index in (3, 4))
+    )
+
+
+def _condition_has_status(condition: str | None, status: str) -> bool:
+    return bool(condition and _normalize_identifier(status) in condition.split())
+
+
+def _update_toxic_stage(
+    parts: Sequence[str],
+    toxic_stage: dict[str, int],
+    toxic_stage_known: dict[str, bool] | None = None,
+    toxic_stage_zero_after_upkeep: dict[str, bool] | None = None,
+) -> None:
     """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
     |-cureteam| lines.
 
-    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
-    status — per-mon (`-curestatus`) or team-wide (`-cureteam`/Aromatherapy) — clears it. The
-    counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); a status
+    replacement or cure on the ACTIVE mon clears it. Team-wide ``-cureteam`` clears the active
+    mon too. The counter is also reset on switch and faint (Gen 3 behavior) in the parse loop.
+
+    Every transition here is public protocol evidence. ``toxic_stage_known`` is optional for
+    direct unit callers; when supplied it distinguishes a real public zero from an incomplete
+    prefix that must never be materialized as a synthetic zero counter. The optional
+    ``toxic_stage_zero_after_upkeep`` carries the still-pending, post-upkeep replacement proof;
+    every active status/cure/faint transition retires it before changing the regular stage.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -3335,8 +4888,23 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
     slot = _slot_from_ident(parts[2])
     if slot not in toxic_stage:
         return
-    if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+    active_target = _is_active_protocol_ident(parts[2])
+    if event_type == "faint" and active_target:
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
+        toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
+    elif not active_target and event_type != "-cureteam":
+        # E.g. Heal Bell's ``|-curestatus|p1: Bench|...|[silent]``. It cannot
+        # alter the current active mon's statusState.stage.
+        return
+    elif event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 1
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type == "-status" and len(parts) >= 4:
         # Any OTHER status replaces tox, and the ramp dies with it. `Pokemon.setStatus`
         # does `this.statusState = this.battle.initEffectState(...)` (sim/pokemon.ts:1733),
@@ -3348,11 +4916,19 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
         # Rest` on an already-toxed mon left the ramp standing at its old value, so a LATER
         # re-tox in the same stint was priced from a stage that no longer existed. Observed
         # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
     elif event_type in {"-curestatus", "-cureteam"}:
         # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
+        if toxic_stage_zero_after_upkeep is not None:
+            toxic_stage_zero_after_upkeep[slot] = False
         toxic_stage[slot] = 0
+        if toxic_stage_known is not None:
+            toxic_stage_known[slot] = True
 
 
 def _update_confusion_elapsed(parts: Sequence[str], confusion_elapsed: dict[str, int]) -> None:
@@ -3465,6 +5041,48 @@ def _update_meanlook_trap(parts: Sequence[str], meanlook_trap: dict[str, bool]) 
     elif event_type == "faint":
         meanlook_trap[slot] = False
         meanlook_trap[_OTHER_SLOT[slot]] = False
+
+
+# Gen3's only ``isChoice`` item (``data/items.ts`` choiceband, gen: 3). Choice Scarf and Choice
+# Specs are gen4+ and are not in the pool, so the lock has exactly one source.
+_CHOICE_ITEMS = frozenset({"choiceband"})
+
+
+def _update_must_recharge(parts: Sequence[str], must_recharge: dict[str, bool]) -> None:
+    """Track the public forced-recharge lock per slot (spec v4 pack A1).
+
+    SET on ``|-mustrecharge|SLOT``. The vendored sim emits that line from the ``mustrecharge``
+    volatile's ``onStart``, which runs only when a recharge move actually LANDS — a missed Hyper
+    Beam never reaches it, so gen3's "a miss does not recharge" rule needs no special case here
+    (it is the one rule the search lane's round-record reconstruction had to encode by hand).
+
+    CLEARED on ``|cant|SLOT|recharge``: the forced turn has been spent, and the lock is gone
+    before the next decision. Cleared on ``|faint|SLOT`` and on switch/drag out (handled in the
+    parse loop's switch block, where every other per-mon volatile-backed tracker resets).
+
+    Ordering note: the ``-mustrecharge`` line lands on the SAME turn the beam hit, and the
+    ``cant`` lands on the NEXT one, so the flag is true across exactly one decision boundary —
+    the one where the opponent is choosing what to do against a mon that cannot act. That is the
+    decision a k0 policy was blind at, and why the ``cant:recharge`` transition token (the
+    protocol inventory's "semantic alias" for this line) was one decision too late.
+    """
+
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in must_recharge:
+        return
+    if event_type == "-mustrecharge":
+        must_recharge[slot] = True
+    elif event_type == "faint":
+        must_recharge[slot] = False
+    elif (
+        event_type == "cant"
+        and len(parts) >= 4
+        and _side_condition_identifier(parts[3]) == "recharge"
+    ):
+        must_recharge[slot] = False
 
 
 def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
@@ -3751,8 +5369,9 @@ def _max_hp_from_condition(condition: str | None) -> int | None:
 def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | None]:
     """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
 
-    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``); the
-    caller derives the toxic-residual fraction from the pair, so either scale recovers the stage.
+    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``).
+    The latter is recognizable by its `/100` denominator; callers needing an exact Gen 3 damage
+    unit must handle its rounded deltas separately.
     """
     if not condition:
         return None, None
@@ -3848,6 +5467,21 @@ def _project_v3_numeric_rows(legacy_rows: Sequence[Sequence[float]]) -> list[lis
     return projected
 
 
+def _project_v4_numeric_rows(writer_rows: Sequence[Sequence[float]]) -> list[list[float]]:
+    """Project private writer rows into the public grouped v4 layout (the v3 projection's twin)."""
+
+    projected: list[list[float]] = []
+    for row_index, row in enumerate(writer_rows):
+        if len(row) != V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT:
+            raise ValueError(
+                "v4 numeric projection requires the complete writer surface "
+                f"({V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT} columns), got {len(row)} on row "
+                f"{row_index}."
+            )
+        projected.append([row[writer_index] for writer_index in V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX])
+    return projected
+
+
 def _encode_field_token(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -3855,6 +5489,8 @@ def _encode_field_token(
     *,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
     schema_v3: bool = False,
+    schema_v4: bool = False,
+    dex: "ShowdownDex | None" = None,
 ) -> None:
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_PRIMARY, f"request_kind:{state.request_kind}")
     # Winner identity is deliberately NOT encoded: it is constant ("none") at every decision
@@ -3902,6 +5538,11 @@ def _encode_field_token(
                 NUMERIC_OPP_WISH_TURNS,
                 min(1.0, state.opponent_wish_turns / 2.0),
             )
+    # Spec v4 Part B: the entry-hazard credit / expected-value pair and the items-removed credit,
+    # all per side on the field token beside the layer counts they are about. Public-protocol
+    # derived, so gated on the schema alone (not masks.exact_state).
+    if schema_v4:
+        _encode_field_credit_features(numeric_features[FIELD_TOKEN_OFFSET], state, dex=dex)
 
 
 # (condition id, self numeric slot, opponent numeric slot) for the timed side conditions.
@@ -3954,6 +5595,179 @@ _BOOST_STAT_SLOTS = (
 )
 
 
+# Gen 3 Spikes damage as a fraction of the incoming mon's max HP, indexed by layer count
+# (0 layers = no damage). Engine ground truth, and the same ladder engine_world prices.
+_SPIKES_DAMAGE_BY_LAYERS = (0.0, 1.0 / 8.0, 1.0 / 6.0, 1.0 / 4.0)
+# Both Part-B credit families are normalized by the TEAM: six mons, so six items and six
+# max-HP units. The opponent's real max HPs are hidden, so an equal-share denominator is the
+# only public normalization available — and using the same one on both sides keeps the four
+# hazard columns and the two item columns on one comparable scale.
+_TEAM_SIZE = 6.0
+
+
+def _is_grounded_for_spikes(
+    pokemon: ShowdownPokemon,
+    *,
+    belief: "RevealedPokemonBelief | None",
+    dex: "ShowdownDex | None",
+) -> bool:
+    """Whether Spikes would damage this mon on entry, from PUBLIC knowledge only.
+
+    The gen3 grounding rule as the engine applies it (``engine_world``'s trap/hazard test):
+    Flying types and Levitate are exempt, everything else takes the chip.
+
+    Conservative by construction — this feeds an EXPECTED-value column, and the honest failure
+    direction is to over-count rather than to claim an immunity we cannot see. A mon whose
+    species is not yet revealed, or whose ability is still ambiguous, counts as grounded; only a
+    revealed Flying type or a revealed (or uniquely-implied) Levitate removes it. Our own team is
+    fully known, so the same code is exact on the self side.
+    """
+
+    species_info = dex.species_info(pokemon.species) if dex is not None else None
+    if species_info is not None and any(
+        _normalize_identifier(type_name) == "flying" for type_name in species_info.types
+    ):
+        return False
+    ability = _normalize_identifier(pokemon.ability or "")
+    if not ability and belief is not None:
+        ability = _normalize_identifier(belief.revealed_ability or "")
+        if not ability:
+            possible = [
+                _normalize_identifier(candidate)
+                for candidate in (belief.possible_abilities or ())
+                if _normalize_identifier(candidate)
+            ]
+            # A single remaining candidate is a public conclusion, not a guess: the belief layer
+            # has already eliminated every other set variant.
+            if len(possible) == 1:
+                ability = possible[0]
+    return ability != "levitate"
+
+
+def _healthy_grounded_bench(
+    team: Sequence[ShowdownPokemon],
+    *,
+    beliefs_by_species: Mapping[str, "RevealedPokemonBelief"] | None,
+    dex: "ShowdownDex | None",
+    unseen_slots: int = 0,
+) -> int:
+    """Count of BENCHED, unfainted, Spikes-grounded mons — the population a layer still bills.
+
+    The active mon is excluded: it is already on the field and will not pay entry chip again
+    unless it leaves and returns, which is precisely the future the value column is pricing.
+
+    ``unseen_slots`` is the opponent's NOT-YET-REVEALED party members, and it is load-bearing.
+    ``state.opponent_team`` holds only revealed mons, so counting that list alone made the
+    column smallest exactly when Spikes are worth most — early, before reveals — and made its
+    magnitude a proxy for how much of their team we have seen rather than for hazard exposure.
+    It also inverted the documented conservative default (an unknown mon counts as GROUNDED,
+    because we must not claim an immunity we cannot see) and broke comparability with the self
+    side, which is always a complete six.
+    """
+
+    count = max(0, unseen_slots)
+    for pokemon in team:
+        if pokemon.active:
+            continue
+        if _condition_features(pokemon.condition).fainted:
+            continue
+        belief = (
+            _belief_for_species(beliefs_by_species, pokemon.species)
+            if beliefs_by_species
+            else None
+        )
+        if _is_grounded_for_spikes(pokemon, belief=belief, dex=dex):
+            count += 1
+    return count
+
+
+def field_credit_values(
+    state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None",
+) -> dict[str, float]:
+    """The six settled Part-B column values (spec v4), by metadata key.
+
+    SINGLE DERIVATION, TWO CONSUMERS — the same rule the pack itself is built on. The Python
+    encoder writes these, and ``_observation_metadata`` publishes the identical numbers so the
+    native Rust leaf encoder can read them instead of re-implementing the gen3 grounding rule.
+    A re-derivation is exactly the kind of thing that drifts silently between two languages.
+    """
+
+    values: dict[str, float] = {}
+    values["self_hazard_credit"] = min(1.0, state.self_hazard_damage_suffered / _TEAM_SIZE)
+    values["opponent_hazard_credit"] = min(
+        1.0, state.opponent_hazard_damage_suffered / _TEAM_SIZE
+    )
+    self_layers = min(
+        3, sum(int(state.self_side_condition_counts.get(n, 0)) for n in _HAZARD_CONDITIONS)
+    )
+    opp_layers = min(
+        3, sum(int(state.opponent_side_condition_counts.get(n, 0)) for n in _HAZARD_CONDITIONS)
+    )
+    values["self_hazard_expected"] = (
+        min(
+            1.0,
+            _healthy_grounded_bench(state.self_team, beliefs_by_species=None, dex=dex)
+            * _SPIKES_DAMAGE_BY_LAYERS[self_layers]
+            / _TEAM_SIZE,
+        )
+        if self_layers
+        else 0.0
+    )
+    values["opponent_hazard_expected"] = (
+        min(
+            1.0,
+            _healthy_grounded_bench(
+                state.opponent_team,
+                beliefs_by_species=state.belief_view.opponent_by_species(),
+                dex=dex,
+                # Every party slot we have not seen yet is a benched, living, presumed-grounded
+                # mon. int(_TEAM_SIZE) is the gen3 singles party size.
+                unseen_slots=int(_TEAM_SIZE) - len(state.opponent_team),
+            )
+            * _SPIKES_DAMAGE_BY_LAYERS[opp_layers]
+            / _TEAM_SIZE,
+        )
+        if opp_layers
+        else 0.0
+    )
+    values["self_items_removed_credit"] = min(1.0, state.self_items_removed / _TEAM_SIZE)
+    values["opponent_items_removed_credit"] = min(
+        1.0, state.opponent_items_removed / _TEAM_SIZE
+    )
+    return values
+
+
+def _encode_field_credit_features(
+    num_row: list[float],
+    state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None",
+) -> None:
+    """Part B credit + expected-value columns on the field token (spec v4).
+
+    ORIENTATION, shared with NUMERIC_SELF_HAZARDS / NUMERIC_OPP_HAZARDS: ``self_*`` is about our
+    own ground — layers on our side, damage our mons took, items of ours that were knocked off.
+    ``opp_*`` is the opponent's ground, which is where OUR hazards' and OUR Knock Offs' payoff
+    shows up. Reading them as "credit we earned" therefore means reading the ``opp_*`` column,
+    exactly as "layers we laid" means NUMERIC_OPP_HAZARDS.
+    """
+
+    values = field_credit_values(state, dex=dex)
+    for key, column in (
+        ("self_hazard_credit", NUMERIC_SELF_HAZARD_CREDIT),
+        ("opponent_hazard_credit", NUMERIC_OPP_HAZARD_CREDIT),
+        ("self_hazard_expected", NUMERIC_SELF_HAZARD_EXPECTED),
+        ("opponent_hazard_expected", NUMERIC_OPP_HAZARD_EXPECTED),
+        ("self_items_removed_credit", NUMERIC_SELF_ITEMS_REMOVED_CREDIT),
+        ("opponent_items_removed_credit", NUMERIC_OPP_ITEMS_REMOVED_CREDIT),
+    ):
+        value = values[key]
+        if value:
+            _set_numeric(num_row, column, value)
+
+
 def _side_condition_features(counts: Mapping[str, int]) -> tuple[float, float]:
     """(hazard layers /3, screens active /2) for one side's condition counts."""
     hazards = sum(int(counts.get(name, 0)) for name in _HAZARD_CONDITIONS)
@@ -3971,9 +5785,57 @@ def _encode_active_boosts(num_row: list[float], boosts: Mapping[str, int] | None
             _set_numeric(num_row, slot, max(-1.0, min(1.0, float(stage) / 6.0)))
 
 
+class VolatileBucketOverflowWarning(UserWarning):
+    """A mon carried more tracked volatiles than the bag has buckets.
+
+    Non-fatal by design: the encode still produces a valid, correctly-shaped observation with
+    the overflow truncated, so no run, cache, or sample can be broken by it. But it is a real
+    loss of public state, so it is announced rather than swallowed — the silent-truncation
+    failure class the divergence ledger exists to eliminate.
+    """
+
+
+# Count of truncated volatile-bag overflows since process start. A warning is emitted once per
+# call site under Python's default filter, which is the right volume for a signal that should
+# never fire; this counter is what a long fleet run can actually poll to prove it did not.
+VOLATILE_BUCKET_OVERFLOWS = 0
+
+
 def _encode_active_volatiles(cat_row: list[str], volatiles: Sequence[str]) -> None:
-    """Place active-mon volatile statuses (sorted) positionally into the volatile columns."""
-    for index, name in enumerate(sorted(set(volatiles))[:VOLATILE_BUCKET_COUNT]):
+    """Place active-mon volatile statuses (sorted) positionally into the volatile columns.
+
+    OVERFLOW IS LOUD BUT NEVER FATAL. Six buckets cover every reachable simultaneous set: over
+    160 random-legal self-play games (337,314 slot observations) the observed maximum was TWO,
+    and 23 of the 38 tracked volatiles have no carrier in the gen3 randbat pool at all. If that
+    ever stops being true the excess is still truncated — an encode must not be able to abort a
+    collection run or corrupt a sample — but it warns and increments a counter so the condition
+    surfaces instead of silently dropping public state.
+
+    Position within the bag carries no meaning: the model SUMS the categorical embeddings, so a
+    volatile contributes the same vector from any column. Only membership matters, which is why
+    truncation (not ordering) is the whole risk here.
+    """
+
+    global VOLATILE_BUCKET_OVERFLOWS
+    names = sorted(set(volatiles))
+    if len(names) > VOLATILE_BUCKET_COUNT:
+        VOLATILE_BUCKET_OVERFLOWS += 1
+        dropped = names[VOLATILE_BUCKET_COUNT:]
+        # Wrapped: a `-W error` profile would otherwise turn this deliberately NON-FATAL
+        # diagnostic into an encode exception, breaking the very collection run the truncation
+        # exists to protect. The counter above is the signal that always survives.
+        try:
+            warnings.warn(
+                f"volatile bag overflow: {len(names)} tracked volatiles on one mon exceeds the "
+                f"{VOLATILE_BUCKET_COUNT} buckets; dropping {dropped}. The observation is "
+                "still valid and the run continues, but this is public state the model cannot "
+                "see — raise VOLATILE_BUCKET_COUNT (a schema change) if it recurs.",
+                VolatileBucketOverflowWarning,
+                stacklevel=2,
+            )
+        except Exception:  # pragma: no cover - a warning must never abort an encode
+            pass
+    for index, name in enumerate(names[:VOLATILE_BUCKET_COUNT]):
         column = CATEGORY_VOLATILE_OFFSET + index
         if column >= len(cat_row):
             break
@@ -4172,6 +6034,57 @@ def _encode_move_mechanics(
     _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(self_hp_cost))))
 
 
+def _encode_active_feature_pack(
+    cat_row: list[str],
+    num_row: list[float],
+    *,
+    truant_loaf: bool,
+    last_used_move: str | None,
+    arrived_by_baton_pass: bool,
+    choice_locked: bool,
+    item_swapped: bool,
+    traced_ability: str | None,
+    last_damage_dealt: float,
+    last_damage_taken: float,
+) -> None:
+    """The per-mon half of the v4 k0 feature pack, written on a side's ACTIVE token.
+
+    Every value here is a CURRENT-STATE fact the search world (or the history region) already
+    had and the observation did not — see the column comments for each one's provenance. Unset
+    stays 0 / padding throughout: a mon that never moved writes no last-move label, a
+    non-Trace-holder writes no ability, and a quiet round writes no damage.
+    """
+
+    if truant_loaf:
+        _set_numeric(num_row, NUMERIC_TRUANT_LOAF, 1.0)
+    if last_damage_dealt > 0.0:
+        _set_numeric(num_row, NUMERIC_LAST_DAMAGE_DEALT, min(1.0, last_damage_dealt))
+    if last_damage_taken > 0.0:
+        _set_numeric(num_row, NUMERIC_LAST_DAMAGE_TAKEN, min(1.0, last_damage_taken))
+    if choice_locked:
+        _set_numeric(num_row, NUMERIC_CHOICE_LOCKED, 1.0)
+    if item_swapped:
+        _set_numeric(num_row, NUMERIC_ITEM_SWAPPED, 1.0)
+    if last_used_move:
+        # The parser stores the ``"switch"`` sentinel in the same field as move ids; it maps to a
+        # DISTINCT label so the bag can tell "came in this turn" (a fact Encore keys off) from a
+        # move identity, and both from the padding state "has never moved". A Baton-Pass arrival
+        # gets its OWN sentinel: it is a different arrival — boosts and the transferable
+        # volatiles came with it — and the explicit switch-reason that records this lives only
+        # in the history region, so at k0 the distinction would otherwise be lost.
+        if _normalize_identifier(last_used_move) == "switch":
+            label = (
+                LAST_USED_MOVE_BATON_PASS_SENTINEL
+                if arrived_by_baton_pass
+                else LAST_USED_MOVE_SWITCH_SENTINEL
+            )
+        else:
+            label = f"move:{_normalize_identifier(last_used_move)}"
+        _set_category(cat_row, CATEGORY_LAST_USED_MOVE, label)
+    if traced_ability:
+        _set_category(cat_row, CATEGORY_TRACED_ABILITY, f"ability:{_normalize_identifier(traced_ability)}")
+
+
 def _encode_pokemon_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -4195,9 +6108,23 @@ def _encode_pokemon_tokens(
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
     schema_v2_1: bool = False,
     schema_v3: bool = False,
+    schema_v4: bool = False,
     tier2_cb_pinned_species: frozenset[str] = frozenset(),
     tier2_investment_pinned: Mapping[str, float] | None = None,
     active_meanlook_trap: bool = False,
+    # ---- spec v4 k0 feature pack, all describing the side's ACTIVE mon. -----------------------
+    active_must_recharge: bool = False,
+    active_truant_loaf: bool = False,
+    active_last_used_move: str | None = None,
+    active_arrived_by_baton_pass: bool = False,
+    active_choice_locked: bool = False,
+    active_item_swapped: bool = False,
+    active_traced_ability: str | None = None,
+    active_last_damage_dealt: float = 0.0,
+    active_last_damage_taken: float = 0.0,
+    # Per-opponent-mon (switched, stayed) against OUR current active; opponent
+    # tokens only, and empty under every schema below v4.
+    matchup_switch_evidence: Mapping[str, tuple[int, int]] | None = None,
 ) -> None:
     # Spec v3 change 7: reuse the determinization gender parser (single source of truth for the
     # ``, M`` / ``, F`` details convention). Imported lazily to avoid a module-load cycle
@@ -4310,7 +6237,13 @@ def _encode_pokemon_tokens(
                 _set_numeric(numeric_features[token_index], NUMERIC_GENDER_FEMALE, 1.0)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
-            _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
+            # Spec v4 pack A1: mustrecharge joins the volatile bag from the parser tracker.
+            # Injected HERE rather than in the state field so v3's bag is untouched — the
+            # label has no v3 vocabulary row and would hash into the OOV band there.
+            bag = active_volatiles
+            if schema_v4 and active_must_recharge:
+                bag = tuple(bag) + (MUST_RECHARGE_VOLATILE,)
+            _encode_active_volatiles(categorical_ids[token_index], bag)
             if active_toxic_stage:
                 _set_numeric(numeric_features[token_index], NUMERIC_TOXIC_STAGE, min(1.0, active_toxic_stage / 15.0))
             # Spec v3 change 3: the public consecutive-stall counter, written on the ACTIVE mon
@@ -4357,6 +6290,23 @@ def _encode_pokemon_tokens(
             # 0 (unwritten) whenever the active mon is not move-trapped.
             if schema_v3 and active_meanlook_trap:
                 _set_numeric(numeric_features[token_index], NUMERIC_MEANLOOK_TRAP, 1.0)
+            if schema_v4:
+                _encode_active_feature_pack(
+                    categorical_ids[token_index],
+                    numeric_features[token_index],
+                    truant_loaf=active_truant_loaf,
+                    # A2 is separately maskable: the plan's arm pair is k0+pack vs
+                    # k0+pack+lastmove, differing in exactly this column.
+                    last_used_move=(
+                        active_last_used_move if masks.feature_pack_last_move else None
+                    ),
+                    arrived_by_baton_pass=active_arrived_by_baton_pass,
+                    choice_locked=active_choice_locked,
+                    item_swapped=active_item_swapped,
+                    traced_ability=active_traced_ability,
+                    last_damage_dealt=active_last_damage_dealt,
+                    last_damage_taken=active_last_damage_taken,
+                )
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
@@ -4431,6 +6381,30 @@ def _encode_pokemon_tokens(
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
             if tendency is not None:
                 _encode_mon_tendency(numeric_features[token_index], tendency)
+        # v4: the matchup-conditional twin of the triple above, on the same token and under
+        # the SAME tendency mask (it is the same channel, conditioned). Absent cells stay
+        # (0, 0) — no history in this matchup — and the marginal triple beside it carries on.
+        if (
+            schema_v4
+            and masks.opponent_tendency_stats_block
+            and role == "opponent"
+            and matchup_switch_evidence
+        ):
+            cell = matchup_switch_evidence.get(_normalize_identifier(candidate.species))
+            if cell is not None:
+                switched, stayed = cell
+                if switched:
+                    _set_numeric(
+                        numeric_features[token_index],
+                        NUMERIC_MON_SWITCHED_VS_ACTIVE,
+                        min(1.0, switched / _MATCHUP_COUNT_DIVISOR),
+                    )
+                if stayed:
+                    _set_numeric(
+                        numeric_features[token_index],
+                        NUMERIC_MON_STAYED_VS_ACTIVE,
+                        min(1.0, stayed / _MATCHUP_COUNT_DIVISOR),
+                    )
         # v2.1 pinned Tier-2 conclusions (current-state surface; the tt cb_bit and
         # tt investment code stay the as-of-strike history records). Gated upstream:
         # the CB set is empty unless the spec is v2.1, masks.tier2_residuals is on,
@@ -4751,6 +6725,13 @@ def _as_sequence(value: Any) -> Sequence[Any]:
     return ()
 
 
+# Evidence-mass divisor for the matchup-conditional pair. Deliberately NOT the /64 the
+# whole-game tendency counts use: a single (their mon x our mon) cell is visited a handful of
+# times per game, so /64 would pin the pair into the bottom few percent of its column for its
+# entire realistic range. Same principle as /64, matched to this quantity's actual scale.
+_MATCHUP_COUNT_DIVISOR = 8.0
+
+
 def _encode_mon_tendency(num_row: list[float], tendency: "OpponentMonTendency") -> None:
     """Per-opponent-mon tendency triple (counts /64 — evidence mass, never rates)."""
     if tendency.switched_out_before_attacking:
@@ -4863,8 +6844,14 @@ def _encode_transition_tokens(
         if token.weather:
             _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        if token.damage_fraction:
-            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, token.damage_fraction))
+        # Internal transition semantics exclude confusion self-damage. This
+        # writer serves only frozen V2/V2.1, so reconstruct their historical
+        # aggregate at the schema boundary.
+        legacy_damage = token.damage_fraction
+        if token.confusion_selfhit:
+            legacy_damage += token.confusion_selfhit_fraction
+        if legacy_damage:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, legacy_damage))
         if token.kind == _TT_KIND_MOVE:
             # n_hits is a move-token field; switch/cant rows keep 0.0 (not a constant 1/5).
             _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
@@ -4952,12 +6939,11 @@ def _encode_turn_merged_transition_tokens(
         if first.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_FIRST_BP, f"species:{first.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        # Spec v3 change 10: under v3 subtract a folded-in confusion self-hit back out of the
-        # move's damage; under v2.2 first_damage IS first.damage_fraction (the frozen field),
-        # so the write is byte-identical.
+        # Internal transition semantics are corrected. Reconstruct the frozen
+        # V2.2 aggregate only when dispatching the legacy merged layout.
         first_damage = first.damage_fraction
-        if schema_v3 and first.confusion_selfhit:
-            first_damage = max(0.0, first_damage - first.confusion_selfhit_fraction)
+        if not schema_v3 and first.confusion_selfhit:
+            first_damage += first.confusion_selfhit_fraction
         if first_damage:
             _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first_damage))
         if first.kind == _TT_KIND_MOVE:
@@ -4995,8 +6981,8 @@ def _encode_turn_merged_transition_tokens(
         # projected into v3's grouped history region after encoding.
         if schema_v3 and first.fail:
             _set_numeric(num_row, NUMERIC_TT_FAIL, 1.0)
-        # Spec v3 change 10: the confusion self-hit flag on the (opponent's) move sub-block
-        # whose damage was just corrected above.
+        # Spec v3 change 10: the confusion self-hit flag on the preceding
+        # opponent move sub-block.
         if schema_v3 and first.confusion_selfhit:
             _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 
@@ -5025,11 +7011,10 @@ def _encode_turn_merged_transition_tokens(
         if second.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_SECOND_BP, f"tt2_species:{second.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_TM2_PRESENT, 1.0)
-        # Spec v3 change 10 (second-mover mirror; the confused mon is normally SLOWER so this
-        # rarely fires, but the correction is symmetric). v2.2 uses the frozen field.
+        # Symmetric legacy reconstruction for the second action sub-block.
         second_damage = second.damage_fraction
-        if schema_v3 and second.confusion_selfhit:
-            second_damage = max(0.0, second_damage - second.confusion_selfhit_fraction)
+        if not schema_v3 and second.confusion_selfhit:
+            second_damage += second.confusion_selfhit_fraction
         if second_damage:
             _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second_damage))
         if second.kind == _TT_KIND_MOVE:
@@ -5057,7 +7042,7 @@ def _encode_turn_merged_transition_tokens(
         if schema_v3 and second.fail:
             _set_numeric(num_row, NUMERIC_TM2_FAIL, 1.0)
         # Spec v3 change 10: the confusion self-hit flag rides the same single column as the
-        # first sub-block (one per-turn bit; the corrected damage is TM2's above).
+        # first sub-block (one per-turn bit).
         if schema_v3 and second.confusion_selfhit:
             _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 
@@ -5159,8 +7144,25 @@ def _encode_action_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if pokemon is not None else 0.0)
 
 
-def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
+def _observation_metadata(
+    state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None" = None,
+    # No default: this argument decides whether the v4 feature pack is disclosed, and a gate
+    # that defaults to the disclosing side fails open. Callers name the schema explicitly.
+    schema_version: str,
+) -> dict[str, Any]:
+    # The v4 pack block is SCHEMA-GATED, not unconditional. Publishing it on every schema was
+    # not merely wasteful (field_credit_values walks the bench on each encode): the search lane
+    # PREFERS metadata["opponent_must_recharge"] over its own reconstruction, so an always-
+    # present key silently changed world seeding for the v2.2/v3 arms currently in flight.
+    # Tensor bytes were frozen either way; behaviour was not, and mid-run behaviour changes to
+    # a live arm are exactly what the contract discipline exists to prevent.
+    pack: dict[str, Any] = {}
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
+        pack = _feature_pack_metadata(state, dex=dex)
     return {
+        **pack,
         "battle_id": state.battle_id,
         "player_id": state.player_id,
         "request_kind": state.request_kind,
@@ -5253,6 +7255,50 @@ def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[st
             }
         )
     return candidates
+
+
+def _feature_pack_metadata(
+    state: PlayerRelativeBattleState, *, dex: "ShowdownDex | None"
+) -> dict[str, Any]:
+    """V4 public-state inputs (the k0 feature pack), for v4 encodes only.
+
+    Metadata-only under every earlier schema in the sense that it is simply ABSENT there: it
+    lets the schema-bound Rust/golden encoders reproduce V4 without replaying private data, and
+    it is the surface the SEARCH lane reads for ``must_recharge`` so the world and the
+    observation share one parser truth — but only for the schema that has those columns.
+    """
+
+    return {
+        # Part B's settled column values, published so the native leaf encoder reads the same
+        # numbers this encoder writes rather than re-deriving the grounding rule in Rust.
+        **field_credit_values(state, dex=dex),
+        "self_must_recharge": state.self_must_recharge,
+        "opponent_must_recharge": state.opponent_must_recharge,
+        "self_truant_loaf": state.self_truant_loaf,
+        "opponent_truant_loaf": state.opponent_truant_loaf,
+        "self_last_used_move": state.self_last_used_move,
+        "opponent_last_used_move": state.opponent_last_used_move,
+        "self_traced_ability": state.self_traced_ability,
+        "opponent_traced_ability": state.opponent_traced_ability,
+        "self_last_damage_dealt": state.self_last_damage_dealt,
+        "self_last_damage_taken": state.self_last_damage_taken,
+        "opponent_last_damage_dealt": state.opponent_last_damage_dealt,
+        "opponent_last_damage_taken": state.opponent_last_damage_taken,
+        "self_hazard_damage_suffered": state.self_hazard_damage_suffered,
+        "opponent_hazard_damage_suffered": state.opponent_hazard_damage_suffered,
+        "self_items_removed": state.self_items_removed,
+        "opponent_items_removed": state.opponent_items_removed,
+        "self_arrived_by_baton_pass": state.self_arrived_by_baton_pass,
+        "opponent_arrived_by_baton_pass": state.opponent_arrived_by_baton_pass,
+        "self_choice_locked": state.self_choice_locked,
+        "opponent_choice_locked": state.opponent_choice_locked,
+        "self_item_swapped": state.self_item_swapped,
+        "opponent_item_swapped": state.opponent_item_swapped,
+        "opponent_matchup_switch_evidence": {
+            species: list(pair)
+            for species, pair in state.opponent_matchup_switch_evidence.items()
+        },
+    }
 
 
 def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:

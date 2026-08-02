@@ -451,6 +451,8 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                     "transition_token_budget": 32,
                     "tier2_residuals": True,
                     "tier2_investment": False,
+                    # v4 pack A2 ablation switch; pack-whole by default and inert below v4.
+                    "feature_pack_last_move": True,
                 },
             )
             matching_model = SimpleNamespace(

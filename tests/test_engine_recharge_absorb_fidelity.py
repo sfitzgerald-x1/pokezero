@@ -112,6 +112,49 @@ class RechargeTurnResidualTests(unittest.TestCase):
         self.assertTrue(any(i.startswith("Heal SideOne:") for i in flat))
         self.assertTrue(any(i.startswith("Damage SideOne:") for i in flat))
 
+    def test_hyper_beam_ko_replacement_defers_recharge_until_next_move_turn(self) -> None:
+        """A forced replacement is not the recharger's onBeforeMove hook.
+
+        The old engine consumed MUSTRECHARGE on the opponent's compulsory
+        switch. Showdown keeps it through that boundary, then removes it when
+        the recharger actually takes its next ordinary turn.
+        """
+        pe = poke_engine
+        snorlax = dict(id="snorlax", level=80, types=("normal", "typeless"), hp=387,
+                       maxhp=387, ability="thickfat", item="none", attack=222,
+                       defense=155, special_attack=260, special_defense=222, speed=170,
+                       moves=[pe.Move(id="hyperbeam", pp=8)])
+        fainted = pe.Pokemon(id="pikachu", level=5, types=("electric", "typeless"),
+                             hp=1, maxhp=20, ability="static", item="none", attack=10,
+                             defense=10, special_attack=10, special_defense=10, speed=10,
+                             moves=[pe.Move(id="splash", pp=16)])
+        replacement = pe.Pokemon(id="blissey", level=80, types=("normal", "typeless"),
+                                 hp=500, maxhp=539, ability="naturalcure", item="none",
+                                 attack=60, defense=77, special_attack=200,
+                                 special_defense=250, speed=120,
+                                 moves=[pe.Move(id="splash", pp=16)])
+        state = _one_on_one(snorlax, [fainted, replacement])
+
+        ko_branch = next(
+            branch for branch in pe.generate_instructions(state, "hyperbeam", "none")
+            if any("ToggleSideTwoForceSwitch" in str(i) for i in branch.instruction_list)
+        )
+        after_ko = state.apply_instructions(ko_branch)
+        self.assertTrue(after_ko.side_two.force_switch)
+        self.assertIn("MUSTRECHARGE", after_ko.side_one.volatile_statuses)
+
+        replacement_branch = pe.generate_instructions(after_ko, "none", "blissey")[0]
+        replacement_text = [str(i) for i in replacement_branch.instruction_list]
+        self.assertTrue(any(i.startswith("Switch SideTwo:") for i in replacement_text))
+        self.assertFalse(any("RemoveVolatileStatus SideOne: MUSTRECHARGE" in i
+                             for i in replacement_text), replacement_text)
+
+        after_replacement = after_ko.apply_instructions(replacement_branch)
+        self.assertIn("MUSTRECHARGE", after_replacement.side_one.volatile_statuses)
+        next_turn = _flat(_branches(after_replacement, "none", "splash"))
+        self.assertTrue(any("RemoveVolatileStatus SideOne: MUSTRECHARGE" in i
+                            for i in next_turn), next_turn)
+
     def test_truant_loaf_boundaries_keep_their_residuals(self) -> None:
         """Audit control (both builds): the loaf early-return does NOT drop
         end-of-turn residuals on either (loaf, move) or (loaf, switch) shapes

@@ -48,10 +48,14 @@ class:
   because the engine ticks per end-of-turn run while the parser/ledger ticks
   per LINE — a faint-pending ply runs the engine's EOT but emits no `|turn|`
   (toxic_stall repro). `LeafMeta` replays the parser's own rules over the
-  branch's synthesized lines, chained per branch exactly like the fold:
-  toxic stage (=1 on `|-status|tox`, +1 per `|turn|` cap 15, reset on the
-  side's switch, cleared on `|-curestatus|`; a status REPLACEMENT like
-  Rest's tox→slp KEEPS the stage — golden-proven), active stints
+  branch's synthesized lines, chained per branch exactly like the fold. The
+  production renderer also passes private ordered active-status transitions to
+  the leaf fold for status changes which Showdown intentionally renders without
+  a public status/cure line (for example Rest, Refresh, and Heal Bell):
+  toxic stage (=1 on `|-status|tox`, +1 per `|turn|` through the raw 16
+  saturation sentinel, reset on the side's switch/drag and re-seeded only by
+  a proven Toxic residual, cleared by status replacement including Rest,
+  `|-curestatus|`, `|-cureteam|`, or faint; model encoding caps at 15), active stints
   (`turns_active`: reset on switch lines, +1 per `|turn|`), per-mon sleep
   counts (`sleep_turns` = observed `|cant …|slp` lines since the
   `|-status|slp`, keyed per mon so a sleeper that faints later keeps its
@@ -95,7 +99,7 @@ world-constant, **C** = static contract (layout constants, invariant).
 | `NUMERIC_ACTIVE` | E | engine `active_index` (a fainted, not-yet-replaced active stays marked active — request semantics) |
 | boosts (`_encode_active_boosts` :2065) | E | engine side boost fields (atk/def/spa/spd/spe/accuracy/evasion) |
 | volatiles (`_encode_active_volatiles` :2075) | E | engine volatile bitset filtered/mapped to `TRACKED_VOLATILES` ids (leaf.rs `VOLATILE_MAP`); engine-only mechanics volatiles dropped; CURSE Ghost-gated AND target-placed (review F5 + live-protocol probe 2026-07-19: the gen3 engine applies the base Curse choice's USER volatile with no Ghost split — the spurious non-Ghost volatile is dropped, and a Ghost curser's volatile is mapped onto the CURSED TARGET's tracked list, where the real protocol starts it; the volatile's engine LIFETIME still follows the curser's switch-outs — residual engine-model deviation) |
-| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` cap 15, reset on switch, cleared on curestatus — Rest's status REPLACEMENT keeps it), replayed by `LeafMeta`; a state-side guard clears only full cures the mapper cannot render (engine active alive at status NONE). The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero |
+| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` through raw sentinel 16, reset on switch/drag, re-seeded only by exact or switch/drag-proven first Toxic residual, and cleared by any active status replacement including Rest, curestatus, cureteam, or faint), replayed by `LeafMeta` with private renderer status transitions where public protocol intentionally omits a cure line; a sanctioned root stage zero is private context only and requires same-seat active faint → upkeep → non-Baton-Pass toxic switch, then is consumed by its first residual. Encoding caps the raw sentinel at 15/15, and a state-side guard clears any non-Toxic active status. The materialized engine counter is pre-tick and capped at 14, so its next residual is capped at stage 15. The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero |
 | belief facts: possible abilities/items/moves, revealed flags+counts, `candidate_set_count`, `NUMERIC_UNCERTAINTY`, `candidate_variants` → expected-stat ranges (:2492) | **W** | root, byte-frozen (epistemic); the SELF ledger is NOT epistemic — a first-time-active self mon (e.g. the replacement after a faint) gets a synthesized minimal entry, matching production's ledger growth |
 | exact-state ledger: `NUMERIC_SLEEP_TURNS`, `NUMERIC_REST_SLEEP`, `NUMERIC_WAKE_KNOWN` (:2348) | E (line-driven) | `sleep_turns` = observed `|cant …|slp` lines since the `|-status|slp`, per MON (belief.py:91 semantics; a sleeper that faints after its cants keeps them); `rest_sleep` from engine rest counters; `WAKE_KNOWN` derives from W ability facts |
 | `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `|turn|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero |
@@ -233,6 +237,7 @@ accepted with a reason — none is an encoder defect, and the defect classes
 | `engine_roll` | 313 | 97 | Determinized chance semantics: the engine prices one representative damage roll (0.925·max collapse); reality rolled elsewhere in the envelope. HP fractions, substitute survival, and pinch-berry thresholds ride the roll. Exact-expectation backup prices the enumerated distribution — per-branch observations legitimately differ from the one trajectory reality took. |
 | `engine_model` | 33 | 5 | Tagged vendored-engine deviations, each with a fail-closed or counted guard: Transform's empty delta (roots fail closed), Encore volatile not applied (roots fail closed), recharge consumed one ply early on faint-replacement plies, Baton-Passed saved moves never resolving, merged full-para/miss/fail outcomes (engine `combine_duplicate_instructions` — the renderer picks the dominant-mass cause), Ghost-curse boost delta + volatile lifetime (rendered real-shape, flagged `lossy`, scenario-gated). |
 | `ledger_skew` | 1 | 0 | Recorded production inconsistency reproduced as recorded: the belief ledger's condition string keeps a stale status suffix through a cure (Refresh/Heal Bell) — root-parity documents the same ~1% class on recorded rows. |
+| `root_frozen_pack` | n/a (v4 only) | n/a (v4 only) | **V4 k0 feature pack, root-frozen at the leaf.** The 15 pack columns enumerated in `leaf_vs_reality.py::V4_ROOT_FROZEN_PACK_COLUMNS` are written from the ROOT's `observation_metadata` and never re-derived per leaf, so at depth > 0 they describe the root. Two different reasons, and they are not equally permanent. (a) **Permanent by design** — the hazard credit/expected pair encodes the gen3 grounding rule (Levitate, Flying, unrevealed-slot accounting); re-deriving that rule in Rust is exactly the duplication this design refuses, since a second implementation free to drift is worse than a stale-but-consistent one. Same for the damage ledgers, Truant phase, items-removed credit, choice lock, item-swapped, last-used move and traced ability. (b) **Follow-up, not accepted forever** — `NUMERIC_MON_SWITCHED_VS_ACTIVE` / `NUMERIC_MON_STAYED_VS_ACTIVE` are frozen only because they are not yet surfaced through `ProductsData`; `fold.rs::matchup_counters` IS branch-advanced per leaf and keyed by `(side, species, facing)`, so the leaf value is derivable and should be re-selected against the leaf's active mon, mirroring `showdown._matchup_switch_evidence`. Until then they read the root's matchup. Note these two are named `NUMERIC_MON_*` and would otherwise be swept into `fold` by the prefix rule — they are matched first so the divergence stays visible rather than accidentally accepted. **A1 (forced recharge) is SPLIT BY SIDE** and is not in this set, because it rides the `CATEGORY_VOLATILE_*` bag as `volatile:mustrecharge` rather than owning a column. **Opponent side: LIVE** — it was the one pack member that did not merely go stale at a leaf but contradicted the *same observation's* action surface, which reads the `MUSTRECHARGE` volatile live to present the forced single "recharge" pseudo-move; `leaf.rs` refreshes `opponent_must_recharge` from the branch's own `volatile_statuses`. **Self side: root-frozen, deliberately** — `MUSTRECHARGE` only enters a constructed world via `recharging_slots`, and the live producer `engine_search.py::_recharging_slots` returns the opponent slot or nothing, never ours; since `model.rs` encodes the ROOT state for `root_priors`, deriving the self flag from `volatile_statuses` would write `False` at depth 0 for a genuinely recharging self mon and regress root/leaf parity in exchange for fixing a staleness. Frozen is correct until `_recharging_slots` is made symmetric — which is a real modelling gap worth closing (the production root world currently lets our recharging mon pick any move) but changes search-world construction, where `engine_world.py` treats `mustrecharge` as a hard lock like `trapped`. **Gate caveat:** `leaf_root_parity.py`, `leaf_vs_reality.py`, `prior_mapping_assert.py` and `fidelity_gate_events.py` all derive `recharging` for BOTH slots from the recorded chosen candidate, so they build a different world than production and would ratify a symmetric self-side write rather than catch it. |
 | long-game Tier-2 overlay capacity | n/a | n/a | `FoldState` retains a 512-action tail. If a cumulative tracker annotation arrives only after its token has aged out of both fold representations, the live fold fails closed for the rest of that battle instead of applying it to an ambiguous token. This is the same bounded-history contract as corpus folding; it is a visible fallback, not silent encoding drift. |
 
 Epistemic freeze and roll collapse are structural (the belief architecture
@@ -242,6 +247,19 @@ a search — failed closed at world construction. None of these classes can
 silently grow: the differential's exit code gates `state`/`turn` at zero,
 and every class reallocation requires a documented rule in
 `scripts/leaf_vs_reality.py::classify`.
+
+**Correction (v4 feature-pack change).** That "cannot silently grow" claim was
+vacuous for a period and should be read with the caveat. `leaf_vs_reality.py`
+imported `TOKEN_BLOCKS`, which the V3 history trim (`ffc2723f`) had renamed to
+`FIXED_TOKEN_BLOCKS`; the name was unused, but the stale import made the module
+**unimportable**, so the gate could not start — let alone return a non-zero exit
+code — from that commit until the import was dropped. A gate that cannot run
+pins nothing. Anyone reading a green history for this differential between
+`ffc2723f` and the v4 pack should treat it as absence of evidence.
+
+The `root_frozen_pack` row above is the one class whose members are expected at
+v4 specifically, and half of it (the matchup pair) is a tracked follow-up rather
+than an accepted-forever divergence.
 
 ## /100 opponent-HP base decision (forward caveat #2, resolved)
 

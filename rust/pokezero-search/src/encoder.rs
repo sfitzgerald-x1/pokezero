@@ -128,6 +128,7 @@ struct Layout {
     volatile_buckets: usize,
     actual_stat_divisor: f64,
     stat_count_divisor: f64,
+    matchup_count_divisor: f64,
     timed_condition_duration: i64,
     hazard_conditions: Vec<String>,
     screen_conditions: Vec<String>,
@@ -142,11 +143,22 @@ struct Layout {
     transition_token_budget: usize,
     tier2_residuals: bool,
     tier2_investment: bool,
+    feature_pack_last_move: bool,
 }
 
 impl Layout {
+    /// Grouped-layout lineage: v3 and everything after it. Gates every V3 public signal, which
+    /// v4 also carries. Mirrors the Python encoder's `schema_v3` flag, which is likewise
+    /// `schema_v4 || == v3` rather than an equality test.
     fn is_v3(&self) -> bool {
-        self.schema_version == "pokezero.observation.v3"
+        self.schema_version == "pokezero.observation.v3" || self.is_v4()
+    }
+
+    /// V4: the k0 feature pack, and NO transition region at all. Turn-merged and grouped-layout
+    /// are separate axes — v4 is grouped-layout but not turn-merged, because it has no history
+    /// rows for a turn-merged surface to live in.
+    fn is_v4(&self) -> bool {
+        self.schema_version == "pokezero.observation.v4"
     }
 
     fn cat_col(&self, name: &str) -> PyResult<usize> {
@@ -262,9 +274,10 @@ impl Tables {
         let buckets = get(layout_value, "belief_buckets");
         let masks = get(layout_value, "default_feature_masks");
         let schema_version = str_or_empty(get(layout_value, "schema_version"));
+        let tables_schema_is_v4 = schema_version == "pokezero.observation.v4";
         if !matches!(
             schema_version.as_str(),
-            "pokezero.observation.v2.2" | "pokezero.observation.v3"
+            "pokezero.observation.v2.2" | "pokezero.observation.v3" | "pokezero.observation.v4"
         ) {
             return Err(err(format!(
                 "unsupported observation layout schema {schema_version:?}"
@@ -286,6 +299,26 @@ impl Tables {
             volatile_buckets: as_i64(get(layout_value, "volatile_bucket_count")) as usize,
             actual_stat_divisor: as_f64(get(constants, "actual_stat_divisor")),
             stat_count_divisor: as_f64(get(constants, "stat_count_divisor")),
+            // /8, not the tendency block's /64: a single (their mon x our mon) cell is visited
+            // a handful of times per game. Exported so the two encoders cannot disagree.
+            // No fallback ON PURPOSE: this constant is exported precisely so the two encoders
+            // cannot disagree about it, and a silent default would reintroduce the drift it
+            // exists to prevent. Absent or non-positive is a malformed table.
+            matchup_count_divisor: {
+                let value = as_f64(get(constants, "matchup_count_divisor"));
+                if value > 0.0 {
+                    value
+                } else if tables_schema_is_v4 {
+                    return Err(err(
+                        "v4 encoder tables are missing or have a non-positive \
+                         constants.matchup_count_divisor (it divides a count, so zero \
+                         and negatives are malformed, not merely absent)",
+                    ));
+                } else {
+                    // Pre-v4 tables never carry it and never read it.
+                    f64::NAN
+                }
+            },
             timed_condition_duration: as_i64(get(constants, "timed_condition_duration")),
             hazard_conditions: string_list(get(constants, "hazard_conditions")),
             screen_conditions: string_list(get(constants, "screen_conditions")),
@@ -314,6 +347,13 @@ impl Tables {
             transition_token_budget: as_i64(get(masks, "transition_token_budget")).max(0) as usize,
             tier2_residuals: as_bool(get(masks, "tier2_residuals")),
             tier2_investment: as_bool(get(masks, "tier2_investment")),
+            // v4 pack A2 ablation. Absent in pre-v4 tables, where the column does not exist,
+            // so default TRUE (pack-whole) rather than false — a missing key must not silently
+            // blank a column every v4 checkpoint expects.
+            feature_pack_last_move: match masks.get("feature_pack_last_move") {
+                Some(value) => as_bool(value),
+                None => true,
+            },
         };
         if layout.token_count == 0 || layout.categorical_width == 0 || layout.numeric_width == 0 {
             return Err(err("tables layout census is incomplete"));
@@ -753,7 +793,7 @@ pub(crate) fn encode_row_value(
     for index in stats_offset..transition_offset {
         attention[index] = layout.stats_block as u8;
     }
-    if let Some(products) = products {
+    if let Some(products) = products.filter(|_| !layout.is_v4()) {
         let transition_count = layout.token_count - transition_offset;
         let filled = products
             .turn_merged_tokens
@@ -795,6 +835,9 @@ pub(crate) fn encode_row_value(
         grid.set_num(stats_offset, layout.num_col("NUMERIC_PRESENT")?, 1.0);
     }
     if let Some(products) = products {
+        // v4 has NO transition region, but the products still carry the tendency counters and
+        // the pinned Tier-2 conclusions, which are current-state surfaces on the mon tokens.
+        // write_history_cells owns both, and skips the transition rows itself at v4.
         write_history_cells(tables, &mut grid, products, md, &opponent_mons)?;
     }
 
@@ -932,6 +975,25 @@ fn encode_field_token(
                 layout.num_col("NUMERIC_OPP_WISH_TURNS")?,
                 (opponent_wish_turns as f64 / 2.0).min(1.0),
             );
+        }
+    }
+    if layout.is_v4() {
+        // Part B credit block. `showdown.field_credit_values` derives these ONCE in Python and
+        // publishes the settled numbers on the observation metadata, so this side reads them
+        // rather than re-implementing the gen3 grounding rule — a re-derivation is exactly what
+        // drifts silently between two languages.
+        for (key, column) in [
+            ("self_hazard_credit", "NUMERIC_SELF_HAZARD_CREDIT"),
+            ("opponent_hazard_credit", "NUMERIC_OPP_HAZARD_CREDIT"),
+            ("self_hazard_expected", "NUMERIC_SELF_HAZARD_EXPECTED"),
+            ("opponent_hazard_expected", "NUMERIC_OPP_HAZARD_EXPECTED"),
+            ("self_items_removed_credit", "NUMERIC_SELF_ITEMS_REMOVED_CREDIT"),
+            ("opponent_items_removed_credit", "NUMERIC_OPP_ITEMS_REMOVED_CREDIT"),
+        ] {
+            let value = as_f64(get(md, key));
+            if value != 0.0 {
+                grid.set_num(token, layout.num_col(column)?, value.min(1.0));
+            }
         }
     }
     if !layout.exact_state {
@@ -1638,7 +1700,17 @@ fn encode_pokemon_tokens(
         }
         if candidate.active() {
             encode_active_boosts(grid, token, boosts, layout);
-            encode_active_volatiles(tables, grid, token, &volatiles)?;
+            // v4 pack A1: forced recharge joins the bag from the parser tracker on the
+            // metadata. Injected here, not upstream, so v3's bag is untouched — the label has
+            // no v3 vocabulary row and would hash into the OOV band there.
+            let mut bag = volatiles.clone();
+            if layout.is_v4() {
+                let prefix = if role == Role::SelfTeam { "self" } else { "opponent" };
+                if as_bool(get(md, &format!("{prefix}_must_recharge"))) {
+                    bag.push("mustrecharge".to_string());
+                }
+            }
+            encode_active_volatiles(tables, grid, token, &bag)?;
             if toxic_stage != 0 {
                 grid.set_num(
                     token,
@@ -1669,6 +1741,81 @@ fn encode_pokemon_tokens(
                 }
                 if as_bool(get(md, &format!("{prefix}_meanlook_trap"))) {
                     grid.set_num(token, layout.num_col("NUMERIC_MEANLOOK_TRAP")?, 1.0);
+                }
+            }
+            if layout.is_v4() {
+                let prefix = if role == Role::SelfTeam { "self" } else { "opponent" };
+                for (key, column) in [
+                    ("truant_loaf", "NUMERIC_TRUANT_LOAF"),
+                    ("choice_locked", "NUMERIC_CHOICE_LOCKED"),
+                    ("item_swapped", "NUMERIC_ITEM_SWAPPED"),
+                ] {
+                    if as_bool(get(md, &format!("{prefix}_{key}"))) {
+                        grid.set_num(token, layout.num_col(column)?, 1.0);
+                    }
+                }
+                for (key, column) in [
+                    ("last_damage_dealt", "NUMERIC_LAST_DAMAGE_DEALT"),
+                    ("last_damage_taken", "NUMERIC_LAST_DAMAGE_TAKEN"),
+                ] {
+                    let value = as_f64(get(md, &format!("{prefix}_{key}")));
+                    if value > 0.0 {
+                        grid.set_num(token, layout.num_col(column)?, value.min(1.0));
+                    }
+                }
+                // A2: three arrival/identity states. The switch and Baton-Pass sentinels are
+                // positive facts, not padding — see the Python write site.
+                let last_move = str_or_empty(get(md, &format!("{prefix}_last_used_move")));
+                if !last_move.is_empty() && layout.feature_pack_last_move {
+                    let label = if normalize_identifier(&last_move) == "switch" {
+                        if as_bool(get(md, &format!("{prefix}_arrived_by_baton_pass"))) {
+                            "lastmove:batonpass".to_string()
+                        } else {
+                            "lastmove:switch".to_string()
+                        }
+                    } else {
+                        format!("move:{}", normalize_identifier(&last_move))
+                    };
+                    grid.set_cat(token, layout.cat_col("CATEGORY_LAST_USED_MOVE")?, label);
+                }
+                // A4: the CURRENT Trace copy, cleared on switch-out. Never the belief's
+                // persistent revealed-ability channel, which holds the last-ever-traced one.
+                let traced = str_or_empty(get(md, &format!("{prefix}_traced_ability")));
+                if !traced.is_empty() {
+                    grid.set_cat(
+                        token,
+                        layout.cat_col("CATEGORY_TRACED_ABILITY")?,
+                        format!("ability:{}", normalize_identifier(&traced)),
+                    );
+                }
+            }
+        }
+        // The matchup-conditional pair, on ALL SIX opponent tokens (not just the active one):
+        // it answers "which of their mons has been willing to face what I have out", which is
+        // a question about their bench too. Written in the always-run path because its source
+        // is the observation METADATA — already conditioned on our current active by
+        // normalize — not FoldProducts; behind the products gate it silently read zero on the
+        // boundary-surface encode while Python wrote real values. Shares the tendency block's
+        // mask: same channel, conditioned.
+        if layout.is_v4() && role == Role::Opponent && layout.stats_block {
+            let matchup_key = normalize_identifier(&candidate.species());
+            let evidence = get(md, "opponent_matchup_switch_evidence");
+            if let Some(cell) = evidence.get(&matchup_key).and_then(|v| v.as_array()) {
+                for (index, column) in [
+                    "NUMERIC_MON_SWITCHED_VS_ACTIVE",
+                    "NUMERIC_MON_STAYED_VS_ACTIVE",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let count = cell.get(index).map(as_i64).unwrap_or(0);
+                    if count != 0 {
+                        grid.set_num(
+                            token,
+                            layout.num_col(column)?,
+                            (count as f64 / layout.matchup_count_divisor).min(1.0),
+                        );
+                    }
                 }
             }
         }
@@ -2301,7 +2448,12 @@ fn write_history_cells(
     let layout = &tables.layout;
     let self_slot = str_or_empty(get(md, "showdown_slot"));
     let turn_number = as_i64(get(md, "turn_number"));
-    write_turn_merged_rows(tables, grid, products, &self_slot, turn_number)?;
+    if !layout.is_v4() {
+        // v4 has no transition region. The rest of this function still runs: the stats-token
+        // counters and the per-opponent-mon tendency / pinned Tier-2 conclusions are
+        // CURRENT-STATE surfaces on real tokens, and they survive the region trim.
+        write_turn_merged_rows(tables, grid, products, &self_slot, turn_number)?;
+    }
     if layout.stats_block {
         write_stats_token(tables, grid, products)?;
     }
@@ -2571,8 +2723,11 @@ fn write_sub_block_numerics(
     columns: SubBlockColumns,
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    let damage_fraction = if layout.is_v3() && sub.confusion_selfhit {
-        (sub.damage_fraction - sub.confusion_selfhit_fraction).max(0.0)
+    // The fold keeps confusion self-damage separate from move damage for
+    // every schema. Reconstruct only the frozen V2.2 aggregate; V3 consumes
+    // the corrected semantic value and additionally exposes the presence bit.
+    let damage_fraction = if !layout.is_v3() && sub.confusion_selfhit {
+        sub.damage_fraction + sub.confusion_selfhit_fraction
     } else {
         sub.damage_fraction
     };
