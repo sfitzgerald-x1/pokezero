@@ -16,7 +16,7 @@
  fn end_encore(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
      let side = state.get_side(side_ref);
      let duration = side.volatile_status_durations.encore;
-@@ -192,31 +193,64 @@
+@@ -192,31 +193,69 @@
  /// Drop CONFUSION from `side_ref` and zero its duration counter, maintaining the
  /// invariant the ladder relies on: `volatile_status_durations.confusion` is 0
  /// whenever the CONFUSION volatile is absent.
@@ -72,11 +72,16 @@
 -    }
 +    // Unreachable, and asserted rather than guarded. `chance_confusion_ends`
 +    // returns 0.0 for `turns_confused <= 0`, so a counter already parked on the
-+    // sentinel cannot re-enter the ladder and cannot be parked twice. An early
-+    // `return` here would hold that invariant up silently if it ever broke;
-+    // parking twice would write `-4 - (-4) == 0`, quietly reviving the volatile
-+    // as a FRESH confusion at the bottom of the ladder. Better to fail loudly in
-+    // debug than to leak a second confusion into a searched world.
++    // sentinel cannot re-enter the ladder and cannot be parked twice.
++    //
++    // Parking twice would be HARMLESS, not corrupting: it writes `amount: 0` and
++    // re-sets the field to the sentinel it already held, which is idempotent and
++    // reverses correctly. So the assert is not buying safety in release, where it
++    // compiles out -- it is there to make a broken invariant loud in debug rather
++    // than let an early `return` absorb it silently. (An earlier version of this
++    // comment claimed the double park revives the volatile as a fresh confusion
++    // at the bottom of the ladder; review checked the arithmetic and that was
++    // wrong.)
 +    debug_assert_ne!(
 +        duration, CONFUSION_SNAP_OUT_PENDING,
 +        "confusion snap-out parked twice; the ladder re-entered a pending counter"
@@ -98,21 +103,77 @@
  }
  
  fn set_last_used_move_as_switch(
-@@ -2126,7 +2160,38 @@
+@@ -1918,6 +1957,34 @@
+     let current_active_index = attacking_side.active_index;
+     let attacker_ability = attacking_side.get_active_immutable().ability;
+     let attacker_active = attacking_side.get_active();
++    // pokezero gen3 fidelity fix (confusion snap-out timing): does this action
++    // actually reach `confusion.onBeforeMove`?
++    //
++    // Showdown resolves sleep at onBeforeMove priority 10 and confusion at 3, and
++    // a sleeping mon's handler returns false, which short-circuits the whole
++    // BeforeMove event -- so confusion's handler never runs, `time` is untouched
++    // and no snap-out is published. Most higher-priority blockers (recharge,
++    // flinch, Disable, Taunt) short-circuit in `cannot_use_move` before this
++    // function is entered, and the NATURAL-sleep arm below pushes its "still
++    // asleep" branch to `final_instructions` and continues as the woke branch.
++    //
++    // The two REST "stays asleep" arms do neither: they push DecrementRestTurns
++    // onto `incoming_instructions` and fall through. That made the reachability
++    // comment on the confusion block below wrong, and it is load-bearing now --
++    // a parked snap-out consumed on a turn the mon cannot move deletes the
++    // publicly visible volatile with no protocol line to explain it, and the
++    // renderer accepts the world instead of refusing it. Rest-while-confused is
++    // common in gen3, so this is a live position, not a corner.
++    //
++    // Sleep Talk is the exception, and gen3's ONLY one: it is `sleepUsable`, so
++    // `slp.onBeforeMove` announces `|cant|slp` and returns UNDEFINED rather than
++    // false (data/mods/gen3/conditions.ts). The event keeps running down the
++    // priority list, confusion's handler DOES fire, and a Sleep Talk turn burns a
++    // confusion turn and can snap out. Snore is not implemented in this engine.
++    // Pinned by `rest_sleep_talk_keeps_the_same_sleep_and_confusion_gate_order`,
++    // which caught this gate when it was first written too broadly.
++    let sleep_usable_move = attacker_choice.move_id == Choices::SLEEPTALK;
++    let mut reaches_confusion_handler = true;
+     match attacker_active.status {
+         PokemonStatus::FREEZE => {
+             let mut still_frozen_instruction = incoming_instructions.clone();
+@@ -2100,6 +2167,8 @@
+                         ));
+                 }
+                 3 if attacker_active.ability == Abilities::EARLYBIRD => {
++                    // Skips this action and lands at 1: asleep for the whole turn.
++                    reaches_confusion_handler = sleep_usable_move;
+                     attacker_active.rest_turns = 1;
+                     for _ in 0..2 {
+                         incoming_instructions.instruction_list.push(
+@@ -2111,6 +2180,7 @@
+                 }
+                 // Pokemon is asleep because of Rest, and will stay asleep this turn
+                 2 | 3 => {
++                    reaches_confusion_handler = sleep_usable_move;
+                     attacker_active.rest_turns -= 1;
+                     incoming_instructions
+                         .instruction_list
+@@ -2126,11 +2196,45 @@
          _ => {}
      }
  
 -    if attacking_side
+-        .volatile_statuses
+-        .contains(&PokemonVolatileStatus::CONFUSION)
 +    // pokezero gen3 fidelity fix (confusion snap-out timing): the ladder already
 +    // decided this confusion ends; publish it HERE, where Showdown's
 +    // `confusion.onBeforeMove` snaps out, and let the move through with no
 +    // self-hit roll. Deterministic -- the fork happened at end of turn -- so
 +    // `incoming_instructions` stays the single surviving branch.
-+    if attacking_side.volatile_status_durations.confusion == CONFUSION_SNAP_OUT_PENDING
++    if reaches_confusion_handler
++        && attacking_side.volatile_status_durations.confusion == CONFUSION_SNAP_OUT_PENDING
 +        && attacking_side
 +            .volatile_statuses
 +            .contains(&PokemonVolatileStatus::CONFUSION)
-+    {
+         && attacker_ability != Abilities::OWNTEMPO
+     {
 +        incoming_instructions
 +            .instruction_list
 +            .push(Instruction::ChangeVolatileStatusDuration(
@@ -134,11 +195,32 @@
 +        attacking_side
 +            .volatile_statuses
 +            .remove(&PokemonVolatileStatus::CONFUSION);
-+    } else if attacking_side
-         .volatile_statuses
-         .contains(&PokemonVolatileStatus::CONFUSION)
-         && attacker_ability != Abilities::OWNTEMPO
-@@ -4387,7 +4452,9 @@
++    } else if reaches_confusion_handler
++        && attacking_side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::CONFUSION)
++        && attacker_ability != Abilities::OWNTEMPO
++    {
+         // pokezero gen3 fidelity fix (confusion duration): burn one attacking
+         // turn off the bounded counter. Showdown's `confusion.onBeforeMove`
+         // decrements `time` on every turn the handler actually runs, and the
+@@ -2138,9 +2242,12 @@
+         // — recharge (11), sleep and freeze (10), flinch (8), Disable (7),
+         // Taunt (5). The engine reproduces that reachability exactly: recharge,
+         // flinch, Disable and Taunt short-circuit in `cannot_use_move` before
+-        // this function is entered, and the sleep/freeze arms above push their
+-        // "no move" branches to `final_instructions` without falling through
+-        // here. Attract (2) and paralysis (1) are LOWER priority than confusion
++        // this function is entered; the natural-sleep and freeze arms above push
++        // their "no move" branches to `final_instructions` and continue as the
++        // woke/thawed branch; and the two REST "stays asleep" arms -- which DO
++        // fall through -- clear `reaches_confusion_handler`. That last case used
++        // to be missed, so a Rest-asleep confused mon burned a turn off the
++        // counter that Showdown leaves untouched. Attract (2) and paralysis (1) are LOWER priority than confusion
+         // (3) and are resolved after this block, so a fully-paralyzed or
+         // infatuation-immobilized turn still burns a confusion turn — as it does
+         // in Showdown.
+@@ -4387,7 +4494,9 @@
  /// A turn only burns a confusion turn if the CHECK ran, so the ladder is gated
  /// on the `+1` duration instruction the confusion block emits — the marker is
  /// carried by both of that block's outcomes (self-hit and move-goes-through) and
@@ -149,7 +231,7 @@
  /// Gating on the counter's VALUE instead would be wrong: the counter persists
  /// across turns, so a Pokemon that spent the turn asleep, flinched, recharging
  /// or Taunted — none of which reach `confusion.onBeforeMove` in Showdown, all of
-@@ -4466,7 +4533,7 @@
+@@ -4466,7 +4575,7 @@
                  expired.update_percentage(chance);
              }
              state.apply_instructions(&expired.instruction_list);

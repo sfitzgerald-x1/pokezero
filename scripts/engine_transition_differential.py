@@ -1302,10 +1302,19 @@ def _confusion_counter_variants(spec: Any) -> list[Any]:
     The PENDING rung is swept too. The ladder no longer removes the volatile at
     end of turn; it parks the counter on ``CONFUSION_SNAP_OUT_PENDING`` so the
     ``-end`` lands on the next move, where Showdown announces it. A mon observed
-    still carrying CONFUSION may therefore be in that parked state, and it plays
+    still carrying CONFUSION may be in that parked state, and it plays
     differently from every live rung -- its next move is a guaranteed snap-out
-    with no self-hit roll. Omitting it would leave the belief set unable to
-    represent a real, reachable, observationally-identical position.
+    with no self-hit roll.
+
+    Scope, stated precisely because an earlier version of this docstring
+    overclaimed: this widens THIS differential's sweep only. Production world
+    construction (``engine_world.py``) never writes
+    ``volatile_status_durations["confusion"]`` at all -- only ``encore`` and
+    ``yawn`` -- so every observed confusion reaches the engine at rung 0 and the
+    live belief set does not model the ladder position. The parked state still
+    arises DURING search, because the engine parks it itself, which is what the
+    snap-out deferral depends on. Seeding the rung from observation is a separate
+    gap and is not addressed here.
     """
 
     def side_variants(side: Any) -> list[Any]:

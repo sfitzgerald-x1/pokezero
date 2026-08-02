@@ -2760,9 +2760,13 @@ fn render_residual_instruction(
             // volatile visible through the next decision boundary and snaps
             // out only when that mon next attempts to move. Emitting -end here
             // would leak the engine's future branch into public state early.
-            // We cannot defer an event across independent renderer calls, so
-            // retain the exact engine endpoint only as an unsafe diagnostic
-            // branch and reject it before fold/encoder advancement.
+            // The engine now defers the snap-out itself, so this arm is no
+            // longer reachable from engine-generated instructions -- the ladder
+            // parks the counter instead of removing the volatile here. It is
+            // KEPT as a fail-closed backstop: if the deferral ever regresses, or
+            // a hand-built instruction list removes CONFUSION at end of turn,
+            // refusing the world is still the right answer. Do not delete it in
+            // a dead-code sweep.
             out.mark_attribution_unsafe("confusion_expiry_timing_unobservable");
             sim.apply(ins);
         }

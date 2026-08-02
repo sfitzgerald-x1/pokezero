@@ -104,11 +104,17 @@ fn drops_confusion(list: &[Instruction]) -> bool {
 /// The ladder's snap-out as it is now expressed at end of turn: the counter is
 /// parked on the sentinel instead of the volatile being removed.
 ///
-/// Keyed on `amount <= CONFUSION_SNAP_OUT_PENDING`, which is disjoint from the
-/// only other duration writes on this side: the `+1` confusion-check burn, and
-/// the switch-out reset of `-(duration)`, which cannot exceed `-4` in magnitude
-/// and never shares a branch with the ladder anyway. Parking from a live rung
-/// `d` in `1..=4` writes `-4 - d`, so every real mark is at most `-5`.
+/// Keyed on `amount <= CONFUSION_SNAP_OUT_PENDING`. Parking from a live rung `d`
+/// in `1..=4` writes `-4 - d`, so every real mark is at most `-5`, and the `+1`
+/// confusion-check burn is nowhere near it.
+///
+/// It is NOT disjoint from the switch-out reset in general: a switch at rung 4
+/// emits exactly `-4`, which satisfies this predicate. Rung 4 is unreachable
+/// from internal play -- the ladder forces the snap-out there -- but it IS swept
+/// by `_confusion_counter_variants`, so the overlap is real rather than
+/// theoretical. It is safe here only because a switch never shares a branch with
+/// the ladder, and no test mixes the two. Anything that keys on this predicate
+/// across a switch boundary needs a different discriminator.
 fn defers_snap_out(list: &[Instruction]) -> bool {
     list.iter().any(|instruction| match instruction {
         Instruction::ChangeVolatileStatusDuration(change) => {
@@ -686,5 +692,93 @@ fn a_new_confusion_starts_at_the_bottom_of_the_ladder() {
         state.side_one.volatile_status_durations.confusion, 0,
         "a fresh confusion must reset the counter: {:?}",
         branches[0].instruction_list
+    );
+}
+
+/// A turn the mon cannot act on must not consume the parked snap-out.
+///
+/// Found by independent review, and it was a REGRESSION rather than a missing
+/// nicety: the ladder's parked snap-out was published on a Rest-asleep turn, so
+/// the publicly visible CONFUSION volatile was deleted from the world with no
+/// protocol line to explain it -- and because the renderer's `DecrementRestTurns`
+/// arm emits `|cant|slp` and drains the rest of the list, the world was ACCEPTED.
+/// Silently wrong beats refused only in the wrong direction; before the deferral
+/// this position was always refused.
+///
+/// Showdown resolves sleep at `onBeforeMove` priority 10 and confusion at 3, and
+/// the sleep handler returns false, short-circuiting the event. So neither the
+/// snap-out nor the counter burn happens on a turn spent asleep.
+#[test]
+fn a_rest_asleep_turn_neither_consumes_the_park_nor_burns_a_turn() {
+    for rest_turns in [2i8, 3i8] {
+        let mut state = confused_state(0);
+        state.side_one.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        state.side_one.get_active().rest_turns = rest_turns;
+
+        let branches = both_splash(&mut state);
+        for branch in &branches {
+            assert!(
+                !drops_confusion(&branch.instruction_list),
+                "rest_turns={}: the park must not be consumed while asleep: {:?}",
+                rest_turns,
+                branch.instruction_list
+            );
+            assert!(
+                !burns_a_confusion_turn(&branch.instruction_list),
+                "rest_turns={}: a turn spent asleep burns no confusion turn: {:?}",
+                rest_turns,
+                branch.instruction_list
+            );
+            assert!(
+                !hits_itself(&branch.instruction_list),
+                "rest_turns={}: no self-hit roll while asleep: {:?}",
+                rest_turns,
+                branch.instruction_list
+            );
+        }
+
+        let survivor = branches[0].clone();
+        state.apply_instructions(&survivor.instruction_list);
+        assert!(
+            state
+                .side_one
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::CONFUSION),
+            "rest_turns={}: the volatile must survive the sleeping turn",
+            rest_turns
+        );
+        assert_eq!(
+            state.side_one.volatile_status_durations.confusion,
+            CONFUSION_SNAP_OUT_PENDING,
+            "rest_turns={}: the park must still be pending",
+            rest_turns
+        );
+    }
+}
+
+/// Positive control for the gate above, so it cannot be widened into "asleep
+/// never snaps out". Sleep Talk is gen3's only `sleepUsable` move: `slp`
+/// announces `|cant|slp` and returns UNDEFINED, so the BeforeMove event keeps
+/// running and confusion's handler DOES fire. A parked mon using Sleep Talk
+/// therefore snaps out on schedule.
+#[test]
+fn a_sleep_talk_turn_still_consumes_the_parked_snap_out() {
+    let mut state = confused_state(0);
+    state.side_one.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
+    state.side_one.get_active().status = PokemonStatus::SLEEP;
+    state.side_one.get_active().rest_turns = 2;
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+
+    let branches = both_splash(&mut state);
+    assert!(
+        branches
+            .iter()
+            .all(|branch| drops_confusion(&branch.instruction_list)),
+        "every Sleep Talk branch must consume the park: {:?}",
+        branches
     );
 }
