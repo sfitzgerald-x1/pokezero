@@ -10,8 +10,8 @@
   "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
   "_original_content_removed": true
  },
- "status": "RESOLVED. 208 -> 64, decomposed by single-variable sweep. Falsified sections above are marked.",
- "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet.",
+ "status": "RESOLVED. Final measured position: main 208, this PR 64, a 144-row reduction decomposed in $.DECOMPOSITION as threading 123 / promotion 17 / bound shape 3 / severity 0. EVERY section of this file other than $.RESOLVED and $.DECOMPOSITION -- including all of $.CORRECTION -- is falsified and marked. Read those two keys only.",
+ "what_this_does_not_change": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
  "the_experiment": {
   "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
   "_original_content_removed": true
@@ -24,31 +24,21 @@
    "measured": "ALL 230 are capped: 213 capped-vs-capped, 17 capped-vs-plain. ZERO have neither side capped.",
    "why_it_matters": "a capped heal restores maxhp - hp_before, so its magnitude is LEGITIMATELY roll-dependent. These are the cascade shape the predicate exists to recognise, not deterministic-value disagreements. There was no masking here."
   },
-  "error_2_my_exact_rule_does_nothing": {
-   "measured": "the promoted-but-uncapped exact-comparison rule rejects 0 pairs in the residue",
-   "why": "it only fires when NEITHER side is capped, and no such pair exists here"
-  },
-  "error_3_the_sound_bound_is_looser_not_tighter": {
-   "measured": "on _to_full pairs the difference bound accepts 300, the 0.18*scale bound accepts 180, and the difference bound rejects NOTHING the fraction bound accepted"
-  },
+  "error_2_my_exact_rule_does_nothing": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "error_3_the_sound_bound_is_looser_not_tighter": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
   "error_4_the_comparison_was_confounded": {
    "what_i_did": "compared 67 (old predicate + loose tolerance) against 187 (post-#1020 predicate + sound tolerance) and attributed the whole gap to the tolerance redesign",
    "the_flaw": "#1020 merged round eight's pre-direct-hit guard and other constraints in between, so the two measurements used DIFFERENT predicates. The gap is not attributable to the tolerance work."
   },
-  "the_clean_measurement": {
-   "main_no_tolerance_changes": 208,
-   "main_plus_sound_tolerance": 187,
-   "improvement": 21,
-   "note": "same predicate, same engine build, same 200-game window. This is the honest effect of the tolerance work: a real but modest 21 rows."
-  },
+  "the_clean_measurement": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
   "what_is_now_open": "why the old loose stack reached 67 on the old predicate while the current predicate sits at 208 without tolerance changes. That gap is #1020's tightening, not the tolerance changes, and it is unmeasured. It is either correct rejection of unsound accepts -- round eight showed 91% of one accept class was impossible -- or over-tightening. That is the next measurement, and it is a question about #1020, which is already merged.",
-  "status_now": "#1025 is a sound, pinned, 21-row improvement over main. It is no longer 'not ready' for the reasons c85 originally gave -- both of those were my own measurement errors -- but its value is 21 rows, not 141.",
+  "status_now": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
   "error_5_the_1020_attribution_was_also_wrong": {
    "claimed": "the ~140-row gap between the old loose stack's 67 and main's 208 is #1020's tightening",
    "measured": "disabled ALL THREE of #1020's added guards -- pre-direct-hit, prefix floor, extra-side -- on current main, rebuilt, re-swept the same window: 208. IDENTICAL to main.",
    "conclusion": "#1020's guards reject nothing in this window. Inert, exactly as the round-nine reviewer predicted they would be until the bucket promotion lands. Third wrong attribution in this chain."
   },
-  "what_is_actually_open": "The 67-vs-187 gap is localised to #1025's own internals and is unexplained. NOT the exact rule (rejects 0 pairs), NOT the difference bound (accepts 300 against the old bound's 180 and rejects nothing it accepted), NOT #1020's guards (inert). Remaining candidate: the severity change. The original admitted every branch whose attribution_unsafe was false; the allowlist admits two named markers. One single-variable sweep decides it. NOT asserted -- the last three attributions in this chain were wrong.",
+  "what_is_actually_open": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
   "error_6_the_severity_candidate_is_also_eliminated": {
    "test": "single-variable: reverted the severity allowlist to the ORIGINAL exclusion form (admit any branch whose attribution_unsafe is false, except the synthetic empty placeholder), changed nothing else, rebuilt, re-swept the same window.",
    "result": 187,

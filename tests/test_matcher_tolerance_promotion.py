@@ -193,8 +193,16 @@ class ThreadingIsPinnedAtTheCallSite(unittest.TestCase):
             )
         )
 
-    def test_the_cascade_path_also_threads(self) -> None:
-        """Same, through the length-mismatch path."""
+    def test_the_cascade_path_reaches_the_comparator(self) -> None:
+        """Coverage for the length-mismatch path.
+
+        NOT a threading pin, despite what this used to claim. Review: the
+        cascade site only ever compares the DIRECT components, whose source is
+        `""` -- never `_to_full`, always roll-scaled -- so the cap tolerance and
+        therefore `damage_scales` are unreachable there. The threading argument
+        was dead code and has been removed; this test passed with or without it.
+        The real threading pin is the sibling test above.
+        """
 
         observed = [comp("", -155, 0), comp("heal_to_full", 160, 1)]
         engine = [

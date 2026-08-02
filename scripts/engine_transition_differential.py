@@ -1233,10 +1233,6 @@ def _roll_cascade_equivalent(
         [(engine_component.source, engine_component.delta)],
         legal,
         scale=scale,
-        damage_scales=(
-            _roll_damage_scale([(c.source, c.delta) for c in observed]),
-            _roll_damage_scale([(c.source, c.delta) for c in engine]),
-        ),
     ):
         return False
 
