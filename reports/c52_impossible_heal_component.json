@@ -1,0 +1,36 @@
+{
+ "schema": "c52-impossible-heal-component-attribution/1",
+ "found_by": "following shape C down to reading two component lists side by side, after four aggregate hypotheses failed",
+ "the_defect": "damage_component_events attributes direct move damage to a HEAL source. Observed on s18000869/18 as observed=[('', -137)] against a matching branch decomposed as [('itemleftovers', -134)], and on s18001093/100 as [('', -160)] against [('itemleftovers', -153)]. Leftovers is a heal of maxhp/16 -- roughly 20 HP at most, and always positive. A Leftovers tick of -134 is not a wrong number, it is an impossible one.",
+ "why_it_costs_rows": "The matcher compares component SOURCE and magnitude. A branch whose HP outcome is correct but whose damage is labelled itemleftovers fails on source identity and is rejected. The row is then reported divergent even though the engine reproduced the transition.",
+ "measurement_with_control": {
+  "method": "scanned every branch decomposition for a heal-source component with a negative delta",
+  "unattributed_rows": "79 of 476 = 16.6%",
+  "attributed_control": "4 of 476 = 0.8%",
+  "enrichment": "21x",
+  "errors": 1
+ },
+ "this_failure_class_is_already_documented": "damage_component_events' own docstring records it for Pain Split: 'the instrument reported impossible components such as a Leftovers heal of -73 and blamed the engine for them (seed 1500008 step 101: true Leftovers +13/+25, harness said +9/+28, engine said +13/+25 -- the engine was right)'. That fix consumed -sethp. The same folding is happening again through a different path, so the earlier repair was specific to Pain Split rather than general.",
+ "the_ceiling_and_why_i_am_stating_it": {
+  "candidate_rows": 79,
+  "expected_clearance": "AT MOST 79, and probably fewer",
+  "why": "79 rows HAVE such a branch. It does not follow that repairing the attribution clears them: a row can still diverge for an unrelated reason on another slot or component. This is the same per-slot-versus-whole-boundary distinction that produced two withdrawn claims earlier in this shape, and I am marking the ceiling before anyone reads 79 as a predicted delta."
+ },
+ "why_this_is_registrable_when_the_earlier_shape_C_claims_were_not": "It has a named mechanism, a physically impossible signature that cannot be a matter of degree, a 21x enrichment against a matched control, and a bounded candidate population. It is also an INSTRUMENT fix, so it needs no engine rebuild and no fingerprint change, which means it cannot void the era-stamped adjudications.",
+ "next": "find where damage_component_events folds a damage delta onto a heal source -- the Pain Split precedent says a missing or misread event line lets the next delta inherit the previous source -- then register a prediction with identity-level falsifiers over the 79.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "mechanism_CONFIRMED": {
+  "walkthrough": "s18000869/18. The engine state has Ninetales at 254/254 and the observed pre-state agrees. The rendered branch events are: Fire Blast misses, p1 is asleep and uses Sleep Talk, then |-heal|p2a: Ninetales|120/254|[from] item: Leftovers. A mon at full HP cannot heal to 120, so the Sleep Talk callee's damage happened and was NEVER RENDERED as an event. damage_component_events tracks running HP per slot and takes the source from the current line, so it computes 120 - 254 = -134 and labels the whole drop itemleftovers.",
+  "measured_over_all_79": {
+   "sleeptalk in the defective branch": 79,
+   "not sleeptalk": 0,
+   "no -damage line at all despite HP dropping": 52,
+   "has a -damage line": 27
+  },
+  "verdict": "100% of the defective branches are Sleep Talk branches, and 65% render no damage line whatsoever. The callee's damage is missing from the event stream and the next heal absorbs it."
+ },
+ "sleep_talk_nuance_stated_explicitly": "I twice concluded Sleep Talk was NOT the mechanism -- in C39 for branch reachability, and in C51 for crit-arm presence. Both stand: Sleep Talk boundaries reach transitions and carry crit arms at normal rates. This is a THIRD question, event RENDERING, and here Sleep Talk is the mechanism at 100%. The earlier refutations were not wrong; they were about different things, and the enrichment that kept pointing at Sleep Talk was pointing at this all along.",
+ "why_the_existing_lossy_handling_does_not_catch_it": "The differential already knows callee rendering is lossy: it carries a _SLEEPTALK_LOSSY_MARKER and an unattributed_damage_as_roll path that retags generically-tagged callee damage as _UNKNOWN_CALLEE_SOURCE. That handles damage rendered with a generic tag. It cannot handle damage rendered with NO LINE AT ALL, which is what 52 of these branches do.",
+ "the_fix_shape": "Either render the callee's damage event, or make damage_component_events refuse to attribute a NEGATIVE delta to a heal source -- a heal cannot reduce HP, so that is a check the instrument can make locally without knowing about Sleep Talk. The second is narrower and testable offline; the first is the actual defect.",
+ "ceiling_unchanged": "79 candidates, expected clearance AT MOST 79. Confirming the mechanism does not raise the ceiling."
+}
