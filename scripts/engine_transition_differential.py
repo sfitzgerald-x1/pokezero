@@ -892,7 +892,12 @@ def _roll_cascade_equivalent(
     if any(_cascade_base(c.source) not in _CASCADE_HEALS or c.delta <= 0 for c in all_heals):
         return False
 
-    # (1) source multisets agree bar exactly one extra on the longer side
+    # (1) the shared heals must agree in SOURCE AND MAGNITUDE, and exactly one
+    #     extra component may sit on the longer side. Comparing source names
+    #     alone let a shifted magnitude hide inside the "extra": re-review
+    #     showed obs [('', -100), ('movewish', 60)] matching
+    #     eng [('', -100), ('movewish', 44), ('itemleftovers', 16)], where the
+    #     direct components are IDENTICAL so there is no roll gap and no cascade.
     longer, shorter = (
         (engine_heals, observed_heals)
         if len(engine_heals) > len(observed_heals)
@@ -900,19 +905,57 @@ def _roll_cascade_equivalent(
     )
     if len(longer) - len(shorter) != 1:
         return False
-    remaining = Counter(_cascade_base(c.source) for c in shorter)
-    extra = 0
+    remaining = Counter((_cascade_base(c.source), c.delta) for c in shorter)
+    extra_components = []
     for component in longer:
-        base = _cascade_base(component.source)
-        if remaining.get(base):
-            remaining[base] -= 1
+        key = (_cascade_base(component.source), component.delta)
+        if remaining.get(key):
+            remaining[key] -= 1
         else:
-            extra += 1
-    if extra != 1 or any(remaining.values()):
+            extra_components.append(component)
+    if len(extra_components) != 1 or any(remaining.values()):
+        return False
+    extra = extra_components[0]
+
+    # (2) the extra component must BE the roll gap. This is the identity C66
+    #     measured and named as the thing that licenses the match; the first
+    #     implementation shipped conservation instead, which is weaker.
+    roll_gap = abs(abs(engine_direct[0].delta) - abs(observed_direct[0].delta))
+    if abs(extra.delta) != roll_gap or roll_gap == 0:
         return False
 
-    # (2) the direct component faces the ordinary legal-roll check
+    # (3) a shared heal must have FLIPPED its cap. That is what makes this a
+    #     cascade rather than a discrete mechanic difference: the larger roll
+    #     stopped a Wish or Recover from topping the mon out, which is why a
+    #     residual appeared. Without it, re-review showed
+    #     obs [('', -100), ('itemleftovers', 25)] matching
+    #     eng [('', -106), ('itemleftovers', 25), ('leechseed', 6)] -- an engine
+    #     Leech Seed the observation never saw, admitted purely on arithmetic.
+    observed_caps = {
+        (_cascade_base(c.source), c.source.endswith("_to_full")) for c in observed_heals
+    }
+    engine_caps = {
+        (_cascade_base(c.source), c.source.endswith("_to_full")) for c in engine_heals
+    }
+    shared_bases = {b for b, _ in observed_caps} & {b for b, _ in engine_caps}
+    if not any(
+        (base, True) in observed_caps ^ engine_caps
+        or (base, False) in observed_caps ^ engine_caps
+        for base in shared_bases
+    ):
+        return False
+
+    # (4) the direct component faces the ordinary legal-roll check, INCLUDING
+    #     the crit cross-check the equal-length path applies. Skipping it here
+    #     made the count-mismatch path the one place a crit mismatch passed.
     engine_component = engine_direct[0]
+    if (
+        support is not None
+        and target_side == support.target_side
+        and engine_component.event_index == support.event_index
+        and observed_direct[0].critical is not support.critical
+    ):
+        return False
     legal = branch_component_legal_rolls(
         support, target_side=target_side, component=engine_component, pre_legal=pre_legal
     )
@@ -928,10 +971,11 @@ def _roll_cascade_equivalent(
     ):
         return False
 
-    # (3) conservation: the extra healing absorbs the extra damage exactly
+    # (5) conservation
     return (observed_direct[0].delta + sum(c.delta for c in observed_heals)) == (
         engine_direct[0].delta + sum(c.delta for c in engine_heals)
     )
+
 
 
 def roll_component_events_agree(

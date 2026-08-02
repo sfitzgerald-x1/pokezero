@@ -77,6 +77,40 @@ class RollCascadeTests(unittest.TestCase):
         engine = [comp("", -49), comp("movewish", 119), comp("itemleftovers", 4), comp("heal", 4)]
         self.assertFalse(cascade(observed, engine))
 
+    def test_identical_directs_with_a_shifted_shared_heal_are_rejected(self) -> None:
+        """Re-review hole (a). The direct components are IDENTICAL, so there is
+        no roll gap and no cascade -- but comparing heal SOURCES only let the
+        16 HP shift hide inside the 'extra' component."""
+
+        self.assertFalse(cascade(
+            [comp("", -100), comp("movewish", 60)],
+            [comp("", -100), comp("movewish", 44), comp("itemleftovers", 16)],
+        ))
+        self.assertFalse(cascade(
+            [comp("", -100), comp("itemleftovers", 25)],
+            [comp("", -100), comp("itemleftovers", 9), comp("leechseed", 16)],
+        ))
+
+    def test_a_discrete_mechanic_difference_is_rejected(self) -> None:
+        """Re-review hole (b). Conservation holds and the extra equals the roll
+        gap, but no shared heal flipped its cap -- so nothing stopped topping
+        the mon out and there is no cascade. The engine simply sees a Leech Seed
+        the observation never did."""
+
+        self.assertFalse(cascade(
+            [comp("", -100), comp("itemleftovers", 25)],
+            [comp("", -106), comp("itemleftovers", 25), comp("leechseed", 6)],
+        ))
+
+    def test_the_extra_component_must_be_the_roll_gap(self) -> None:
+        """C66 measured this identity and named it as what licenses the match;
+        the first implementation shipped bare conservation instead."""
+
+        self.assertFalse(cascade(
+            [comp("", -41), comp("movewish_to_full", 119)],
+            [comp("", -45), comp("movewish", 111), comp("itemleftovers_to_full", 12)],
+        ))
+
     def test_unequal_totals_are_rejected(self) -> None:
         observed = [comp("", -41), comp("movewish_to_full", 119)]
         engine = [comp("", -45), comp("movewish", 119), comp("itemleftovers_to_full", 40)]

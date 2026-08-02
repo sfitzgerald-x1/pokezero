@@ -1529,34 +1529,46 @@ fn render_move_phase(
                     for instruction in &called_tail {
                         sim.apply(instruction);
                     }
-                    // BOTH DIRECTIONS. Review of #1010: the consumer defect
-                    // this repairs -- a stale running-HP baseline absorbed by
-                    // the next component -- is symmetric, and describing only
-                    // decreases fixed one sign of it. A Sleep-Talk-called
-                    // Recover, Softboiled, Synthesis, Giga Drain or Absorb
-                    // RAISES HP and, undescribed, leaves the baseline stale low
-                    // so the next component absorbs the heal. Drain moves are
-                    // the likely case: the defender's damage was being
-                    // described and the attacker's heal was not.
-                    for (index, hp_side) in [SideReference::SideOne, SideReference::SideTwo]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let now = sim.active_hp(hp_side).0;
-                        if now == before[index] {
-                            continue;
-                        }
-                        let ident = ctx.active_ident(sim.state, hp_side);
-                        let condition = sim.hp_condition(hp_side);
-                        if now < before[index] {
-                            out.lines.push(format!(
-                                "|-damage|{ident}|{condition}|[from] residual"
-                            ));
-                            emit_faint_if_dead(sim, hp_side, ctx, out);
-                        } else {
-                            out.lines.push(format!(
-                                "|-heal|{ident}|{condition}|[from] residual"
-                            ));
+                    // DAMAGE ONLY, and never across a switching tail.
+                    //
+                    // A heal direction was added and REVERTED. Re-review of
+                    // #1010 reproduced `|-heal|p2a: Snorlax|100/100|[from]
+                    // residual` for a Snorlax dragged IN by a Sleep-Talk-called
+                    // Roar, which never healed: `before[]` is captured before
+                    // the tail is applied, so a tail containing a Switch makes
+                    // the comparison span two different Pokemon. The old `<`
+                    // guard left that case silent (100 < 50 is false); adding
+                    // the heal branch turned a silent half into a wrong line.
+                    // Roar and Whirlwind are Sleep-Talk-callable and produce
+                    // identical tails, so identify_sleep_talk_called returns
+                    // None and lands exactly here.
+                    //
+                    // The heal direction also had no consumer: the differential
+                    // retags `residual` -> move_unknown_callee only for
+                    // `-damage`, so a `-heal` carrying that tag lands in the
+                    // exact bucket as ('residual', +n) against Showdown's
+                    // ('heal', +n) and can never match.
+                    //
+                    // The guard below is the precondition for restoring either
+                    // direction. scripts/switch_safe_hp.py is the Python-side
+                    // statement of the same rule.
+                    let tail_switches = called_tail
+                        .iter()
+                        .any(|instruction| matches!(instruction, Instruction::Switch(_)));
+                    if !tail_switches {
+                        for (index, hp_side) in
+                            [SideReference::SideOne, SideReference::SideTwo]
+                                .into_iter()
+                                .enumerate()
+                        {
+                            if sim.active_hp(hp_side).0 < before[index] {
+                                let ident = ctx.active_ident(sim.state, hp_side);
+                                let condition = sim.hp_condition(hp_side);
+                                out.lines.push(format!(
+                                    "|-damage|{ident}|{condition}|[from] residual"
+                                ));
+                                emit_faint_if_dead(sim, hp_side, ctx, out);
+                            }
                         }
                     }
                 }
