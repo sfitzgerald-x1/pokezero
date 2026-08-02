@@ -48,7 +48,66 @@ pub fn panic_detail(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod panic_containment_tests {
-    use super::panic_detail;
+    use super::{catch_native_panic, panic_detail};
+    use pyo3::exceptions::PyValueError;
+    use pyo3::{PyResult, Python};
+
+    /// The guard itself, not the string formatter.
+    ///
+    /// An earlier version of this module tested only `panic_detail` -- a pure
+    /// function -- through the tests' OWN `catch_unwind`. Independent review
+    /// showed the consequence: five mutants survived, including deleting the
+    /// `catch_unwind` entirely and returning `PyBaseException` (which
+    /// reintroduces the exact bug this module exists to fix). These drive
+    /// `catch_native_panic`.
+    #[test]
+    fn a_panic_becomes_a_catchable_error_carrying_its_payload() {
+        Python::initialize();
+        let result: PyResult<i32> = catch_native_panic(|| panic!("Invalid rest_turns value: 32"));
+        let err = result.expect_err("a panic must surface as Err, never a fabricated Ok");
+        Python::attach(|py| {
+            // MUST be an Exception subclass. PanicException derives from
+            // BaseException, which is precisely why `except Exception` in
+            // engine_search.py could not catch it and one bad world killed the
+            // whole shard.
+            assert!(
+                err.is_instance_of::<PyValueError>(py),
+                "must be catchable by `except Exception`: {err}"
+            );
+            let message = err.value(py).to_string();
+            assert!(
+                message.contains("Invalid rest_turns value: 32"),
+                "the payload must survive so world_failure_reasons can tell \
+                 panics apart: {message}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_successful_call_passes_through_untouched() {
+        Python::initialize();
+        let result = catch_native_panic(|| Ok(7i32));
+        assert_eq!(result.expect("no panic, no error"), 7);
+    }
+
+    #[test]
+    fn an_ordinary_error_is_not_rewrapped() {
+        Python::initialize();
+        let result: PyResult<i32> =
+            catch_native_panic(|| Err(PyValueError::new_err("attribution-unsafe renderer branch")));
+        let err = result.expect_err("the inner error must survive");
+        Python::attach(|py| {
+            let message = err.value(py).to_string();
+            assert!(
+                message.contains("attribution-unsafe renderer branch"),
+                "an ordinary PyErr must pass through so its own counter still \
+                 fires, not be relabelled as a panic: {message}"
+            );
+            assert!(!message.contains("panicked"), "{message}");
+        });
+    }
+
+
 
     /// A `panic!("literal")` payload is a `&'static str`.
     #[test]

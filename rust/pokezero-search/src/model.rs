@@ -1675,7 +1675,8 @@ impl NativeLeafModel {
             // that one malformed state kills the whole shard process instead of
             // one world, and the driver then refuses to write a partial shard.
             // Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
-            // took out two shards, deterministically by seed, so a retry
+            // took out shards deterministically by seed (3 panics / 4 refused
+            // shards over ~80), so a retry
             // reproduces it. Same remedy `parse_state` already applies to
             // deserialization (lib.rs).
             crate::panic_guard::catch_native_panic(|| {
@@ -1701,5 +1702,3 @@ impl NativeLeafModel {
         })
     }
 }
-
-
