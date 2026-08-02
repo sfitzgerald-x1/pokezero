@@ -1,0 +1,173 @@
+{
+ "schema": "c32-fail-diagnosis/1",
+ "source": "reports/c32_current_engine_attestation.json (run cert-c32-20260801b)",
+ "population": "3,779 structural rows from a FRESH 10,000-game sweep -- the first non-archive, non-probe corpus this program has had for this shape",
+ "measured": {
+  "majority_count_mismatch_no_cap": 3433,
+  "majority_count_mismatch_with_cap": 346,
+  "direction": {
+   "observed_has_more": 3323,
+   "engine_has_more": 110
+  },
+  "sources_on_the_longer_side": {
+   "(direct)": 3412,
+   "itemleftovers": 2874,
+   "heal": 127,
+   "movewish": 110,
+   "capped_lethal": 23,
+   "recoil": 17
+  }
+ },
+ "dominant_shape": "observed=[('', -60), ('itemleftovers', 17)]  engine=[('', -60)]",
+ "leading_hypothesis": {
+  "claim": "C29's cap promotion is scoped too widely and is inflating this counter. It promotes a base source to roll-scaled when ANY component on that SLOT carries a cap, rather than when the paired component does. An UNCAPPED itemleftovers tick belongs in the exact bucket; it reaches the roll-scaled comparison only through that promotion, where the length check then rejects it before any tolerance applies.",
+  "why_it_matters": "If true, C29 moved rows that would have been reported as exact-bucket differences into the structural counter -- changing how they are CLASSIFIED without changing whether they diverge, and inflating the very counter I then declared resolved.",
+  "status": "SUPERSEDED. All five hypotheses were wrong; the real defect was found by reading values.",
+  "how_to_settle_it": "Re-read a sample of these boundaries with capped_bases scoped to the component pair instead of the slot, and compare verdicts. Offline, no engine change, no sweep."
+ },
+ "independent_of_that": {
+  "engine_side_shape": "3,323 rows where the observed transition has a component the engine's arm lacks -- most often a Leftovers tick the engine did not emit. Whatever bucket it is reported in, the engine's arm not carrying a residual the simulator emitted is an engine-support question, not a presentation one.",
+  "the_60_game_probe_missed_this_entirely": "The probe's structural rows were 26/29 cap-carrying; the sweep's are 346/3,779. The probe sampled the opposite shape."
+ },
+ "other_failures_to_diagnose": {
+  "coverage": "0.9587 against a 0.97 floor, cause unknown, no advance signal",
+  "family_bounds": "7 of 13 over, because they were calibrated on the archive and applied to a fresh population",
+  "contract_defect": "CORRECTED: not a shape defect. 18 classes were OBSERVED in the sweep but never REGISTERED, because predicted_class_rates_10k was built from the archive's class set. Same root cause as the family-bound overruns."
+ },
+ "next_cycle": [
+  "recalibrate BOTH the family bounds and the predicted class set from a fresh population -- these are one error, not two",
+  "diagnose the coverage shortfall (0.9587 vs 0.97)",
+  "diagnose the 515 unattributed rows remaining after C34",
+  "C33 residual-lethality partition for the 73 confirmed support gaps",
+  "identify a discriminator for the 1,009 rows that does not rest on the legal roll set"
+ ],
+ "hypothesis_testing": {
+  "established": {
+   "fresh_structural_rows": 3779,
+   "majority_count_mismatch_no_cap_in_pair": 3433,
+   "observed_has_more": 3323,
+   "itemleftovers_on_longer_side": 2874,
+   "sample_400_no_cap_anywhere_on_OBSERVED_slot": 392,
+   "sample_150_uncapped_itemleftovers_present_in_the_ROLL_SCALED_list": 113
+  },
+  "the_anomaly": "An uncapped itemleftovers tick appears in the ROLL-SCALED comparison list in 113 of 150 sampled rows, while no cap exists anywhere on the observed slot in 392 of 400. Reading _split_component_events, that should be impossible: itemleftovers is not in _ROLL_SCALED_SOURCES, does not end with _to_full, and with capped_bases empty the C29 recut is skipped entirely by its `if capped_bases:` guard.",
+  "remaining_explanation": "capped_bases unions the observed AND ENGINE component lists. So the promotion could be driven by an engine-side _to_full that the observed side does not carry. That is the only path left consistent with the code, and it is the one I have NOT measured.",
+  "why_i_stopped": "Three attempts at this check were under-specified in a row: the first ignored the engine side of capped_bases entirely, the second called a branch-component helper that does not exist and silently measured nothing. Settling it needs engine components computed per branch from the retained states -- straightforward, but it needs doing properly rather than in another quick pass. Recording the narrowed question is worth more than a fourth wrong answer.",
+  "how_to_settle": "For a sample of these rows, recompute engine components per branch via damage_component_events over generate_instructions output, and report whether an engine-side _to_full exists for the same base source. If yes, C29's slot-wide scoping is confirmed as the inflation path and the fix is to scope capped_bases to the component pair. If no, the promotion has another cause and _split_component_events needs re-reading.",
+  "settled": {
+   "method": "For 120 fresh structural rows, engine components were rendered through the real mapper -- pokezero_search.branch_events over every retained state, then damage_component_events on each branch's events -- and checked for an engine-side _to_full on the complaining slot. This is the path the differential itself uses; the three earlier attempts each substituted something cheaper and measured the wrong thing.",
+   "result": {
+    "no_observed_cap_but_engine_cap": 103,
+    "no_cap_either_side": 16,
+    "cap_on_both": 1,
+    "checked": 120
+   },
+   "conclusion": "RETRACTED. The check asked whether ANY branch carried an engine-side cap; capped_bases is computed PER BRANCH inside the comparison loop, so only the complaining branch matters. Re-measured at the correct scope: 71 of 80 rows have NO cap on the complaining branch. The earlier 103-of-120 result is real but answers a question that does not bear on the mechanism.",
+   "the_defect_is_mine": "C29 scoped capped_bases to the SLOT. The differential's stated intent for the _to_full tag is 'only the magnitude is relaxed, and only in the capped direction', which calls for scoping to the COMPONENT PAIR. Slot-wide scoping relaxes membership for components that have nothing to do with the cap.",
+   "fix": "Scope capped_bases per paired base source rather than per slot: promote a base source only where THAT source is capped on at least one side AND appears on both. Registered as C34, pre-measured offline before implementation, like every change before it.",
+   "expected_effect": "Up to 3,433 of the 3,779 structural rows -- the no-cap-in-pair majority -- should stop being count-mismatches. That is a PREDICTION to register, not a result: C29's own identity-level falsifier caught counts matching while the rows did not."
+  },
+  "c34_measured": {
+   "design": "narrow capped_bases to base sources present on BOTH sides",
+   "result": "NO-OP. 400 of 400 sampled rows unchanged.",
+   "why": "_bases() normalises the _to_full suffix, so itemleftovers is in both sets and the intersection retains it. The variant cannot change a shape whose two sides differ only by the cap suffix.",
+   "value": "A registered prediction that failed cleanly, before any code shipped."
+  },
+  "count_of_wrong_answers": 5,
+  "what_is_actually_established": [
+   "3,433 of 3,779 fresh structural rows: majority-arm count mismatch, no cap in the pair.",
+   "3,323 are 'observed has more'; itemleftovers appears 2,874 times on the longer side.",
+   "71 of 80: no cap on the complaining branch, so slot-wide promotion is NOT the path.",
+   "C34 as designed is a no-op, measured on 400 rows.",
+   "The mechanism placing an uncapped itemleftovers into the roll-scaled list remains UNEXPLAINED."
+  ],
+  "next_step": "Stop hypothesising and instrument directly: for one row, dump obs_exact, obs_rolled, eng_exact, eng_rolled and capped_bases as evaluate_boundary_strict actually computes them. Five inferences from reading the source have now failed; the next answer should come from the values, not the code.",
+  "resolved_by_instrumentation": {
+   "method": "Stopped inferring from source and dumped the actual values at the comparison site for one row: capped_bases, obs_exact, obs_rolled, eng_exact, eng_rolled and both raw component lists, as evaluate_boundary_strict computes them.",
+   "observed": {
+    "capped_bases": "[] (EMPTY -- so C29's promotion was not active on this branch at all)",
+    "obs_rolled": "[('', -60), ('itemleftovers', 17)]",
+    "eng_exact": "{('itemleftovers', 17): 1}",
+    "note": "An IDENTICAL component sat in the rolled bucket on one side and the exact bucket on the other, with no cap anywhere in play."
+   },
+   "root_cause": "An aliasing bug I introduced in C29. obs_exact and obs_rolled are built ONCE before the branch loop and shared across every branch and every state. C29 assigned back into them -- obs_exact[slot], obs_rolled[slot] = ... -- so a promotion earned by one branch that did carry a cap leaked into all later branches, whose own capped_bases were empty. The engine side was already computed into per-branch locals, so only the observed side drifted, and the two sides then disagreed about which bucket an identical component belonged to.",
+   "fix": "Compute the observed split into per-branch locals; never mutate the shared split.",
+   "measured_effect": {
+    "rows_retested": 400,
+    "now_matched": 357,
+    "still_structural": 43,
+    "share_manufactured_by_the_leak": "89%"
+   },
+   "why_five_hypotheses_failed": "Every one reasoned about what the source must do. The bug was not in the logic I kept re-reading -- capped_bases, the promotion rule, the scoping -- but in a mutation two lines away that made the logic correct and the STATE wrong. Values found it in one attempt."
+  }
+ },
+ "residual_after_c34": {
+  "total": 515,
+  "by_counter": {
+   "structural_component_count_without_supported_sibling": 433,
+   "same_turn_stat_event_gap": 37,
+   "unattributed_generic": 36,
+   "truant_loaf_phase_drift": 9
+  },
+  "shapes": {
+   "structural": {
+    "count_mismatch_no_cap": 296,
+    "count_mismatch_with_cap": 137,
+    "sample": "observed=[('', -42)] engine=[('', -19), ('leechseed_to_full', 19)]",
+    "reading": "The ENGINE side is the longer one -- it splits into damage plus a capped Leech Seed where Showdown reports a single component. That is the REVERSE of the shape C34 fixed, where the observed side was longer. Cap-adjacent but a distinct problem, and it is the only residual shape large enough to dominate."
+   },
+   "same_turn_stat_event_gap": {
+    "count_matched": 29,
+    "count_mismatch": 7,
+    "sample": "observed=[('', -229)] engine=[('', -124)]",
+    "reading": "Mostly count-MATCHED, so not structural at all: a magnitude disagreement of nearly 2x, which is the ratio of a crit. Plausibly a crit the engine did not price on this boundary -- the C27/C31 family, at a third site.",
+    "crit_hypothesis": {
+     "measured": {
+      "count_matched": 30,
+      "count_mismatch": 7,
+      "ratio_samples": 31,
+      "median_ratio": 1.86,
+      "in_crit_band_1.7_to_2.3": 21
+     },
+     "status": "SUGGESTIVE, not established.",
+     "the_tension": "The magnitudes cluster at roughly 2x, which is the gen3 crit multiplier and would place these rows in the engine-gap bucket beside C27 and C31. But the counter's own rule fires on 0.70 <= observed/engine <= 0.96 -- observed SMALLER than engine -- and the ratios I measured are observed LARGER. So the pairs I measured and the pair that actually triggers the rule may not be the same pair: I averaged across all component pairs instead of isolating the deciding one.",
+     "how_to_settle": "Measure the ratio of the DECIDING pair only -- the one the rule inspects -- rather than every pair on the arm. If that pair also sits near 2x, the crit reading holds and this is an engine-gap. If it sits in 0.70-0.96 as the rule requires, the 2x clustering is coming from other components and says nothing about the trigger.",
+     "why_recorded_this_way": "Five hypotheses on the structural shape were confidently wrong this session, every one from a check cheaper than the question. This one is cheap in the same way."
+    }
+   },
+   "unattributed_generic": {
+    "sample": "engine_only=[('psn', -32)]",
+    "reading": "An exact-bucket residual the engine emits and Showdown does not."
+   },
+   "truant_loaf_phase_drift": {
+    "sample": "observed=[] engine=[('', -163)]",
+    "reading": "The engine damages where Showdown does nothing -- the loaf-phase signature the counter is named for. Nine rows, and the first FRESH evidence for this counter: the archive's 48 could always be dismissed as pre-#970. These cannot."
+   }
+  },
+  "sequencing_consequence": "Four distinct problems, not one. Only the 433 dominates, and it is not the shape C34 addressed. The 37 same-turn rows look like unpriced crits, which would put them in the engine-gap bucket alongside C27 and C31 rather than the instrument bucket. The 9 Truant rows matter out of proportion to their count: they are the first fresh-population evidence for a predicted-zero counter that the archive could never settle."
+ },
+ "coverage_diagnosis": {
+  "measured": 0.9587,
+  "floor": 0.97,
+  "full_round": 821320,
+  "measured_boundaries": 787376,
+  "unmeasured": 33944,
+  "boundaries_needed_to_clear_the_floor": 9304,
+  "coverage_reducing_skips": {
+   "struggle_not_submittable": 7909,
+   "rest_sleep_skipped_time_pending": 7476,
+   "self_moveset_mismatch": 5058,
+   "volatile_unsupported": 4799,
+   "self_request_state_unsupported": 643,
+   "strict_all_branches_lossy": 372,
+   "materialization_blocker": 362,
+   "encore_move_unknown": 76,
+   "transform_unexpressible": 23,
+   "status_unsupported": 2
+  },
+  "single_seat_boundary_is_not_coverage_reducing": "89,887 single-seat boundaries are recorded as a skip but are NOT full-round boundaries, so they never entered the denominator. Reading them as coverage loss would badly misstate the picture -- they exceed the entire unmeasured count on their own.",
+  "unaccounted": "7,224 unmeasured boundaries are not explained by the named skips (26,720 of 33,944). I cannot attribute those from the readout alone and am not going to guess at them.",
+  "tractability": "No single cause clears the floor: the two largest reach 0.9683 and 0.9678 against 0.97. Any TWO of the top four clear it comfortably. These are world-construction limits rather than engine errors, so they are a different repair class from everything else in this cycle.",
+  "floor_provenance_worth_checking": "0.97 was registered on the basis of C14's 0.9773 and C6's 0.9765. This sweep reads 0.9587 on a different harness era, so the question is not only 'why is coverage low' but 'is the floor still calibrated to the same measurement'. Both need answering before the floor is either met or moved -- and moving it to fit a result is precisely what the contract forbids."
+ }
+}

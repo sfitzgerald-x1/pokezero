@@ -1,0 +1,115 @@
+{
+ "schema": "c66-roll-cascade-count-mismatch/1",
+ "found_by": "reading the component lists of the 23 exact-outcome switch rows, after every generated hypothesis in the preceding cycles had been refuted",
+ "the_mechanism": "The engine picks a legal damage roll that differs from the simulator's. That difference propagates: a Wish or Recover that would have capped the mon at full no longer does, so a Leftovers tick which had nothing to do now has 4 HP of room and emits a line. The NET HP change is identical; the COMPONENT COUNT is not. The matcher rejects on count before any roll tolerance is applied, so a difference entirely explained by a legal roll is rejected by a structural check.",
+ "worked_example": {
+  "row": "s18000588/37",
+  "observed": "[('', -41), ('movewish_to_full', 119)] -> net +78",
+  "engine": "[('', -45), ('movewish', 119), ('itemleftovers_to_full', 4)] -> net +78",
+  "reading": "-41 and -45 are one legal roll apart. At -41 the Wish tops the mon out and Leftovers is a no-op with no line. At -45 the Wish leaves 4 HP short and Leftovers fills it, adding a third component."
+ },
+ "measured_over_the_count_mismatch_rows": {
+  "SAME net HP, different component count": 84,
+  "net differs beyond a legal roll": 34,
+  "net differs but within one legal roll": 2,
+  "share_that_is_net_identical": "84 of 120 = 70.0%"
+ },
+ "why_this_is_the_first_solid_lead_in_several_cycles": "It is not an enrichment, a proxy, or an inference from one row. The two component lists sum to the same number, and the arithmetic linking the roll difference to the extra component is visible in each example. C60 predicted this shape without naming it: 'a length check cannot distinguish the engine modelling a different outcome from the engine rendering the same outcome with a different number of events'. This is a third case it also cannot distinguish -- the engine modelling a legally different ROLL whose downstream capping differs.",
+ "what_a_fix_would_have_to_respect": "NOT simply comparing net HP. Net-equality is exactly the false-match risk the exact-component comparison exists to prevent: damage and heals that coincidentally sum alike are not the same transition. A sound repair has to establish that the count difference is CAUSED by the roll difference -- that the extra component is a cap-filling residual whose magnitude equals the roll gap -- rather than merely observing that the totals agree. In s18000588/37 the extra itemleftovers is 4 and the roll gap is 4, and that identity is what would license the match.",
+ "ceiling": "84 candidate rows, and lower once the causal condition above is required rather than net equality alone.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "causal_predicate_measured": {
+  "predicate": "exactly one extra component; it is a cap-filling heal residual with positive magnitude; that magnitude EQUALS the gap between the two direct-damage components; and the two direct components are one legal roll apart",
+  "result": {
+   "rows where a miss satisfies it": 21,
+   "rows where none does": 320
+  },
+  "against_net_equality": "84 rows are net-equal; only 21 survive the causal condition",
+  "why_the_gap_is_so_large": "net equality is cheap to satisfy. Two lists can sum alike through unrelated differences -- a heal that differs one way and a residual the other. The causal condition demands the extra residual's magnitude BE the roll gap, which is the arithmetic that actually links the two descriptions to one transition. 63 of the 84 do not have that identity.",
+  "the_predicate_is_precise_where_it_fires": "all three sampled rows are textbook cascades: s18000588/37 (-41 vs -45, extra leftovers 4), s18000642/44 (-124 vs -122, extra leftovers 2), s18001125/57 (-145 vs -136, extra leftovers 9). The gap equals the residual in each."
+ },
+ "engineering_judgement": {
+  "verdict": "NOT worth implementing as it stands, and I am recording that rather than shipping it.",
+  "why": "21 rows of 341, and clearance would be at most 21 since a miss being explained does not clear a row unless some branch matches entirely. Against that, the change touches roll_component_events_agree -- the comparison the whole residue is measured by, and the one place where a false match hides a real difference instead of flagging a non-difference. A 6% reduction is not worth loosening the safest check in the matcher.",
+  "what_would_change_it": "if the same causal identity accounts for a materially larger share once the OTHER cascade shapes are characterised -- a cap flag flipping without an extra component, or a residual that shrinks rather than appears. The 63 net-equal-but-not-causal rows are where to look, and they may hold a second identity as exact as this one.",
+  "the_ceiling_i_published_was_too_high": "C66 said 84 candidates, 'lower once the causal condition is required'. It is 21. Stating the size of the drop because 'lower' understated it by a factor of four."
+ },
+ "generalised_identity": {
+  "found_by": "reading the 63 net-equal-but-not-causal rows, which C66 named as the place to look",
+  "what_the_narrow_predicate_missed": "it required the extra residual's magnitude to EQUAL the damage gap. In most rows the gap is split: the engine's larger damage means a Wish or Recover heals MORE as well, and the residual covers only what is left. s18000053/136 has damage gap 6 = heal gap 3 + residual 3; s18001200/15 has 9 = 2 + 7. The narrow form caught only the special case where the heal magnitude happened to be unchanged.",
+  "the_general_form": "damage gap == sum of the increases across ALL healing components",
+  "and_what_that_actually_is": "conservation. If the mon ends at the same HP, extra damage must be matched by extra healing, so the identity reduces to net equality. That is worth stating plainly rather than dressing up: the general 'causal' condition IS net equality once every component is a damage or a heal.",
+  "so_the_predicate_has_to_constrain_SHAPE_not_just_sums": "exactly one direct-damage component on each side, one legal roll apart; every other component a positive heal source; and the totals equal. That is tighter than bare net equality because it forbids the unrelated-differences case -- two damage components, or a residual that reduces HP -- which is what made net equality unsafe.",
+  "measured": {
+   "rows explained": 77,
+   "rows not explained": 264,
+   "share": "22.6%"
+  },
+  "against_the_earlier_numbers": "84 net-equal, 21 under the narrow causal form, 77 under the shape-constrained form"
+ },
+ "engineering_judgement_REVISED": {
+  "previous": "21 rows, not worth touching the safest check in the matcher",
+  "now": "77 rows, 22.6% of the residue. That is a materially different proposition from 6% and it meets the condition I set for revisiting: 'if the same identity accounts for a materially larger share once the OTHER cascade shapes are characterised'.",
+  "but_still_not_shipped_here": "the predicate is now close enough to net equality that its safety rests entirely on the shape constraints, and those deserve adversarial testing before they touch roll_component_events_agree -- specifically, how often two genuinely different transitions satisfy one-direct-each-plus-heals-plus-equal-totals. That is a false-match measurement, not a row count, and it is the gate this change has to pass.",
+  "SUPERSEDED": "77 rows was measured under an earlier predicate"
+ },
+ "false_match_gate": {
+  "why_this_was_the_gate": "the predicate reduces to net equality plus shape constraints, so its safety rests entirely on those constraints. The question is not how many rows it clears but how often it accepts two genuinely DIFFERENT transitions.",
+  "method": "harvested all 7,023 real (observed, engine) component-list pairs from the residue's misses, then CROSSED them -- observed from one pair against engine from another. A crossed pair describes two unrelated transitions, so every fire is a false match by construction. 200,000 random crossings.",
+  "result": {
+   "predicate on REAL pairs": "195/7023 = 2.78%",
+   "predicate on CROSSED pairs": "37/200000 = 0.018%",
+   "current exact comparison on CROSSED pairs": "103/200000 = 0.051%"
+  },
+  "verdict": "PASSES, and by a wider margin than expected. The cascade predicate's false-match rate on unrelated transitions is 0.018%, roughly a THIRD of the 0.051% that a plain exact-component equality already accepts. Requiring one direct damage each within a legal roll, all other components positive heals, and equal totals is MORE selective against unrelated pairs than demanding identical lists -- because identical lists occur by accident on common shapes like a lone Leftovers tick, while the cascade structure does not.",
+  "the_caveat_that_keeps_this_honest": "my baseline is sorted(o)==sorted(e), a proxy for the shipped comparison. The real check is roll_component_events_agree with per-component legal roll sets, which is more permissive than exact equality and would therefore show a HIGHER false-match rate than 0.051%. That widens the margin rather than narrowing it, but the number is a proxy and should be re-derived against the real check before the change lands.",
+  "expected_false_matches_in_practice": "0.018% over 7,023 real pairs is about 1.3 pairs -- not zero, and worth stating as the price of the 77 rows.",
+  "SUPERSEDED": "This gate was run against the BARE-CONSERVATION predicate and its 0.018% verdict does not describe the shipped form. It is also the wrong instrument: a crossed-pair rate measures discrimination on unrelated inputs, and C70 showed that overstates real risk by two orders of magnitude. The fourth review replaced it with the right test -- generate genuine two-roll pairs from a physical realizer and count what the predicate wrongly accepts. That measured 14% of accepts unrealizable before the final constraints, including a masked engine heal defect, and zero under-firing across 13,584 genuine cascades."
+ },
+ "status": "SUPERSEDED BY REVIEW -- see corrected_outcome",
+ "outcome": {
+  "unattributed": "341 -> 264 (-77, exactly the registered figure)",
+  "matched": "4,069 -> 4,156; 87 rows cleared",
+  "structural": "309 -> 232",
+  "unattributed_generic": "27 -> 27",
+  "same_turn": "5 -> 5"
+ },
+ "invariants": {
+  "matched -> divergent": "ZERO, by row identity",
+  "no family may grow": "HELD -- I1_cap_state_shape falls 97 -> 87 and no family rises",
+  "tests": "69 pass including the tactics gate"
+ },
+ "no_fingerprint_change": "matcher-only, so the engine fingerprint stays at c50da60a and the era-stamped adjudications survive; the differential hash moves, so the audit was re-derived",
+ "differential_sha256": "66b6d85e5545312020c2ce2d9bc7cf09b9b36b135448462a9502e98fa6dbd4a0",
+ "corrected_outcome": {
+  "why_this_file_was_wrong": "it asserted status IMPLEMENTED AND VERIFIED with unattributed 341 -> 264, matched 4,069 -> 4,156, and a differential_sha256 that no longer exists. Three review rounds changed the predicate underneath it and the report was never re-derived. In a program whose reports ARE the deliverable, a stale outcome is not cosmetic -- the third review caught roughly 55 rows that had gone matched -> divergent with no record.",
+  "what_the_predicate_now_requires": [
+   "exactly one extra heal component on the longer side; shared heals agree by SOURCE, and their MAGNITUDES may differ because a _to_full heal restores maxhp - hp_before and so inherits the preceding roll",
+   "the extra component must itself be _to_full and must be a source the other side does not carry -- both sides end at full in a cascade, and this rejects both a discrete mechanic difference and an extra that duplicates a shared source to manufacture its own cap flip",
+   "a shared heal must have flipped its cap ON THE SIDE WITH THE SMALLER DIRECT ROLL; a flip the other way is arithmetically impossible from a common start",
+   "the direct component passes the ordinary legal/roll check AND the crit cross-check the equal-length path applies",
+   "conservation, which with the shape fixed above IS the general causal identity: the roll gap equals the sum of increases across the healing components"
+  ],
+  "measured": {
+   "unattributed": "264 -> 265 against the pre-cascade baseline",
+   "note": "the cascade now clears far fewer rows than the 77 originally reported, and slightly fewer than the 264 state, because it demands the identity rather than the arithmetic"
+  },
+  "the_two_wrong_versions_this_replaces": {
+   "shipped_first": "bare conservation plus a source whitelist -- cleared 77 rows and admitted cross-mechanism pairs; review demonstrated four false matches",
+   "shipped_second": "required shared heals to agree in MAGNITUDE, which collapsed to the NARROW form C66 itself measured at 21 rows and recorded as 'NOT worth implementing'. It rejected the split-gap majority the report names -- s18000053/136 where gap 6 = heal gap 3 + residual 3 -- because in a real cascade the capped heal is precisely the one whose magnitude moved. Residue went to 319, which is C66's own 'none satisfies it: 320'."
+  },
+  "verified": "all five demonstrated false-match cases reject; the motivating row s18000588/37 and both split-gap C66 shapes pass",
+  "differential_sha256": "f1a162a227ef15d18c6e84fb52bbecba1d28602984c4ba5140585ea0ae21a248"
+ },
+ "final_constraints": [
+  "exactly one extra heal component; shared heals agree by SOURCE, magnitudes may differ",
+  "the extra must be _to_full and a source the other side does not carry",
+  "at most ONE _to_full per side -- a later heal after a cap restores zero",
+  "the roll gap must be nonzero and must bound the extra: capped <= uncapped nominal",
+  "exactly one shared base flips, toward the SMALLER direct roll, and no base repeats",
+  "the direct component passes the legal/roll check and the crit cross-check",
+  "conservation"
+ ],
+ "final_constraints_SUPERSEDED": "Two of these are rules the MERGED predicate (#1020) deleted as wrong, and one shipped rule is missing. 'no base repeats' was replaced by (base, delta) instance pairing after review measured it rejecting two genuine cascades, s18500122/85 and s18100033/60. 'at most ONE _to_full per side' is physically false -- cap, damage, cap is an ordinary line -- and was replaced by order-based gating on event_index. Missing: the once-per-turn residual rule (itemleftovers, leechseed). Read scripts/engine_transition_differential.py on main for the shipped constraint set, not this list.",
+ "ERA_STAMP_NOTE": "Era note: the differential hash in this file names the round it was written in, not the current tree. main is ae1bf51d32983937. Compare era stamps against the tree you are reading."
+}

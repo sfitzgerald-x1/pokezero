@@ -1,0 +1,38 @@
+{
+ "schema": "c29-cap-bucket-prediction/1",
+ "bucket": "instrument-artifact (differential-side)",
+ "defect": "_split_component_events routes a component into the roll-scaled bucket iff its source ends with _to_full. The differential's own comment states the intent: 'The tag is preserved so attribution is still compared; only the magnitude is relaxed, and only in the capped direction.' Changing the source name also changes BUCKET MEMBERSHIP, which the stated intent never asked for -- so the roll-scaled list's LENGTH becomes roll-dependent, and roll_component_events_agree rejects on length before applying any tolerance. When one side caps and the other does not, two arms differing only by a legal roll read as structurally different.",
+ "fix": "Cap-marking relaxes magnitude, never membership. If either side marks a base source as capped for a slot, both sides treat that base source as roll-scaled for the comparison. Membership becomes roll-independent; the magnitude tolerance still applies only where a cap is involved.",
+ "per_shape_argument": "Argued from the differential's own stated intent rather than from the count it produces. The comment says the tag relaxes magnitude only; bucket migration is an unintended consequence of encoding the cap in the source name.",
+ "engine_fingerprint": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+ "differential_sha256_before": "12fe80c5b77235d87b19d78edb47e6f8e2db3502670b27047ad457c1e2163e8d",
+ "prediction": {
+  "fresh_60_games": {
+   "rows_that_become_matched": 4,
+   "divergent_before": 60,
+   "divergent_after": 56,
+   "unattributed_before": 7,
+   "unattributed_after": 3,
+   "rows_expected_to_clear": [
+    "17000013/12",
+    "17000016/38",
+    "17000026/41",
+    "17000025/32"
+   ]
+  },
+  "shape": "These rows MATCH rather than re-attribute. That is the correct outcome for a false divergence: the boundary agreed and the matcher was wrong. A fix that instead moved them into a documented family would be widening attribution.",
+  "kpi_era": {
+   "in_support_before": 98.734,
+   "in_support_after": 98.818,
+   "out_of_support_per_10k_before": 10000,
+   "out_of_support_per_10k_after": 9333,
+   "claim": "This moves the KPI, and it is NOT a fidelity gain. Per the charter's matcher-era rule, this opens a new KPI era: no fidelity delta may be claimed until the 51-patch engine is re-baselined on the new matcher. The charter's guard is load-bearing on its first use."
+  },
+  "certification_still_fails": "3 rows survive: one evidence-backed cross-turn comparison limit and two candidate-not-findings. A PASS needs the limit registered as a family with a bound, and the two candidates resolved. 'Zero unattributed' is the readout's gate, so an adjudicated but unattributed row still fails it."
+ },
+ "falsifiers": [
+  "any row other than the four named clearing, or any of the four not clearing",
+  "any family count increasing -- these rows should leave the population, not move house",
+  "any change to boundaries_measured, which the fix must not touch"
+ ]
+}

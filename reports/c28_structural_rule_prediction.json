@@ -1,0 +1,36 @@
+{
+ "schema": "c28-structural-rule-prediction/1",
+ "purpose": "Registered BEFORE changing cert_sweep_readout.py. Corrects the design premise stated one turn earlier: the capped-heal COMPARISON was assumed to be the primary blocker, and measurement on the 52-patch build says it is not. 22 of 29 structural rows are decided by a MINORITY arm whose complaint is irrelevant, while the majority arm's components pair up with matching cap flags. The primary fix is the rule's scoping, not the differential's component comparison.",
+ "bucket": "instrument-artifact",
+ "bucket_consequence": "Both changes are instrument fixes. They must NOT move the fidelity KPI, and the prediction that they do not is the falsifiable claim that they are instrument rather than engine. If in-support rate changes, one of them is silently altering what counts as a divergence.",
+ "per_shape_argument": {
+  "majority_scoping": "I4 states the reason in its own comment: 'A tie confined to a minority arm cannot explain the majority-arm complaint.' The structural rule is the only documented-family-preempting rule outside the marked new-mechanism block that reasons from a minority arm. This aligns it with every neighbour, and is argued from the file's own stated semantics rather than from the count it produces.",
+  "sibling_carry_tolerance": "_sibling_arm_carries_observed_components compares roll-scaled components by EXACT magnitude, while the matcher that produced the miss accepts a roll-scaled component at any legal roll. That is an internal inconsistency between two comparisons of the same quantity, not a policy choice."
+ },
+ "explicitly_not_changed": "The ordering defect -- the rule preceding I1/I2/I5 -- stays unfixed. On the archive, reordering drives the structural counter to exactly zero while inflating I1 from 50 to 508, which reads as over-correction. It needs its own per-shape argument that does not reduce to 'it lowers the count'.",
+ "measured_baseline": "reports/c28_structural_rule_premeasure.json",
+ "engine_fingerprint": "2054cf3b9bd4b81cc83a3209aa61cb66880bad678211b76046bca68274321c29",
+ "readout_sha256_before": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
+ "prediction": {
+  "fresh_60_games_unattributed": {
+   "registered": 29,
+   "after_majority_scoping": 7,
+   "after_both": 4
+  },
+  "retained_archive_unattributed": {
+   "registered": 855,
+   "after_majority_scoping": 583,
+   "after_both": 429
+  },
+  "fidelity_kpi_unchanged": {
+   "in_support_percent": 98.734,
+   "out_of_support_per_10k": 10000
+  },
+  "certification_still_fails": "4 rows survive on the fresh sample, about 667 per 10,000 games. This does NOT reach a PASS. Those four need individual closure as a fix, a documented follow-up, or an evidence-backed limit -- which is objective 1's actual bar, not a lower unattributed count."
+ },
+ "falsifiers": [
+  "any fresh or archive count differing from the numbers above",
+  "any change in the fidelity KPI",
+  "any family other than UNATTRIBUTED and LS_structural_arm_echo changing count"
+ ]
+}

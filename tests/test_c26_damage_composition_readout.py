@@ -172,23 +172,64 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         )
         self.assertTrue(self.readout["invariants"]["no_historical_or_control_row_is_claimed_cleared"])
 
-    def test_final_matcher_has_zero_diff_from_pinned_main(self) -> None:
-        completed = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--exit-code",
-                PINNED_MAIN,
-                "--",
-                "scripts/engine_transition_differential.py",
-                "tests/test_transition_differential_matcher.py",
-            ],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
+    def test_production_matcher_is_not_the_rejected_experiment(self) -> None:
+        """The invariant is that production never took the rejected experiment.
+
+        This used to assert `git diff --exit-code` against a pinned main, which
+        conflated "production never took the rejected experiment" with
+        "production never changes". The second is not an invariant and broke on
+        C30, a deliberate, registered capped-heal repair. What must hold forever
+        is that the matcher production runs is not the experiment's matcher, so
+        that is what is asserted now — against the digest the readout already
+        pins, which is stronger than a diff against a moving baseline.
+        """
+
+        current = hashlib.sha256(
+            (REPO_ROOT / "scripts" / "engine_transition_differential.py").read_bytes()
+        ).hexdigest()
+        self.assertNotEqual(
+            current,
+            self.readout["rejected_experiment"]["matcher_source_sha256"],
+            "production is running the rejected damage-composition matcher",
         )
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        # ...and a POSITIVE anchor. assertNotEqual alone admits ANY matcher that
+        # is not byte-identical to one specific rejected file, which is a much
+        # weaker statement than the `git diff` it replaced. The lifecycle records
+        # the differential at the pinned certification commit; the live file must
+        # either be that, or the lifecycle must declare the divergence. Without
+        # this leg the suite passes for an arbitrarily tampered matcher.
+        lifecycle_path = REPO_ROOT / "reports" / "certification_contract_lifecycle.json"
+        # FAIL CLOSED ON A MISSING KEY. Round nine turned this guard off by
+        # DELETING source_code_identity.differential_sha256: `.get()` returned
+        # None, `if registered and ...` short-circuited, and a tampered matcher
+        # passed green. The switch lived in the same JSON the guard protects.
+        self.assertTrue(lifecycle_path.is_file(), lifecycle_path)
+        lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+        identity = lifecycle["source_code_identity"]
+        self.assertIn("differential_sha256", identity)
+        registered = identity["differential_sha256"]
+        self.assertTrue(registered)
+        if True:
+            if current != registered:
+                self.assertTrue(
+                    lifecycle.get("successor_registration_pending"),
+                    "the working matcher has diverged from the registered "
+                    "source_code_identity, so the lifecycle must record an "
+                    "explicit successor-pending divergence",
+                )
+                # Pin the divergent bytes, not just the flag -- see the same
+                # guard in tests/test_cert_historical_attestation.py.
+                pending = lifecycle.get("successor_pending_identity") or {}
+                self.assertEqual(
+                    current,
+                    pending.get("differential_sha256"),
+                    "the matcher has changed since the divergence was declared; "
+                    "re-derive and update "
+                    "successor_pending_identity.differential_sha256",
+                )
+        self.assertEqual(
+            self.readout["rejected_experiment"]["production_code_survives"], False
+        )
         self.assertEqual(
             self.readout["final_main_equivalence"]["archive_reread_delta"],
             {"diverged_to_matched": 0, "matched_to_diverged": 0},

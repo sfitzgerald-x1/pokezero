@@ -1,0 +1,43 @@
+{
+ "schema": "c64-bucket-validation-audit/1",
+ "why": "three analyses this session were invalidated by the same bug class -- a check reading the wrong field or covering part of a boundary, producing a plausible number that aggregates cannot detect. Before extending the analysis further, the standing claims were audited against that class. C42 was audited first because it is a stop-condition artifact: objectives 3 and 4 rest on it.",
+ "audit_1_the_C42_support_gap_population": {
+  "exposure": "the C37/C42 support test compares a per-SLOT HP delta, which is meaningless when the active changed. 76 of the 309 structural rows have a switch on the complaining slot, so the exposure is real and large.",
+  "method": "re-ran the support test with slot_hp_comparable guarding every verdict",
+  "result": {
+   "unreachable rows invalidated by a switch": 0,
+   "sleeptalk unreachable": 13,
+   "other unreachable": 37,
+   "total": 50
+  },
+  "verdict": "CLEAN. None of the 50 confirmed support gaps sits on a switched slot. The C42 adjudication, and with it the objective-3 and objective-4 evidence, survives the bug class unchanged.",
+  "why_it_escaped": "the support test runs on the D-with-count-evidence subset, not the full structural population. The 76 switch rows are all outside that subset. That is luck rather than design -- the test had no guard and would have been wrong if they had fallen inside."
+ },
+ "what_this_audit_does_not_cover": "the other standing claims -- the 203 count-mismatch-only rows, the 70 majority-arm disagreements from C61, and the 82 same-Pokemon-different-HP rows -- are not yet audited against this bug class. C61's population was defined with an explicit switch check so it is probably sound; the 203 came from miss-string parsing and involves no HP arithmetic, so it is probably immune. Neither has been verified and 'probably' is what produced the three bugs.",
+ "the_durable_fix_already_landed": "scripts/switch_safe_hp.py returns None rather than 0 for an uncomparable slot, so a future analysis that forgets the case raises instead of publishing. This audit used it, which is the first time the guard has been applied to an existing claim rather than a new one.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "audit_2_the_remaining_claims": {
+  "claim_203_count_mismatch_only": {
+   "verdict": "IMMUNE to the bug class",
+   "evidence": "the derivation parses miss strings and performs no HP arithmetic at all -- no pre_features, no observed HP, no subtraction across a boundary",
+   "a_number_that_needs_disambiguating": "recomputing 'majority-arm component count mismatch' gives 309, not 203. That is NOT a discrepancy: C60's 203 counts rows where exit 1 was the ONLY exit to fire across every branch, while 309 counts rows whose MAJORITY miss has a count mismatch regardless of what else fired. C60 also reported 323 rows where exit 1 fires anywhere, and 309 sits inside that. Three related numbers measuring three different things, and I am naming them because carrying '203' and '309' forward unlabelled is how the next confusion starts."
+  },
+  "claim_70_majority_arm_disagreements": {
+   "verdict": "SOUND",
+   "evidence": "the derivation contains an explicit active_changed check and reported its 37 switch rows separately rather than folding them in",
+   "off_by_one_resolved": "recomputing the comparable population gives 71 against C61's 70; C61 also reported 1 error row, and 70 + 1 = 71. Accounted for, not unexplained."
+  },
+  "claim_82_same_pokemon_different_hp": {
+   "verdict": "SOUND",
+   "evidence": "derived from the CORRECTED per-Pokemon test: it compares against end-of-boundary HP rather than the switch-line HP, and it requires the non-switched slot to agree as well"
+  }
+ },
+ "audit_status": "COMPLETE. Every standing claim about the 341-row residue has now been checked against the bug class that invalidated C58, C62 and C63.",
+ "summary": {
+  "C42 support gaps (50)": "clean, though by luck rather than a guard",
+  "count-mismatch rows": "immune, no HP arithmetic",
+  "C61 majority-arm (70)": "sound, guarded at derivation",
+  "same-Pokemon-different-HP (82)": "sound, uses the corrected field"
+ },
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
+}
