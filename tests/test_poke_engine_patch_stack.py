@@ -26,13 +26,14 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins. Updated for the 53-patch stack: crit-kill-split and
-# substitute-hp-gate touch generate_instructions.rs. choice_effects.rs moved when
-# the trick-attacker-item patch was DROPPED (review: it encoded a rule that is not
-# gen3 -- Showdown succeeds where it forced a fail). abilities.rs is touched by NO
-# new patch and its digest is unchanged from the 52-patch stack -- that is the
-# check that makes updating the others safe rather than a paste, since drift would
-# have moved it too.
+# Post-patch content pins for the 53-patch stack. Only generate_instructions.rs
+# moved: crit-kill-split and substitute-hp-gate both touch it. choice_effects.rs
+# and abilities.rs are BOTH byte-identical to the 52-patch pins -- the dropped
+# trick-attacker-item patch was the only thing that would have moved
+# choice_effects.rs, and it is gone (review: it encoded a rule that is not gen3;
+# Showdown succeeds where it forced a fail). Two unchanged digests either side of
+# one changed digest is what makes the update a measurement rather than a paste:
+# drift in the vendored source would have moved all three.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/generate_instructions.rs": "89386c7359fe54d39c17c7fae6ad4f155d0e17d7e344673ff75481f4fa200f0d",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
@@ -87,7 +88,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
 
             self.assertEqual([entry.name for entry in applied], patch_stack.patch_names())
             # Pinned by POSITION of the two zero-context patches rather than by
-            # a hardcoded stack length. The stack grows; it went 52 -> 54 in this
+            # a hardcoded stack length. The stack grows; it went 52 -> 53 in this
             # branch and the old `applied[:46]` / `applied[46:]` split silently
             # became wrong, which is how a green guard on "the new patches apply
             # cleanly to a fresh upstream sdist" went red without anyone noticing.
