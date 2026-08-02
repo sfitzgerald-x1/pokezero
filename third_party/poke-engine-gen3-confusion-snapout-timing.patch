@@ -1,2 +1,110 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
+@@ -192,6 +192,58 @@
+ /// Drop CONFUSION from `side_ref` and zero its duration counter, maintaining the
+ /// invariant the ladder relies on: `volatile_status_durations.confusion` is 0
+ /// whenever the CONFUSION volatile is absent.
++/// pokezero gen3 fidelity fix: the confusion ladder decides EXPIRY at end of
++/// turn, but Showdown does not show it there. `confusion.onBeforeMove`
++/// decrements, snaps out at zero and lets the move through, so `-end confusion`
++/// lands on the victim's NEXT MOVE ATTEMPT. Emitting the removal at end of turn
++/// published a state change one decision boundary early, and the renderer had
++/// to reject the whole belief world as attribution-unsafe rather than leak it
++/// (`confusion_expiry_timing_unobservable`).
++///
++/// Splitting the two fixes that without restructuring move generation, which is
++/// what made the next-turn placement look impossible: the PROBABILISTIC fork
++/// stays at end of turn, where both outcomes are terminal and can simply be
++/// pushed, and only the OBSERVABLE instruction moves. By the time the move
++/// phase sees it the outcome is already decided, so the snap-out is
++/// DETERMINISTIC there -- no second surviving branch, which is the constraint
++/// that ruled out forking in `generate_instructions_from_move`.
++///
++/// The pending state is carried as a NEGATIVE duration. `chance_confusion_ends`
++/// already returns 0.0 for `turns_confused <= 0`, so a pending counter cannot
++/// re-enter the ladder, and the volatile stays visible in the meantime --
++/// matching what Showdown shows between the two moments.
++/// NOT -1. The restore amount is `-CONFUSION_SNAP_OUT_PENDING`, and at -1 that
++/// is `+1` -- bit-for-bit the ladder's "the confusion check ran" marker, which
++/// `add_confusion_expiry_branches` gates on and which the renderer matches to
++/// emit `-activate`. With that collision the snap-out rendered a FABRICATED
++/// `-activate`, emitted no `-end`, and the world was ACCEPTED rather than
++/// refused: fail-open, and strictly worse than the refusal it replaced. A value
++/// whose restore cannot be produced by the ladder keeps the marker unique and
++/// makes the snap-out pair self-identifying to both.
++const CONFUSION_SNAP_OUT_PENDING: i8 = -4;
++
++fn defer_confusion_snap_out(
++    state: &mut State,
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++) {
++    let side = state.get_side(side_ref);
++    let duration = side.volatile_status_durations.confusion;
++    if duration == CONFUSION_SNAP_OUT_PENDING {
++        return;
++    }
++    instructions
++        .instruction_list
++        .push(Instruction::ChangeVolatileStatusDuration(
++            ChangeVolatileStatusDurationInstruction {
++                side_ref: *side_ref,
++                volatile_status: PokemonVolatileStatus::CONFUSION,
++                amount: CONFUSION_SNAP_OUT_PENDING - duration,
++            },
++        ));
++    side.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
++}
++
+ fn end_confusion(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
+     let side = state.get_side(side_ref);
+     let duration = side.volatile_status_durations.confusion;
+@@ -2126,7 +2178,38 @@
+         _ => {}
+     }
+ 
+-    if attacking_side
++    // pokezero gen3 fidelity fix (confusion snap-out timing): the ladder already
++    // decided this confusion ends; publish it HERE, where Showdown's
++    // `confusion.onBeforeMove` snaps out, and let the move through with no
++    // self-hit roll. Deterministic -- the fork happened at end of turn -- so
++    // `incoming_instructions` stays the single surviving branch.
++    if attacking_side.volatile_status_durations.confusion == CONFUSION_SNAP_OUT_PENDING
++        && attacking_side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::CONFUSION)
++    {
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::ChangeVolatileStatusDuration(
++                ChangeVolatileStatusDurationInstruction {
++                    side_ref: *attacking_side_ref,
++                    volatile_status: PokemonVolatileStatus::CONFUSION,
++                    amount: -CONFUSION_SNAP_OUT_PENDING,
++                },
++            ));
++        attacking_side.volatile_status_durations.confusion = 0;
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::RemoveVolatileStatus(
++                RemoveVolatileStatusInstruction {
++                    side_ref: *attacking_side_ref,
++                    volatile_status: PokemonVolatileStatus::CONFUSION,
++                },
++            ));
++        attacking_side
++            .volatile_statuses
++            .remove(&PokemonVolatileStatus::CONFUSION);
++    } else if attacking_side
+         .volatile_statuses
+         .contains(&PokemonVolatileStatus::CONFUSION)
+         && attacker_ability != Abilities::OWNTEMPO
+@@ -4466,7 +4549,7 @@
+                 expired.update_percentage(chance);
+             }
+             state.apply_instructions(&expired.instruction_list);
+-            end_confusion(state, side_ref, &mut expired);
++            defer_confusion_snap_out(state, side_ref, &mut expired);
+             state.reverse_instructions(&expired.instruction_list);
+             next.push(expired);
+         }
