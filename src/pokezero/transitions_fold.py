@@ -99,13 +99,15 @@ from .transitions import (
     TOKEN_KIND_CANT,
     TOKEN_KIND_MOVE,
     TOKEN_KIND_SWITCH,
+    OpponentMonMatchupTendency,
     OpponentMonTendency,
     OpponentWeatherReveal,
     TendencyStats,
     TransitionToken,
     _CANT_NO_CHOICE_REASONS,
+    _MatchupCounters,
     _MonCounters,
-    _PURSUIT_SCAN_BOUNDARY,
+    _is_pursuit_scan_boundary,
     _SELF_COST_FROM_TAGS,
     _SELF_FAINT_COST_MOVES,
     _StayRecord,
@@ -225,6 +227,10 @@ class FoldState:
     pursuit_intercept_predict_count: int = 0
     my_switch_turn_count: int = 0
     mon_counters: dict[tuple[str, str], _MonCounters] = field(default_factory=dict)
+    # Matchup-conditional twin, accumulated at the SAME two live hook points as the marginal
+    # counters above so the incremental and batch folds cannot drift. Per-mon totals, never
+    # per-turn, so _prune_turn_maps does not touch them.
+    matchup_counters: dict[tuple[str, str, str], _MatchupCounters] = field(default_factory=dict)
     # (side, weather id) -> OR(from_ability); the consumer's order-independent reduction.
     weather_reveals: dict[tuple[str, str], bool] = field(default_factory=dict)
 
@@ -286,7 +292,7 @@ class FoldState:
             # Pursuit ring buffer maintenance AFTER processing: boundary-type lines
             # clear it (they stop the batch backward scan); everything else — blank
             # separators included — joins the scan set.
-            if event_type in _PURSUIT_SCAN_BOUNDARY:
+            if _is_pursuit_scan_boundary(raw_line, event_type):
                 self.pursuit_buffer.clear()
             else:
                 self.pursuit_buffer.append(raw_line)
@@ -414,9 +420,10 @@ class FoldState:
         perspective = self.perspective_slot
         opponent = self.opponent_slot
 
-        if event_type in {"", "upkeep"}:
+        canonical_upkeep = raw_line == "|upkeep"
+        if event_type == "" or canonical_upkeep:
             self._close_window()
-            if event_type == "upkeep":
+            if canonical_upkeep:
                 self.completed_turns.add(self.turn_number)
             return
 
@@ -458,6 +465,11 @@ class FoldState:
             if stay is not None and not stay.moved:
                 stay.moved = True
                 self._counters_for(side, stay.species).stayed_and_attacked += 1
+                facing_stay = self.occupant.get(_other_side(side))
+                if facing_stay is not None:
+                    self._matchup_for(
+                        side, stay.species, facing_stay.species
+                    ).stayed_and_attacked += 1
             self.pending_baton_pass[side] = move_id == "batonpass"
             defender = (_slot_from_ident(parts[4]) if len(parts) > 4 else None) or _other_side(side)
             defender_stay = self.occupant.get(defender)
@@ -524,6 +536,11 @@ class FoldState:
             previous = self.occupant.get(side)
             if previous is not None and voluntary and not previous.moved:
                 self._counters_for(side, previous.species).switched_out_before_attacking += 1
+                facing = self.occupant.get(_other_side(side))
+                if facing is not None:
+                    self._matchup_for(
+                        side, previous.species, facing.species
+                    ).switched_out_before_attacking += 1
             species = _species_from_details(parts[3]) or _species_from_ident(parts[2])
             self.occupant[side] = _StayRecord(species=species)
             self.transformed[side] = False
@@ -600,13 +617,16 @@ class FoldState:
                         previous_fraction = self.hp_fraction.get(target, 1.0)
                         delta = previous_fraction - new_fraction
                         if delta > 0:
-                            current.damage_fraction += delta
                             if is_confusion_selfhit:
                                 current.confusion_selfhit_fraction += delta
                                 current.confusion_selfhit = True
-                        current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = False
+                            else:
+                                current.damage_fraction += delta
+                                current.defender_hit_by_move = True
+                                current.defender_last_damage_by_move = True
                 else:
-                    current.defender_hit_by_move = False
+                    current.defender_last_damage_by_move = False
             if (
                 current is not None
                 and target == current.side
@@ -657,7 +677,11 @@ class FoldState:
             self.hp_fraction[target] = 0.0
             self.pending_faint_replacement[target] = True
             self.fainted_turns.add(self.turn_number)
-            if current is not None and target == current.defender_side and current.defender_hit_by_move:
+            if (
+                current is not None
+                and target == current.defender_side
+                and current.defender_last_damage_by_move
+            ):
                 current.ko = True
 
         elif event_type == "-status" and target in {"p1", "p2"}:
@@ -771,6 +795,9 @@ class FoldState:
     def _counters_for(self, side: str, species: str) -> _MonCounters:
         return self.mon_counters.setdefault((side, species), _MonCounters())
 
+    def _matchup_for(self, side: str, species: str, opposing: str) -> _MatchupCounters:
+        return self.matchup_counters.setdefault((side, species, opposing), _MatchupCounters())
+
     def _open_window(self, window: _Window) -> None:
         self.pending_confusion_selfhit_slot = None
         self._close_window()
@@ -869,6 +896,17 @@ class FoldState:
             for (side, species), counters in sorted(self.mon_counters.items())
             if side == opponent
         )
+        mon_matchups = tuple(
+            OpponentMonMatchupTendency(
+                slot=side,
+                species=species,
+                opposing_species=facing,
+                switched_out_before_attacking=counters.switched_out_before_attacking,
+                stayed_and_attacked=counters.stayed_and_attacked,
+            )
+            for (side, species, facing), counters in sorted(self.matchup_counters.items())
+            if side == opponent
+        )
         reveals_by_weather = {
             weather: from_ability
             for (side, weather), from_ability in self.weather_reveals.items()
@@ -888,6 +926,7 @@ class FoldState:
             blocked_on_our_attack_count=blocked,
             pursuit_intercept_predict_count=pursuit,
             my_switch_turn_count=my_switches,
+            opponent_mon_matchups=mon_matchups,
         )
 
     # ------------------------------------------------------------------ merge staging
@@ -1076,6 +1115,13 @@ class FoldState:
             )
             for key, value in self.mon_counters.items()
         }
+        clone.matchup_counters = {
+            key: _MatchupCounters(
+                switched_out_before_attacking=value.switched_out_before_attacking,
+                stayed_and_attacked=value.stayed_and_attacked,
+            )
+            for key, value in self.matchup_counters.items()
+        }
         clone.weather_reveals = dict(self.weather_reveals)
         clone.turn_start_occupants = {
             turn: dict(occupants) for turn, occupants in self.turn_start_occupants.items()
@@ -1140,6 +1186,13 @@ class FoldState:
             "blocked_on_our_attack_count": self.blocked_on_our_attack_count,
             "pursuit_intercept_predict_count": self.pursuit_intercept_predict_count,
             "my_switch_turn_count": self.my_switch_turn_count,
+            "matchup_counters": {
+                f"{side}|{species}|{facing}": [
+                    counters.switched_out_before_attacking,
+                    counters.stayed_and_attacked,
+                ]
+                for (side, species, facing), counters in sorted(self.matchup_counters.items())
+            },
             "mon_counters": {
                 f"{side}|{species}": [
                     counters.switched_out_before_attacking,
@@ -1235,6 +1288,13 @@ class FoldState:
         state.blocked_on_our_attack_count = int(payload["blocked_on_our_attack_count"])
         state.pursuit_intercept_predict_count = int(payload["pursuit_intercept_predict_count"])
         state.my_switch_turn_count = int(payload["my_switch_turn_count"])
+        state.matchup_counters = {}
+        for key, values in payload.get("matchup_counters", {}).items():
+            side, species, facing = key.split("|", 2)
+            state.matchup_counters[(side, species, facing)] = _MatchupCounters(
+                switched_out_before_attacking=int(values[0]),
+                stayed_and_attacked=int(values[1]),
+            )
         state.mon_counters = {}
         for key, values in payload["mon_counters"].items():
             side, species = key.split("|", 1)
@@ -1430,6 +1490,10 @@ def _window_to_payload(window: _Window) -> dict:
     if window.confusion_selfhit:
         payload["confusion_selfhit"] = True
         payload["confusion_selfhit_fraction"] = window.confusion_selfhit_fraction
+    # Old payloads only had the historical hit bit. Persist the distinct KO
+    # guard only where it differs, preserving established clean payload bytes.
+    if window.defender_hit_by_move and not window.defender_last_damage_by_move:
+        payload["defender_last_damage_by_move"] = False
     return payload
 
 
@@ -1462,6 +1526,9 @@ def _window_from_payload(payload: Mapping) -> _Window:
         effectiveness=str(payload["effectiveness"]),
         side_effect=str(payload["side_effect"]),
         defender_hit_by_move=bool(payload["defender_hit_by_move"]),
+        defender_last_damage_by_move=bool(
+            payload.get("defender_last_damage_by_move", payload["defender_hit_by_move"])
+        ),
         voluntary_switch=bool(payload["voluntary_switch"]),
         locked_continuation=bool(payload["locked_continuation"]),
         switch_reason=payload["switch_reason"],

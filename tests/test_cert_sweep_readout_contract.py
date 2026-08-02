@@ -15,6 +15,39 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
 import cert_sweep_readout as readout  # noqa: E402
+from cert_execution_manifest import (  # noqa: E402
+    EMITTABLE_DOCUMENTED_FAMILIES,
+    EMITTABLE_LIMIT_FAMILIES,
+    REGISTERED_ZERO_EXCLUSION_COUNTERS,
+)
+
+
+def _complete_family_rate_table() -> dict:
+    documented = {
+        family: {"wilson95_rate": [0.0, 1.0]}
+        for family in sorted(
+            EMITTABLE_DOCUMENTED_FAMILIES
+            | EMITTABLE_LIMIT_FAMILIES
+            - {"limit:world_substitute_health_unknown"}
+        )
+    }
+    documented["limit:world_substitute_health_unknown"] = {
+        "upper_full_round_rate": 0.001,
+        "upper_rate_basis": "pre_registered_risk_budget",
+        "risk_budget_rationale": "fixture risk budget",
+    }
+    return {
+        "calibration_boundaries": 1000,
+        "documented_families": documented,
+        "new_mechanisms_post_fix": {
+            counter: {
+                "predicted_next": 0,
+                "classifier_outcome": "UNATTRIBUTED",
+                "exclusion_counter": counter,
+            }
+            for counter in sorted(REGISTERED_ZERO_EXCLUSION_COUNTERS)
+        },
+    }
 
 
 class CertificationContractTests(unittest.TestCase):
@@ -110,6 +143,7 @@ class CertificationContractTests(unittest.TestCase):
             "certification_gates": {
                 "expected_shards": 2,
                 "expected_games": 2,
+                "minimum_boundaries_full_round": 200,
                 "seed_blocks": [
                     {"start": 1000, "games": 1},
                     {"start": 2000, "games": 1},
@@ -128,10 +162,7 @@ class CertificationContractTests(unittest.TestCase):
                     ROOT / "scripts" / "cert_execution_manifest.py"
                 ),
             },
-            "pre_registered_family_rate_table": {
-                "documented_families": {},
-                "new_mechanisms_post_fix": {},
-            },
+            "pre_registered_family_rate_table": _complete_family_rate_table(),
             "predicted_class_rates_10k": {},
         }
 
@@ -271,6 +302,24 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(payload["enforcement_status"], "enforced")
         self.assertEqual(payload["contract_evidence"]["distinct_seed_total"], 2)
         self.assertEqual(payload["skip_counters"]["skip:world_unsupported:test_fixture"], 4)
+
+    def test_registered_full_round_minimum_is_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract["certification_gates"]["minimum_boundaries_full_round"] = 201
+            payload = self._run(root, contract=contract)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertIn(
+            "full-round boundaries 200 are below registered minimum 201",
+            payload["gate_failures"],
+        )
+        self.assertEqual(
+            payload["contract_evidence"]["observed_boundaries_full_round"], 200
+        )
 
     def test_failure_writes_json_and_returns_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -467,7 +516,12 @@ class CertificationContractTests(unittest.TestCase):
                 "prediction_interval_rate": [0.01, 0.03],
             }
         }
-        failures, _ = readout._family_rate_gates({}, contract, boundaries_measured=100)
+        failures, _ = readout._family_rate_gates(
+            {},
+            contract,
+            boundaries_measured=100,
+            boundaries_full_round=100,
+        )
         self.assertEqual(
             failures,
             ["registered family 'I1_cap_state_shape' rate 0 is below pre-registered prediction lower rate 0.01"],
@@ -484,6 +538,60 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(
             failures,
             ["registered family 'I1_cap_state_shape' rate 0.04 exceeds registered upper rate 0.03"],
+        )
+
+    def test_counter_backed_limit_over_upper_bound_fails_full_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            for index, seed in enumerate((1000, 2000)):
+                self._shard(paths[index], seed)
+                shard = json.loads(paths[index].read_text(encoding="utf-8"))
+                shard["counters"]["limit:world_substitute_health_unknown"] = 1
+                paths[index].write_text(json.dumps(shard), encoding="utf-8")
+            contract = self._contract()
+            contract["pre_registered_family_rate_table"]["documented_families"][
+                "limit:world_substitute_health_unknown"
+            ] = {
+                "upper_full_round_rate": 0.001,
+                "upper_rate_basis": "pre_registered_risk_budget",
+                "risk_budget_rationale": "one per thousand full rounds",
+            }
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            for entry in manifest["shards"]:
+                checkpoint_path = Path(entry["checkpoint"]["path"])
+                record = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                record["counters"]["limit:world_substitute_health_unknown"] = 1
+                checkpoint_path.write_text(
+                    json.dumps(record) + "\n", encoding="utf-8"
+                )
+                entry["checkpoint"]["sha256"] = readout._sha256(checkpoint_path)
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertEqual(
+            payload["comparison_limit_counters"],
+            {"limit:world_substitute_health_unknown": 2},
+        )
+        evidence = payload["family_rate_evidence"]["families"][
+            "limit:world_substitute_health_unknown"
+        ]
+        self.assertEqual(evidence["observed"], 2)
+        self.assertEqual(evidence["divergence_row_observed"], 0)
+        self.assertEqual(evidence["aggregate_counter_observed"], 2)
+        self.assertEqual(
+            evidence["upper_rate_basis"], "pre_registered_risk_budget"
+        )
+        self.assertEqual(
+            evidence["observed_rate_denominator"], "boundaries_full_round"
+        )
+        self.assertEqual(
+            payload["gate_failures"],
+            [
+                "registered family 'limit:world_substitute_health_unknown' rate "
+                "0.01 exceeds registered upper rate 0.001"
+            ],
         )
 
     def test_checkpoint_requires_every_game_record_and_complete_report_provenance(self) -> None:
@@ -701,7 +809,12 @@ class CertificationContractTests(unittest.TestCase):
         contract["pre_registered_family_rate_table"]["new_mechanisms_post_fix"] = {
             "typed_hidden_power_thaw": {"predicted_next": 0}
         }
-        failures, _ = readout._family_rate_gates({}, contract, boundaries_measured=100)
+        failures, _ = readout._family_rate_gates(
+            {},
+            contract,
+            boundaries_measured=100,
+            boundaries_full_round=100,
+        )
         self.assertEqual(
             failures,
             ["post-fix mechanism 'typed_hidden_power_thaw' has no emittable classifier exclusion counter"],
@@ -717,7 +830,10 @@ class CertificationContractTests(unittest.TestCase):
             }
         }
         failures, _ = readout._family_rate_gates(
-            {}, contract, boundaries_measured=100,
+            {},
+            contract,
+            boundaries_measured=100,
+            boundaries_full_round=100,
             exclusion_counts={"recharge_turn_residual_gap": 1},
         )
         self.assertEqual(

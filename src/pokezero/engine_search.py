@@ -97,6 +97,34 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+def _root_toxic_zero_after_upkeep_attestation(replay: object) -> dict[str, dict[str, bool | None]]:
+    """Serialize only exact proof booleans for the Rust root handoff.
+
+    The leaf has no replay snapshot to inspect.  Preserve malformed values as
+    JSON ``null`` rather than coercing them with ``bool(...)`` so its decoder
+    can fail closed before creating a Toxic re-entry latch.
+    """
+
+    def exact_bool_field(name: str, slot: str) -> bool | None:
+        values = getattr(replay, name, None)
+        value = values.get(slot) if isinstance(values, Mapping) else None
+        return value if type(value) is bool else None
+
+    post_upkeep_window = getattr(replay, "post_upkeep_window", None)
+    exact_post_upkeep_window = (
+        post_upkeep_window if type(post_upkeep_window) is bool else None
+    )
+    return {
+        slot: {
+            "proof": exact_bool_field("toxic_stage_zero_after_upkeep", slot),
+            "pending": exact_bool_field("toxic_faint_replacement_pending", slot),
+            "invalid": exact_bool_field("toxic_faint_replacement_invalid", slot),
+            "post_upkeep_window": exact_post_upkeep_window,
+        }
+        for slot in ("p1", "p2")
+    }
+
+
 def _checkpoint_feature_masks_payload(model_config: Any) -> dict[str, Any]:
     """Encoder-table mask payload derived from checkpoint provenance."""
 
@@ -296,6 +324,16 @@ class EngineMctsConfig:
     # Self-side model priors in selection (the opponent side stays uniform in
     # this integration; docs/crate_search_design.md "Model priors").
     model_priors: bool = True
+    # Seed the OPPONENT seat's PUCT priors from the checkpoint's opponent
+    # action head instead of leaving them uniform. Default OFF: flag-off is
+    # the uniform-opponent search every recorded result was produced under.
+    #
+    # The opponent head has always been exported and batched (export_model.py
+    # OUTPUT_NAMES) and was discarded in the crate; the uniform-opponent design
+    # is a known modelling gap that findings 13.4 cleared of causing the SEAT
+    # RESIDUAL but did not clear as harmless against an EXTERNAL opponent,
+    # whose non-uniform policy is exactly what uniform play mismodels.
+    use_opponent_priors: bool = False
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -437,6 +475,7 @@ class EngineMctsStats:
     products_wall_seconds: float = 0.0
     row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
+    attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
@@ -486,6 +525,7 @@ class EngineMctsStats:
             "products_wall_seconds": self.products_wall_seconds,
             "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
+            "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
@@ -517,6 +557,61 @@ class EngineMctsStats:
         if self.decisions:
             payload["wall_per_decision"] = self.decision_wall_seconds / self.decisions
         return payload
+
+
+def opponent_request_order(context, party_species) -> list[str] | None:
+    """The opponent's Showdown request order at this decision, or None.
+
+    Showdown keeps a player's active at request slot 0 and swaps the incoming
+    mon into slot 0 on every switch-in (`sim/battle-actions.ts` `switchIn`, an
+    unconditional slot swap that also fires for forced replacements and for
+    `dragIn`). The resulting order is the label space of the model's opponent
+    action head, so the crate needs it to gather opponent priors onto the right
+    arms -- and the crate cannot derive it, having no pre-root protocol lines.
+
+    This REUSES `determinization._public_opponent_team_index_walk`, which
+    already maintains exactly this permutation as `current_order` while
+    decoding recorded opponent switch actions. Reuse is the point: five
+    hand-rolled reconstructions were each wrong, and the fifth -- diffing the
+    opponent's public active across OUR decision rounds -- was wrong on 170 of
+    811 decisions across 12 live games because the opponent also acts at rounds
+    we are not requested at (a forced replacement after a faint), which that
+    diff cannot see. The walk consumes the opponent's trajectory steps directly
+    and reconciles them against the next observed active, so it sees those
+    rounds; it is also the code that already handles Roar/Whirlwind drags and
+    same-chunk faint replacements.
+
+    Fails closed rather than guessing: the walk returns None when the public
+    data is inconsistent, and sets `active_position` to None when it loses
+    track of the permutation. Either means no order. A wrong order silently
+    permutes opponent switch priors, which is strictly worse than the crate's
+    documented one-swap fallback.
+    """
+    from .determinization import _public_opponent_team_index_walk
+
+    party = [normalize_id(str(name)) for name in party_species]
+    if not party:
+        return None
+    if len(set(party)) != len(party):
+        # Slot swaps are resolved by species name downstream, so a duplicated
+        # species makes the mapping ambiguous.
+        return None
+    opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
+    try:
+        walk = _public_opponent_team_index_walk(
+            context, opponent_slot=opponent_slot, team_size=len(party)
+        )
+    except Exception:  # noqa: BLE001 - never break search over telemetry
+        return None
+    if walk is None:
+        return None
+    _constraints, current_order, active_position = walk
+    if active_position is None:
+        # The walk stopped trusting its own permutation.
+        return None
+    if sorted(current_order) != list(range(len(party))):
+        return None
+    return [party[index] for index in current_order]
 
 
 class EngineMctsPolicy:
@@ -1186,13 +1281,20 @@ class EngineMctsPolicy:
                     config.deep_ko_split,
                     config.model_priors,
                 ]
-                if early_stop_min_sims:
+                if early_stop_min_sims or config.use_opponent_priors:
                     # Preserve the old native call contract while the feature
                     # is disabled, so a stale image cannot break default
                     # full-budget search merely because Python was updated.
                     search_args.extend(
                         [early_stop_min_sims, record["side_key"] == "side_one"]
                     )
+                if config.use_opponent_priors:
+                    # Positional, and it follows the early-stop pair in the
+                    # native signature -- hence the combined guard above: the
+                    # pair must be present for this to land in the right slot.
+                    # Appended ONLY when set, so a flag-off run makes exactly
+                    # the call it always did.
+                    search_args.append(True)
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
@@ -1203,6 +1305,12 @@ class EngineMctsPolicy:
                     if early_stop_min_sims and isinstance(error, TypeError)
                     else detail
                 )
+                # Unsafe renderer branches abort the native world before a
+                # chance outcome can be silently omitted from its expectation.
+                # The native report is unavailable on that error path, so
+                # retain the same observability counter at the fallback seam.
+                if "attribution-unsafe renderer branch rejected before" in reason:
+                    self.stats.attribution_unsafe_renders += 1
                 self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -1238,6 +1346,9 @@ class EngineMctsPolicy:
             self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
             self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.attribution_unsafe_renders += int(
+                report.get("attribution_unsafe_renders") or 0
+            )
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report
 
@@ -1247,6 +1358,21 @@ class EngineMctsPolicy:
                     "p1": list(world.party_species["p1"]),
                     "p2": list(world.party_species["p2"]),
                     "turn": turn,
+                    # Construction-only provenance for a root Toxic zero.
+                    # The leaf context consumes this outside model metadata.
+                    "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
+                        replay
+                    ),
+                    **(
+                        {"opponent_request_order": opponent_order}
+                        if (opponent_order := opponent_request_order(
+                            context,
+                            world.party_species[
+                                "p2" if context.player_id == "p1" else "p1"
+                            ],
+                        ))
+                        else {}
+                    ),
                 }
             )
             world_seed = rng.getrandbits(63)
@@ -1370,7 +1496,19 @@ class EngineMctsPolicy:
     def _recharging_slots(self, context: PolicyContext) -> tuple[str, ...]:
         """Slots publicly forced to recharge THIS turn (Hyper Beam landed last round).
 
-        Turn-exact signal: the round-indexed public action record (not the
+        PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
+        observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
+        the ``|-mustrecharge|SLOT`` line the sim emits when a recharge move LANDS, which is
+        strictly better evidence than the reconstruction below: a missed Hyper Beam never emits
+        it, the line names its own actor, and it cannot scroll out of a rolling window. Taking it
+        here is what makes the world and the observation ONE PARSER TRUTH with TWO CONSUMERS
+        rather than two derivations that can disagree.
+
+        The reconstruction below remains the fallback for callers whose observation metadata
+        predates the pack (older cached rollouts, hand-built contexts). It is strictly weaker,
+        never stronger, so preferring the tracker can only remove wrong locks, never add one.
+
+        FALLBACK — turn-exact signal: the round-indexed public action record (not the
         rolling event window) must show the opponent's action in the
         immediately-preceding round was a recharge move, and the rolling
         window must not carry a miss marker for it (a missed Hyper Beam does
@@ -1379,6 +1517,15 @@ class EngineMctsPolicy:
         """
 
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        observation_metadata = getattr(context.observation, "metadata", None)
+        if isinstance(observation_metadata, Mapping):
+            tracked = observation_metadata.get("opponent_must_recharge")
+            if tracked is True:
+                return (opponent_slot,)
+            if tracked is False:
+                # An explicit False from the tracker is a public PROOF of no lock, not an absent
+                # signal — do not let the weaker fallback manufacture one behind it.
+                return ()
         trajectory = getattr(context, "trajectory", None)
         round_index = getattr(context, "decision_round_index", None)
         if trajectory is None or not isinstance(round_index, int):
@@ -1925,6 +2072,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "batch": args.batch,
             "depth": args.depth,
             "model_priors": config.model_priors,
+            "use_opponent_priors": config.use_opponent_priors,
             "early_stop": config.early_stop,
             "early_stop_min_sims": config.early_stop_min_sims,
         },

@@ -14,13 +14,14 @@ possible shape for a measurement that gates an acceptance criterion.
 
 Two independent checks, because they catch different halves:
 
-  FINGERPRINT (content).  A sha256 over the shared patch list, every patch file
-  it names, crate Rust sources, Cargo.toml/Cargo.lock files, build.rs scripts,
-  and pyproject.toml feature configuration for both native trees — i.e. the
-  checked build inputs, excluding generated target output. The builders stamp
-  it into the venv at build time; a mismatch means the installed artifacts were
-  built from different inputs than the ones checked out.
-  Exact, and independent of timestamps.
+  FINGERPRINT (content).  A sha256 over the pinned upstream sdist digest, shared
+  patch list, every patch file it names, and all tracked search-crate Rust,
+  Cargo, build-script, and pyproject inputs. The gitignored vendored tree is a
+  verified derivation of the pinned sdist plus those ordered patches, so a clean
+  checkout computes the same identity as a post-vendoring build. The builders
+  stamp it into the venv at build time; a mismatch means the installed
+  artifacts were built from different inputs than the ones checked out.
+  Exact, reproducible from tracked bytes, and independent of timestamps.
 
   The stamp must be written at the END of a FULL rebuild (wheel AND crate), which
   is what the sequence below does — a stamp written after rebuilding only one of
@@ -49,6 +50,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCH_LIST = REPO_ROOT / "third_party" / "poke-engine-gen3-patches.txt"
+BASE_SOURCE = REPO_ROOT / "third_party" / "poke-engine-base-source.json"
 VENDORED = REPO_ROOT / "third_party" / "poke-engine-src"
 # The crate's OWN sources are build inputs too. Without them a .so built before
 # an events.rs edit passes the content check whenever timestamps are in the
@@ -92,13 +94,13 @@ def crate_sources() -> list[Path]:
 
 
 def cargo_inputs() -> list[Path]:
-    """Every Cargo manifest/lock compiled by either native consumer tree."""
+    """Tracked Cargo manifests/locks compiled by the search crate."""
 
     return _checked_tree_inputs({"Cargo.toml", "Cargo.lock"})
 
 
 def build_metadata_inputs() -> list[Path]:
-    """Checked build scripts and Python/maturin feature configuration."""
+    """Tracked build scripts and Python/maturin feature configuration."""
 
     return _checked_tree_inputs({"build.rs", "pyproject.toml"})
 
@@ -107,7 +109,7 @@ def _checked_tree_inputs(names: set[str]) -> list[Path]:
     """Find checked build inputs while excluding generated and repository metadata."""
 
     paths: set[Path] = set()
-    for root in (VENDORED, CRATE_ROOT):
+    for root in (CRATE_ROOT,):
         if not root.exists():
             continue
         for path in root.rglob("*"):
@@ -125,6 +127,7 @@ def build_inputs() -> list[Path]:
 
     return (
         list(patch_files())
+        + [BASE_SOURCE]
         + crate_sources()
         + cargo_inputs()
         + build_metadata_inputs()
@@ -141,6 +144,10 @@ def _sha256(path: Path) -> str:
 
 def compute_fingerprint() -> dict[str, Any]:
     digest = hashlib.sha256()
+    if not BASE_SOURCE.exists():
+        raise FileNotFoundError(f"missing upstream source pin: {BASE_SOURCE}")
+    digest.update(BASE_SOURCE.name.encode())
+    digest.update(hashlib.sha256(BASE_SOURCE.read_bytes()).digest())
     digest.update(PATCH_LIST.read_bytes())
     entries = []
     for path in patch_files():
@@ -151,9 +158,9 @@ def compute_fingerprint() -> dict[str, Any]:
         digest.update(hashlib.sha256(blob).digest())
         entries.append(path.name)
     # Native source and dependency-resolution inputs are hashed by repo-relative
-    # path so the digest is location independent. Vendored Cargo files appear
-    # only after setup, which is intentional: a certification build must attest
-    # the actual engine source tree it compiled.
+    # path so the digest is location independent. The gitignored vendored engine
+    # tree is a deterministic derivation of BASE_SOURCE plus the ordered patch
+    # set; both builders verify the upstream archive before applying patches.
     crate = crate_sources()
     cargo = cargo_inputs()
     build_metadata = build_metadata_inputs()
@@ -165,6 +172,7 @@ def compute_fingerprint() -> dict[str, Any]:
         "fingerprint": digest.hexdigest(),
         "patches": entries,
         "count": len(entries),
+        "base_source": json.loads(BASE_SOURCE.read_text(encoding="utf-8")),
         "crate_sources": len(crate),
         "cargo_inputs": [str(path.relative_to(REPO_ROOT)) for path in cargo],
         "build_metadata_inputs": [

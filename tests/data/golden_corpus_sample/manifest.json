@@ -36,9 +36,9 @@
       "sha256": "0bc0e3e798c117c80468c6dec219e6f1ddd10819ed9dd624a293b9c0b27042c3"
     },
     "fold.jsonl.gz": {
-      "bytes": 3408,
-      "sha256": "967d0f11306b1766efc498c414ff3ba4f1cdc0247d523d25c63bc340d142e167",
-      "uncompressed_bytes": 51562
+      "bytes": 3444,
+      "sha256": "f476791dea47cab47474c0f041e9349c93d923614f53139fc2893fc3335c1882",
+      "uncompressed_bytes": 51913
     },
     "rows.jsonl": {
       "bytes": 102578,

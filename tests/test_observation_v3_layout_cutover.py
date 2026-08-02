@@ -14,6 +14,7 @@ from pokezero.showdown import (
     NUMERIC_SELF_SCREENS,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TT_ABS_TURN,
+    NUMERIC_TT_CONFUSION_SELFHIT,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
     OPPONENT_POKEMON_TOKEN_OFFSET,
@@ -28,6 +29,7 @@ from pokezero.showdown import (
     V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
     V3_REPLAY_OBSERVATION_SPEC,
+    V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     _project_v3_numeric_rows,
     numeric_index_if_present_for_schema,
     numeric_index_for_schema,
@@ -205,10 +207,25 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
                 V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
             )
         )
-        with self.assertRaisesRegex(ValueError, "not part of v3"):
+        # A v4-only column asked about under v3 is ABSENT, not invalid: the pack columns exist
+        # in a later schema's writer surface, so the present-or-None accessor answers None (the
+        # same answer it gives for a dropped column) while the strict accessor still raises.
+        self.assertIsNone(
             numeric_index_if_present_for_schema(
                 V3_REPLAY_OBSERVATION_SPEC.schema_version,
                 V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
+        # Past the END of every writer surface is still a hard error on both accessors.
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
             )
 
     def test_legacy_v2_2_surface_is_fully_accounted_for(self) -> None:
@@ -256,7 +273,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             1.0,
         )
 
-    def test_second_sub_block_confusion_rewrite_is_declared_and_projected(self) -> None:
+    def test_second_sub_block_confusion_marker_is_declared_and_projected(self) -> None:
         state = self._state()
         token_index, token = next(
             (index, token)
@@ -265,7 +282,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         )
         rewritten_second = replace(
             token.second,
-            damage_fraction=0.25,
+            damage_fraction=0.15,
             confusion_selfhit=True,
             confusion_selfhit_fraction=0.10,
         )
@@ -281,10 +298,15 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
         v2_2 = self._encode(V2_2_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
         v3 = self._encode(V3_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
         row = TRANSITION_TOKEN_OFFSET + token_index
+        self.assertEqual(rewritten_second.damage_fraction, 0.15)
         self.assertEqual(v2_2.numeric_features[row][NUMERIC_TM2_DAMAGE_FRACTION], 0.25)
         self.assertEqual(
             v3.numeric_features[row][v3_numeric_index(NUMERIC_TM2_DAMAGE_FRACTION)],
             0.15,
+        )
+        self.assertEqual(
+            v3.numeric_features[row][v3_numeric_index(NUMERIC_TT_CONFUSION_SELFHIT)],
+            1.0,
         )
 
     def test_v3_refuses_a_noncanonical_public_census(self) -> None:

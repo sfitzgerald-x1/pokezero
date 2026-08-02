@@ -158,6 +158,7 @@ def gen3_randbat_category_strings(
     showdown_root: str | Path,
     *,
     include_turn_merged: bool = False,
+    include_feature_pack_v4: bool = False,
     extra_moves: Iterable[str] = (),
 ) -> dict[str, list[str]]:
     """Enumerate the categorical strings the encoder emits for the closed Gen 3 universe.
@@ -296,6 +297,35 @@ def gen3_randbat_category_strings(
     # Active-mon volatile statuses the encoder surfaces (volatile:<id>).
     groups["volatiles"] = [f"volatile:{name}" for name in GEN3_VOLATILES]
 
+    if include_feature_pack_v4:
+        # Spec v4 (k0 feature pack) categorical families. OPT-IN for the same reason
+        # ``include_turn_merged`` is: extra rows change the vocabulary size and therefore every
+        # embedding table's shape, so a v2.2/v3 checkpoint must keep building the vocabulary it
+        # was trained against. Only a v4-schema config sets this.
+        #
+        # Cheap by design — no per-move rows. Pack A2 deliberately REUSES the existing
+        # ``move:<id>`` family for the last-executed-move identity (shared embedding with the same
+        # move on an action token; the token-type embedding supplies the context), so all it needs
+        # is a sentinel.
+        feature_pack: list[str] = [
+            # A2's switch sentinel: "this mon came in this turn, so lastMove is genuinely null" —
+            # a positive fact (Encore fails against it), distinct from the padding "never moved".
+            "lastmove:switch",
+            # …and the Baton-Pass arrival's own sentinel. A different arrival: boosts and the
+            # transferable volatiles came with it, and the explicit switch-reason recording that
+            # lives only in the history region, which v4 does not carry.
+            "lastmove:batonpass",
+            # A1: forced recharge, injected into the ACTIVE mon's volatile bag at encode time
+            # from the parser tracker. NOT in TRACKED_VOLATILES — the sim emits a bespoke
+            # ``|-mustrecharge|`` line, never a ``|-start|`` the generic tracker could catch —
+            # so the row is enumerated here rather than falling out of GEN3_VOLATILES.
+            "volatile:mustrecharge",
+            # A4: the ability currently BORROWED via Trace, cleared on switch-out. A separate
+            # family from belief:possible_ability, which is the persistent set-identity channel.
+            *[f"ability:{_normalize_identifier(ability)}" for ability in entities["abilities"]],
+        ]
+        groups["feature_pack_v4"] = feature_pack
+
     return groups
 
 
@@ -349,6 +379,7 @@ def gen3_category_string_aliases(
     showdown_root: str | Path,
     *,
     include_turn_merged: bool = False,
+    include_feature_pack_v4: bool = False,
     extra_moves: Iterable[str] = (),
 ) -> dict[str, str]:
     """Category string aliases onto existing base rows."""
@@ -385,12 +416,14 @@ def _cached_category_vocabulary(
     oov_buckets: int,
     include_turn_merged: bool,
     extra_moves: tuple[str, ...],
+    include_feature_pack_v4: bool = False,
 ) -> CategoryVocabulary:
     strings = [
         s
         for group in gen3_randbat_category_strings(
             showdown_root_key,
             include_turn_merged=include_turn_merged,
+            include_feature_pack_v4=include_feature_pack_v4,
             extra_moves=extra_moves,
         ).values()
         for s in group
@@ -398,6 +431,7 @@ def _cached_category_vocabulary(
     aliases = gen3_category_string_aliases(
         showdown_root_key,
         include_turn_merged=include_turn_merged,
+        include_feature_pack_v4=include_feature_pack_v4,
         extra_moves=extra_moves,
     )
     return build_category_vocabulary(strings, oov_buckets=oov_buckets, aliases=aliases)
@@ -408,6 +442,7 @@ def gen3_category_vocabulary(
     *,
     oov_buckets: int = 16,
     include_turn_merged: bool = False,
+    include_feature_pack_v4: bool = False,
     extra_moves: Iterable[str] = (),
 ) -> CategoryVocabulary:
     """Build (cached) the string->row CategoryVocabulary for the closed Gen 3 randbat universe.
@@ -416,7 +451,9 @@ def gen3_category_vocabulary(
     the model's embedding size/config, so rows align deterministically from the closed universe.
     ``include_turn_merged`` appends the turn-merged transition families (v2.1 batch 3) —
     opt-in because it changes the vocabulary size and therefore the embedding-table shape;
-    only turn-merged-mode configs may set it.
+    only turn-merged-mode configs may set it. ``include_feature_pack_v4`` is the same kind of
+    latch for the v4 k0 feature pack's two categorical families (the last-executed-move switch
+    sentinel and the traced-ability family); only a v4-schema config may set it.
     """
     normalized_extra_moves = tuple(
         sorted({_normalize_identifier(move) for move in extra_moves if _normalize_identifier(move)})
@@ -426,6 +463,7 @@ def gen3_category_vocabulary(
         oov_buckets,
         include_turn_merged,
         normalized_extra_moves,
+        include_feature_pack_v4,
     )
 
 

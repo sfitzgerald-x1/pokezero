@@ -64,7 +64,14 @@ class BeliefSidecarState:
             connection_state = self.connection_state
             connection_detail = self.connection_detail
             perspective = self.perspective
-        replay = parse_showdown_replay(lines, battle_id=self.room_id)
+        # A sidecar may attach or reconnect after battle start, and it deliberately strips
+        # private requests. It therefore cannot attest prefix completeness or whether /100 is
+        # percentage-form versus a real 100-HP Pokemon; keep Toxic provenance fail-closed.
+        replay = parse_showdown_replay(
+            lines,
+            battle_id=self.room_id,
+            complete_prefix=False,
+        )
         engine = PublicBattleBeliefEngine.from_events(
             replay.public_events,
             format_id=self.format_id,

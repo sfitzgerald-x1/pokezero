@@ -42,8 +42,8 @@ use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::tree::{
-    apply_self_priors, finalize, multiply_report_json, traverse, BranchSeam, LeafPrice,
-    root_visit_lock, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
+    apply_self_priors, finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam,
+    LeafPrice, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -235,6 +235,14 @@ pub struct LeafBatchOutput {
     /// Flat [n, action_count] priors: softmax over logits, masked to the
     /// caller's legal actions when a mask is supplied.
     pub priors: Vec<f32>,
+    /// Flat [n, action_count] softmax of the OPPONENT action head.
+    ///
+    /// Never masked by the caller's `legal_mask`: that mask describes the
+    /// ACTING seat's legal actions, and applying it here would zero arms the
+    /// opponent owns. The opponent-side gather renormalizes over the
+    /// opponent's own mapped options instead, which is mathematically the
+    /// masked softmax restricted to those actions.
+    pub opponent_priors: Vec<f32>,
     pub action_count: usize,
 }
 
@@ -271,8 +279,9 @@ impl TorchScriptLeafEval {
         self.spec
     }
 
-    /// Run the traced forward on `obs`, returning (policy_logits, value) on CPU.
-    fn forward(&self, obs: &ObsBatch) -> PyResult<(Tensor, Tensor)> {
+    /// Run the traced forward on `obs`, returning
+    /// (policy_logits, value, opponent_action_logits) on CPU.
+    fn forward(&self, obs: &ObsBatch) -> PyResult<(Tensor, Tensor, Tensor)> {
         let outputs = tch::no_grad(|| {
             self.module.forward_is(&[
                 IValue::Tensor(obs.categorical_ids.to_device(self.device)),
@@ -295,7 +304,17 @@ impl TorchScriptLeafEval {
             )));
         }
         // Field order matches scripts/export_model.py OUTPUT_NAMES.
-        let _opponent = outputs.pop();
+        // The opponent head is policy over the OPPONENT seat's own actions. It
+        // was discarded for as long as the crate ran uniform opponent priors;
+        // it is now returned so the opponent-side gather can consume it.
+        let opponent = match outputs.pop() {
+            Some(IValue::Tensor(tensor)) => tensor,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "opponent_action_logits output is not a tensor",
+                ))
+            }
+        };
         let value = match outputs.pop() {
             Some(IValue::Tensor(tensor)) => tensor,
             _ => return Err(PyValueError::new_err("value output is not a tensor")),
@@ -311,13 +330,14 @@ impl TorchScriptLeafEval {
         Ok((
             policy_logits.to_device(Device::Cpu).to_kind(Kind::Float),
             value.to_device(Device::Cpu).to_kind(Kind::Float),
+            opponent.to_device(Device::Cpu).to_kind(Kind::Float),
         ))
     }
 }
 
 impl BatchLeafEval for TorchScriptLeafEval {
     fn eval_batch(&self, obs: &ObsBatch, legal_mask: Option<&Tensor>) -> PyResult<LeafBatchOutput> {
-        let (policy_logits, value) = self.forward(obs)?;
+        let (policy_logits, value, opponent_logits) = self.forward(obs)?;
         let action_count = *policy_logits
             .size()
             .last()
@@ -344,6 +364,8 @@ impl BatchLeafEval for TorchScriptLeafEval {
             None => policy_logits.shallow_clone(),
         };
         let priors = masked.softmax(-1, Kind::Float);
+        // Deliberately UNMASKED -- see the field docs on `opponent_priors`.
+        let opponent_priors = opponent_logits.softmax(-1, Kind::Float);
         let values_tanh: Vec<f32> = Vec::try_from(value.flatten(0, -1)).map_err(tch_err)?;
         let values01 = values_tanh.iter().map(|v| 0.5 * (v + 1.0)).collect();
         Ok(LeafBatchOutput {
@@ -351,6 +373,7 @@ impl BatchLeafEval for TorchScriptLeafEval {
             values01,
             policy_logits: Vec::try_from(policy_logits.flatten(0, -1)).map_err(tch_err)?,
             priors: Vec::try_from(priors.flatten(0, -1)).map_err(tch_err)?,
+            opponent_priors: Vec::try_from(opponent_priors.flatten(0, -1)).map_err(tch_err)?,
             action_count,
         })
     }
@@ -533,6 +556,9 @@ fn multiply_batched_core<E: BatchLeafEval>(
         max_depth,
         c_puct,
         deep_ko_split,
+        // Template-stub core: placeholder observations with no seat, so there
+        // is no meaningful opponent head to gather. Throughput bench only.
+        use_opponent_priors: false,
     };
     let mut tree = Tree::from_root(&state)?;
     let mut counters = SearchCounters::default();
@@ -620,6 +646,11 @@ struct BranchFold {
     fold: crate::fold::FoldStateInner,
     turn: i64,
     self_order: Vec<String>,
+    /// The opponent's party order evolved to this branch. Threaded alongside
+    /// `self_order` rather than recomputed, because switch swaps must
+    /// ACCUMULATE down a line -- an unevolved order is correct only until the
+    /// opponent's first switch, after which every switch prior is permuted.
+    opponent_order: Vec<String>,
     meta: crate::leaf::LeafMeta,
 }
 
@@ -659,7 +690,11 @@ fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f
 /// with the node's own arm order.
 fn self_options_at(state: &State, self_side_one: bool) -> Vec<MoveChoice> {
     let (s1_options, s2_options) = state.get_all_options();
-    let mut options = if self_side_one { s1_options } else { s2_options };
+    let mut options = if self_side_one {
+        s1_options
+    } else {
+        s2_options
+    };
     if options.is_empty() {
         options.push(MoveChoice::None);
     }
@@ -720,6 +755,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     max_depth: u8,
     deep_ko_split: bool,
     model_priors: bool,
+    use_opponent_priors: bool,
     leaf_ctx: &crate::leaf::LeafContext,
     event_ctx: &crate::events::EventContext,
     root_fold: &crate::fold::FoldStateInner,
@@ -738,6 +774,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         max_depth,
         c_puct,
         deep_ko_split,
+        use_opponent_priors,
     };
     let mut tree = Tree::from_root(&state)?;
     let mut counters = SearchCounters::default();
@@ -749,6 +786,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
+    let mut attribution_unsafe_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
     let root_turn = event_ctx.turn;
@@ -819,6 +857,42 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 }
                 _ => prior_fallbacks += 1,
             }
+            // Opponent-side root priors, from the SAME forward. Orientation
+            // (#937): this gathers the opponent head onto the OPPONENT's own
+            // option list and applies it to the OPPONENT's stats. Nothing is
+            // reflected -- `!self_side_one` selects the other seat's stat
+            // vector, and the option list and action map are the opponent's
+            // throughout. Only values flip at the seat boundary, elsewhere.
+            if cfg.use_opponent_priors && !output.opponent_priors.is_empty() {
+                let opponent_options = if self_side_one {
+                    tree.decisions[0].s2_options.clone()
+                } else {
+                    tree.decisions[0].s1_options.clone()
+                };
+                if !is_single_none(&opponent_options) {
+                    // Root: no branch lines yet, so the unevolved party order
+                    // is correct here by construction.
+                    let opponent_map = leaf_ctx.opponent_action_map(
+                        &state,
+                        &opponent_options,
+                        None,
+                        None,
+                        false,
+                    )?;
+                    match gather_self_priors(
+                        &output.opponent_priors[..output.action_count],
+                        &opponent_map,
+                    ) {
+                        Some(priors)
+                            if apply_self_priors(
+                                &mut tree.decisions[0],
+                                !self_side_one,
+                                &priors,
+                            ) => {}
+                        _ => prior_fallbacks += 1,
+                    }
+                }
+            }
         }
     }
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
@@ -830,6 +904,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // Per-round prior work: (branch key, batch row, option→action map)
         // for every priced branch whose child decision node can exist.
         let mut pending_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> = Vec::new();
+        // Parallel to pending_maps, for the opponent seat. Kept as its own
+        // list rather than a second column so the self-side path is untouched
+        // when the flag is off.
+        let mut pending_opponent_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> =
+            Vec::new();
         let mut leaf_error: Option<PyErr> = None;
         let traverse_started = Instant::now();
         let encode_before_traverse = encode_nanos;
@@ -850,11 +929,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     // Parent fold prefix: the root fold for root edges, the
                     // ancestor branch's advanced fold otherwise.
                     let clone_started = Instant::now();
-                    let (mut fold, mut turn, parent_order, parent_meta) = match seam.parent {
+                    let (mut fold, mut turn, parent_order, parent_opponent_order, parent_meta) =
+                        match seam.parent {
                         None => (
                             root_fold.clone(),
                             root_turn,
                             leaf_ctx.root_self_order().to_vec(),
+                            leaf_ctx.root_opponent_order(),
                             leaf_ctx.root_meta().clone(),
                         ),
                         Some(key) => match fold_by_branch.get(&key) {
@@ -862,6 +943,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 rec.fold.clone(),
                                 rec.turn,
                                 rec.self_order.clone(),
+                                rec.opponent_order.clone(),
                                 rec.meta.clone(),
                             ),
                             None => {
@@ -892,6 +974,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if !rendered.lossy.is_empty() {
                         lossy_renders += 1;
                     }
+                    if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
+                        attribution_unsafe_renders += 1;
+                        leaf_error = Some(error);
+                        return LeafPrice::Ready(0.5);
+                    }
                     let advance_started = Instant::now();
                     let advance_result = fold.advance_in_place(&rendered.lines);
                     fold_advance_nanos += advance_started.elapsed().as_nanos();
@@ -907,10 +994,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
                     );
-                    let meta = crate::leaf::evolve_leaf_meta(
+                    let opponent_order = crate::leaf::evolve_self_order(
+                        &parent_opponent_order,
+                        &rendered.lines,
+                        leaf_ctx.opponent_prefix(),
+                    );
+                    let meta = crate::leaf::evolve_leaf_meta_with_status_transitions(
                         &parent_meta,
                         &rendered.lines,
                         leaf_ctx.meta_ctx(),
+                        &rendered.active_status_transitions,
                     );
                     let tensor_started = Instant::now();
                     let encoded_result = leaf_ctx.encode_leaf(
@@ -947,14 +1040,41 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
-                                Ok(map) => pending_maps.push((
-                                    (seam.chance, seam.branch_index),
-                                    row,
-                                    map,
-                                )),
+                                Ok(map) => {
+                                    pending_maps.push(((seam.chance, seam.branch_index), row, map))
+                                }
                                 Err(error) => {
                                     leaf_error = Some(error);
                                     return LeafPrice::Ready(0.5);
+                                }
+                            }
+                        }
+                        // Opponent seat's own options at the same future child.
+                        // `self_options_at(leaf, !self_side_one)` is the
+                        // opponent's list -- the orientation pin: the map is
+                        // built from the arms that seat owns.
+                        if cfg.use_opponent_priors {
+                            let opponent_options = self_options_at(leaf, !self_side_one);
+                            if !is_single_none(&opponent_options) {
+                                let map_started = Instant::now();
+                                let map_result = leaf_ctx.opponent_action_map(
+                                    leaf,
+                                    &opponent_options,
+                                    Some(&opponent_order),
+                                    Some(&meta),
+                                    false,
+                                );
+                                action_map_nanos += map_started.elapsed().as_nanos();
+                                match map_result {
+                                    Ok(map) => pending_opponent_maps.push((
+                                        (seam.chance, seam.branch_index),
+                                        row,
+                                        map,
+                                    )),
+                                    Err(error) => {
+                                        leaf_error = Some(error);
+                                        return LeafPrice::Ready(0.5);
+                                    }
                                 }
                             }
                         }
@@ -964,6 +1084,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         BranchFold {
                             fold,
                             turn,
+                            opponent_order: opponent_order.clone(),
                             self_order,
                             meta,
                         },
@@ -1022,6 +1143,38 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     None => prior_fallbacks += 1,
                 }
             }
+            // Same resolution for the opponent seat, off the SAME batch rows
+            // (one forward feeds both heads). Stored under `!self_side_one`:
+            // the seat that owns these arms, which is what apply_self_priors
+            // indexes on. No reflection anywhere in this block.
+            for (key, row, map) in &pending_opponent_maps {
+                let base = row * output.action_count;
+                let priors = gather_self_priors(
+                    &output.opponent_priors[base..base + output.action_count],
+                    map,
+                );
+                match priors {
+                    Some(priors) => {
+                        let child = tree.chances[key.0].branches[key.1].child;
+                        let applied = match child {
+                            Some(child) => apply_self_priors(
+                                &mut tree.decisions[child],
+                                !self_side_one,
+                                &priors,
+                            ),
+                            None => true,
+                        };
+                        tree.chances[key.0].branches[key.1].child_opponent_priors =
+                            Some((!self_side_one, priors));
+                        if applied {
+                            prior_branches += 1;
+                        } else {
+                            prior_fallbacks += 1;
+                        }
+                    }
+                    None => prior_fallbacks += 1,
+                }
+            }
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
@@ -1049,10 +1202,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         tree_nanos += finalize_started.elapsed().as_nanos();
         completed += traversals.len();
         rounds += 1;
-        if early_stop_min_sims > 0
-            && completed >= early_stop_min_sims
-            && completed < iterations
-        {
+        if early_stop_min_sims > 0 && completed >= early_stop_min_sims && completed < iterations {
             let remaining = iterations - completed;
             if let Some((locked, leader, runner_up)) =
                 root_visit_lock(&tree, early_stop_side_one, remaining)
@@ -1092,7 +1242,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
-         \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
+         \"lossy_renders\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
          \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
@@ -1102,6 +1252,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         rounds,
         model_evals,
         lossy_renders,
+        attribution_unsafe_renders,
         fold_by_branch.len(),
         model_priors,
         prior_branches,
@@ -1448,7 +1599,10 @@ impl NativeLeafModel {
     /// the root fold state. With `model_priors` (default) the ACTING seat's
     /// decision arms use the model's masked policy priors (root: one extra
     /// forward on the root observation; interior nodes: the priors of the
-    /// branch observation they grow under); the opponent side stays uniform.
+    /// branch observation they grow under). The opponent side stays uniform
+    /// unless `use_opponent_priors` is set, which seeds that seat from the
+    /// model's opponent action head gathered onto the OPPONENT's own option
+    /// list (never reflected -- see `LeafContext::opponent_action_map`).
     /// Returns the search report as JSON (with `encoder: "native_leaf"`,
     /// lossy-render accounting, and `root_priors`/`prior_branches`/
     /// `prior_fallbacks` telemetry). Runs with the GIL released.
@@ -1467,6 +1621,10 @@ impl NativeLeafModel {
         model_priors = true,
         early_stop_min_sims = 0,
         early_stop_side_one = true,
+        // Default OFF, and last in the signature, so every existing caller is
+        // byte-for-byte unaffected: flag-off must be the uniform-opponent
+        // search every recorded result was produced under.
+        use_opponent_priors = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1486,6 +1644,7 @@ impl NativeLeafModel {
         model_priors: bool,
         early_stop_min_sims: usize,
         early_stop_side_one: bool,
+        use_opponent_priors: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1501,14 +1660,10 @@ impl NativeLeafModel {
             ));
         }
         let root_state = parse_state(state_str)?;
-        let leaf_ctx = crate::leaf::LeafContext::new(
-            tables_json,
-            root_inputs_json,
-            ctx_json,
-            &root_state,
-        )?;
-        let event_ctx = crate::events::EventContext::from_json(ctx_json)
-            .map_err(PyValueError::new_err)?;
+        let leaf_ctx =
+            crate::leaf::LeafContext::new(tables_json, root_inputs_json, ctx_json, &root_state)?;
+        let event_ctx =
+            crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
         py.detach(|| {
@@ -1520,6 +1675,7 @@ impl NativeLeafModel {
                 max_depth,
                 deep_ko_split,
                 model_priors,
+                use_opponent_priors,
                 &leaf_ctx,
                 &event_ctx,
                 &fold,

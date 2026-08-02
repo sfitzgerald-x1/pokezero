@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 import unittest
 
@@ -20,7 +21,9 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    V2_REPLAY_OBSERVATION_SPEC,
     V2_1_REPLAY_OBSERVATION_SPEC,
+    V2_2_REPLAY_OBSERVATION_SPEC,
     NUMERIC_ACTUAL_HP,
     NUMERIC_ACTUAL_SPE,
     NUMERIC_EFFECT_CHANCE,
@@ -218,10 +221,10 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
                 "|turn|1",
                 "|move|p1a: Swampert|Toxic|p2a: Aggron",
                 "|-status|p2a: Aggron|tox",
-                "|-damage|p2a: Aggron|262/280 tox|[from] psn",
+                "|-damage|p2a: Aggron|263/280 tox|[from] psn",
                 "|move|p2a: Aggron|Toxic|p1a: Swampert",
                 "|-status|p1a: Swampert|tox",
-                "|-damage|p1a: Swampert|283/300 tox|[from] psn",
+                "|-damage|p1a: Swampert|282/300 tox|[from] psn",
                 "|turn|2",
                 "|switch|p2a: Snorlax|Snorlax, L82|400/400",
                 "|turn|3",
@@ -234,16 +237,16 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
                 "|-curestatus|p2: Aggron|tox|[silent]",
             ]
         )
-        # Benched ally (Aggron): tox suffix stripped — the fix (fails on origin/main: "262/280 tox").
+        # Benched ally (Aggron): tox suffix stripped — the fix (fails on origin/main: "263/280 tox").
         aggron = next(p for p in replay.public_revealed["p2"] if p.species == "Aggron")
-        self.assertEqual(aggron.condition, "262/280")
+        self.assertEqual(aggron.condition, "263/280")
         # ACTIVE-target cure (Miltank, position-bearing ident): par stripped on the unchanged path.
         self.assertEqual(replay.public_active["p2"].condition, "300/300")
         # Healthy same-side member (Snorlax): no phantom status, untouched.
         snorlax = next(p for p in replay.public_revealed["p2"] if p.species == "Snorlax")
         self.assertEqual(snorlax.condition, "400/400")
         # NO OVER-CLEARING: the OPPONENT side's genuinely-toxic mon keeps its status suffix.
-        self.assertEqual(replay.public_active["p1"].condition, "283/300 tox")
+        self.assertEqual(replay.public_active["p1"].condition, "282/300 tox")
         # Cured side's toxic ramp reset; the opponent side's ramp is untouched.
         self.assertEqual(replay.toxic_stage["p2"], 0)
         self.assertEqual(replay.toxic_stage["p1"], 4)
@@ -1766,6 +1769,437 @@ class Phase2DynamicStateTest(unittest.TestCase):
             ]
         )
         self.assertEqual(state.toxic_stage["p1"], 0)
+
+    def test_toxic_residual_reseed_uses_gen3_floored_damage_unit(self) -> None:
+        # 239 // 16 == 14. A mid-battle replay import can first see a tox mon after it has
+        # healed back to full HP; proportional rounding recovers 8/9/10 below, but the
+        # simulator's floored unit proves the public stages are 9/10/11.
+        for damage, remaining_hp, expected_stage in (
+            (126, 113, 9),
+            (140, 99, 10),
+            (154, 85, 11),
+        ):
+            with self.subTest(damage=damage):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|239/239 tox",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        f"|-damage|p1a: Tauros|{remaining_hp}/239 tox|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], expected_stage)
+
+    def test_toxic_residual_reseed_preserves_low_hp_flooring_and_divisible_control(self) -> None:
+        # max(1, 15 // 16) is one, so low-HP Toxic still recovers its exact stage.
+        for remaining_hp, expected_stage in ((14, 1), (12, 3)):
+            with self.subTest(max_hp=15, remaining_hp=remaining_hp):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|15/15",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        "|-status|p1a: Tauros|tox",
+                        f"|-damage|p1a: Tauros|{remaining_hp}/15 tox|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], expected_stage)
+
+        # A denominator divisible by 16 is an agreement control for both formulae.
+        divisible = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|240/240",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|60/240 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(divisible.toxic_stage["p1"], 12)
+
+    def test_toxic_percentage_residual_does_not_reseed_a_known_counter(self) -> None:
+        # The public per-seat stream rounds HP to /100. It cannot recover a hidden exact Toxic
+        # unit, so this must retain the already-public stage from the status/switch/turn history
+        # rather than reverse-rounding a replacement stage from private HP.
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|95/100 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+            ],
+            complete_prefix=True,
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
+        )
+        self.assertEqual(state.toxic_stage["p1"], 2)
+        self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_exact_100_hp_uses_request_provenance_not_denominator(self) -> None:
+        request = "|request|" + json.dumps(
+            {"side": {"id": "p1", "name": "Exact", "pokemon": []}},
+            separators=(",", ":"),
+        )
+        state = parse_showdown_replay(
+            [
+                request,
+                "|switch|p1a: Diglett|Diglett, L60, M|100/100 tox",
+                "|switch|p2a: Magikarp|Magikarp, L100, M|180/180",
+                "|turn|1",
+                "|-damage|p1a: Diglett|94/100 tox|[from] psn",
+            ],
+            complete_prefix=True,
+        )
+
+        # A real exact-100 HP mon has a floor(100/16) == 6 Toxic unit.
+        self.assertEqual(state.hp_visibility, {"p1": "exact", "p2": "percentage"})
+        self.assertEqual(state.toxic_stage["p1"], 1)
+        self.assertTrue(state.toxic_stage_known["p1"])
+        resumed = _ReplayParser.from_snapshot(state).snapshot()
+        self.assertEqual(resumed.hp_visibility, state.hp_visibility)
+
+    def test_nonintegral_exact_damage_after_reentry_fails_closed(self) -> None:
+        request = "|request|" + json.dumps(
+            {"side": {"id": "p1", "name": "Exact", "pokemon": []}},
+            separators=(",", ":"),
+        )
+        state = parse_showdown_replay(
+            [
+                request,
+                "|switch|p1a: Diglett|Diglett, L60, M|100/100 tox",
+                "|switch|p2a: Magikarp|Magikarp, L100, M|180/180",
+                "|turn|1",
+                "|-damage|p1a: Diglett|95/100 tox|[from] psn",
+            ],
+            complete_prefix=True,
+        )
+
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertFalse(state.toxic_stage_known["p1"])
+
+    def test_parser_prefix_completeness_is_explicit_and_public_resets_recover_it(self) -> None:
+        attached = _ReplayParser("attached-midstream")
+        full = _ReplayParser("full-from-reset", complete_prefix=True)
+
+        self.assertEqual(attached.toxic_stage_known, {"p1": False, "p2": False})
+        self.assertEqual(full.toxic_stage_known, {"p1": True, "p2": True})
+
+        attached.feed(["|switch|p1a: Tauros|Tauros, L80, M|100/100 tox"])
+        self.assertTrue(attached.toxic_stage_known["p1"])
+        self.assertFalse(attached.toxic_stage_known["p2"])
+
+    def test_parser_prefix_completeness_requires_a_literal_boolean(self) -> None:
+        for label, complete_prefix, expected in (
+            ("true", True, True),
+            ("false", False, False),
+            ("int-true", 1, False),
+            ("int-false", 0, False),
+            ("truthy-string", "true", False),
+            ("empty-string", "", False),
+            ("none", None, False),
+        ):
+            with self.subTest(value=label):
+                parser = _ReplayParser("prefix-type", complete_prefix=complete_prefix)
+                self.assertEqual(parser.toxic_stage_known, {"p1": expected, "p2": expected})
+
+    def test_upkeep_grammar_requires_the_exact_bare_protocol_boundary(self) -> None:
+        parser = _ReplayParser("upkeep-grammar", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+            ]
+        )
+        self.assertTrue(parser.snapshot().post_upkeep_window)
+
+        for marker in ("|upkeep|", "|upkeep|payload", "|upkeeppayload", " |upkeep", "|upkeep "):
+            with self.subTest(marker=marker):
+                parser = _ReplayParser("upkeep-grammar", complete_prefix=True)
+                parser.feed(
+                    [
+                        "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                        "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                        "|turn|1",
+                        "|faint|p1a: LeadOne",
+                        marker,
+                    ]
+                )
+                self.assertFalse(parser.snapshot().post_upkeep_window)
+
+    def test_toxic_percentage_or_missing_hp_never_invents_a_legacy_counter(self) -> None:
+        # A legacy checkpoint can expose a public tox condition without the
+        # counter provenance added by this recovery. Neither rounded /100 HP
+        # nor a condition-only residual can manufacture private stage data.
+        parser = _ReplayParser(
+            "toxic-legacy-percentage",
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
+        )
+        parser.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|100/100 tox",
+                "|switch|p2a: Milotic|Milotic, L80, F|100/100",
+                "|turn|1",
+            ]
+        )
+        parser.toxic_stage["p1"] = 0
+        parser.toxic_stage_known["p1"] = False
+        parser.feed(["|-damage|p1a: Tauros|95/100 tox|[from] psn"])
+        parser.feed(["|-damage|p1a: Tauros|tox|[from] psn"])
+        self.assertEqual(parser.toxic_stage["p1"], 0)
+        self.assertFalse(parser.toxic_stage_known["p1"])
+
+    def test_real_capture_leftovers_precedes_exact_toxic_stage(self) -> None:
+        # Real controlled capture 10000: Azumarill takes stage-1 then stage-2
+        # Toxic after its own Leftovers heal. The residual's own absolute delta
+        # is 19 then 38 (316 // 16), so the turn-3 request holds next stage 3.
+        fixture = Path(__file__).parent / "fixtures" / "showdown" / "capture" / (
+            "lines-battle-gen3randombattle-controlled-20260710000.log"
+        )
+        lines = fixture.read_text().splitlines()
+        parser = _ReplayParser("real-capture-leftovers-toxic")
+        for line in lines:
+            parser.feed([line])
+            if line == "|turn|3":
+                break
+        self.assertEqual(parser.toxic_stage["p2"], 3)
+        self.assertTrue(parser.toxic_stage_known["p2"])
+
+    def test_toxic_checkpoint_resume_preserves_known_counter_and_rejects_legacy_unknown(self) -> None:
+        parser = _ReplayParser("toxic-resume")
+        parser.feed(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|225/239 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        snapshot = parser.snapshot()
+        resumed = _ReplayParser.from_snapshot(snapshot)
+        self.assertEqual(resumed.toxic_stage["p1"], 2)
+        self.assertTrue(resumed.toxic_stage_known["p1"])
+
+        # A pre-provenance snapshot cannot prove an active Toxic stage from its
+        # numeric field alone. Resume drops the numeric claim instead of
+        # materializing that legacy value as engine-private truth.
+        legacy = replace(snapshot, toxic_stage_known={})
+        legacy_resumed = _ReplayParser.from_snapshot(legacy)
+        self.assertEqual(legacy_resumed.toxic_stage["p1"], 0)
+        self.assertFalse(legacy_resumed.toxic_stage_known["p1"])
+
+    def test_toxic_snapshot_restoration_requires_exact_boolean_upkeep_window(self) -> None:
+        parser = _ReplayParser("toxic-window-type", complete_prefix=True)
+        parser.feed(
+            [
+                "|switch|p1a: One|One, L80, M|90/100 tox",
+                "|switch|p2a: Two|Two, L80, F|90/100 tox",
+                "|turn|2",
+            ]
+        )
+        snapshot = parser.snapshot()
+        active_idents = {
+            slot: snapshot.public_active[slot].ident for slot in ("p1", "p2")
+        }
+        proof_snapshot = replace(
+            snapshot,
+            toxic_stage_zero_after_upkeep={"p1": True, "p2": True},
+            toxic_stage_zero_after_upkeep_expires_after_turn={"p1": 2, "p2": 2},
+            toxic_stage_zero_after_upkeep_ident=active_idents,
+            toxic_faint_replacement_pending={"p1": False, "p2": False},
+            toxic_faint_replacement_expected_ident={"p1": None, "p2": None},
+            toxic_faint_replacement_invalid={"p1": False, "p2": False},
+        )
+
+        for window, deadline in ((False, 2), (True, 3)):
+            with self.subTest(valid_window=window):
+                restored = _ReplayParser.from_snapshot(
+                    replace(
+                        proof_snapshot,
+                        post_upkeep_window=window,
+                        toxic_stage_zero_after_upkeep_expires_after_turn={
+                            "p1": deadline,
+                            "p2": deadline,
+                        },
+                    )
+                ).snapshot()
+                self.assertIs(restored.post_upkeep_window, window)
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep, {"p1": True, "p2": True})
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_expires_after_turn,
+                    {"p1": deadline, "p2": deadline},
+                )
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep_ident, active_idents)
+                self.assertEqual(
+                    restored.toxic_faint_replacement_invalid,
+                    {"p1": False, "p2": False},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_pending,
+                    {"p1": False, "p2": False},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_expected_ident,
+                    {"p1": None, "p2": None},
+                )
+
+        for window in (1, "yes", None):
+            with self.subTest(malformed_window=window):
+                restored = _ReplayParser.from_snapshot(
+                    replace(proof_snapshot, post_upkeep_window=window)
+                ).snapshot()
+                self.assertIs(restored.post_upkeep_window, False)
+                self.assertEqual(restored.toxic_stage_zero_after_upkeep, {"p1": False, "p2": False})
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_expires_after_turn,
+                    {"p1": None, "p2": None},
+                )
+                self.assertEqual(
+                    restored.toxic_stage_zero_after_upkeep_ident,
+                    {"p1": None, "p2": None},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_invalid,
+                    {"p1": True, "p2": True},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_pending,
+                    {"p1": False, "p2": False},
+                )
+                self.assertEqual(
+                    restored.toxic_faint_replacement_expected_ident,
+                    {"p1": None, "p2": None},
+                )
+
+    def test_post_upkeep_zero_proof_is_invisible_to_frozen_observation_schemas(self) -> None:
+        # This is construction-only provenance. It must not mutate the public
+        # replay counter or the V2/V2.1/V2.2 encodes already used by frozen
+        # checkpoints; only direct world materialization consumes it.
+        replay = parse_showdown_replay(
+            [
+                "|switch|p1a: LeadOne|LeadOne, L80, M|100/100",
+                "|switch|p2a: LeadTwo|LeadTwo, L80, F|100/100",
+                "|turn|1",
+                "|faint|p1a: LeadOne",
+                "|upkeep",
+                "|switch|p1a: Replacement|Replacement, L80, M|90/100 tox",
+                "|turn|2",
+            ],
+            complete_prefix=True,
+        )
+        without_proof = replace(replay, toxic_stage_zero_after_upkeep={})
+        # V2.2 rejects a vocabulary that cannot represent its turn-merged
+        # surface.  Keep the existing frozen V2/V2.1 test vocabulary intact;
+        # this deliberately local vocabulary is only the minimal schema gate
+        # for comparing the same trace with and without construction-only
+        # provenance.
+        turn_merged_vocab = build_category_vocabulary(
+            [*_TEST_VOCAB.tokens, "tt_phase:turn"]
+        )
+        for player in ("p1", "p2"):
+            with self.subTest(player=player):
+                state = normalize_for_player(
+                    replay, player_id=player, configured_showdown_slot=player,
+                    include_turn_merged=True,
+                )
+                legacy_state = normalize_for_player(
+                    without_proof, player_id=player, configured_showdown_slot=player,
+                    include_turn_merged=True,
+                )
+                self.assertEqual(state, legacy_state)
+                for spec in (
+                    V2_REPLAY_OBSERVATION_SPEC,
+                    V2_1_REPLAY_OBSERVATION_SPEC,
+                    V2_2_REPLAY_OBSERVATION_SPEC,
+                ):
+                    category_vocab = (
+                        turn_merged_vocab
+                        if spec is V2_2_REPLAY_OBSERVATION_SPEC
+                        else _TEST_VOCAB
+                    )
+                    encoded = observation_from_player_state(
+                        state, category_vocab=category_vocab, spec=spec,
+                    )
+                    legacy_encoded = observation_from_player_state(
+                        legacy_state, category_vocab=category_vocab, spec=spec,
+                    )
+                    self.assertEqual(encoded, legacy_encoded, spec.schema_version)
+
+    def test_toxic_counter_does_not_baton_pass_to_the_replacement(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|285/285",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|268/285 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|move|p1a: Tauros|Baton Pass|p1a: Tauros",
+                "|switch|p1a: Snorlax|Snorlax, L80, M|400/400|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_faint_and_forced_replacement_retire_the_counter(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|285/285",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|268/285 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|faint|p1a: Tauros",
+                "|switch|p1a: Snorlax|Snorlax, L80, M|400/400",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 0)
+        self.assertTrue(state.toxic_stage_known["p1"])
+
+    def test_toxic_residual_reseed_rejects_non_surviving_or_ambiguous_damage(self) -> None:
+        # Preserve the known stage rather than inventing one from a lethal/capped line or a
+        # non-integral number of Gen 3 Toxic units.
+        for condition in ("0 fnt", "216/239 tox"):
+            with self.subTest(condition=condition):
+                state = parse_showdown_replay(
+                    [
+                        "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                        "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                        "|turn|1",
+                        "|-status|p1a: Tauros|tox",
+                        f"|-damage|p1a: Tauros|{condition}|[from] psn",
+                    ]
+                )
+                self.assertEqual(state.toxic_stage["p1"], 1)
+
+    def test_toxic_residual_reseed_uses_floored_unit_after_reentry(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|239/239",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|tox",
+                "|-damage|p1a: Tauros|225/239 tox|[from] psn",
+                "|upkeep",
+                "|turn|2",
+                "|switch|p1a: Zapdos|Zapdos, L78|301/301",
+                "|upkeep",
+                "|turn|3",
+                "|switch|p1a: Tauros|Tauros, L80, M|225/239 tox",
+                "|-damage|p1a: Tauros|211/239 tox|[from] psn",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 1)
 
     def test_future_sight_cleared_when_it_lands(self) -> None:
         landed = self._replay_with(

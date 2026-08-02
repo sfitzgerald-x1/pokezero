@@ -133,7 +133,11 @@ def active_token_index(state) -> int:
 def engineer_toxic(state, stage: int | None):
     """Return a copy of `state` with the active mon badly poisoned at ramp `stage`
     (status:tox categorical + the NUMERIC_TOXIC_STAGE ramp + belief status), HP held fixed.
-    `stage=None` clears the status (healthy baseline)."""
+    `stage=None` clears the status (healthy baseline).
+
+    This is an observation-only counterfactual over ``PlayerRelativeBattleState``. It carries no
+    replay provenance and must not be used to materialize an engine Toxic counter.
+    """
     active = state.self_active
     hp = hp_token(active.condition)
     status_word = "tox" if stage is not None else ""

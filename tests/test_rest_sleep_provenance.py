@@ -82,6 +82,8 @@ def _dex() -> ShowdownDex:
                                 {"hp": 65, "atk": 80, "def": 140, "spa": 40, "spd": 70, "spe": 70}, 50.5),
             "starmie": species("starmie", "Starmie", ("water", "psychic"),
                                {"hp": 60, "atk": 75, "def": 85, "spa": 100, "spd": 85, "spe": 115}, 80.0),
+            "unown": species("unown", "Unown-Z", ("psychic",),
+                               {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}, 5.0),
         },
         type_chart={},
     )
@@ -96,6 +98,12 @@ _SKARMORY = FixturePokemon(species="Skarmory", moves=("rest",), ability="Keen Ey
 _SKARMORY_EARLY_BIRD = FixturePokemon(species="Skarmory", moves=("rest",), ability="Early Bird",
                                       item="Leftovers", level=76,
                                       evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+_UNOWN_Z = FixturePokemon(species="Unown-Z", moves=("rest",), ability="Levitate",
+                          item="Leftovers", level=76,
+                          evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+_UNOWN_QUESTION = FixturePokemon(species="Unown-Question", moves=("rest",), ability="Levitate",
+                                 item="Leftovers", level=76,
+                                 evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
 _STARMIE = FixturePokemon(species="Starmie", moves=("surf",), ability="Natural Cure",
                           item="Leftovers", level=79,
                           evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
@@ -106,11 +114,11 @@ def _maxhp(mon: FixturePokemon, dex: ShowdownDex) -> int:
     return gen3_hp_stat(int(info.base_stats["hp"]), 31, int((mon.evs or {}).get("hp", 0)), mon.level)
 
 
-def _override(*, sleeper: FixturePokemon = _SKARMORY) -> BattleStartOverride:
+def _override(*, sleeper: FixturePokemon = _SKARMORY, bench: FixturePokemon = _STARMIE) -> BattleStartOverride:
     return BattleStartOverride(
         player_teams={
             "p1": pack_team((_SNORLAX,)),
-            "p2": pack_team((sleeper, _STARMIE)),
+            "p2": pack_team((sleeper, bench)),
         },
     )
 
@@ -358,6 +366,18 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         self.assertEqual(induced.rest_turns, 0)
         self.assertEqual(induced.sleep_turns, 0)
 
+    def test_unrepresentable_rest_marker_refuses_approximation(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["restSleepProvenanceUnrepresentable"] = True
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=self.dex,
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
     def test_the_exemption_rides_the_bench(self) -> None:
         # The population this exists to serve. An ACTIVE Rest-sleeper reveals itself
         # next turn either way; a BENCHED one is visible to nothing but the clause.
@@ -567,6 +587,41 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
         self.assertEqual(dict(replay.rest_sleep_refunded_turns), {"p2:skarmory": 1})
 
+    def test_two_public_sleep_talk_pivots_accumulate_refunds_and_rebuild_exactly(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|3",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="two-sleep-talk-refunds")
+        self.assertEqual(dict(replay.rest_sleep_counts), {"p2:skarmory": 2})
+        self.assertEqual(dict(replay.rest_sleep_refunded_turns), {"p2:skarmory": 2})
+        self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
+
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 2)
+        self.assertEqual(rows[0]["restSleepRefundedTime"], 2)
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with _stubbed_capability_probe():
+            world = battle_spec_from_payload(payload, _override(), dex=_dex())
+        self.assertEqual(world.spec.side_two.pokemon[0].rest_turns, 3)
+
     def test_plain_sleep_turn_after_sleep_talk_cancels_the_refund(self) -> None:
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
@@ -685,6 +740,141 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         rows = [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}]
         _apply_rest_sleep_provenance(rows, replay, "p2")
         self.assertEqual(rows, [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}])
+
+    def test_malformed_rest_maps_refuse_approximate_sleep_materialization(self) -> None:
+        cases = {
+            "count": ("rest_sleep_counts", "not-an-int"),
+            "refunded": ("rest_sleep_refunded_turns", "not-an-int"),
+            "skipped": ("rest_sleep_skipped_turns", "not-an-int"),
+            "pending": ("rest_sleep_pending_attempt", "not-a-bool"),
+            "inconsistent_refund": ("rest_sleep_refunded_turns", 2),
+            "orphan_refund": ("rest_sleep_refunded_turns", 1),
+            "orphan_skipped": ("rest_sleep_skipped_turns", 1),
+            "orphan_pending": ("rest_sleep_pending_attempt", True),
+        }
+        for name, (attribute, value) in cases.items():
+            with self.subTest(case=name):
+                replay = parse_showdown_replay(self._RESTED, battle_id=f"rest-invalid-{name}")
+                if name.startswith("orphan_"):
+                    replay.rest_sleep_counts.clear()
+                getattr(replay, attribute)["p2:skarmory"] = value
+                rows = self._rows()
+                _apply_rest_sleep_provenance(rows, replay, "p2")
+
+                self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+                self.assertNotIn("restSleepAttempts", rows[0])
+
+                payload = _payload(_dex())
+                payload["sides"]["p2"]["pokemon"] = rows
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload,
+                        _override(),
+                        dex=_dex(),
+                        approximate_sleep_turns=True,
+                )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_conflicting_induced_and_rest_provenance_refuses_approximation(self) -> None:
+        replay = parse_showdown_replay(self._RESTED, battle_id="rest-induced-conflict")
+        replay.induced_sleep_victims["p1"] = ("p2:skarmory",)
+        rows = self._rows()
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+
+        self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_cosmetic_forme_rest_key_rebuilds_instead_of_approximating_sleep(self) -> None:
+        lines = [
+            "|player|p1|Alice|",
+            "|player|p2|Bob|",
+            "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+            "|switch|p2a: Unown|Unown-Z, L76|100/100",
+            "|move|p2a: Unown|Rest|p2a: Unown",
+            "|-status|p2a: Unown|slp|[from] move: Rest",
+            "|cant|p2a: Unown|slp",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="unown-rest-forme")
+        rows = [
+            {"species": "Unown-Z", "condition": "88/100 slp", "active": False},
+            {"species": "Starmie", "condition": "100/100", "active": True},
+        ]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertNotIn("restSleepProvenanceUnrepresentable", rows[0])
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with _stubbed_capability_probe():
+            world = battle_spec_from_payload(
+                payload,
+                _override(sleeper=_UNOWN_Z),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(world.spec.side_two.pokemon[0].rest_turns, 2)
+
+    def test_ambiguous_cosmetic_formes_refuse_generic_sleep_approximation(self) -> None:
+        lines = [
+            "|player|p1|Alice|",
+            "|player|p2|Bob|",
+            "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+            "|switch|p2a: Unown|Unown-Z, L76|100/100",
+            "|move|p2a: Unown|Rest|p2a: Unown",
+            "|-status|p2a: Unown|slp|[from] move: Rest",
+            "|cant|p2a: Unown|slp",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="unown-ambiguous-formes")
+        rows = [
+            {"species": "Unown-Z", "condition": "88/100 slp", "active": False},
+            {"species": "Unown-Question", "condition": "100/100 slp", "active": True},
+        ]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        for row in rows:
+            self.assertTrue(row.get("restSleepProvenanceUnrepresentable"))
+            self.assertNotIn("restSleepAttempts", row)
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(sleeper=_UNOWN_Z, bench=_UNOWN_QUESTION),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_unmatched_rest_tracker_refuses_generic_sleep_approximation(self) -> None:
+        replay = parse_showdown_replay(self._RESTED, battle_id="unmatched-rest-tracker")
+        rows = [
+            {"species": "Starmie", "condition": "88/100 slp", "active": False},
+            {"species": "Skarmory", "condition": "100/100", "active": True},
+        ]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertTrue(rows[0].get("restSleepProvenanceUnrepresentable"))
+
+        payload = _payload(_dex())
+        payload["sides"]["p2"]["pokemon"] = rows
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=_dex(),
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
     @classmethod
     def _all_rest_maps_live_lines(cls):

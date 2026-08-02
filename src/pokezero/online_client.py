@@ -121,7 +121,13 @@ class OnlineBattleAgent:
         # with the vocab's include_turn_merged latch already set in build_agent below.
         turn_merged = self.spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         try:
-            replay = parse_showdown_replay(room_lines, battle_id=room_id)
+            # OnlineBattleClient owns this room buffer from its first battle line. The one private
+            # request in the stream also identifies exact own HP versus percentage opponent HP.
+            replay = parse_showdown_replay(
+                room_lines,
+                battle_id=room_id,
+                complete_prefix=True,
+            )
             state = normalize_for_player(
                 replay,
                 player_id="bot",

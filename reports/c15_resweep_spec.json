@@ -1,204 +1,176 @@
 {
-  "spec_version": "engine-cert-sweep-2 draft-2 (blocked after independent review)",
-  "registered_before_launch": false,
+  "spec_version": "engine-cert-sweep-2/2 (final 48-patch pre-registration)",
+  "registered_before_launch": true,
   "requires_execution_contract": true,
   "launch_registration": {
-    "status": "BLOCKED",
-    "review": "Independent Opus review blocked the premature final registration before any fresh measurement was launched.",
-    "public_source_parent_commit": null,
-    "engine_patch_count": null,
-    "engine_fingerprint": null,
-    "readout_sha256": null,
-    "fresh_measurements_inspected_before_registration": 0
+    "fresh_measurements_inspected_before_registration": 0,
+    "coordinator_go": true,
+    "engine_patch_count": 48,
+    "public_source_parent_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
+    "public_source_parent_note": "This immutable build-source commit contains the 48-patch engine, a cross-platform strict patch applicator with a canonical post-patch target digest, exact limit vocabulary, reproducible upstream-source fingerprint check, and an explicit non-launchable lifecycle marker. It intentionally contains no registered final contract, calibration artifact, or attestation. This later contract commit pins that source without circular Git metadata.",
+    "calibration_evidence": "reports/c24_final_classifier_c14_calibration.json"
+  },
+  "certification_gates": {
+    "expected_shards": 8,
+    "expected_games": 10000,
+    "minimum_boundaries_full_round": 700000,
+    "seed_blocks": [
+      {"start": 2800000, "games": 1250},
+      {"start": 2900000, "games": 1250},
+      {"start": 3000000, "games": 1250},
+      {"start": 3100000, "games": 1250},
+      {"start": 3200000, "games": 1250},
+      {"start": 3300000, "games": 1250},
+      {"start": 3400000, "games": 1250},
+      {"start": 3500000, "games": 1250}
+    ],
+    "minimum_coverage_measured_fraction": 0.97,
+    "required_build_check": "gated",
+    "required_matcher": "strict",
+    "required_repros_per_game": 40,
+    "required_keep_repro": 1000,
+    "required_behavioral_probe_passes": 9,
+    "required_source_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
+    "required_image_commit": "72f971a42b3fc4d79d46368414db08e66e56e4ad",
+    "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
+    "required_readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
+    "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
   },
   "gated_on": [
-    "SATISFIED: engine patches 42-45 landed in #976, including recharge residuals, absorb Protect/accuracy ordering, typed-Hidden-Power thaw exclusion, and public no-op branch fidelity",
-    "SATISFIED: Substitute public-depletion tracking and fail-closed sampled-world routing landed in #977",
-    "SATISFIED: bench-Rest provenance landed in #975",
-    "BLOCKED: repair the confirmed fixed-point base-power rounding, dynamic Flail/Reversal HP timing, and Forecast weather-expiry engine defects",
-    "BLOCKED: repair the event-aware same-turn legal-set and post-switch branch-legality matcher defects",
-    "BLOCKED: adjudicate the six retained incapacitated-action rows not closed by #974",
-    "SATISFIED: post-#977 Substitute classification re-verified over all 13 retained identities in reports/c17_substitute_retained_verification.json",
-    "SATISFIED: unsupported structural-count rows remain fail-closed UNATTRIBUTED unless a sibling arm actually carries the observed components",
-    "BLOCKED: regenerate the family-rate table with the final classifier and freeze all predicted-zero mechanisms before launch",
-    "BLOCKED: pin the final source commit, engine fingerprint, readout hash, seed contract, coverage floor, and immutable execution-manifest schema",
-    "BLOCKED: coordinator go after independent review of the completed contract and runner"
+    "SATISFIED: all 48 vendored engine patches, world-construction repairs, matcher repairs, and row-level adjudications are merged in the pinned source parent.",
+    "SATISFIED: the final classifier was replayed over the consumed C14 archive before registration; no sweep-2 measurement was inspected.",
+    "SATISFIED: all currently emittable documented families and all seven post-fix exclusion counters are pre-registered. recoil_vs_substitute_basis remains gate-blocking UNATTRIBUTED evidence; only limit:world_substitute_health_unknown is governed by the independent full-round Substitute risk gate.",
+    "SATISFIED: the execution contract binds source/image commits, engine fingerprint, readout and manifest-producer hashes, seed blocks, coverage, probes, matcher mode, and repro retention.",
+    "SATISFIED: coordinator go is recorded before launch. The fresh 10,000-game readout remains the binding result."
   ],
-  "corrected_972_disposition_map": {
-    "recoil_vs_substitute_basis": "world/knowledge-limit; public depletion tracking must land and verify the inferable subset before launch; not an engine fix lane",
-    "incapacitated_arm_pricing": {
-      "engine": "typed-HP thaw exclusion",
-      "world": "bench-Rest provenance",
-      "unresolved": "six retained rows remain to be adjudicated at row level before launch"
+  "execution": "Eight persistent CPU-only shards of 1,250 games. Each shard rebuilds the wheel and search crate, passes 9/9 behavioral probes, uses the strict matcher, writes resumable per-game checkpoints, retains 40 repros per game up to 1,000, and writes its completion marker last. A persistent aggregate job validates all provenance before producing the binding readout.",
+  "acceptance_criterion": {
+    "binding": "PASS only with zero unattributed rows, zero engine errors, complete repro retention, all registered family rates at or below their upper bounds, all seven predicted-zero counters at zero, at least 700,000 full-round boundaries with measured coverage at least 0.97, and exactly 10,000 distinct games from the registered seed blocks.",
+    "failure": "Any unattributed row, engine error, missing or duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, nonzero exclusion counter, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",
+    "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
+  },
+  "pre_registered_family_rate_table": {
+    "note": "Twelve count intervals are calibrated from the final classifier's replay of the consumed C14 archive over 791,757 measured boundaries and normalized by the readout. The Substitute-health counter did not exist archive-wide, so it uses an explicit non-empirical risk ceiling of 0.0001 per full-round boundary. The nearest historical anchor is 13 retained recoil/Substitute identities over 810,125 full-round boundaries, whose Wilson-95 upper rate is 0.0000274574. The registered ceiling is 3.64 times that upper anchor and permits at most 70 unknown-Substitute boundaries at the 700,000-boundary minimum. Lower Wilson bounds are advisory; every upper rate is binding.",
+    "calibration_boundaries": 791757,
+    "documented_families": {
+      "limit:roll_divergent_lethality": {"wilson95": [1213, 1353]},
+      "I1_cap_state_shape": {"wilson95": [0, 68]},
+      "LS_capped_lethal_shape": {"wilson95": [0, 481]},
+      "limit:world_sample_drag_target": {"wilson95": [241, 305]},
+      "I3_roll_inherited": {"wilson95": [0, 267]},
+      "I6_sleeptalk_callee_union": {"wilson95": [0, 49]},
+      "I4_attribution_tie": {"wilson95": [0, 193]},
+      "I5_boundary_truncation": {"wilson95": [0, 191]},
+      "I2_matcher_accounting": {"wilson95": [0, 7]},
+      "LS_crit_arm_pairing_echo": {"wilson95": [0, 7]},
+      "LS_confusion_fan": {"wilson95": [0, 9]},
+      "LS_structural_arm_echo": {"wilson95": [0, 4]},
+      "limit:world_substitute_health_unknown": {
+        "upper_full_round_rate": 0.0001,
+        "upper_rate_basis": "pre_registered_risk_budget",
+        "risk_budget_rationale": "At most one unknown-Substitute boundary per 10,000 full-round boundaries. This is 3.64 times the Wilson-95 upper rate of the nearest historical anchor (13 retained recoil/Substitute identities over 810,125 full rounds), allowing at most 70 such boundaries at the registered minimum."
+      }
+    },
+    "new_mechanisms_post_fix": {
+      "absorb_through_protect_or_miss": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "absorb_through_protect_or_miss"
+      },
+      "incapacitated_arm_pricing": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "incapacitated_arm_pricing"
+      },
+      "recharge_turn_residual_gap": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "recharge_turn_residual_gap"
+      },
+      "same_turn_stat_event_gap": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "same_turn_stat_event_gap"
+      },
+      "structural_component_count_without_supported_sibling": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "structural_component_count_without_supported_sibling"
+      },
+      "truant_loaf_phase_drift": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "truant_loaf_phase_drift"
+      },
+      "unattributed_generic": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "unattributed_generic"
+      }
     }
- },
- "seeds": {
-  "blocks": "2800000 + k*100000, k=0..7, 1250 games each",
-  "registry": "validated against 34 protected bands; reservation engine-cert-sweep2-20260730 filed 2026-07-30 (registry and reservations live outside this repository)"
- },
- "execution": "identical to Z12: 8 x 1250 games; per-shard wheel REBUILD + in-shard behavioral probes (9/9 required per shard); --checkpoint retention; strict matcher; --repros-per-game 40 --keep-repro 1000; resume from per-game JSONL after retryable infrastructure failure",
- "readout": "DRAFT: scripts/cert_sweep_readout.py must fail closed on the final source/fingerprint/readout hashes, shard/probe markers, strict matcher, seed contract, coverage floor, engine errors, repro retention, family-rate registration, and zero-unattributed criterion. Wilson lower rates estimated from calibration are advisory; registered upper rates remain binding. A lower rate becomes binding only when a separately pre-registered prediction interval is supplied.",
- "acceptance_criterion": {
-   "binding": "PASS only when the readout reports zero unattributed rows, zero engine errors, complete repro retention, and exactly 10,000 distinct games from the reserved sweep-2 bands.",
-   "failure": "Any unattributed row, engine error, missing/duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",
-   "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
- },
- "scope_statement": "#970 lesson folded: this sweep bounds NEW rows GLOBALLY by construction - 10,000 fresh games with full-frame attribution and the zero-unattributed criterion - not merely clearance at the fix lanes' aimed seeds. Any mechanism the fixes regress or newly expose surfaces as UNATTRIBUTED.",
- "draft_family_rate_table": {
-  "note": "NONBINDING DRAFT carried from c14. Recompute with the final classifier after all source fixes merge, then rename this field to pre_registered_family_rate_table in a separate pre-launch commit.",
-  "calibration_boundaries": 791757,
-  "documented_families": {
-   "limit:roll_divergent_lethality": {
-    "observed_c14": 1281,
-    "predicted_next": 1281,
-    "wilson95": [
-     1213,
-     1353
-    ]
-   },
-   "I1_cap_state_shape": {
-    "observed_c14": 517,
-    "predicted_next": 517,
-    "wilson95": [
-     474,
-     564
-    ]
-   },
-   "LS_capped_lethal_shape": {
-    "observed_c14": 478,
-    "predicted_next": 478,
-    "wilson95": [
-     437,
-     523
-    ]
-   },
-   "limit:world_sample_drag_target": {
-    "observed_c14": 271,
-    "predicted_next": 271,
-    "wilson95": [
-     241,
-     305
-    ]
-   },
-   "I3_roll_inherited": {
-    "observed_c14": 240,
-    "predicted_next": 240,
-    "wilson95": [
-     211,
-     272
-    ]
-   },
-   "I6_sleeptalk_callee_union": {
-    "observed_c14": 215,
-    "predicted_next": 215,
-    "wilson95": [
-     188,
-     246
-    ]
-   },
-   "I4_attribution_tie": {
-    "observed_c14": 166,
-    "predicted_next": 166,
-    "wilson95": [
-     143,
-     193
-    ]
-   },
-   "I5_boundary_truncation": {
-    "observed_c14": 164,
-    "predicted_next": 164,
-    "wilson95": [
-     141,
-     191
-    ]
-   },
-   "I2_matcher_accounting": {
-    "observed_c14": 111,
-    "predicted_next": 111,
-    "wilson95": [
-     92,
-     134
-    ]
-   },
-   "LS_crit_arm_pairing_echo": {
-    "observed_c14": 28,
-    "predicted_next": 28,
-    "wilson95": [
-     19,
-     40
-    ]
-   },
-   "LS_confusion_fan": {
-    "observed_c14": 26,
-    "predicted_next": 26,
-    "wilson95": [
-     18,
-     38
-    ]
-   }
   },
-  "new_mechanisms_post_fix": {
-   "recharge_turn_residual_gap": {
-    "observed_c14": 61,
-    "predicted_next": 0,
-    "classifier_outcome": "UNATTRIBUTED",
-    "exclusion_counter": "recharge_turn_residual_gap",
-    "on_nonzero": "REGRESSION - sweep fails"
-   },
-   "truant_loaf_phase_drift": {
-    "observed_c14": 50,
-    "predicted_next": 0,
-    "classifier_outcome": "UNATTRIBUTED",
-    "exclusion_counter": "truant_loaf_phase_drift",
-    "on_nonzero": "REGRESSION - sweep fails",
-    "caveat": "#970 verified clearance at its aimed-seed scope (54 cleared, 0 new at 116-seed scope per its ledger section); this sweep is the GLOBAL bound"
-   },
-   "absorb_through_protect_and_missed": {
-    "observed_c14": 79,
-    "predicted_next": 0,
-    "classifier_outcome": "UNATTRIBUTED",
-    "exclusion_counter": "absorb_through_protect_or_miss",
-    "on_nonzero": "REGRESSION - sweep fails"
-   }
+  "predicted_class_rates_10k": {
+    "component_extra_in_engine:abilityvoltabsorb": {"expected_10k": 5, "wilson95_count_10k": [2.1, 11.7]},
+    "component_extra_in_engine:abilitywaterabsorb": {"expected_10k": 36, "wilson95_count_10k": [26.0, 49.8]},
+    "component_extra_in_engine:brn": {"expected_10k": 4, "wilson95_count_10k": [1.6, 10.3]},
+    "component_extra_in_engine:brn,itemleftovers": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_extra_in_engine:itemleftovers": {"expected_10k": 132, "wilson95_count_10k": [111.3, 156.5]},
+    "component_extra_in_engine:itemleftovers,movepainsplit": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_extra_in_engine:itemleftovers,psn": {"expected_10k": 17, "wilson95_count_10k": [10.6, 27.2]},
+    "component_extra_in_engine:itemleftovers,psn,sandstorm": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_extra_in_engine:itemleftovers,sandstorm": {"expected_10k": 12, "wilson95_count_10k": [6.9, 21.0]},
+    "component_extra_in_engine:leechseed": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_extra_in_engine:movepainsplit": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_extra_in_engine:partialtrap": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_extra_in_engine:psn": {"expected_10k": 14, "wilson95_count_10k": [8.3, 23.5]},
+    "component_extra_in_engine:spikes": {"expected_10k": 15, "wilson95_count_10k": [9.1, 24.8]},
+    "component_magnitude:abilityliquidooze": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_magnitude:heal": {"expected_10k": 16, "wilson95_count_10k": [9.8, 26.0]},
+    "component_magnitude:movepainsplit": {"expected_10k": 214, "wilson95_count_10k": [187.2, 244.7]},
+    "component_magnitude:psn": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:brn,movepainsplit|movepainsplit": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:heal,itemleftovers,psn|leechseed": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:heal,itemleftovers|leechseed": {"expected_10k": 5, "wilson95_count_10k": [2.1, 11.7]},
+    "component_mismatch:heal|itemleftovers": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:heal|itemleftovers,psn": {"expected_10k": 0, "wilson95_count_10k": [0.0, 3.8]},
+    "component_mismatch:heal|leechseed": {"expected_10k": 50, "wilson95_count_10k": [37.9, 65.9]},
+    "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_mismatch:itemleftovers,psn|leechseed": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_mismatch:itemleftovers|leechseed": {"expected_10k": 47, "wilson95_count_10k": [35.3, 62.5]},
+    "component_mismatch:leechseed|brn": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_mismatch:leechseed|psn": {"expected_10k": 7, "wilson95_count_10k": [3.4, 14.5]},
+    "component_mismatch:movepainsplit,psn|movepainsplit": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:partialtrap|brn": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_mismatch:partialtrap|psn": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_mismatch:sandstorm|brn": {"expected_10k": 0, "wilson95_count_10k": [0.0, 3.8]},
+    "component_mismatch:sandstorm|psn": {"expected_10k": 5, "wilson95_count_10k": [2.1, 11.7]},
+    "component_missing_in_engine:abilityliquidooze": {"expected_10k": 8, "wilson95_count_10k": [4.1, 15.8]},
+    "component_missing_in_engine:abilityliquidooze,itemleftovers": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_missing_in_engine:abilityvoltabsorb": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_missing_in_engine:abilitywaterabsorb": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_missing_in_engine:brn": {"expected_10k": 10, "wilson95_count_10k": [5.4, 18.4]},
+    "component_missing_in_engine:brn,heal": {"expected_10k": 2, "wilson95_count_10k": [0.5, 7.3]},
+    "component_missing_in_engine:brn,itemleftovers": {"expected_10k": 5, "wilson95_count_10k": [2.1, 11.7]},
+    "component_missing_in_engine:brn,itemleftovers,sandstorm": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_missing_in_engine:heal": {"expected_10k": 18, "wilson95_count_10k": [11.4, 28.5]},
+    "component_missing_in_engine:heal,itemleftovers": {"expected_10k": 15, "wilson95_count_10k": [9.1, 24.8]},
+    "component_missing_in_engine:heal,itemleftovers,psn": {"expected_10k": 4, "wilson95_count_10k": [1.6, 10.3]},
+    "component_missing_in_engine:heal,itemleftovers,sandstorm": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_missing_in_engine:itemleftovers": {"expected_10k": 252, "wilson95_count_10k": [222.8, 285.1]},
+    "component_missing_in_engine:itemleftovers,leechseed": {"expected_10k": 3, "wilson95_count_10k": [1.0, 8.8]},
+    "component_missing_in_engine:itemleftovers,movepainsplit": {"expected_10k": 1, "wilson95_count_10k": [0.2, 5.7]},
+    "component_missing_in_engine:itemleftovers,movewish": {"expected_10k": 6, "wilson95_count_10k": [2.7, 13.1]},
+    "component_missing_in_engine:itemleftovers,psn": {"expected_10k": 84, "wilson95_count_10k": [67.9, 104.0]},
+    "component_missing_in_engine:itemleftovers,psn,sandstorm": {"expected_10k": 4, "wilson95_count_10k": [1.6, 10.3]},
+    "component_missing_in_engine:itemleftovers,sandstorm": {"expected_10k": 34, "wilson95_count_10k": [24.3, 47.5]},
+    "component_missing_in_engine:leechseed": {"expected_10k": 30, "wilson95_count_10k": [21.0, 42.8]},
+    "component_missing_in_engine:movepainsplit": {"expected_10k": 16, "wilson95_count_10k": [9.8, 26.0]},
+    "component_missing_in_engine:psn": {"expected_10k": 96, "wilson95_count_10k": [78.6, 117.2]},
+    "component_missing_in_engine:sandstorm": {"expected_10k": 23, "wilson95_count_10k": [15.3, 34.5]},
+    "limit:roll_divergent_lethality": {"expected_10k": 1281, "wilson95_count_10k": [1212.8, 1353.0]},
+    "limit:world_sample_drag_target": {"expected_10k": 271, "wilson95_count_10k": [240.6, 305.2]},
+    "roll_scaled_component": {"expected_10k": 1049, "wilson95_count_10k": [987.4, 1114.4]}
   },
-  "what_level_candidates_if_why_round_does_not_close_them": {
-   "structural_component_count_without_supported_sibling": {
-    "observed_c14": 41,
-    "wilson95": [
-     30,
-     56
-    ]
-   },
-   "recoil_vs_substitute_basis": {
-    "observed_c14": 13,
-    "wilson95": [
-     8,
-     22
-    ]
-   },
-   "incapacitated_arm_pricing": {
-    "observed_c14": 11,
-    "wilson95": [
-     6,
-     20
-    ],
-    "note": "Typed-Hidden-Power thaw and bench-Rest provenance are not separately emittable classifier outcomes. They remain row-level candidates; do not register a predicted-zero key until a distinct classifier counter exists."
-   },
-   "same_turn_stat_event_gap": {
-    "observed_c14": 9,
-    "wilson95": [
-     5,
-     17
-    ]
-   },
-   "unresolved_generic_fallback_pool": {
-    "observed_c14": 60,
-    "wilson95": [
-     47,
-     77
-    ]
-   }
-  }
- },
-  "gate_adjudication_for_signoff": "The #965-endorsed disjunction covers only established fixes, documented follow-ups, and proven comparison limits. The independent review established that #974 did not close six incapacitated-action rows and also confirmed source defects that must be repaired before registration. Fresh rows matching no established mechanism remain UNATTRIBUTED and fail this sweep. Attributed-as-candidate never satisfies certification."
+  "scope_statement": "This sweep globally bounds new rows across 10,000 fresh games. Any mechanism the fixes regress or newly expose surfaces as UNATTRIBUTED or as an out-of-contract family/rate and fails certification."
 }

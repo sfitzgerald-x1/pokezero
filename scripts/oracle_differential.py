@@ -30,11 +30,14 @@ moves/items/abilities, expected stats) are intentionally uncertain and are NOT
 asserted for exact equality here; they get the lighter Part C checks.
 
 CONVENTIONS (verified against the vendored engine + encoder source, cited):
-  * toxic_stage: encoder = Showdown ``statusState.stage`` + 1. Showdown's
+  * toxic_stage: encoder normally = Showdown ``statusState.stage`` + 1. Showdown's
     ``data/conditions.ts`` tox increments stage in the END-OF-TURN residual;
     the encoder counts the |turn| line (showdown.py ~L818-821, "each turn ...
     escalates") so at a PRE-residual decision it already holds the NEXT tick's
-    multiplier. Consistently +1 (accepted convention, not a bug).
+    multiplier. In the post-upkeep/pre-next-turn forced-switch window it holds
+    the just-applied multiplier, so the offset is 0 (accepted convention).
+    Both sides clamp to stage 15 after saturation; the parser's internal 16
+    sentinel is intentionally invisible in this encoded comparison.
   * sleep_turns: encoder tracks ELAPSED turns asleep = startTime - remaining
     (snapshot ``statusState.time`` is turns REMAINING). Accepted.
   Both carry an expected +/-1 turn-boundary timing skew (snapshot is
@@ -275,8 +278,8 @@ def audit_side(acc: Acc, orc: Oracle, obs, team, offset: int, role: str, side: M
             if st == "tox":
                 snap_stage = ss.get("stage", 0)
                 enc_stage = round(nf[tok][S.NUMERIC_TOXIC_STAGE] * 15)
-                # Accepted convention: encoder = snapshot stage + 1 (pre-residual
-                # next-tick multiplier), with an occasional 0 at turn boundaries.
+                # Accepted convention: +1 at an ordinary pre-residual request, 0 in the
+                # post-upkeep/pre-next-turn forced-switch boundary.
                 off = enc_stage - snap_stage
                 acc.fam["toxic_stage(offset accepted +1)"]["n"] += 1
                 if off not in (0, 1):

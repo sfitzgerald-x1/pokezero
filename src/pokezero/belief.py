@@ -369,7 +369,7 @@ class PublicBattleBeliefEngine:
         self._shed_skin_activated_this_turn: set[str] = set()
         # Belief keys with an unresolved ``|cant|…|slp`` this turn — awaiting a following
         # ``sleepUsable`` (Sleep Talk / Snore) move that would mark the turn as ``skippedTime``.
-        # Any key still unresolved at ``|upkeep|`` was a plain sleep turn, which resets skip to 0.
+        # Any key still unresolved at ``|upkeep`` was a plain sleep turn, which resets skip to 0.
         self._sleep_cant_pending: set[str] = set()
         self._hp_after_actions: dict[str, Optional[float]] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
@@ -665,7 +665,7 @@ class PublicBattleBeliefEngine:
                     belief = self._upsert(showdown_slot=cant_slot, species=species)
                     self._replace_belief(belief, sleep_turns=belief.sleep_turns + 1)
                     # Mark the cant unresolved: a following Sleep-Talk/Snore ``|move|`` this turn
-                    # reclassifies it as a ``skippedTime`` turn; otherwise ``|upkeep|`` clears it as
+                    # reclassifies it as a ``skippedTime`` turn; otherwise ``|upkeep`` clears it as
                     # a plain (skip-resetting) sleep turn.
                     self._sleep_cant_pending.add(belief.key)
             return
@@ -712,8 +712,8 @@ class PublicBattleBeliefEngine:
                     self._replace_belief(active, turns_active=active.turns_active + 1)
             return
 
-        if event_type == "upkeep":
-            # The |upkeep| line follows all residuals (Leftovers heals, pinch-berry eats), so
+        if event_type == "upkeep" and raw_line == "|upkeep":
+            # The |upkeep line follows all residuals (Leftovers heals, pinch-berry eats), so
             # end-of-turn non-proc pruning runs here with this turn's proc sets fully populated.
             self._sweep_end_of_turn_non_procs()
             self._resolve_pending_mudshot()

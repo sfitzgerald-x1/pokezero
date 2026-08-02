@@ -528,11 +528,11 @@ fn is_caller_move(id: &str) -> bool {
     )
 }
 
-fn is_pursuit_scan_boundary(event_type: &str) -> bool {
+fn is_pursuit_scan_boundary(raw_line: &str, event_type: &str) -> bool {
     matches!(
         event_type,
-        "move" | "switch" | "drag" | "replace" | "cant" | "turn" | "upkeep"
-    )
+        "move" | "switch" | "drag" | "replace" | "cant" | "turn"
+    ) || raw_line == "|upkeep"
 }
 
 fn is_cant_no_choice_reason(action: &str) -> bool {
@@ -645,6 +645,7 @@ struct Window {
     effectiveness: Effectiveness,
     side_effect: SideEffect,
     defender_hit_by_move: bool,
+    defender_last_damage_by_move: bool,
     voluntary_switch: bool,
     locked_continuation: bool,
     switch_reason: Option<SwitchReason>,
@@ -696,6 +697,7 @@ impl Window {
             effectiveness: Effectiveness::Neutral,
             side_effect: SideEffect::None_,
             defender_hit_by_move: false,
+            defender_last_damage_by_move: false,
             voluntary_switch: false,
             locked_continuation: false,
             switch_reason: None,
@@ -873,6 +875,16 @@ struct MonCounters {
     switched_out_before_attacking: i64,
     stayed_and_attacked: i64,
     turns_active: i64,
+}
+
+/// Matchup-conditional twin of `MonCounters`, keyed by (side, species, opposing species).
+/// Accumulated at the SAME two live hook points as the marginal counters so the Rust and
+/// Python folds cannot drift — the reason the pair is (switched, stayed) rather than
+/// (switched, opportunities), which would have needed a turn map the folds prune.
+#[derive(Clone, Debug, Default)]
+struct MatchupCounters {
+    switched_out_before_attacking: i64,
+    stayed_and_attacked: i64,
 }
 
 type AnnotationValues = (Option<f64>, bool, bool, f64);
@@ -1270,6 +1282,7 @@ pub struct FoldStateInner {
     pursuit_intercept_predict_count: i64,
     my_switch_turn_count: i64,
     mon_counters: BTreeMap<(u8, String), MonCounters>,
+    matchup_counters: BTreeMap<(u8, String, String), MatchupCounters>,
     weather_reveals: BTreeMap<(u8, String), bool>,
 
     // --- bounded recent-turn slices (probe #7) ---
@@ -1322,6 +1335,7 @@ impl FoldStateInner {
             pursuit_intercept_predict_count: 0,
             my_switch_turn_count: 0,
             mon_counters: BTreeMap::new(),
+            matchup_counters: BTreeMap::new(),
             weather_reveals: BTreeMap::new(),
             turn_start_occupants: BTreeMap::new(),
             completed_turns: BTreeSet::new(),
@@ -1350,7 +1364,7 @@ impl FoldStateInner {
             self.event_index += 1;
             // Pursuit ring buffer maintenance AFTER processing: boundary-type lines
             // clear it; everything else — blank separators included — joins the scan set.
-            if is_pursuit_scan_boundary(event_type) {
+            if is_pursuit_scan_boundary(raw_line, event_type) {
                 self.pursuit_buffer.clear();
             } else {
                 self.pursuit_buffer.push(raw_line.clone());
@@ -1367,6 +1381,23 @@ impl FoldStateInner {
             .get("spikes")
             .unwrap_or(&0);
         (own, opp, self.weather.clone())
+    }
+
+    fn matchup_for(
+        &mut self,
+        side: u8,
+        species: &str,
+        opposing: &str,
+    ) -> &mut MatchupCounters {
+        self.matchup_counters
+            .entry((side, species.to_string(), opposing.to_string()))
+            .or_default()
+    }
+
+    fn opposing_species(&self, side: u8) -> Option<String> {
+        self.occupant[(1 - side) as usize]
+            .as_ref()
+            .map(|stay| stay.species.clone())
     }
 
     fn counters_for(&mut self, side: u8, species: &str) -> &mut MonCounters {
@@ -1397,9 +1428,10 @@ impl FoldStateInner {
 
     /// One line of the reference `_process_line`, against carried state.
     fn process_line(&mut self, raw_line: &str, parts: &[&str], event_type: &str) -> PyResult<()> {
-        if event_type.is_empty() || event_type == "upkeep" {
+        let canonical_upkeep = raw_line == "|upkeep";
+        if event_type.is_empty() || canonical_upkeep {
             self.close_window();
-            if event_type == "upkeep" {
+            if canonical_upkeep {
                 self.completed_turns.insert(self.turn_number);
             }
             return Ok(());
@@ -1460,6 +1492,9 @@ impl FoldStateInner {
             }
             if let Some(stayed) = stayed_species {
                 self.counters_for(side, &stayed).stayed_and_attacked += 1;
+                if let Some(facing) = self.opposing_species(side) {
+                    self.matchup_for(side, &stayed, &facing).stayed_and_attacked += 1;
+                }
             }
             self.pending_baton_pass[side as usize] = move_id == "batonpass";
             let defender = parts
@@ -1541,6 +1576,10 @@ impl FoldStateInner {
             if let Some(prev_species) = switched_out_species {
                 self.counters_for(side, &prev_species)
                     .switched_out_before_attacking += 1;
+                if let Some(facing) = self.opposing_species(side) {
+                    self.matchup_for(side, &prev_species, &facing)
+                        .switched_out_before_attacking += 1;
+                }
             }
             let species = {
                 let from_details = species_from_details(parts[3]);
@@ -1639,17 +1678,20 @@ impl FoldStateInner {
                             if let Some(new_fraction) = new_fraction {
                                 let delta = previous_fraction - new_fraction;
                                 if delta > 0.0 {
-                                    current.damage_fraction += delta;
                                     if is_confusion_selfhit {
                                         current.confusion_selfhit_fraction += delta;
                                         current.confusion_selfhit = true;
+                                        current.defender_last_damage_by_move = false;
+                                    } else {
+                                        current.damage_fraction += delta;
+                                        current.defender_hit_by_move = true;
+                                        current.defender_last_damage_by_move = true;
                                     }
                                 }
-                                current.defender_hit_by_move = true;
                             }
                         }
                     } else {
-                        current.defender_hit_by_move = false;
+                        current.defender_last_damage_by_move = false;
                     }
                 }
                 if target == current.side && current.kind == Kind::Move {
@@ -1725,7 +1767,7 @@ impl FoldStateInner {
             self.pending_faint_replacement[target as usize] = true;
             self.fainted_turns.insert(self.turn_number);
             if let Some(current) = self.current_window.as_mut() {
-                if Some(target) == current.defender_side && current.defender_hit_by_move {
+                if Some(target) == current.defender_side && current.defender_last_damage_by_move {
                     current.ko = true;
                 }
             }
@@ -2365,6 +2407,9 @@ fn window_to_py<'py>(py: Python<'py>, window: &Window) -> PyResult<Bound<'py, Py
     out.set_item("effectiveness", window.effectiveness.as_str())?;
     out.set_item("side_effect", window.side_effect.as_str())?;
     out.set_item("defender_hit_by_move", window.defender_hit_by_move)?;
+    if window.defender_hit_by_move && !window.defender_last_damage_by_move {
+        out.set_item("defender_last_damage_by_move", false)?;
+    }
     out.set_item("voluntary_switch", window.voluntary_switch)?;
     out.set_item("locked_continuation", window.locked_continuation)?;
     out.set_item(
@@ -2397,6 +2442,14 @@ fn window_from_py(payload: &Bound<'_, PyAny>) -> PyResult<Window> {
         Some(reason) => Some(SwitchReason::parse(&reason)?),
         None => None,
     };
+    let defender_hit_by_move = py_get(payload, "defender_hit_by_move")?.is_truthy()?;
+    let defender_last_damage_by_move = match payload
+        .downcast::<PyDict>()?
+        .get_item("defender_last_damage_by_move")?
+    {
+        Some(value) => value.is_truthy()?,
+        None => defender_hit_by_move,
+    };
     Ok(Window {
         event_index: py_get(payload, "event_index")?.extract::<i64>()?,
         turn: py_get(payload, "turn")?.extract::<i64>()?,
@@ -2426,7 +2479,8 @@ fn window_from_py(payload: &Bound<'_, PyAny>) -> PyResult<Window> {
             &py_get(payload, "effectiveness")?.extract::<String>()?,
         )?,
         side_effect: SideEffect::parse(&py_get(payload, "side_effect")?.extract::<String>()?)?,
-        defender_hit_by_move: py_get(payload, "defender_hit_by_move")?.is_truthy()?,
+        defender_hit_by_move,
+        defender_last_damage_by_move,
         voluntary_switch: py_get(payload, "voluntary_switch")?.is_truthy()?,
         locked_continuation: py_get(payload, "locked_continuation")?.is_truthy()?,
         switch_reason,
@@ -2727,6 +2781,21 @@ impl FoldStateInner {
         )?;
         out.set_item("my_switch_turn_count", self.my_switch_turn_count)?;
 
+        let matchup_counters = PyDict::new(py);
+        for ((side, species, facing), counters) in &self.matchup_counters {
+            let values = PyList::new(
+                py,
+                [
+                    counters.switched_out_before_attacking,
+                    counters.stayed_and_attacked,
+                ],
+            )?;
+            matchup_counters.set_item(
+                format!("{}|{}|{}", side_str(*side), species, facing),
+                values,
+            )?;
+        }
+        out.set_item("matchup_counters", matchup_counters)?;
         let mon_counters = PyDict::new(py);
         for ((side, species), counters) in &self.mon_counters {
             let values = PyList::new(
@@ -2937,6 +3006,37 @@ impl FoldStateInner {
                     turns_active: values[2],
                 },
             );
+        }
+
+        // Matchup counters must RESTORE, not just serialize: validate_fold_chains resumes
+        // each pair from the recorded row-n state, and a resumed fold that started these empty
+        // would diverge from the batch fold on the very next switch.
+        if let Ok(matchup_counters) = py_get(payload, "matchup_counters") {
+            for (key, values) in matchup_counters.downcast::<PyDict>()?.iter() {
+                let key = key.extract::<String>()?;
+                let mut parts = key.splitn(3, '|');
+                let side = parts.next().unwrap_or_default();
+                let species = parts.next().unwrap_or_default();
+                let facing = parts.next().unwrap_or_default();
+                if species.is_empty() || facing.is_empty() {
+                    return Err(PyValueError::new_err(format!(
+                        "malformed matchup_counters key {key:?}"
+                    )));
+                }
+                let values = values.extract::<Vec<i64>>()?;
+                if values.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "matchup_counters entry must have 2 ints",
+                    ));
+                }
+                state.matchup_counters.insert(
+                    (parse_side(side)?, species.to_string(), facing.to_string()),
+                    MatchupCounters {
+                        switched_out_before_attacking: values[0],
+                        stayed_and_attacked: values[1],
+                    },
+                );
+            }
         }
 
         let weather_reveals = py_get(payload, "weather_reveals")?;

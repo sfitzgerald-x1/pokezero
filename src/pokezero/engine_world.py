@@ -764,9 +764,10 @@ def _truant_volatile_decision(
     toggle; `truant_loafs` is the caller-side "acted last round -> loafs now" proxy that this
     replaces, so a payload `False` must OVERRIDE a proxy `True` rather than OR with it.
 
-    `None` means genuinely unknown -- no holder, or a truncated prefix whose switch-in was
-    never observed -- and falls back to the proxy, preserving previous behaviour instead of
-    asserting an acting phase the world cannot support.
+    `None` means no phase assertion: no holder, a truncated prefix, or a full-prefix Trace
+    acquisition whose residual event-queue membership is not public-derivable. It falls back
+    to the legacy proxy; this preserves previous behaviour but is not a fail-closed
+    materialization block.
     """
     phase = side_payload.get("truantPhase")
     if isinstance(phase, bool):
@@ -1107,9 +1108,9 @@ def _build_side_spec(
     # flinch, freeze, recharge, a switch -- after which it is inverted for the rest of the
     # stint. That single failure produced the 48-row loaf-phase family.
     #
-    # `None` means genuinely unknown (no holder, or a truncated prefix whose switch-in was
-    # never seen) and falls back to the caller's value, preserving previous behaviour rather
-    # than asserting an acting phase we cannot support.
+    # `None` means no phase assertion (no holder, a truncated prefix, or a full-prefix Trace
+    # acquisition whose residual event-queue membership is ambiguous). It falls back to the
+    # caller's legacy proxy; this is intentionally compatible, not fail-closed.
     if _truant_volatile_decision(side_payload, truant_loafs):
         volatiles = volatiles + ["truant"]
         supported = supported | {"truant"}
@@ -1224,9 +1225,28 @@ def _build_side_spec(
             side_conditions[mapped] = remaining
         else:
             side_conditions[mapped] = int(value)
+    # `toxicStage` is a bridge-only pre-tick counter, not the public multiplier.  The engine
+    # charges `toxic_count + 1`; 15 would therefore create an illegal stage-16 residual.
     toxic_stage = side_payload.get("toxicStage")
-    if isinstance(toxic_stage, int) and toxic_stage > 0:
-        side_conditions["toxic_count"] = toxic_stage
+    if party[active_index].status == "toxic":
+        if (
+            isinstance(toxic_stage, bool)
+            or not isinstance(toxic_stage, int)
+            or not 0 <= toxic_stage <= 14
+        ):
+            raise EngineWorldUnsupported(
+                "toxic_stage_unknown",
+                f"side {slot!r} has active Toxic without a public toxicStage",
+            )
+        if toxic_stage > 0:
+            side_conditions["toxic_count"] = toxic_stage
+    elif toxic_stage is not None and (
+        isinstance(toxic_stage, bool) or not isinstance(toxic_stage, int) or toxic_stage != 0
+    ):
+        raise EngineWorldUnsupported(
+            "toxic_stage_inconsistent",
+            f"side {slot!r} has toxicStage {toxic_stage!r} without active Toxic",
+        )
     # Consecutive-Protect decay. The engine prices the NEXT stall attempt at
     # CONSECUTIVE_PROTECT_CHANCE ** side_conditions.protect (0.5 ** k), and only
     # branches at all when k > 0 — so an unseeded world says "this is a first
@@ -1613,6 +1633,11 @@ def _hp_and_status(
     status = _STATUS_CODES.get(status_code)
     if status is None:
         if status_code == _SLEEP_STATUS_CODE:
+            if bool(row.get("restSleepProvenanceUnrepresentable")):
+                raise EngineWorldUnsupported(
+                    "rest_sleep_provenance_unrepresentable",
+                    f"{slot}: {species!r} has malformed public Rest provenance",
+                )
             if bool(row.get("restSleepRefundPending")):
                 raise EngineWorldUnsupported(
                     "rest_sleep_skipped_time_pending",

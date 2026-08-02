@@ -60,6 +60,7 @@ use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::state::{PokemonStatus, PokemonType, Side, State};
 
 use crate::encoder::{encode_row_value, encoded_to_dict, EncodedArrays, Tables};
+use crate::events::ActiveStatusTransition;
 use crate::fold::{FoldStateInner, PyFoldState};
 use crate::parse_state;
 
@@ -306,6 +307,17 @@ fn snapshot_side(side: &Side) -> SideSnapshot {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LeafMeta {
     pub(crate) toxic: [i64; 2],
+    /// Whether the active mon is publicly known to retain badly poisoned
+    /// status. The event renderer omits an unchanged status from ordinary HP
+    /// lines, so residual recovery carries this fact across those lines.
+    pub(crate) active_toxic: [bool; 2],
+    /// Exact HP condition last announced for each active side. This is only
+    /// used to recover a Toxic multiplier from the next exact residual.
+    pub(crate) active_hp: [Option<(i64, i64)>; 2],
+    /// A switch/drag proves the incoming Toxic mon's simulator counter reset
+    /// to zero. A first `/100` Toxic residual can therefore prove stage one;
+    /// no other rounded residual is safe to invert.
+    pub(crate) toxic_reentry_pending: [bool; 2],
     pub(crate) stint: [i64; 2],
     /// Per-mon sleep bookkeeping keyed by (engine side, species key):
     /// (started, cant_count). `started` marks a `|-status|..|slp` seen in the
@@ -354,6 +366,47 @@ pub(crate) struct LeafMetaCtx {
     /// Pressure (gen 3 announces Pressure on entry, so world truth and the
     /// parser's revealed-ability rule coincide for on-field mons).
     pub(crate) pressure: [Vec<String>; 2],
+    /// HP Percentage Mod applies to these sides' rendered protocol lines.
+    /// `/100` damage is rounded, except for the first residual after a
+    /// switch/drag reset, which is provably Toxic stage one.
+    pub(crate) hp_percent: [bool; 2],
+}
+
+/// Construction-only root proof for the one active-Toxic zero that is public:
+/// a same-seat fainted mon was replaced after upkeep. Each seat must carry the
+/// complete exact-boolean Python attestation; this lives in `ctx_json`, not the
+/// observation metadata or any frozen model schema.
+fn root_toxic_zero_after_upkeep(ctx: &Value) -> [bool; 2] {
+    let proof = ctx
+        .get("toxic_stage_zero_after_upkeep")
+        .and_then(Value::as_object);
+    ["p1", "p2"].map(|side| {
+        let attestation = proof
+            .and_then(|proof| proof.get(side))
+            .and_then(Value::as_object);
+        attestation
+            .and_then(|attestation| {
+                (attestation.get("proof").and_then(Value::as_bool) == Some(true)
+                    && attestation.get("pending").and_then(Value::as_bool) == Some(false)
+                    && attestation.get("invalid").and_then(Value::as_bool) == Some(false)
+                    && attestation
+                        .get("post_upkeep_window")
+                        .and_then(Value::as_bool)
+                        .is_some())
+                .then_some(true)
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn seed_root_toxic_reentry_pending(meta: &mut LeafMeta, proof: [bool; 2]) {
+    for side in 0..2 {
+        // The proof is meaningful only for the active toxic zero itself. A
+        // malformed/stale context must fail closed instead of leaking into a
+        // later residual, cure, switch, or faint.
+        meta.toxic_reentry_pending[side] =
+            proof[side] && meta.toxic[side] == 0 && meta.active_toxic[side];
+    }
 }
 
 /// The parser's timed side conditions (showdown.py `_TIMED_SIDE_CONDITIONS`).
@@ -405,6 +458,99 @@ fn called_move_source(line: &str) -> Option<String> {
     Some(normalize_identifier(tag))
 }
 
+/// Parse a protocol HP condition's exact numerator and denominator.
+/// Percentage-mode lines use the same shape (`n/100`); callers must consult
+/// [`LeafMetaCtx::hp_percent`] before treating that pair as exact HP.
+fn condition_hp(raw: &str) -> Option<(i64, i64)> {
+    let hp = raw.split_whitespace().next()?;
+    let (current, maximum) = hp.split_once('/')?;
+    let current = current.parse::<i64>().ok()?;
+    let maximum = maximum.parse::<i64>().ok()?;
+    (current >= 0 && maximum > 0).then_some((current, maximum))
+}
+
+/// The explicit major status on a protocol condition, if the line carries one.
+/// Bare HP updates deliberately return `None`: they do not change status.
+fn condition_status(raw: &str) -> Option<String> {
+    raw.split_whitespace()
+        .skip(1)
+        .find(|field| *field != "fnt")
+        .map(normalize_identifier)
+}
+
+fn condition_is_fainted(raw: &str) -> bool {
+    raw.split_whitespace().any(|field| field == "fnt")
+}
+
+fn clear_toxic_meta(meta: &mut LeafMeta, side: usize) {
+    meta.toxic[side] = 0;
+    meta.active_toxic[side] = false;
+    meta.toxic_reentry_pending[side] = false;
+}
+
+/// Re-seed a Toxic stage from a residual damage line before its HP condition
+/// replaces the prior value. Exact HP recovers any integral Gen 3 multiplier;
+/// rounded `/100` HP recovers only the first tick after a public re-entry.
+fn reseed_toxic_from_residual(meta: &mut LeafMeta, rest: &str, ctx: &LeafMetaCtx) {
+    let Some(side) = line_slot(rest) else { return };
+    let fields: Vec<&str> = rest.split('|').collect();
+    let condition = fields.get(1).copied().unwrap_or("");
+    let is_toxic_residual = fields.iter().skip(2).any(|field| field.trim() == "[from] psn");
+    if !is_toxic_residual || !meta.active_toxic[side] {
+        return;
+    }
+    let Some((current_hp, maximum_hp)) = condition_hp(condition) else {
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    };
+    if current_hp <= 0 {
+        clear_toxic_meta(meta, side);
+        return;
+    }
+    if ctx.hp_percent[side] {
+        if meta.toxic_reentry_pending[side] {
+            meta.toxic[side] = 1;
+        }
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    }
+    let Some((previous_hp, previous_maximum)) = meta.active_hp[side] else {
+        meta.toxic_reentry_pending[side] = false;
+        return;
+    };
+    meta.toxic_reentry_pending[side] = false;
+    if maximum_hp != previous_maximum || previous_hp <= current_hp {
+        return;
+    }
+    let damage = previous_hp - current_hp;
+    let unit = (maximum_hp / 16).max(1);
+    if damage % unit != 0 {
+        return;
+    }
+    let stage = damage / unit;
+    if (1..=15).contains(&stage) {
+        meta.toxic[side] = stage;
+    }
+}
+
+/// Carry the public active HP/status surface across protocol lines. The
+/// renderer writes only HP on ordinary damage/heal lines, so no status token
+/// means "unchanged", not "cured".
+fn update_active_condition(meta: &mut LeafMeta, side: usize, condition: &str) {
+    if let Some(hp) = condition_hp(condition) {
+        meta.active_hp[side] = Some(hp);
+    }
+    if condition_is_fainted(condition) {
+        clear_toxic_meta(meta, side);
+    } else if let Some(status) = condition_status(condition) {
+        meta.active_toxic[side] = status == "tox";
+        if status != "tox" {
+            meta.toxic[side] = 0;
+            meta.toxic_reentry_pending[side] = false;
+        }
+    }
+}
+
 /// Engine side index from a SIDE ident ("p1: name" / "p1a: name").
 fn side_ident_slot(rest: &str) -> Option<usize> {
     if rest.starts_with("p1") {
@@ -442,22 +588,57 @@ fn species_key(obj: &Map<String, Value>) -> String {
 
 /// Replay the parser's toxic/stint rules over synthesized lines
 /// (`showdown._ReplayParser._feed_line`: `|-status|..|tox` sets stage 1,
-/// `|-curestatus|` clears, the side's `|switch|`/`|drag|` resets stage AND
-/// stint, `|turn|` escalates every nonzero stage (cap 15) and advances every
-/// stint), plus the PP-charge replay (parser rules, see [`LeafMeta`]) and the
+/// status replacement, `|-curestatus|`, `|-cureteam|`, and `|faint|` clear;
+/// the side's `|switch|`/`|drag|` resets stage AND stint; `|turn|` escalates
+/// every nonzero stage through the internal saturation sentinel 16 and
+/// advances every stint. Exact residuals recover their multiplier, while
+/// rounded residuals recover only a switch/drag-proven stage one. This also
+/// replays the PP-charge rules (see [`LeafMeta`]) and the
 /// timed side-condition set-turn replay. `ctx` carries the sampled world's
-/// static per-side facts (Pressure holders).
+/// static per-side facts (Pressure holders and HP representation).
 pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMetaCtx) -> LeafMeta {
+    evolve_leaf_meta_with_status_transitions(meta, lines, ctx, &[])
+}
+
+pub(crate) fn evolve_leaf_meta_with_status_transitions(
+    meta: &LeafMeta,
+    lines: &[String],
+    ctx: &LeafMetaCtx,
+    transitions: &[ActiveStatusTransition],
+) -> LeafMeta {
     let mut out = meta.clone();
-    for line in lines {
+    for line_offset in 0..=lines.len() {
+        for transition in transitions.iter().filter(|transition| transition.line_offset == line_offset) {
+            if transition.new_status == PokemonStatus::TOXIC {
+                out.toxic[transition.side] = 1;
+                out.active_toxic[transition.side] = true;
+                out.toxic_reentry_pending[transition.side] = false;
+            } else {
+                clear_toxic_meta(&mut out, transition.side);
+            }
+        }
+        if line_offset == lines.len() {
+            break;
+        }
+        let line = &lines[line_offset];
         if line.starts_with("|turn|") {
+            // A root stage-zero proof has exactly one residual opportunity.
+            // If the first branch marker arrives without that Toxic residual,
+            // do not let a later rounded residual manufacture its stage.
+            out.toxic_reentry_pending = [false, false];
             for side in 0..2 {
                 if out.toxic[side] > 0 {
-                    out.toxic[side] = (out.toxic[side] + 1).min(15);
+                    out.toxic[side] = (out.toxic[side] + 1).min(16);
                 }
                 out.stint[side] += 1;
             }
             out.turns_seen += 1;
+            continue;
+        }
+        if line == "|upkeep" {
+            // `|upkeep` follows the residual block. A live proof here missed
+            // its first Toxic tick and is terminal for this leaf branch.
+            out.toxic_reentry_pending = [false, false];
             continue;
         }
         if let Some(rest) = line.strip_prefix("|move|") {
@@ -507,6 +688,36 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
             }
             continue;
         }
+        if let Some(rest) = line.strip_prefix("|-damage|") {
+            reseed_toxic_from_residual(&mut out, rest, ctx);
+            if let Some(side) = line_slot(rest) {
+                if let Some(condition) = rest.split('|').nth(1) {
+                    update_active_condition(&mut out, side, condition);
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|-heal|") {
+            if let Some(side) = line_slot(rest) {
+                if let Some(condition) = rest.split('|').nth(1) {
+                    update_active_condition(&mut out, side, condition);
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|faint|") {
+            if let Some(side) = line_slot(rest) {
+                clear_toxic_meta(&mut out, side);
+                out.active_hp[side] = None;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|-cureteam|") {
+            if let Some(side) = side_ident_slot(rest) {
+                clear_toxic_meta(&mut out, side);
+            }
+            continue;
+        }
         // Timed side-condition set turns (showdown.py
         // `_update_timed_side_conditions` :909-922): |-sidestart| records the
         // parser's CURRENT turn, |-sideend| pops the entry. Side idents on
@@ -533,17 +744,23 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
             let Some(side) = line_slot(rest) else { break };
             if is_status {
                 match rest.split('|').nth(1).map(|s| normalize_identifier(s.trim())) {
-                    Some(status) if status == "tox" => out.toxic[side] = 1,
+                    Some(status) if status == "tox" => {
+                        out.toxic[side] = 1;
+                        out.active_toxic[side] = true;
+                        out.toxic_reentry_pending[side] = false;
+                    }
                     Some(status) if status == "slp" => {
+                        clear_toxic_meta(&mut out, side);
                         let key = ident_species_key(rest);
                         out.sleep.insert((side, key), (true, 0));
                     }
-                    _ => {}
+                    Some(_) => clear_toxic_meta(&mut out, side),
+                    None => {}
                 }
             } else if is_cure {
-                out.toxic[side] = 0;
+                clear_toxic_meta(&mut out, side);
             } else {
-                out.toxic[side] = 0;
+                clear_toxic_meta(&mut out, side);
                 out.stint[side] = 0;
                 out.fresh_active[side] = true;
                 // Active tracking (Pressure resolution): species from the
@@ -553,6 +770,9 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMeta
                 if !species.is_empty() {
                     out.active[side] = species;
                 }
+                let condition = rest.split('|').nth(2).unwrap_or("");
+                update_active_condition(&mut out, side, condition);
+                out.toxic_reentry_pending[side] = out.active_toxic[side];
             }
             break;
         }
@@ -599,6 +819,8 @@ pub(crate) struct LeafContext {
     /// benched mons' cached request-history PP is stale by their last
     /// stint's final action, so their base is the belief ledger below).
     root_active_party: [usize; 2],
+    /// Caller-supplied opponent root request order (empty when absent).
+    root_opponent_request_order: Vec<String>,
     /// The SELF side's belief-ledger PP charges per (species key, move id)
     /// (`belief_view.self_pokemon[*].move_uses` — the parser's public
     /// charging count, exact where the cached request-history PP is stale).
@@ -661,6 +883,17 @@ impl LeafContext {
                 species_keys[out].push(normalize_identifier(name));
             }
         }
+        let mut meta_ctx = LeafMetaCtx::default();
+        if let Some(hp_percent) = ctx.get("hp_percent").and_then(Value::as_array) {
+            for side in hp_percent {
+                match side.as_str() {
+                    Some("p1") => meta_ctx.hp_percent[0] = true,
+                    Some("p2") => meta_ctx.hp_percent[1] = true,
+                    other => return Err(err(format!("ctx JSON has bad hp_percent side {other:?}"))),
+                }
+            }
+        }
+        let root_toxic_zero_proof = root_toxic_zero_after_upkeep(&ctx);
         let root_self_order: Vec<String> = md
             .get("self_team")
             .and_then(Value::as_array)
@@ -733,8 +966,12 @@ impl LeafContext {
                 .get(active)
                 .cloned()
                 .unwrap_or_default();
+            let active = side.get_active_immutable();
+            root_meta.active_toxic[engine_side] = active.status == PokemonStatus::TOXIC;
+            root_meta.active_hp[engine_side] = (active.maxhp > 0)
+                .then_some((active.hp as i64, active.maxhp as i64));
         }
-        let mut meta_ctx = LeafMetaCtx::default();
+        seed_root_toxic_reentry_pending(&mut root_meta, root_toxic_zero_proof);
         for (engine_side, side) in [(0usize, &root_state.side_one), (1, &root_state.side_two)] {
             for (party, p) in side.pokemon.into_iter().enumerate() {
                 if p.ability == poke_engine::engine::abilities::Abilities::PRESSURE {
@@ -775,6 +1012,24 @@ impl LeafContext {
             }
         }
         let root_turn = ctx.get("turn").and_then(Value::as_i64).unwrap_or(0);
+        // The opponent's ROOT REQUEST ORDER, supplied by the caller when it can
+        // compute it. This is the channel attempts 2 and 3 lacked: the crate
+        // never receives pre-root protocol lines, so it cannot replay the
+        // opponent's switch history itself, and every in-crate approximation
+        // has been wrong beyond one switch. Python already maintains exactly
+        // this permutation (determinization's `current_order`), so it is passed
+        // in rather than guessed.
+        let root_opponent_request_order: Vec<String> = ctx
+            .get("opponent_request_order")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(normalize_identifier)
+                    .collect()
+            })
+            .unwrap_or_default();
         let root_weather = md
             .get("weather")
             .and_then(Value::as_str)
@@ -797,6 +1052,7 @@ impl LeafContext {
             root_meta,
             meta_ctx,
             root_active_party,
+            root_opponent_request_order,
             self_ledger_uses,
             root_turn,
             root_weather,
@@ -969,9 +1225,9 @@ impl LeafContext {
         // opponent raises the USER's flag) — so a side's clause goes up when
         // its OPPONENT gains a new non-Rest sleeper. Toxic stage:
         // line-driven metadata (the parser escalates on |turn| lines only —
-        // review F1), with a cure guard only for full cures the mapper does
-        // not render (|-curestatus| is fold-invisible; a status REPLACEMENT
-        // like Rest's tox->slp keeps the parser stage — golden-proven).
+        // review F1). The line replay clears every public Toxic-ending event;
+        // this state guard also protects rows whose engine state proves the
+        // active fainted or has a non-Toxic replacement status.
         for (index, (key_sc, key_tox, side, other, engine_side)) in [
             (
                 "self_sleep_clause_used",
@@ -1007,7 +1263,7 @@ impl LeafContext {
             md.insert(key_sc.into(), json!(clause));
             let active = side.get_active_immutable();
             let mut stage = meta.toxic[engine_side];
-            if stage > 0 && active.hp > 0 && active.status == PokemonStatus::NONE {
+            if stage > 0 && (active.hp <= 0 || active.status != PokemonStatus::TOXIC) {
                 stage = 0;
             }
             md.insert(key_tox.into(), json!(stage));
@@ -1029,6 +1285,42 @@ impl LeafContext {
         md.insert(
             "opponent_active_volatiles".into(),
             json!(tracked_volatiles(opp_side, self_side)),
+        );
+        // V4 pack A1, OPPONENT SIDE ONLY — the asymmetry is deliberate; see below.
+        //
+        // MUSTRECHARGE is absent from VOLATILE_MAP (no tracked parser counterpart), so without
+        // this write the v4 encoder's `volatile:mustrecharge` bag entry would come from the
+        // ROOT's flag and go stale. For the opponent that is not merely stale like the rest of
+        // the pack, it is self-contradictory: this same function's action surface reads the
+        // volatile LIVE (see `recharging` below) to present the forced single "recharge"
+        // pseudo-move, so a branch that just fired Hyper Beam would show the forced surface
+        // with no recharge volatile, and a branch resuming from a recharging root would keep
+        // the volatile after the turn was consumed.
+        //
+        // The SELF side is deliberately NOT derived the same way, because the world it would
+        // read is not seeded for us. `MUSTRECHARGE` only enters a constructed world through
+        // engine_world.py's recharging_slots, and the live producer
+        // (engine_search.py::_recharging_slots) returns the OPPONENT slot or nothing — never
+        // ours. Since model.rs encodes the ROOT state to build root_priors, deriving the self
+        // flag from volatile_statuses would write `false` at depth 0 for a root where our own
+        // active must recharge, while Python's root encode writes the volatile from the parser
+        // tracker: a depth-0 parity regression in exchange for fixing a staleness. Passing the
+        // root flag through verbatim is correct there. Interior nodes are fine either way — the
+        // engine applies MUSTRECHARGE itself during simulation.
+        //
+        // BEWARE when revisiting: the depth-0 gate cannot catch this. leaf_root_parity.py
+        // (and leaf_vs_reality.py, prior_mapping_assert.py, fidelity_gate_events.py) derive
+        // `recharging` for BOTH slots from the recorded chosen candidate, so the gate's world
+        // carries self-side MUSTRECHARGE and would agree with a symmetric write rather than
+        // test it. Making the self side live requires teaching _recharging_slots to return our
+        // slot too (which also closes a real modelling gap: today the production root world
+        // lets our recharging mon pick any move) and that changes search-world construction,
+        // where engine_world.py treats mustrecharge as a hard lock like `trapped`.
+        md.insert(
+            "opponent_must_recharge".into(),
+            json!(opp_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::MUSTRECHARGE)),
         );
 
         // --- team conditions + active flags ---
@@ -1384,7 +1676,17 @@ impl LeafContext {
                 // its base is the belief ledger's public charging count
                 // (maxpp − ledger uses — the same |move|-line rules the
                 // request follows).
-                let ledger_base = if active_party != self.root_active_party[self_engine] {
+                // SELF SIDE ONLY. `self_ledger_uses` is keyed by the self
+                // team's species keys (belief_view.self_pokemon), so an
+                // opponent-side lookup would MISS rather than fail, yielding
+                // `max - 0` = full PP and silently overriding the (correct)
+                // root-snapshot base with a too-generous one. The opponent has
+                // no public charging ledger, so it must fall through to
+                // root_base -- see `opponent_action_map`.
+                let ledger_side_is_self = self_engine == self.engine_side_index(true);
+                let ledger_base = if ledger_side_is_self
+                    && active_party != self.root_active_party[self_engine]
+                {
                     self.tables.move_max_pp(&sd_id).filter(|max| *max > 0).map(|max| {
                         let uses = self
                             .self_ledger_uses
@@ -1421,8 +1723,16 @@ impl LeafContext {
                 }
                 MoveChoice::Switch(index) => {
                     let party = index.serialize().parse::<usize>().unwrap_or(0);
-                    let engine_side = self.engine_side_index(true);
-                    if let Some(key) = self.species_keys[engine_side].get(party) {
+                    // `self_engine`, NOT engine_side_index(true). This function
+                    // is seat-generic and is called for the opponent too;
+                    // hardcoding the self side here resolved the OPPONENT's
+                    // switch options against the SELF team's species keys,
+                    // which then failed to match `self_team_order` below --
+                    // silently mapping every opponent switch to None (node
+                    // falls back to uniform, so the cell measures nothing), or
+                    // worse, matching a same-species mon on the other team and
+                    // binding the arm to the wrong physical Pokemon.
+                    if let Some(key) = self.species_keys[self_engine].get(party) {
                         legal_switch_keys.push(key.clone());
                     }
                 }
@@ -1607,9 +1917,122 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(state, options, self_order, meta, engine_authoritative, true)
+    }
+
+    /// The OPPONENT seat's option list mapped onto action-block slots.
+    ///
+    /// Exists so the model's `opponent_action_logits` head can be gathered onto
+    /// the arms the opponent actually owns. Orientation (the #937 lesson):
+    /// priors are per-seat action distributions applied to the seat that owns
+    /// the actions and are NEVER reflected — only *values* flip at the seat
+    /// boundary. So this maps the opponent's own `get_all_options()` through
+    /// the opponent's own action block; there is no `1-x` and no index remap
+    /// through the self block anywhere in this path.
+    ///
+    /// Two conventions differ from the self side, both forced by the opponent
+    /// being BELIEF state rather than known state:
+    ///
+    /// * **Display order.** Same shape as the self side, different base. The
+    ///   root base is the sampled world's ENGINE PARTY order (the only base
+    ///   that resolves engine `Switch(party)` indices), and it is then evolved
+    ///   through the branch's switches by `evolve_self_order` with
+    ///   `opponent_prefix()`, exactly as the self order is. Measured on the
+    ///   golden corpus, that reproduces the opponent seat's own request order
+    ///   — which is the head's training label space
+    ///   (`rollout.py::_opponent_action_index`). Two nearby wrong answers,
+    ///   both tried and both measured: `md["opponent_team"]` is the partial
+    ///   belief view and resolves almost nothing, and the unevolved party
+    ///   order is correct only until the opponent's first switch.
+    /// * **PP base.** The self side can correct a switched-in mon's stale
+    ///   cached PP from the public charging ledger (`self_ledger_uses`). There
+    ///   is no such ledger for the opponent, so its base falls back to the
+    ///   sampled world's own root-snapshot PP. A disagreement can only make an
+    ///   engine-offered option fail to find a legal action slot, which returns
+    ///   `None` for that option and leaves the whole node uniform — the
+    ///   existing node-level fallback, i.e. it fails safe rather than shaping
+    ///   priors from a wrong surface.
+    pub(crate) fn opponent_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        opponent_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
+        self.seat_action_map(
+            state,
+            options,
+            opponent_order,
+            meta,
+            engine_authoritative,
+            false,
+        )
+    }
+
+    /// The opponent's ROOT display order: the sampled world's engine party
+    /// order. Always six entries and always resolves engine `Switch(party)`
+    /// indices, unlike `md["opponent_team"]`, which is the partial belief view.
+    /// Callers evolve this through a branch's switches with
+    /// [`evolve_self_order`] and `opponent_prefix()`.
+    pub(crate) fn root_opponent_order(&self) -> Vec<String> {
+        // ACTIVE-FIRST, not the raw packed party order. The head's label space
+        // is that seat's own Showdown request order, which keeps the active at
+        // slot 0 and accumulates a slot-0 swap on every switch-in; the self
+        // side gets this free because `root_self_order` comes from
+        // `md["self_team"]`, the real request. The opponent has no request, so
+        // the packed order must be corrected the same way before
+        // `evolve_self_order` layers further swaps on top of it.
+        //
+        // Measured on the golden corpus: without this swap the crate's switch
+        // slots disagree with `rollout.py::_opponent_action_index` on every row
+        // whose opponent has already switched -- i.e. from the opponent's first
+        // switch onward, which is most of a gen3 randbat. Applying the swap
+        // reproduces the label order exactly.
+        // Prefer the caller's explicit order. The fallback below -- packed
+        // party order with the active swapped to slot 0 -- reproduces the
+        // request order only while the opponent has made AT MOST ONE
+        // switch-in, and is transposed from the second onward. Four review
+        // rounds landed on that; it is kept only so ad-hoc callers that cannot
+        // supply the order degrade to a documented approximation rather than
+        // to nothing.
+        if !self.root_opponent_request_order.is_empty() {
+            return self.root_opponent_request_order.clone();
+        }
+        let engine_side = self.engine_side_index(false);
+        let mut order = self.species_keys[engine_side].clone();
+        let active = self.root_active_party[engine_side];
+        if active < order.len() && active != 0 {
+            order.swap(0, active);
+        }
+        order
+    }
+
+    pub(crate) fn opponent_prefix(&self) -> &'static str {
+        if self.self_is_p1 {
+            "p2"
+        } else {
+            "p1"
+        }
+    }
+
+    /// Seat-generic core of the action map. `slot_is_self` picks which seat's
+    /// side, engine index, party order and snapshot are read; every lookup
+    /// below is already indexed by engine side, so the two seats differ only in
+    /// that index and in the display-order convention documented above.
+    fn seat_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+        slot_is_self: bool,
+    ) -> PyResult<Vec<Option<usize>>> {
         let meta = meta.unwrap_or(&self.root_meta);
-        let self_side = side_ref_for(state, self.self_is_p1);
-        let self_engine = self.engine_side_index(true);
+        let side_is_p1 = if slot_is_self { self.self_is_p1 } else { !self.self_is_p1 };
+        let self_side = side_ref_for(state, side_is_p1);
+        let self_engine = self.engine_side_index(slot_is_self);
         let force_switch_shape =
             self_side.force_switch || self_side.get_active_immutable().hp <= 0;
         let recharging = self_side
@@ -1618,7 +2041,25 @@ impl LeafContext {
         // The (evolved) self-team display order with active flags — the same
         // derivation leaf_row_inputs writes into the md team before
         // action_surface reads it back.
-        let order: &[String] = self_order.unwrap_or(&self.root_self_order);
+        //
+        // The opponent uses the same shape: the sampled world's engine party
+        // order at the root, EVOLVED through the branch's switches by the
+        // caller. Both halves matter. The engine party order is the only base
+        // that resolves engine `Switch(party)` indices -- `md["opponent_team"]`
+        // is the partial belief view and resolves almost nothing. But leaving
+        // it UNEVOLVED is also wrong: measured against the head's training
+        // label (`rollout.py` `_opponent_action_index`, that seat's own
+        // request-order action block), the two agree until the opponent's
+        // first switch and are rotated by one from then on -- which in a gen3
+        // randbat is most of the game, and permutes every opponent switch
+        // prior.
+        let root_opponent: Vec<String> =
+            if slot_is_self { Vec::new() } else { self.root_opponent_order() };
+        let order: &[String] = if slot_is_self {
+            self_order.unwrap_or(&self.root_self_order)
+        } else {
+            self_order.unwrap_or(&root_opponent)
+        };
         let active_party = active_index_usize(self_side);
         let team_flags: Vec<(String, bool)> = order
             .iter()
@@ -1937,6 +2378,64 @@ impl PyLeafEncoder {
             .collect())
     }
 
+    /// The OPPONENT seat's option→action-index correspondence, the mirror of
+    /// `self_action_map`. Exposed so the orientation contract can be pinned
+    /// from Python without a libtorch build: the opponent head must be
+    /// gathered onto the arms the opponent owns, never reflected through the
+    /// self block. See [`LeafContext::opponent_action_map`] for the two
+    /// belief-state conventions (display order, PP base) that differ from the
+    /// self side.
+    #[pyo3(signature = (state_str, lines = None, root = false, engine_authoritative = false))]
+    fn opponent_action_map(
+        &self,
+        state_str: &str,
+        lines: Option<Vec<String>>,
+        root: bool,
+        engine_authoritative: bool,
+    ) -> PyResult<Vec<(String, Option<usize>)>> {
+        let state = parse_state(state_str)?;
+        let (_order, meta) = self.branch_context(lines.as_deref());
+        let (s1_options, s2_options) = if root || engine_authoritative {
+            state.root_get_all_options()
+        } else {
+            state.get_all_options()
+        };
+        // The OPPONENT's options and the OPPONENT's side -- the whole point of
+        // the mirror. `self_is_side_one()` selects the self seat, so both
+        // picks below are inverted relative to `self_action_map`.
+        let options = if self.ctx.self_is_side_one() {
+            s2_options
+        } else {
+            s1_options
+        };
+        let side = if self.ctx.self_is_side_one() {
+            &state.side_two
+        } else {
+            &state.side_one
+        };
+        // Evolve over the same branch lines the self side uses, with the
+        // OPPONENT's protocol prefix.
+        let opponent_order = lines.as_deref().map(|lines| {
+            evolve_self_order(
+                &self.ctx.root_opponent_order(),
+                lines,
+                self.ctx.opponent_prefix(),
+            )
+        });
+        let map = self.ctx.opponent_action_map(
+            &state,
+            &options,
+            opponent_order.as_deref(),
+            meta.as_ref(),
+            engine_authoritative,
+        )?;
+        Ok(options
+            .iter()
+            .zip(map)
+            .map(|(choice, index)| (crate::move_display(side, choice), index))
+            .collect())
+    }
+
     /// The rewritten row-inputs JSON for a leaf state (divergence debugging:
     /// diff this against the root inputs to see exactly which state fields
     /// the engine recompute changed).
@@ -1983,9 +2482,95 @@ impl PyLeafEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::{render_branch_events, EventContext};
+    use poke_engine::choices::Choices;
+    use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+    use poke_engine::state::PokemonMoveIndex;
 
     fn lines(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn root_zero_attestation(p1: bool, p2: bool) -> Value {
+        json!({
+            "toxic_stage_zero_after_upkeep": {
+                "p1": {
+                    "proof": p1,
+                    "pending": false,
+                    "invalid": false,
+                    "post_upkeep_window": false,
+                },
+                "p2": {
+                    "proof": p2,
+                    "pending": false,
+                    "invalid": false,
+                    "post_upkeep_window": false,
+                },
+            }
+        })
+    }
+
+    #[test]
+    fn root_zero_proof_requires_complete_exact_boolean_attestation() {
+        for (field, value) in [
+            ("proof", json!(1)),
+            ("proof", json!(0)),
+            ("proof", json!("true")),
+            ("proof", Value::Null),
+            ("proof", json!({"forged": true})),
+            ("pending", json!(1)),
+            ("pending", json!(0)),
+            ("invalid", json!("false")),
+            ("post_upkeep_window", json!({"forged": false})),
+        ] {
+            let mut ctx = root_zero_attestation(true, false);
+            ctx["toxic_stage_zero_after_upkeep"]["p1"][field] = value;
+            assert!(
+                !root_toxic_zero_after_upkeep(&ctx)[0],
+                "{field} must reject a non-boolean root attestation"
+            );
+        }
+
+        for (field, value) in [("pending", json!(true)), ("invalid", json!(true))] {
+            let mut ctx = root_zero_attestation(true, false);
+            ctx["toxic_stage_zero_after_upkeep"]["p1"][field] = value;
+            assert!(
+                !root_toxic_zero_after_upkeep(&ctx)[0],
+                "{field} must reject the wrong exact boolean"
+            );
+        }
+
+        assert!(root_toxic_zero_after_upkeep(&root_zero_attestation(true, false))[0]);
+        assert!(!root_toxic_zero_after_upkeep(&root_zero_attestation(true, false))[1]);
+    }
+
+    fn rendered_status_cure(choice: Choices) -> crate::events::RenderedEvents {
+        let mut state = State::default();
+        let active = state.side_one.get_active();
+        active.maxhp = 200;
+        active.hp = 100;
+        active.status = PokemonStatus::TOXIC;
+        active.replace_move(PokemonMoveIndex::M0, choice);
+        let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
+        let s2 = MoveChoice::None;
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, false);
+        assert_eq!(
+            branches.len(),
+            1,
+            "expected deterministic status cure: {branches:?}"
+        );
+        render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branches[0].instruction_list,
+            false,
+            &EventContext {
+                species: [vec!["Rattata".to_string()], vec!["Chansey".to_string()]],
+                turn: 1,
+                hp_percent: [false, false],
+            },
+        )
     }
 
     #[test]
@@ -2051,6 +2636,291 @@ mod tests {
         assert_eq!(meta.active[1], "starmie");
     }
 
+    #[test]
+    fn toxic_meta_rest_status_replacement_and_cures_clear_stage() {
+        let root = LeafMeta {
+            toxic: [0, 7],
+            active_toxic: [false, true],
+            ..Default::default()
+        };
+        for line in [
+            "|-status|p2a: Starmie|slp|[from] move: Rest",
+            "|-status|p2a: Starmie|par",
+            "|-curestatus|p2a: Starmie|tox",
+            "|-cureteam|p2a: Starmie|tox",
+        ] {
+            let meta = evolve_leaf_meta(&root, &lines(&[line]), &LeafMetaCtx::default());
+            assert_eq!(meta.toxic[1], 0, "{line} must clear Toxic stage");
+            assert!(!meta.active_toxic[1], "{line} must end active Toxic");
+        }
+    }
+
+    #[test]
+    fn rendered_status_cures_clear_toxic_meta_without_fake_protocol_lines() {
+        let root = LeafMeta {
+            toxic: [7, 0],
+            active_toxic: [true, false],
+            active_hp: [Some((100, 200)), None],
+            ..Default::default()
+        };
+
+        let rest = rendered_status_cure(Choices::REST);
+        assert!(
+            rest.lines
+                .iter()
+                .any(|line| line.contains("|-heal|p1a: Rattata|200/200 slp|[silent]")),
+            "Rest's production form carries sleep on its silent heal: {:?}",
+            rest.lines
+        );
+        assert!(
+            !rest
+                .lines
+                .iter()
+                .any(|line| line.starts_with("|-status|p1a: Rattata|slp")),
+            "the production renderer must not rely on a synthetic Rest status line: {:?}",
+            rest.lines
+        );
+        let rest_meta = evolve_leaf_meta_with_status_transitions(
+            &root,
+            &rest.lines,
+            &LeafMetaCtx::default(),
+            &rest.active_status_transitions,
+        );
+        assert_eq!(rest_meta.toxic[0], 0);
+        assert!(!rest_meta.active_toxic[0]);
+
+        for choice in [Choices::REFRESH, Choices::HEALBELL] {
+            let rendered = rendered_status_cure(choice);
+            assert!(
+                !rendered
+                    .lines
+                    .iter()
+                    .any(|line| line.starts_with("|-curestatus|")),
+                "the production renderer must not invent cure text: {:?}",
+                rendered.lines
+            );
+            assert!(
+                !rendered.active_status_transitions.is_empty(),
+                "the leaf must receive the renderer-private cure transition"
+            );
+            let meta = evolve_leaf_meta_with_status_transitions(
+                &root,
+                &rendered.lines,
+                &LeafMetaCtx::default(),
+                &rendered.active_status_transitions,
+            );
+            assert_eq!(meta.toxic[0], 0, "{choice:?} must clear stale Toxic stage");
+            assert!(
+                !meta.active_toxic[0],
+                "{choice:?} must clear Toxic provenance"
+            );
+        }
+    }
+
+    #[test]
+    fn toxic_meta_switch_and_drag_reentry_residuals_recover_stage() {
+        let root = LeafMeta {
+            toxic: [0, 9],
+            active_toxic: [false, true],
+            active_hp: [None, Some((80, 240))],
+            ..Default::default()
+        };
+        let switched = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|switch|p2a: Starmie|Starmie, L77|90/240 tox",
+                "|-damage|p2a: Starmie|75/240|[from] psn",
+            ]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(switched.toxic[1], 1, "exact Toxic residual must recover stage one");
+        let advanced = evolve_leaf_meta(
+            &switched,
+            &lines(&["|turn|21"]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(advanced.toxic[1], 2);
+
+        let ctx = LeafMetaCtx {
+            hp_percent: [false, true],
+            ..Default::default()
+        };
+        let dragged = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|drag|p2a: Starmie|Starmie, L77|90/100 tox",
+                "|-damage|p2a: Starmie|85/100|[from] psn",
+            ]),
+            &ctx,
+        );
+        assert_eq!(dragged.toxic[1], 1, "reentry provenance must recover rounded stage one");
+
+        let unproven = evolve_leaf_meta(
+            &LeafMeta {
+                toxic: [0, 0],
+                active_toxic: [false, true],
+                active_hp: [None, Some((90, 100))],
+                ..Default::default()
+            },
+            &lines(&["|-damage|p2a: Starmie|85/100|[from] psn"]),
+            &ctx,
+        );
+        assert_eq!(unproven.toxic[1], 0, "rounded residual without reentry provenance fails closed");
+
+        for event in ["switch", "drag"] {
+            let clean = evolve_leaf_meta(
+                &root,
+                &lines(&[
+                    &format!("|{event}|p2a: Blissey|Blissey, L80, F|90/240"),
+                    "|-damage|p2a: Blissey|75/240|[from] psn",
+                ]),
+                &LeafMetaCtx::default(),
+            );
+            assert_eq!(
+                clean.toxic[1], 0,
+                "{event} to a healthy mon must not resurrect Toxic"
+            );
+            assert!(
+                !clean.active_toxic[1],
+                "{event} must clear active Toxic provenance"
+            );
+            assert!(
+                !clean.toxic_reentry_pending[1],
+                "{event} clean entry has no reentry proof"
+            );
+        }
+    }
+
+    #[test]
+    fn sanctioned_root_zero_proof_reaches_percent_leaf_for_both_seats() {
+        for side in 0..2 {
+            let mut root = LeafMeta {
+                active_toxic: [side == 0, side == 1],
+                active_hp: [Some((100, 100)), Some((100, 100))],
+                ..Default::default()
+            };
+            let proof = root_toxic_zero_after_upkeep(&root_zero_attestation(side == 0, side == 1));
+            seed_root_toxic_reentry_pending(&mut root, proof);
+            assert!(root.toxic_reentry_pending[side], "root proof lost for side {side}");
+            assert!(!root.toxic_reentry_pending[1 - side]);
+
+            let mut ctx = LeafMetaCtx::default();
+            ctx.hp_percent[side] = true;
+            let ident = if side == 0 { "p1a: Replacement" } else { "p2a: Replacement" };
+            let leaf = evolve_leaf_meta(
+                &root,
+                &lines(&[
+                    &format!("|-damage|{ident}|94/100 tox|[from] psn"),
+                    "|upkeep",
+                    "|turn|2",
+                ]),
+                &ctx,
+            );
+            // The first rounded residual proves stage one; the following
+            // parser turn boundary advances it to the next pending stage.
+            assert_eq!(leaf.toxic[side], 2, "root-to-leaf recovery side {side}");
+            assert!(!leaf.toxic_reentry_pending[side], "proof must be consumed");
+        }
+    }
+
+    #[test]
+    fn root_zero_proof_fails_closed_and_expires_on_lifecycle_transitions() {
+        let mut root = LeafMeta {
+            active_toxic: [true, false],
+            active_hp: [Some((100, 100)), None],
+            ..Default::default()
+        };
+        seed_root_toxic_reentry_pending(&mut root, root_toxic_zero_after_upkeep(&json!({})));
+        let ctx = LeafMetaCtx {
+            hp_percent: [true, false],
+            ..Default::default()
+        };
+        let unproven = evolve_leaf_meta(
+            &root,
+            &lines(&["|-damage|p1a: Replacement|94/100 tox|[from] psn"]),
+            &ctx,
+        );
+        assert_eq!(unproven.toxic[0], 0, "missing root proof must fail closed");
+
+        for line in [
+            "|-curestatus|p1a: Replacement|tox",
+            "|switch|p1a: Other|Other, L80|100/100",
+            "|faint|p1a: Replacement",
+        ] {
+            let mut proven = root.clone();
+            seed_root_toxic_reentry_pending(
+                &mut proven,
+                root_toxic_zero_after_upkeep(&root_zero_attestation(true, false)),
+            );
+            let expired = evolve_leaf_meta(&proven, &lines(&[line]), &ctx);
+            assert!(
+                !expired.toxic_reentry_pending[0],
+                "{line} must retire root zero proof"
+            );
+        }
+
+        let mut forged = LeafMeta {
+            toxic: [1, 0],
+            active_toxic: [true, false],
+            ..Default::default()
+        };
+        seed_root_toxic_reentry_pending(
+            &mut forged,
+            root_toxic_zero_after_upkeep(&root_zero_attestation(true, true)),
+        );
+        assert_eq!(forged.toxic_reentry_pending, [false, false]);
+    }
+
+    #[test]
+    fn root_zero_proof_expires_at_first_missed_residual_opportunity() {
+        for side in 0..2 {
+            for boundary in ["|upkeep", "|turn|2"] {
+                let mut root = LeafMeta {
+                    active_toxic: [side == 0, side == 1],
+                    active_hp: [Some((100, 100)), Some((100, 100))],
+                    ..Default::default()
+                };
+                let proof =
+                    root_toxic_zero_after_upkeep(&root_zero_attestation(side == 0, side == 1));
+                seed_root_toxic_reentry_pending(&mut root, proof);
+                let mut ctx = LeafMetaCtx::default();
+                ctx.hp_percent[side] = true;
+                let ident = if side == 0 { "p1a: Replacement" } else { "p2a: Replacement" };
+                let expired = evolve_leaf_meta(
+                    &root,
+                    &lines(&[
+                        boundary,
+                        &format!("|-damage|{ident}|94/100 tox|[from] psn"),
+                    ]),
+                    &ctx,
+                );
+                assert!(
+                    !expired.toxic_reentry_pending[side],
+                    "{boundary} must retire side {side}'s root proof"
+                );
+                assert_eq!(
+                    expired.toxic[side], 0,
+                    "later rounded residual after {boundary} must not recover side {side}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn toxic_meta_preserves_saturation_sentinel_sixteen() {
+        let root = LeafMeta {
+            toxic: [0, 15],
+            active_toxic: [false, true],
+            ..Default::default()
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&["|upkeep", "|turn|32", "|turn|33"]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(meta.toxic[1], 16);
+    }
+
     /// toxic_stall repro: a faint-pending ply runs the ENGINE's end-of-turn
     /// tick but emits no |turn| line — the parser (and therefore the leaf)
     /// must NOT escalate.
@@ -2072,7 +2942,7 @@ mod tests {
             ]),
             &LeafMetaCtx::default(),
         );
-        assert_eq!(meta.toxic[1], 9);
+        assert_eq!(meta.toxic[1], 0);
     }
 
     /// Review F4: stint counting — +1 per |turn| line, reset on the side's
@@ -2108,6 +2978,7 @@ mod tests {
         root.active = ["swampert".to_string(), "zapdos".to_string()];
         let ctx = LeafMetaCtx {
             pressure: [Vec::new(), vec!["zapdos".to_string()]],
+            ..Default::default()
         };
         let meta = evolve_leaf_meta(
             &root,

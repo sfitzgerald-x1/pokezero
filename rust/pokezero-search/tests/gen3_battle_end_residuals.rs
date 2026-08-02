@@ -62,6 +62,74 @@ fn damages(list: &[Instruction], side_ref: SideReference) -> Vec<i16> {
         .collect()
 }
 
+fn terminal_residual_roll_limit_state() -> State {
+    let mut state = State::default();
+
+    let attacker = state.side_one.get_active();
+    attacker.level = 87;
+    attacker.types = (
+        poke_engine::state::PokemonType::ICE,
+        poke_engine::state::PokemonType::GROUND,
+    );
+    attacker.hp = 154;
+    attacker.maxhp = 316;
+    attacker.attack = 224;
+    attacker.speed = 137;
+    attacker.item = poke_engine::engine::items::Items::LEFTOVERS;
+    attacker.replace_move(PokemonMoveIndex::M0, Choices::EARTHQUAKE);
+
+    let defender = state.side_two.get_active();
+    defender.types = (
+        poke_engine::state::PokemonType::NORMAL,
+        poke_engine::state::PokemonType::TYPELESS,
+    );
+    defender.hp = 182;
+    defender.maxhp = 362;
+    defender.defense = 201;
+    defender.speed = 201;
+    defender.status = poke_engine::state::PokemonStatus::TOXIC;
+    defender.replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state.side_two.side_conditions.toxic_count = 2;
+
+    for index in [
+        PokemonIndex::P1,
+        PokemonIndex::P2,
+        PokemonIndex::P3,
+        PokemonIndex::P4,
+        PokemonIndex::P5,
+    ] {
+        state.side_one.pokemon[index].hp = 0;
+        state.side_two.pokemon[index].hp = 0;
+    }
+    state
+}
+
+/// This is an ablation pin, not a fidelity assertion. The compact result below
+/// demonstrates why the withdrawn Toxic-only splitter cannot be restored: a
+/// correct comparison must evaluate the complete move pair and residual queue.
+#[test]
+fn terminal_residual_roll_split_remains_an_explicit_comparison_limit() {
+    let mut state = terminal_residual_roll_limit_state();
+    let before = format!("{:?}", state);
+    let branches = poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        true,
+    );
+
+    assert_eq!(before, format!("{:?}", state), "branch generation mutated state");
+    assert!(
+        (branches.iter().map(|branch| branch.percentage).sum::<f32>() - 100.0).abs() < 1e-6,
+        "the compact ablation must preserve probability mass"
+    );
+    assert_eq!(branches.len(), 2, "no production residual roll splitter is installed");
+    assert!(branches.iter().any(|branch| {
+        damages(&branch.instruction_list, SideReference::SideTwo).first() == Some(&113)
+            && heals(&branch.instruction_list, SideReference::SideOne) == vec![19]
+    }));
+}
+
 /// Side two's active is poisoned on 1 HP, so the residual block kills it — and it is
 /// the FASTER mon (200 vs 50), so under gen3's speed-major ordering its ENTIRE
 /// order-10 set resolves before side one runs any of its own.
