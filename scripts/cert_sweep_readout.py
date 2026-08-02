@@ -220,20 +220,36 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # random battles do not nickname, so this is latent rather than live;
     # scripts/fidelity_gate_events.py resolves the Truant active by species and
     # ability from the real team and is the right long-term source.
-    if _truant_slot is None:
-        _truant_loaf = False
-    else:
-        _defender = _truant_slot.group(1)
-        _attacker = "p2" if _defender == "p1" else "p1"
-        _actor = f"{_attacker}a: Slak"
-        _truant_loaf = any(
-            _actor in line
-            and (
-                (line.startswith("|cant|") and "truant" in line.lower())
-                or line.startswith("|move|")
-            )
-            for line in protocol
-        )
+    # SUBJECT POSITION, EITHER SIDE. Round nine found the side restriction was
+    # both too narrow and too wide, and that one change fixes both.
+    #
+    # Too narrow: the differential breaks on the FIRST disagreeing slot in the
+    # fixed order (p1, p2). A Slaking on p1 whose move leaves a same-side
+    # roll-scaled component -- Double-Edge recoil, Giga Drain -- makes p1 the
+    # complaining slot, so an attacker-side rule computed p2 and found nothing.
+    # Measured: a real Double-Edge loaf row that main attributes to Truant fell
+    # through to the structural counter.
+    #
+    # Too wide: `_actor in line` matches the Slaking as the move's TARGET.
+    # `|move|p1a: Skarmory|whirlwind|p2a: Slaking` fired loaf-phase for a
+    # Slaking that never acted and was being phazed off the field -- the exact
+    # "Slaking leaving the field on a switch boundary" shape this rule was
+    # narrowed to reject, and firing it manufactures a certification failure
+    # through the registered-zero gate.
+    #
+    # Requiring the Slaking in SUBJECT position -- the field immediately after
+    # the tag -- says "the Slaking acted", which is the actual mechanism, and
+    # makes the side irrelevant. It does not matter which slot complains; it
+    # matters that a Truant holder took or skipped its turn.
+    def _slaking_acted(line: str) -> bool:
+        parts = line.split("|")
+        if len(parts) < 3 or "Slak" not in parts[2]:
+            return False
+        if parts[1] == "move":
+            return True
+        return parts[1] == "cant" and "truant" in line.lower()
+
+    _truant_loaf = any(_slaking_acted(line) for line in protocol)
     if _truant_loaf and (
             (not obs_c and eng_c) or (obs_c and not eng_c)):
         return ("UNATTRIBUTED",
