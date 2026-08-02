@@ -194,24 +194,27 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # certification failures. The narrowed predicate is the loaf signature
     # itself, so a genuine loaf-phase drift still surfaces.
     _truant_slot = _MISS_SIDE_RE.search(majority)
-    # The |cant| and the Truant attribution must be on the SAME line. Checking
-    # them independently over the whole protocol lets a paralysis |cant| in any
-    # turn that mentions Truant anywhere satisfy both (#1010 review, comment 15).
+    # THE SLAKING IS THE ATTACKER; THE COMPLAINING SLOT IS THE DEFENDER.
     #
-    # BOTH DIRECTIONS. The first narrowing required an observed `|cant| truant`
-    # line, which by construction cannot exist in the rule's PRIMARY cited
-    # validation row -- s2000059/11, where the Slaking ATTACKS in the sim and
-    # only the engine's branch loafed. Re-review executed it: that direction
-    # fell through to unattributed_generic, so the narrowing silently dropped
-    # half the mechanism it was written for while the comment above still
-    # claimed "a genuine loaf-phase drift still surfaces".
+    # This binding was wrong twice. `_MISS_SIDE_RE` yields the slot whose HP
+    # COMPONENTS differ -- engine_transition_differential.py builds that string
+    # per slot from that slot's own component set, so it names the damage
+    # RECIPIENT. A Truant loaf changes whether the Slaking's ATTACK LANDS, so
+    # the differing components sit on the opponent's slot while the Slaking is
+    # on the other side. Binding the actor to the complaining slot therefore
+    # looked for the Slaking on the side it is never on.
     #
-    # What actually identifies the boundary is that THE SLAKING ON THE
-    # COMPLAINING SLOT acted, either way: it loafed (|cant|) or it moved
-    # (|move|). Both forms tie the line to the slot AND to Slaking being the
-    # actor, which is what the original "protocol mentions a Slaking anywhere"
-    # predicate failed to do -- that is the 8-of-9 switch-boundary defect this
-    # rule was narrowed to fix, and it stays fixed.
+    # Re-review demonstrated it on a real retained row: p1a Slaking uses Shadow
+    # Ball into p2a Zapdos for -130, the miss reads "p2 roll-scaled components
+    # differ", and the previous binding stopped attributing it -- the rule's own
+    # primary validation shape, silently dropped by the rule meant to sharpen it.
+    #
+    # Requiring the Slaking on the OPPOSITE side also fixes the too-wide axis
+    # the same review found. Both false positives it constructed -- a Slaking
+    # that moves and faints leaving a different mon on the slot, and an ordinary
+    # Double-Edge turn with a same-side recoil difference -- have the Slaking on
+    # the COMPLAINING slot, so both are now excluded. The original 8-of-9
+    # switch-boundary defect stays fixed for the same reason.
     #
     # Known limit: matching the species substring is nickname-blind. Gen 3
     # random battles do not nickname, so this is latent rather than live;
@@ -220,7 +223,9 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     if _truant_slot is None:
         _truant_loaf = False
     else:
-        _actor = f"{_truant_slot.group(1)}a: Slak"
+        _defender = _truant_slot.group(1)
+        _attacker = "p2" if _defender == "p1" else "p1"
+        _actor = f"{_attacker}a: Slak"
         _truant_loaf = any(
             _actor in line
             and (

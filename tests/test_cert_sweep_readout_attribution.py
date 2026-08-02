@@ -62,8 +62,13 @@ class CertificationAttributionTests(unittest.TestCase):
         # which carries no |cant| and so is not a loaf at all -- it went stale when
         # C45 narrowed the rule from "protocol mentions a Slaking" to the actual
         # signature, after finding 8 of its 9 sweep rows were switch boundaries.
+        # The Slaking is the ATTACKER, so it sits on the side OPPOSITE the
+        # complaining slot. This fixture complains about p1, so the Slaking is
+        # p2a. The previous version put it on p1a -- the side the mechanism
+        # never puts it on -- which is why the rule could stop firing on real
+        # data with its tests still green.
         cases["truant_loaf_phase_drift"]["protocol"] = [
-            "|cant|p1a: Slaking|ability: Truant"
+            "|cant|p2a: Slaking|ability: Truant"
         ]
         cases["absorb_through_protect_or_miss"]["protocol"] = ["|-activate|p1a: Mon|move: Protect"]
         cases["recoil_vs_substitute_basis"]["protocol"] = ["|-end|p2a: Mon|Substitute"]
@@ -228,19 +233,23 @@ class NarrowingPinTests(unittest.TestCase):
         _, basis = attribute_row(row)
         self.assertNotIn("structural component-count mismatch", basis, basis)
 
-    # -- rule 3: Truant loaf phase, BOTH directions -------------------------
+    # -- rule 3: Truant loaf phase ------------------------------------------
+    #    GEOMETRY: the complaining slot is the DEFENDER (the miss string is
+    #    built per slot from that slot's own components, so it names the damage
+    #    recipient). The Slaking is the ATTACKER, on the other side. Pinning it
+    #    the other way round is how this rule stopped firing on its own
+    #    validation shape while its tests stayed green.
     _TRUANT_MISS = (
         "pct=100.00: p1 roll-scaled components differ: "
         "observed_only=[] engine_only=[('', -10)]",
     )
     _TRUANT_MISS_OBS = (
         "pct=100.00: p1 roll-scaled components differ: "
-        "observed_only=[('', -10)] engine_only=[]",
+        "observed_only=[('', -130)] engine_only=[]",
     )
 
     def test_a_slaking_elsewhere_in_the_protocol_does_not_qualify(self) -> None:
-        """The 8-of-9 defect: a switch boundary whose complaining slot holds a
-        different mon, in a game that merely contains a Slaking."""
+        """The 8-of-9 defect: a game that merely contains a Slaking."""
 
         row = self._row(
             "roll_scaled_component",
@@ -251,23 +260,55 @@ class NarrowingPinTests(unittest.TestCase):
         self.assertNotIn("loaf-phase", basis, basis)
 
     def test_the_loafing_direction_qualifies(self) -> None:
+        """Sim's Slaking loafed; the engine's branch attacked p1."""
+
         row = self._row(
             "roll_scaled_component",
             self._TRUANT_MISS,
-            ("|cant|p1a: Slaking|ability: Truant",),
+            ("|cant|p2a: Slaking|ability: Truant",),
         )
         _, basis = attribute_row(row)
         self.assertIn("loaf-phase", basis, basis)
 
     def test_the_attacking_direction_also_qualifies(self) -> None:
-        """s2000059/11 -- the rule's PRIMARY cited validation row. The Slaking
-        attacks in the sim and only the engine's branch loafed, so there is no
-        |cant| line anywhere. The first narrowing dropped this direction."""
+        """s2000059/11 -- the rule's PRIMARY cited validation row, and the real
+        retained shape: p1a Slaking hits p2a for -130 and the miss complains
+        about p2. Mirrored here as p2a Slaking hitting p1."""
 
         row = self._row(
             "roll_scaled_component",
             self._TRUANT_MISS_OBS,
-            ("|move|p1a: Slaking|return|p2a: Blissey",),
+            ("|move|p2a: Slaking|shadowball|p1a: Zapdos",),
         )
         _, basis = attribute_row(row)
         self.assertIn("loaf-phase", basis, basis)
+
+    def test_a_slaking_on_the_complaining_slot_does_not_qualify(self) -> None:
+        """Re-review's false positive #1: the Slaking moves, faints, and a
+        different mon lands on the slot. Same side as the complaint, so it is
+        the switch-boundary shape, not a loaf."""
+
+        row = self._row(
+            "roll_scaled_component",
+            self._TRUANT_MISS_OBS,
+            (
+                "|move|p1a: Slaking|doubleedge|p2a: Zapdos",
+                "|-damage|p1a: Slaking|0 fnt",
+                "|faint|p1a: Slaking",
+                "|switch|p1a: Blissey|Blissey|100/100",
+            ),
+        )
+        _, basis = attribute_row(row)
+        self.assertNotIn("loaf-phase", basis, basis)
+
+    def test_a_same_side_recoil_difference_does_not_qualify(self) -> None:
+        """Re-review's false positive #2: an ordinary Slaking attack turn whose
+        one-sided difference is its OWN recoil."""
+
+        row = self._row(
+            "roll_scaled_component",
+            self._TRUANT_MISS_OBS,
+            ("|move|p1a: Slaking|doubleedge|p2a: Zapdos", "|-damage|p1a: Slaking|80/100"),
+        )
+        _, basis = attribute_row(row)
+        self.assertNotIn("loaf-phase", basis, basis)
