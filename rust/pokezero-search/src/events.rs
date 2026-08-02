@@ -3299,6 +3299,63 @@ mod tests {
         ));
     }
 
+    /// A recharge on an ORDINARY turn must still be consumed and rendered.
+    ///
+    /// The companion to the forced-replacement case. The fix suppresses recharge
+    /// consumption while a replacement boundary is open, and the obvious way to
+    /// get that wrong is to suppress it always -- which would make MUSTRECHARGE
+    /// permanent and hand the recharger a free pass every turn forever. This
+    /// pins the other direction.
+    #[test]
+    fn an_ordinary_recharge_turn_still_consumes_and_renders() {
+        let fixture = MINIMAL
+            .trim()
+            .replacen("EMBER;false;32", "HYPERBEAM;false;8", 1);
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::MUSTRECHARGE);
+        assert!(!state.side_one.force_switch, "no replacement boundary");
+        assert!(!state.side_two.force_switch, "no replacement boundary");
+
+        let ctx = EventContext {
+            species: [vec!["Charmander".to_string()], vec!["Squirtle".to_string()]],
+            turn: 7,
+            hp_percent: [false, false],
+        };
+        let tackle =
+            MoveChoice::from_string("tackle", &state.side_two).expect("Tackle is available");
+        let branches =
+            generate_instructions_from_move_pair(&mut state, &MoveChoice::None, &tackle, true);
+        assert!(!branches.is_empty());
+        for branch in &branches {
+            assert!(
+                branch.instruction_list.iter().any(|i| matches!(
+                    i,
+                    Instruction::RemoveVolatileStatus(r)
+                        if r.volatile_status == PokemonVolatileStatus::MUSTRECHARGE
+                )),
+                "an ordinary recharge turn must CONSUME the recharge: {:?}",
+                branch.instruction_list
+            );
+            let rendered = render_branch_events(
+                &mut state,
+                &MoveChoice::None,
+                &tackle,
+                &branch.instruction_list,
+                true,
+                &ctx,
+            );
+            let text = rendered.lines.join("\n");
+            assert_eq!(
+                text.matches("|cant|p1a: Charmander|recharge").count(),
+                1,
+                "exactly one recharge line on an ordinary turn: {text}"
+            );
+        }
+    }
+
     #[test]
     fn forced_replacement_defers_hyper_beam_recharge_cant_until_next_turn() {
         let fixture = MINIMAL
