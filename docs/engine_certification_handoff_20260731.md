@@ -20,6 +20,14 @@ The repository is at the C26 `build_source` lifecycle stage:
   "build_source"` and `launchable: false`.
 - The frozen source contains 51 engine patches with fingerprint
   `776fa1e15cec731d3223b493fab992dc042fd3da8bdee6d4b8c9dc1a1d192c9c`.
+  **Superseded 2026-08-01:** containing poke-engine's panics at the native
+  search boundary (`panic_guard.rs`) edits the crate, so the active source now
+  fingerprints `1ca662b02ea5d742e31baa3ac29f4d414f8683f9e84711962a24fd1b118b6498`
+  at the same 51 patches — the patch count is unchanged because the edit is to
+  our crate, not to a poke-engine patch. The value above is kept as the record
+  of what was handed off on 2026-07-31; the LIVE value is in
+  `reports/certification_contract_lifecycle.json`, which the attestation test
+  recomputes from the tree.
 - The certification readout and execution-manifest producer hashes are pinned
   in the lifecycle record.
 - The following C26 artifacts are intentionally absent and must remain absent
