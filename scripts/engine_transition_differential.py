@@ -742,17 +742,28 @@ def branch_component_legal_rolls(
 
 def _split_component_events(
     components: Sequence[DamageComponent],
+    *,
+    capped_bases: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Counter, list[DamageComponent]]:
-    """Event-preserving counterpart to :func:`_split_components`."""
+    """Event-preserving counterpart to :func:`_split_components`.
+
+    ``capped_bases`` names base sources that either side reported as capped on
+    this slot. They are roll-scaled on BOTH sides, so a cap present on one side
+    and absent on the other cannot change the roll-scaled list's length. See the
+    call site in :func:`evaluate_boundary_strict`.
+    """
 
     exact: Counter = Counter()
     rolled: list[DamageComponent] = []
     for component in components:
         if component.source in _IGNORED_SOURCES:
             continue
+        capped = component.source.endswith("_to_full")
+        base = component.source[: -len("_to_full")] if capped else component.source
         if (
             component.source in _ROLL_SCALED_SOURCES
-            or component.source.endswith("_to_full")
+            or capped
+            or base in capped_bases
         ):
             rolled.append(component)
         else:
@@ -771,6 +782,7 @@ def roll_components_agree(
     observed: Sequence[tuple[str, int]],
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
+    scale: int | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -782,6 +794,8 @@ def roll_components_agree(
 
     if len(observed) != len(engine):
         return False
+    if scale is None:
+        scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
     for (obs_source, obs), (_eng_source, eng) in zip(
         sorted(observed, key=lambda pair: pair[1]),
         sorted(engine, key=lambda pair: pair[1]),
@@ -801,7 +815,6 @@ def roll_components_agree(
             # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
             # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
             # of flooring slack.
-            scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
             if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
                 continue
             return False
@@ -832,6 +845,229 @@ def roll_components_agree(
     return True
 
 
+_MIN_DAMAGE_ROLL = 85
+_ONCE_PER_TURN_HEALS = frozenset({"itemleftovers", "leechseed"})
+_CASCADE_HEALS = frozenset({"itemleftovers", "heal", "movewish", "leechseed"})
+
+
+def _cascade_base(source: str) -> str:
+    return source[: -len("_to_full")] if source.endswith("_to_full") else source
+
+
+def _roll_cascade_equivalent(
+    observed, engine, *, support, target_side: str, pre_legal: set[int] | None
+) -> bool:
+    """Whether a component-COUNT difference is caused by a legal roll difference.
+
+    The engine may pick a legal damage roll the simulator did not. That
+    difference cascades: a Wish or Recover that would have capped the mon at
+    full no longer does, so a Leftovers tick which had nothing to do now has
+    room and emits a line. Same transition, same end HP, different component
+    COUNT -- and the length check rejected it before any roll tolerance applied.
+
+    FIVE constraints, all necessary. Review of #1010 found the first version
+    had only the third, which let an observed Leftovers tick match an engine
+    Wish plus Leech Seed on equal nets -- different mechanics, not one
+    transition at two rolls -- and let the direct component skip the legal-roll
+    set entirely by returning before the per-component loop.
+
+    1. The heal SOURCES must agree as a multiset except for exactly one extra
+       component on the longer side. Without this, any heals summing alike pass.
+    2. The direct component must clear the same ``legal``/``support`` check every
+       other roll-scaled component clears. A proportional band is not roll-set
+       membership.
+    3. The totals must agree, which is what makes the extra component a
+       cap-filling residual rather than an unrelated difference.
+    """
+
+    observed_direct = [c for c in observed if c.source == ""]
+    engine_direct = [c for c in engine if c.source == ""]
+    if len(observed_direct) != 1 or len(engine_direct) != 1:
+        return False
+
+    observed_heals = [c for c in observed if c.source != ""]
+    engine_heals = [c for c in engine if c.source != ""]
+    all_heals = observed_heals + engine_heals
+    if not all_heals:
+        return False
+    if any(_cascade_base(c.source) not in _CASCADE_HEALS or c.delta <= 0 for c in all_heals):
+        return False
+
+    # (1) exactly one extra component, and the shared heals agree by SOURCE.
+    #     Their MAGNITUDES may differ: in a real cascade the capped heal is
+    #     precisely the one that moved, because a `_to_full` heal restores
+    #     `maxhp - hp_before` and so inherits the preceding roll (see the
+    #     `_to_full` branch of roll_components_agree). Requiring equal
+    #     magnitudes here collapsed this predicate back to the NARROW form C66
+    #     measured at 21 rows and declined to ship -- it rejected the split-gap
+    #     majority, e.g. s18000053/136 where gap 6 = heal gap 3 + residual 3.
+    longer, shorter = (
+        (engine_heals, observed_heals)
+        if len(engine_heals) > len(observed_heals)
+        else (observed_heals, engine_heals)
+    )
+    if len(longer) - len(shorter) != 1:
+        return False
+    remaining = Counter(_cascade_base(c.source) for c in shorter)
+    extra_components = []
+    for component in longer:
+        base = _cascade_base(component.source)
+        if remaining.get(base):
+            remaining[base] -= 1
+        else:
+            extra_components.append(component)
+    if len(extra_components) != 1 or any(remaining.values()):
+        return False
+    extra = extra_components[0]
+
+    # (2) the EXTRA must itself be capped, and must be a source the other side
+    #     does not carry. Both sides end at full in a cascade, so the residual
+    #     that filled the gap tops the mon out. This is what rejects a discrete
+    #     mechanic difference -- an engine Leech Seed the observation never saw
+    #     arrives untagged -- and it rejects an extra that merely duplicates a
+    #     shared source to manufacture its own cap flip.
+    if not extra.source.endswith("_to_full"):
+        return False
+    if _cascade_base(extra.source) in {_cascade_base(c.source) for c in shorter}:
+        return False
+
+    # (3) the roll gap must be NONZERO and must bound the extra. Physically the
+    #     capped instance of a heal equals the deficit at that moment and the
+    #     uncapped instance is the nominal that overshot it, so capped <= uncapped;
+    #     with conservation that is exactly `extra <= |roll gap|`. Without it the
+    #     predicate accepted pairs unrealizable from any common start -- and
+    #     worse, MASKED real defects: a fourth review measured 14% of accepts
+    #     unrealizable, including an engine Leech Seed healing 21 where the
+    #     simulator healed 25 from an identical state, which is the gen3
+    #     rounding class this program exists to find. A strict `>` also closes
+    #     the zero-gap case, where identical damage from a common start means an
+    #     identical deficit and no heal can cap on one side only.
+    roll_gap = abs(abs(engine_direct[0].delta) - abs(observed_direct[0].delta))
+    if roll_gap <= 0 or abs(extra.delta) > roll_gap:
+        return False
+
+    # (4) exactly one shared base may flip its cap, it must flip toward the
+    #     SMALLER direct roll, and no base may appear twice. The smaller roll
+    #     leaves more HP, so it is the side whose heal still tops the mon out; a
+    #     flip the other way is impossible from a common start. Inspecting only
+    #     "some base flipped" admitted two shared heals flipping in OPPOSITE
+    #     directions, and a Counter over bases collapsed duplicates so that one
+    #     instance of a repeated source could supply the flip for another.
+    # Once-per-turn residuals may not repeat on a side. Leftovers and Leech
+    # Seed tick exactly once per turn, so two instances on one slot cannot both
+    # be real; that is how a synthetic case slipped a duplicate past the
+    # instance pairing, one copy matching and the other supplying the flip.
+    # Generic `heal` and `movewish` are NOT in this set: two untagged -heal
+    # lines in one step are ordinary, and banning them cost two genuine corpus
+    # cascades in an earlier round (s18500122/85, s18100033/60).
+    for side_heals in (observed_heals, engine_heals):
+        once_per_turn = [
+            _cascade_base(c.source)
+            for c in side_heals
+            if _cascade_base(c.source) in _ONCE_PER_TURN_HEALS
+        ]
+        if len(once_per_turn) != len(set(once_per_turn)):
+            return False
+
+    # Two capped heals on one side are possible ONLY with damage between them.
+    # A heal that tops the mon out leaves nothing for a later heal to restore,
+    # so a second positive `_to_full` requires the mon to have been damaged in
+    # between -- cap, hit, cap is an ordinary line (Recover to full, take the
+    # hit, Leftovers tops out again) and an earlier version of this predicate
+    # wrongly banned it outright. Order is what distinguishes the two, and
+    # event_index carries it.
+    for side_heals, side_direct in (
+        (observed_heals, observed_direct),
+        (engine_heals, engine_direct),
+    ):
+        caps = sorted(
+            (c.event_index for c in side_heals if c.source.endswith("_to_full"))
+        )
+        if len(caps) < 2:
+            continue
+        damage_indices = [c.event_index for c in side_direct]
+        if not all(
+            any(first < hit < second for hit in damage_indices)
+            for first, second in zip(caps, caps[1:])
+        ):
+            return False
+
+    smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
+    capped_side, uncapped_side = (
+        (observed_heals, engine_heals)
+        if smaller_is_observed
+        else (engine_heals, observed_heals)
+    )
+    # Pair the two sides' heals as INSTANCES, matching identical (base, delta)
+    # first, so a repeated source cannot have one of its instances supply the
+    # flip for another. Banning repeated bases outright was the previous
+    # attempt and it was wrong: two untagged `-heal` lines on one slot in one
+    # step both normalise to `heal`, which is ordinary. Review measured it
+    # rejecting two genuine two-roll cascades on the corpus -- s18500122/85 and
+    # s18100033/60 -- each reproducible from a single common start.
+    # The extra is already accounted for; pair only the SHARED instances.
+    unmatched_capped = [c for c in capped_side if c is not extra]
+    unmatched_uncapped = [c for c in uncapped_side if c is not extra]
+    for component in list(unmatched_capped):
+        twin = next(
+            (
+                other
+                for other in unmatched_uncapped
+                if other.source == component.source and other.delta == component.delta
+            ),
+            None,
+        )
+        if twin is not None:
+            unmatched_capped.remove(component)
+            unmatched_uncapped.remove(twin)
+    # Exactly one instance may remain on each side, and they must be the same
+    # base differing only in whether it capped.
+    if len(unmatched_capped) != 1 or len(unmatched_uncapped) != 1:
+        return False
+    capped, uncapped = unmatched_capped[0], unmatched_uncapped[0]
+    if _cascade_base(capped.source) != _cascade_base(uncapped.source):
+        return False
+    if not capped.source.endswith("_to_full") or uncapped.source.endswith("_to_full"):
+        return False
+    # the capped instance cannot exceed the nominal it was clipped from
+    if capped.delta > uncapped.delta:
+        return False
+
+    # (4) the direct component faces the ordinary legal-roll check, INCLUDING
+    #     the crit cross-check the equal-length path applies.
+    engine_component = engine_direct[0]
+    if (
+        support is not None
+        and target_side == support.target_side
+        and engine_component.event_index == support.event_index
+        and observed_direct[0].critical is not support.critical
+    ):
+        return False
+    legal = branch_component_legal_rolls(
+        support, target_side=target_side, component=engine_component, pre_legal=pre_legal
+    )
+    scale = max(
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
+    if not roll_components_agree(
+        [(observed_direct[0].source, observed_direct[0].delta)],
+        [(engine_component.source, engine_component.delta)],
+        legal,
+        scale=scale,
+    ):
+        return False
+
+    # (5) conservation. With the shape fixed above this IS the general causal
+    #     identity C66 named: the roll gap equals the sum of the increases
+    #     across the healing components, extra included.
+    return (observed_direct[0].delta + sum(c.delta for c in observed_heals)) == (
+        engine_direct[0].delta + sum(c.delta for c in engine_heals)
+    )
+
+
+
+
 def roll_component_events_agree(
     observed: Sequence[DamageComponent],
     engine: Sequence[DamageComponent],
@@ -850,7 +1086,13 @@ def roll_component_events_agree(
     """
 
     if len(observed) != len(engine):
-        return False
+        return _roll_cascade_equivalent(
+            observed, engine, support=support, target_side=target_side, pre_legal=pre_legal
+        )
+    slot_scale = max(
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
     for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
@@ -873,6 +1115,7 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
+            scale=slot_scale,
         ):
             return False
     return True
@@ -1375,7 +1618,33 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            if lossy and not sleeptalk_union:
+            # SKIP ON attribution_unsafe, NOT ON lossy. The renderer publishes two
+            # severities and this read collapsed them: mark_lossy means telemetry
+            # is incomplete while the action window is still exact, and
+            # mark_attribution_unsafe means the attribution is not observable
+            # from the engine delta -- and because the latter also writes to
+            # `lossy`, a merely telemetry-incomplete branch was discarded exactly
+            # as if its attribution were unobservable. 27 rows of the C32 residue
+            # were reported divergent while a branch carrying only
+            # `attract_immobilization_source_unknown` -- whose own source comment
+            # says "telemetry-only because the public action window itself is
+            # exact", and for which a full |cant|...|Attract line IS emitted --
+            # reproduced the observation. The attribution-unsafe branches stay
+            # excluded: admitting an unobservable attribution could manufacture a
+            # false MATCH, which hides a real difference rather than flagging a
+            # non-difference. reports/c57_severity_collapse.json.
+            # `empty_instruction_list` is lossy-but-not-unsafe, so the
+            # severity switch above would admit it. Review of #1010 caught that:
+            # the branch is a SYNTHETIC placeholder the renderer emits when the
+            # engine generated no instructions at all, carrying events ["|"].
+            # branch_event_legal_rolls returns None rather than raising for it
+            # (there is no direct-damage event to find), so it counts as usable
+            # and compares empty component lists on both slots -- meaning any
+            # boundary whose observation also has no HP components would MATCH
+            # against a branch that verified nothing. It returned skip_lossy
+            # before and must keep doing so.
+            _empty_render = "empty_instruction_list" in lossy
+            if (bool(branch.get("attribution_unsafe")) or _empty_render) and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:
@@ -1400,11 +1669,51 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
+                # CAP MARKING RELAXES MAGNITUDE, NEVER MEMBERSHIP.
+                #
+                # `_to_full` is encoded in the source NAME, which also moves the
+                # component between buckets — something the tag was never meant
+                # to do ("only the magnitude is relaxed, and only in the capped
+                # direction", above). Whether a heal caps depends on the damage
+                # roll, so membership, and therefore the roll-scaled list's
+                # LENGTH, became roll-dependent — and the comparison below
+                # rejects on length before any tolerance applies. Two arms
+                # differing only by a legal roll then read as structurally
+                # different (seed 17000013 step 12: Leftovers caps at 290/290
+                # against the observed -84 roll and does not against the
+                # engine's -90).
+                #
+                # So if EITHER side marks a base source as capped on this slot,
+                # both sides treat that base source as roll-scaled here. The
+                # magnitude tolerance still applies only where a cap is
+                # involved; nothing else changes bucket.
+                capped_bases = {
+                    component.source[: -len("_to_full")]
+                    for component in list(observed_components[slot])
+                    + list(engine_components[label])
+                    if component.source.endswith("_to_full")
+                }
+                # PER-BRANCH, never mutating the shared observed split. C29
+                # assigned back into obs_exact/obs_rolled, which are built once
+                # before this loop and shared by every branch AND every state --
+                # so a promotion earned by one branch leaked into all later
+                # branches, whose own capped_bases were empty. The engine side
+                # was already computed into locals per branch, so only the
+                # observed side drifted, and the two sides then disagreed about
+                # which bucket an identical component belonged to.
+                obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
+                if capped_bases:
+                    obs_exact_branch, obs_rolled_branch = _split_component_events(
+                        observed_components[slot], capped_bases=capped_bases
+                    )
+                    eng_exact, eng_rolled = _split_component_events(
+                        engine_components[label], capped_bases=capped_bases
+                    )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.
                 if not roll_component_events_agree(
-                    obs_rolled[slot],
+                    obs_rolled_branch,
                     eng_rolled,
                     support=branch_support,
                     target_side=label,
@@ -1412,14 +1721,14 @@ def evaluate_boundary_strict(
                 ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={[(c.source, c.delta) for c in obs_rolled[slot]]} "
+                        f"observed={[(c.source, c.delta) for c in obs_rolled_branch]} "
                         f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
-                if eng_exact != obs_exact[slot]:
-                    only_obs = obs_exact[slot] - eng_exact
-                    only_eng = eng_exact - obs_exact[slot]
+                if eng_exact != obs_exact_branch:
+                    only_obs = obs_exact_branch - eng_exact
+                    only_eng = eng_exact - obs_exact_branch
                     reason = (
                         f"{slot} attributed components differ: "
                         f"observed_only={sorted(only_obs.elements())} "
