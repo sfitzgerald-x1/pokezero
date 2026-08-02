@@ -420,7 +420,11 @@ class LocalShowdownEnv:
             else None
         )
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._observation_format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id,
+            set_source=self._belief_set_source,
+            # Unlike the tier2 producers this narrowing lives INSIDE the engine (the facts are
+            # protocol lines, not inferences), so the mask has to reach the constructor.
+            item_belief_narrowing=self.item_belief_narrowing_active(),
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -522,7 +526,9 @@ class LocalShowdownEnv:
             hp_visibility={"p1": "exact", "p2": "exact"},
         )
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._observation_format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id,
+            set_source=self._belief_set_source,
+            item_belief_narrowing=self.item_belief_narrowing_active(),
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -1748,6 +1754,20 @@ class LocalShowdownEnv:
         """
         return self.tier2_residuals_active() and bool(
             self.config.feature_masks.investment_belief_narrowing
+        )
+
+    def item_belief_narrowing_active(self) -> bool:
+        """Whether PROTOCOL-CERTAIN item facts narrow the shared belief candidate sets.
+
+        Deliberately NOT gated on the tier2 channel the way ``investment_belief_narrowing``
+        is. That gate is right for the investment pins, which cannot exist without the damage
+        inference running; these narrowings are read straight off ``|-enditem|`` / ``|-item|``
+        lines by the belief engine itself, so riding tier2 would make them silently inert on a
+        k0 arm for no mechanical reason. The candidate-set source IS required: with no
+        candidate variants there is nothing to narrow.
+        """
+        return self.config.belief_set_source_enabled() and bool(
+            self.config.feature_masks.item_belief_narrowing
         )
 
     def _investment_tracker_for(self, player: PlayerId) -> InvestmentLiveTracker | None:

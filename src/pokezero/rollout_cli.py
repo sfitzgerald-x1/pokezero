@@ -247,6 +247,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     collect_selfplay_cache.add_argument(
+        "--item-belief-narrowing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Let PROTOCOL-CERTAIN item facts narrow that mon's belief candidate variants: "
+            "the ORIGINAL held item named by a Knock Off / Trick stays a matching key after "
+            "the swap, and two different moves in one stay rule out Choice Band. Default: "
+            "OFF for checkpoint-less collection; adopted from the checkpoint otherwise. A "
+            "SIBLING of --investment-belief-narrowing rather than the same axis, but with "
+            "the same consequence: it moves the candidate-set count and uncertainty columns, "
+            "which exist under EVERY schema. Opt in only for a fresh arm."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -511,6 +525,7 @@ def _explicit_feature_masks_from_args(
     investment = getattr(args, "tier2_investment", None)
     pack_last_move = getattr(args, "feature_pack_last_move", None)
     narrowing = getattr(args, "investment_belief_narrowing", None)
+    item_narrowing = getattr(args, "item_belief_narrowing", None)
     no_stats = bool(getattr(args, "no_stats_block", False))
     no_exact = bool(getattr(args, "no_exact_state", False))
     if (
@@ -519,6 +534,7 @@ def _explicit_feature_masks_from_args(
         and investment is None
         and pack_last_move is None
         and narrowing is None
+        and item_narrowing is None
         and not no_stats
         and not no_exact
     ):
@@ -553,6 +569,9 @@ def _explicit_feature_masks_from_args(
         ),
         investment_belief_narrowing=(
             base.investment_belief_narrowing if narrowing is None else bool(narrowing)
+        ),
+        item_belief_narrowing=(
+            base.item_belief_narrowing if item_narrowing is None else bool(item_narrowing)
         ),
     )
 

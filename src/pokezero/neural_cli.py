@@ -543,6 +543,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "flag hard-fails."
         ),
     )
+    train.add_argument(
+        "--item-belief-narrowing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Let PROTOCOL-CERTAIN item facts narrow that mon's belief candidate variants: "
+            "the ORIGINAL held item named by a Knock Off / Trick stays a matching key after "
+            "the swap, and two different moves in one stay rule out Choice Band. A SIBLING "
+            "of --investment-belief-narrowing, not the same axis — those are precision-gated "
+            "damage inferences, these are certainties off the protocol — but it carries the "
+            "same warning: belief state feeds the candidate-set count and uncertainty "
+            "columns present under EVERY schema, so turning it on shifts the input "
+            "distribution away from every existing checkpoint's. Default for a fresh train: "
+            "OFF. With --initial-checkpoint the checkpoint's value wins and an explicitly "
+            "disagreeing flag hard-fails."
+        ),
+    )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     train.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
@@ -1959,6 +1976,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "the model-config equality validation."
         ),
     )
+    iterate.add_argument(
+        "--item-belief-narrowing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Let PROTOCOL-CERTAIN item facts narrow that mon's belief candidate variants "
+            "(original held item retained through a Knock Off / Trick; Choice Band ruled out "
+            "by two different moves in one stay). A SIBLING of "
+            "--investment-belief-narrowing — certainties rather than gated inferences — with "
+            "the same consequence: it moves the candidate-set count and uncertainty columns, "
+            "which exist under EVERY schema. Default: OFF. On --resume the run's stored model "
+            "config wins; a disagreeing explicit flag fails the model-config equality "
+            "validation."
+        ),
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -2657,6 +2689,7 @@ _MASK_FLAG_FIELDS = (
         "--investment-belief-narrowing/--no-investment-belief-narrowing",
         "investment_belief_narrowing",
     ),
+    ("--item-belief-narrowing/--no-item-belief-narrowing", "item_belief_narrowing"),
 )
 
 
@@ -2677,6 +2710,8 @@ def _explicit_mask_requests(args: argparse.Namespace) -> dict[str, object]:
         requested["feature_pack_last_move"] = bool(args.feature_pack_last_move)
     if getattr(args, "investment_belief_narrowing", None) is not None:
         requested["investment_belief_narrowing"] = bool(args.investment_belief_narrowing)
+    if getattr(args, "item_belief_narrowing", None) is not None:
+        requested["item_belief_narrowing"] = bool(args.item_belief_narrowing)
     return requested
 
 
@@ -2766,6 +2801,9 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         "investment_belief_narrowing": getattr(
             model_config, "investment_belief_narrowing", False
         ),
+        # getattr: a config without the item-certainty switch trained on candidate sets that
+        # discarded the original item after a mutation (same strict latch as the pair above).
+        "item_belief_narrowing": getattr(model_config, "item_belief_narrowing", False),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
@@ -2776,6 +2814,7 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
             "tier2_investment": False,
             "feature_pack_last_move": True,
             "investment_belief_narrowing": False,
+            "item_belief_narrowing": False,
             **masks,
         }
         if masks != expected:
@@ -2973,6 +3012,11 @@ def _train(args: argparse.Namespace) -> int:
                 False
                 if args.investment_belief_narrowing is None
                 else bool(args.investment_belief_narrowing)
+            ),
+            # Absent flag resolves OFF for the same reason: the item certainties narrow
+            # candidate sets that every existing checkpoint saw wide.
+            item_belief_narrowing=(
+                False if args.item_belief_narrowing is None else bool(args.item_belief_narrowing)
             ),
             reward_shaping=shaping_weights_json,
         )
@@ -5588,6 +5632,9 @@ def _iterate(args: argparse.Namespace) -> int:
             False
             if args.investment_belief_narrowing is None
             else bool(args.investment_belief_narrowing)
+        ),
+        item_belief_narrowing=(
+            False if args.item_belief_narrowing is None else bool(args.item_belief_narrowing)
         ),
         reward_shaping=iterate_shaping_json,
         observation_schema_version=iterate_schema_version,

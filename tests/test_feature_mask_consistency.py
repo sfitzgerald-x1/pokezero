@@ -1294,6 +1294,10 @@ class TrainMaskFlagsTest(unittest.TestCase):
                 # exist under every schema (candidate-set count, uncertainty), so a cache
                 # predating the field cannot have been collected with it on.
                 "investment_belief_narrowing": False,
+                # The item-certainty narrowing switch. Same FALSE default on read and for the
+                # same reason: it moves the candidate-set count and uncertainty columns, which
+                # exist under every schema, so a cache predating the field cannot have had it on.
+                "item_belief_narrowing": False,
             },
         )
 

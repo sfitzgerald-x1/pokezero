@@ -215,6 +215,28 @@ class ObservationFeatureMasks:
       ``tier2_residuals`` and the candidate-set source exactly as the tracker is; it does
       NOT require ``tier2_investment``, because the column and the belief write are
       independent consumers of the same conclusion.
+    - ``item_belief_narrowing``: whether PROTOCOL-CERTAIN item facts narrow that mon's belief
+      candidate variants. Two members so far, both inside ``pokezero.belief``: the ORIGINAL
+      held item named by a Knock Off / Trick stays a variant-matching key after the mutation
+      (``RevealedPokemonBelief.original_public_item``), and a mon that selects two different
+      moves in one stay on the field has Choice Band ruled out (the ``choicelock`` volatile
+      forbids it). Default False.
+
+      A SIBLING of ``investment_belief_narrowing``, not a reuse of it, for three reasons.
+      The evidence class differs: those are precision-gated statistical inferences over
+      damage rolls with a real false-pin risk, these are certainties read straight off the
+      protocol with no gate to design. The dependencies differ: the investment switch is
+      correctly gated on ``tier2_residuals`` because without the inference running there is
+      nothing to narrow with, while these need only the candidate-set source — riding the
+      tier2 channel would make them silently inert on a k0 arm for no mechanical reason.
+      And arm attribution needs them separable: bundled, a run that moved could not say
+      which channel moved it.
+
+      What it shares with ``investment_belief_narrowing`` is the reason for the default.
+      Belief state feeds ``NUMERIC_CANDIDATE_SET_COUNT`` (5) and ``NUMERIC_UNCERTAINTY`` (6),
+      frozen legacy positions present in EVERY schema, plus the possible-items/moves/abilities
+      counts and every sampled search world. Turning this on is not an ablation of something
+      already written — it perturbs encodes that every existing checkpoint trained against.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -224,6 +246,7 @@ class ObservationFeatureMasks:
     tier2_investment: bool = False
     feature_pack_last_move: bool = True
     investment_belief_narrowing: bool = False
+    item_belief_narrowing: bool = False
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked
