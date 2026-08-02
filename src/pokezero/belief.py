@@ -360,6 +360,52 @@ def variant_identity(variant: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _variant_field_values(
+    variants: Sequence[Mapping[str, Any]], field_name: str, *, plural: bool
+) -> set[str]:
+    values: set[str] = set()
+    for variant in variants:
+        raw = variant.get(field_name)
+        if plural:
+            if isinstance(raw, (list, tuple)):
+                values.update(str(item) for item in raw)
+        elif raw:
+            values.add(str(raw))
+    return values
+
+
+def _narrowed_possible_values(
+    values: tuple[str, ...],
+    variants: Sequence[Mapping[str, Any]],
+    kept: Sequence[Mapping[str, Any]],
+    field_name: str,
+    *,
+    plural: bool,
+) -> tuple[str, ...]:
+    """Drop ``possible_*`` entries no SURVIVING variant carries. Filter, never recompute.
+
+    The randbats source builds ``possible_moves``/``_items``/``_abilities`` as exactly this
+    projection over the surviving variant list (``_stable_unique`` over the same fields
+    ``Gen3RandbatVariant.to_summary`` writes into ``candidate_variants``), so filtering the
+    already-emitted tuple reproduces what the source itself would have emitted for the
+    narrowed set — while preserving ITS ordering and ITS string forms. Recomputing here
+    would introduce a second normalizer that could silently drift.
+
+    Guarded for sources that build these surfaces some other way: if any emitted value is
+    absent from the projection over ALL variants, the two are not the same vocabulary, and
+    the surface is returned untouched rather than filtered down to something wrong. A filter
+    that would empty the surface is also declined — same refusal asymmetry as the pin itself.
+    """
+
+    if not values:
+        return values
+    if not set(values) <= _variant_field_values(variants, field_name, plural=plural):
+        return values
+    survivors = _variant_field_values(kept, field_name, plural=plural)
+    narrowed = tuple(value for value in values if value in survivors)
+    return narrowed or values
+
+
 class PublicBattleBeliefEngine:
     def __init__(
         self,
@@ -968,6 +1014,10 @@ class PublicBattleBeliefEngine:
         ``inconsistent`` summary is left alone: its variants are the unconstrained fallback pool
         with uncertainty forced to 1.0, and narrowing a fallback would manufacture confidence
         the reveals do not support.
+
+        The ``possible_*`` surfaces are narrowed too, so the snapshot cannot end up internally
+        inconsistent (one surviving variant, five "possible" moves). They are FILTERED, never
+        recomputed: see :func:`_narrowed_possible_values`.
         """
 
         pin = self._variant_pins.get(key)
@@ -988,6 +1038,18 @@ class PublicBattleBeliefEngine:
         prior_uncertainty = summary_fields.get("uncertainty")
         if isinstance(prior_uncertainty, (int, float)):
             summary_fields["uncertainty"] = float(prior_uncertainty) * (len(kept) / previous)
+        for field_name, variant_field, plural in (
+            ("possible_abilities", "ability", False),
+            ("possible_items", "item", False),
+            ("possible_moves", "moves", True),
+        ):
+            summary_fields[field_name] = _narrowed_possible_values(
+                summary_fields.get(field_name) or (),
+                variants,
+                kept,
+                variant_field,
+                plural=plural,
+            )
         return summary_fields
 
     def clone(self) -> "PublicBattleBeliefEngine":
@@ -1354,6 +1416,9 @@ class PublicBattleBeliefEngine:
             "candidate_set_count": summary.candidate_count,
             "uncertainty": summary.uncertainty,
             "candidate_variants": summary.candidate_variants,
+            "possible_abilities": summary.possible_abilities,
+            "possible_items": summary.possible_items,
+            "possible_moves": summary.possible_moves,
             "_inconsistent": summary.inconsistent,
         }
         # Re-applied on EVERY summarize (each reveal re-derives the set), which is what makes a
@@ -1362,9 +1427,6 @@ class PublicBattleBeliefEngine:
         fields.pop("_inconsistent", None)
         return replace(
             belief,
-            possible_abilities=summary.possible_abilities,
-            possible_items=summary.possible_items,
-            possible_moves=summary.possible_moves,
             source_metadata=summary.source_metadata,
             **fields,
         )

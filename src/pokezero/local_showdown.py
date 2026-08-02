@@ -1611,25 +1611,32 @@ class LocalShowdownEnv:
             self.config.observation_spec.schema_version
             in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         )
-        normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
-        try:
-            state = normalize_for_player(
-                replay,
-                player_id=player,
-                configured_showdown_slot=player,
-                format_id=self._observation_format_id,
-                belief_engine=self._belief_engine,
-                include_turn_merged=turn_merged,
-            )
-        finally:
-            if normalize_started_at is not None:
-                self._root_puct_branch_observation_player_state_normalization_seconds += max(
-                    0.0, time.perf_counter() - normalize_started_at
+        def _normalize() -> PlayerRelativeBattleState:
+            normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
+            try:
+                return normalize_for_player(
+                    replay,
+                    player_id=player,
+                    configured_showdown_slot=player,
+                    format_id=self._observation_format_id,
+                    belief_engine=self._belief_engine,
+                    include_turn_merged=turn_merged,
                 )
-                self._root_puct_branch_observation_player_state_normalization_count += 1
+            finally:
+                if normalize_started_at is not None:
+                    self._root_puct_branch_observation_player_state_normalization_seconds += max(
+                        0.0, time.perf_counter() - normalize_started_at
+                    )
+                    self._root_puct_branch_observation_player_state_normalization_count += 1
+
+        state = _normalize()
         annotation_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
             tracker = self._tier2_tracker_for(player)
+            investment_tracker = self._investment_tracker_for(player)
+            narrowings_before = (
+                investment_tracker.belief_narrowing_count if investment_tracker is not None else 0
+            )
             if tracker is not None:
                 state = replace(
                     state,
@@ -1637,7 +1644,6 @@ class LocalShowdownEnv:
                         replay, state.transition_tokens, self._belief_engine
                     ),
                 )
-            investment_tracker = self._investment_tracker_for(player)
             if investment_tracker is not None:
                 codes = investment_tracker.observe(
                     replay, state.transition_tokens, self._belief_engine
@@ -1649,6 +1655,24 @@ class LocalShowdownEnv:
                             replace(token, investment=codes[index]) if index in codes else token
                             for index, token in enumerate(state.transition_tokens)
                         ),
+                    )
+                if investment_tracker.belief_narrowing_count != narrowings_before:
+                    # The tracker just narrowed the SHARED belief engine, but this state's
+                    # belief view was snapshotted from it a few lines above — so it is now
+                    # stale. Re-derive it, keeping the annotated token stream (extraction
+                    # does not depend on the belief engine, only the belief view does).
+                    #
+                    # This is not an optimisation, it is what makes the observation a
+                    # function of the STATE rather than of how many times this method has
+                    # been called: narrowing is monotone, so without the refresh the first
+                    # call after a conclusion would encode the pre-narrowing belief and
+                    # every later call the post-narrowing one, and a root and its leaves
+                    # would disagree. One pass suffices — re-deriving survivors from an
+                    # already-narrowed set reproduces it exactly, so the tracker's
+                    # idempotent re-narrow cannot fire a second change.
+                    state = replace(
+                        _normalize(),
+                        transition_tokens=state.transition_tokens,
                     )
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
@@ -1712,8 +1736,25 @@ class LocalShowdownEnv:
         """
         return self.tier2_residuals_active() and bool(self.config.feature_masks.tier2_investment)
 
+    def investment_belief_narrowing_active(self) -> bool:
+        """Whether investment conclusions narrow the shared belief candidate sets.
+
+        A THIRD switch, deliberately independent of ``tier2_investment``: that one governs
+        the reserved investment COLUMN, this one governs BELIEF STATE. Narrowing moves the
+        candidate-set count and uncertainty columns, which exist in every schema, so it must
+        never ride on the column's switch. It still needs the tier2 channel + the
+        candidate-set source, because without candidate variants there is nothing to narrow
+        and no strike is assessable at all.
+        """
+        return self.tier2_residuals_active() and bool(
+            self.config.feature_masks.investment_belief_narrowing
+        )
+
     def _investment_tracker_for(self, player: PlayerId) -> InvestmentLiveTracker | None:
-        if not self.investment_active():
+        # The tracker exists when EITHER consumer of its conclusions is on: the reserved
+        # column (tier2_investment) or the belief narrowing. With both off no tracker is
+        # built and the env is byte-identical to a pre-investment pipeline.
+        if not self.investment_active() and not self.investment_belief_narrowing_active():
             return None
         tracker = self._investment_trackers.get(player)
         if tracker is not None:
@@ -1729,6 +1770,7 @@ class LocalShowdownEnv:
             perspective_slot=player,
             own_team=own_team,
             dex=dex,
+            narrow_belief_candidates=self.investment_belief_narrowing_active(),
         )
         self._investment_trackers[player] = tracker
         return tracker

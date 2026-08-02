@@ -1289,6 +1289,11 @@ class TrainMaskFlagsTest(unittest.TestCase):
                 # under a different pack shape; caches predating the field are defaulted to
                 # True on read, the same asymmetry tier2_investment uses.
                 "feature_pack_last_move": True,
+                # The belief-narrowing switch. Recorded like every other mask, and defaulted
+                # FALSE on read: it is the one mask whose "on" state changes columns that
+                # exist under every schema (candidate-set count, uncertainty), so a cache
+                # predating the field cannot have been collected with it on.
+                "investment_belief_narrowing": False,
             },
         )
 

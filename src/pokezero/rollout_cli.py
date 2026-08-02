@@ -233,6 +233,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     collect_selfplay_cache.add_argument(
+        "--investment-belief-narrowing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Let a defender-side investment CONCLUSION narrow that mon's belief candidate "
+            "variants instead of only setting the reserved column. Default: OFF for "
+            "checkpoint-less collection; adopted from the checkpoint otherwise. A SEPARATE "
+            "switch from --tier2-investment, which governs a column: narrowing moves the "
+            "candidate-set count and uncertainty columns, which exist under EVERY schema, so "
+            "turning it on makes encodes differ from every existing checkpoint's training "
+            "distribution. Opt in only for a fresh arm."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -496,6 +510,7 @@ def _explicit_feature_masks_from_args(
     tier2 = getattr(args, "tier2_residuals", None)
     investment = getattr(args, "tier2_investment", None)
     pack_last_move = getattr(args, "feature_pack_last_move", None)
+    narrowing = getattr(args, "investment_belief_narrowing", None)
     no_stats = bool(getattr(args, "no_stats_block", False))
     no_exact = bool(getattr(args, "no_exact_state", False))
     if (
@@ -503,6 +518,7 @@ def _explicit_feature_masks_from_args(
         and tier2 is None
         and investment is None
         and pack_last_move is None
+        and narrowing is None
         and not no_stats
         and not no_exact
     ):
@@ -534,6 +550,9 @@ def _explicit_feature_masks_from_args(
         ),
         feature_pack_last_move=(
             base.feature_pack_last_move if pack_last_move is None else bool(pack_last_move)
+        ),
+        investment_belief_narrowing=(
+            base.investment_belief_narrowing if narrowing is None else bool(narrowing)
         ),
     )
 

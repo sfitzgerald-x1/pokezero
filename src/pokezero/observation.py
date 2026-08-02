@@ -185,15 +185,28 @@ class ObservationFeatureMasks:
       residuals live while the investment column was constant zero — one switch could not
       mask investment off for them without also darkening residuals. Default False until
       v2.1 training adopts the column; pre-v2.1 pipelines encode byte-identically.
-    - ``feature_pack_last_move``: whether the v4 k0 feature pack writes its A2 column, the
-      ACTIVE mon's last executed move (``CATEGORY_LAST_USED_MOVE``). Default True — the pack
-      is whole unless an arm deliberately ablates it.
-
       This exists because A2 is the pack's LARGEST single surface, and the k0-feature-pack
       plan's arm design is exactly ``k0+pack`` against ``k0+pack+lastmove``: two arms whose
       only difference is this column, so the read attributes whatever moves to A2 rather than
       to "the pack" as a bundle. Inert under every schema below v4, where the column does not
       exist — so toggling it can never perturb a v2.x/v3 encode.
+    - ``investment_belief_narrowing``: whether a defender-side investment CONCLUSION also
+      narrows that mon's belief candidate variants (``pokezero.investment`` calling
+      ``PublicBattleBeliefEngine.narrow_candidate_variants``). Default False.
+
+      NOT the same axis as ``tier2_investment``, which governs a COLUMN. This switch changes
+      BELIEF STATE, and the belief state feeds columns that exist in EVERY schema —
+      ``NUMERIC_CANDIDATE_SET_COUNT`` (5) and ``NUMERIC_UNCERTAINTY`` (6) on every
+      opponent-mon token, plus the possible-items/moves/abilities counts and every sampled
+      search world. So unlike every other mask here, turning this on is not an ablation of
+      something already written: it perturbs encodes that v2/v2.1/v2.2/v3/v4 checkpoints were
+      all trained against. Default OFF keeps them byte-identical; an arm that wants the
+      richer belief opts in explicitly and trains fresh.
+
+      Narrowing needs the investment inference to be RUNNING, so it is gated on
+      ``tier2_residuals`` and the candidate-set source exactly as the tracker is; it does
+      NOT require ``tier2_investment``, because the column and the belief write are
+      independent consumers of the same conclusion.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -202,6 +215,7 @@ class ObservationFeatureMasks:
     tier2_residuals: bool = True
     tier2_investment: bool = False
     feature_pack_last_move: bool = True
+    investment_belief_narrowing: bool = False
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked

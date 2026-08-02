@@ -288,6 +288,13 @@ class TransformerPolicyConfig:
     # the column only exists under v4 and no v4 checkpoint predates this field. Under every
     # earlier schema the switch is inert.
     feature_pack_last_move: bool = True
+    # Belief-side consumer of the defender-side investment conclusions: whether a pin also
+    # NARROWS the mon's candidate variants. Dataclass default False, and from_dict defaults
+    # False as well — the strict latch, because this is the one mask whose "on" state
+    # changes columns that exist in EVERY schema (candidate-set count 5, uncertainty 6, the
+    # possible-* counts). Every checkpoint that predates it trained on un-narrowed beliefs,
+    # so a missing field must resolve OFF exactly like tier2_residuals/tier2_investment.
+    investment_belief_narrowing: bool = False
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -518,6 +525,9 @@ class TransformerPolicyConfig:
             # v4-only switch: no checkpoint predating it can have the column, so the
             # dataclass default (pack whole) is the right resolution for a missing field.
             feature_pack_last_move=bool(payload.get("feature_pack_last_move", True)),
+            # Belief-narrowing latch: absent means a checkpoint trained on un-narrowed
+            # candidate sets, which is every checkpoint predating the switch.
+            investment_belief_narrowing=bool(payload.get("investment_belief_narrowing", False)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -2513,6 +2523,9 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
         tier2_residuals=config.tier2_residuals,
         tier2_investment=config.tier2_investment,
         feature_pack_last_move=bool(getattr(config, "feature_pack_last_move", True)),
+        investment_belief_narrowing=bool(
+            getattr(config, "investment_belief_narrowing", False)
+        ),
     )
 
 

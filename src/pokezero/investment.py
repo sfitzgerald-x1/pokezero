@@ -573,6 +573,57 @@ def _defense_class(
     return None
 
 
+# --- Belief narrowing (the conclusion's richer consumer). ---
+
+
+def _surviving_variant_payloads(
+    *,
+    conclusion: InvestmentConclusion,
+    candidate_variants: Sequence[Mapping[str, Any]],
+    species_key: str,
+    dex: ShowdownDex,
+    spread_cache: dict[tuple, RandbatsSpread],
+) -> tuple[Mapping[str, Any], ...]:
+    """Candidate variants still consistent with every CONCLUDED axis for one defender.
+
+    Returns the RAW payload mappings (not :class:`CandidateVariant`) because the belief
+    engine matches on ``belief.variant_identity`` of the mappings it handed out — the same
+    objects on both sides, so no normalizer can drift between them.
+
+    Reuses :func:`_variant_spread`, i.e. the shared gen3 spread core the strike assessment
+    already ran these variants through. Forking that computation here would let the pin and
+    the narrowing disagree about which variant has which stat, which is the one way a sound
+    exclusion turns into a wrong one.
+
+    Returns ``()`` when nothing is concluded, when a variant is unevaluable (an unevaluable
+    candidate could be the true one, so no exclusion is safe), or when the intersection is
+    empty. The caller passes ``()`` straight through: the engine treats an empty survivor
+    list as "no evidence", never as "eliminate everything".
+    """
+
+    hp_value = conclusion.hp_value
+    defense_values = {
+        stat: value
+        for stat, value in conclusion.defense_values.items()
+        if stat in {"def", "spd"}
+    }
+    if hp_value is None and not defense_values:
+        return ()
+    survivors: list[Mapping[str, Any]] = []
+    for payload in candidate_variants:
+        spread = _variant_spread(
+            CandidateVariant.from_mapping(payload), species_key, dex, spread_cache
+        )
+        if spread is None:
+            return ()
+        if hp_value is not None and int(spread.stats.get("hp", 0)) != hp_value:
+            continue
+        if any(int(spread.stats.get(stat, -1)) != value for stat, value in defense_values.items()):
+            continue
+        survivors.append(payload)
+    return tuple(survivors)
+
+
 @dataclass
 class _InferenceState:
     """Shared accrual state between the batch entry point and the live tracker."""
@@ -755,6 +806,14 @@ class InvestmentLiveTracker:
     caller's belief engine, folds each protocol line once, and assesses each of OUR
     move tokens once at the first ``observe`` call that sees it. ``token_codes`` maps
     token indices to the reserved investment-column code as of that strike (monotone).
+
+    With ``narrow_belief_candidates`` the conclusions ALSO feed
+    :meth:`PublicBattleBeliefEngine.narrow_candidate_variants`, which is the strictly
+    richer consumer: a narrowing moves the candidate-set count, the uncertainty, and the
+    possible items/moves/abilities on every opponent-mon token, and sharpens every sampled
+    search world — instead of projecting the same evidence onto one +/-1 scalar column.
+    Default OFF: narrowing perturbs belief-derived columns under EVERY schema, so a
+    pipeline that has not opted in must stay byte-identical.
     """
 
     def __init__(
@@ -764,6 +823,7 @@ class InvestmentLiveTracker:
         own_team: Sequence[OwnMon],
         dex: ShowdownDex,
         config: InvestmentConfig | None = None,
+        narrow_belief_candidates: bool = False,
     ) -> None:
         if perspective_slot not in {"p1", "p2"}:
             raise ValueError(f"perspective_slot must be 'p1' or 'p2', got {perspective_slot!r}.")
@@ -772,11 +832,16 @@ class InvestmentLiveTracker:
         self._own_by_species = {_species_key(mon.species): mon for mon in own_team}
         self._dex = dex
         self._config = config or InvestmentConfig()
+        self._narrow_belief_candidates = bool(narrow_belief_candidates)
         self._fold = _IncrementalContextFold()
         self._spread_cache: dict[tuple, RandbatsSpread] = {}
         self._state = _InferenceState()
         self._defender_levels: dict[str, int] = {}
         self._assessed_until = 0
+        # Monotone count of narrowings that actually CHANGED the shared belief engine.
+        # The caller watches it to know that a belief view snapshotted before ``observe``
+        # is now stale (see LocalShowdownEnv._state_for_player).
+        self._belief_narrowings = 0
 
     def clone(self) -> "InvestmentLiveTracker":
         """Clone accumulated public evidence for one independent search branch."""
@@ -787,12 +852,24 @@ class InvestmentLiveTracker:
         cloned._own_by_species = self._own_by_species
         cloned._dex = self._dex
         cloned._config = self._config
+        cloned._narrow_belief_candidates = self._narrow_belief_candidates
         cloned._fold = self._fold.clone()
         cloned._spread_cache = dict(self._spread_cache)
         cloned._state = self._state.clone()
         cloned._defender_levels = dict(self._defender_levels)
         cloned._assessed_until = self._assessed_until
+        cloned._belief_narrowings = self._belief_narrowings
         return cloned
+
+    @property
+    def narrow_belief_candidates(self) -> bool:
+        return self._narrow_belief_candidates
+
+    @property
+    def belief_narrowing_count(self) -> int:
+        """How many narrowings have actually changed the shared engine's candidate sets."""
+
+        return self._belief_narrowings
 
     @property
     def token_codes(self) -> dict[int, float]:
@@ -848,5 +925,54 @@ class InvestmentLiveTracker:
             self._state.apply(
                 assessment, dex=self._dex, defender_level=defender_level, config=self._config
             )
+            if self._narrow_belief_candidates:
+                self._narrow(belief_engine, assessment.defender_key, context.defender_species)
         self._assessed_until = len(tokens)
         return dict(self._state.token_codes)
+
+    def _narrow(
+        self,
+        belief_engine: PublicBattleBeliefEngine,
+        defender_key: str,
+        defender_species: str,
+    ) -> None:
+        """Push this defender's standing conclusions into the belief candidate set.
+
+        Called after every assessed strike of the defender rather than only at the moment
+        an axis freezes, which makes it IDEMPOTENT and self-healing: re-deriving survivors
+        from an already-narrowed set yields the same set, and
+        ``narrow_candidate_variants`` returns False without touching the pin. That matters
+        under search cloning — a branch whose engine somehow lacked the pin re-acquires it
+        from the ledger it cloned, and a branch whose engine already has it does nothing.
+        """
+
+        ledger = self._state.ledgers.get(defender_key)
+        if ledger is None:
+            return
+        conclusion = ledger.conclusion(defender_key)
+        if conclusion.hp_value is None and not conclusion.defense_values:
+            return
+        species_key = _species_key(defender_species)
+        belief = next(
+            (
+                mon
+                for mon in belief_engine.snapshot().side(self._opponent)
+                if _species_key(mon.species) == species_key
+            ),
+            None,
+        )
+        if belief is None:
+            return
+        survivors = _surviving_variant_payloads(
+            conclusion=conclusion,
+            candidate_variants=belief.candidate_variants,
+            species_key=species_key,
+            dex=self._dex,
+            spread_cache=self._spread_cache,
+        )
+        # An empty survivor list is passed through unchanged: the engine's refusal
+        # asymmetry treats it as "no evidence", never as "eliminate every variant".
+        if belief_engine.narrow_candidate_variants(
+            defender_key, survivors, reason="investment-lattice"
+        ):
+            self._belief_narrowings += 1
