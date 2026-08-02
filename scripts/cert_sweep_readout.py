@@ -193,33 +193,6 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # fail-closed alarm, and one that fires on unrelated boundaries manufactures
     # certification failures. The narrowed predicate is the loaf signature
     # itself, so a genuine loaf-phase drift still surfaces.
-    _truant_slot = _MISS_SIDE_RE.search(majority)
-    # THE SLAKING IS THE ATTACKER; THE COMPLAINING SLOT IS THE DEFENDER.
-    #
-    # This binding was wrong twice. `_MISS_SIDE_RE` yields the slot whose HP
-    # COMPONENTS differ -- engine_transition_differential.py builds that string
-    # per slot from that slot's own component set, so it names the damage
-    # RECIPIENT. A Truant loaf changes whether the Slaking's ATTACK LANDS, so
-    # the differing components sit on the opponent's slot while the Slaking is
-    # on the other side. Binding the actor to the complaining slot therefore
-    # looked for the Slaking on the side it is never on.
-    #
-    # Re-review demonstrated it on a real retained row: p1a Slaking uses Shadow
-    # Ball into p2a Zapdos for -130, the miss reads "p2 roll-scaled components
-    # differ", and the previous binding stopped attributing it -- the rule's own
-    # primary validation shape, silently dropped by the rule meant to sharpen it.
-    #
-    # Requiring the Slaking on the OPPOSITE side also fixes the too-wide axis
-    # the same review found. Both false positives it constructed -- a Slaking
-    # that moves and faints leaving a different mon on the slot, and an ordinary
-    # Double-Edge turn with a same-side recoil difference -- have the Slaking on
-    # the COMPLAINING slot, so both are now excluded. The original 8-of-9
-    # switch-boundary defect stays fixed for the same reason.
-    #
-    # Known limit: matching the species substring is nickname-blind. Gen 3
-    # random battles do not nickname, so this is latent rather than live;
-    # scripts/fidelity_gate_events.py resolves the Truant active by species and
-    # ability from the real team and is the right long-term source.
     # SUBJECT POSITION, EITHER SIDE. Round nine found the side restriction was
     # both too narrow and too wide, and that one change fixes both.
     #
@@ -243,11 +216,20 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # matters that a Truant holder took or skipped its turn.
     def _slaking_acted(line: str) -> bool:
         parts = line.split("|")
-        if len(parts) < 3 or "Slak" not in parts[2]:
+        if len(parts) < 3:
             return False
-        if parts[1] == "move":
+        # A `|cant|...|ability: Truant` tag PROVES a Truant holder loafed, so
+        # the species is redundant there -- and gating on it dropped TRACED
+        # Truant, where a Porygon2 copies Slaking's ability. The ledger records
+        # traced holders as the harder half of the mechanism (they get no
+        # derived seed), and main catches them; the species gate was a measured
+        # coverage regression against it.
+        if parts[1] == "cant" and "ability: truant" in line.lower():
             return True
-        return parts[1] == "cant" and "truant" in line.lower()
+        # The acting direction has no ability tag to key on, so it still needs
+        # the species. Native Slakoth/Slaking only; traced acting is not
+        # detectable from the observation alone.
+        return parts[1] == "move" and "Slak" in parts[2]
 
     _truant_loaf = any(_slaking_acted(line) for line in protocol)
     if _truant_loaf and (

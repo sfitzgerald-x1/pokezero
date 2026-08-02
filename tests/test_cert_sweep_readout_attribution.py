@@ -62,11 +62,9 @@ class CertificationAttributionTests(unittest.TestCase):
         # which carries no |cant| and so is not a loaf at all -- it went stale when
         # C45 narrowed the rule from "protocol mentions a Slaking" to the actual
         # signature, after finding 8 of its 9 sweep rows were switch boundaries.
-        # The Slaking is the ATTACKER, so it sits on the side OPPOSITE the
-        # complaining slot. This fixture complains about p1, so the Slaking is
-        # p2a. The previous version put it on p1a -- the side the mechanism
-        # never puts it on -- which is why the rule could stop firing on real
-        # data with its tests still green.
+        # Either side: what matters is that a Truant holder ACTED, in subject
+        # position. An earlier version required the Slaking opposite the
+        # complaining slot, which dropped the same-side recoil shape.
         cases["truant_loaf_phase_drift"]["protocol"] = [
             "|cant|p2a: Slaking|ability: Truant"
         ]
@@ -234,11 +232,11 @@ class NarrowingPinTests(unittest.TestCase):
         self.assertNotIn("structural component-count mismatch", basis, basis)
 
     # -- rule 3: Truant loaf phase ------------------------------------------
-    #    GEOMETRY: the complaining slot is the DEFENDER (the miss string is
-    #    built per slot from that slot's own components, so it names the damage
-    #    recipient). The Slaking is the ATTACKER, on the other side. Pinning it
-    #    the other way round is how this rule stopped firing on its own
-    #    validation shape while its tests stayed green.
+    #    The rule keys on a Truant holder ACTING in subject position, on
+    #    EITHER side. Two earlier versions keyed on which side the Slaking was
+    #    on -- first the complaining slot, then the opposite one -- and each
+    #    dropped a real shape while its tests stayed green, because the pins
+    #    used the same wrong frame as the code.
     _TRUANT_MISS = (
         "pct=100.00: p1 roll-scaled components differ: "
         "observed_only=[] engine_only=[('', -10)]",
@@ -371,4 +369,38 @@ class NarrowingPinTests(unittest.TestCase):
             ),
         )
         _, basis = attribute_row(row)
+        self.assertNotIn("loaf-phase", basis, basis)
+
+
+class TracedTruantTests(unittest.TestCase):
+    """A Porygon2 that Traces Slaking's Truant is still a Truant holder.
+
+    Round ten measured this as a coverage regression against main: the species
+    gate on the |cant| arm dropped it. The ability tag already proves the
+    mechanism, so the species is redundant there. docs ledger 6212 states the
+    rule with no species term.
+    """
+
+    @staticmethod
+    def _row(protocol):
+        return {
+            "divergence_class": "roll_scaled_component",
+            "branch_misses": [
+                "pct=100.00: p1 roll-scaled components differ: "
+                "observed_only=[] engine_only=[('', -10)]"
+            ],
+            "protocol": list(protocol),
+            "choices": {},
+        }
+
+    def test_a_traced_truant_loaf_qualifies(self) -> None:
+        _, basis = attribute_row(self._row(["|cant|p2a: Porygon2|ability: Truant"]))
+        self.assertIn("loaf-phase", basis, basis)
+
+    def test_a_native_slaking_loaf_still_qualifies(self) -> None:
+        _, basis = attribute_row(self._row(["|cant|p2a: Slaking|ability: Truant"]))
+        self.assertIn("loaf-phase", basis, basis)
+
+    def test_a_non_truant_cant_still_does_not(self) -> None:
+        _, basis = attribute_row(self._row(["|cant|p2a: Porygon2|par"]))
         self.assertNotIn("loaf-phase", basis, basis)
