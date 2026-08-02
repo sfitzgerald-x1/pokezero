@@ -1541,6 +1541,17 @@ fn render_move_phase(
                         sim.active_hp(SideReference::SideOne).0,
                         sim.active_hp(SideReference::SideTwo).0,
                     ];
+                    // Once a side has been dragged, HP it loses is hazard chip
+                    // on the way in, NOT a residual. Showdown emits
+                    // `[from] Spikes` there, and the proven-callee path above
+                    // already gets this right (the `switched && damage.side_ref
+                    // == side` arm). Tagging it `residual` put the observation
+                    // in the exact-component bucket as ("spikes", -n) while the
+                    // engine line was retagged move_unknown_callee into the
+                    // roll-scaled bucket, so the two never compared and the row
+                    // could not match -- on "Roar into Spikes", which is the
+                    // very line this walk was written to render.
+                    let mut dragged = [false, false];
                     macro_rules! emit_residuals {
                         () => {
                             for (index, hp_side) in
@@ -1551,8 +1562,13 @@ fn render_move_phase(
                                 if sim.active_hp(hp_side).0 < before[index] {
                                     let ident = ctx.active_ident(sim.state, hp_side);
                                     let condition = sim.hp_condition(hp_side);
+                                    let source = if dragged[index] {
+                                        "Spikes"
+                                    } else {
+                                        "residual"
+                                    };
                                     out.lines.push(format!(
-                                        "|-damage|{ident}|{condition}|[from] residual"
+                                        "|-damage|{ident}|{condition}|[from] {source}"
                                     ));
                                     emit_faint_if_dead(sim, hp_side, ctx, out);
                                     before[index] = sim.active_hp(hp_side).0;
@@ -1572,6 +1588,7 @@ fn render_move_phase(
                                 .push(format!("|drag|{ident}|{details}|{condition}"));
                             before[side_usize(switch.side_ref)] =
                                 sim.active_hp(switch.side_ref).0;
+                            dragged[side_usize(switch.side_ref)] = true;
                         } else {
                             sim.apply(instruction);
                         }

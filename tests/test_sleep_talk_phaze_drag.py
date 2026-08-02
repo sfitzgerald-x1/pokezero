@@ -42,6 +42,11 @@ from pokezero.poke_engine_adapter import (  # noqa: E402
 )
 from test_instruction_event_mapping import CTX  # noqa: E402
 
+# The shared CTX names only Chansey on p2, so a drag renders `p2a: unknown1`
+# and a test that merely counts drags never checks WHICH mon it named -- the
+# precise thing the first shipped version got wrong. Name both.
+NAMED_CTX = json.dumps({**json.loads(CTX), "p2": ["Chansey", "Snorlax"]})
+
 
 def _mon(species, moves, *, hp=100, speed=100, status="none", item=None):
     return PokemonSpec(
@@ -68,7 +73,9 @@ class SleepTalkPhazeDragTests(unittest.TestCase):
         )
         state = build_poke_engine_state(spec).to_string()
         report = json.loads(
-            pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, True)
+            pokezero_search.branch_events(
+                state, "sleeptalk", "splash", NAMED_CTX, True, True
+            )
         )
         for branch in report["branches"]:
             if any("|drag|" in line for line in branch["events"]):
@@ -101,6 +108,53 @@ class SleepTalkPhazeDragTests(unittest.TestCase):
         self.assertEqual(
             [(c.source, c.delta) for c in (components.get("p2") or [])],
             [("itemleftovers", 6)],
+            branch,
+        )
+
+    def test_the_drag_names_the_incoming_mon(self) -> None:
+        """Counting drags does not check the drag is correct."""
+
+        branch = self._branch(30)
+        drags = [line for line in branch["events"] if line.startswith("|drag|")]
+        self.assertEqual(drags, ["|drag|p2a: Snorlax|Snorlax|30/100"], branch)
+
+    def test_the_incoming_mon_gets_no_damage_line_when_it_took_no_damage(self) -> None:
+        """THE RE-BASELINE PIN.
+
+        Review round six deleted the `before[side] = active_hp(side)` re-baseline,
+        rebuilt, and all 23 tests stayed green. The mutant emits
+
+            |drag|p2a: Snorlax|Snorlax|30/100
+            |-damage|p2a: Snorlax|30/100|[from] residual
+
+        -- a damage line for a mon that took none, because before[] still held
+        the OUTGOING Chansey's 50. It survived because
+        damage_component_events drops zero-delta components, so the
+        component-level assertions could not see it.
+
+        So assert the rendered LINES, not the decomposed components. Snorlax
+        enters at 30 which is BELOW Chansey's 50, which is exactly the ordering
+        that makes a stale baseline look like damage.
+        """
+
+        branch = self._branch(30)
+        self.assertEqual(
+            [line for line in branch["events"] if line != "|"],
+            [
+                "|cant|p1a: Rattata|slp",
+                "|move|p1a: Rattata|sleeptalk|p1a: Rattata",
+                "|drag|p2a: Snorlax|Snorlax|30/100",
+                "|move|p2a: Snorlax|splash||[still]",
+                "|-heal|p2a: Snorlax|36/100|[from] item: Leftovers",
+                "|upkeep",
+                "|turn|2",
+            ],
+            branch,
+        )
+        # And specifically: no damage line at all for the dragged mon.
+        self.assertEqual(
+            [line for line in branch["events"] if line.startswith("|-damage|")],
+            [],
             branch,
         )
 
