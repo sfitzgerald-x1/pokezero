@@ -1,0 +1,56 @@
+{
+ "schema": "c68-contract-exit-closure-registration/1",
+ "authority": "the goal defines a PASS as 'zero unattributed; every shape closed as fix, documented follow-up, or evidence-backed limit'. The three exits are part of the contract, not a redefinition of it. I have held this decision back for many cycles as though it required separate sign-off; re-reading the goal, applying the exits where evidence exists is in scope, and never applying them makes a PASS unreachable by construction.",
+ "what_i_am_NOT_doing": "closing shapes that lack evidence. This is the move I declined three times -- C37's I6 reorder, C53's retag, C53's lossy marking -- each because it relocated rows into a family that explained nothing. The test is unchanged: a closure is legitimate only where a mechanical, era-stamped evidence chain already exists. Two populations qualify. The rest do not, and stay unattributed.",
+ "closure_1_documented_follow_up": {
+  "population": "37 rows -- 28 non-Sleep-Talk plus 9 Sleep-Talk -- where NO enumerated engine branch reaches the observed transition",
+  "evidence": "C37 established it by enumerating the real branch set; C39 excluded roll collapse and a Sleep Talk mechanism; C38 excluded partial observability; C41 excluded a lethality-pricing defect; C42 adjudicated it era-stamped; C64 audited it against the switch-comparison bug and found it clean; it has been mechanically re-derived across three fingerprint changes and returned the same population each time.",
+  "why_follow_up_and_not_limit": "these are real engine defects. The engine's support does not contain a transition the simulator reaches. That is a tracked deficiency, not a limit of the comparison.",
+  "search_impact": "C40 measured it: 75.7% shift the n-hit-KO threshold against a 22.1% matched-boundary baseline"
+ },
+ "closure_2_evidence_backed_limit": {
+  "population": "50 rows where the ONLY branch reproducing the observation is one the renderer marked attribution_unsafe",
+  "evidence": "the producer's own judgement, not mine. mark_attribution_unsafe means the action attribution is not observable from the engine delta. C57 already admitted the 27 branches the renderer marked merely telemetry-incomplete; these are the remainder, where it says the attribution genuinely cannot be recovered.",
+  "why_limit_and_not_follow_up": "nothing is wrong with the engine here. The comparison cannot be made, which is what an evidence-backed limit means.",
+  "the_safety_argument_for_leaving_them_excluded_still_holds": "C56 and C57 both concluded that admitting an unobservable attribution could manufacture a false MATCH. Closing them as a limit records that, rather than pretending the comparison succeeded."
+ },
+ "registered_prediction": {
+  "unattributed": {
+   "before": 264,
+   "after": 177
+  },
+  "rows_closed": 87,
+  "no_row_may_move_into_an_existing_family": "the closures are new self-attributing classes; any movement into I6, I2 or an LS family falsifies this",
+  "invariant": "matched -> divergent must be ZERO; a closure reclassifies, it must not change any verdict"
+ },
+ "what_this_still_does_not_reach": "177 rows remain unattributed and a PASS needs zero. The largest remaining block is the ~106 rows where an INCLUDED branch reproduces the observation, which are instrument-side and not closeable by any exit -- they are a difference the matcher should not be reporting. Applying every exit I have evidence for still leaves a PASS out of reach, and saying so now is better than discovering it after the change.",
+ "status": "RE-IMPLEMENTED CORRECTLY AND KEPT",
+ "outcome": {
+  "predicted": "unattributed 264 -> 177, 87 rows closed, no row moves into an existing family",
+  "actual": "unattributed 264 -> 44, and followup:engine_support_gap absorbed 1,273 rows against a predicted 37. LS_capped_lethal_shape fell 463 -> 138, I2_matcher_accounting 403 -> 23, I5_boundary_truncation 94 -> 28, I3_roll_inherited 244 -> 28.",
+  "verdict": "FALSIFIED by a factor of 34, and in the most damaging direction available."
+ },
+ "what_went_wrong": "_branch_reproduces_observation demanded that a branch's post-state land the observed HP EXACTLY on both slots. Almost no branch does -- that is nearly the definition of a divergent row. So reproducing_branches was False for most rows and the follow-up marker fired on nearly everything, including rows that documented families already explained. The marker was meant to identify a narrow evidenced population and instead became a catch-all.",
+ "why_this_is_worse_than_a_missed_fix": "the number moved the right way and the artifact would have read as enormous progress: 264 -> 44 unattributed, close to the PASS the goal asks for. It got there by relabelling 1,273 rows -- most of them already correctly attributed -- as engine support gaps. That is the exact laundering I declined three times, arriving this time with a registered prediction and a contract citation in front of it.",
+ "the_invariant_i_registered_did_not_catch_it": "I registered 'no row may move INTO an existing family'. The failure was the mirror: rows moved OUT of existing families into the new class. I wrote the invariant against the previous failure mode rather than against this change's own risk. A closure class cannibalising real attributions is the specific hazard of a closure class, and it should have been the registered invariant.",
+ "what_a_correct_implementation_needs": "the marker must fire only where the C42 evidence chain applies -- the D-with-count-evidence subset, with the roll-window tolerance the support test actually used -- not on a bare exact-HP-on-both-slots test. And the closure must be checked AFTER the documented families, not before them, so it can only claim what nothing else explains.",
+ "second_attempt": {
+  "two_changes_from_the_falsified_version": [
+   "the readout consults the markers LAST, after every documented family has declined the row, so a marker can only claim what nothing else explains",
+   "the branch test allows the legal roll window instead of demanding an exact HP match -- the exact test made 'no branch reaches the observation' true almost everywhere, which is what turned the marker into a catch-all"
+  ],
+  "measured": {
+   "unattributed": "264 -> 255 (-9)",
+   "followup:engine_support_gap": 9,
+   "limit:attribution_not_observable": 0,
+   "every documented family": "UNCHANGED, byte-identical",
+   "survivors": "3,093 -> 3,093, so no verdict changed, only attribution"
+  },
+  "the_invariant_that_should_have_been_registered_first_time": "NO EXISTING FAMILY MAY SHRINK. It holds: exactly 9 rows moved from UNATTRIBUTED into the new class and nothing else moved.",
+  "tests": "69 pass including the tactics gate"
+ },
+ "predicted_87_delivered_9": "and the gap is the point. The roll-window tolerance that stops the marker being a catch-all also, correctly, disqualifies most of the population I predicted: once a branch landing within one legal roll counts as reaching the transition, most rows DO have such a branch. The 87 came from offline tests using per-slot deltas on the D-subset; this uses both slots' post-state through the differential's own enumeration. The stricter, more honest test finds 9.",
+ "is_9_worth_keeping": "yes. It closes 9 rows with zero collateral, using the differential's own branch set, checked last, under an invariant that no family shrinks. Small and sound beats large and wrong, which is what the first attempt was.",
+ "differential_sha256": "f5e9287f31879902f653231a9e17cc02cd54dd2f70aae9a7361ae18b78d56560",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED on both counts. The 264 -> 255 outcome was measured under an earlier cascade predicate, and the change itself was REVERTED in review for creating a certification deadlock. Current differential_sha256: 66b6d85e5545312020c2ce2d9bc7cf09b9b36b135448462a9502e98fa6dbd4a0"
+}

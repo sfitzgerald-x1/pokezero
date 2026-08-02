@@ -1,0 +1,30 @@
+{
+ "schema": "c80-i5-boundary-truncation-diagnosis/1",
+ "follows": "reports/c75 -- third of the four candidate-not-finding families with a decisive reject signature (94 rows, 77% exact-component mismatch)",
+ "the_shape": {
+  "obs0/eng1": 67,
+  "obs2/eng2": 16,
+  "obs0/eng2": 10,
+  "obs2/eng1": 1,
+  "engine_only_components": {
+   "itemleftovers": 51,
+   "capped_lethal": 22,
+   "spikes": 15,
+   "psn": 10
+  },
+  "reading": "71% have the observation recording NOTHING on the slot while the engine emits an end-of-turn residual -- Leftovers, Spikes chip, poison"
+ },
+ "a_hypothesis_i_tested_and_only_partly_confirmed": {
+  "claim": "the family name says boundary TRUNCATION, and 57% of rows carry |faint| with 60% carrying |switch|. The natural reading is that the observation window ends at a faint and the engine keeps applying residuals the protocol never records.",
+  "measured_on_the_77_observed_empty_rows": {
+   "faint on THIS slot, no switch": 6,
+   "no faint, slot switched": 40,
+   "no faint, no switch": 31
+  },
+  "verdict": "PARTLY REFUTED. A faint on the complaining slot explains 6 of 77, under 8%. The |faint| tags counted at family level are mostly on the OTHER slot. What actually dominates is a switch on the slot -- 40 of 77 -- and 31 rows have neither.",
+  "why_i_nearly_got_this_wrong": "I counted |faint| across the whole protocol rather than on the slot being compared. The same partial-check error as C58 and C62: measuring a boundary-level property and attributing it to a slot. Caught by scoping the check to the complaining slot."
+ },
+ "what_is_established": "the engine emits end-of-turn residuals on a slot where the observation records none, in 71% of the family. A switch on that slot accompanies 52% of those. Neither a faint on the slot nor a switch explains the remaining 31 rows, so the truncation story is real for part of the family and unproven for the rest.",
+ "what_is_not": "the mechanism for the 31 rows with neither a faint nor a switch, and whether the 40 switch rows are truncation or the per-Pokemon comparison problem C62 identified in a new guise. Both need the switch-safe comparison rather than a slot-level one.",
+ "status": "PARTIALLY DIAGNOSED. Weaker than C76 and C77; recorded at the strength the evidence supports rather than rounded up to match them."
+}

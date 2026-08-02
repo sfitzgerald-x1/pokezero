@@ -1,0 +1,97 @@
+{
+ "schema": "c51-shape-c-crit-signature/1",
+ "population": "the 117 shape-C rows -- a sibling arm carries the observed component SHAPE but at a magnitude no legal gen3 roll can reach",
+ "why_this_shape": "C50 showed 402 of the 476 residue rows have no registered hypothesis. This is the second largest of the four shapes and had the sharpest signature.",
+ "signature": {
+  "observed_over_engine_sibling_ratio": {
+   "n": 125,
+   "min": 0.11,
+   "median": 1.98,
+   "max": 8.69,
+   "in_crit_band_1.7_to_2.3": "87 of 125 (70%)"
+  },
+  "reading": "a median of 1.98 is the gen3 crit multiplier essentially exactly. The observed transition looks like a crit priced against the engine's non-crit arm.",
+  "enrichment_vs_all_other_survivors": {
+   "Sleep Talk": "94.0% vs 19.2% = 4.9x",
+   "|-crit| in protocol": "59.0% vs 19.5% = 3.0x"
+  }
+ },
+ "hypothesis_tested_and_refuted": {
+  "claim": "the engine's Sleep Talk callee branches lack crit arms -- the 1/num_choices mass split prunes them",
+  "why_it_was_attractive": "Sleep Talk is 94% of the shape and the callee union is the one place the engine divides branch mass",
+  "control": "measured whether the engine enumerates any 2x magnitude pair, on ALL 3,538 survivors, split by whether the boundary is a Sleep Talk one",
+  "result": {
+   "sleep_talk": "crit pair present at 25.8%",
+   "control": "20.0%"
+  },
+  "verdict": "REFUTED. Sleep Talk boundaries carry crit pairs slightly MORE often, not less. Sleep Talk is enriched in the shape without being the mechanism -- the same conclusion C39 reached for the D bucket, reached again independently."
+ },
+ "the_split_and_the_caveat_that_limits_it": {
+  "measured": {
+   "engine HAS a 2x pair somewhere in its branch set": 36,
+   "engine has NO 2x pair": 81
+  },
+  "the_36": "the engine does enumerate the crit magnitude; the matcher's shape-matching sibling test selected the non-crit arm. A pairing failure, so instrument-artifact.",
+  "the_81": "CANNOT be called an engine gap on this evidence. Lacking a 2x pair is the NORMAL state: only 20% of all control boundaries have one, so 69% of shape C lacking one is unremarkable against an 80% baseline. Shape C is in fact slightly LESS likely to lack a crit pair than the population at large.",
+  "what_this_kills": "the tempting headline -- '81 rows where the engine cannot reach the observed crit' -- is not supported. The baseline comparison removes it."
+ },
+ "what_is_established": [
+  "observed magnitude is ~2x the engine's shape-matched sibling, median 1.98 over 125 pairs",
+  "39 of 117 have a branch agreeing with the observation on both slots, confirmed independently by both engine consumers",
+  "30 of those 39 carry a non-empty decomposition, so the rejection is on component identity or magnitude",
+  "112 of 117 anchors carry an empty engine decomposition -- true of the MAJORITY arm, and still not linked to the 39"
+ ],
+ "what_is_not": [
+  "whether any of the 117 is an engine gap -- lacking a 2x pair is the baseline condition (80% of all boundaries), so it does not discriminate",
+  "whether the 40 are matcher failures -- that needs a whole-boundary test, not a per-slot one",
+  "why the shape-matching sibling test prefers the non-crit arm"
+ ],
+ "next": "dump, for one of the 30, the observed component list beside the matching branch's component list. Four hypotheses have died to aggregate statistics; the remaining question is small enough that reading two lists side by side will answer it.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "correction_to_the_split": {
+  "what_i_claimed": "36 of 117 are pairing failures where the engine has the crit magnitude and the matcher did not use it",
+  "why_that_test_was_wrong": "has_crit_pair asked whether ANY TWO engine branches differ by ~2x. That is not the question. The question is whether any branch REACHES the observed magnitude.",
+  "the_right_test": {
+   "EXACT branch reaches the observed magnitude": 6,
+   "a branch is within the legal roll window": 34,
+   "NO branch reaches it": 77
+  },
+  "and_it_still_does_not_prove_a_pairing_failure": "40 of 117 have a branch reaching the observed magnitude ON THE COMPLAINING SLOT. That does not mean the row should have matched: evaluate_boundary_strict requires a single branch to agree on BOTH slots and all components, so a branch that matches p1 can legitimately fail on p2. A per-slot test cannot establish a whole-boundary matching failure. The '36 pairing failures' framing is withdrawn; what is measured is 40 rows worth checking at boundary level, not 36 defects.",
+  "the_pattern_worth_naming": "Three tests in this one cycle, each answering a narrower question than the claim I wanted to make from it: crit-pair-exists for engine-gap, sleep-talk-enrichment for mechanism, reaches-magnitude-on-one-slot for pairing failure. Two were caught by a control and one by re-reading what the matcher actually requires."
+ },
+ "whole_boundary_test": {
+  "why": "the per-slot test could not decide whether a magnitude-matching branch legitimately failed on the other slot. This checks both slots.",
+  "result": {
+   "BOTH slots agree": 39,
+   "matches complaining slot but OTHER slot differs": 1,
+   "no branch matches the complaining slot": 77
+  },
+  "reading": "The 'legitimately fails on the other slot' explanation I raised when withdrawing the pairing claim accounts for exactly ONE row, not forty. 39 of 117 have an engine branch whose HP outcome agrees with the observation on BOTH slots -- exactly or within the legal roll window -- while the row is still reported divergent.",
+  "the_limit_of_this_test": "It compares net HP per slot. The matcher compares COMPONENT decompositions. A branch can reproduce net HP on both slots and still be rejected because the damage is attributed to different sources. So this identifies 39 rows where the engine reaches the observed OUTCOME; it does not by itself prove the matcher is wrong."
+ },
+ "anchor_decomposition": {
+  "measured": {
+   "engine side of the anchor miss is EMPTY": 112,
+   "engine has components": 5
+  },
+  "reading": "95.7% of shape C anchors show observed components against engine=[] -- the engine's majority arm decomposes to nothing on the complaining slot.",
+  "NOT_yet_linked_to_the_39": "The anchor is the MAJORITY miss. The branch whose HP agrees on both slots may be a different branch entirely. These two measurements are taken on possibly different arms and I am NOT combining them into a mechanism. Combining measurements taken on different arms is precisely the C35 defect -- a minority arm deciding a row the majority arm explains -- and I am not going to reproduce it in the diagnosis after fixing it in the code."
+ },
+ "linking_test": {
+  "question": "for the branches that agree on BOTH slots, is that branch's own decomposition empty? Empty would make shape C an event-attribution defect with a predictable row delta.",
+  "result": {
+   "matching branch HAS components": 30,
+   "matching branch decomposition EMPTY": 9,
+   "no both-slot match via the crate path": 78
+  },
+  "verdict": "REFUTED for the majority. 30 of the 39 matching branches DO carry components, so shape C is not primarily an event-attribution defect. 9 remain consistent with it.",
+  "cross_path_validation": "The crate path finds 39 both-slot matches and poke_engine found 39. Two independent consumers agree on the count, which is a check the C46 stale-crate episode showed was worth making.",
+  "what_it_leaves": "30 rows where an engine branch agrees with the observation on BOTH slots' HP and carries a non-empty decomposition, yet the row is reported divergent. The disagreement is therefore in component IDENTITY or MAGNITUDE, not in emptiness and not in the HP outcome. That is a narrow and well-posed instrument question, and it is the first time in this shape that the remaining population has no competing explanation left standing."
+ },
+ "hypotheses_refuted_for_shape_C": [
+  "the Sleep Talk callee union prunes crit arms (control: crit pairs MORE common on Sleep Talk boundaries, 25.8% vs 20.0%)",
+  "the engine cannot reach the observed crit (baseline: 80% of ALL boundaries lack a 2x pair, so 69% here is unremarkable)",
+  "the magnitude-matching branch legitimately fails on the other slot (whole-boundary test: exactly 1 row of 117)",
+  "the matching branch's events are undecomposed (linking test: 30 of 39 carry components)"
+ ]
+}

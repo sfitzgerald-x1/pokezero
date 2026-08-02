@@ -1,0 +1,37 @@
+{
+ "schema": "c67-post-cascade-residue-recharacterisation/1",
+ "why": "C66 cleared 77 rows, so the residue's composition changed. Re-characterising by the matcher's own verdict before choosing a next target -- the C59 discipline, applied before picking rather than after.",
+ "matcher_verdict_on_the_264": {
+  "roll-scaled components differ": "241 (91.3%)",
+  "attributed components differ": "23 (8.7%)"
+ },
+ "composition": {
+  "ENGINE side empty": {
+   "rows": 117,
+   "share": "44.3%"
+  },
+  "OBSERVED side empty": {
+   "rows": 83,
+   "share": "31.4%"
+  },
+  "both non-empty, counts differ": {
+   "rows": 46,
+   "share": "17.4%"
+  },
+  "same count": {
+   "rows": 18,
+   "share": "6.8%"
+  }
+ },
+ "what_the_cascade_fix_actually_removed": "the net-equal-with-both-sides-populated shape. It was 84 rows before C66 and is 9 now. That sub-shape is essentially exhausted.",
+ "the_9_that_remain_and_why": {
+  "s18100454/164": "observed has NO direct damage component, so the one-direct-per-side constraint fails",
+  "s18200765/55": "the ENGINE has no direct damage component, same reason",
+  "s18201160/28": "drain is the heal source, and drain is not in the predicate's heal set",
+  "reading": "two natural extensions -- admit drain, and handle the zero-direct case -- would reach some of these. 9 rows is not worth widening a safety-critical predicate for, and widening it is how the shape constraints that passed the false-match gate get eroded one special case at a time."
+ },
+ "where_the_mass_now_sits": "200 of 264 rows -- 76% -- have one side entirely EMPTY. That is not the cascade shape and no roll tolerance addresses it: one party recorded HP components on a slot and the other recorded none. C61 characterised the engine-empty half as majority-arm-versus-minority-arm disagreements, where the engine's most likely outcome is that nothing happened and the simulator's roll landed elsewhere, and declined to absorb them into an accounting family because that would launder a real disagreement about probability mass.",
+ "the_honest_read": "the instrument-side seam that produced C55, C57 and C66 is worked out. What remains is dominated by a shape three separate cycles have examined and each time concluded is a genuine disagreement rather than a presentation artifact. Further reduction runs through the contract's three exits rather than through more matcher work.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 264",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED. Measured under an earlier version of _roll_cascade_equivalent. Four review rounds changed that predicate; the row counts and composition in this file describe a matcher that no longer exists. Kept as the record of what was measured when, not as a current statement. Current differential_sha256: 66b6d85e5545312020c2ce2d9bc7cf09b9b36b135448462a9502e98fa6dbd4a0"
+}

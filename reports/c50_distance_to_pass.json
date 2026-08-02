@@ -1,0 +1,38 @@
+{
+ "schema": "c50-distance-to-pass/1",
+ "purpose": "I have been telling the user that the attributed-class decision on the 74 support gaps is 'the only lever with real magnitude'. That framing is wrong and this quantifies why.",
+ "the_correction": "Closing all 74 adjudicated support gaps as documented follow-up would take the residue from 476 to 402. It does not approach zero. It is 16% of the remaining work, not the bulk of it. I had been presenting a decision worth 74 rows as though it were the gate on a 476-row condition, which overstated what the user's answer would buy and understated how much evidence work is left regardless of how they answer.",
+ "residue_at_476": {
+  "structural_total": 443,
+  "D_no_arm_carries_shape": 211,
+  "  of_which_confirmed_support_gaps_with_evidence": 74,
+  "  of_which_reachable_or_label_sensitive": 137,
+  "C_shape_carried_magnitude_beyond_a_legal_roll": 117,
+  "A_engine_emits_where_sim_emitted_nothing": 106,
+  "B_within_the_legal_roll_window": 9,
+  "unattributed_generic": 28,
+  "same_turn_stat_event_gap": 5
+ },
+ "evidence_status": {
+  "carries_a_C27_method_evidence_chain_and_era_stamp": 74,
+  "diagnosed_to_a_shape_but_no_mechanism": 369,
+  "not_yet_diagnosed_at_all": 33,
+  "share_of_the_residue_that_could_be_closed_today": "74/476 = 16%"
+ },
+ "what_each_remaining_segment_needs": {
+  "C (117)": "a mechanism for magnitudes beyond any legal gen3 roll. No hypothesis registered.",
+  "A (106)": "a mechanism for the engine emitting a component where the simulator emitted none. No hypothesis registered.",
+  "D minus the 74 (137)": "either a support measurement that resolves them, or the label-sensitivity caveat retired. 32 of these are label-sensitive by C36's own test and are explicitly not claimed.",
+  "B (9)": "the only instrument-artifact candidates; the exact-magnitude sibling test is what rejects them.",
+  "unattributed_generic (28)": "one is the residual Trick row in the opposite direction; 27 are undiagnosed.",
+  "same_turn (5)": "the majority-arm residue after C35; undiagnosed."
+ },
+ "honest_distance_to_a_PASS": "Certification requires zero. Today 74 of 476 rows could be closed on existing evidence, and that closure needs a contract decision I should not make alone. The other 402 need mechanisms that do not exist yet -- four distinct shapes, none with a registered hypothesis. On this session's rate, where a strong-looking mechanism survived measurement roughly once in five attempts, that is many cycles of work and at least one fresh sweep to verify, not a near-miss.",
+ "what_this_session_did_move": {
+  "485 -> 476": "C46 Trick fix, confirmed at instruction level and on the registered total",
+  "3882 -> 515 -> 485": "C34 aliasing fix and C35 majority-arm scoping, both confirmed on identities",
+  "objective_2": "complete",
+  "objective_3": "complete, era-stamped, no family OPEN",
+  "objective_4": "engine-gap bucket adjudicated at current era; no fix registered because no mechanism spans it"
+ }
+}

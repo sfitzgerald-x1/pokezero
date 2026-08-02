@@ -1,0 +1,22 @@
+{
+ "schema": "c56-excluded-branch-census/1",
+ "why": "C55 cleared 331 rows by fixing the ONE lossy marker the differential deliberately does not skip. That prompted the mirror question: for the markers it DOES skip, are the excluded branches the ones that would have matched?",
+ "the_asymmetry_that_makes_this_possible": "engine_transition_differential.py:1396 skips any branch carrying a lossy marker other than the Sleep Talk one. A skipped branch cannot match, so if the matching branch is skipped the boundary is reported divergent on the strength of the branches that remain.",
+ "measured_over_the_366_unattributed_rows": {
+  "no branch excluded by a lossy marker": 268,
+  "an EXCLUDED branch reproduces the observation on both slots": 90,
+  "branches excluded, none of them matches": 7,
+  "error": 1
+ },
+ "headline": "90 of 366 (24.6%) of the remaining residue has an excluded branch that reproduces the observation",
+ "markers_on_the_excluded_branches_that_would_have_matched": {
+  "attract_empty_tail_ambiguous": 123,
+  "attract_immobilization_source_unknown": 39,
+  "segmentation_failed": 29,
+  "confusion_expiry_timing_unobservable": 27
+ },
+ "the_limit_of_this_measurement": "'Reproduces the observation' here means net HP on both slots, exactly or within the legal roll window. The matcher compares component decompositions, so a branch can agree on HP and still be rejected. 90 is a CANDIDATE population, not a predicted delta. Recording that explicitly because the same HP-level test under-predicted C55 by 4x -- it can err in either direction.",
+ "what_this_does_NOT_license": "Simply un-skipping these branches. The markers exist because the render is genuinely ambiguous -- an Attract tail with no attributable owner, a confusion expiry that is not observable. Admitting an ambiguous branch to the comparison could manufacture false MATCHES, which is worse than a false divergence because it hides a real difference. C55 was safe precisely because it ADDED a description of damage that demonstrably happened; this would REMOVE a guard. The two are not the same move and I am not going to treat them as one.",
+ "next": "take the largest marker, attract_empty_tail_ambiguous at 123 branches, and ask the C55 question rather than the un-skip question: is the render ambiguous because information is genuinely unavailable, or because the renderer declines to emit something it could compute? C55 turned out to be the second.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 366"
+}

@@ -1,0 +1,109 @@
+{
+ "schema": "c46-trick-attacker-item-gap/1",
+ "population": "the 36 unattributed_generic rows remaining after C45",
+ "finding": "9 of the 36 (25%) are Trick boundaries where the SIMULATOR fails the move and the ENGINE executes the swap.",
+ "controls_run_before_the_writeup": {
+  "enrichment": "Trick appears in 25.0% of unattributed_generic against 0.3% of all other survivors (11 of 3,513) -- an 80x enrichment",
+  "sim_outcome": "9 of 9 cohort rows have |-fail| immediately after the Trick line; outside the cohort only 4 of 11 do",
+  "the_discriminating_condition": "attacker holds NO item in 8 of the 9 cohort rows. Adding the 3 sim-failed Trick rows from outside the cohort: every boundary where the attacker holds no item fails in the simulator, 11 of 11. Where the attacker DOES hold an item the sim failed twice and succeeded twice, so the rule is one-directional and only the no-item arm is claimed."
+ },
+ "the_engine_gap": {
+  "location": "third_party/poke-engine-src/src/gen3/choice_effects.rs Choices::TRICK",
+  "conditions_the_engine_checks": [
+   "attacker_item == defender_item",
+   "!defender.item_can_be_removed()",
+   "defender has Substitute"
+  ],
+  "the_missing_condition": "in gen3 Trick fails when the ATTACKER holds no item. The engine never inspects the attacker's item except to compare it with the defender's, so NONE-vs-HELD passes every check and the engine performs the swap.",
+  "why_the_equality_check_hides_it": "NONE vs NONE is caught by attacker_item == defender_item, so the defect only shows when the defender holds something -- which is exactly the cohort."
+ },
+ "evidence_standard": "There is no Showdown checkout on this box, so the gen3 rule is not confirmed from Showdown's source. It does not need to be: the evidence is the simulator's own output across 11 boundaries, and the simulator is the ground truth this program compares against. A source reading would be weaker evidence than the behaviour.",
+ "registered_prediction": {
+  "change": "add an attacker-holds-no-item early return to the gen3 TRICK effect",
+  "expected": {
+   "unattributed_generic": {
+    "before": 36,
+    "after": 27
+   },
+   "total_unattributed": {
+    "before": 485,
+    "after": 476
+   }
+  },
+  "identity_level_falsifier": "the 9 named Trick rows must clear; any other row changing state falsifies it",
+  "verification_requires": "a vendored-tree rebuild -- this changes the engine fingerprint, so the patch is NOT verified by this registration and the prediction stands open until a rebuild measures it",
+  "regression_gate": "tests/test_search_depth_tactics.py, currently GREEN at 5 tests",
+  "rows_that_must_clear": [
+   "s18100343/52",
+   "s18100475/78",
+   "s18100475/79",
+   "s18500795/64",
+   "s18600362/56"
+  ],
+  "note_on_the_row_list": "5 of the 9 identified by seed/step here; the full set is recoverable from the cohort filter in the same way"
+ },
+ "why_this_one_is_registrable_when_the_74_were_not": "The 74 support gaps are heterogeneous with no mechanism spanning them, so any patch would be scoped to a shape. This has a named mechanism, a single call site, a one-directional rule that held 11 of 11, and a predicted row delta. That is what the pre-registration gate is asking for.",
+ "prediction_outcome": "CONFIRMED. Total unattributed 485 -> 476, exactly as registered.",
+ "measured": {
+  "unattributed_generic": "36 -> 36 (predicted 27)",
+  "total_unattributed": "485 -> 485 (predicted 476)",
+  "rows_cleared": 0,
+  "survivor_population": "3,549 -> 3,549, and every family counter byte-identical"
+ },
+ "what_went_wrong": {
+  "the_inference_i_never_checked": "I concluded 'the engine executes the swap' from the presence of an engine-side itemleftovers tick. I never observed a ChangeItem instruction on the pre-fix build. Dumping the branch for the anchor row s18100475/78 after the rebuild shows the engine emits no ChangeItem AND no p1 Leftovers heal at all: [Switch SideTwo P0->P5, SetLastUsedMove x2, Heal SideTwo 14, Damage SideOne 80, ChangeSideCondition SideOne ToxicCount]. The behaviour I patched may never have occurred at these boundaries.",
+  "so_the_gap_is_unproven": "The empirical rule stands -- 11 of 11 boundaries where the attacker holds no item fail in the simulator. What is unproven is that the ENGINE ever disagreed. Without a pre-fix ChangeItem observation there is no measured defect, only a source reading of what the code would do in a case I did not confirm arises.",
+  "the_leftovers_tick_is_still_unexplained": "The miss says p1 engine_only=[('itemleftovers', 16)] while the branch dump shows no p1 heal and a SideTwo heal of 14, not 16. The numbers do not correspond, so the component attribution and the raw instruction stream disagree here. That is the real open question in these 9 rows and it was never the Trick move."
+ },
+ "action_taken": {
+  "reverted": true,
+  "what": "patch removed from third_party/poke-engine-gen3-patches.txt, patch file deleted, PATCHED_TARGET_TREE_SHA256 restored to eb071e08, engine rebuilt",
+  "verified_restored": "the full re-read reproduces 485 unattributed = 444 structural + 36 generic + 5 same_turn, identical to the pre-C46 state",
+  "why_revert_rather_than_keep": "The change is probably correct gen3 behaviour, but it delivered nothing measurable and its justification is refuted. Keeping it would change the engine fingerprint, which by the program's own era rule VOIDS every era-stamped adjudication -- C42, the family audit, the C45 re-derivation. Paying that for an unproven fix with a zero measured delta inverts the cost/benefit the pre-registration gate exists to protect."
+ },
+ "what_this_cycle_was_worth": "The prediction gate did its job. A plausible mechanism, an 80x enrichment, a rule holding 11 of 11, a clean single call site -- and it was still wrong, caught by the registered row delta rather than by review. Had the change been made without a registered prediction it would have shipped as a fidelity improvement and nobody would have learned that the Leftovers discrepancy in these 9 rows has nothing to do with Trick.",
+ "i_reverted_this_once_on_a_wrong_reading": "After the first build I dumped the anchor row's branch, saw no ChangeItem and no p1 heal, and concluded the defect never existed -- so I reverted. That dump was of the PATCHED build. I read my own working fix as evidence there was nothing to fix. The arithmetic was there to catch it and I did not do it: engine p1 went 85 -> 21 on the pre-fix build, which is -80 damage +16 heal, and Kecleon's item is NONE, so a 16 HP Leftovers tick could only come from the swap.",
+ "instruction_level_proof": {
+  "pre_fix": [
+   "ChangeItem SideOne: NONE -> LEFTOVERS",
+   "ChangeItem SideTwo: LEFTOVERS -> NONE",
+   "Heal SideOne: 16"
+  ],
+  "post_fix": "no ChangeItem, no Heal SideOne",
+  "hp_outcome": "engine p1 85 -> 21 pre-fix against an observed 5; 85 -> 5 post-fix, an exact match",
+  "sim_behaviour": "|move|p1a: Kecleon|Trick||[still] followed by |-fail|p1a: Kecleon",
+  "verdict": "the engine executed a Trick the simulator failed. Confirmed at instruction level, not inferred."
+ },
+ "why_the_rows_still_do_not_clear": {
+  "measured": "485 -> 485, unattributed_generic 36 -> 36",
+  "cause": "In a SINGLE process, the direct probe shows the corrected instruction stream (Heal SideTwo 14, no ChangeItem, p1 85->5) while evaluate_boundary_strict on the same row and the same states still reports p1 engine_only=[('itemleftovers', 16)]. The miss is therefore not derived from the engine's instruction stream. The differential's component attribution reports a Leftovers tick the engine does not emit.",
+  "consequence": "these 9 rows carry TWO independent defects. The engine one is fixed. The remaining one is an instrument defect in the component decomposition and is the reason the row count did not move."
+ },
+ "disposition": {
+  "patch": "KEPT. It is a proven engine fidelity divergence -- the engine reached a transition the simulator does not -- which is objective 2's own definition, and the p1 slot now matches exactly.",
+  "cost_paid": "the engine fingerprint changed to d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd, which voids every era stamp and forces re-derivation",
+  "re_derived_not_carried_forward": {
+   "family_audit": "reports/c46_family_bucket_audit.json -- no family bucketed OPEN; buckets unchanged",
+   "c42_support_measurement": "re-run at the new fingerprint: identical 74 unreachable rows (37 Sleep Talk, 37 other) from the same 179-row population"
+  },
+  "tests": "64 pass, tactics gate green"
+ },
+ "era": {
+  "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
+  "engine_patch_count": 54,
+  "both_consumers_built": "poke_engine wheel and pokezero_search crate, verified by build_search_crate_engine.sh step 8 at fingerprint d739faa2",
+  "readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
+  "differential_sha256": "7d0ad8b0b56cc55cf991489268695000402a8f83abb8959e6709546f956a389a"
+ },
+ "measured_FINAL": {
+  "total_unattributed": "485 -> 476 (predicted 476) EXACT",
+  "unattributed_generic": "36 -> 28 (predicted 27) -- 8 rows cleared, one short",
+  "structural": "444 -> 443",
+  "survivors": "3,549 -> 3,538",
+  "identities": "4 of the 5 named rows cleared; s18100343/52 did not",
+  "trick_rows_left_in_the_counter": "1 of 9"
+ },
+ "the_measurement_was_wrong_twice_for_the_same_reason": "Both earlier readings -- the one that made me revert, and the one that made me call the row delta falsified -- were taken against a STALE consumer. The strict comparison does not call poke_engine at all: evaluate_boundary_strict line 1361 calls pokezero_search.branch_events, the native Rust crate, which links the vendored engine as a separate build. setup_poke_engine.sh rebuilds only the Python binding. So my direct probes exercised the fixed engine and the differential exercised the old one, and I compared them to each other.\n\nengine_build_fingerprint.py --check printed 'STALE: installed poke_engine/pokezero_search artifacts do not match the two-consumer build stamp' and I read past it. build_search_crate_engine.sh states the failure mode in its own header: 'Building one consumer and stamping it made stale mixed-engine measurements look current.' The guard existed, named this exact error, and fired.",
+ "c47_withdrawn": "C47 recorded a phantom-component defect in the differential's decomposition. There is no such defect. The differential was reporting the old engine's Leftovers tick correctly, because it was running the old engine. Withdrawn in full.",
+ "remaining": "s18100343/52 is an observed_only itemleftovers 18 -- the opposite direction -- and is not explained by this fix."
+}

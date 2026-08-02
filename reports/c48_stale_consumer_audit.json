@@ -1,0 +1,42 @@
+{
+ "schema": "c48-stale-consumer-audit/1",
+ "why": "C46 established that this session's offline rereads had been running against a STALE pokezero_search crate while poke_engine was current. Every conclusion drawn from a reread was therefore suspect and had to be re-checked at the two-consumer build, not assumed to survive.",
+ "check_1_cross_instrument_agreement": {
+  "question": "C37 measured branch support with poke_engine.generate_instructions, but the rows themselves come from pokezero_search.branch_events. If those two enumerate different branch sets, the 74 support gaps were measured with a different instrument than the one that produced them.",
+  "method": "compared branch counts from both consumers on every engine state of the 443 structural rows",
+  "result": {
+   "same_branch_count": 574,
+   "differing": 0,
+   "crashed": 1
+  },
+  "verdict": "PASS. The two consumers agree on branch enumeration, so C37's instrument choice is sound."
+ },
+ "check_2_the_74_at_the_current_era": {
+  "result": {
+   "sleep_talk_unreachable": 37,
+   "other_unreachable": 37,
+   "total": 74,
+   "exact_branch_exists": 72,
+   "within_a_roll": 33
+  },
+  "verdict": "identical to every prior derivation. The engine-gap adjudication survives the two-consumer rebuild on evidence."
+ },
+ "check_3_an_engine_panic_that_aborts_the_crate": {
+  "row": "s18600013/89, choices p1=extremespeed p2=reversal",
+  "error": "pyo3_runtime.PanicException: Invalid rest_turns value: 32 (gen3/generate_instructions.rs:2123)",
+  "scope": "1 row of 3,538 panics pokezero_search.branch_events; poke_engine.generate_instructions handles the same state without error",
+  "why_it_matters": "This is not a divergence, it is a crash. In the crate path it raises a PanicException that propagates out of Rust and kills the calling process -- it took down this audit script on first run. A sweep shard hitting it does not record a divergence, it dies. That is a certification-infrastructure risk distinct from any row count, and it reproduces deterministically on a named row.",
+  "asymmetry_is_itself_a_finding": "the two consumers disagree on whether this state is even legal, which the cross-instrument check would not have surfaced as a branch-count difference because one side never returns."
+ },
+ "standing_conclusions_rechecked": {
+  "c42_engine_gap_adjudication": "re-derived, unchanged (74 rows)",
+  "c45_family_audit": "re-derived, no family OPEN",
+  "c46_trick_fix": "confirmed, 485 -> 476",
+  "c47": "withdrawn in full -- it was an artifact of the stale crate"
+ },
+ "era": {
+  "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
+  "engine_patch_count": 54,
+  "both_consumers": "verified by build_search_crate_engine.sh step 8 at d739faa2"
+ }
+}

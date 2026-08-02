@@ -1,0 +1,92 @@
+{
+ "schema": "c43-coverage-shortfall-diagnosis/1",
+ "closes": "the 'coverage: 0.9587 against a 0.97 floor, cause unknown, no advance signal' item open since reports/c32_fail_diagnosis.json",
+ "arithmetic": {
+  "boundaries_full_round": 821320,
+  "boundaries_measured": 787376,
+  "coverage": 0.9587,
+  "floor": 0.97,
+  "unmeasured_full_round_boundaries": 33944,
+  "boundaries_needed_to_reach_the_floor": 9305
+ },
+ "decomposition": {
+  "note": "skip:single_seat_boundary (89,887) is excluded -- a single-seat boundary is not a full round and is not in the denominator",
+  "accounted_by_a_skip_counter": 26720,
+  "ranked": [
+   {
+    "rows": 7909,
+    "counter": "unmappable_choice:struggle_not_submittable"
+   },
+   {
+    "rows": 7476,
+    "counter": "world_unsupported:rest_sleep_skipped_time_pending"
+   },
+   {
+    "rows": 5058,
+    "counter": "world_unsupported:self_moveset_mismatch"
+   },
+   {
+    "rows": 4799,
+    "counter": "world_unsupported:volatile_unsupported"
+   },
+   {
+    "rows": 643,
+    "counter": "world_unsupported:self_request_state_unsupported"
+   },
+   {
+    "rows": 372,
+    "counter": "strict_all_branches_lossy"
+   },
+   {
+    "rows": 362,
+    "counter": "world_unsupported:materialization_blocker"
+   },
+   {
+    "rows": 76,
+    "counter": "world_unsupported:encore_move_unknown"
+   },
+   {
+    "rows": 23,
+    "counter": "world_unsupported:transform_unexpressible"
+   },
+   {
+    "rows": 2,
+    "counter": "world_unsupported:status_unsupported"
+   }
+  ],
+  "the_top_two_alone_close_the_gap": "7,909 + 7,476 = 15,385 against 9,305 needed",
+  "unaccounted_by_ANY_counter": {
+   "rows": 7224,
+   "reading": "a sixth of the shortfall is invisible to the skip instrumentation. This is its own finding: the counters do not sum to the gap, so no repair list built from them can be complete. Instrumenting this is a prerequisite, not a follow-up."
+  }
+ },
+ "cause_1_struggle": {
+  "source": "scripts/engine_transition_differential.py:219-224",
+  "why_skipped": "Struggle is engine-INTERNAL. gen3 MoveChoice::from_string resolves only ids on the active's move list, and the engine substitutes Struggle itself when nothing else is usable, so there is no choice string for it.",
+  "the_tempting_repair": "recharge, four lines above, has the same problem and is handled by returning the no-move sentinel _ENGINE_NO_MOVE ('none'). Applying that pattern to struggle is the obvious repair.",
+  "what_i_actually_tested": {
+   "engine rejects 'struggle'": "CONFIRMED -- ValueError: Invalid move for s1: struggle",
+   "engine accepts 'none'": "CONFIRMED -- generate_instructions returns 1 branch",
+   "'none' makes the engine SUBSTITUTE Struggle": "UNTESTED"
+  },
+  "why_untested": "That needs a state whose active has every move at 0 PP, and poke_engine.Move.pp is not writable from Python, so the state cannot be constructed through the binding. It needs a crafted state string or a Rust-side probe.",
+  "status": "the repair is MECHANICALLY AVAILABLE but its behaviour is unverified. Not claimed as a fix.",
+  "SETTLED_BY": "reports/c44_struggle_repair_probe.json -- REFUTED. The no-move sentinel does not make the engine substitute Struggle; side one simply takes no action. Applying it would convert 7,909 skips into 7,909 measured rows asserting the mon did nothing, raising coverage while destroying the zero-unattributed gate."
+ },
+ "cause_2_rest_sleep": {
+  "source": "src/pokezero/engine_world.py:1641-1644",
+  "why_skipped": "public Rest skippedTime the engine's state cannot represent",
+  "assessment": "a representation limit in the engine's state, not a harness mapping gap. Harder than cause 1 and likely a comparison-limit rather than a repair."
+ },
+ "the_two_pass_gates_conflict": {
+  "point": "recovering a skipped boundary makes it MEASURED, and measured boundaries can diverge. Closing coverage therefore pushes the unattributed count UP, against a gate that requires zero.",
+  "magnitude": {
+   "current_divergence_rate": "7,249 / 787,376 = 0.92%",
+   "current_unattributed_rate": "485 / 787,376 = 6.16e-4",
+   "expected_new_divergent_rows_from_recovering_15385": 142,
+   "expected_new_unattributed_rows": 9.5
+  },
+  "reading": "The conflict is real but small: about 9 or 10 new unattributed rows in expectation. Against a required zero even that fails, so the two gates cannot be closed independently and the ordering matters -- coverage repairs must land BEFORE the final residue burndown, not after, or the burndown gets invalidated by its own coverage fix."
+ },
+ "does_not_reach_a_pass": "diagnosis only; no code changed and unattributed stays at 485"
+}

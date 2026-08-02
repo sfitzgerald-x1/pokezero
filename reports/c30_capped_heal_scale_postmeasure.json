@@ -1,0 +1,75 @@
+{
+ "schema": "c30-capped-heal-scale-postmeasure/1",
+ "prediction": "reports/c30_capped_heal_scale_prediction.json",
+ "prediction_outcome": "CONFIRMED on every registered number, including the full family table and the archive",
+ "fresh": {
+  "tally": {
+   "diverged": 16,
+   "matched": 44
+  },
+  "families": {
+   "I2_matcher_accounting": 2,
+   "LS_capped_lethal_shape": 2,
+   "limit:world_sample_drag_target": 4,
+   "I1_cap_state_shape": 1,
+   "limit:roll_divergent_lethality": 6,
+   "UNATTRIBUTED": 1
+  }
+ },
+ "archive": {
+  "tally": {
+   "diverged": 2871,
+   "matched": 949,
+   "skip_lossy": 1
+  },
+  "families": {
+   "limit:roll_divergent_lethality": 1093,
+   "LS_capped_lethal_shape": 442,
+   "I3_roll_inherited": 234,
+   "limit:world_sample_drag_target": 271,
+   "I5_boundary_truncation": 92,
+   "UNATTRIBUTED": 385,
+   "I2_matcher_accounting": 95,
+   "I6_sleeptalk_callee_union": 54,
+   "I4_attribution_tie": 153,
+   "I1_cap_state_shape": 42,
+   "LS_crit_arm_pairing_echo": 8,
+   "LS_confusion_fan": 2
+  }
+ },
+ "differential_sha256_after": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c",
+ "kpi_era": {
+  "in_support_percent": 99.662,
+  "out_of_support_per_10k": 2667,
+  "not_a_fidelity_gain": "The engine is untouched by C28/C29/C30. This is a new MATCHER era: the prior readings (98.649% at 51 patches, 98.734% at 52) were taken on a matcher that reported these rows as divergent, so no delta may be claimed until the 51-patch engine is re-baselined here."
+ },
+ "lockstep_churn": "test_c26_damage_composition_readout asserted `git diff --exit-code` of the matcher against a pinned main. That conflated 'production never took the rejected damage-composition experiment' with 'production never changes'. The first is the invariant and holds; the second is not one and broke on a deliberate registered repair. Re-expressed as a digest inequality against the experiment's own pinned hash, which is stronger than a diff against a baseline that moves.",
+ "last_unattributed_row": {
+  "row": "17000037/55",
+  "prior_adjudication": "comparison-limit, cross-turn Substitute threshold",
+  "corrected_adjudication": "ENGINE GAP, same-turn Substitute-viability threshold straddle",
+  "both_errors": "I recorded it as cross-turn; it is same-turn -- Gyarados used Substitute in the same transition as the crit that hit it. And I recorded it as a comparison limit on the grounds that no same-transition partition could reach it, which is exactly wrong: a same-transition partition is precisely what reaches it.",
+  "evidence": {
+   "psychic_into_gyarados": {
+    "non_crit_base": 96,
+    "crit_base": 192
+   },
+   "gyarados": {
+    "hp": 242,
+    "maxhp": 258,
+    "substitute_threshold": 64.5
+   },
+   "crit_rolls": "163..192; representative arm 177",
+   "straddle": "8 of 16 crit rolls leave Substitute FAILING, 8 leave it SUCCEEDING",
+   "engine": "damage 177 -> hp 65 -> Substitute succeeds, engine pays -64",
+   "showdown": "damage 184 -> hp 58 -> Substitute fails, no cost and no -start"
+  },
+  "diagnosis": "Identical shape to C27's KO straddle at a different threshold. C27 partitions the crit roll range only against defender_active.hp; it does not partition against Substitute viability (maxhp/4), so the representative roll decides a discrete outcome the roll range does not determine.",
+  "fix_shape": "Extend the threshold partition beyond lethality. The generalisation is: partition the roll set by outcome-equivalence class over EVERY discrete threshold this transition crosses, not just the KO one. Objective 4 work, to be pre-registered with the tactics-suite gate."
+ },
+ "certification_status": {
+  "passes": false,
+  "unattributed_fresh": 1,
+  "blocker": "one engine gap, now diagnosed with its fix shape"
+ }
+}

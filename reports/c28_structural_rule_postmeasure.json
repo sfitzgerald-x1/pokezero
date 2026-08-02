@@ -1,0 +1,38 @@
+{
+ "schema": "c28-structural-rule-postmeasure/1",
+ "prediction": "reports/c28_structural_rule_prediction.json",
+ "shipped": [
+  "majority-arm scoping of the structural component-count rule"
+ ],
+ "withdrawn": {
+  "change": "relaxing _sibling_arm_carries_observed_components to the matcher's roll tolerance",
+  "reason": "The 'internal inconsistency' argument does not survive the ledger's own stated principle. Appendix X.3.3: 'only the verdict that *reduces* the residue has to clear a bar.' LS_structural_arm_echo reduces the residue, so a stricter bar there than the primary matcher applies is the rule rather than a contradiction of it. tests/test_cert_sweep_readout_attribution.py already pinned the near-miss sibling case, and the pin is right. My first implementation was also worse than what I had argued for -- it compared labels with NO magnitude tolerance at all, so a sibling with any magnitudes would have carried. Withdrawn on the argument, not on the numbers."
+ },
+ "outcome": {
+  "fresh_60_games": {
+   "predicted": 7,
+   "actual": 7,
+   "match": true
+  },
+  "retained_archive": {
+   "predicted": 583,
+   "actual": 583,
+   "match": true
+  }
+ },
+ "invariant": "UNATTRIBUTED fell 272 on the archive and the receiving families gained exactly 272; no family decreased. My registered falsifier -- 'any family other than UNATTRIBUTED and LS_structural_arm_echo changing count' -- was mis-specified: rows leaving UNATTRIBUTED must land somewhere, so receiving families necessarily grow. The correct invariant is that no family DECREASES and the total is conserved. Both hold.",
+ "fidelity_kpi": {
+  "in_support_percent": 98.734,
+  "out_of_support_per_10k": 10000,
+  "changed": false,
+  "why_structural": "Guaranteed, not merely observed: the change is confined to the classifier, while the KPI is computed by the differential. An instrument fix cannot move it by construction, which is what makes the bucket claim checkable."
+ },
+ "certification_status": {
+  "passes": false,
+  "unattributed_fresh": 7,
+  "projected_per_10k": 1167,
+  "next": "Seven shapes need individual closure as a fix, a documented follow-up, or an evidence-backed limit. That is objective 1's bar; a lower count is not."
+ },
+ "readout_sha256_after": "52981731361fef29407d1d97ba0216640759afe439fd88fb4a94380e9253085d",
+ "c26_superseded": "C26's registered readout hash no longer matches the working tree. Its tests now assert that divergence explicitly rather than asserting currency, so a missing successor registration fails loudly instead of passing quietly."
+}

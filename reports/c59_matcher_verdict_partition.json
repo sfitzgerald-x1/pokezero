@@ -1,0 +1,25 @@
+{
+ "schema": "c59-matcher-verdict-partition/1",
+ "supersedes": "reports/c58_residue_partition.json in full. All three of its readings were proxies for the matcher's decision. This is the decision itself.",
+ "how": "evaluate_boundary_strict already records WHY it rejected each branch, in the miss text. No instrumentation was needed -- I had been carrying the answer in branch_misses the whole time and building HP and decomposition proxies alongside it.",
+ "matcher_verdict_on_the_majority_arm": {
+  "roll-scaled components differ": {
+   "rows": 318,
+   "share": "93.3%"
+  },
+  "attributed components differ": {
+   "rows": 23,
+   "share": "6.7%"
+  }
+ },
+ "which_checks_fire_anywhere_on_the_row": {
+  "roll-scaled only": 246,
+  "both": 82,
+  "attributed only": 13
+ },
+ "what_this_says": "The residue is not a mixture of unrelated shapes. 93% of it dies at ONE check: roll_component_events_agree, the comparison that decides whether a roll-dependent magnitude is consistent with the legal roll set. Only 23 rows are rejected by the exact-component check on their majority arm.",
+ "why_this_beats_every_partition_i_published": "The three earlier readings -- 183/107/50, 132/53/50, 17/265/58 -- all asked a question I invented ('does some branch reproduce the observation, by a rule I chose') and then treated the answer as a bucketing. The matcher does not use my rule. This reports the check that actually fired, so it cannot disagree with the gate it is meant to explain.",
+ "the_next_question_is_now_specific": "Within roll_component_events_agree, which sub-condition rejects these 318? The candidates are the legal-roll-set derivation, the branch-local support, the cap/_to_full relaxation, and the component pairing. That is a bounded set inside one function rather than a search across the whole residue.",
+ "lesson_recorded_because_it_cost_three_cycles": "When the goal is to explain a gate's verdict, instrument the gate. I built three proxies for a decision whose reasons were already serialised on every row. Controls did not catch it because the proxies were consistently wrong, not randomly wrong -- a control tells you whether two populations differ under YOUR test, not whether your test is the right one.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+}

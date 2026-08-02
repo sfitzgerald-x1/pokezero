@@ -1,0 +1,78 @@
+{
+ "schema": "c77-i2-crit-arm-absence/1",
+ "follows": "reports/c75 -- I2_matcher_accounting was the largest candidate-not-finding family with a decisive signature (403 rows, 99% magnitude-only)",
+ "the_signature": {
+  "components": "394 direct damage, 8 recoil",
+  "observed_over_engine_ratio": {
+   "n": 402,
+   "min": 0.692,
+   "median": 1.95,
+   "max": 5.0
+  },
+  "inside the matcher's 0.92-1.09 window": "8 of 402 = 2%",
+  "inside a full gen3 roll 0.85-1.176": "11 of 402 = 3%",
+  "majority_arm_mass": "median 89.1%",
+  "reading": "a median of 1.950 is the gen3 crit multiplier, and 97% of components are outside anything a roll explains. The observation is the crit of the engine's non-crit arm."
+ },
+ "the_decisive_measurement": {
+  "question": "does the engine render a crit arm on these boundaries?",
+  "result": {
+   "sim crit, engine renders NO crit arm": 390,
+   "sim no crit, engine renders one": 9,
+   "neither": 2,
+   "both": 2
+  },
+  "share": "390 of 403 = 96.8%",
+  "context": "C65 measured the engine rendering a crit line on 29.3% of non-Sleep-Talk boundaries generally. Here it is under 1%."
+ },
+ "the_family_is_misnamed_and_misbucketed": "I2_matcher_accounting is bucketed candidate-not-finding and its name attributes the divergence to branch-set accounting. The evidence says otherwise: the simulator crit, the engine offers no crit arm, and the magnitude ratio is the crit multiplier. This is not the matcher accounting for branch mass -- it is the engine's branch set missing an arm the simulator reached. 403 rows, the largest single family in the residue.",
+ "one_ambiguity_i_am_not_resolving_here": "my test looks for a rendered |-crit| line. Absence could mean the engine does not ENUMERATE the crit branch (an engine support gap) or enumerates it without RENDERING the tag (a renderer gap, the C55 class). Those have different fixes and different buckets -- engine-gap versus instrument-artifact -- and distinguishing them needs a magnitude test over the branch set, not a tag search. I have been wrong about crits twice this session, in C51 by using a magnitude proxy for a structural question, so I am naming the ambiguity rather than picking.",
+ "why_this_matters_more_than_the_gate": "these 403 rows are counted as ATTRIBUTED by the certification gate. C74 showed 35% of fresh divergences sit in families with no established mechanism; this is the largest of them, and the mechanism turns out to be a missing crit arm rather than accounting. A gate that counts them as explained is not measuring what it claims to.",
+ "status": "DIAGNOSED AND SPLIT: 217 engine-gap, 173 instrument-artifact, 13 other.",
+ "ambiguity_resolved": {
+  "method": "for each row where the sim crit and no |-crit| line was rendered, ask whether ANY enumerated branch REACHES the observed crit magnitude within a legal roll. Reaching it means the branch exists and only the tag is missing; not reaching it means the arm is absent.",
+  "result": {
+   "no crit line and NO branch reaches the crit magnitude (not enumerated)": 217,
+   "no crit line but a branch REACHES it (enumerated, not rendered)": 173,
+   "engine rendered a crit line": 1
+  },
+  "verdict": "the family SPLITS, roughly evenly. 217 rows are an engine support gap -- the crit arm is not in the branch set at all. 173 are a renderer gap -- the branch exists and reaches the observed magnitude, but carries no |-crit| tag, which is the C55 class at a new site.",
+  "why_the_split_matters": "these need different fixes and land in different buckets. The 217 are engine-gap and belong in objective 4's burndown ranked by search impact. The 173 are instrument-artifact and are plausibly the cheaper repair -- C55 fixed exactly this shape for Sleep Talk callees and cleared 331 rows. Treating the 403 as one family, as the current audit does, guarantees whichever fix is attempted will explain at most half of it.",
+  "the_ambiguity_was_worth_naming": "I declined to pick in C77 because a tag search cannot distinguish enumeration from rendering. Had I guessed, either answer would have been wrong for about half the family."
+ },
+ "chasing_the_173_renderer_gap": {
+  "the_renderer_condition": "events.rs ~2054 emits |-crit| only when six conditions hold: not already emitted, damage lines not done, a collapsed crit value exists, the damage EXACTLY equals it, that value differs from the regular collapsed value, and -- notably -- damage.damage_amount < pre_hp, so no crit tag is ever emitted on a KO.",
+  "hypothesis": "the KO guard explains the 173: a crit that kills is never tagged",
+  "measured": {
+   "crit does NOT kill, no tag": 122,
+   "crit DOES kill, no tag": 50,
+   "other": 1
+  },
+  "verdict": "REFUTED for the majority. The KO guard accounts for 50 of 173, 29%. The other 122 are non-KO crits that still receive no tag, so a different condition is suppressing them -- most likely the exact-value match against crit_collapsed, since the engine collapses its roll fan to at most three representatives and a crit branch need not land exactly on the stored value.",
+  "status": "the 173 remain a renderer gap with the specific condition unidentified. 50 are explained by the KO guard; 122 are not.",
+  "next": "instrument the six conditions at events.rs:2054 and count which one fails, per row. That is the C60 method -- instrument the gate rather than infer from outside it -- and it is the approach that worked every time I used it and failed every time I substituted a proxy."
+ },
+ "condition_identified_by_instrumentation": {
+  "method": "added an eprintln at events.rs:2054 reporting all six crit-tag conditions per evaluation, rebuilt the crate, replayed the I2 crit rows, then reverted and rebuilt clean back to fingerprint c50da60a. The C60 method: instrument the gate rather than infer from outside it.",
+  "evaluations_observed": 451,
+  "which_condition_blocks_the_tag": {
+   "exact value match against crit_collapsed": "449 (99.6%)",
+   "damage < pre_hp, the KO guard": "103 (22.8%)",
+   "the other four": "never"
+  },
+  "the_answer": "the blocker is `Some(damage.damage_amount) == crit_collapsed`, an EXACT equality. The engine collapses its roll fan to at most three representatives (DamageRolls Average|Min|Max), and the branch being rendered need not carry the same representative that was stored as crit_collapsed. So a genuine crit branch is denied its tag because two collapsed values disagree, and the matcher then compares an untagged crit against a non-crit arm.",
+  "this_supersedes_the_KO_guard_reading": "C77's chase found the KO guard explains 50 of 173 and left 122 unexplained. The instrumentation shows the exact-match condition fails on 99.6% of evaluations, so it is the dominant blocker and the KO guard is secondary. My hypothesis was right in kind and wrong in rank -- I picked the condition that reads most suspiciously rather than the one that fires.",
+  "what_a_fix_would_look_like": "match the crit within the legal roll window rather than exactly, or carry the branch's own roll representative into crit_collapsed so the two are comparable by construction. The second is better: it removes the mismatch rather than tolerating it. Either needs the full gate -- counterfactual, identity falsifiers, no-family-shrinks, and a false-match measurement, since loosening a tag condition can mislabel non-crits as crits.",
+  "status": "the 173-row renderer gap now has its exact mechanism identified. Not fixed."
+ },
+ "what_fixing_it_would_and_would_not_do": {
+  "measured": {
+   "rows whose protocol contains a crit, attributed to a family": 606,
+   "rows whose protocol contains a crit, UNATTRIBUTED": 77
+  },
+  "the_point": "the 403 I2 rows, and the 173 renderer-gap subset within them, are ATTRIBUTED. Fixing the crit tag moves them from I2_matcher_accounting to matched. It does NOT reduce the unattributed count, which is what the certification gate measures.",
+  "why_it_is_still_worth_doing": "C74 established that 35% of divergences sit in families with no established mechanism, and that the gate counts them as explained. The 173 are the clearest case: attributed to a family named for branch accounting, actually a suppressed crit tag. Fixing them removes 173 rows from the explained-in-name-only category by making them genuinely matched. That improves the honesty of the measurement without improving the number.",
+  "the_expectation_to_set": "anyone taking this on should expect the unattributed count to stay at 255 and the divergence count to fall by up to 173. If the unattributed count MOVES, something unintended happened and that is the signal to stop -- which is the invariant this fix should be registered with.",
+  "SUPERSEDED_INVARIANT": "This registered 'expect unattributed to stay at 255; if it MOVES, stop'. 255 predates five review rounds and anyone following that invariant on a correct run would now abort. The invariant's INTENT stands -- a crit-tag fix should move divergences, not the unattributed count -- but it must be re-baselined against the residue at the time it is attempted."
+ }
+}

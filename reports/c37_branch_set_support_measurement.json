@@ -1,0 +1,39 @@
+{
+ "schema": "c37-branch-set-support-measurement/1",
+ "corrects": "reports/c36_structural_residue_bucketing.json",
+ "population": "the 179 D-with-count-evidence rows C36 called the strongest engine-support-gap signal",
+ "what_i_did_differently": "C36 read the recorded branch_misses strings. This enumerates the engine's ACTUAL branch set with poke_engine.generate_instructions on the row's own states and choices, applies each branch, and asks whether the observed net HP delta on the complaining slot is reachable at all.",
+ "result": {
+  "exact_branch_exists": 72,
+  "branch_within_one_roll": 33,
+  "no_branch_reaches_it": 74,
+  "by_mechanism": {
+   "sleep_talk": {
+    "exact": 9,
+    "within_roll": 20,
+    "no_branch": 37,
+    "n": 66
+   },
+   "other": {
+    "exact": 63,
+    "within_roll": 13,
+    "no_branch": 37,
+    "n": 113
+   }
+  },
+  "branches_enumerated_per_boundary": {
+   "sleep_talk": "min 1, median 4, max 46",
+   "other": "min 1, median 4, max 79"
+  }
+ },
+ "the_correction": "C36 said 'no arm carries the shape at all' for these 179 rows and read that as the strongest support-gap signal in the residue. Measuring the real branch set shows 105 of 179 -- 59% -- DO have a branch reaching the observed net HP delta. The two are not the same question: branch_misses records the matcher's COMPONENT decomposition of branches it rejected, and a branch can reach the right net HP while decomposing into a different component set. C36's claim that '426 of 435 are engine-side questions and only 9 are instrument-artifact candidates' is withdrawn for the D bucket; the majority of it is a decomposition difference, not a support gap.",
+ "why_i_got_it_wrong_again": "Same failure mode as the crit reading one cycle earlier: I inferred from a recorded artifact -- the miss strings -- instead of measuring the thing the claim was about. The engine was importable and the states were on the row the whole time. The check that settled it took one function call I had not made.",
+ "what_survives_and_is_solid": {
+  "rows": 74,
+  "claim": "no enumerated branch reaches the observed net HP delta, so the transition is not in the engine's support at this boundary",
+  "asymmetry_of_the_test": "This measurement is DECISIVE in the negative and only suggestive in the positive. If no branch reaches the net delta the transition is unreachable, full stop. But a branch reaching the right net delta does not prove the transition is supported -- damage and heal can coincidentally net out. So the 74 are confirmed; the 105 are 'not shown to be support gaps', not 'shown to be fine'.",
+  "sleep_talk_is_enriched": "37 of 66 Sleep Talk rows are unreachable (56%) against 37 of 113 others (33%). Sleep Talk is the single largest identifiable mechanism in the bucket and it fails at nearly twice the rate."
+ },
+ "a_relabel_i_declined": "The structural rule at cert_sweep_readout.py:241 preempts the I6 Sleep Talk rule at :289, so no Sleep Talk row with a majority-arm count mismatch can reach I6. Reordering them would have moved up to 57 rows out of unattributed and cut the certification number. I did not do it. I6 is bucketed candidate-not-finding -- it is not an evidenced limit -- so moving rows into it would launder unattributed rows into an unevidenced family and make the metric move without explaining anything. The 37 unreachable Sleep Talk rows are a support gap and belong in the engine-gap bucket, which is the harder and correct place for them.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+}

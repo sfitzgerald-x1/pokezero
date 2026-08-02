@@ -1,0 +1,34 @@
+{
+ "schema": "c60-gate-exit-census/1",
+ "follows": "reports/c59_matcher_verdict_partition.json, which localised 93% of the residue to roll_component_events_agree",
+ "method": "instrumented the three False-returns of roll_component_events_agree and scoped the counters PER ROW, cleared before each boundary, restricted to the 341 unattributed rows. My first pass counted branch-comparisons across every row including attributed ones -- 71/18/11 -- which conflates a row having many branches with a row being hard. Corrected before reporting this time rather than after.",
+ "per_row_exits_over_the_341": {
+  "1_component_count_mismatch": {
+   "rows": 323,
+   "share": "94.7%"
+  },
+  "3_roll_components_agree_rejected": {
+   "rows": 69,
+   "share": "20.2%"
+  },
+  "2_selected_direct_event_source_or_crit_mismatch": {
+   "rows": 66,
+   "share": "19.4%"
+  }
+ },
+ "exact_combinations": {
+  "count mismatch ONLY": 203,
+  "count mismatch + roll disagreement": 57,
+  "count mismatch + direct-event source/crit": 54,
+  "gate never reached": 13,
+  "all three": 9,
+  "roll disagreement only": 2,
+  "direct-event only": 2,
+  "direct-event + roll": 1
+ },
+ "the_finding": "203 of 341 rows -- 60% -- are rejected by ONE line: `if len(observed) != len(engine): return False`, and by nothing else. No magnitude disagreed, no roll fell outside its legal set, no attribution conflicted. The engine simply produced a different NUMBER of HP components than the simulator on every branch. Another 120 rows hit that line plus something else, so the count check fires on 323 of 341.",
+ "why_that_matters": "A length check is the crudest possible comparison and it is the dominant rejector. It cannot distinguish 'the engine modelled a different outcome' from 'the engine rendered the same outcome with a different number of events' -- which is exactly the defect class C55 fixed, where an unrendered Sleep Talk callee damage line made the counts differ. C55 cleared 331 rows through this same line.",
+ "what_this_does_NOT_license": "relaxing the length check. Protocol order and component count are load-bearing: the function's own docstring says a branch that moves HP events is a different branch rather than interchangeable evidence. Making the comparison length-tolerant would admit false matches wholesale. The lead is not 'loosen the check', it is 'find the remaining places where the engine's event stream under- or over-describes an outcome it modelled correctly'.",
+ "next": "for the 203 count-mismatch-only rows, tabulate observed-count versus engine-count and the sources present on each side. C55 was found exactly this way, by reading the two lists rather than aggregating over them.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+}
