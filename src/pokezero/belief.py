@@ -338,6 +338,28 @@ class BattleBeliefSnapshot:
         }
 
 
+def variant_identity(variant: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Stable identity of one candidate-variant mapping.
+
+    Used to intersect an evidence producer's SURVIVOR list against the engine's own
+    candidate list (:meth:`PublicBattleBeliefEngine.narrow_candidate_variants`). Both
+    sides read the SAME mappings out of the same ``CandidateSetSummary``, so the fields
+    are taken RAW: normalizing here would add a divergence risk (two normalizers drifting
+    apart silently drops every pin) without adding any discrimination between variants
+    that the generator already emits distinctly.
+    """
+
+    raw_moves = variant.get("moves")
+    moves = tuple(str(move) for move in raw_moves) if isinstance(raw_moves, (list, tuple)) else ()
+    level = variant.get("level")
+    return (
+        int(level) if isinstance(level, int) and level > 0 else 0,
+        moves,
+        str(variant.get("item") or ""),
+        str(variant.get("ability") or ""),
+    )
+
+
 class PublicBattleBeliefEngine:
     def __init__(
         self,
@@ -374,6 +396,21 @@ class PublicBattleBeliefEngine:
         self._hp_after_actions: dict[str, Optional[float]] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
         self._pending_mudshot: Optional[dict[str, Any]] = None
+        # Variant narrowing from EXTERNAL damage-evidence producers (defender-side investment
+        # inference, pokezero.investment). Belief key -> the identities still viable. Monotone:
+        # each call intersects, never widens, so a narrowing can only be undone by rebuilding
+        # the engine. Kept as identities rather than mappings so the filter survives the
+        # set source re-summarizing on every reveal.
+        #
+        # This module stays a stdlib LEAF: computing which variants survive needs the dex and
+        # the gen3 spread/damage core, so the producer computes survivors and hands them in
+        # rather than belief.py importing that stack.
+        self._variant_pins: dict[str, frozenset[tuple[Any, ...]]] = {}
+        # Diagnostic only: keys where an incoming survivor list contradicted the standing pin
+        # (empty intersection). The pin is LEFT INTACT and the contradiction counted — a false
+        # narrowing that eliminates the true variant is unrecoverable and corrupts every
+        # downstream derived feature and search world, so the conflict path never widens.
+        self._variant_pin_conflicts: dict[str, int] = {}
 
     @classmethod
     def from_events(
@@ -878,6 +915,81 @@ class PublicBattleBeliefEngine:
         twin.resolve_pending_switches_at_boundary()
         return twin.snapshot().for_player(showdown_slot)
 
+    def narrow_candidate_variants(
+        self,
+        key: str,
+        survivors: Sequence[Mapping[str, Any]],
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Restrict ``key``'s candidate variants to ``survivors``. Monotone.
+
+        The narrowing is stored by identity and re-applied every time the set source
+        re-summarizes, so it persists for the rest of the battle. Returns True when the
+        standing pin actually changed.
+
+        Refuses two ways, both of which LEAVE THE STANDING PIN INTACT rather than widening:
+        an empty ``survivors`` (no evidence is not evidence for nothing), and a survivor list
+        disjoint from the standing pin (counted in ``variant_pin_conflicts``). The asymmetry is
+        deliberate: dropping a true variant is unrecoverable, while declining a narrowing only
+        costs precision.
+        """
+
+        del reason  # accepted for call-site readability; conflicts are counted, not attributed
+        incoming = frozenset(variant_identity(variant) for variant in survivors)
+        if not incoming:
+            return False
+        standing = self._variant_pins.get(key)
+        if standing is None:
+            self._variant_pins[key] = incoming
+            return True
+        merged = standing & incoming
+        if not merged:
+            self._variant_pin_conflicts[key] = self._variant_pin_conflicts.get(key, 0) + 1
+            return False
+        if merged == standing:
+            return False
+        self._variant_pins[key] = merged
+        return True
+
+    @property
+    def variant_pin_conflicts(self) -> Mapping[str, int]:
+        """Per-key count of contradicted narrowings — a precision alarm for the producer."""
+
+        return dict(self._variant_pin_conflicts)
+
+    def _apply_variant_pin(
+        self, key: str, summary_fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Filter a summary's variants through ``key``'s standing pin, in place.
+
+        ``uncertainty`` is ``count / species_pool_total`` (see the randbats source), so scaling
+        it by the surviving fraction keeps that denominator implicit and correct. An
+        ``inconsistent`` summary is left alone: its variants are the unconstrained fallback pool
+        with uncertainty forced to 1.0, and narrowing a fallback would manufacture confidence
+        the reveals do not support.
+        """
+
+        pin = self._variant_pins.get(key)
+        variants = summary_fields.get("candidate_variants") or ()
+        if not pin or not variants or summary_fields.get("_inconsistent"):
+            return summary_fields
+        kept = tuple(v for v in variants if variant_identity(v) in pin)
+        if not kept or len(kept) == len(variants):
+            # Empty means the pin and this summary disagree entirely (the producer pinned
+            # against a stale variant list). Keep the unfiltered set: see the refusal
+            # asymmetry in narrow_candidate_variants.
+            if not kept:
+                self._variant_pin_conflicts[key] = self._variant_pin_conflicts.get(key, 0) + 1
+            return summary_fields
+        previous = len(variants)
+        summary_fields["candidate_variants"] = kept
+        summary_fields["candidate_set_count"] = len(kept)
+        prior_uncertainty = summary_fields.get("uncertainty")
+        if isinstance(prior_uncertainty, (int, float)):
+            summary_fields["uncertainty"] = float(prior_uncertainty) * (len(kept) / previous)
+        return summary_fields
+
     def clone(self) -> "PublicBattleBeliefEngine":
         """Copy only the public-evidence state needed to continue a sampled world."""
 
@@ -894,6 +1006,10 @@ class PublicBattleBeliefEngine:
         twin._shed_skin_activated_this_turn = set(self._shed_skin_activated_this_turn)
         twin._sleep_cant_pending = set(self._sleep_cant_pending)
         twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
+        # Narrowings are public evidence like any other reveal: a sampled world that forgot
+        # them would re-admit variants the strikes already excluded.
+        twin._variant_pins = dict(self._variant_pins)
+        twin._variant_pin_conflicts = dict(self._variant_pin_conflicts)
         return twin
 
     def snapshot(self) -> BattleBeliefSnapshot:
@@ -1234,15 +1350,23 @@ class PublicBattleBeliefEngine:
                 )
         if summary is None:
             return belief
+        fields: dict[str, Any] = {
+            "candidate_set_count": summary.candidate_count,
+            "uncertainty": summary.uncertainty,
+            "candidate_variants": summary.candidate_variants,
+            "_inconsistent": summary.inconsistent,
+        }
+        # Re-applied on EVERY summarize (each reveal re-derives the set), which is what makes a
+        # narrowing persist for the rest of the battle rather than being undone by the next reveal.
+        fields = self._apply_variant_pin(belief_key(belief.showdown_slot, belief.species), fields)
+        fields.pop("_inconsistent", None)
         return replace(
             belief,
-            candidate_set_count=summary.candidate_count,
-            uncertainty=summary.uncertainty,
             possible_abilities=summary.possible_abilities,
             possible_items=summary.possible_items,
             possible_moves=summary.possible_moves,
-            candidate_variants=summary.candidate_variants,
             source_metadata=summary.source_metadata,
+            **fields,
         )
 
     def _record_raw_ability_reveal(self, event: Any) -> None:
