@@ -27,7 +27,7 @@ same audit run in the opposite direction: world-seeded facts the observation nev
 
 | | v3 | v4 |
 |---|---|---|
-| numeric | 155 | **133** |
+| numeric | 155 | **132** |
 | categorical | 51 | **41** |
 | transition tokens | 64 | **0 — the region is gone** |
 | tokens in the sequence | 87 | **23** |
@@ -45,25 +45,36 @@ The same drop set applies: the fourteen evidence-backed unreachable fields v3 re
 *rewritten* relative to the v3 writer surface, so every surviving v3 column carries the same
 VALUE at a different index — asserted directly in `tests/test_observation_spec_v4.py`.
 
-**One live current-state column is retired at v4: `NUMERIC_TIER2_INVESTMENT_PINNED`
-(writer 139).** The defender-side investment conclusion now NARROWS THE BELIEF CANDIDATE SET
+**Two live current-state columns are retired at v4 — the whole pinned Tier-2 pair:
+`NUMERIC_TIER2_CB_PINNED` (writer 138) and `NUMERIC_TIER2_INVESTMENT_PINNED` (writer 139).**
+Both conclusions now NARROW THE BELIEF CANDIDATE SET
 (`ObservationFeatureMasks.investment_belief_narrowing`) rather than being projected onto a
-reserved scalar. Narrowing moves `NUMERIC_CANDIDATE_SET_COUNT` (5) and `NUMERIC_UNCERTAINTY`
-(6) — frozen legacy positions present in *every* schema, on every opponent-mon token — plus
-the `possible_items` / `possible_moves` / `possible_abilities` surfaces, and it sharpens every
-sampled search world. Column 139 is a lossy ±1 / ±0.5 projection of the same evidence: it
-carries the investment CLASS and discards the integer, the axis, and everything the surviving
-variants imply about the mon's moves and items.
+reserved scalar:
 
-The retirement is **v4-only**. v2.1 / v2.2 / v3 keep the column intact — checkpoints trained
-under those schemas have it in their input layout, and removing it would be a silent census
+- the attacker-side **Choice Band** conclusion narrows that mon to its candidate variants
+  holding a Choice Band. `item` is already a candidate-set discriminator, so concluding "this
+  mon holds a Choice Band" is a statement about a first-class belief field;
+- the defender-side **investment** pin narrows to the variants matching its stat lattice.
+
+Narrowing moves `NUMERIC_CANDIDATE_SET_COUNT` (5) and `NUMERIC_UNCERTAINTY` (6) — frozen legacy
+positions present in *every* schema, on every opponent-mon token — plus the `possible_items` /
+`possible_moves` / `possible_abilities` surfaces, and it sharpens every sampled search world.
+Against that, 139 is a lossy ±1 / ±0.5 projection that carries the investment CLASS and
+discards the integer and the axis, and 138 is a single bit that names the item while saying
+nothing about which SETS remain — i.e. nothing about what else the mon is carrying.
+
+The retirement is **v4-only**. v2.1 / v2.2 / v3 keep both columns intact — checkpoints trained
+under those schemas have them in their input layout, and removing them would be a silent census
 break for artifacts that exist. v4 is unlaunched and its censuses are EXACT-matched, so here
-it is a clean census edit now and a loud schema break later. Its sibling
-`NUMERIC_TIER2_CB_PINNED` (138) is unaffected and stays in the v4 layout.
+it is a clean census edit now and a loud schema break later.
 
 The exclusion is surgical by necessity: `schema_v2_1` in the encoder means "carries the v2.1
-blocks", and v4 inherits it for every other one (PP-validity bits, sub HP, the pinned CB
-conclusion), so 139 is switched off by name rather than by turning that flag off.
+blocks", and v4 inherits it for the others (PP-validity bits, sub HP), so 138 and 139 are
+switched off by name rather than by turning that flag off.
+
+The as-of-strike history twins (`NUMERIC_TT_CB_BIT` 119, `NUMERIC_TT_INVESTMENT_BIT` 120) need
+no such treatment: they are `history`-group columns and the region trim below already removes
+them, so under v4 the tier2 conclusions have **no** encoded column at all.
 
 ## The history region is REMOVED, not masked
 
@@ -84,11 +95,11 @@ history, because there is nowhere to put it.
 writer while being not-turn-merged. Both the Python and the native encoder keep those flags
 distinct (`schema_v3` / `schema_turn_merged`, `is_v3()` / `is_v4()`).
 
-**What survives the trim.** The transition tokens are still EXTRACTED — the per-mon pinned
-Tier-2 CB conclusion and the tendency aggregates derive from that stream, and both live on real
-mon tokens as current state. Only the per-row encoding is gone. (The investment half of the
-pinned pair is retired at v4 for a different reason — see *Census and layout* — not because
-the region went away.)
+**What survives the trim.** The transition tokens are still EXTRACTED — the tendency aggregates
+derive from that stream and live on real mon tokens as current state, and so do the per-mon
+Tier-2 conclusions, which under v4 land in the BELIEF candidate sets rather than in a column.
+Only the per-row encoding is gone. (Both pinned tier2 columns are retired at v4 for that
+separate reason — see *Census and layout* — not because the region went away.)
 
 `showdown.v4_numeric_index()` is the physical-layout authority. `NUMERIC_*` constants are
 writer-semantic identifiers, never physical v4 positions.

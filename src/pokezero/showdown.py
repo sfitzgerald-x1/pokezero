@@ -319,9 +319,17 @@ NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_
 # and every later assessed strike), so the same ``masks.tier2_residuals`` gate + the
 # belief-source double-gate govern it: pipelines that never ran the Tier-2 inference
 # carry unannotated tokens and the column stays 0.0.
-# LAYER SEPARATION (architectural invariant): Tier-2 conclusions NEVER mutate the belief
-# engine's Tier-1 candidate sets — the exact/protocol layer stays inference-free; this is
-# a parallel tier2-layer feature carried on the same token, not a belief-fact write.
+# LAYER SEPARATION, SUPERSEDED: this column was introduced under an invariant that Tier-2
+# conclusions never mutate the belief engine's Tier-1 candidate sets. That invariant now holds
+# only with ``masks.investment_belief_narrowing`` OFF (its default). With it on, the CB
+# conclusion NARROWS the mon's candidate variants to those holding a Choice Band — the owner's
+# ruling being that "this mon holds a Choice Band" is a statement about a first-class belief
+# field, since ``item`` is already a candidate-set discriminator, and belongs there rather than
+# in a reserved bit. The narrowing is monotone and refusal-asymmetric (see
+# PublicBattleBeliefEngine.narrow_candidate_variants), never a widening.
+# RETIRED AT V4 (and only at v4), for exactly that reason — see
+# _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES. v2.1/v2.2/v3 keep it: their checkpoints have it
+# in their input layout.
 NUMERIC_TIER2_CB_PINNED = NUMERIC_SUB_HP_FRACTION + 1  # 138
 # The per-mon twin of NUMERIC_TT_INVESTMENT_BIT — the AUTHORITATIVE current-state form of
 # the defender-side investment conclusion (the CB_PINNED derivation mirrored to the
@@ -1000,9 +1008,11 @@ _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
 # has no surface left to sit on. What those rows were carrying is either named as current state
 # by the feature pack (recharge, last move, last-round damage) or deliberately let go.
 #
-# NUMERIC_TIER2_CB_PINNED survives, because it was never a history column: it lives on the
-# opponent MON token as the authoritative CURRENT-STATE form of that conclusion, still derived
-# from the extracted token stream (extraction keeps running, only the row ENCODING is gone).
+# The two per-mon PINNED tier2 columns (138/139) are not history columns — they live on the
+# opponent MON token as the authoritative CURRENT-STATE form of those conclusions — so the
+# history sweep does not reach them. V4 retires them anyway, for the separate reason spelled
+# out below. Their derivation is unaffected either way: the transition stream is still
+# EXTRACTED under v4, only its row ENCODING is gone.
 _V4_HISTORY_GROUP_INDICES = frozenset(
     index for name, indices in _V3_NUMERIC_LAYOUT_GROUPS if name == "history" for index in indices
 )
@@ -1010,20 +1020,30 @@ _V4_HISTORY_GROUP_INDICES = frozenset(
 # break, which is why this set is empty for every schema that has shipped an artifact and why
 # it is spelled separately from the history sweep above.
 #
-# NUMERIC_TIER2_INVESTMENT_PINNED (139): the defender-side investment conclusion now NARROWS
-# THE BELIEF CANDIDATE SET (ObservationFeatureMasks.investment_belief_narrowing) instead of
-# being projected onto one reserved scalar. That narrowing moves NUMERIC_CANDIDATE_SET_COUNT
-# (5) and NUMERIC_UNCERTAINTY (6) — frozen legacy positions present in EVERY schema, on every
-# opponent-mon token — plus the possible_items / possible_moves / possible_abilities surfaces,
-# and it sharpens every sampled search world. Against that, column 139 is a lossy +/-1 / +/-0.5
-# projection of the same evidence: it carries the investment CLASS and discards the integer,
-# the axis, and everything the surviving variants imply about moves and items.
+# BOTH pinned tier2 conclusions now NARROW THE BELIEF CANDIDATE SET
+# (ObservationFeatureMasks.investment_belief_narrowing) instead of being projected onto a
+# reserved scalar:
 #
-# Dropped from V4 ONLY. v2.1/v2.2/v3 keep the column intact: checkpoints trained under those
-# schemas have it in their input layout, and removing it would be a silent census break for
+#   - NUMERIC_TIER2_INVESTMENT_PINNED (139), the defender-side investment pin;
+#   - NUMERIC_TIER2_CB_PINNED (138), the attacker-side Choice Band conclusion, whose
+#     survivors are that mon's candidate variants holding a Choice Band. ``item`` is already
+#     a candidate-set discriminator, so "this mon holds a Choice Band" is a statement about
+#     a first-class belief field, not about a reserved bit.
+#
+# A narrowing moves NUMERIC_CANDIDATE_SET_COUNT (5) and NUMERIC_UNCERTAINTY (6) — frozen
+# legacy positions present in EVERY schema, on every opponent-mon token — plus the
+# possible_items / possible_moves / possible_abilities surfaces, and it sharpens every sampled
+# search world. Against that, 139 is a lossy +/-1 / +/-0.5 class projection that discards the
+# integer and the axis, and 138 is a single bit that says "Choice Band" while the belief
+# surface can say WHICH sets remain and therefore what this mon's other moves are.
+#
+# Dropped from V4 ONLY. v2.1/v2.2/v3 keep both columns intact: checkpoints trained under those
+# schemas have them in their input layout, and removing them would be a silent census break for
 # artifacts that exist. V4 is unlaunched and its censuses are EXACT-matched, so here it is a
 # clean census edit now and a loud schema break later.
-_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES = frozenset((NUMERIC_TIER2_INVESTMENT_PINNED,))
+_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES = frozenset(
+    (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED)
+)
 V4_DROPPED_LEGACY_NUMERIC_INDICES = (
     V3_DROPPED_LEGACY_NUMERIC_INDICES
     | _V4_HISTORY_GROUP_INDICES
@@ -4144,10 +4164,15 @@ def observation_from_player_state(
     # the monotone as-of-strike bit makes "any assessed strike of this mon carries it"
     # exactly the tracker's per-mon conclusion, and reading the FULL (untruncated) token
     # list here is what makes the pinned form robust to the K-budget truncation the
-    # history surface is subject to. Tier-2 conclusions never touch the Tier-1 belief
-    # candidate sets (layer separation; see the column comment).
+    # history surface is subject to.
+    #
+    # RETIRED AT V4 (and only at v4): the conclusion narrows the belief candidate set there
+    # instead — a strictly richer surface than this one bit, and the reason the exclusion is
+    # spelled by name (``and not schema_v4``) rather than by turning ``schema_v2_1`` off:
+    # that flag means "carries the v2.1 blocks" and v4 inherits it for the PP-validity bits
+    # and sub HP. See _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES.
     tier2_cb_pinned_species: frozenset[str] = frozenset()
-    if schema_v2_1 and feature_masks.tier2_residuals:
+    if schema_v2_1 and not schema_v4 and feature_masks.tier2_residuals:
         opponent_slot = state.perspective.opponent_showdown_slot
         tier2_cb_pinned_species = frozenset(
             _normalize_identifier(token.actor_species)
