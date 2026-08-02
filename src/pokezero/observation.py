@@ -48,10 +48,18 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # (docs/k0-feature-pack-plan.md Parts A and B). The motivating question is whether a pure-Markov
 # k0 policy (transition_token_budget=0) can match a k1 one once the facts k1's single history row
 # was carrying are named as current state.
-# NEW CONTRACT, NEW ARMS: v4 SHRINKS BOTH public censuses — numeric 134 vs v3's 155, categorical
-# 41 vs 51 — because dropping the transition-history region removes more slots (34 numeric, 12
-# categorical) than the feature pack adds (13 numeric, 2 categorical). The private WRITER surface
-# grows; the public census does not, and the census is what every check below compares. So a v4
+# V4 also RETIRES one live current-state column: NUMERIC_TIER2_INVESTMENT_PINNED (writer 139).
+# The defender-side investment conclusion now narrows the belief candidate set instead
+# (ObservationFeatureMasks.investment_belief_narrowing), which moves the candidate-set-count and
+# uncertainty columns present in every schema plus the possible_items/moves/abilities surfaces —
+# a strictly richer surface than 139's lossy +/-1 / +/-0.5 class projection of the same evidence.
+# v2.1/v2.2/v3 keep the column: their checkpoints have it in their input layout. Retiring it at
+# v4 is a clean census edit while v4 is unlaunched, and a loud schema break afterwards.
+# NEW CONTRACT, NEW ARMS: v4 SHRINKS BOTH public censuses — numeric 133 vs v3's 155, categorical
+# 41 vs 51 — because dropping the transition-history region and column 139 removes more slots
+# (34 + 1 numeric, 12 categorical) than the feature pack adds (13 numeric, 2 categorical). The
+# private WRITER surface grows; the public census does not, and the census is what every check
+# below compares. So a v4
 # checkpoint can never share a cache, an env, or a run with a v3 one. That is enforced at every
 # layer (schema validation, an encode-time census EXACT match at v4 — a floor cannot catch a
 # census that shrinks, and BOTH v4 censuses shrink, so both exact matches are load-bearing,

@@ -27,7 +27,7 @@ same audit run in the opposite direction: world-seeded facts the observation nev
 
 | | v3 | v4 |
 |---|---|---|
-| numeric | 155 | **134** |
+| numeric | 155 | **133** |
 | categorical | 51 | **41** |
 | transition tokens | 64 | **0 — the region is gone** |
 | tokens in the sequence | 87 | **23** |
@@ -41,9 +41,29 @@ positions diverge from v3's from `pokemon_state` onward. That is free — v4 is 
 so no artifact is ever read under both layouts (see *Contract consequence* below).
 
 The same drop set applies: the fourteen evidence-backed unreachable fields v3 removed
-([dead observation fields](dead_observation_fields.md)) stay removed. No v4 column is dropped
-or rewritten relative to the v3 writer surface, so every v3 column carries the same VALUE at a
-different index — asserted directly in `tests/test_observation_spec_v4.py`.
+([dead observation fields](dead_observation_fields.md)) stay removed. No v4 column is
+*rewritten* relative to the v3 writer surface, so every surviving v3 column carries the same
+VALUE at a different index — asserted directly in `tests/test_observation_spec_v4.py`.
+
+**One live current-state column is retired at v4: `NUMERIC_TIER2_INVESTMENT_PINNED`
+(writer 139).** The defender-side investment conclusion now NARROWS THE BELIEF CANDIDATE SET
+(`ObservationFeatureMasks.investment_belief_narrowing`) rather than being projected onto a
+reserved scalar. Narrowing moves `NUMERIC_CANDIDATE_SET_COUNT` (5) and `NUMERIC_UNCERTAINTY`
+(6) — frozen legacy positions present in *every* schema, on every opponent-mon token — plus
+the `possible_items` / `possible_moves` / `possible_abilities` surfaces, and it sharpens every
+sampled search world. Column 139 is a lossy ±1 / ±0.5 projection of the same evidence: it
+carries the investment CLASS and discards the integer, the axis, and everything the surviving
+variants imply about the mon's moves and items.
+
+The retirement is **v4-only**. v2.1 / v2.2 / v3 keep the column intact — checkpoints trained
+under those schemas have it in their input layout, and removing it would be a silent census
+break for artifacts that exist. v4 is unlaunched and its censuses are EXACT-matched, so here
+it is a clean census edit now and a loud schema break later. Its sibling
+`NUMERIC_TIER2_CB_PINNED` (138) is unaffected and stays in the v4 layout.
+
+The exclusion is surgical by necessity: `schema_v2_1` in the encoder means "carries the v2.1
+blocks", and v4 inherits it for every other one (PP-validity bits, sub HP, the pinned CB
+conclusion), so 139 is switched off by name rather than by turning that flag off.
 
 ## The history region is REMOVED, not masked
 
@@ -65,8 +85,10 @@ writer while being not-turn-merged. Both the Python and the native encoder keep 
 distinct (`schema_v3` / `schema_turn_merged`, `is_v3()` / `is_v4()`).
 
 **What survives the trim.** The transition tokens are still EXTRACTED — the per-mon pinned
-Tier-2 conclusions and the tendency aggregates derive from that stream, and both live on real
-mon tokens as current state. Only the per-row encoding is gone.
+Tier-2 CB conclusion and the tendency aggregates derive from that stream, and both live on real
+mon tokens as current state. Only the per-row encoding is gone. (The investment half of the
+pinned pair is retired at v4 for a different reason — see *Census and layout* — not because
+the region went away.)
 
 `showdown.v4_numeric_index()` is the physical-layout authority. `NUMERIC_*` constants are
 writer-semantic identifiers, never physical v4 positions.
@@ -308,9 +330,8 @@ sleep-clause blocks, wish clocks, gender, confusion-selfhit (all landed in the v
 
 ## Contract consequence — new arms only, never mixed
 
-Every v4 column extends the numeric AND categorical censuses, so a v4 checkpoint can never
-share a cache, an env, or a run with a v3 one. The machinery refuses mixing at every layer, by
-design:
+Both v4 censuses differ from v3's, so a v4 checkpoint can never share a cache, an env, or a run
+with a v3 one. The machinery refuses mixing at every layer, by design:
 
 - schema mismatch raises at validation (`observation.py`), and legacy/unversioned schemas
   load-and-refuse;

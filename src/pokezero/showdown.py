@@ -1000,18 +1000,45 @@ _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
 # has no surface left to sit on. What those rows were carrying is either named as current state
 # by the feature pack (recharge, last move, last-round damage) or deliberately let go.
 #
-# Two survivors from the tier2 family are NOT dropped, because they were never history columns:
-# NUMERIC_TIER2_CB_PINNED and NUMERIC_TIER2_INVESTMENT_PINNED live on the opponent MON token as
-# the authoritative CURRENT-STATE form of those conclusions. They are still derived from the
-# extracted token stream — extraction keeps running, only the ENCODING of the rows is gone.
+# NUMERIC_TIER2_CB_PINNED survives, because it was never a history column: it lives on the
+# opponent MON token as the authoritative CURRENT-STATE form of that conclusion, still derived
+# from the extracted token stream (extraction keeps running, only the row ENCODING is gone).
 _V4_HISTORY_GROUP_INDICES = frozenset(
     index for name, indices in _V3_NUMERIC_LAYOUT_GROUPS if name == "history" for index in indices
 )
+# V4-ONLY drops that are not history rows. Retiring a live current-state column is a schema
+# break, which is why this set is empty for every schema that has shipped an artifact and why
+# it is spelled separately from the history sweep above.
+#
+# NUMERIC_TIER2_INVESTMENT_PINNED (139): the defender-side investment conclusion now NARROWS
+# THE BELIEF CANDIDATE SET (ObservationFeatureMasks.investment_belief_narrowing) instead of
+# being projected onto one reserved scalar. That narrowing moves NUMERIC_CANDIDATE_SET_COUNT
+# (5) and NUMERIC_UNCERTAINTY (6) — frozen legacy positions present in EVERY schema, on every
+# opponent-mon token — plus the possible_items / possible_moves / possible_abilities surfaces,
+# and it sharpens every sampled search world. Against that, column 139 is a lossy +/-1 / +/-0.5
+# projection of the same evidence: it carries the investment CLASS and discards the integer,
+# the axis, and everything the surviving variants imply about moves and items.
+#
+# Dropped from V4 ONLY. v2.1/v2.2/v3 keep the column intact: checkpoints trained under those
+# schemas have it in their input layout, and removing it would be a silent census break for
+# artifacts that exist. V4 is unlaunched and its censuses are EXACT-matched, so here it is a
+# clean census edit now and a loud schema break later.
+_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES = frozenset((NUMERIC_TIER2_INVESTMENT_PINNED,))
 V4_DROPPED_LEGACY_NUMERIC_INDICES = (
-    V3_DROPPED_LEGACY_NUMERIC_INDICES | _V4_HISTORY_GROUP_INDICES
+    V3_DROPPED_LEGACY_NUMERIC_INDICES
+    | _V4_HISTORY_GROUP_INDICES
+    | _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES
 )
 _V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = tuple(
-    (name, indices + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()))
+    (
+        name,
+        tuple(
+            index
+            for index in indices
+            if index not in _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES
+        )
+        + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()),
+    )
     for name, indices in _V3_NUMERIC_LAYOUT_GROUPS
     if name != "history"
 )
@@ -1034,14 +1061,19 @@ if set(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V4_DROPPED_LEGACY_NUMERIC_INDICES
     raise AssertionError("v4 numeric layout must account for every v4 writer column")
 
 _V4_NUMERIC_FEATURE_COUNT = len(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
-# v4 = the v3 public surface, MINUS the history group, PLUS the feature pack.
+# v4 = the v3 public surface, MINUS the history group, MINUS the retired current-state
+# columns, PLUS the feature pack.
 _V4_NUMERIC_FEATURE_COUNT_EXPECTED = (
-    _V3_NUMERIC_FEATURE_COUNT - len(_V4_HISTORY_GROUP_INDICES) + V4_NUMERIC_EXTRA
+    _V3_NUMERIC_FEATURE_COUNT
+    - len(_V4_HISTORY_GROUP_INDICES)
+    - len(_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES)
+    + V4_NUMERIC_EXTRA
 )
 if _V4_NUMERIC_FEATURE_COUNT != _V4_NUMERIC_FEATURE_COUNT_EXPECTED:
     raise AssertionError(
-        "v4 must be the v3 public surface minus history plus the feature pack "
-        f"({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), got {_V4_NUMERIC_FEATURE_COUNT}"
+        "v4 must be the v3 public surface minus history minus the retired current-state "
+        f"columns plus the feature pack ({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), "
+        f"got {_V4_NUMERIC_FEATURE_COUNT}"
     )
 
 
@@ -4129,10 +4161,21 @@ def observation_from_player_state(
     # an HP conclusion upgrades over a defense-only pin, never retracts), so the LAST
     # annotated strike of each defender carries the tracker's current per-mon conclusion,
     # and reading the FULL untruncated token list keeps the pinned form robust to
-    # K-budget truncation. Triple-gated like the tt-row write (v2.1 schema + both
-    # masks); layer separation holds — Tier-1 candidate sets are never touched.
+    # K-budget truncation. Triple-gated like the tt-row write (v2.1 schema + both masks).
+    #
+    # RETIRED AT V4 (and only at v4): the conclusion narrows the belief candidate set there
+    # instead, which is a strictly richer surface than this lossy class projection — see
+    # _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES. The exclusion has to be surgical because
+    # ``schema_v2_1`` means "carries the v2.1 blocks" and v4 inherits it for every OTHER
+    # block (PP-validity bits, sub HP, the pinned CB conclusion), so the column is switched
+    # off by name rather than by turning that flag off.
     tier2_investment_pinned: dict[str, float] = {}
-    if schema_v2_1 and feature_masks.tier2_residuals and feature_masks.tier2_investment:
+    if (
+        schema_v2_1
+        and not schema_v4
+        and feature_masks.tier2_residuals
+        and feature_masks.tier2_investment
+    ):
         self_slot = state.perspective.showdown_slot
         for token in state.transition_tokens:
             if (

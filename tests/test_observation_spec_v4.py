@@ -20,6 +20,7 @@ from pokezero.observation import (
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
@@ -50,10 +51,13 @@ from pokezero.showdown import (
     NUMERIC_SELF_HAZARD_EXPECTED,
     NUMERIC_SELF_ITEMS_REMOVED_CREDIT,
     NUMERIC_STALL_COUNTER,
+    NUMERIC_TIER2_CB_PINNED,
+    NUMERIC_TIER2_INVESTMENT_PINNED,
     NUMERIC_TRUANT_LOAF,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
     SELF_POKEMON_TOKEN_OFFSET,
+    V3_DROPPED_LEGACY_NUMERIC_INDICES,
     V3_NUMERIC_LAYOUT_GROUPS,
     V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     V3_REPLAY_OBSERVATION_SPEC,
@@ -250,9 +254,10 @@ class V4SchemaTableTest(unittest.TestCase):
         self.assertEqual(spec.transition_token_count, 0)
         self.assertEqual(spec.token_count, 23)
         self.assertLess(spec.token_count, V3_REPLAY_OBSERVATION_SPEC.token_count)
-        # v3's surface, minus the 34-column history group and the 12 turn-merged categorical
-        # columns, plus the 13-column feature pack and its 2 categorical rows.
-        self.assertEqual(spec.numeric_feature_count, 134)
+        # v3's surface, minus the 34-column history group, minus the retired
+        # NUMERIC_TIER2_INVESTMENT_PINNED, minus the 12 turn-merged categorical columns, plus
+        # the 13-column feature pack and its 2 categorical rows.
+        self.assertEqual(spec.numeric_feature_count, 133)
         self.assertEqual(spec.categorical_feature_count, 41)
         # v4 is a grouped-layout schema but NOT a turn-merged one: the two axes are separate.
         self.assertNotIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
@@ -290,11 +295,18 @@ class V4LayoutTest(unittest.TestCase):
                 NUMERIC_OPP_ITEMS_REMOVED_CREDIT,
             ),
         }
+        # One v3 current-state column is RETIRED at v4 (not carried to a new index):
+        # NUMERIC_TIER2_INVESTMENT_PINNED, whose evidence now narrows the belief candidate set
+        # instead. It sits in pokemon_state; its CB sibling (138) is untouched.
+        self.assertIn(NUMERIC_TIER2_INVESTMENT_PINNED, dict(V3_NUMERIC_LAYOUT_GROUPS)["pokemon_state"])
+        self.assertNotIn(NUMERIC_TIER2_INVESTMENT_PINNED, v4_groups["pokemon_state"])
+        self.assertIn(NUMERIC_TIER2_CB_PINNED, v4_groups["pokemon_state"])
         for name, v3_indices in v3_groups.items():
             if name == "history":
                 continue
+            carried = tuple(i for i in v3_indices if i != NUMERIC_TIER2_INVESTMENT_PINNED)
             self.assertEqual(
-                v4_groups[name], v3_indices + expected_additions.get(name, ()), name
+                v4_groups[name], carried + expected_additions.get(name, ()), name
             )
 
     def test_every_writer_column_is_carried_or_explicitly_dropped(self) -> None:
@@ -304,13 +316,23 @@ class V4LayoutTest(unittest.TestCase):
             carried | V4_DROPPED_LEGACY_NUMERIC_INDICES,
             set(range(V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
         )
-        # V4 drops everything v3 dropped, PLUS the whole history group.
+        # V4 drops everything v3 dropped, PLUS the whole history group, PLUS the one retired
+        # current-state column.
         self.assertLess(
             {24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104},
             set(V4_DROPPED_LEGACY_NUMERIC_INDICES),
         )
         history = {i for n, idx in V3_NUMERIC_LAYOUT_GROUPS if n == "history" for i in idx}
         self.assertTrue(history <= set(V4_DROPPED_LEGACY_NUMERIC_INDICES))
+        self.assertIn(NUMERIC_TIER2_INVESTMENT_PINNED, V4_DROPPED_LEGACY_NUMERIC_INDICES)
+        self.assertNotIn(NUMERIC_TIER2_INVESTMENT_PINNED, history)
+        # ...and nothing else. The retirement is exactly one column wide.
+        self.assertEqual(
+            set(V4_DROPPED_LEGACY_NUMERIC_INDICES)
+            - set(V3_DROPPED_LEGACY_NUMERIC_INDICES)
+            - history,
+            {NUMERIC_TIER2_INVESTMENT_PINNED},
+        )
         self.assertEqual(
             V4_ONLY_NUMERIC_INDICES,
             frozenset(range(V4_NUMERIC_BASE, V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
@@ -321,12 +343,21 @@ class V4LayoutTest(unittest.TestCase):
         # The pack is appended INSIDE pokemon_state, so every column laid out after that group
         # shifts. This is the concrete reason the two contracts can never share an artifact —
         # asserted rather than left implicit.
-        self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), v4_numeric_index(NUMERIC_STALL_COUNTER))
-        self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
-        # +5 from the pokemon_state insertions and +2 from the belief insertions, both laid
-        # out before the field group.
+        #
+        # Columns BEFORE the retired 139 still align (the CB bit at 138 does not move);
+        # everything after it shifts down one, then up by the group insertions.
         self.assertEqual(
-            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 7
+            v3_numeric_index(NUMERIC_TIER2_CB_PINNED), v4_numeric_index(NUMERIC_TIER2_CB_PINNED)
+        )
+        self.assertEqual(
+            v4_numeric_index(NUMERIC_STALL_COUNTER),
+            v3_numeric_index(NUMERIC_STALL_COUNTER) - 1,
+        )
+        self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
+        # -1 for the retired column, +5 from the pokemon_state insertions and +2 from the
+        # belief insertions, all laid out before the field group.
+        self.assertEqual(
+            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 6
         )
 
     def test_schema_aware_lookup_reports_pack_columns_as_absent_under_v3(self) -> None:
@@ -339,6 +370,38 @@ class V4LayoutTest(unittest.TestCase):
             self.assertEqual(
                 numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column),
                 V4_NUMERIC_INDEX_BY_LEGACY_INDEX[column],
+            )
+
+    def test_the_investment_column_is_retired_from_v4_only(self) -> None:
+        """v2.1/v2.2/v3 checkpoints have column 139 in their input layout; v4 never did."""
+
+        self.assertIsNone(
+            numeric_index_if_present_for_schema(
+                OBSERVATION_SCHEMA_VERSION_V4, NUMERIC_TIER2_INVESTMENT_PINNED
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "dropped from v4"):
+            numeric_index_for_schema(
+                OBSERVATION_SCHEMA_VERSION_V4, NUMERIC_TIER2_INVESTMENT_PINNED
+            )
+        for schema in (
+            OBSERVATION_SCHEMA_VERSION_V2_1,
+            OBSERVATION_SCHEMA_VERSION_V2_2,
+            OBSERVATION_SCHEMA_VERSION_V3,
+        ):
+            self.assertIsNotNone(
+                numeric_index_if_present_for_schema(schema, NUMERIC_TIER2_INVESTMENT_PINNED),
+                schema,
+            )
+        # The CB sibling is untouched under every schema, v4 included.
+        for schema in (
+            OBSERVATION_SCHEMA_VERSION_V2_1,
+            OBSERVATION_SCHEMA_VERSION_V2_2,
+            OBSERVATION_SCHEMA_VERSION_V3,
+            OBSERVATION_SCHEMA_VERSION_V4,
+        ):
+            self.assertIsNotNone(
+                numeric_index_if_present_for_schema(schema, NUMERIC_TIER2_CB_PINNED), schema
             )
 
 

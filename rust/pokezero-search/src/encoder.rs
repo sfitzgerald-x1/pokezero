@@ -2897,18 +2897,22 @@ fn write_opponent_mon_history(
         if layout.tier2_residuals && cb_pinned.iter().any(|s| *s == species_key) {
             grid.set_num(token, layout.num_col("NUMERIC_TIER2_CB_PINNED")?, 1.0);
         }
+        // RETIRED AT V4: the investment conclusion narrows the belief candidate set there
+        // instead of being projected onto this column, so v4 layouts do not carry it (the
+        // Python twin gates on `not schema_v4`). Resolved with num_col_opt rather than
+        // num_col: under v4 the column is legitimately absent, and a hard "layout missing
+        // numeric column" at leaf-encode time would be wrong. The extraction keeps running —
+        // `products.investment_pinned` is still populated, it simply has no column to land in.
         if layout.tier2_residuals && layout.tier2_investment {
-            if let Some((_, code)) = products
-                .investment_pinned
-                .iter()
-                .find(|(species, _)| normalize_identifier(species) == species_key)
-            {
-                if *code != 0.0 {
-                    grid.set_num(
-                        token,
-                        layout.num_col("NUMERIC_TIER2_INVESTMENT_PINNED")?,
-                        code.clamp(-1.0, 1.0),
-                    );
+            if let Some(column) = layout.num_col_opt("NUMERIC_TIER2_INVESTMENT_PINNED") {
+                if let Some((_, code)) = products
+                    .investment_pinned
+                    .iter()
+                    .find(|(species, _)| normalize_identifier(species) == species_key)
+                {
+                    if *code != 0.0 {
+                        grid.set_num(token, column, code.clamp(-1.0, 1.0));
+                    }
                 }
             }
         }
