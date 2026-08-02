@@ -24,7 +24,7 @@
   "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences.",
   "RESOLVED": "hypothesis A"
  },
- "status": "#1025 remains NOT READY, but the reason has changed. It is no longer 'the sound fix underperforms'; it is that the LOOSE fix's headline number was substantially masking. Deciding this needs per-row adjudication of the 230 heal disagreements against the engine's actual heal arithmetic -- that is engine-gap work, not matcher work.",
+ "status": "SUPERSEDED BY $.CORRECTION. The original 'not ready' verdict rested on two measurement errors and a confounded comparison.",
  "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet.",
  "the_experiment": {
   "method": "Classify every equal-length magnitude disagreement in the 187-row sweep's recorded branch_misses by whether the two components share a base source. Mispairing (hypothesis B) predicts systematically MISMATCHED sources; real differences (hypothesis A) predict MATCHED sources with differing magnitudes.",
@@ -41,5 +41,32 @@
   },
   "verdict": "Mispairing accounts for about 3%. The components the exact rule rejects ARE genuine counterparts, and their magnitudes genuinely differ."
  },
- "what_this_means_for_the_67": "The loose version reached 67 by tolerating magnitude differences between matched, largely DETERMINISTIC components -- 230 of the disagreements are on `heal`, whose gen3 amount is floor(maxhp/2), and 29 on itemleftovers, which is maxhp/16. Those are the rounding class this program exists to detect. So the 141 rows are not obviously artifacts the matcher should absorb; on this evidence a substantial share are differences the loose tolerance was MASKING. The sound version's 187 may be nearer the truth than the 67, and 67 should stop being quoted as the target."
+ "what_this_means_for_the_67": "The loose version reached 67 by tolerating magnitude differences between matched, largely DETERMINISTIC components -- 230 of the disagreements are on `heal`, whose gen3 amount is floor(maxhp/2), and 29 on itemleftovers, which is maxhp/16. Those are the rounding class this program exists to detect. So the 141 rows are not obviously artifacts the matcher should absorb; on this evidence a substantial share are differences the loose tolerance was MASKING. The sound version's 187 may be nearer the truth than the 67, and 67 should stop being quoted as the target.",
+ "CORRECTION": {
+  "what_i_got_wrong": "c85's first two readings were both wrong, and the second one -- 'the loose tolerance was substantially MASKING' -- was wrong in a way that would have misdirected the engine-gap burndown.",
+  "error_1_the_heals_are_not_deterministic": {
+   "claimed": "230 disagreements on `heal`, deterministic at floor(maxhp/2), so the loose tolerance was masking real defects",
+   "measured": "ALL 230 are capped: 213 capped-vs-capped, 17 capped-vs-plain. ZERO have neither side capped.",
+   "why_it_matters": "a capped heal restores maxhp - hp_before, so its magnitude is LEGITIMATELY roll-dependent. These are the cascade shape the predicate exists to recognise, not deterministic-value disagreements. There was no masking here."
+  },
+  "error_2_my_exact_rule_does_nothing": {
+   "measured": "the promoted-but-uncapped exact-comparison rule rejects 0 pairs in the residue",
+   "why": "it only fires when NEITHER side is capped, and no such pair exists here"
+  },
+  "error_3_the_sound_bound_is_looser_not_tighter": {
+   "measured": "on _to_full pairs the difference bound accepts 300, the 0.18*scale bound accepts 180, and the difference bound rejects NOTHING the fraction bound accepted"
+  },
+  "error_4_the_comparison_was_confounded": {
+   "what_i_did": "compared 67 (old predicate + loose tolerance) against 187 (post-#1020 predicate + sound tolerance) and attributed the whole gap to the tolerance redesign",
+   "the_flaw": "#1020 merged round eight's pre-direct-hit guard and other constraints in between, so the two measurements used DIFFERENT predicates. The gap is not attributable to the tolerance work."
+  },
+  "the_clean_measurement": {
+   "main_no_tolerance_changes": 208,
+   "main_plus_sound_tolerance": 187,
+   "improvement": 21,
+   "note": "same predicate, same engine build, same 200-game window. This is the honest effect of the tolerance work: a real but modest 21 rows."
+  },
+  "what_is_now_open": "why the old loose stack reached 67 on the old predicate while the current predicate sits at 208 without tolerance changes. That gap is #1020's tightening, not the tolerance changes, and it is unmeasured. It is either correct rejection of unsound accepts -- round eight showed 91% of one accept class was impossible -- or over-tightening. That is the next measurement, and it is a question about #1020, which is already merged.",
+  "status_now": "#1025 is a sound, pinned, 21-row improvement over main. It is no longer 'not ready' for the reasons c85 originally gave -- both of those were my own measurement errors -- but its value is 21 rows, not 141."
+ }
 }
