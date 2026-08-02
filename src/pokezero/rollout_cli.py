@@ -546,7 +546,15 @@ def _explicit_feature_masks_from_args(
     )
 
     base = base_masks or DEFAULT_OBSERVATION_FEATURE_MASKS
-    capacity = transition_token_capacity or TRANSITION_TOKEN_COUNT
+    # `or` would resolve v4's capacity of ZERO through a falsy-zero to the legacy 128, which is
+    # the one schema where the distinction matters: v4 REMOVES the transition region, so its only
+    # admissible budget is 0. Under `or`, `--transition-token-budget 32` on a v4 spec passed
+    # validation, was accepted, and was then silently ignored by an encoder with no region to
+    # apply it to -- failing quietly instead of loudly, and making v4's own contract text ("there
+    # is no transition_token_budget knob left to mis-set") false. `is None` keeps 0 meaning 0.
+    capacity = (
+        TRANSITION_TOKEN_COUNT if transition_token_capacity is None else transition_token_capacity
+    )
     resolved_budget = min(base.transition_token_budget, capacity) if budget is None else budget
     if not 0 <= resolved_budget <= capacity:
         raise ValueError(
