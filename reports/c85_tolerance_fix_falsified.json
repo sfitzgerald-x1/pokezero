@@ -1,0 +1,28 @@
+{
+ "schema": "c85-tolerance-fix-falsified/1",
+ "what_was_proposed": "Review round nine implemented and measured a corrected form of #1025's tolerance changes -- promote for LENGTH only, compare promoted-but-uncapped components EXACTLY, and bound a cap difference by the DIFFERENCE of the two arms' damage rather than 0.18x its magnitude. On 75,630 simulated realizable cap-bearing pairs it measured 99.99% recovery against 99.89% for the version that shipped, while rejecting both physically impossible pairs. I implemented exactly that design.",
+ "what_the_real_corpus_says": {
+  "window": "200 games, seeds 19000000-19000199, 15,224 boundaries, engine rebuilt per state",
+  "no_tolerance_changes": {
+   "diverged": 208,
+   "roll_scaled_component": 162
+  },
+  "loose_version_as_shipped": {
+   "diverged": 67,
+   "roll_scaled_component": 21
+  },
+  "corrected_sound_version": {
+   "diverged": 187,
+   "roll_scaled_component": 141
+  },
+  "recovery": "21 of 141 rows, not 141 of 141"
+ },
+ "the_finding": "The corrected design is SOUND -- it rejects both impossible pairs, and all four of its rules are mutation-pinned -- but on real data it recovers only 15% of what the loose version recovered. The synthetic estimate of 99.99% did not transfer. A simulated corpus of realizable pairs is not the corpus the matcher actually sees.",
+ "which_explanation_is_right_is_NOT_established": {
+  "possibility_a": "the 120 unrecovered rows are REAL engine defects that the loose version was masking, in which case the sound version is correct and 67 was never an honest number",
+  "possibility_b": "the exact-magnitude rule is firing on MISPAIRED components. Promotion moves a component out of the order-insensitive Counter comparison into roll_component_events_agree's POSITIONAL zip, which sorts by magnitude; review flagged this as a known hazard of promotion. If pairing is wrong, the magnitudes being compared are not counterparts at all.",
+  "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences."
+ },
+ "status": "#1025 IS NOT READY. Do not merge it on the strength of the round-nine simulation. The sound version is in the branch with its pins, and this artifact records that its real-data effect is 15% of what was projected.",
+ "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet."
+}
