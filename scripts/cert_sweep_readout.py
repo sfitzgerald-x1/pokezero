@@ -197,15 +197,38 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # The |cant| and the Truant attribution must be on the SAME line. Checking
     # them independently over the whole protocol lets a paralysis |cant| in any
     # turn that mentions Truant anywhere satisfy both (#1010 review, comment 15).
-    _truant_loaf = (
-        _truant_slot is not None
-        and any(
-            line.startswith("|cant|")
-            and "truant" in line.lower()
-            and f"{_truant_slot.group(1)}a: Slak" in line
+    #
+    # BOTH DIRECTIONS. The first narrowing required an observed `|cant| truant`
+    # line, which by construction cannot exist in the rule's PRIMARY cited
+    # validation row -- s2000059/11, where the Slaking ATTACKS in the sim and
+    # only the engine's branch loafed. Re-review executed it: that direction
+    # fell through to unattributed_generic, so the narrowing silently dropped
+    # half the mechanism it was written for while the comment above still
+    # claimed "a genuine loaf-phase drift still surfaces".
+    #
+    # What actually identifies the boundary is that THE SLAKING ON THE
+    # COMPLAINING SLOT acted, either way: it loafed (|cant|) or it moved
+    # (|move|). Both forms tie the line to the slot AND to Slaking being the
+    # actor, which is what the original "protocol mentions a Slaking anywhere"
+    # predicate failed to do -- that is the 8-of-9 switch-boundary defect this
+    # rule was narrowed to fix, and it stays fixed.
+    #
+    # Known limit: matching the species substring is nickname-blind. Gen 3
+    # random battles do not nickname, so this is latent rather than live;
+    # scripts/fidelity_gate_events.py resolves the Truant active by species and
+    # ability from the real team and is the right long-term source.
+    if _truant_slot is None:
+        _truant_loaf = False
+    else:
+        _actor = f"{_truant_slot.group(1)}a: Slak"
+        _truant_loaf = any(
+            _actor in line
+            and (
+                (line.startswith("|cant|") and "truant" in line.lower())
+                or line.startswith("|move|")
+            )
             for line in protocol
         )
-    )
     if _truant_loaf and (
             (not obs_c and eng_c) or (obs_c and not eng_c)):
         return ("UNATTRIBUTED",
