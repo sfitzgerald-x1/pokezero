@@ -21,6 +21,17 @@ defines (items 7, 9, 10 of ``docs/observation_compression_design.md``):
   boosted-stage / screened strikes never count). A strike that exceeds even the best CB
   explanation is off-model and never counts either (precision guard).
 
+The CB conclusion is a statement about a FIRST-CLASS BELIEF FIELD — ``item`` is already a
+candidate-set discriminator — so :class:`Tier2LiveTracker` also feeds it to
+:meth:`PublicBattleBeliefEngine.narrow_candidate_variants` (see
+``_choice_band_variant_payloads``), behind
+``ObservationFeatureMasks.investment_belief_narrowing``, default OFF. A narrowing moves the
+candidate-set count, the uncertainty, and the possible-items/moves/abilities surfaces on
+every opponent-mon token and sharpens every sampled search world, instead of projecting the
+same evidence onto one reserved scalar. The reserved per-mon column
+(``NUMERIC_TIER2_CB_PINNED``, 138) is consequently RETIRED AT V4; v2.1/v2.2/v3 keep it,
+because checkpoints trained under those schemas have it in their input layout.
+
 Base Tier 2 populates residuals on OPPONENT attacks only (correction item 10): the
 defender is the perspective player's own mon, whose exact stats/ability/item are known
 from its own request — no defender-side ambiguity. Trick carriers are handled upstream:
@@ -1135,6 +1146,44 @@ def cb_whitelist_for_source(set_source: Any, dex: ShowdownDex) -> Mapping[str, f
         return _WHITELIST_CACHE.setdefault(key, built)
 
 
+# --- Belief narrowing (the CB conclusion's richer consumer). ---
+
+CHOICE_BAND_ITEM_ID = "choiceband"
+
+
+def _choice_band_variant_payloads(
+    candidate_variants: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    """The candidate variants holding a Choice Band, as the engine's RAW payload mappings.
+
+    Returned raw (not :class:`CandidateVariant`) because the belief engine matches on
+    ``belief.variant_identity`` of the mappings it handed out — the same objects on both
+    sides, so no normalizer can drift between them.
+
+    The predicate is character-for-character the one ``_assess_strike`` splits ``cb`` from
+    ``non_cb`` with (``CandidateVariant.item``, i.e. ``normalize_id`` of the payload's
+    item). Deliberately so: the survivors have to be exactly the population whose rolls
+    produced ``max_cb_hp``, or the exclusion would rest on a different partition than the
+    evidence did.
+
+    No dex and no damage core are needed here — unlike the investment inference's lattice
+    test, "holds a Choice Band" is a plain item predicate over the payload — so unlike
+    :func:`pokezero.investment._surviving_variant_payloads` this is a pure function of the
+    variant list. Empty is returned, and passed straight through, when no candidate holds
+    the item: the engine reads an empty survivor list as "no evidence", never as "eliminate
+    everything". That case is REACHABLE even behind a standing conclusion — the conclusion
+    freezes but the Tier-1 candidate set keeps shrinking on later reveals, and a reveal
+    that excludes every Choice Band variant must not be overridden by a margin-exceedance
+    inference.
+    """
+
+    return tuple(
+        payload
+        for payload in candidate_variants
+        if normalize_id(str(payload.get("item") or "")) == CHOICE_BAND_ITEM_ID
+    )
+
+
 class Tier2LiveTracker:
     """Incremental live consumer: annotates transition tokens with Tier-2 residuals.
 
@@ -1159,6 +1208,26 @@ class Tier2LiveTracker:
     divergence classes are rare (4 perspective-level cases in a 120-perspective
     review sweep) and always in the more-evidence direction.
 
+    With ``narrow_belief_candidates`` a standing CB conclusion ALSO feeds
+    :meth:`PublicBattleBeliefEngine.narrow_candidate_variants`, restricting that mon to its
+    Choice Band variants — the strictly richer consumer of the same evidence, and the only
+    one v4 keeps (the reserved column 138 is retired there). Default OFF: narrowing moves
+    belief-derived columns that exist in EVERY schema, so a pipeline that has not opted in
+    must stay byte-identical.
+
+    Narrowing widens the live-vs-batch divergence described above, but only along the SAME
+    axis: once the non-CB variants are gone every later strike of that mon reports
+    ``cb-pinned-by-elimination`` and stands down, which is the conservative direction the
+    invariant already permits. It also sharpens the RESIDUAL baseline for that mon, since
+    the surviving variants are the population the medians are taken over.
+
+    One consequence worth naming: a FRESH tracker re-assessing a replay against an
+    already-narrowed engine (the env's snapshot-restore paths that install a belief engine
+    and rebuild trackers) can never re-derive the COLUMN conclusion, because every strike
+    now reports ``cb-pinned-by-elimination`` — the deliberate Tier-1 boundary. The belief
+    pin is what carries the conclusion across those resets; it rides
+    ``PublicBattleBeliefEngine.clone``, and under v4 it is the only surface there is.
+
     Per-``annotate`` work is O(new lines + new strikes); memory is O(actions).
     """
 
@@ -1170,6 +1239,7 @@ class Tier2LiveTracker:
         dex: ShowdownDex,
         whitelist: Mapping[str, frozenset[str]],
         config: Tier2Config | None = None,
+        narrow_belief_candidates: bool = False,
     ) -> None:
         if perspective_slot not in {"p1", "p2"}:
             raise ValueError(f"perspective_slot must be 'p1' or 'p2', got {perspective_slot!r}.")
@@ -1179,6 +1249,7 @@ class Tier2LiveTracker:
         self._dex = dex
         self._whitelist = whitelist
         self._config = config or Tier2Config()
+        self._narrow_belief_candidates = bool(narrow_belief_candidates)
         self._fold = _IncrementalContextFold()
         self._stats_cache: dict[tuple, Mapping[str, int]] = {}
         self._assessed_until = 0
@@ -1186,6 +1257,10 @@ class Tier2LiveTracker:
         self._cb_turns: dict[str, list[int]] = {}
         self._cb_non_ko: set[str] = set()
         self._cb_bit_indices: set[int] = set()
+        # Monotone count of narrowings that actually CHANGED the shared belief engine.
+        # The caller watches it to know that a belief view snapshotted before ``annotate``
+        # is now stale (see LocalShowdownEnv._state_for_player).
+        self._belief_narrowings = 0
 
     def clone(self) -> "Tier2LiveTracker":
         """Clone the incremental state for one independent search branch.
@@ -1202,6 +1277,7 @@ class Tier2LiveTracker:
         cloned._dex = self._dex
         cloned._whitelist = self._whitelist
         cloned._config = self._config
+        cloned._narrow_belief_candidates = self._narrow_belief_candidates
         cloned._fold = self._fold.clone()
         cloned._stats_cache = dict(self._stats_cache)
         cloned._assessed_until = self._assessed_until
@@ -1209,7 +1285,18 @@ class Tier2LiveTracker:
         cloned._cb_turns = {key: list(turns) for key, turns in self._cb_turns.items()}
         cloned._cb_non_ko = set(self._cb_non_ko)
         cloned._cb_bit_indices = set(self._cb_bit_indices)
+        cloned._belief_narrowings = self._belief_narrowings
         return cloned
+
+    @property
+    def narrow_belief_candidates(self) -> bool:
+        return self._narrow_belief_candidates
+
+    @property
+    def belief_narrowing_count(self) -> int:
+        """How many narrowings have actually changed the shared engine's candidate sets."""
+
+        return self._belief_narrowings
 
     @property
     def cb_bits(self) -> dict[str, bool]:
@@ -1271,6 +1358,8 @@ class Tier2LiveTracker:
                 and assessment.attacker_key in self._cb_non_ko
             ):
                 self._cb_bit_indices.add(index)
+                if self._narrow_belief_candidates:
+                    self._narrow(belief_engine, assessment.attacker_key)
         self._assessed_until = len(tokens)
         if not self._residuals and not self._cb_bit_indices:
             return tuple(tokens)
@@ -1285,6 +1374,44 @@ class Tier2LiveTracker:
             else token
             for index, token in enumerate(tokens)
         )
+
+    def _narrow(
+        self, belief_engine: PublicBattleBeliefEngine, attacker_key: str
+    ) -> None:
+        """Push this mon's standing Choice Band conclusion into the belief candidate set.
+
+        Called after EVERY assessed strike whose conclusion stands, not only at the moment
+        the second strike lands, which makes it IDEMPOTENT and self-healing: re-deriving
+        the Choice Band variants from an already-narrowed set yields the same set and
+        ``narrow_candidate_variants`` returns False without touching the pin. That matters
+        under search cloning — a branch whose engine somehow lacked the pin re-acquires it
+        from the ledger it cloned, and a branch whose engine already has it does nothing.
+        Note the reach of that self-healing is bounded by assessability: a mon that
+        concludes and then only uses status moves is never re-assessed, so the pin has to
+        come across on ``PublicBattleBeliefEngine.clone`` (it does) rather than be rebuilt.
+
+        The belief entry is joined on the belief key EXACTLY, not on a re-derived species
+        id: ``attacker_key`` is the key the pin is stored under, so matching anything else
+        could filter one entry's variants and pin them onto another.
+        """
+
+        belief = next(
+            (
+                mon
+                for mon in belief_engine.snapshot().side(self._opponent)
+                if belief_key(mon.showdown_slot, mon.species) == attacker_key
+            ),
+            None,
+        )
+        if belief is None:
+            return
+        survivors = _choice_band_variant_payloads(belief.candidate_variants)
+        # An empty survivor list is passed through unchanged: the engine's refusal
+        # asymmetry treats it as "no evidence", never as "eliminate every variant".
+        if belief_engine.narrow_candidate_variants(
+            attacker_key, survivors, reason="tier2-choice-band"
+        ):
+            self._belief_narrowings += 1
 
 
 def _assess_strike(

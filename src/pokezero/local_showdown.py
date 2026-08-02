@@ -422,7 +422,7 @@ class LocalShowdownEnv:
         self._belief_engine = PublicBattleBeliefEngine(
             format_id=self._observation_format_id,
             set_source=self._belief_set_source,
-            # Unlike the tier2 producers this narrowing lives INSIDE the engine (the facts are
+            # Unlike the tier2 producers, this narrowing lives INSIDE the engine (the facts are
             # protocol lines, not inferences), so the mask has to reach the constructor.
             item_belief_narrowing=self.item_belief_narrowing_active(),
         )
@@ -1640,9 +1640,17 @@ class LocalShowdownEnv:
         try:
             tracker = self._tier2_tracker_for(player)
             investment_tracker = self._investment_tracker_for(player)
-            narrowings_before = (
-                investment_tracker.belief_narrowing_count if investment_tracker is not None else 0
-            )
+
+            def _narrowings() -> int:
+                """Total belief narrowings applied by EITHER tier2 producer so far."""
+
+                return (tracker.belief_narrowing_count if tracker is not None else 0) + (
+                    investment_tracker.belief_narrowing_count
+                    if investment_tracker is not None
+                    else 0
+                )
+
+            narrowings_before = _narrowings()
             if tracker is not None:
                 state = replace(
                     state,
@@ -1662,24 +1670,28 @@ class LocalShowdownEnv:
                             for index, token in enumerate(state.transition_tokens)
                         ),
                     )
-                if investment_tracker.belief_narrowing_count != narrowings_before:
-                    # The tracker just narrowed the SHARED belief engine, but this state's
-                    # belief view was snapshotted from it a few lines above — so it is now
-                    # stale. Re-derive it, keeping the annotated token stream (extraction
-                    # does not depend on the belief engine, only the belief view does).
-                    #
-                    # This is not an optimisation, it is what makes the observation a
-                    # function of the STATE rather than of how many times this method has
-                    # been called: narrowing is monotone, so without the refresh the first
-                    # call after a conclusion would encode the pre-narrowing belief and
-                    # every later call the post-narrowing one, and a root and its leaves
-                    # would disagree. One pass suffices — re-deriving survivors from an
-                    # already-narrowed set reproduces it exactly, so the tracker's
-                    # idempotent re-narrow cannot fire a second change.
-                    state = replace(
-                        _normalize(),
-                        transition_tokens=state.transition_tokens,
-                    )
+            if _narrowings() != narrowings_before:
+                # A tracker just narrowed the SHARED belief engine, but this state's belief
+                # view was snapshotted from it a few lines above — so it is now stale.
+                # Re-derive it, keeping the annotated token stream (extraction does not
+                # depend on the belief engine, only the belief view does).
+                #
+                # This is not an optimisation, it is what makes the observation a function
+                # of the STATE rather than of how many times this method has been called:
+                # narrowing is monotone, so without the refresh the first call after a
+                # conclusion would encode the pre-narrowing belief and every later call the
+                # post-narrowing one, and a root and its leaves would disagree. One pass
+                # suffices — re-deriving survivors from an already-narrowed set reproduces
+                # it exactly, so a tracker's idempotent re-narrow cannot fire a second
+                # change.
+                #
+                # Checked once, AFTER both producers: either of them can narrow, and the
+                # Choice Band producer runs first, so the check cannot live inside the
+                # investment branch.
+                state = replace(
+                    _normalize(),
+                    transition_tokens=state.transition_tokens,
+                )
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
             # the annotation substrate and the per-mon pinned-surface derivation source.
@@ -1729,6 +1741,12 @@ class LocalShowdownEnv:
             own_team=own_team,
             dex=dex,
             whitelist=cb_whitelist_for_source(self._belief_set_source, dex),
+            # The CB conclusion rides the SAME belief-narrowing switch as the investment
+            # one rather than getting a third mask. Both are "a tier2 conclusion mutates
+            # the Tier-1 candidate set", both perturb the same frozen legacy belief columns
+            # in every schema, and a cache whose metadata says narrowing was off must mean
+            # neither producer ran — one provenance bit for one class of distribution shift.
+            narrow_belief_candidates=self.investment_belief_narrowing_active(),
         )
         self._tier2_trackers[player] = tracker
         return tracker
@@ -1743,7 +1761,7 @@ class LocalShowdownEnv:
         return self.tier2_residuals_active() and bool(self.config.feature_masks.tier2_investment)
 
     def investment_belief_narrowing_active(self) -> bool:
-        """Whether investment conclusions narrow the shared belief candidate sets.
+        """Whether TIER-2 CONCLUSIONS narrow the shared belief candidate sets.
 
         A THIRD switch, deliberately independent of ``tier2_investment``: that one governs
         the reserved investment COLUMN, this one governs BELIEF STATE. Narrowing moves the
@@ -1751,6 +1769,13 @@ class LocalShowdownEnv:
         never ride on the column's switch. It still needs the tier2 channel + the
         candidate-set source, because without candidate variants there is nothing to narrow
         and no strike is assessable at all.
+
+        Named for the investment inference that introduced it, but it now gates BOTH
+        producers — the defender-side investment pin (``InvestmentLiveTracker``) and the
+        attacker-side Choice Band conclusion (``Tier2LiveTracker``). They share one bit on
+        purpose: the provenance question a cache's metadata has to answer is "did any tier2
+        conclusion touch the Tier-1 candidate sets", and that is a single class of input
+        distribution shift, not two.
         """
         return self.tier2_residuals_active() and bool(
             self.config.feature_masks.investment_belief_narrowing
@@ -1759,12 +1784,12 @@ class LocalShowdownEnv:
     def item_belief_narrowing_active(self) -> bool:
         """Whether PROTOCOL-CERTAIN item facts narrow the shared belief candidate sets.
 
-        Deliberately NOT gated on the tier2 channel the way ``investment_belief_narrowing``
-        is. That gate is right for the investment pins, which cannot exist without the damage
-        inference running; these narrowings are read straight off ``|-enditem|`` / ``|-item|``
-        lines by the belief engine itself, so riding tier2 would make them silently inert on a
-        k0 arm for no mechanical reason. The candidate-set source IS required: with no
-        candidate variants there is nothing to narrow.
+        A FOURTH switch, and deliberately not gated on the tier2 channel the way
+        ``investment_belief_narrowing`` is. That gate is right for the investment pins, which
+        cannot exist without the damage inference running; these narrowings are read straight
+        off ``|-enditem|``/``|-item|``/``|move|`` lines by the belief engine itself, so riding
+        tier2 would make them silently inert on a k0 arm for no mechanical reason. The
+        candidate-set source IS required: with no variants there is nothing to narrow.
         """
         return self.config.belief_set_source_enabled() and bool(
             self.config.feature_masks.item_belief_narrowing
