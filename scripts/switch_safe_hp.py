@@ -27,10 +27,22 @@ from typing import Any, Mapping
 
 
 def slot_hp_comparable(row: Mapping[str, Any], slot: str) -> bool:
-    """Whether ``row``'s pre/post HP for ``slot`` describe the same Pokemon."""
+    """Whether ``row``'s pre/post HP for ``slot`` describe the same Pokemon.
 
-    active_changed = row.get("active_changed") or {}
-    return not bool(active_changed.get(slot))
+    FAILS CLOSED. A row with no ``active_changed`` map, or a map that does not
+    mention this slot, is NOT comparable. The first version of this returned
+    ``not bool(active_changed.get(slot))``, so a missing key read as False --
+    "the active did not change" -- and the helper produced exactly the +55
+    cross-Pokemon delta on s18000268/37 that it exists to prevent. Only
+    scripts/engine_transition_differential.py emits ``active_changed``, so any
+    hand-built row, older artifact, or JSON from another producer hit that path.
+    Absence of evidence that the slot held still is not evidence that it did.
+    """
+
+    active_changed = row.get("active_changed")
+    if not isinstance(active_changed, Mapping) or slot not in active_changed:
+        return False
+    return not bool(active_changed[slot])
 
 
 def slot_hp_delta(row: Mapping[str, Any], slot: str) -> int | None:

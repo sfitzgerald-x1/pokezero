@@ -44,3 +44,40 @@ class SwitchSafeHpTests(unittest.TestCase):
     def test_comparable_slots_filters(self) -> None:
         self.assertEqual(comparable_slots(STATIC), ("p1", "p2"))
         self.assertEqual(comparable_slots(SWITCHED), ("p1",))
+
+
+class FailClosedTests(unittest.TestCase):
+    """A row that does not say the slot held still is not comparable.
+
+    Review finding: the first version read a missing key as "did not change",
+    so the helper produced the exact +55 cross-Pokemon delta on s18000268/37
+    that the module exists to prevent.
+    """
+
+    ROW = {
+        "pre_features": {"p1_hp": 244, "p2_hp": 184},
+        "observed": {"p1_hp": 229, "p2_hp": 239},
+    }
+
+    def test_a_row_with_no_active_changed_map_is_not_comparable(self) -> None:
+        self.assertFalse(slot_hp_comparable(self.ROW, "p2"))
+        self.assertIsNone(slot_hp_delta(self.ROW, "p2"))
+        self.assertEqual(comparable_slots(self.ROW), ())
+
+    def test_a_partial_active_changed_map_does_not_cover_the_other_slot(self) -> None:
+        row = dict(self.ROW, active_changed={"p1": False})
+        self.assertTrue(slot_hp_comparable(row, "p1"))
+        self.assertFalse(slot_hp_comparable(row, "p2"))
+        self.assertIsNone(slot_hp_delta(row, "p2"))
+        self.assertEqual(comparable_slots(row), ("p1",))
+
+    def test_a_non_mapping_active_changed_is_not_comparable(self) -> None:
+        for bad in (None, [], "p2", 0):
+            with self.subTest(active_changed=bad):
+                row = dict(self.ROW, active_changed=bad)
+                self.assertFalse(slot_hp_comparable(row, "p2"))
+
+    def test_the_fully_specified_unswitched_row_is_still_comparable(self) -> None:
+        row = dict(self.ROW, active_changed={"p1": False, "p2": False})
+        self.assertEqual(comparable_slots(row), ("p1", "p2"))
+        self.assertEqual(slot_hp_delta(row, "p2"), 55)
