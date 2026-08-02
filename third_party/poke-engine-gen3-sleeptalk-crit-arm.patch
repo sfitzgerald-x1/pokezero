@@ -1,0 +1,22 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2585,7 +2585,18 @@
+                 attacking_side,
+                 sleep_talk_instructions,
+                 &mut final_instructions,
+-                false,
++                // pokezero gen3 fidelity fix (sleeptalk_crit_arm): propagate
++                // branch_on_damage into the called move. Showdown runs the
++                // Sleep Talk callee through `this.actions.useMove`
++                // (data/moves.ts, sleeptalk.onHit), which performs the ordinary
++                // critical-hit roll, and gen3 has no sleeptalk override.
++                // Hardcoding false sent the callee's damage to the final
++                // `else { regular_damage = avg_damage_dealt }` arm, which emits
++                // NO crit branch: both the KO-straddling and the non-lethal
++                // crit partitions are gated on branch_on_damage. A
++                // Sleep-Talk-called critical hit was therefore reachable in the
++                // simulator and absent from the engine's support.
++                branch_on_damage,
+             );
+         }
+         return;

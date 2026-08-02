@@ -1210,3 +1210,9 @@ poke-engine-gen3-crit-kill-split.patch
 # C27's kill split. Registered in reports/c31_substitute_threshold_prediction.json.
 poke-engine-gen3-substitute-hp-gate.patch
 
+# C87: Sleep Talk callees must branch on damage like any other move. Showdown
+# runs the callee through useMove with the ordinary crit roll; the engine passed
+# branch_on_damage=false, so the callee took the no-crit-arm path and a
+# Sleep-Talk-called crit was reachable in the sim and absent from the support.
+# Registered in reports/c87_sleeptalk_crit_arm_absence.json.
+poke-engine-gen3-sleeptalk-crit-arm.patch

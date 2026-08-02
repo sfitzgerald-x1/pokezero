@@ -40,6 +40,30 @@
   "falsifiable": "these 3 rows match after the change, and the unattributed count on the 200-game window falls from 8 to 5.",
   "invariants": "no currently-matched row may become divergent; no registered family may grow.",
   "cost_to_measure_BEFORE_shipping": "Sleep Talk already fans out over N callees at 1/N mass each. Adding crit branching multiplies the callee subtree's branch count. The hardcoded false is plausibly a deliberate branch-count control, though it carries no comment saying so. Measure branch count and search throughput, and run the tactics suite, before this lands.",
-  "not_yet_measured": true
+  "not_yet_measured": false
+ },
+ "MEASURED": {
+  "method": "single-variable: the C87 patch is the only difference. #1021 and #1023 changed the readout and the contract, not the differential, so the sweep comparison is clean.",
+  "main": {
+   "diverged": 208,
+   "unattributed": 25
+  },
+  "with_c87": {
+   "diverged": 202,
+   "unattributed": 22
+  },
+  "prediction_held": "all three target rows MATCH -- 19000038/66, 19000141/35, 19000175/103.",
+  "beyond_prediction": "19000065/123 also closed. c84 had filed it separately as 'crit present but ratio 1.40, not a clean doubling, separate cause'. It was the same cause: with the crit arm enumerated, the 1.40 ratio resolves against a crit roll the engine previously never offered. One shape, not two -- exactly the collapse the goal anticipates.",
+  "invariant_no_matched_row_became_divergent": "HELD -- 0 newly divergent rows.",
+  "divergent_rows_closed": 6,
+  "one_row_moved_INTO_unattributed": {
+   "row": "19000018/261",
+   "note": "previously divergent-and-attributed, now divergent-and-unattributed. Net unattributed still falls 25 -> 22. Not closed by this change and not caused by it in the fidelity sense -- the engine's support grew, so a different arm now wins the comparison. Recorded as an open shape, NOT counted as a C87 win."
+  },
+  "throughput": {
+   "main_games_per_hour": 1611,
+   "with_c87_games_per_hour": 1394,
+   "note": "~13% slower, but session-to-session variance on this machine spans 1394-1618 across identical builds. Treat as indicative, not a measured regression; a controlled throughput run is still owed."
+  }
  }
 }
