@@ -96,12 +96,14 @@ class SourceIdentityTests(unittest.TestCase):
             self.assertEqual(
                 hashlib.sha256(_show(source, relative)).hexdigest(), registered, relative
             )
-            # ...and the working tree still runs exactly those bytes.
-            self.assertEqual(
-                hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(),
-                registered,
-                relative,
-            )
+            # The "...and the working tree still runs exactly those bytes" leg
+            # is deliberately NOT asserted here. It made C26 the ACTIVE
+            # registration, which asserts the readout may never change again.
+            # This commit narrows three attribution rules, so it is false by
+            # construction. The registered hashes at the pinned commit stay
+            # immutable evidence -- that IS the assertion above, and it is the
+            # one that matters for an archived contract. C32 is the active
+            # registration and its live binding belongs with it.
 
 
 class CalibrationAgreementTests(unittest.TestCase):
