@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 from engine_transition_differential import (  # noqa: E402
     DamageComponent,
+    _roll_damage_scale,
     _split_component_events,
     roll_components_agree,
 )
@@ -119,3 +120,46 @@ class CapToleranceIsTheDamageDifference(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DamageDifferenceIsSlotWide(unittest.TestCase):
+    """The bound is a property of the SLOT's damage, not of one component.
+
+    This was the bug that cost four wrong attributions. Computing it inside
+    roll_components_agree from `observed`/`engine` looks right, but the
+    equal-length caller passes ONE component at a time and _roll_damage_scale
+    excludes heals -- so for a heal pair the local value is 0 and the bound
+    collapses to 1 HP. Far TIGHTER than intended, which is the opposite of how
+    I described it for three rounds. Measured effect on a 200-game window:
+    208 divergent with the collapsed bound, 64 with the slot-wide one.
+    """
+
+    OBS = [("", -155), ("heal_to_full", 160)]
+    ENG = [("", -165), ("heal_to_full", 170)]
+
+    def test_the_unthreaded_bound_collapses_and_false_rejects(self) -> None:
+        """Without damage_scales, a single heal pair sees 0 damage."""
+
+        self.assertFalse(
+            roll_components_agree([self.OBS[1]], [self.ENG[1]], None)
+        )
+
+    def test_the_threaded_bound_accepts_the_same_realizable_pair(self) -> None:
+        scales = (_roll_damage_scale(self.OBS), _roll_damage_scale(self.ENG))
+        self.assertTrue(
+            roll_components_agree(
+                [self.OBS[1]], [self.ENG[1]], None, damage_scales=scales
+            )
+        )
+
+    def test_threading_does_not_cost_soundness(self) -> None:
+        """Identical damage still forbids any cap difference."""
+
+        obs = [("", -260), ("movewish_to_full", 40)]
+        eng = [("", -260), ("movewish_to_full", 85)]
+        scales = (_roll_damage_scale(obs), _roll_damage_scale(eng))
+        self.assertFalse(
+            roll_components_agree(
+                [obs[1]], [eng[1]], None, damage_scales=scales
+            )
+        )

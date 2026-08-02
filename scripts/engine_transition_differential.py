@@ -808,6 +808,7 @@ def roll_components_agree(
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
     scale: int | None = None,
+    damage_scales: tuple[int, int] | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -821,8 +822,17 @@ def roll_components_agree(
         return False
     if scale is None:
         scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
-    _obs_damage = _roll_damage_scale(observed)
-    _eng_damage = _roll_damage_scale(engine)
+    # SLOT-WIDE, threaded in. Computing this from `observed`/`engine` was the
+    # bug: roll_component_events_agree calls this with ONE component at a time,
+    # and _roll_damage_scale excludes heals, so for a heal pair the local value
+    # is 0 and the bound collapses to 1 HP -- far tighter than intended, not
+    # looser. The deficit difference is a property of the SLOT's damage, not of
+    # the single component being compared.
+    if damage_scales is None:
+        _obs_damage = _roll_damage_scale(observed)
+        _eng_damage = _roll_damage_scale(engine)
+    else:
+        _obs_damage, _eng_damage = damage_scales
     _damage_difference = abs(_obs_damage - _eng_damage)
     for (obs_source, obs), (_eng_source, eng) in zip(
         sorted(observed, key=lambda pair: pair[1]),
@@ -1210,6 +1220,10 @@ def _roll_cascade_equivalent(
         [(engine_component.source, engine_component.delta)],
         legal,
         scale=scale,
+        damage_scales=(
+            _roll_damage_scale([(c.source, c.delta) for c in observed]),
+            _roll_damage_scale([(c.source, c.delta) for c in engine]),
+        ),
     ):
         return False
 
@@ -1252,6 +1266,10 @@ def roll_component_events_agree(
             observed_all=observed_all,
             engine_all=engine_all,
         )
+    _slot_damage = (
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
     for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
@@ -1274,6 +1292,7 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
+            damage_scales=_slot_damage,
         ):
             return False
     return True

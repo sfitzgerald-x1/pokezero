@@ -24,7 +24,7 @@
   "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences.",
   "RESOLVED": "hypothesis A"
  },
- "status": "SUPERSEDED BY $.CORRECTION. The original 'not ready' verdict rested on two measurement errors and a confounded comparison.",
+ "status": "RESOLVED -- see $.RESOLVED. #1025 measures 64 against main's 208.",
  "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet.",
  "the_experiment": {
   "method": "Classify every equal-length magnitude disagreement in the 187-row sweep's recorded branch_misses by whether the two components share a base source. Mispairing (hypothesis B) predicts systematically MISMATCHED sources; real differences (hypothesis A) predict MATCHED sources with differing magnitudes.",
@@ -89,5 +89,18 @@
   "severity_form": "allowlist vs original exclusion both give 187"
  },
  "STILL_UNLOCATED": "The old loose stack measured 67 on the old predicate; every reconstruction on the current tree measures 187. All four differences I could name are eliminated. The gap is real and I have not found it. What I will NOT do is name a fifth candidate from reasoning -- four in a row were wrong that way. The next step is mechanical, not inferential: check out the exact tree that produced the 67, diff scripts/engine_transition_differential.py against the current one, and bisect the differences by single-variable sweep. That is bounded work with a guaranteed answer.",
- "what_is_safe_to_say": "On the CURRENT tree, measured cleanly: main is 208 and #1025 is 187, a real 21-row improvement, sound and pinned. Every number quoted from the old stack -- including 67 -- is from a predicate that no longer exists and should not be used as a target until the gap is located."
+ "what_is_safe_to_say": "On the CURRENT tree, measured cleanly: main is 208 and #1025 is 187, a real 21-row improvement, sound and pinned. Every number quoted from the old stack -- including 67 -- is from a predicate that no longer exists and should not be used as a target until the gap is located.",
+ "RESOLVED": {
+  "the_cause": "My own bug, and it was in the code the whole time. `_damage_difference` was computed INSIDE roll_components_agree from its `observed`/`engine` arguments -- but the equal-length caller passes ONE component at a time, and _roll_damage_scale excludes heals. For a heal pair the local value is therefore 0 and the bound collapses to 1 HP.",
+  "why_it_evaded_four_rounds": "The bound was far TIGHTER than intended, which is the opposite of what I asserted for three rounds. My offline analysis computed the damage difference from the FULL miss lists and concluded the sound bound was LOOSER (300 accepts vs 180) -- a correct calculation of a quantity the code never computes. The proxy disagreed with the program and I trusted the proxy.",
+  "the_fix": "thread the slot-wide (obs_damage, eng_damage) pair from both call sites, exactly as slot_scale used to be threaded.",
+  "measured": {
+   "main_no_tolerance": 208,
+   "loose_original": 67,
+   "sound_unthreaded": 187,
+   "sound_threaded": 64
+  },
+  "the_result": "64 divergent -- BETTER than the loose version's 67, with a bound that is sound. All five impossible pairs still reject and all 88 tests pass. So the sound design was right all along; my implementation of it was wrong, and every conclusion I drew from that measurement was an artifact of my own defect.",
+  "found_by": "the mechanical step I should have taken first: diff the tree that produced the 67 against the current one and read what actually differs, instead of naming candidates from reasoning. It took one diff."
+ }
 }
