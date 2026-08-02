@@ -1210,9 +1210,3 @@ poke-engine-gen3-crit-kill-split.patch
 # C27's kill split. Registered in reports/c31_substitute_threshold_prediction.json.
 poke-engine-gen3-substitute-hp-gate.patch
 
-# C46: gen3 Trick fails when the USER holds no item. Upstream inspected the
-# attacker's item only to compare it with the defender's, so NONE-vs-HELD passed
-# every gate. Verified at instruction level: the pre-fix engine emitted
-# ChangeItem SideOne NONE -> LEFTOVERS where the sim emitted |-fail|.
-# Registered in reports/c46_trick_attacker_item_gap.json.
-poke-engine-gen3-trick-attacker-item.patch

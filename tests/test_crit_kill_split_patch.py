@@ -22,10 +22,29 @@ mined from the archive by magnitude matching.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _patch_stack():
+    """Load the applicator so the registration guard reads the SAME list it does."""
+
+    spec = importlib.util.spec_from_file_location(
+        "apply_poke_engine_patches", ROOT / "scripts" / "apply_poke_engine_patches.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    # Register before exec: the module defines a frozen dataclass, and
+    # dataclasses resolves the defining module out of sys.modules.
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATCH_LIST = ROOT / "third_party" / "poke-engine-gen3-patches.txt"
 KILL_SPLIT_PATCH = ROOT / "third_party" / "poke-engine-gen3-crit-kill-split.patch"
 SUBSTITUTE_PATCH = ROOT / "third_party" / "poke-engine-gen3-substitute-hp-gate.patch"
@@ -88,7 +107,11 @@ class KillSplitContractTests(unittest.TestCase):
 
 class PatchStackPinTests(unittest.TestCase):
     def test_both_partition_patches_are_registered_in_order(self) -> None:
-        stack = PATCH_LIST.read_text(encoding="utf-8").split()
+        # Must use patch_names(), the applicator's own parse, NOT .split() on the
+        # raw text. .split() tokenises the comment prose too, so a patch mentioned
+        # in a comment but de-registered still satisfied assertIn -- exactly the
+        # failure class that let #1017 register a patch twice and break the build.
+        stack = _patch_stack().patch_names(PATCH_LIST)
         self.assertIn("poke-engine-gen3-crit-kill-split.patch", stack)
         self.assertIn("poke-engine-gen3-substitute-hp-gate.patch", stack)
         self.assertLess(

@@ -26,15 +26,17 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins. Updated for the 54-patch stack: crit-kill-split and
-# substitute-hp-gate touch generate_instructions.rs, trick-attacker-item touches
-# choice_effects.rs. abilities.rs is touched by NO new patch and its digest is
-# unchanged from the 52-patch stack -- that is the check that makes updating the
-# other two safe rather than a paste, since drift would have moved it too.
+# Post-patch content pins. Updated for the 53-patch stack: crit-kill-split and
+# substitute-hp-gate touch generate_instructions.rs. choice_effects.rs moved when
+# the trick-attacker-item patch was DROPPED (review: it encoded a rule that is not
+# gen3 -- Showdown succeeds where it forced a fail). abilities.rs is touched by NO
+# new patch and its digest is unchanged from the 52-patch stack -- that is the
+# check that makes updating the others safe rather than a paste, since drift would
+# have moved it too.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/generate_instructions.rs": "89386c7359fe54d39c17c7fae6ad4f155d0e17d7e344673ff75481f4fa200f0d",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
-    "src/gen3/choice_effects.rs": "8fcf52ffa143681b5e212cc78f666c6464471a52766655d7e793d57537a7b160",
+    "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
 
 
@@ -110,11 +112,13 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                 applied,
             )
             self.assertEqual(
-                [entry.name for entry in applied[-2:]],
-                [
-                    "poke-engine-gen3-substitute-hp-gate.patch",
-                    "poke-engine-gen3-trick-attacker-item.patch",
-                ],
+                [entry.name for entry in applied[-1:]],
+                ["poke-engine-gen3-substitute-hp-gate.patch"],
+            )
+            # The dropped Trick patch must stay gone: no file, no registration.
+            self.assertNotIn(
+                "poke-engine-gen3-trick-attacker-item.patch",
+                [entry.name for entry in applied],
             )
             self.assertIn(
                 "poke-engine-gen3-public-noop-branches.patch",
