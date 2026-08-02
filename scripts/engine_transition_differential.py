@@ -1499,7 +1499,18 @@ def evaluate_boundary_strict(
             # excluded: admitting an unobservable attribution could manufacture a
             # false MATCH, which hides a real difference rather than flagging a
             # non-difference. reports/c57_severity_collapse.json.
-            if bool(branch.get("attribution_unsafe")) and not sleeptalk_union:
+            # `empty_instruction_list` is lossy-but-not-unsafe, so the
+            # severity switch above would admit it. Review of #1010 caught that:
+            # the branch is a SYNTHETIC placeholder the renderer emits when the
+            # engine generated no instructions at all, carrying events ["|"].
+            # branch_event_legal_rolls returns None rather than raising for it
+            # (there is no direct-damage event to find), so it counts as usable
+            # and compares empty component lists on both slots -- meaning any
+            # boundary whose observation also has no HP components would MATCH
+            # against a branch that verified nothing. It returned skip_lossy
+            # before and must keep doing so.
+            _empty_render = "empty_instruction_list" in lossy
+            if (bool(branch.get("attribution_unsafe")) or _empty_render) and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:

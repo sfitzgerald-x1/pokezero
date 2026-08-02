@@ -1529,17 +1529,34 @@ fn render_move_phase(
                     for instruction in &called_tail {
                         sim.apply(instruction);
                     }
+                    // BOTH DIRECTIONS. Review of #1010: the consumer defect
+                    // this repairs -- a stale running-HP baseline absorbed by
+                    // the next component -- is symmetric, and describing only
+                    // decreases fixed one sign of it. A Sleep-Talk-called
+                    // Recover, Softboiled, Synthesis, Giga Drain or Absorb
+                    // RAISES HP and, undescribed, leaves the baseline stale low
+                    // so the next component absorbs the heal. Drain moves are
+                    // the likely case: the defender's damage was being
+                    // described and the attacker's heal was not.
                     for (index, hp_side) in [SideReference::SideOne, SideReference::SideTwo]
                         .into_iter()
                         .enumerate()
                     {
-                        if sim.active_hp(hp_side).0 < before[index] {
-                            let ident = ctx.active_ident(sim.state, hp_side);
-                            let condition = sim.hp_condition(hp_side);
+                        let now = sim.active_hp(hp_side).0;
+                        if now == before[index] {
+                            continue;
+                        }
+                        let ident = ctx.active_ident(sim.state, hp_side);
+                        let condition = sim.hp_condition(hp_side);
+                        if now < before[index] {
                             out.lines.push(format!(
                                 "|-damage|{ident}|{condition}|[from] residual"
                             ));
                             emit_faint_if_dead(sim, hp_side, ctx, out);
+                        } else {
+                            out.lines.push(format!(
+                                "|-heal|{ident}|{condition}|[from] residual"
+                            ));
                         }
                     }
                 }

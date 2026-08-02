@@ -58,7 +58,13 @@ class CertificationAttributionTests(unittest.TestCase):
             ),
         }
         cases["recharge_turn_residual_gap"]["protocol"] = ["|cant|p1a: Mon|recharge"]
-        cases["truant_loaf_phase_drift"]["protocol"] = ["|-ability|p1a: Slaking|Truant"]
+        # The real loaf signature. The old fixture was |-ability|p1a: Slaking|Truant,
+        # which carries no |cant| and so is not a loaf at all -- it went stale when
+        # C45 narrowed the rule from "protocol mentions a Slaking" to the actual
+        # signature, after finding 8 of its 9 sweep rows were switch boundaries.
+        cases["truant_loaf_phase_drift"]["protocol"] = [
+            "|cant|p1a: Slaking|ability: Truant"
+        ]
         cases["absorb_through_protect_or_miss"]["protocol"] = ["|-activate|p1a: Mon|move: Protect"]
         cases["recoil_vs_substitute_basis"]["protocol"] = ["|-end|p2a: Mon|Substitute"]
         cases["incapacitated_arm_pricing"]["protocol"] = ["|cant|p1a: Mon|frz"]

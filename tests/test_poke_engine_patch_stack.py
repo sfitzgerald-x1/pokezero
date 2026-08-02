@@ -26,10 +26,15 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
+# Post-patch content pins. Updated for the 54-patch stack: crit-kill-split and
+# substitute-hp-gate touch generate_instructions.rs, trick-attacker-item touches
+# choice_effects.rs. abilities.rs is touched by NO new patch and its digest is
+# unchanged from the 52-patch stack -- that is the check that makes updating the
+# other two safe rather than a paste, since drift would have moved it too.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "535c3fbdc111a8a879458699686bf1907b52096dcd4ffc74c40021ef9db5f483",
+    "src/gen3/generate_instructions.rs": "89386c7359fe54d39c17c7fae6ad4f155d0e17d7e344673ff75481f4fa200f0d",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
-    "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
+    "src/gen3/choice_effects.rs": "8fcf52ffa143681b5e212cc78f666c6464471a52766655d7e793d57537a7b160",
 }
 
 
@@ -79,25 +84,42 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             applied = patch_stack.apply_patch_stack(source)
 
             self.assertEqual([entry.name for entry in applied], patch_stack.patch_names())
+            # Pinned by POSITION of the two zero-context patches rather than by
+            # a hardcoded stack length. The stack grows; it went 52 -> 54 in this
+            # branch and the old `applied[:46]` / `applied[46:]` split silently
+            # became wrong, which is how a green guard on "the new patches apply
+            # cleanly to a fresh upstream sdist" went red without anyone noticing.
+            fallbacks = [
+                index
+                for index, entry in enumerate(applied)
+                if entry.backend == "patch-fallback"
+            ]
+            self.assertEqual(len(fallbacks), 2, applied)
+            self.assertEqual(fallbacks[1], fallbacks[0] + 1, "the two are adjacent")
             self.assertTrue(
-                all(entry.backend == "git-apply" for entry in applied[:46]),
+                all(entry.backend == "git-apply" for entry in applied[: fallbacks[0]]),
                 applied,
             )
-            self.assertEqual(
-                [entry.backend for entry in applied[46:]],
-                # The two zero-context patches require the portable fallback.
-                # The remaining ordered tail, including Toxic-stage capping,
-                # must continue to apply cleanly through git without fuzz.
-                ["patch-fallback", "patch-fallback", "git-apply", "git-apply"],
+            self.assertTrue(
+                all(
+                    entry.backend == "git-apply" for entry in applied[fallbacks[1] + 1 :]
+                ),
+                # Everything after the two zero-context patches, including the
+                # Toxic-stage cap and both patches this branch adds, must keep
+                # applying cleanly through git without fuzz.
+                applied,
             )
             self.assertEqual(
                 [entry.name for entry in applied[-2:]],
                 [
-                    "poke-engine-gen3-wrap-substitute-lifecycle.patch",
-                    "poke-engine-gen3-toxic-stage-cap.patch",
+                    "poke-engine-gen3-substitute-hp-gate.patch",
+                    "poke-engine-gen3-trick-attacker-item.patch",
                 ],
             )
-            self.assertEqual(applied[43].name, "poke-engine-gen3-public-noop-branches.patch")
+            self.assertIn(
+                "poke-engine-gen3-public-noop-branches.patch",
+                [entry.name for entry in applied],
+            )
             generated = (source / "src/gen3/generate_instructions.rs").read_text(
                 encoding="utf-8"
             )

@@ -194,9 +194,18 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     # certification failures. The narrowed predicate is the loaf signature
     # itself, so a genuine loaf-phase drift still surfaces.
     _truant_slot = _MISS_SIDE_RE.search(majority)
-    _truant_loaf = ("|cant|" in proto and "truant" in proto.lower()
-                    and _truant_slot is not None
-                    and f"{_truant_slot.group(1)}a: Slak" in proto)
+    # The |cant| and the Truant attribution must be on the SAME line. Checking
+    # them independently over the whole protocol lets a paralysis |cant| in any
+    # turn that mentions Truant anywhere satisfy both (#1010 review, comment 15).
+    _truant_loaf = (
+        _truant_slot is not None
+        and any(
+            line.startswith("|cant|")
+            and "truant" in line.lower()
+            and f"{_truant_slot.group(1)}a: Slak" in line
+            for line in protocol
+        )
+    )
     if _truant_loaf and (
             (not obs_c and eng_c) or (obs_c and not eng_c)):
         return ("UNATTRIBUTED",
