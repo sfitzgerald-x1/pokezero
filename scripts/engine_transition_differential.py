@@ -930,19 +930,65 @@ def _roll_cascade_equivalent(
     if _cascade_base(extra.source) in {_cascade_base(c.source) for c in shorter}:
         return False
 
-    # (3) a shared heal must have flipped its cap, ON THE SIDE WITH THE SMALLER
-    #     DIRECT ROLL. Direction matters: the smaller roll leaves more HP, so it
-    #     is the side whose heal still tops the mon out. A flip the other way is
-    #     arithmetically impossible from a common start, and without the
-    #     direction check it admitted an engine that took MORE damage yet capped.
-    smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
-    capped_side = observed_heals if smaller_is_observed else engine_heals
-    uncapped_side = engine_heals if smaller_is_observed else observed_heals
-    uncapped_bases = {_cascade_base(c.source) for c in uncapped_side if not c.source.endswith("_to_full")}
-    if not any(
-        c.source.endswith("_to_full") and _cascade_base(c.source) in uncapped_bases
-        for c in capped_side
+    # (3) the roll gap must be NONZERO and must bound the extra. Physically the
+    #     capped instance of a heal equals the deficit at that moment and the
+    #     uncapped instance is the nominal that overshot it, so capped <= uncapped;
+    #     with conservation that is exactly `extra <= |roll gap|`. Without it the
+    #     predicate accepted pairs unrealizable from any common start -- and
+    #     worse, MASKED real defects: a fourth review measured 14% of accepts
+    #     unrealizable, including an engine Leech Seed healing 21 where the
+    #     simulator healed 25 from an identical state, which is the gen3
+    #     rounding class this program exists to find. A strict `>` also closes
+    #     the zero-gap case, where identical damage from a common start means an
+    #     identical deficit and no heal can cap on one side only.
+    roll_gap = abs(abs(engine_direct[0].delta) - abs(observed_direct[0].delta))
+    if roll_gap <= 0 or abs(extra.delta) > roll_gap:
+        return False
+
+    # (4) exactly one shared base may flip its cap, it must flip toward the
+    #     SMALLER direct roll, and no base may appear twice. The smaller roll
+    #     leaves more HP, so it is the side whose heal still tops the mon out; a
+    #     flip the other way is impossible from a common start. Inspecting only
+    #     "some base flipped" admitted two shared heals flipping in OPPOSITE
+    #     directions, and a Counter over bases collapsed duplicates so that one
+    #     instance of a repeated source could supply the flip for another.
+    # At most ONE capped heal per side. If a heal tops the mon out, every later
+    # heal on that side restores zero and cannot appear as a positive component,
+    # so two positive `_to_full` heals on one side is unrealizable. This is the
+    # physical rule behind a case a fourth review found: `_to_full` on both
+    # sides of a shared base at EQUAL magnitude, which would require equal
+    # deficits on two sides whose rolls differ.
+    for side_heals in (observed_heals, engine_heals):
+        if sum(1 for c in side_heals if c.source.endswith("_to_full")) > 1:
+            return False
+
+    observed_bases = [_cascade_base(c.source) for c in observed_heals]
+    engine_bases = [_cascade_base(c.source) for c in engine_heals]
+    if len(set(observed_bases)) != len(observed_bases) or len(set(engine_bases)) != len(
+        engine_bases
     ):
+        return False
+    smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
+    capped_side, uncapped_side = (
+        (observed_heals, engine_heals)
+        if smaller_is_observed
+        else (engine_heals, observed_heals)
+    )
+    capped_by_base = {_cascade_base(c.source): c for c in capped_side}
+    uncapped_by_base = {_cascade_base(c.source): c for c in uncapped_side}
+    flips = [
+        base
+        for base in set(capped_by_base) & set(uncapped_by_base)
+        if capped_by_base[base].source.endswith("_to_full")
+        != uncapped_by_base[base].source.endswith("_to_full")
+    ]
+    if len(flips) != 1:
+        return False
+    flipped = flips[0]
+    if not capped_by_base[flipped].source.endswith("_to_full"):
+        return False
+    # the capped instance cannot exceed the nominal it was clipped from
+    if capped_by_base[flipped].delta > uncapped_by_base[flipped].delta:
         return False
 
     # (4) the direct component faces the ordinary legal-roll check, INCLUDING

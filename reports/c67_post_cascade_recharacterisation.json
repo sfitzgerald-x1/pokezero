@@ -32,5 +32,6 @@
  },
  "where_the_mass_now_sits": "200 of 264 rows -- 76% -- have one side entirely EMPTY. That is not the cascade shape and no roll tolerance addresses it: one party recorded HP components on a slot and the other recorded none. C61 characterised the engine-empty half as majority-arm-versus-minority-arm disagreements, where the engine's most likely outcome is that nothing happened and the simulator's roll landed elsewhere, and declined to absorb them into an accounting family because that would launder a real disagreement about probability mass.",
  "the_honest_read": "the instrument-side seam that produced C55, C57 and C66 is worked out. What remains is dominated by a shape three separate cycles have examined and each time concluded is a genuine disagreement rather than a presentation artifact. Further reduction runs through the contract's three exits rather than through more matcher work.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 264"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 264",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED. Measured under an earlier version of _roll_cascade_equivalent. Four review rounds changed that predicate; the row counts and composition in this file describe a matcher that no longer exists. Kept as the record of what was measured when, not as a current statement. Current differential_sha256: 66b6d85e5545312020c2ce2d9bc7cf09b9b36b135448462a9502e98fa6dbd4a0"
 }

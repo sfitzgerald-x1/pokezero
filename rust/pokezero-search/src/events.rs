@@ -1522,36 +1522,48 @@ fn render_move_phase(
                     // knows how to read
                     // (reports/c54_sleeptalk_render_contract_mismatch.json).
                     out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    // Walk the tail IN ORDER, rendering a drag at the moment
+                    // it happens and re-baselining that side, then describing
+                    // whatever HP movement follows. The previous version applied
+                    // the whole tail first and read HP afterwards, so the drag
+                    // line carried the mon's FINAL hp, any post-switch damage
+                    // (Roar into Spikes is a common gen3 line) was swallowed,
+                    // and emit_faint_if_dead could never fire for a switched
+                    // side because before[] had already been set to its final
+                    // value. This mirrors the proven-callee path below.
+                    //
+                    // The callee itself stays unattributed: no |move| line is
+                    // emitted and the damage carries the generic [from] residual
+                    // tag, which is what the differential retags as
+                    // move_unknown_callee. A drag names no move, so rendering it
+                    // invents nothing.
                     let mut before = [
                         sim.active_hp(SideReference::SideOne).0,
                         sim.active_hp(SideReference::SideTwo).0,
                     ];
-                    for instruction in &called_tail {
-                        sim.apply(instruction);
+                    macro_rules! emit_residuals {
+                        () => {
+                            for (index, hp_side) in
+                                [SideReference::SideOne, SideReference::SideTwo]
+                                    .into_iter()
+                                    .enumerate()
+                            {
+                                if sim.active_hp(hp_side).0 < before[index] {
+                                    let ident = ctx.active_ident(sim.state, hp_side);
+                                    let condition = sim.hp_condition(hp_side);
+                                    out.lines.push(format!(
+                                        "|-damage|{ident}|{condition}|[from] residual"
+                                    ));
+                                    emit_faint_if_dead(sim, hp_side, ctx, out);
+                                    before[index] = sim.active_hp(hp_side).0;
+                                }
+                            }
+                        };
                     }
-                    // DAMAGE ONLY, and the drag must be RENDERED.
-                    //
-                    // A heal direction was added and reverted: re-review
-                    // reproduced `|-heal|p2a: Snorlax|100/100|[from] residual`
-                    // for a Snorlax dragged IN by a Sleep-Talk-called Roar,
-                    // which never healed. `before[]` predates the tail, so a
-                    // tail containing a Switch made the comparison span two
-                    // Pokemon. The heal direction also had no consumer: the
-                    // differential retags `residual` -> move_unknown_callee
-                    // only for `-damage`.
-                    //
-                    // Bailing on a switching tail was the first attempt and was
-                    // ALSO wrong: with no `|drag|` line the consumer's running
-                    // HP stays on the outgoing Pokemon, and the next residual
-                    // is measured against it -- a Leftovers tick reported as
-                    // -14, which is verbatim the C52 impossible component this
-                    // block exists to prevent.
-                    //
-                    // The callee is unprovable; the DRAG is not. Rendering it
-                    // re-baselines the consumer and costs no attribution, since
-                    // a drag names no move. reports/c52_impossible_heal_component.json.
                     for instruction in &called_tail {
                         if let Instruction::Switch(switch) = instruction {
+                            emit_residuals!();
+                            sim.apply(instruction);
                             let details =
                                 ctx.details(sim.state, switch.side_ref, switch.next_index);
                             let ident = ctx.ident(switch.side_ref, switch.next_index);
@@ -1560,21 +1572,11 @@ fn render_move_phase(
                                 .push(format!("|drag|{ident}|{details}|{condition}"));
                             before[side_usize(switch.side_ref)] =
                                 sim.active_hp(switch.side_ref).0;
+                        } else {
+                            sim.apply(instruction);
                         }
                     }
-                    for (index, hp_side) in [SideReference::SideOne, SideReference::SideTwo]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        if sim.active_hp(hp_side).0 < before[index] {
-                            let ident = ctx.active_ident(sim.state, hp_side);
-                            let condition = sim.hp_condition(hp_side);
-                            out.lines.push(format!(
-                                "|-damage|{ident}|{condition}|[from] residual"
-                            ));
-                            emit_faint_if_dead(sim, hp_side, ctx, out);
-                        }
-                    }
+                    emit_residuals!();
                 }
             }
             return;
