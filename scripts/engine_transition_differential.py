@@ -1776,7 +1776,8 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            if lossy and not set(lossy) <= _TELEMETRY_ONLY_LOSSY_MARKERS:
+            _empty_render = "empty_instruction_list" in lossy
+            if (bool(branch.get("attribution_unsafe")) or _empty_render) and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:

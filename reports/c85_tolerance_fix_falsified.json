@@ -73,7 +73,21 @@
    "measured": "disabled ALL THREE of #1020's added guards -- pre-direct-hit, prefix floor, extra-side -- on current main, rebuilt, re-swept the same window: 208. IDENTICAL to main.",
    "conclusion": "#1020's guards reject nothing in this window. Inert, exactly as the round-nine reviewer predicted they would be until the bucket promotion lands. Third wrong attribution in this chain."
   },
-  "what_is_actually_open": "The 67-vs-187 gap is localised to #1025's own internals and is unexplained. NOT the exact rule (rejects 0 pairs), NOT the difference bound (accepts 300 against the old bound's 180 and rejects nothing it accepted), NOT #1020's guards (inert). Remaining candidate: the severity change. The original admitted every branch whose attribution_unsafe was false; the allowlist admits two named markers. One single-variable sweep decides it. NOT asserted -- the last three attributions in this chain were wrong."
+  "what_is_actually_open": "The 67-vs-187 gap is localised to #1025's own internals and is unexplained. NOT the exact rule (rejects 0 pairs), NOT the difference bound (accepts 300 against the old bound's 180 and rejects nothing it accepted), NOT #1020's guards (inert). Remaining candidate: the severity change. The original admitted every branch whose attribution_unsafe was false; the allowlist admits two named markers. One single-variable sweep decides it. NOT asserted -- the last three attributions in this chain were wrong.",
+  "error_6_the_severity_candidate_is_also_eliminated": {
+   "test": "single-variable: reverted the severity allowlist to the ORIGINAL exclusion form (admit any branch whose attribution_unsafe is false, except the synthetic empty placeholder), changed nothing else, rebuilt, re-swept the same window.",
+   "result": 187,
+   "conclusion": "identical to the allowlist version. The severity change is not the cause either."
+  }
  },
- "method_note": "Every attribution error here came from comparing two sweeps that differed in more than one way and crediting the difference to the change of interest. The fix is what settled the #1020 question: mutate exactly one thing on one tree and re-sweep. Eight minutes, and it overturned three rounds of reasoning."
+ "method_note": "Every attribution error here came from comparing two sweeps that differed in more than one way and crediting the difference to the change of interest. The fix is what settled the #1020 question: mutate exactly one thing on one tree and re-sweep. Eight minutes, and it overturned three rounds of reasoning.",
+ "ELIMINATED_CANDIDATES": {
+  "note": "Four single-variable sweeps, each mutating exactly one thing on one tree. All four eliminated.",
+  "exact_comparison_rule": "rejects 0 pairs in the residue (no pair has neither side capped)",
+  "difference_bound": "ACCEPTS MORE than the 0.18*scale bound it replaced -- 300 vs 180 -- and rejects nothing the old bound accepted",
+  "c1020_guards": "disabling all three gives 208, identical to main -- inert in this window",
+  "severity_form": "allowlist vs original exclusion both give 187"
+ },
+ "STILL_UNLOCATED": "The old loose stack measured 67 on the old predicate; every reconstruction on the current tree measures 187. All four differences I could name are eliminated. The gap is real and I have not found it. What I will NOT do is name a fifth candidate from reasoning -- four in a row were wrong that way. The next step is mechanical, not inferential: check out the exact tree that produced the 67, diff scripts/engine_transition_differential.py against the current one, and bisect the differences by single-variable sweep. That is bounded work with a guaranteed answer.",
+ "what_is_safe_to_say": "On the CURRENT tree, measured cleanly: main is 208 and #1025 is 187, a real 21-row improvement, sound and pinned. Every number quoted from the old stack -- including 67 -- is from a predicate that no longer exists and should not be used as a target until the gap is located."
 }
