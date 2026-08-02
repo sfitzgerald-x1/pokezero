@@ -1264,3 +1264,40 @@ class EndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingInputGuard(unittest.TestCase):
+    """A path that matches nothing must fail loudly, not write an n_games=0 metrics file.
+
+    The old resolver fell back to the literal path when a glob matched nothing, so a typo'd or
+    renamed shard produced a valid-looking metrics file with every rate zeroed — which silently
+    blanks a lineage in the report instead of erroring.
+    """
+
+    def _run(self, events, out):
+        import sys
+        argv = sys.argv
+        sys.argv = ["trait_extract.py", "--events", *events, "--out", out]
+        try:
+            TE.main()
+        finally:
+            sys.argv = argv
+
+    def test_missing_events_file_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "m.json")
+            with self.assertRaises(SystemExit) as cm:
+                self._run([os.path.join(d, "events-nope.jsonl.gz")], out)
+            self.assertIn("no such events file", str(cm.exception))
+            self.assertFalse(os.path.exists(out), "must not write a metrics file")
+
+    def test_zero_game_input_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(src, "wt") as fh:
+                fh.write("")
+            out = os.path.join(d, "m.json")
+            with self.assertRaises(SystemExit) as cm:
+                self._run([src], out)
+            self.assertIn("0 games parsed", str(cm.exception))
+            self.assertFalse(os.path.exists(out), "must not write a metrics file")

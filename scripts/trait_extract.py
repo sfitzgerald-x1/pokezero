@@ -15,6 +15,7 @@ import argparse
 import glob
 import gzip
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -1243,10 +1244,23 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     files = []
+    missing = []
     for e in args.events:
-        files.extend(sorted(glob.glob(e)) or [e])
+        hits = sorted(glob.glob(e))
+        if hits:
+            files.extend(hits)
+        elif os.path.exists(e):
+            files.append(e)
+        else:
+            missing.append(e)
+    # A path that matches nothing used to fall through as a literal and yield n_games=0, writing a
+    # metrics file that looks valid and silently zeroes out a lineage in the report. Fail instead.
+    if missing:
+        raise SystemExit(f"no such events file(s): {' '.join(missing)}")
     metrics = extract(files, lineage=args.lineage, milestone=args.milestone,
                       measure_seat=args.measure_seat)
+    if not metrics["n_games"]:
+        raise SystemExit(f"refusing to write {args.out}: 0 games parsed from {len(files)} file(s)")
     json.dump(metrics, open(args.out, "w"), indent=1)
     print(f"WROTE {args.out} n_games={metrics['n_games']} opponent={metrics['opponent']}")
     print("top5:", [(m["move"], m["share"]) for m in metrics["top5_moves"]])

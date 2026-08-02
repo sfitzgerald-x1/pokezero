@@ -47,34 +47,51 @@ run_one() {   # args: dir lineage milestone opp
     newest=$(ls -t "$1"/events-*.jsonl.gz 2>/dev/null | head -1)
     if [ -n "$newest" ] && [ ! "$newest" -nt "$out" ]; then echo "skip $2 $3 $4"; return; fi
   fi
-  python3 "$SCR/trait_extract.py" --events "$1/events-*.jsonl.gz" --lineage "$2" --milestone "$3" \
-    --out "$out" >/dev/null 2>&1 && echo "ok $2 $3 $4"
+  # Report failures rather than dropping them: the extractor now refuses to write a metrics file
+  # when its inputs are missing or parse to 0 games, and a silently skipped set would otherwise
+  # look identical to one that was never due.
+  if err=$(python3 "$SCR/trait_extract.py" --events "$1/events-*.jsonl.gz" --lineage "$2" \
+             --milestone "$3" --out "$out" 2>&1 >/dev/null); then
+    echo "ok $2 $3 $4"
+  else
+    echo "fail $2 $3 $4: $(echo "$err" | tail -1)"
+  fi
 }
 export -f run_one
 
-# Default parallelism from the CGROUP cpu quota, never nproc: this runs inside a pod whose limit
-# (16 CPU) is far below the node's core count (nproc reports 128), and oversubscribing a
-# CPU-capped pod is what caused the 10x slowdown that timed out earlier sweeps.
+# Default parallelism from the CGROUP cpu quota, NEVER nproc: this runs inside a pod whose limit
+# is far below the node's core count (nproc reports node cores), and oversubscribing a CPU-capped
+# pod is what caused the 10x slowdown that timed out earlier sweeps.
+#
+# cpu.max is not always readable at the root of the cgroup mount -- on some hosts the container
+# only sees it under its own cgroup path from /proc/self/cgroup, so try that first. When the quota
+# cannot be read at all, fall back to TRAIT_CPUS (or a conservative constant), never to nproc:
+# guessing low costs wall-clock, guessing high costs an order of magnitude to thrash.
 cpu_quota() {
-  local q p
-  if [ -r /sys/fs/cgroup/cpu.max ]; then            # cgroup v2: "<quota|max> <period>"
-    read -r q p < /sys/fs/cgroup/cpu.max
-    [ "$q" = "max" ] && return 1
+  local q p cg f
+  cg=$(awk -F: '/^0::/{print $3}' /proc/self/cgroup 2>/dev/null)
+  for f in "/sys/fs/cgroup${cg}/cpu.max" /sys/fs/cgroup/cpu.max; do   # cgroup v2: "<quota|max> <period>"
+    [ -r "$f" ] || continue
+    read -r q p < "$f"
+    [ "$q" = "max" ] && continue
     echo $(( q / p )); return 0
-  fi
-  if [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then   # cgroup v1
-    q=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us); p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
-    [ "$q" -le 0 ] && return 1
+  done
+  for f in /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us; do  # v1
+    [ -r "$f" ] || continue
+    q=$(cat "$f"); p=$(cat "$(dirname "$f")/cpu.cfs_period_us")
+    [ "$q" -le 0 ] && continue
     echo $(( q / p )); return 0
-  fi
+  done
   return 1
 }
-DEFAULT_JOBS=$(cpu_quota || nproc 2>/dev/null || echo 8)
+DEFAULT_JOBS=$(cpu_quota || echo "${TRAIT_CPUS:-8}")
 [ "$DEFAULT_JOBS" -lt 4 ] && DEFAULT_JOBS=4
 tasks=$(emit_tasks); n=$(echo "$tasks" | grep -c .)
 echo "extracting $n metric sets with ${JOBS:-$DEFAULT_JOBS} workers (FORCE=${FORCE:-0}) ..."
 results=$(echo "$tasks" | xargs -P "${JOBS:-$DEFAULT_JOBS}" -L1 bash -c 'run_one "$@"' _)
-echo "  extracted: $(echo "$results" | grep -c '^ok ')  skipped-current: $(echo "$results" | grep -c '^skip ')"
+nfail=$(echo "$results" | grep -c '^fail ' || true)
+echo "  extracted: $(echo "$results" | grep -c '^ok ')  skipped-current: $(echo "$results" | grep -c '^skip ')  failed: $nfail"
+[ "$nfail" -gt 0 ] && echo "$results" | grep '^fail ' | sed 's/^/    /'
 # v2 report (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and the separate v3 report (empty until v3 runs
 # exist and V3_LINEAGES/ACTIVE are populated).
 python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report.html" --set v2
