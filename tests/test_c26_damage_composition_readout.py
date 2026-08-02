@@ -192,6 +192,25 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
             self.readout["rejected_experiment"]["matcher_source_sha256"],
             "production is running the rejected damage-composition matcher",
         )
+        # ...and a POSITIVE anchor. assertNotEqual alone admits ANY matcher that
+        # is not byte-identical to one specific rejected file, which is a much
+        # weaker statement than the `git diff` it replaced. The lifecycle records
+        # the differential at the pinned certification commit; the live file must
+        # either be that, or the lifecycle must declare the divergence. Without
+        # this leg the suite passes for an arbitrarily tampered matcher.
+        lifecycle_path = REPO_ROOT / "reports" / "certification_contract_lifecycle.json"
+        if lifecycle_path.is_file():
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            registered = lifecycle.get("source_code_identity", {}).get(
+                "differential_sha256"
+            )
+            if registered and current != registered:
+                self.assertTrue(
+                    lifecycle.get("successor_registration_pending"),
+                    "the working matcher has diverged from the registered "
+                    "source_code_identity, so the lifecycle must record an "
+                    "explicit successor-pending divergence",
+                )
         self.assertEqual(
             self.readout["rejected_experiment"]["production_code_survives"], False
         )
