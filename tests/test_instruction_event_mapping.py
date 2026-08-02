@@ -321,10 +321,32 @@ class BranchEventsTest(unittest.TestCase):
             self.assertEqual(branch["post"]["p1"]["active_status"], "sleep", branch)
             self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertIn("|move|p1a: Rattata|sleeptalk|p1a: Rattata", branch["events"])
-            self.assertFalse(
-                any(line.startswith("|-damage|p2a: Chansey|") for line in branch["events"]),
-                branch,
+            # The guard is against INVENTING AN OWNER, not against describing
+            # the damage. The delta cannot prove whether Tackle or Scratch was
+            # called, so no damage line may name a move or carry a specific
+            # attribution -- but the HP change demonstrably happened (post p2 is
+            # below 100, asserted above) and the renderer must say so.
+            #
+            # Emitting nothing left the consumer's running-HP baseline stale, and
+            # the next end-of-turn heal absorbed the whole drop, surfacing as an
+            # impossible component such as a Leftovers tick of -134 on a mon that
+            # was at full HP. The differential is already built for the generic
+            # form: it passes unattributed_damage_as_roll and retags
+            # _UNATTRIBUTED_DAMAGE_SOURCE as _UNKNOWN_CALLEE_SOURCE. See
+            # reports/c52_impossible_heal_component.json and
+            # reports/c54_sleeptalk_render_contract_mismatch.json.
+            damage_lines = [
+                line
+                for line in branch["events"]
+                if line.startswith("|-damage|p2a: Chansey|")
+            ]
+            self.assertEqual(len(damage_lines), 1, branch)
+            self.assertTrue(
+                damage_lines[0].endswith("|[from] residual"),
+                f"the callee's damage must carry the generic tag and no owner: {damage_lines[0]}",
             )
+            for called in ("tackle", "scratch", "Tackle", "Scratch"):
+                self.assertNotIn(called, damage_lines[0], branch)
 
     def test_confusion_self_hit_cancels_substitute_and_keeps_leftovers(self) -> None:
         # The native before-move confusion branch uses the

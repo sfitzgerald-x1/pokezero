@@ -1,0 +1,21 @@
+{
+ "schema": "c54-sleeptalk-render-contract-mismatch/1",
+ "closes": "the root-cause question left open by reports/c52 and c53",
+ "verdict": "ROOT CAUSE FOUND. The renderer and the differential disagree about what a sleeptalk_called_unidentified branch contains, and each is internally consistent.",
+ "producer_side": {
+  "where": "rust/pokezero-search/src/events.rs, the Sleep Talk block at ~1479",
+  "what_it_does": "when identify_sleep_talk_called cannot prove the callee from the instruction delta, it marks attribution unsafe with 'sleeptalk_called_unidentified' and then applies the instructions to the state WITHOUT EMITTING ANY EVENT LINES. The HP moves; the event stream is silent.",
+  "its_stated_contract": "its own comment says 'Callers reject before fold/encoder so post-state cannot silently diverge from the event stream.' The renderer believes such branches are rejected downstream."
+ },
+ "consumer_side": {
+  "where": "scripts/engine_transition_differential.py:1393-1400",
+  "what_it_does": "a branch whose ONLY lossy marker is _SLEEPTALK_LOSSY_MARKER is explicitly NOT skipped. Its own comment: 'A branch whose ONLY defect is the known Sleep Talk callee-identity gap is still usable: its damage is real, only its attribution is generic.'",
+  "what_it_expects": "damage present in the stream under a generic tag. It even passes unattributed_damage_as_roll=sleeptalk_union into damage_component_events, whose job is to retag _UNATTRIBUTED_DAMAGE_SOURCE ('residual') as _UNKNOWN_CALLEE_SOURCE. The machinery for generically-tagged callee damage already exists and is wired up."
+ },
+ "the_mismatch": "The renderer emits NOTHING and expects rejection. The differential expects a GENERIC TAG and declines to reject. Neither is wrong on its own terms; together they mean the callee's damage vanishes from the stream while the branch stays in the comparison. damage_component_events then tracks running HP per slot, sees the next heal line land far below the stale baseline, and attributes the whole drop to that heal -- producing the impossible negative Leftovers of C52.",
+ "the_fix_this_implies": "Emit the damage line with the generic attribution the differential is already built to consume, instead of applying instructions silently. That is the smaller change AND the one both sides already agree on: the renderer keeps its 'no public action owner' honesty by using the unattributed tag, and the differential's existing _UNKNOWN_CALLEE_SOURCE path handles it without a matcher change at all.",
+ "why_this_beats_both_rejected_repairs": "The retag laundered 48 rows into an unevidenced family and the lossy marking hid 15 boundaries to clear 8. This moves no row into a family it has not earned and removes no boundary from measurement -- it makes the event stream describe damage that demonstrably happened, which is the thing that was actually missing.",
+ "cost": "a crate change, so the fingerprint moves and every era stamp must be mechanically re-derived. Paid once already in C46, where re-derivation returned identical results.",
+ "not_yet_done": "the change is not implemented and no prediction is registered. The row delta is unmeasured and must not be assumed to be 79.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476"
+}

@@ -1503,15 +1503,109 @@ fn render_move_phase(
                     );
                 }
                 None => {
-                    // The called move is not provable from this delta. Keep
-                    // the simulated state exact, but do not emit its HP,
-                    // status, or side effects without a public action owner.
-                    // Callers reject before fold/encoder so post-state cannot
-                    // silently diverge from the event stream.
+                    // The called move is not provable from this delta, so its
+                    // HP change gets no public action owner. It must still be
+                    // DESCRIBED. Emitting nothing left the consumer's running
+                    // HP baseline stale, and the next end-of-turn heal absorbed
+                    // the whole drop -- surfacing as an impossible component
+                    // such as a Leftovers tick of -134 on a mon that was at
+                    // full HP (reports/c52_impossible_heal_component.json).
+                    //
+                    // This block's old comment asserted "callers reject before
+                    // fold/encoder", but the differential deliberately does NOT
+                    // reject a branch whose only lossy marker is this one --
+                    // it treats the damage as real and generically attributed,
+                    // and passes unattributed_damage_as_roll so that
+                    // damage_component_events can retag it. The two sides
+                    // disagreed about the contract; this satisfies the
+                    // consumer's half by emitting the generic tag it already
+                    // knows how to read
+                    // (reports/c54_sleeptalk_render_contract_mismatch.json).
                     out.mark_attribution_unsafe("sleeptalk_called_unidentified");
-                    for instruction in &called_tail {
-                        sim.apply(instruction);
+                    // Walk the tail IN ORDER, rendering a drag at the moment
+                    // it happens and re-baselining that side, then describing
+                    // whatever HP movement follows. The previous version applied
+                    // the whole tail first and read HP afterwards, so the drag
+                    // line carried the mon's FINAL hp, any post-switch damage
+                    // (Roar into Spikes is a common gen3 line) was swallowed,
+                    // and emit_faint_if_dead could never fire for a switched
+                    // side because before[] had already been set to its final
+                    // value. This mirrors the proven-callee path below.
+                    //
+                    // The callee itself stays unattributed: no |move| line is
+                    // emitted and the damage carries the generic [from] residual
+                    // tag, which is what the differential retags as
+                    // move_unknown_callee. A drag names no move, so rendering it
+                    // invents nothing.
+                    let mut before = [
+                        sim.active_hp(SideReference::SideOne).0,
+                        sim.active_hp(SideReference::SideTwo).0,
+                    ];
+                    // Once a side has been dragged, HP it loses is hazard chip
+                    // on the way in, NOT a residual. Showdown emits
+                    // `[from] Spikes` there, and the proven-callee path above
+                    // already gets this right (the `switched && damage.side_ref
+                    // == side` arm). Tagging it `residual` put the observation
+                    // in the exact-component bucket as ("spikes", -n) while the
+                    // engine line was retagged move_unknown_callee into the
+                    // roll-scaled bucket, so the two never compared and the row
+                    // could not match -- on "Roar into Spikes", which is the
+                    // very line this walk was written to render.
+                    // gen3-only inference: Spikes is the sole entry hazard that
+                    // deals damage in this generation, and the crate is built
+                    // with features = ["gen3"]. Under a gen4+ build this would
+                    // need to distinguish Stealth Rock and Toxic Spikes.
+                    let mut dragged = [false, false];
+                    macro_rules! emit_residuals {
+                        () => {
+                            for (index, hp_side) in
+                                [SideReference::SideOne, SideReference::SideTwo]
+                                    .into_iter()
+                                    .enumerate()
+                            {
+                                // DECREASES ONLY, deliberately. Rendering the heal
+                                // direction was shipped once and emitted lines for
+                                // the wrong Pokemon; it needs the same per-side
+                                // re-baselining this walk now has, plus its own pin.
+                                // Until then an unrendered rise leaves the row
+                                // divergent, which is safe -- it cannot manufacture
+                                // a false match -- but it does leave C52's impossible
+                                // component alive in mirror image.
+                                if sim.active_hp(hp_side).0 < before[index] {
+                                    let ident = ctx.active_ident(sim.state, hp_side);
+                                    let condition = sim.hp_condition(hp_side);
+                                    let source = if dragged[index] {
+                                        "Spikes"
+                                    } else {
+                                        "residual"
+                                    };
+                                    out.lines.push(format!(
+                                        "|-damage|{ident}|{condition}|[from] {source}"
+                                    ));
+                                    emit_faint_if_dead(sim, hp_side, ctx, out);
+                                    before[index] = sim.active_hp(hp_side).0;
+                                }
+                            }
+                        };
                     }
+                    for instruction in &called_tail {
+                        if let Instruction::Switch(switch) = instruction {
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let details =
+                                ctx.details(sim.state, switch.side_ref, switch.next_index);
+                            let ident = ctx.ident(switch.side_ref, switch.next_index);
+                            let condition = sim.hp_condition(switch.side_ref);
+                            out.lines
+                                .push(format!("|drag|{ident}|{details}|{condition}"));
+                            before[side_usize(switch.side_ref)] =
+                                sim.active_hp(switch.side_ref).0;
+                            dragged[side_usize(switch.side_ref)] = true;
+                        } else {
+                            sim.apply(instruction);
+                        }
+                    }
+                    emit_residuals!();
                 }
             }
             return;
