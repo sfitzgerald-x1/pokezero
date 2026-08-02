@@ -48,7 +48,9 @@ Measured baseline, same 60 fresh games, seed band 17,000,000:
 
 **Written, NOT shipped.** The `fidelity` block and its pin
 (`tests/test_cert_sweep_readout_contract.py::FidelityKpiTests`) exist only in the
-unmerged #1021; neither `in_support_rate` nor `FidelityKpiTests` is on `main`.
+unmerged #1021 and #1023 (which is stacked on it); neither `in_support_rate` nor
+`FidelityKpiTests` is on `main`. Everything in this subsection is written in the
+present tense but describes unmerged code.
 `cert_sweep_readout.py` emits a `fidelity` block carrying both framings and its era
 stamp:
 
@@ -197,7 +199,11 @@ as results of the change that overturned them, with the reasoning that failed.
 > the wrong Pokemon, a silent reversion to a rejected predicate, a predicate that MASKED real
 > engine defects, a rubber-stamp provenance guard, and pins that exercised the wrong code path.
 >
-> **THREE ROWS IN THE TABLE BELOW DID NOT LAND.** C68 was reverted (`264 -> 255`). C57 was
+> **C46 ALSO DID NOT LAND** — the gen3 Trick patch was dropped after review falsified
+> it against Showdown, which is what moved the engine fingerprint from 54 patches to 53.
+> Every baseline of 476 or 485 below descends from its void clearance.
+>
+> **THREE FURTHER ROWS IN THE TABLE BELOW DID NOT LAND.** C68 was reverted (`264 -> 255`). C57 was
 > reverted (`366 -> 341`) — `attribution_unsafe` exists in no branch; the change moved to
 > #1025 and is unmerged, so every downstream figure that starts from 341 inherits the error.
 > C66's real effect is **+1, not −77**: its own report records `264 -> 265`, the shipped
@@ -279,7 +285,9 @@ caught the C69 capped_lethal repairs immediately.
 
 ## Where the residue actually is
 
-Of 265 (corpus basis; superseded by the fresh measurement in `reports/c83`/`c84`):
+Of 255 — this partition is the POST-C68 state, and C68 was reverted, so it does not
+sum to the corrected 265. Kept as the last full decomposition of the corpus; superseded
+as a current figure by the fresh measurement in `reports/c83`/`c84`:
 
 - **142** count mismatch on every miss, dominated by one side being entirely
   empty. The engine's majority arm places its mass on nothing happening while

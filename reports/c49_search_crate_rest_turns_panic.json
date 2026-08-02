@@ -77,5 +77,6 @@
   "32 is constant, independent of the input value and of the branch count",
   "poke_engine handles the identical state and choices; only the crate panics",
   "it needs a priority move paired with an HP-dependent one (extremespeed + reversal)"
- ]
+ ],
+ "BASELINE_NOTE": "The 476 baseline this file reasons from descends from C46's Trick-patch clearance, which is VOID -- the patch was dropped after review falsified it against Showdown. See reports/c46 and reports/c83."
 }

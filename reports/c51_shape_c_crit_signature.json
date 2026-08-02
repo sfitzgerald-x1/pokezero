@@ -93,5 +93,6 @@
   "the engine cannot reach the observed crit (baseline: 80% of ALL boundaries lack a 2x pair, so 69% here is unremarkable)",
   "the magnitude-matching branch legitimately fails on the other slot (whole-boundary test: exactly 1 row of 117)",
   "the matching branch's events are undecomposed (linking test: 30 of 39 carry components)"
- ]
+ ],
+ "BASELINE_NOTE": "The 476 baseline this file reasons from descends from C46's Trick-patch clearance, which is VOID -- the patch was dropped after review falsified it against Showdown. See reports/c46 and reports/c83."
 }

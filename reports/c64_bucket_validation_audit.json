@@ -38,5 +38,6 @@
   "count-mismatch rows": "immune, no HP arithmetic",
   "C61 majority-arm (70)": "sound, guarded at derivation",
   "same-Pokemon-different-HP (82)": "sound, uses the corrected field"
- }
+ },
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
 }

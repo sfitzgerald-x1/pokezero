@@ -110,5 +110,6 @@
   "the direct component passes the legal/roll check and the crit cross-check",
   "conservation"
  ],
- "final_constraints_SUPERSEDED": "Two of these are rules the MERGED predicate (#1020) deleted as wrong, and one shipped rule is missing. 'no base repeats' was replaced by (base, delta) instance pairing after review measured it rejecting two genuine cascades, s18500122/85 and s18100033/60. 'at most ONE _to_full per side' is physically false -- cap, damage, cap is an ordinary line -- and was replaced by order-based gating on event_index. Missing: the once-per-turn residual rule (itemleftovers, leechseed). Read scripts/engine_transition_differential.py on main for the shipped constraint set, not this list."
+ "final_constraints_SUPERSEDED": "Two of these are rules the MERGED predicate (#1020) deleted as wrong, and one shipped rule is missing. 'no base repeats' was replaced by (base, delta) instance pairing after review measured it rejecting two genuine cascades, s18500122/85 and s18100033/60. 'at most ONE _to_full per side' is physically false -- cap, damage, cap is an ordinary line -- and was replaced by order-based gating on event_index. Missing: the once-per-turn residual rule (itemleftovers, leechseed). Read scripts/engine_transition_differential.py on main for the shipped constraint set, not this list.",
+ "ERA_STAMP_NOTE": "Era note: the differential hash in this file names the round it was written in, not the current tree. main is ae1bf51d32983937. Compare era stamps against the tree you are reading."
 }

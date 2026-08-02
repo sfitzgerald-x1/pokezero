@@ -30,5 +30,6 @@
  "why_that_matters": "A length check is the crudest possible comparison and it is the dominant rejector. It cannot distinguish 'the engine modelled a different outcome' from 'the engine rendered the same outcome with a different number of events' -- which is exactly the defect class C55 fixed, where an unrendered Sleep Talk callee damage line made the counts differ. C55 cleared 331 rows through this same line.",
  "what_this_does_NOT_license": "relaxing the length check. Protocol order and component count are load-bearing: the function's own docstring says a branch that moves HP events is a different branch rather than interchangeable evidence. Making the comparison length-tolerant would admit false matches wholesale. The lead is not 'loosen the check', it is 'find the remaining places where the engine's event stream under- or over-describes an outcome it modelled correctly'.",
  "next": "for the 203 count-mismatch-only rows, tabulate observed-count versus engine-count and the sources present on each side. C55 was found exactly this way, by reading the two lists rather than aggregating over them.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
 }

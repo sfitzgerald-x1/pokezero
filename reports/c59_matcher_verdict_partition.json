@@ -21,5 +21,6 @@
  "why_this_beats_every_partition_i_published": "The three earlier readings -- 183/107/50, 132/53/50, 17/265/58 -- all asked a question I invented ('does some branch reproduce the observation, by a rule I chose') and then treated the answer as a bucketing. The matcher does not use my rule. This reports the check that actually fired, so it cannot disagree with the gate it is meant to explain.",
  "the_next_question_is_now_specific": "Within roll_component_events_agree, which sub-condition rejects these 318? The candidates are the legal-roll-set derivation, the branch-local support, the cap/_to_full relaxation, and the component pairing. That is a bounded set inside one function rather than a search across the whole residue.",
  "lesson_recorded_because_it_cost_three_cycles": "When the goal is to explain a gate's verdict, instrument the gate. I built three proxies for a decision whose reasons were already serialised on every row. Controls did not catch it because the proxies were consistently wrong, not randomly wrong -- a control tells you whether two populations differ under YOUR test, not whether your test is the right one.",
- "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
 }

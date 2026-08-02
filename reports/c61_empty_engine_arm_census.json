@@ -18,5 +18,6 @@
   "1 row is a genuine divergence with the engine's HP unchanged",
   "37 are unmeasurable by per-slot comparison and need the per-Pokemon fix"
  ],
- "does_not_reach_a_pass": "no code changed; unattributed stays at 341"
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 341",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
 }
