@@ -56,6 +56,8 @@ FOCUS_PUNCH = mid("Focus Punch")
 LEECH_SEED = mid("Leech Seed")
 SOLAR_BEAM = mid("Solar Beam")
 KNOCK_OFF = mid("Knock Off")   # in gen3 randbats (162 carriers / 41 uses in a 2000-game sample)
+ENCORE = mid("Encore")   # gen3 randbats: 16 carrier species (alakazam, jumpluff, wobbuffet, ...)
+TRICK = mid("Trick")     # gen3 randbats: 2 carrier species (furret, kecleon) — rare but reachable
 # NOTE: Thief is NOT in the gen3 randbats pool (0 carriers empirically) — deliberately not tracked.
 REVERSAL_MOVES = {mid("Reversal"), mid("Flail")}  # BP scales inversely with the user's HP fraction
 BELLY_DRUM = mid("Belly Drum")
@@ -722,6 +724,10 @@ class GameParse:
             E["cat_leechseed"] += 1
         if move == KNOCK_OFF:
             E["cat_knockoff"] += 1
+        if move == ENCORE:
+            E["cat_encore"] += 1
+        if move == TRICK:
+            E["cat_trick"] += 1
         if move in PRIORITY_MOVES:
             E["cat_priority"] += 1
             if self.slower.get(seat):   # opponent observed to outspeed us -> skilled priority use
@@ -829,7 +835,8 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
             "cat_phaze","cat_spikes","cat_rapidspin_total","cat_toxic","cat_para","cat_sleep","cat_yawn",
             "cat_burn","cat_status_move","cat_knockoff","cat_reversal","cat_bellydrum",
             "cat_priority","cat_destinybond","cat_aromatherapy","cat_protect","cat_counter_mirrorcoat",
-            "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse"}
+            "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse",
+            "cat_encore","cat_trick"}
     CAT_MOVE = {"cat_stat_boost":STAT_BOOST,"cat_heal":HEAL_NON_REST,"cat_wish":{WISH},"cat_rest":{REST},
         "cat_weather_sun":{k for k,v in WEATHER_PRIMARY.items() if v=="sun"},
         "cat_weather_rain":{k for k,v in WEATHER_PRIMARY.items() if v=="rain"},
@@ -838,6 +845,7 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
         "cat_burn":{WILL_O_WISP},"cat_status_move":STATUS_MOVES,"cat_boom":BOOM,
         "cat_batonpass":{BATON_PASS},"cat_substitute":{SUBSTITUTE},"cat_leechseed":{LEECH_SEED},
         "cat_solarbeam":{SOLAR_BEAM},"cat_curse":{CURSE},"cat_knockoff":{KNOCK_OFF},
+        "cat_encore":{ENCORE},"cat_trick":{TRICK},
         "cat_reversal":REVERSAL_MOVES,"cat_bellydrum":{BELLY_DRUM},
         "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY,
         "cat_protect":PROTECT_MOVES,"cat_counter_mirrorcoat":COUNTER_MOVES}

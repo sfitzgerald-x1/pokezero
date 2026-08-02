@@ -564,6 +564,19 @@ class V3Traits(unittest.TestCase):
         ], movesets=ms2)
         self.assertEqual(gp2.ev["p1"]["nc_switchin_on_status"], 0)
 
+    def test_encore_and_trick_counted(self):
+        # Both are in the gen3 randbats pool (encore 16 carrier species, trick 2) — reachable is
+        # the bar for tracking, so they get gated usage categories like any other carried move.
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: Alakazam|Encore|p2a: Blissey",
+            "|move|p2a: Kecleon|Trick|p1a: Alakazam",
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_encore"], 1)
+        self.assertEqual(gp.ev["p1"]["cat_trick"], 0)
+        self.assertEqual(gp.ev["p2"]["cat_trick"], 1)
+        self.assertEqual(gp.ev["p2"]["cat_encore"], 0)
+
     def test_struggle_counted(self):
         gp = parse(["|turn|1", "|move|p1a: X|Struggle|p2a: Y"])
         self.assertEqual(gp.ev["p1"]["cat_struggle"], 1)
