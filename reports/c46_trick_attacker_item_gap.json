@@ -80,7 +80,7 @@
   "consequence": "these 9 rows carry TWO independent defects. The engine one is fixed. The remaining one is an instrument defect in the component decomposition and is the reason the row count did not move."
  },
  "disposition": {
-  "patch": "KEPT. It is a proven engine fidelity divergence -- the engine reached a transition the simulator does not -- which is objective 2's own definition, and the p1 slot now matches exactly.",
+  "patch": "DROPPED -- see SUPERSEDED_BY_REVIEW. (Previously 'KEPT'.)",
   "cost_paid": "the engine fingerprint changed to d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd, which voids every era stamp and forces re-derivation",
   "re_derived_not_carried_forward": {
    "family_audit": "reports/c46_family_bucket_audit.json -- no family bucketed OPEN; buckets unchanged",
@@ -101,9 +101,11 @@
   "structural": "444 -> 443",
   "survivors": "3,549 -> 3,538",
   "identities": "4 of the 5 named rows cleared; s18100343/52 did not",
-  "trick_rows_left_in_the_counter": "1 of 9"
+  "trick_rows_left_in_the_counter": "1 of 9",
+  "VOID": "the 485 -> 476 clearance is void; the patch is gone."
  },
  "the_measurement_was_wrong_twice_for_the_same_reason": "Both earlier readings -- the one that made me revert, and the one that made me call the row delta falsified -- were taken against a STALE consumer. The strict comparison does not call poke_engine at all: evaluate_boundary_strict line 1361 calls pokezero_search.branch_events, the native Rust crate, which links the vendored engine as a separate build. setup_poke_engine.sh rebuilds only the Python binding. So my direct probes exercised the fixed engine and the differential exercised the old one, and I compared them to each other.\n\nengine_build_fingerprint.py --check printed 'STALE: installed poke_engine/pokezero_search artifacts do not match the two-consumer build stamp' and I read past it. build_search_crate_engine.sh states the failure mode in its own header: 'Building one consumer and stamping it made stale mixed-engine measurements look current.' The guard existed, named this exact error, and fired.",
  "c47_withdrawn": "C47 recorded a phantom-component defect in the differential's decomposition. There is no such defect. The differential was reporting the old engine's Leftovers tick correctly, because it was running the old engine. Withdrawn in full.",
- "remaining": "s18100343/52 is an observed_only itemleftovers 18 -- the opposite direction -- and is not explained by this fix."
+ "remaining": "s18100343/52 is an observed_only itemleftovers 18 -- the opposite direction -- and is not explained by this fix.",
+ "SUPERSEDED_BY_REVIEW": "The gen3 Trick patch was DROPPED. Review falsified it against Showdown: it asserted Trick fails when the USER holds no item, and Showdown succeeds (attacker itemless, target holding Leftovers, gen3 custom game). The real gen<=4 rule is itemKnockedOff. The patch was a coarse proxy that fixed the 11 Knock-Off rows here but newly broke every mon itemless for any other reason -- a consumed Lum or Salac, Thief'd, an itemless set. Dropping it is what moved the engine fingerprint 625cb059 (54 patches) -> e5f4c7b1 (53); see reports/c83_era_rederivation.json. Any row clearance credited to it below is VOID."
 }

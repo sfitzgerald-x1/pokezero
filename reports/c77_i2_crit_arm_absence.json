@@ -74,5 +74,6 @@
   "why_it_is_still_worth_doing": "C74 established that 35% of divergences sit in families with no established mechanism, and that the gate counts them as explained. The 173 are the clearest case: attributed to a family named for branch accounting, actually a suppressed crit tag. Fixing them removes 173 rows from the explained-in-name-only category by making them genuinely matched. That improves the honesty of the measurement without improving the number.",
   "the_expectation_to_set": "anyone taking this on should expect the unattributed count to stay at 255 and the divergence count to fall by up to 173. If the unattributed count MOVES, something unintended happened and that is the signal to stop -- which is the invariant this fix should be registered with.",
   "SUPERSEDED_INVARIANT": "This registered 'expect unattributed to stay at 255; if it MOVES, stop'. 255 predates five review rounds and anyone following that invariant on a correct run would now abort. The invariant's INTENT stands -- a crit-tag fix should move divergences, not the unattributed count -- but it must be re-baselined against the residue at the time it is attempted."
- }
+ },
+ "ambiguity_resolved_ARITHMETIC_NOTE": "This partition sums to 391 (217+173+1) against a subset defined as 390 by the_decisive_measurement. The extra 'engine rendered a crit line: 1' also contradicts that subset's own definition, which is 'sim crit, engine renders NO crit arm'. Off by one; the status line's 217/173/13 against 403 is internally consistent and is the figure to use."
 }

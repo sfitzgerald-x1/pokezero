@@ -34,5 +34,6 @@
   "objective_2": "complete",
   "objective_3": "complete, era-stamped, no family OPEN",
   "objective_4": "engine-gap bucket adjudicated at current era; no fix registered because no mechanism spans it"
- }
+ },
+ "SUPERSEDED_BY_REVIEW": "The C46 Trick step in this distance calculation was DROPPED, so the distance recorded here is stale. The gen3 Trick patch was DROPPED. Review falsified it against Showdown: it asserted Trick fails when the USER holds no item, and Showdown succeeds (attacker itemless, target holding Leftovers, gen3 custom game). The real gen<=4 rule is itemKnockedOff. The patch was a coarse proxy that fixed the 11 Knock-Off rows here but newly broke every mon itemless for any other reason -- a consumed Lum or Salac, Thief'd, an itemless set. Dropping it is what moved the engine fingerprint 625cb059 (54 patches) -> e5f4c7b1 (53); see reports/c83_era_rederivation.json. Any row clearance credited to it below is VOID."
 }

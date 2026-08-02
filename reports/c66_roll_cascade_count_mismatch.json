@@ -109,5 +109,6 @@
   "exactly one shared base flips, toward the SMALLER direct roll, and no base repeats",
   "the direct component passes the legal/roll check and the crit cross-check",
   "conservation"
- ]
+ ],
+ "final_constraints_SUPERSEDED": "Two of these are rules the MERGED predicate (#1020) deleted as wrong, and one shipped rule is missing. 'no base repeats' was replaced by (base, delta) instance pairing after review measured it rejecting two genuine cascades, s18500122/85 and s18100033/60. 'at most ONE _to_full per side' is physically false -- cap, damage, cap is an ordinary line -- and was replaced by order-based gating on event_index. Missing: the once-per-turn residual rule (itemleftovers, leechseed). Read scripts/engine_transition_differential.py on main for the shipped constraint set, not this list."
 }

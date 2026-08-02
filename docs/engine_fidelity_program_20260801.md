@@ -46,8 +46,11 @@ Measured baseline, same 60 fresh games, seed band 17,000,000:
 | 51-patch `776fa1e1` | 98.649% | 10,667 |
 | 52-patch `2054cf3b` (C27) | 98.734% | 10,000 |
 
-**Shipped.** `cert_sweep_readout.py` emits a `fidelity` block carrying both
-framings and its era stamp:
+**Written, NOT shipped.** The `fidelity` block and its pin
+(`tests/test_cert_sweep_readout_contract.py::FidelityKpiTests`) exist only in the
+unmerged #1021; neither `in_support_rate` nor `FidelityKpiTests` is on `main`.
+`cert_sweep_readout.py` emits a `fidelity` block carrying both framings and its era
+stamp:
 
 ```json
 "fidelity": {
@@ -201,10 +204,18 @@ as results of the change that overturned them, with the reasoning that failed.
 > version admitted cross-mechanism false matches, and it landed only as #1020 after eight
 > rounds. Read the reports, not this table.
 >
-> Current measured position is `reports/c83_era_rederivation.json` and
-> `reports/c84_unattributed_anatomy.json`: 67 divergent of 15,224 boundaries at engine
-> fingerprint `e5f4c7b1`, 8 unattributed across four or more mechanisms, 36 of 67 not
-> actually explained.
+> **Current measured position, and what it depends on.** With ALL open PRs applied:
+> 67 divergent of 15,224 boundaries at engine fingerprint `e5f4c7b16fe2895a`, 8
+> unattributed across four or more mechanisms, 36 of 67 not actually explained
+> (`reports/c83_era_rederivation.json`, `reports/c84_unattributed_anatomy.json`).
+>
+> **On `main` today it is roughly 208 divergent and 16 unattributed.** Both improvements
+> are gated on unmerged work: the 67 needs #1025's tolerance changes (without them the
+> same window measures 208 — `reports/c83` `$.the_headline_finding`), and the 8 needs
+> #1021's readout narrowings (without them the same rows classify as 16 —
+> `reports/c84` `$.era.readout`). #1025 is additionally marked NOT READY: its sound
+> form recovers only 21 of the 141 rows on real data (`reports/c85`). Quote 208/16 for
+> `main`, 67/8 only for the full stack.
 
 This section is the current picture. Where it contradicts an earlier section or
 an earlier report, this section is right and the reason is given.
@@ -214,7 +225,7 @@ an earlier report, this section is right and the reason is given.
 | | value |
 | --- | --- |
 | unattributed, C32 corpus, session start | 3,882 |
-| unattributed, C32 corpus, now | 255 |
+| unattributed, C32 corpus, now | **265** (was 255 — that was C68's outcome and C68 was REVERTED; see the banner) |
 | divergence rate, C32 sweep (old build) | 0.921% |
 | divergence rate, 800 fresh games (current build) | 0.385% |
 | unattributed fraction, C32 corpus | 8.24% |
@@ -231,8 +242,10 @@ fixes then cleared whole classes from it, so what survives is enriched for rows
 that resisted those very fixes. The corpus therefore **overstates** the
 unattributed fraction — 8.24% against a fresh 4.13%, outside the fresh interval.
 
-The practical effect: the headline 255 is not the number a real sweep would
-produce. ~125 is. Anyone planning engine work off 255 is planning off a biased
+The practical effect: the headline corpus number is not what a real sweep would
+produce. Fresh measurement at the current era is 67 divergent / 8 unattributed with
+the full stack, 208/16 on main — see the banner. Anyone planning engine work off a
+corpus residue is planning off a biased
 population.
 
 A local Showdown install at `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`
@@ -266,7 +279,7 @@ caught the C69 capped_lethal repairs immediately.
 
 ## Where the residue actually is
 
-Of 255 (corpus basis; ~125 projected fresh):
+Of 265 (corpus basis; superseded by the fresh measurement in `reports/c83`/`c84`):
 
 - **142** count mismatch on every miss, dominated by one side being entirely
   empty. The engine's majority arm places its mass on nothing happening while

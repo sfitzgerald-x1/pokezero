@@ -38,5 +38,6 @@
   "engine_fingerprint": "d739faa2643fea0d55a1d5238d72e2be659e53f86eccd6b847c62cf732de89bd",
   "engine_patch_count": 54,
   "both_consumers": "verified by build_search_crate_engine.sh step 8 at d739faa2"
- }
+ },
+ "SUPERSEDED_BY_REVIEW": "The C46 Trick fix credited here was DROPPED. The gen3 Trick patch was DROPPED. Review falsified it against Showdown: it asserted Trick fails when the USER holds no item, and Showdown succeeds (attacker itemless, target holding Leftovers, gen3 custom game). The real gen<=4 rule is itemKnockedOff. The patch was a coarse proxy that fixed the 11 Knock-Off rows here but newly broke every mon itemless for any other reason -- a consumed Lum or Salac, Thief'd, an itemless set. Dropping it is what moved the engine fingerprint 625cb059 (54 patches) -> e5f4c7b1 (53); see reports/c83_era_rederivation.json. Any row clearance credited to it below is VOID."
 }
