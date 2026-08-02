@@ -115,6 +115,42 @@ results=$(echo "$tasks" | xargs -P "${JOBS:-$DEFAULT_JOBS}" -L1 bash -c 'run_one
 nfail=$(echo "$results" | grep -c '^fail ' || true)
 echo "  extracted: $(echo "$results" | grep -c '^ok ')  skipped-current: $(echo "$results" | grep -c '^skip ')  failed: $nfail"
 [ "$nfail" -gt 0 ] && echo "$results" | grep '^fail ' | sed 's/^/    /'
+
+# --- FoulPlay's own play, as a contrast lineage -------------------------------------------------
+# Same stored games, read from the OTHER seat (--measure-seat opponent), pooled across every active
+# lineage at a milestone. This is what FoulPlay itself does at that point in the grid, so the report
+# can contrast the bot's tendencies against its opponent's rather than against nothing.
+#
+# This pass used to be run by hand and silently went stale whenever new fp games landed. It is
+# driven off the same completeness-gated task list as everything else so it cannot drift again.
+# Scoped to the v3 arms on purpose: this line is read inside the v3/v4 reports as "what FoulPlay
+# does against THIS generation". Pooling the v2 arms in would silently change what the contrast
+# means and would invent milestones (800k, 1.9M) where only a v2 arm has foul-play games.
+fp_tasks=$(echo "$tasks" | awk '$4=="foulplay" && $2 ~ /^v3-/')
+fp_ms=$(echo "$fp_tasks" | awk '{print $3}' | sort -un)
+fp_built=0
+for ms in $fp_ms; do
+  dirs=$(echo "$fp_tasks" | awk -v m="$ms" '$3==m {print $1}')
+  n_lin=$(echo "$dirs" | grep -c .)
+  out="$REPORT/metrics-v3-foulplay-$ms-foulplay.json"
+  # Rebuild when any contributing set is newer than the pooled file: its composition changes as
+  # arms retire (five arms below 3M, two above), and a stale pool would misattribute the mix.
+  if [ -z "${FORCE:-}" ] && [ -f "$out" ]; then
+    newest=$(echo "$dirs" | xargs -I{} ls -t {}/events-*.jsonl.gz 2>/dev/null | xargs -r ls -t 2>/dev/null | head -1)
+    [ -n "$newest" ] && [ ! "$newest" -nt "$out" ] && continue
+  fi
+  # shellcheck disable=SC2046
+  if python3 "$SCR/trait_extract.py" --measure-seat opponent \
+       --events $(echo "$dirs" | sed 's#$#/events-*.jsonl.gz#' | tr '\n' ' ') \
+       --lineage v3-foulplay --milestone "$ms" --out "$out" >/dev/null 2>&1; then
+    fp_built=$((fp_built+1))
+    echo "  foulplay-seat $ms: pooled $n_lin lineage(s)"
+  else
+    echo "  foulplay-seat $ms: FAILED (pooling $n_lin lineage(s))"
+  fi
+done
+echo "  foulplay-seat sets rebuilt: $fp_built"
+
 # v2 report (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and the separate v3 report (empty until v3 runs
 # exist and V3_LINEAGES/ACTIVE are populated).
 python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report.html" --set v2
