@@ -1,0 +1,62 @@
+{
+ "schema": "c83-era-rederivation/1",
+ "why": "The engine fingerprint changed, so every limit adjudication is void until mechanically re-derived. This is that re-derivation, plus the first measurement of the open PR stack as a whole.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "patches": 53,
+  "supersedes": "625cb059c21a8de6 (54 patches)",
+  "what_moved_the_era": "the gen3 Trick patch was DROPPED after review falsified it against Showdown: it asserted Trick fails when the user holds no item, and Showdown succeeds. The real gen<=4 rule is itemKnockedOff."
+ },
+ "sample": {
+  "games": 200,
+  "seed_start": 19000000,
+  "boundaries_measured": 15224,
+  "transitions_diverged": 67,
+  "engine_errors": 0,
+  "repros_complete": true
+ },
+ "the_headline_finding": {
+  "claim": "The three matcher tolerance changes split into #1025 are LOAD-BEARING for 141 rows. I had described them as unrelated collateral whose deletion was a legitimate outcome. That was wrong.",
+  "without_them_diverged": 208,
+  "with_them_diverged": 67,
+  "delta_is_one_class": {
+   "roll_scaled_component": [
+    162,
+    21
+   ]
+  },
+  "mechanism": "whether a heal caps depends on the damage roll, so cap membership makes the roll-scaled list's LENGTH roll-dependent, and the comparison rejects on length before any tolerance applies. Two engine arms differing only by a legal roll then read as structurally different.",
+  "but_they_are_still_not_correct": "the same code fixes length by moving deterministic heals into the 9% magnitude window, so a 2 HP gen3 heal discrepancy -- exactly the rounding class this program exists to find -- now matches. Promote for LENGTH, compare exactly for MAGNITUDE. The two problems are separable and this code conflates them."
+ },
+ "attribution_of_all_67": {
+  "limit:roll_divergent_lethality": 24,
+  "LS_capped_lethal_shape": 12,
+  "I2_matcher_accounting": 10,
+  "UNATTRIBUTED": 8,
+  "I3_roll_inherited": 3,
+  "I5_boundary_truncation": 3,
+  "I1_cap_state_shape": 3,
+  "I4_attribution_tie": 3,
+  "limit:world_sample_drag_target": 1
+ },
+ "certification_verdict": {
+  "gate": "zero unattributed",
+  "measured": 8,
+  "result": "FAILS",
+  "single_shape": "roll_scaled_component -- structural component-count mismatch without a sibling engine arm carrying the observed components"
+ },
+ "honest_reading": {
+  "unattributed": 8,
+  "candidate_not_finding": 28,
+  "documented_limits": 25,
+  "evidence_backed_families": 6,
+  "not_actually_explained": 36,
+  "fraction": 0.537,
+  "note": "the gate counts 8 because it treats a family LABEL as an explanation. reports/c68 buckets LS_capped_lethal_shape, I2, I3 and I5 as candidate-not-finding -- no decisive signature."
+ },
+ "what_the_era_change_did_to_the_residue": {
+  "answer": "nothing measurable. The attribution is row-for-row identical to C82 at the previous era: same 8 unattributed, same single shape, same 28 candidate-not-finding, same 25 limits.",
+  "interpretation": "the work in this PR stack was correctness work -- soundness of the cascade predicate, regression pins, provenance bindings, a falsified engine patch removed. None of it was residue reduction, and the measurement says so plainly rather than crediting it with an improvement it did not produce."
+ },
+ "reproduce": "merge the open splits, scripts/build_search_crate_engine.sh, then scripts/engine_transition_differential.py --games 200 --seed-start 19000000 --keep-repro 100000 --repros-per-game 100000"
+}
