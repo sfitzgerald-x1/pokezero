@@ -1,0 +1,45 @@
+{
+ "schema": "c87-source-level-cause/1",
+ "shape": "crit arm absent from the engine's branch support",
+ "rows": 3,
+ "identities": [
+  "19000038/66",
+  "19000141/35",
+  "19000175/103"
+ ],
+ "signature": "the observation carries |-crit| and its magnitude is ~2x the LARGEST any engine arm offers (measured ratios 2.13, 2.19, 2.05; a gen3 crit is exactly 2x)",
+ "method": "source comparison, per the current program goal. Not signature profiling.",
+ "the_reference": {
+  "file": "data/moves.ts, sleeptalk.onHit",
+  "behaviour": "Sleep Talk picks a legal callee and runs `this.actions.useMove(randomMove, pokemon)` -- the ordinary move-execution path, which performs the normal critical-hit roll. gen3 has no sleeptalk override in data/mods/gen3/moves.ts, so base applies. A Sleep-Talk-called Ice Beam can crit at the usual 1/16."
+ },
+ "the_engine": {
+  "file": "third_party/poke-engine-src/src/gen3/generate_instructions.rs",
+  "site": "the SLEEPTALK arm of generate_instructions_from_move (~line 2555)",
+  "behaviour": "for each callee it calls generate_instructions_from_move(..., false) -- the 7th parameter is branch_on_damage, hardcoded false. With branch_on_damage false the damage block at ~2830 takes its final `else { regular_damage = avg_damage_dealt }`, which emits NO crit arm. Both the Case A (straddling KO) and Case B (non-lethal crit) partitions are gated on branch_on_damage.",
+  "consequence": "a Sleep-Talk-called critical hit is REACHABLE IN THE SIMULATOR AND ABSENT FROM THE ENGINE'S SUPPORT."
+ },
+ "worked_example": {
+  "row": "19000038/66",
+  "protocol": "|move|p2a: Articuno|Sleep Talk -> |move|p2a: Articuno|Ice Beam|p1a: Seaking|[from] Sleep Talk, |-crit|, |-damage|p1a: Seaking|59/290",
+  "observed_damage": 98,
+  "engine_arms_offered": [
+   -46,
+   -46,
+   -23
+  ],
+  "arithmetic": "98 = 2 x 49; 46 is the 0.925 average of the non-crit roll. The crit arm at ~92 is simply not enumerated."
+ },
+ "disposition": {
+  "class": "ENGINE FIX",
+  "why_not_a_limit": "this is precisely the fidelity objective's failure mode -- engine support must contain every reachable sim transition, and this transition is reachable and absent. It is not a branch-set-versus-sample artifact: the engine enumerates a branch set here and the crit member is missing from it.",
+  "why_not_a_matcher_fix": "the matcher is correct to reject. There is no arm to match against.",
+  "the_fix": "thread branch_on_damage through to the Sleep Talk recursive call instead of passing false."
+ },
+ "pre_registered_prediction": {
+  "falsifiable": "these 3 rows match after the change, and the unattributed count on the 200-game window falls from 8 to 5.",
+  "invariants": "no currently-matched row may become divergent; no registered family may grow.",
+  "cost_to_measure_BEFORE_shipping": "Sleep Talk already fans out over N callees at 1/N mass each. Adding crit branching multiplies the callee subtree's branch count. The hardcoded false is plausibly a deliberate branch-count control, though it carries no comment saying so. Measure branch count and search throughput, and run the tactics suite, before this lands.",
+  "not_yet_measured": true
+ }
+}
