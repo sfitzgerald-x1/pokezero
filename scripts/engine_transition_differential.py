@@ -855,7 +855,14 @@ def _cascade_base(source: str) -> str:
 
 
 def _roll_cascade_equivalent(
-    observed, engine, *, support, target_side: str, pre_legal: set[int] | None
+    observed,
+    engine,
+    *,
+    support,
+    target_side: str,
+    pre_legal: set[int] | None,
+    observed_all=None,
+    engine_all=None,
 ) -> bool:
     """Whether a component-COUNT difference is caused by a legal roll difference.
 
@@ -1024,7 +1031,19 @@ def _roll_cascade_equivalent(
     # PR body called out -- and refutes its stated reason for leaving it open,
     # since event_index is already present, already monotonic (enumerate over
     # the protocol lines) and already used by constraint 4.
-    for side in (observed, engine):
+    # Walk the FULL per-slot component list, not the roll-scaled subset that
+    # reaches this predicate. Review round seven: `observed`/`engine` here are
+    # obs_rolled/eng_rolled, so an untagged Leftovers tick, a sethp, or a
+    # burn/poison/sandstorm tick is INVISIBLE to the running total -- and those
+    # move HP. A +18 Leftovers before a cap makes the true deficit 18 smaller
+    # than the subset suggests, so the subset walk false-rejected an ordinary
+    # realizable cascade; exact-bucket DAMAGE makes it under-trigger, so it was
+    # wrong in both directions. Falling back to the subset keeps direct callers
+    # (and the tests) working, but the real path threads the whole list.
+    for side in (
+        observed_all if observed_all is not None else observed,
+        engine_all if engine_all is not None else engine,
+    ):
         running = 0
         for component in sorted(side, key=lambda c: c.event_index):
             if component.source.endswith("_to_full") and running < 0:
@@ -1114,6 +1133,8 @@ def roll_component_events_agree(
     support: BranchLegalRollSupport | None,
     target_side: str,
     pre_legal: set[int] | None,
+    observed_all: Sequence[DamageComponent] | None = None,
+    engine_all: Sequence[DamageComponent] | None = None,
 ) -> bool:
     """Compare ordered roll components with per-event legal support.
 
@@ -1126,7 +1147,13 @@ def roll_component_events_agree(
 
     if len(observed) != len(engine):
         return _roll_cascade_equivalent(
-            observed, engine, support=support, target_side=target_side, pre_legal=pre_legal
+            observed,
+            engine,
+            support=support,
+            target_side=target_side,
+            pre_legal=pre_legal,
+            observed_all=observed_all,
+            engine_all=engine_all,
         )
     slot_scale = max(
         _roll_damage_scale([(c.source, c.delta) for c in observed]),
@@ -1757,6 +1784,8 @@ def evaluate_boundary_strict(
                     support=branch_support,
                     target_side=label,
                     pre_legal=pre_legal,
+                    observed_all=observed_components[slot],
+                    engine_all=engine_components[label],
                 ):
                     reason = (
                         f"{slot} roll-scaled components differ: "

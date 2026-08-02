@@ -305,3 +305,87 @@ class PhysicalFloorTests(unittest.TestCase):
             comp("itemleftovers_to_full", 6, 3),
         ]
         self.assertTrue(cascade(observed, engine))
+
+
+class PrefixWalkScopeTests(unittest.TestCase):
+    """The prefix floor must walk ALL HP events, not the roll-scaled subset.
+
+    Round seven: the first version of the floor summed only the components that
+    reach the predicate (obs_rolled / eng_rolled). Exact-bucket components --
+    an untagged Leftovers tick, sethp, burn/poison/sandstorm -- move HP but are
+    not in that list, so `running` was not the real running total. It
+    false-rejected a realizable cascade, the same over-tightening class that
+    regressed two corpus rows in an earlier round.
+    """
+
+    # maxhp 300, start 290/300, damage base 155 (rolls 94 -> 145, 100 -> 155),
+    # Leftovers floor(300/16) = 18, Wish nominal 140, Leech Seed 30. Both sides
+    # end at exactly 300/300.
+    OBS_ALL = [
+        comp("", -145, 0),
+        comp("itemleftovers", 18, 1),
+        comp("movewish_to_full", 137, 2),
+    ]
+    ENG_ALL = [
+        comp("", -155, 0),
+        comp("itemleftovers", 18, 1),
+        comp("movewish", 140, 2),
+        comp("leechseed_to_full", 7, 3),
+    ]
+    OBS_ROLLED = [comp("", -145, 0), comp("movewish_to_full", 137, 2)]
+    ENG_ROLLED = [
+        comp("", -155, 0),
+        comp("movewish", 140, 2),
+        comp("leechseed_to_full", 7, 3),
+    ]
+
+    def test_an_exact_bucket_heal_is_counted_in_the_running_total(self) -> None:
+        """The +18 Leftovers makes the true deficit at the cap 137, not 145."""
+
+        self.assertTrue(
+            D._roll_cascade_equivalent(
+                self.OBS_ROLLED,
+                self.ENG_ROLLED,
+                support=None,
+                target_side="side_one",
+                pre_legal=None,
+                observed_all=self.OBS_ALL,
+                engine_all=self.ENG_ALL,
+            )
+        )
+
+    def test_the_subset_walk_is_what_got_this_wrong(self) -> None:
+        """Guard against silently dropping the threading: without the full
+        lists the same pair is rejected, so a caller that forgets to pass them
+        is measurably more conservative rather than accidentally identical."""
+
+        self.assertFalse(
+            D._roll_cascade_equivalent(
+                self.OBS_ROLLED,
+                self.ENG_ROLLED,
+                support=None,
+                target_side="side_one",
+                pre_legal=None,
+            )
+        )
+
+    def test_the_floor_still_rejects_an_impossible_cap_with_full_lists(self) -> None:
+        """Widening the walk must not cost soundness."""
+
+        observed = [comp("", -200, 0), comp("movewish_to_full", 150, 1)]
+        engine = [
+            comp("", -212, 0),
+            comp("movewish", 160, 1),
+            comp("itemleftovers_to_full", 2, 2),
+        ]
+        self.assertFalse(
+            D._roll_cascade_equivalent(
+                observed,
+                engine,
+                support=None,
+                target_side="side_one",
+                pre_legal=None,
+                observed_all=observed,
+                engine_all=engine,
+            )
+        )
