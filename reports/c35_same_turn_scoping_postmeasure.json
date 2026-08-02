@@ -1,0 +1,21 @@
+{
+ "schema": "c35-same-turn-scoping-postmeasure/1",
+ "prediction": "reports/c35_same_turn_scoping_premeasure.json",
+ "prediction_outcome": "CONFIRMED on counts AND on identities",
+ "counts": {
+  "same_turn_stat_event_gap": "37 -> 5 (predicted 5)",
+  "total_unattributed": "515 -> 485 (predicted 485)",
+  "I2_matcher_accounting": "379 -> 403 (predicted 403)",
+  "structural_component_count_without_supported_sibling": "433 -> 435 (predicted 435)"
+ },
+ "identity_check": "32/32 named rows moved to their named family; 5/5 named rows stayed. This is the check C29 failed at matching counts.",
+ "tests": "59 tests pass across test_cert_sweep_readout_contract, test_crit_kill_split_patch, test_cert_contract_registration",
+ "new_readout_sha256": "b10329f8d79a08fe01f10c9e1828e146b0a9a2bc6318aace742872d51ac2b72b",
+ "era_rederivation": {
+  "done": "reports/c35_family_bucket_audit.json",
+  "note": "the audit was mechanically re-derived against the new readout hash, not carried forward. same_turn_stat_event_gap drops 37 -> 5 and stays candidate-not-finding; no adjudication was overturned by the era change.",
+  "still_open": "truant_loaf_phase_drift, 9 rows -- a predicted-zero counter with fresh nonzero evidence. Unchanged by C35 and still the one OPEN family."
+ },
+ "does_not_reach_a_pass": "485 unattributed against a required zero. Remaining: 435 structural (engine side longer -- inverts C34's shape), 36 unattributed_generic, 9 Truant, 5 same_turn. A PASS also needs the coverage shortfall (0.9587 vs 0.97) and the family-bound/class-set recalibration, neither of which C35 touches.",
+ "what_this_cycle_actually_bought": "One refutation and one fix. The refutation is worth as much: the crit reading would have moved 37 rows into the engine-gap bucket and pointed the next fix at the engine, which is not where the defect was."
+}

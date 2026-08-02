@@ -1,0 +1,47 @@
+{
+ "schema": "c28-surviving-shape-adjudication/1",
+ "population": "60 fresh games, seed band 17,000,000, engine 2054cf3b, readout 52981731",
+ "shapes": {
+  "cap_label_bucket_migration": {
+   "rows": [
+    "17000013/12",
+    "17000016/38",
+    "17000026/41",
+    "17000025/32"
+   ],
+   "bucket": "instrument-artifact",
+   "mechanism": "_split_component_events routes a component into the roll-scaled bucket iff its source ends with _to_full. Whether a heal caps depends on the damage roll, so the roll-scaled list's LENGTH is roll-dependent, and roll_component_events_agree rejects on length before applying any tolerance. 17000013/12 and 17000026/41 have the observed side capped and the engine side not; 17000016/38 is the mirror. 17000025/32 has a sibling arm carrying the labels at a different legal roll, blocked by the sibling bar that C28 correctly left strict.",
+   "closure": "fix - a differential-side change, still owed",
+   "note": "This is the mechanism I originally called the primary blocker. It is real, and it was NOT primary: 4 of 60 games' worth of rows, against 22 for the rule's scoping. Right mechanism, wrong share."
+  },
+  "cross_turn_threshold": {
+   "rows": [
+    "17000037/55"
+   ],
+   "bucket": "comparison-limit",
+   "mechanism": "A crit left Gyarados below a quarter of its maximum, so the Substitute it chose on a LATER turn failed. Observed carries one damage component; the engine's arms carry the hit plus the Substitute cost. No partition of THIS transition's rolls can capture a threshold whose significance depends on a future choice.",
+   "closure": "evidence-backed limit - era-stamped at 2054cf3b, re-derive on fingerprint change"
+  },
+  "empty_engine_rolled_list": {
+   "rows": [
+    "17000039/55"
+   ],
+   "bucket": "candidate-not-finding",
+   "mechanism": "p2 used Rest. Observed carries damage -172 and heal_to_full +172, netting zero; the engine's 100% and 75% arms carry NO roll-scaled components at all, while a 23.44% arm carries -84/+84. Whether the engine is dropping the Rest damage-and-heal pair or decomposing it outside the rolled bucket is not established within this shape's budget.",
+   "closure": "documented follow-up"
+  },
+  "exact_bucket_leftovers_on_thin_arms": {
+   "rows": [
+    "17000045/123"
+   ],
+   "bucket": "candidate-not-finding",
+   "mechanism": "An exact-bucket difference -- observed carries itemleftovers 13, the engine none -- surfacing across nine thin arms (1.27%, 3.57%, 0.24%). Survives majority scoping because the majority arm is itself thin, so no arm carries interpretive weight. Needs the mass-aware treatment that Appendix X applies to walk verdicts, which this rule does not have.",
+   "closure": "documented follow-up"
+  }
+ },
+ "charter_correction": {
+  "problem": "The charter claims an instrument fix cannot move the fidelity KPI, and cites C28 as proof. That holds only for CLASSIFIER changes. The KPI is transitions_diverged over boundaries_measured, both computed by the DIFFERENTIAL -- so a differential-side instrument fix, which the capped-heal work is, moves the KPI directly.",
+  "consequence": "Unqualified, the KPI would let a matcher relaxation read as a fidelity gain -- precisely the dashboard-versus-reality failure the bucket scheme exists to prevent.",
+  "fix": "The KPI is comparable only within a fixed MATCHER era. Every KPI reading is stamped with both the engine fingerprint and the differential's source hash, and a reading may only be compared against another sharing the differential hash. A matcher change opens a new KPI era and requires re-baselining the prior engine on the new matcher before any delta is claimed."
+ }
+}

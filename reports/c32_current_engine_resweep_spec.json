@@ -1,0 +1,557 @@
+{
+  "spec_version": "engine-cert-sweep-c32/1 (frozen 53-patch pre-registration)",
+  "registered_before_launch": true,
+  "requires_execution_contract": true,
+  "launch_registration": {
+    "fresh_measurements_inspected_before_registration": 0,
+    "coordinator_go": true,
+    "engine_patch_count": 53,
+    "public_source_parent_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
+    "public_source_parent_note": "This immutable build-source commit carries the 53-patch engine after C27 and C31, and the certification consumers after C28, C29, C30 and the fidelity KPI. It contains no C32 contract, calibration or attestation, so this later registration pins it without circular Git metadata. It supersedes C26, which was registered and deliberately never executed.",
+    "calibration_evidence": "reports/c32_current_engine_calibration.json",
+    "supersedes": "C26 (reports/c26_current_engine_resweep_spec.json), registered_never_executed"
+  },
+  "certification_gates": {
+    "expected_shards": 8,
+    "expected_games": 10000,
+    "minimum_boundaries_full_round": 700000,
+    "seed_blocks": [
+      {
+        "start": 18000000,
+        "games": 1250
+      },
+      {
+        "start": 18100000,
+        "games": 1250
+      },
+      {
+        "start": 18200000,
+        "games": 1250
+      },
+      {
+        "start": 18300000,
+        "games": 1250
+      },
+      {
+        "start": 18400000,
+        "games": 1250
+      },
+      {
+        "start": 18500000,
+        "games": 1250
+      },
+      {
+        "start": 18600000,
+        "games": 1250
+      },
+      {
+        "start": 18700000,
+        "games": 1250
+      }
+    ],
+    "minimum_coverage_measured_fraction": 0.97,
+    "required_build_check": "gated",
+    "required_matcher": "strict",
+    "required_repros_per_game": 40,
+    "required_keep_repro": 50000,
+    "required_behavioral_probe_passes": 9,
+    "required_source_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
+    "required_image_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
+    "required_engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+    "required_readout_sha256": "72793727a6dc5a8aa45c421b6d42e4cad7d4532eb8e8945ffec18a116e7e2f10",
+    "required_execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02"
+  },
+  "seed_reservation": {
+    "reservation_id": "engine-cert-c32-20260801",
+    "note": "Eight fresh 1,250-game blocks from 18,000,000. Disjoint from every prior band: the highest previously declared is C26's 16,700,000-16,701,249, and the C26 diagnostic probe consumed 17,000,000-17,000,999 (reserved outward to 17,000,999). C26's blocks stay burned rather than recycled even though its sweep never ran."
+  },
+  "gated_on": [
+    "SATISFIED: the 53-patch engine, reader, differential and manifest producer are pinned by the build-source lifecycle record and re-verified from tracked bytes at registration time.",
+    "SATISFIED: C32's own archival calibration was produced before registration by re-reading and re-attributing the retained archive on this build. No fresh measurement was inspected.",
+    "SATISFIED: every family the classifier can emit is pre-registered with a bound, and all seven predicted-zero exclusion counters are registered at zero.",
+    "EVIDENCE: a 60-game diagnostic probe on the retired 17,000,000 band reached ZERO unattributed rows on this build (reports/c31_substitute_threshold_postmeasure.json). That is diagnosis, not certification: it was read after C26's registration and is a 167th of the registered population. The fresh 10,000-game readout remains the binding result.",
+    "DECLARED RISK: the archival reread on this build skips 5 lossily stored rows, up from 1 on the 52-patch build. Reconstructibility of stored payloads fell slightly; those rows are recorded as skipped and never credited as matches.",
+    "SATISFIED: the execution contract binds source and image commits, engine fingerprint, reader and manifest-producer hashes, seed blocks, coverage, probes, matcher mode, and full repro retention.",
+    "SATISFIED: coordinator go is recorded before launch."
+  ],
+  "execution": "Eight resumable CPU-only shards of 1,250 games from the registered blocks. Each shard rebuilds the wheel and the search crate, passes 9/9 behavioral probes, uses the strict matcher, writes resumable per-game checkpoints, retains 40 repros per game with a 50,000-row capacity so a fully divergent shard is still complete, and writes its completion marker last. A persistent aggregate job validates all provenance, including the selected seed reservation, before producing the binding readout.",
+  "acceptance_criterion": {
+    "binding": "PASS only with zero unattributed rows, zero engine errors, complete repro retention, every registered family at or below its upper bound, all seven predicted-zero counters at zero, at least 700,000 full-round boundaries with measured coverage at least 0.97, and exactly 10,000 distinct games from the registered seed blocks.",
+    "failure": "Any unattributed row, engine error, missing or duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, nonzero predicted-zero counter, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run, and do not amend this contract in place.",
+    "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
+  },
+  "pre_registered_family_rate_table": {
+    "note": "Calibrated by C32's own archival recalibration (reports/c32_current_engine_calibration.json): the retained 3,821-row archive re-read on the frozen 53-patch build over 791757 measured boundaries, re-attributed from the current reread's misses, with clearances and the lossily stored rows removed from the counts. Only upper counts are binding; lower counts are advisory and zero except for the two long-standing comparison limits.",
+    "calibration_boundaries": 791757,
+    "calibration_artifact": "reports/c32_current_engine_calibration.json",
+    "documented_families": {
+      "I1_cap_state_shape": {
+        "wilson95": [
+          0.0,
+          56.8
+        ]
+      },
+      "I2_matcher_accounting": {
+        "wilson95": [
+          0.0,
+          116.1
+        ]
+      },
+      "I3_roll_inherited": {
+        "wilson95": [
+          0.0,
+          266.0
+        ]
+      },
+      "I4_attribution_tie": {
+        "wilson95": [
+          0.0,
+          179.2
+        ]
+      },
+      "I5_boundary_truncation": {
+        "wilson95": [
+          0.0,
+          112.8
+        ]
+      },
+      "I6_sleeptalk_callee_union": {
+        "wilson95": [
+          0.0,
+          70.5
+        ]
+      },
+      "LS_capped_lethal_shape": {
+        "wilson95": [
+          0.0,
+          483.1
+        ]
+      },
+      "LS_confusion_fan": {
+        "wilson95": [
+          0.0,
+          7.3
+        ]
+      },
+      "LS_crit_arm_pairing_echo": {
+        "wilson95": [
+          0.0,
+          15.8
+        ]
+      },
+      "LS_structural_arm_echo": {
+        "wilson95": [
+          0.0,
+          3.8
+        ]
+      },
+      "limit:roll_divergent_lethality": {
+        "wilson95": [
+          1019.5,
+          1148.4
+        ]
+      },
+      "limit:world_sample_drag_target": {
+        "wilson95": [
+          240.6,
+          305.2
+        ]
+      },
+      "limit:world_substitute_health_unknown": {
+        "upper_full_round_rate": 0.0001,
+        "upper_rate_basis": "pre_registered_risk_budget",
+        "risk_budget_rationale": "The retained archive predates the archive-wide Substitute-health counter, so C26 registers a risk budget rather than a measured bound. The nearest anchor the frozen 51-patch build produces on the same archive is 13 retained recoil-vs-Substitute identities over 810125 full-round boundaries (Wilson-95 upper rate 0.0000274574). The registered ceiling of 0.0001 per full-round boundary is 3.64 times that upper anchor and permits at most one unknown-Substitute boundary per 10,000 full rounds."
+      }
+    },
+    "new_mechanisms_post_fix": {
+      "absorb_through_protect_or_miss": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "absorb_through_protect_or_miss",
+        "archival_residue_on_frozen_build": 0
+      },
+      "incapacitated_arm_pricing": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "incapacitated_arm_pricing",
+        "archival_residue_on_frozen_build": 6
+      },
+      "recharge_turn_residual_gap": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "recharge_turn_residual_gap",
+        "archival_residue_on_frozen_build": 1
+      },
+      "same_turn_stat_event_gap": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "same_turn_stat_event_gap",
+        "archival_residue_on_frozen_build": 18
+      },
+      "structural_component_count_without_supported_sibling": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "structural_component_count_without_supported_sibling",
+        "archival_residue_on_frozen_build": 252
+      },
+      "truant_loaf_phase_drift": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "truant_loaf_phase_drift",
+        "archival_residue_on_frozen_build": 48
+      },
+      "unattributed_generic": {
+        "predicted_next": 0,
+        "classifier_outcome": "UNATTRIBUTED",
+        "exclusion_counter": "unattributed_generic",
+        "archival_residue_on_frozen_build": 26
+      }
+    }
+  },
+  "predicted_class_rates_10k": {
+    "component_extra_in_engine:brn": {
+      "expected_10k": 4,
+      "wilson95_count_10k": [
+        0.0,
+        10.3
+      ]
+    },
+    "component_extra_in_engine:itemleftovers": {
+      "expected_10k": 75,
+      "wilson95_count_10k": [
+        0.0,
+        94.0
+      ]
+    },
+    "component_extra_in_engine:itemleftovers,movepainsplit": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_extra_in_engine:itemleftovers,psn": {
+      "expected_10k": 9,
+      "wilson95_count_10k": [
+        0.0,
+        17.1
+      ]
+    },
+    "component_extra_in_engine:itemleftovers,psn,sandstorm": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_extra_in_engine:itemleftovers,sandstorm": {
+      "expected_10k": 9,
+      "wilson95_count_10k": [
+        0.0,
+        17.1
+      ]
+    },
+    "component_extra_in_engine:leechseed": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_extra_in_engine:psn": {
+      "expected_10k": 7,
+      "wilson95_count_10k": [
+        0.0,
+        14.5
+      ]
+    },
+    "component_extra_in_engine:spikes": {
+      "expected_10k": 15,
+      "wilson95_count_10k": [
+        0.0,
+        24.8
+      ]
+    },
+    "component_magnitude:abilityliquidooze": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_magnitude:heal": {
+      "expected_10k": 14,
+      "wilson95_count_10k": [
+        0.0,
+        23.5
+      ]
+    },
+    "component_magnitude:movepainsplit": {
+      "expected_10k": 212,
+      "wilson95_count_10k": [
+        0.0,
+        242.5
+      ]
+    },
+    "component_magnitude:psn": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:brn,movepainsplit|movepainsplit": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:heal,itemleftovers,psn|leechseed": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:heal,itemleftovers|leechseed": {
+      "expected_10k": 5,
+      "wilson95_count_10k": [
+        0.0,
+        11.7
+      ]
+    },
+    "component_mismatch:heal|leechseed": {
+      "expected_10k": 39,
+      "wilson95_count_10k": [
+        0.0,
+        53.3
+      ]
+    },
+    "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_mismatch:itemleftovers,psn|leechseed": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_mismatch:itemleftovers|leechseed": {
+      "expected_10k": 45,
+      "wilson95_count_10k": [
+        0.0,
+        60.2
+      ]
+    },
+    "component_mismatch:leechseed|brn": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_mismatch:leechseed|psn": {
+      "expected_10k": 7,
+      "wilson95_count_10k": [
+        0.0,
+        14.5
+      ]
+    },
+    "component_mismatch:movepainsplit,psn|movepainsplit": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:partialtrap|brn": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_mismatch:partialtrap|psn": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_mismatch:sandstorm|psn": {
+      "expected_10k": 5,
+      "wilson95_count_10k": [
+        0.0,
+        11.7
+      ]
+    },
+    "component_missing_in_engine:abilityliquidooze": {
+      "expected_10k": 8,
+      "wilson95_count_10k": [
+        0.0,
+        15.8
+      ]
+    },
+    "component_missing_in_engine:abilityliquidooze,itemleftovers": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_missing_in_engine:brn": {
+      "expected_10k": 6,
+      "wilson95_count_10k": [
+        0.0,
+        13.1
+      ]
+    },
+    "component_missing_in_engine:brn,heal": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_missing_in_engine:brn,itemleftovers": {
+      "expected_10k": 5,
+      "wilson95_count_10k": [
+        0.0,
+        11.7
+      ]
+    },
+    "component_missing_in_engine:brn,itemleftovers,sandstorm": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_missing_in_engine:heal": {
+      "expected_10k": 11,
+      "wilson95_count_10k": [
+        0.0,
+        19.7
+      ]
+    },
+    "component_missing_in_engine:heal,itemleftovers": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_missing_in_engine:heal,itemleftovers,psn": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_missing_in_engine:itemleftovers": {
+      "expected_10k": 220,
+      "wilson95_count_10k": [
+        0.0,
+        251.1
+      ]
+    },
+    "component_missing_in_engine:itemleftovers,leechseed": {
+      "expected_10k": 2,
+      "wilson95_count_10k": [
+        0.0,
+        7.3
+      ]
+    },
+    "component_missing_in_engine:itemleftovers,movepainsplit": {
+      "expected_10k": 1,
+      "wilson95_count_10k": [
+        0.0,
+        5.7
+      ]
+    },
+    "component_missing_in_engine:itemleftovers,psn": {
+      "expected_10k": 79,
+      "wilson95_count_10k": [
+        0.0,
+        98.4
+      ]
+    },
+    "component_missing_in_engine:itemleftovers,psn,sandstorm": {
+      "expected_10k": 3,
+      "wilson95_count_10k": [
+        0.0,
+        8.8
+      ]
+    },
+    "component_missing_in_engine:itemleftovers,sandstorm": {
+      "expected_10k": 31,
+      "wilson95_count_10k": [
+        0.0,
+        44.0
+      ]
+    },
+    "component_missing_in_engine:leechseed": {
+      "expected_10k": 26,
+      "wilson95_count_10k": [
+        0.0,
+        38.1
+      ]
+    },
+    "component_missing_in_engine:movepainsplit": {
+      "expected_10k": 17,
+      "wilson95_count_10k": [
+        0.0,
+        27.2
+      ]
+    },
+    "component_missing_in_engine:psn": {
+      "expected_10k": 73,
+      "wilson95_count_10k": [
+        0.0,
+        91.8
+      ]
+    },
+    "component_missing_in_engine:sandstorm": {
+      "expected_10k": 20,
+      "wilson95_count_10k": [
+        0.0,
+        30.9
+      ]
+    },
+    "limit:roll_divergent_lethality": {
+      "expected_10k": 1082,
+      "wilson95_count_10k": [
+        1019.5,
+        1148.4
+      ]
+    },
+    "limit:world_sample_drag_target": {
+      "expected_10k": 271,
+      "wilson95_count_10k": [
+        240.6,
+        305.2
+      ]
+    },
+    "roll_scaled_component": {
+      "expected_10k": 507,
+      "wilson95_count_10k": [
+        0.0,
+        553.1
+      ]
+    }
+  },
+  "scope_statement": "This sweep globally bounds new rows across 10,000 fresh games on the frozen 53-patch source. Any mechanism this engine regresses or newly exposes surfaces as UNATTRIBUTED or as an out-of-contract family or rate and fails certification."
+}

@@ -1,0 +1,39 @@
+{
+ "schema": "c27-c31-branch-cost/1",
+ "purpose": "Task 10's cost question: the differential's 2.88x wall time is its own business; the search's cost is a different number, and the FoulPlay-power preflight timing math depends on it.",
+ "method": "Branch counts from generate_instructions on IDENTICAL boundary states -- the 51-patch pre-C27 branch_count recorded in reports/c26_structural_probe_report.json against the 53-patch engine now. No rebuild of the old engine required, so the comparison is exact rather than timing noise.",
+ "measured": {
+  "boundaries": 60,
+  "median": {
+   "before": 2,
+   "after": 3
+  },
+  "mean": {
+   "before": 3.5,
+   "after": 4.4,
+   "ratio": 1.26
+  },
+  "max": {
+   "before": 15,
+   "after": 64
+  },
+  "boundaries_that_grew": "8 of 60",
+  "median_ratio": 1.0,
+  "distribution_after": {
+   "1": 4,
+   "2": 25,
+   "3": 7,
+   "4": 13,
+   "5": 3,
+   "6": 2,
+   "8": 1,
+   "9": 2,
+   "10": 2,
+   "64": 1
+  }
+ },
+ "reading": "Cost is concentrated, not diffuse: 52 of 60 boundaries are unchanged, the median does not move, the mean rises 26%, and exactly one boundary reaches 64 -- the Substitute case C31 fixed.",
+ "limitation": "This sample is BIASED and cannot answer the question on its own. It is the divergent rows only, so it says nothing about how often the 16-roll preservation path fires across ALL boundaries -- and that path triggers whenever the defender has a pending Substitute, which in 60 games is far more often than this sample's single instance. The differential's 2.88x wall time over 4,738 boundaries is the hint that it fires considerably more than this suggests, and 26% mean branch growth does not explain 188% more wall time.",
+ "conclusion": "The 2-way partition follow-up stays indicated rather than settled: a Substitute boundary paying 64 arms where 2 would be exact is the wrong trade on a staple move. Closing it properly needs an all-boundary instrument, which this measurement is not.",
+ "does_not_gate": "The C32 sweep is unaffected: the differential's cost is wall time on CPU shards, not correctness, and the shards are resumable."
+}

@@ -1,0 +1,19 @@
+{
+ "schema": "c62-per-pokemon-switch-judgement/1",
+ "uses": "scripts/switch_safe_hp.py, added so this comparison stops being redone wrongly",
+ "population": "the 105 residue rows that no per-slot HP comparison in this program could judge",
+ "method": "compare the IDENTIFIED Pokemon rather than the slot: parse the sim's switch lines for the incoming species and its HP, then require an included engine branch whose post-state has the same species at the same HP on those slots -- AND whose non-switched slot HP also agrees, via slot_hp_comparable so the check is only applied where it is valid.",
+ "result": {
+  "engine reproduces the incoming Pokemon exactly, species and HP, on both slots": 35,
+  "same Pokemon, different HP": 70,
+  "engine switched in a DIFFERENT Pokemon": 0
+ },
+ "a_partial_check_i_caught_before_publishing": "My first pass verified only the slots that carried a switch line and reported 50. That leaves the other half of the boundary unverified -- the same partial-check error as C58's per-slot comparison, in a new place. Requiring the non-switched slot to agree as well drops it to 35. The 15-row difference is rows where the engine got the switch right and the other slot wrong.",
+ "what_the_35_are": "the engine switches in the right Pokemon at the right HP and gets the other slot right too, and the row is still reported divergent. The disagreement is therefore in the component decomposition rather than the outcome -- the same shape as the non-switch instrument candidates, now measurable for the first time on this third of the residue.",
+ "what_the_70_are": "the right Pokemon is on the field at the wrong HP. That is a genuine magnitude disagreement, not a presentation one, and it is not a candidate for instrument work.",
+ "no_species_mismatches": "zero rows have the engine switching in a different Pokemon. Whatever else diverges, the engine's switch selection agrees with the simulator's throughout this population -- which retires drag/switch-target selection as a hypothesis for these rows.",
+ "residue_now_judged_end_to_end": "341 rows: 236 judged by per-slot comparison in earlier cycles and 105 judged here. No part of the residue is now unmeasurable for want of a valid comparison.",
+ "does_not_reach_a_pass": "no code changed in the matcher or engine; unattributed stays at 341",
+ "CORRECTED": "Both this file and C62 rest on a measurement bug I found while dumping the event stream for s18000815/100. I parsed the incoming Pokemon's HP from the SWITCH LINE -- its HP at the moment it entered, 266/266 -- and compared the engine's FINAL post-state against it. The correct target is the boundary-end HP, 130. So 'engine reproduces the incoming Pokemon exactly' actually meant 'the engine's final HP equals the sim's HP at switch time', which is only true when nothing happened to the mon afterwards.\n\nRe-measured with the end-of-boundary HP: 23 rows reproduce exactly, not 35. The 29 'render omission' rows in C63 are derived from the same broken set and are WITHDRAWN.\n\nWhat the dump actually showed for s18000815/100: the sim rolled a CRIT on a Sleep-Talk-called Hidden Power (damage to 114, then Leftovers to 130). The engine enumerates a non-crit callee at 33.3% that renders its damage line correctly, and a 40% branch that is attribution-unsafe and renders nothing. That is not an unrendered outcome the engine modelled -- it is the engine not enumerating the crit arm of the callee, which is the C51 question, not the C55 one.",
+ "BASELINE_NOTE": "Baseline note: the 341 this file reasons from is C57's outcome, and C57 was REVERTED -- it never landed (see reports/c57). Figures descending from 341 inherit that error."
+}

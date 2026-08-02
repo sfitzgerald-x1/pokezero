@@ -1,0 +1,20 @@
+{
+ "schema": "c70-matched-population-integrity-check/1",
+ "why": "C69 found the shipped capped_lethal test accepts 45.6% of CROSSED (unrelated) component pairs. If a check that weak is load-bearing, it may be producing false MATCHES -- meaning the residue is under-reported and the 3,882 -> 255 figure I have been reporting is inflated. That is a question about the integrity of my own headline, so it needed answering.",
+ "a_probe_that_was_not_what_i_called_it": "my first attempt replaced the one-sided test with a roll-window test and called it a tightening. It is not: the window ACCEPTS obs > eng, which the one-sided form rejects. Matched went UP, 4,156 -> 4,708, which is how I noticed. A probe meant to measure a risk cannot itself change the behaviour in the other direction.",
+ "the_pure_tightening": {
+  "form": "keep the one-sided ceiling and ADD a floor, so it can only ever accept fewer pairs",
+  "result": {
+   "matched": "4,156 -> 4,152",
+   "rows that previously matched and now diverge": 4,
+   "unattributed": "255 -> 254"
+  },
+  "verdict": "the matched population does NOT rest on this weakness. 4 rows of 4,156, or 0.1%."
+ },
+ "why_the_45_percent_did_not_translate": "a crossed-pair rate measures discriminating power on UNRELATED inputs. Real (observed, engine) pairs come from the same boundary and are correlated by construction -- same mon, same remaining HP, same preceding damage -- so the space of values the test must separate is far narrower than the crossed distribution suggests. The 45.6% overstates the practical risk by more than two orders of magnitude.",
+ "what_this_means_for_the_headline": "3,882 -> 255 stands. At most 4 additional rows would surface under a stricter capped_lethal floor, so the residue is not materially under-reported. I would rather have found the number inflated and said so; it is not, and the check is worth having on the record either way.",
+ "a_caveat_on_my_own_gate": "C66's cascade predicate passed a crossed-pair gate at 0.018% against 0.051%. This result shows crossed-pair rates overstate real risk, which makes C66's margin MORE comfortable rather than less -- but it also means a crossed-pair gate is a conservative screen, not a measurement of actual false matches. The stronger test is the one run here: tighten and count how many real matched rows depend on the looseness.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 255",
+ "SUPERSEDED_BY_REVIEW": "SUPERSEDED BY REVIEW. The numbers in this file were measured before five rounds of adversarial review changed the cascade predicate and reverted C68. In particular any figure of 255 unattributed, and any projection derived from it, predates those rounds. Kept as the record of what was measured when. Current differential_sha256: b7b83904fe40baed025e237c83fff79d196f84c7202ec61f5b22b342372b3e59",
+ "ERA_STAMP_NOTE": "Era note: this stamp names the differential at the round it was written, not the current one. Stamps of 66b6d85e (round four) and b7b83904 (round five) both appear across these artifacts and NEITHER is main, which is ae1bf51d32983937. Compare era stamps against the tree you are reading, not against each other."
+}
