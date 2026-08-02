@@ -742,16 +742,8 @@ def branch_component_legal_rolls(
 
 def _split_component_events(
     components: Sequence[DamageComponent],
-    *,
-    capped_bases: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Counter, list[DamageComponent]]:
-    """Event-preserving counterpart to :func:`_split_components`.
-
-    ``capped_bases`` names base sources that either side reported as capped on
-    this slot. They are roll-scaled on BOTH sides, so a cap present on one side
-    and absent on the other cannot change the roll-scaled list's length. See the
-    call site in :func:`evaluate_boundary_strict`.
-    """
+    """Event-preserving counterpart to :func:`_split_components`."""
 
     exact: Counter = Counter()
     rolled: list[DamageComponent] = []
@@ -760,11 +752,7 @@ def _split_component_events(
             continue
         capped = component.source.endswith("_to_full")
         base = component.source[: -len("_to_full")] if capped else component.source
-        if (
-            component.source in _ROLL_SCALED_SOURCES
-            or capped
-            or base in capped_bases
-        ):
+        if component.source in _ROLL_SCALED_SOURCES or capped:
             rolled.append(component)
         else:
             exact[(component.source, component.delta)] += 1
@@ -1155,10 +1143,6 @@ def roll_component_events_agree(
             observed_all=observed_all,
             engine_all=engine_all,
         )
-    slot_scale = max(
-        _roll_damage_scale([(c.source, c.delta) for c in observed]),
-        _roll_damage_scale([(c.source, c.delta) for c in engine]),
-    )
     for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
@@ -1181,7 +1165,6 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
-            scale=slot_scale,
         ):
             return False
     return True
@@ -1684,33 +1667,7 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            # SKIP ON attribution_unsafe, NOT ON lossy. The renderer publishes two
-            # severities and this read collapsed them: mark_lossy means telemetry
-            # is incomplete while the action window is still exact, and
-            # mark_attribution_unsafe means the attribution is not observable
-            # from the engine delta -- and because the latter also writes to
-            # `lossy`, a merely telemetry-incomplete branch was discarded exactly
-            # as if its attribution were unobservable. 27 rows of the C32 residue
-            # were reported divergent while a branch carrying only
-            # `attract_immobilization_source_unknown` -- whose own source comment
-            # says "telemetry-only because the public action window itself is
-            # exact", and for which a full |cant|...|Attract line IS emitted --
-            # reproduced the observation. The attribution-unsafe branches stay
-            # excluded: admitting an unobservable attribution could manufacture a
-            # false MATCH, which hides a real difference rather than flagging a
-            # non-difference. reports/c57_severity_collapse.json.
-            # `empty_instruction_list` is lossy-but-not-unsafe, so the
-            # severity switch above would admit it. Review of #1010 caught that:
-            # the branch is a SYNTHETIC placeholder the renderer emits when the
-            # engine generated no instructions at all, carrying events ["|"].
-            # branch_event_legal_rolls returns None rather than raising for it
-            # (there is no direct-damage event to find), so it counts as usable
-            # and compares empty component lists on both slots -- meaning any
-            # boundary whose observation also has no HP components would MATCH
-            # against a branch that verified nothing. It returned skip_lossy
-            # before and must keep doing so.
-            _empty_render = "empty_instruction_list" in lossy
-            if (bool(branch.get("attribution_unsafe")) or _empty_render) and not sleeptalk_union:
+            if lossy and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:
@@ -1753,28 +1710,7 @@ def evaluate_boundary_strict(
                 # both sides treat that base source as roll-scaled here. The
                 # magnitude tolerance still applies only where a cap is
                 # involved; nothing else changes bucket.
-                capped_bases = {
-                    component.source[: -len("_to_full")]
-                    for component in list(observed_components[slot])
-                    + list(engine_components[label])
-                    if component.source.endswith("_to_full")
-                }
-                # PER-BRANCH, never mutating the shared observed split. C29
-                # assigned back into obs_exact/obs_rolled, which are built once
-                # before this loop and shared by every branch AND every state --
-                # so a promotion earned by one branch leaked into all later
-                # branches, whose own capped_bases were empty. The engine side
-                # was already computed into locals per branch, so only the
-                # observed side drifted, and the two sides then disagreed about
-                # which bucket an identical component belonged to.
                 obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
-                if capped_bases:
-                    obs_exact_branch, obs_rolled_branch = _split_component_events(
-                        observed_components[slot], capped_bases=capped_bases
-                    )
-                    eng_exact, eng_rolled = _split_component_events(
-                        engine_components[label], capped_bases=capped_bases
-                    )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.
