@@ -199,12 +199,18 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         # either be that, or the lifecycle must declare the divergence. Without
         # this leg the suite passes for an arbitrarily tampered matcher.
         lifecycle_path = REPO_ROOT / "reports" / "certification_contract_lifecycle.json"
-        if lifecycle_path.is_file():
-            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
-            registered = lifecycle.get("source_code_identity", {}).get(
-                "differential_sha256"
-            )
-            if registered and current != registered:
+        # FAIL CLOSED ON A MISSING KEY. Round nine turned this guard off by
+        # DELETING source_code_identity.differential_sha256: `.get()` returned
+        # None, `if registered and ...` short-circuited, and a tampered matcher
+        # passed green. The switch lived in the same JSON the guard protects.
+        self.assertTrue(lifecycle_path.is_file(), lifecycle_path)
+        lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+        identity = lifecycle["source_code_identity"]
+        self.assertIn("differential_sha256", identity)
+        registered = identity["differential_sha256"]
+        self.assertTrue(registered)
+        if True:
+            if current != registered:
                 self.assertTrue(
                     lifecycle.get("successor_registration_pending"),
                     "the working matcher has diverged from the registered "

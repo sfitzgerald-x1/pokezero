@@ -3,7 +3,7 @@
  "stage": "attested_fail",
  "launchable": false,
  "launchable_note": "The C32 sweep ran to completion and FAILED. The lifecycle records an attested negative result; it is not launchable and must not be read as certified.",
- "purpose": "The C32 contract and its archival calibration are registered together against the frozen 53-patch build source. The sweep attestation is intentionally absent: it may only be produced from a completed fresh sweep, in a later commit, so no part of this registration can be read as evidence that the sweep happened.",
+ "purpose": "Record the certification contract lifecycle. Stage attested_fail means a registered contract was executed to completion and FAILED; the sweep attestation for it is registered at registered_sweep_attestation_path and is present. (Earlier text here said the attestation was intentionally absent -- that was C26, which was registered and never executed.)",
  "supersedes": {
   "registration": "C26",
   "contract": "reports/c26_current_engine_resweep_spec.json",
@@ -33,10 +33,10 @@
   "run_id": "cert-c32-20260801b"
  },
  "successor_registration_pending": true,
- "successor_registration_note": "source_code_identity is a frozen, CORRECT snapshot of the classifier at 7d85f4b242d2 -- the classifier the C32 sweep actually executed (the attestation's runtime_readout_sha256 matches it under enforcement_status enforced). The working tree has since moved past it: C45 narrowed three attribution rules, so the live readout is 267d8fc9d61a. C32 is therefore an ATTESTED HISTORICAL result and no longer the active registration. A successor contract must be registered before another sweep runs, and C32 must never be re-scored with the current classifier -- the contract forbids widening attribution after reading the run.",
+ "successor_registration_note": "source_code_identity is a frozen, CORRECT snapshot of the classifier at the pinned certification commit -- the classifier the C32 sweep actually executed (the attestation's runtime_readout_sha256 matches it under enforcement_status enforced). The working tree has since moved past it. C32 is therefore an ATTESTED HISTORICAL result and no longer the active registration. A successor contract must be registered before another sweep runs, and C32 must never be re-scored with the current classifier. The live hashes are in successor_pending_identity, which IS asserted; do not restate them here, because prose is not tested and goes stale silently.",
  "successor_pending_identity": {
-  "readout_sha256": "267d8fc9d61a2168129f1c6a095fda42f9ad2cc6f057e5ae707fffbdd19bb7f3",
-  "differential_sha256": "12fe80c5b77235d87b19d78edb47e6f8e2db3502670b27047ad457c1e2163e8d",
+  "readout_sha256": "364b30635960c2e9f48e20347521c62611bc39ec3506b5e9b116b9c323744ae3",
+  "differential_sha256": "ae1bf51d329839379e926bca7596d2bd0c2c6f3b1bdced0d1f28c6d34f422e65",
   "why_pinned": "A boolean 'we have diverged' flag is not a binding -- review passed four tampers with it set, including one that laundered every real unattributed row into a documented family. These are the EXACT bytes the divergence is declared for. Any further edit to either file breaks the assertion and forces a reviewable update here, which is the point."
  },
  "pinned_source_commit_reachability": "C32's required_source_commit is NOT an ancestor of main -- it lives on scott/engine-fidelity-program, the branch the split PRs came from. Three registration tests resolve it with `git show` and hard-ERROR in a default single-branch clone (what actions/checkout does). They now SKIP instead, which is honest: in a shallow clone the provenance genuinely cannot be verified. DO NOT DELETE scott/engine-fidelity-program until this contract is superseded, or the object becomes unreachable on origin and C32's whole provenance chain is permanently unverifiable."

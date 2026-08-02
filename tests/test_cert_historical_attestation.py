@@ -85,6 +85,33 @@ class HistoricalCertificationAttestationTests(unittest.TestCase):
             return
 
         lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+
+        # THE LIVE READOUT BINDING RUNS IN EVERY STAGE.
+        #
+        # Round nine turned this guard off by setting `stage` from
+        # "attested_fail" to "contract_registered_attestation_pending": the
+        # binding lived only in the attested_fail branch, so a tampered
+        # classifier passed green. A stage field inside the guarded file must
+        # not be able to disable the guard. Hoisted above every branch.
+        _identity = lifecycle.get("source_code_identity") or {}
+        if "readout_sha256" in _identity:
+            _live = _sha256(ROOT / "scripts" / "cert_sweep_readout.py")
+            if _live != _identity["readout_sha256"]:
+                _pending = lifecycle.get("successor_pending_identity") or {}
+                self.assertIn(
+                    "readout_sha256",
+                    _pending,
+                    "the working readout has diverged from the registered "
+                    "source_code_identity and no successor_pending_identity "
+                    "records the divergent bytes",
+                )
+                self.assertEqual(
+                    _live,
+                    _pending["readout_sha256"],
+                    "the readout has changed since the divergence was declared; "
+                    "re-derive the certification numbers and update "
+                    "successor_pending_identity.readout_sha256",
+                )
         self.assertEqual(
             lifecycle["schema_version"],
             "pokezero.engine-cert-contract-lifecycle/v1",
