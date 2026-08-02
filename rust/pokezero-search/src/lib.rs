@@ -13,6 +13,7 @@ pub mod envstep;
 pub mod events;
 pub mod fold;
 pub mod leaf;
+pub mod panic_guard;
 #[cfg(feature = "model")]
 pub mod model;
 pub mod tree;

@@ -883,7 +883,16 @@ pub(crate) fn puct_search_multi(
         use_opponent_priors: false,
     };
     let evaluator = HpFractionEval;
-    let outcome = multiply_search_with_eval(&mut state, iterations, &cfg, seed, &evaluator)?;
+    // Contain poke-engine's panics here too. This is the hp_fraction path, and
+    // its caller (engine_search.py, the `crate_search_hp` handler) wraps it in
+    // `except Exception` with the same "count the bad world, keep the others"
+    // intent as the model path -- an intent a PanicException defeats, because it
+    // derives from BaseException. Review demonstrated the real
+    // `Invalid rest_turns value: 32` panic firing through THIS function, so
+    // guarding only the model entry point left the identical hole open.
+    let outcome = crate::panic_guard::catch_native_panic(|| {
+        multiply_search_with_eval(&mut state, iterations, &cfg, seed, &evaluator)
+    })?;
     Ok(multiply_report_json(
         &outcome,
         iterations,
@@ -937,6 +946,46 @@ mod tests {
     /// Charmander (ember/tackle) vs Squirtle (watergun/tackle), 100 HP each —
     /// the crate's standard minimal fixture (`minimal_gen3_fixture`).
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
+
+    /// The REAL panic, contained, end to end -- and the process survives it.
+    ///
+    /// poke-engine rejects an out-of-range Rest counter with a panic. Across the
+    /// pyo3 boundary that is a PanicException, which derives from BaseException,
+    /// so the caller's `except Exception` cannot catch it and one bad belief
+    /// world kills the whole shard process. Measured in a campaign probe: it
+    /// took out shards deterministically by seed.
+    ///
+    /// This drives the real panic through a real entry point. The guard's own
+    /// unit tests use a synthetic `panic!`; this one proves the containment
+    /// holds for an engine panic raised deep inside the search.
+    #[test]
+    fn a_real_engine_panic_is_contained_and_the_next_search_still_works() {
+        pyo3::Python::initialize();
+        let mut poisoned = parse_state(MINIMAL.trim()).expect("fixture parses");
+        poisoned.side_one.get_active().status = poke_engine::state::PokemonStatus::SLEEP;
+        poisoned.side_one.get_active().rest_turns = 32;
+        let poisoned_str = poisoned.serialize();
+
+        let error = puct_search_multi(&poisoned_str, 32, 2, 1.4, 7, true)
+            .expect_err("an out-of-range rest counter must surface as an error");
+        pyo3::Python::attach(|py| {
+            assert!(
+                error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
+                "must be catchable by `except Exception`, or one world kills the shard"
+            );
+            let message = error.value(py).to_string();
+            assert!(
+                message.contains("rest_turns"),
+                "the engine's own reason must survive into world_failure_reasons: {message}"
+            );
+        });
+
+        // The point of containing rather than crashing: the NEXT world still runs.
+        let healthy = parse_state(MINIMAL.trim()).expect("fixture parses").serialize();
+        let report = puct_search_multi(&healthy, 32, 2, 1.4, 7, true)
+            .expect("a good state must still search after a contained panic");
+        assert!(report.contains("visits"), "{report}");
+    }
     /// Rattata (toxic/seismictoss, faster) vs Chansey (splash only), 1v1
     /// 100 HP: analytically solvable chance structure (gen3 toxic = 85% hit
     /// applying 6 residual damage on a 100-max-HP target; seismic toss =

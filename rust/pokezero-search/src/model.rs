@@ -1668,24 +1668,37 @@ impl NativeLeafModel {
         drop(root_fold);
         py.detach(|| {
             let spec = self.evaluator.spec();
-            multiply_batched_encoded_core(
-                state_str,
-                iterations,
-                batch_size,
-                max_depth,
-                deep_ko_split,
-                model_priors,
-                use_opponent_priors,
-                &leaf_ctx,
-                &event_ctx,
-                &fold,
-                &self.evaluator,
-                &spec,
-                c_puct,
-                seed,
-                early_stop_min_sims,
-                early_stop_side_one,
-            )
+            // Contain poke-engine's own panics. A panic here crosses the FFI
+            // boundary as `PanicException`, which derives from BaseException and
+            // so is NOT caught by the caller's `except Exception`
+            // (engine_search.py, "count, keep the other worlds"). The result is
+            // that one malformed state kills the whole shard process instead of
+            // one world, and the driver then refuses to write a partial shard.
+            // Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
+            // took out shards deterministically by seed (3 panics / 4 refused
+            // shards over ~80), so a retry
+            // reproduces it. Same remedy `parse_state` already applies to
+            // deserialization (lib.rs).
+            crate::panic_guard::catch_native_panic(|| {
+                multiply_batched_encoded_core(
+                    state_str,
+                    iterations,
+                    batch_size,
+                    max_depth,
+                    deep_ko_split,
+                    model_priors,
+                    use_opponent_priors,
+                    &leaf_ctx,
+                    &event_ctx,
+                    &fold,
+                    &self.evaluator,
+                    &spec,
+                    c_puct,
+                    seed,
+                    early_stop_min_sims,
+                    early_stop_side_one,
+                )
+            })
         })
     }
 }
