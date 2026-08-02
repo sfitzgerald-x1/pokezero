@@ -1,0 +1,48 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1326,8 +1326,22 @@
+     incoming_instructions.update_percentage(percent_hit);
+ }
+ 
+-fn pending_dynamic_base_power(choice: &Choice) -> bool {
+-    matches!(choice.move_id, Choices::FLAIL | Choices::REVERSAL)
++/// Whether the defender's pending move READS its own HP after this hit, so an
++/// average damage roll would erase reachable positions before that move runs.
++///
++/// Flail and Reversal read it for base power. Substitute reads it as a gate: gen3
++/// refuses the Substitute unless the user is above a quarter of its maximum, so a
++/// roll range straddling that quarter decides whether the Substitute happens at
++/// all -- the cost is paid or not, and `-start` is emitted or not. Collapsing to
++/// the average roll picks one side of that and drops the other from the branch
++/// support entirely (seed 17000037 step 55: eight of sixteen Psychic crit rolls
++/// leave Gyarados' Substitute failing, and the representative roll is on the
++/// succeeding side while Showdown's roll was not).
++fn pending_hp_reading_move(choice: &Choice) -> bool {
++    matches!(
++        choice.move_id,
++        Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE
++    )
+ }
+ 
+ fn critical_hit_chance(choice: &Choice, defender_ability: Abilities) -> f32 {
+@@ -2746,13 +2760,15 @@
+     };
+ 
+     // A first-move hit can move a pending Flail/Reversal user across one of its
+-    // HP-based base-power bands. The ordinary branch normally keeps only an
+-    // average damage roll, which erases those reachable positions before the
+-    // second move reads HP. Preserve the sixteen Gen 3 random rolls here only
+-    // when that second-move dependency exists.
++    // HP-based base-power bands, or a pending Substitute user across the
++    // quarter-HP gate that decides whether its Substitute happens at all. The
++    // ordinary branch normally keeps only an average damage roll, which erases
++    // those reachable positions before the second move reads HP. Preserve the
++    // sixteen Gen 3 random rolls here only when that second-move dependency
++    // exists.
+     if branch_on_damage
+         && choice.first_move
+-        && pending_dynamic_base_power(defender_choice)
++        && pending_hp_reading_move(defender_choice)
+         && fixed_damage.is_none()
+     {
+         if let Some((max_damage, max_crit_damage)) = damage {

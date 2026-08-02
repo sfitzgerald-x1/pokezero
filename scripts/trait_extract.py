@@ -15,6 +15,7 @@ import argparse
 import glob
 import gzip
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -56,6 +57,8 @@ FOCUS_PUNCH = mid("Focus Punch")
 LEECH_SEED = mid("Leech Seed")
 SOLAR_BEAM = mid("Solar Beam")
 KNOCK_OFF = mid("Knock Off")   # in gen3 randbats (162 carriers / 41 uses in a 2000-game sample)
+ENCORE = mid("Encore")   # gen3 randbats: 16 carrier species (alakazam, jumpluff, wobbuffet, ...)
+TRICK = mid("Trick")     # gen3 randbats: 2 carrier species (furret, kecleon) — rare but reachable
 # NOTE: Thief is NOT in the gen3 randbats pool (0 carriers empirically) — deliberately not tracked.
 REVERSAL_MOVES = {mid("Reversal"), mid("Flail")}  # BP scales inversely with the user's HP fraction
 BELLY_DRUM = mid("Belly Drum")
@@ -722,6 +725,10 @@ class GameParse:
             E["cat_leechseed"] += 1
         if move == KNOCK_OFF:
             E["cat_knockoff"] += 1
+        if move == ENCORE:
+            E["cat_encore"] += 1
+        if move == TRICK:
+            E["cat_trick"] += 1
         if move in PRIORITY_MOVES:
             E["cat_priority"] += 1
             if self.slower.get(seat):   # opponent observed to outspeed us -> skilled priority use
@@ -752,7 +759,7 @@ def ability_present(g, gp, seat, abilities, activation_key, require_exact=False)
     return False if require_exact else gp.ev[seat][activation_key] > 0
 
 
-def extract(files, lineage=None, milestone=None):
+def extract(files, lineage=None, milestone=None, measure_seat="bot"):
     manifest = None
     seats_behavioral = None
     games = []
@@ -771,8 +778,16 @@ def extract(files, lineage=None, milestone=None):
             skipped += 1
             print(f"WARN: skipped rest of {path} ({type(e).__name__})", file=sys.stderr)
     opponent = (manifest or {}).get("opponent", "self")
-    # in self-play both seats are the bot; in foulplay only p1 (bot) is behavioral
+    # in self-play both seats are the bot; in foulplay only p1 (bot) is behavioral.
+    # measure_seat="opponent" flips that to p2 — i.e. profile FOUL-PLAY's own play from the same
+    # stored games. The omniscient protocol already contains both seats, so this needs no re-run;
+    # it yields the search bot's trait profile as a contrast line for the bot's own trajectory.
     behav_seats = ("p1", "p2") if opponent == "self" else ("p1",)
+    if measure_seat == "opponent":
+        if opponent == "self":
+            raise SystemExit("--measure-seat opponent is meaningless in self-play: both seats are "
+                             "the same policy. Use it on foul-play events.")
+        behav_seats = ("p2",)
 
     n = len(games)
     # the observation unit for behavioral rates is the (game, behavioral-seat): a "seat-game".
@@ -821,7 +836,8 @@ def extract(files, lineage=None, milestone=None):
             "cat_phaze","cat_spikes","cat_rapidspin_total","cat_toxic","cat_para","cat_sleep","cat_yawn",
             "cat_burn","cat_status_move","cat_knockoff","cat_reversal","cat_bellydrum",
             "cat_priority","cat_destinybond","cat_aromatherapy","cat_protect","cat_counter_mirrorcoat",
-            "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse"}
+            "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse",
+            "cat_encore","cat_trick"}
     CAT_MOVE = {"cat_stat_boost":STAT_BOOST,"cat_heal":HEAL_NON_REST,"cat_wish":{WISH},"cat_rest":{REST},
         "cat_weather_sun":{k for k,v in WEATHER_PRIMARY.items() if v=="sun"},
         "cat_weather_rain":{k for k,v in WEATHER_PRIMARY.items() if v=="rain"},
@@ -830,6 +846,7 @@ def extract(files, lineage=None, milestone=None):
         "cat_burn":{WILL_O_WISP},"cat_status_move":STATUS_MOVES,"cat_boom":BOOM,
         "cat_batonpass":{BATON_PASS},"cat_substitute":{SUBSTITUTE},"cat_leechseed":{LEECH_SEED},
         "cat_solarbeam":{SOLAR_BEAM},"cat_curse":{CURSE},"cat_knockoff":{KNOCK_OFF},
+        "cat_encore":{ENCORE},"cat_trick":{TRICK},
         "cat_reversal":REVERSAL_MOVES,"cat_bellydrum":{BELLY_DRUM},
         "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY,
         "cat_protect":PROTECT_MOVES,"cat_counter_mirrorcoat":COUNTER_MOVES}
@@ -994,7 +1011,11 @@ def extract(files, lineage=None, milestone=None):
             pg_corr[t] = {"r": round(r, 4), "n": len(xs), "mean": round(sum(xs) / len(xs), 4)}
 
     metrics = {
-        "metrics_version": METRICS_VERSION, "opponent": opponent, "n_games": n,
+        # measure_seat is provenance, not decoration: a bot-seat and an opponent-seat extraction of
+        # the SAME games are otherwise indistinguishable from the file contents alone, and the two
+        # mean opposite things (what the bot did vs what FoulPlay did).
+        "metrics_version": METRICS_VERSION, "opponent": opponent, "measure_seat": measure_seat,
+        "n_games": n,
         "lineage": lineage or (manifest or {}).get("lineage"),
         "milestone": milestone if milestone is not None else (manifest or {}).get("milestone"),
         "checkpoint": (manifest or {}).get("checkpoint"),
@@ -1221,12 +1242,29 @@ def main():
     ap.add_argument("--events", nargs="+", required=True, help="events-*.jsonl.gz (globs ok)")
     ap.add_argument("--lineage", default=None)
     ap.add_argument("--milestone", type=int, default=None)
+    ap.add_argument("--measure-seat", choices=["bot", "opponent"], default="bot",
+                    help="which seat to profile. 'opponent' reads FoulPlay's own play out of "
+                         "stored foul-play games (no re-run needed) for a contrast line.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     files = []
+    missing = []
     for e in args.events:
-        files.extend(sorted(glob.glob(e)) or [e])
-    metrics = extract(files, lineage=args.lineage, milestone=args.milestone)
+        hits = sorted(glob.glob(e))
+        if hits:
+            files.extend(hits)
+        elif os.path.exists(e):
+            files.append(e)
+        else:
+            missing.append(e)
+    # A path that matches nothing used to fall through as a literal and yield n_games=0, writing a
+    # metrics file that looks valid and silently zeroes out a lineage in the report. Fail instead.
+    if missing:
+        raise SystemExit(f"no such events file(s): {' '.join(missing)}")
+    metrics = extract(files, lineage=args.lineage, milestone=args.milestone,
+                      measure_seat=args.measure_seat)
+    if not metrics["n_games"]:
+        raise SystemExit(f"refusing to write {args.out}: 0 games parsed from {len(files)} file(s)")
     json.dump(metrics, open(args.out, "w"), indent=1)
     print(f"WROTE {args.out} n_games={metrics['n_games']} opponent={metrics['opponent']}")
     print("top5:", [(m["move"], m["share"]) for m in metrics["top5_moves"]])

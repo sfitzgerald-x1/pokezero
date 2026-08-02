@@ -26,8 +26,16 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
+# Post-patch content pins for the 53-patch stack. Only generate_instructions.rs
+# moved: crit-kill-split and substitute-hp-gate both touch it. choice_effects.rs
+# and abilities.rs are BOTH byte-identical to the 52-patch pins -- the dropped
+# trick-attacker-item patch was the only thing that would have moved
+# choice_effects.rs, and it is gone (review: it encoded a rule that is not gen3;
+# Showdown succeeds where it forced a fail). Two unchanged digests either side of
+# one changed digest is what makes the update a measurement rather than a paste:
+# drift in the vendored source would have moved all three.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "535c3fbdc111a8a879458699686bf1907b52096dcd4ffc74c40021ef9db5f483",
+    "src/gen3/generate_instructions.rs": "89386c7359fe54d39c17c7fae6ad4f155d0e17d7e344673ff75481f4fa200f0d",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
@@ -79,25 +87,44 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             applied = patch_stack.apply_patch_stack(source)
 
             self.assertEqual([entry.name for entry in applied], patch_stack.patch_names())
+            # Pinned by POSITION of the two zero-context patches rather than by
+            # a hardcoded stack length. The stack grows; it went 52 -> 53 in this
+            # branch and the old `applied[:46]` / `applied[46:]` split silently
+            # became wrong, which is how a green guard on "the new patches apply
+            # cleanly to a fresh upstream sdist" went red without anyone noticing.
+            fallbacks = [
+                index
+                for index, entry in enumerate(applied)
+                if entry.backend == "patch-fallback"
+            ]
+            self.assertEqual(len(fallbacks), 2, applied)
+            self.assertEqual(fallbacks[1], fallbacks[0] + 1, "the two are adjacent")
             self.assertTrue(
-                all(entry.backend == "git-apply" for entry in applied[:46]),
+                all(entry.backend == "git-apply" for entry in applied[: fallbacks[0]]),
+                applied,
+            )
+            self.assertTrue(
+                all(
+                    entry.backend == "git-apply" for entry in applied[fallbacks[1] + 1 :]
+                ),
+                # Everything after the two zero-context patches, including the
+                # Toxic-stage cap and both patches this branch adds, must keep
+                # applying cleanly through git without fuzz.
                 applied,
             )
             self.assertEqual(
-                [entry.backend for entry in applied[46:]],
-                # The two zero-context patches require the portable fallback.
-                # The remaining ordered tail, including Toxic-stage capping,
-                # must continue to apply cleanly through git without fuzz.
-                ["patch-fallback", "patch-fallback", "git-apply", "git-apply"],
+                [entry.name for entry in applied[-1:]],
+                ["poke-engine-gen3-substitute-hp-gate.patch"],
             )
-            self.assertEqual(
-                [entry.name for entry in applied[-2:]],
-                [
-                    "poke-engine-gen3-wrap-substitute-lifecycle.patch",
-                    "poke-engine-gen3-toxic-stage-cap.patch",
-                ],
+            # The dropped Trick patch must stay gone: no file, no registration.
+            self.assertNotIn(
+                "poke-engine-gen3-trick-attacker-item.patch",
+                [entry.name for entry in applied],
             )
-            self.assertEqual(applied[43].name, "poke-engine-gen3-public-noop-branches.patch")
+            self.assertIn(
+                "poke-engine-gen3-public-noop-branches.patch",
+                [entry.name for entry in applied],
+            )
             generated = (source / "src/gen3/generate_instructions.rs").read_text(
                 encoding="utf-8"
             )

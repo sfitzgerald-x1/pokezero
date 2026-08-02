@@ -29,6 +29,7 @@ from pokezero.showdown import (
     V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
     V3_REPLAY_OBSERVATION_SPEC,
+    V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     _project_v3_numeric_rows,
     numeric_index_if_present_for_schema,
     numeric_index_for_schema,
@@ -206,10 +207,25 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
                 V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
             )
         )
-        with self.assertRaisesRegex(ValueError, "not part of v3"):
+        # A v4-only column asked about under v3 is ABSENT, not invalid: the pack columns exist
+        # in a later schema's writer surface, so the present-or-None accessor answers None (the
+        # same answer it gives for a dropped column) while the strict accessor still raises.
+        self.assertIsNone(
             numeric_index_if_present_for_schema(
                 V3_REPLAY_OBSERVATION_SPEC.schema_version,
                 V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
+        # Past the END of every writer surface is still a hard error on both accessors.
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
             )
 
     def test_legacy_v2_2_surface_is_fully_accounted_for(self) -> None:

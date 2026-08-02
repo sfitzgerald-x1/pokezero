@@ -20,6 +20,7 @@ from collections import defaultdict
 # parent so the post-fork divergence is easy to read off the trajectories.
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
                  "v3-k16", "v3-k32", "v3-k64",   # v3 history-length arms (v3 report)
+                 "v3-foulplay",   # FoulPlay's OWN play, profiled from the same games (contrast line)
                  "v3-k0-enthalf", "v3-k1-enthalf", "v3-k8-enthalf",   # enthalf across history lengths
                  "v3-k64-enthalf", "v3-k64-eps-entq",   # k64 experiment variants (own entities from game 0)
                  "m50-seq", "l200-seq"]
@@ -225,6 +226,8 @@ TRAJECTORY_CHARTS = [
         ("rest", lambda r: _catrate(r, "cat_rest")),
         ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
         ("knock off", lambda r: _catrate(r, "cat_knockoff")),
+        ("encore", lambda r: _catrate(r, "cat_encore")),
+        ("trick", lambda r: _catrate(r, "cat_trick")),
         ("protect/detect", lambda r: _catrate(r, "cat_protect")),
         ("counter/mirror coat", lambda r: _catrate(r, "cat_counter_mirrorcoat")),
         ("leech seed", lambda r: _catrate(r, "cat_leechseed")),
@@ -336,8 +339,15 @@ V3_EXTRA_CHARTS = [
 #                  names with no variant suffix.
 #   * v3_ent_fix — the entropy-fix experiment variants (v3-k64-enthalf, v3-k64-eps-entq, and any
 #                  future v3 variant): every v3 lineage that is NOT one of the bare legacy arms.
+#   * v4         — the successor generation. k8-enthalf and both k64 variants were killed, so the
+#                  surviving short-history arms (v3-k0-enthalf, v3-k1-enthalf) are carried over as
+#                  CONTROL arms and any lineage named v4-* joins them. The controls keep their v3
+#                  identity/colour so a line means the same run in both reports.
 # ("v22-*" does not contain "v3", so v2.2 stays in v2.)
 LEGACY_V3_LINEAGES = {"v3-k16", "v3-k32", "v3-k64"}
+
+# Carried into the v4 report as controls: still-running arms whose siblings were killed 2026-08-01.
+V4_CONTROL_LINEAGES = {"v3-k0-enthalf", "v3-k1-enthalf"}
 
 
 def is_v3(lineage):
@@ -350,6 +360,11 @@ def is_v3_legacy(lineage):
 
 def is_v3_variant(lineage):
     return is_v3(lineage) and lineage not in LEGACY_V3_LINEAGES
+
+
+def is_v4(lineage):
+    """v4 report = native v4-* lineages plus the carried-over v3 control arms."""
+    return (lineage or "").startswith("v4") or lineage in V4_CONTROL_LINEAGES
 
 
 def _traj_excluded(lineage, milestone):
@@ -501,6 +516,7 @@ PG_LABEL = {
     "cat_leechseed": "leech seed", "cat_boom": "explosion/self-destruct",
     "cat_batonpass": "baton pass", "cat_solarbeam": "solar beam",
     "cat_rapidspin_total": "rapid spin", "cat_yawn": "yawn", "cat_wish": "wish",
+    "cat_encore": "encore", "cat_trick": "trick",
     "cat_weather_sun": "sunny day", "cat_weather_rain": "rain dance", "cat_curse": "curse",
     "pivot": "pivot (voluntary switch)", "forced_switch": "forced switch",
     "immunity_switchin": "immunity switch-in", "switch_out_sleeping": "sleeping mon out",
@@ -715,11 +731,15 @@ tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:
 def build_html(rows, report_set="v2"):
     # Each report set is a standalone HTML. The two v3 sub-sets render only their lineages plus the
     # v3-only chart groups + vs-FoulPlay section; v2 renders everything else (minus excluded lines).
-    is_v3_set = report_set in ("v3_legacy", "v3_ent_fix")
+    is_v3_set = report_set in ("v3_legacy", "v3_ent_fix", "v4")
     if report_set == "v3_legacy":
         rows = [r for r in rows if is_v3_legacy(r.get("lineage"))]
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
         title = "PokeZero checkpoint trait tracking — v3 legacy (history-length arms)"
+    elif report_set == "v4":
+        rows = [r for r in rows if is_v4(r.get("lineage")) or r.get("lineage") == "v3-foulplay"]
+        charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
+        title = "PokeZero checkpoint trait tracking — v4 (with carried-over control arms)"
     elif report_set == "v3_ent_fix":
         rows = [r for r in rows if is_v3_variant(r.get("lineage"))]
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
@@ -789,7 +809,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics-dir", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--set", default="v2", choices=["v2", "v3_legacy", "v3_ent_fix"],
+    ap.add_argument("--set", default="v2", choices=["v2", "v3_legacy", "v3_ent_fix", "v4"],
                     help="which report set to render")
     args = ap.parse_args()
     rows = load(args.metrics_dir)

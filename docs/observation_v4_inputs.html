@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PokeZero — Observation v4: the k0 feature pack</title>
+<style>
+  /* ---- chrome: the house style shared with observation_input_shape.html ---- */
+  :root{
+    --bg:#0f1419; --panel:#171c24; --panel2:#1b212b; --line:#2a323d;
+    --txt:#e6edf3; --muted:#9aa7b4; --accent:#e3b341;
+    --grid:#232b35; --baseline:#38414d;
+    /* ---- data layer: validated categorical slots, dark steps, surface #0f1419.
+       node scripts/validate_palette.js "#3987e5,#d95926,#199e70" --mode dark
+         --surface "#0f1419" --pairs all  ->  ALL CHECKS PASS
+       (worst all-pairs CVD dE 9.4 deutan; normal-vision 20.9; all >=3:1) ---- */
+    --series-1:#3987e5;   /* blue   — "dealt" / new-in-v4 / the measured series */
+    --series-2:#d95926;   /* orange — "taken" / the contrasting series */
+    --series-3:#199e70;   /* aqua   — third series, used sparingly */
+    --de-emphasis:#3a4450;/* context marks that are not the story */
+    /* status: fixed, never themed. Always shipped with an icon + label. */
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+  }
+  @media (prefers-color-scheme: light){
+    :root:where(:not([data-theme="dark"])){
+      --bg:#f9f9f7; --panel:#fcfcfb; --panel2:#f2f1ed; --line:#e1e0d9;
+      --txt:#0b0b0b; --muted:#52514e; --accent:#8a6100;
+      --grid:#e8e7e1; --baseline:#c3c2b7;
+      /* light steps, surface #fcfcfb -> ALL CHECKS PASS (aqua carries a
+         contrast WARN, so every mark using it is directly labelled and
+         also present in the table view below — the relief rule). */
+      --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+      --de-emphasis:#d5d4cd;
+      --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+    }
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);
+       font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       margin:0 auto;padding:32px;max-width:1120px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em}
+  h2{font-size:19px;margin:44px 0 12px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-size:15px;margin:26px 0 6px}
+  .sub{color:var(--muted);margin:0 0 22px;max-width:76ch}
+  p{max-width:82ch}
+  code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+       padding:1px 6px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .kpis{display:flex;gap:14px;flex-wrap:wrap;margin:20px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 17px;min-width:132px}
+  .stat .v{font-size:27px;font-weight:700;line-height:1.15}
+  .stat .l{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+  .stat .d{font-size:12px;color:var(--muted);margin-top:3px}
+  .stat .d b{color:var(--series-1)}
+  table{border-collapse:collapse;width:100%;background:var(--panel);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:14px 0;font-size:13px}
+  th,td{padding:8px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  tr:last-child td{border-bottom:none}
+  td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .note{background:var(--panel);border-left:3px solid var(--accent);
+        padding:11px 15px;border-radius:0 8px 8px 0;color:var(--muted);margin:14px 0;max-width:82ch}
+  .note b{color:var(--txt)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0}
+  .card > .cap{color:var(--muted);font-size:12.5px;margin:12px 0 0;max-width:80ch}
+  .cardtitle{font-size:13px;font-weight:600;margin:0 0 14px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 14px;color:var(--muted);font-size:12.5px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
+  .pill{display:inline-block;border-radius:20px;padding:1px 9px;font-size:11px;font-weight:600;
+        border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pill.built{border-color:var(--good);color:var(--good)}
+  .pill.prop{border-color:var(--warning);color:var(--warning)}
+  .pill.cov{border-color:var(--line);color:var(--muted)}
+  .rowhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:30px}
+  .rowhead h3{margin:0}
+  .rowhead .where{color:var(--muted);font-size:12.5px}
+  /* token map: the repo's established idiom */
+  .tokmap{display:flex;gap:3px;margin:12px 0 6px}
+  .tok{height:38px;border-radius:5px;display:flex;align-items:center;justify-content:center;
+       font-size:11px;font-weight:600;padding:0 6px;text-align:center;line-height:1.2;
+       color:var(--txt);background:var(--de-emphasis)}
+  /* NB: named .pack, not .hit — .hit is the SVG hover-target class below, and it
+     carries opacity:0, which would render these blocks invisible. */
+  .tok.pack{background:var(--series-1);color:#fff}
+  /* generic chart scaffolding */
+  svg{display:block;max-width:100%;height:auto;overflow:visible}
+  .gridline{stroke:var(--grid);stroke-width:1}
+  .axis{stroke:var(--baseline);stroke-width:1}
+  .tick{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+  .lbl{fill:var(--txt);font-size:11.5px}
+  .lbl-mut{fill:var(--muted);font-size:11px}
+  .val{fill:var(--txt);font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums}
+  .hoverable{cursor:default}
+  .hoverable:hover .hit{opacity:.18}
+  .hit{fill:var(--txt);opacity:0}
+  .derivs{display:flex;flex-direction:column;gap:8px}
+  .deriv{display:flex;align-items:center;gap:12px;background:var(--panel2);
+         border:1px solid var(--line);border-radius:8px;padding:9px 13px}
+  .deriv .dlab{font-size:12.5px;font-weight:600;min-width:118px}
+  .deriv .dcalc{color:var(--muted);font-size:12.5px;flex:1}
+  .deriv .dval{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+  details{margin:12px 0}
+  summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+  summary:hover{color:var(--txt)}
+  .foot{color:var(--muted);font-size:12px;margin-top:44px;border-top:1px solid var(--line);padding-top:14px}
+  @media (max-width:720px){ body{padding:18px} .kpis{gap:10px} }
+</style>
+</head>
+<body>
+
+<h1>Observation v4 — the k0 feature pack</h1>
+<p class="sub">
+  Every input v4 adds on top of v3, why each one exists, and what it looks like in the tensor.
+  Source of truth: <code>docs/observation_v4_spec.md</code> (the contract) and
+  the k0 feature-pack plan held in the internal deployment tooling. Every number on this page was
+  read out of <code>pokezero.showdown</code> or the gen3 randbat set data, not estimated.
+</p>
+
+<div class="kpis">
+  <div class="stat"><div class="v">134</div><div class="l">numeric columns</div><div class="d">v3: 155 &nbsp;<b>&minus;21</b></div></div>
+  <div class="stat"><div class="v">41</div><div class="l">categorical columns</div><div class="d">v3: 51 &nbsp;<b>&minus;10</b></div></div>
+  <div class="stat"><div class="v">23</div><div class="l">tokens</div><div class="d">v3: 87 &nbsp;<b>&minus;64</b></div></div>
+  <div class="stat"><div class="v">0</div><div class="l">history rows</div><div class="d">the region is <b>gone</b></div></div>
+</div>
+
+<div class="note">
+  <b>The history region is removed, not masked.</b> A budget of zero still leaves the region —
+  and the knob — in the contract. v4 deletes both: the 64 transition tokens, the 34-column history
+  numeric group, and the 12 turn-merged categorical columns with their <code>tt2_*</code> vocabulary.
+  Every forward is ~3.8&times; shorter, there is no budget left to mis-set, and a v4 checkpoint
+  cannot be fed synthesized history because there is nowhere to put it. The tokens are still
+  <em>extracted</em> — the pinned Tier-2 conclusions and the tendency aggregates derive from that
+  stream onto real mon tokens — only the per-row encoding is gone.
+</div>
+
+<h2>The question v4 exists to answer</h2>
+<p>
+  Five v3 arms differed only in history budget <em>k</em>. Pooled high-fidelity foul-play ordered them
+  <b>k1 &gt; k0 &gt; k8 &gt; k64</b> — and history turned out to be the <em>instability</em> axis too: the k64 arm
+  entered runaway dilution/sharpening cycles and collapsed while k0/k1/k8 traversed the same counts clean.
+</p>
+<p>
+  So: <b>can a pure-Markov k0 policy match a k1 one, once the facts k1's single history row was carrying are
+  named as current state?</b> The existence proof is already in the tree — the consecutive-stall counter
+  encodes the double-protect decision exactly, where raw history would spend a whole token row on it. v4 asks
+  the same of nine more facts.
+</p>
+<p>
+  The organising principle is <b>ONE PARSER TRUTH, TWO CONSUMERS</b>: every parser-derived public fact should
+  reach both the search world and the observation. The campaign's fix wave closed the world-side gaps. v4 is
+  that audit run in the opposite direction — <b>facts the searched world is seeded with (or that only the
+  history region carries) which the observation never saw.</b>
+</p>
+
+<h2>Where the new columns land</h2>
+<p>
+  v4 is v3's grouped layout with the pack appended <em>inside</em> its semantic group, not bolted onto the end.
+  Three groups grow, three are untouched — and the seventh, <b>history</b>, is deleted outright.
+</p>
+
+<div class="card">
+  <p class="cardtitle">Numeric layout, v3 &rarr; v4 &nbsp;<span style="font-weight:400;color:var(--muted)">(column counts per group)</span></p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--de-emphasis)"></span>carried from v3, unchanged</span>
+    <span><span class="sw" style="background:var(--series-1)"></span>added by the pack</span>
+  </div>
+  <!-- Emphasis form: the story is "two groups grew", so five groups recede to
+       de-emphasis gray and only the additions take the accent hue. 2px surface
+       gaps between adjacent fills; every segment directly labelled. -->
+  <svg viewBox="0 0 1000 132" role="img" aria-label="Numeric layout by group: pokemon_state grows 33 to 37, field grows 12 to 18, five other groups unchanged.">
+    <!-- Both rows share one scale: 5.87px per column, 2px surface gaps. So the two rows are
+         directly comparable and v4's row ends visibly SHORT — the region trim is the story. -->
+    <!-- v3 row -->
+    <text x="0" y="24" class="lbl-mut">v3 · 155</text>
+    <g transform="translate(78,10)">
+      <rect x="0"     y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="37.2"  y="0" width="193.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="232.9" y="0" width="311.2" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="546.1" y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="583.3" y="0" width="70.5"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="655.8" y="0" width="64.6"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="722.4" y="0" width="199.6" height="22" rx="3" fill="none"
+            stroke="var(--critical)" stroke-width="1.5" stroke-dasharray="0"/>
+      <text x="822" y="15" text-anchor="middle" style="font-size:10.5px;font-weight:600"
+            fill="var(--critical)">history · 34 — REMOVED at v4</text>
+    </g>
+    <!-- v4 row -->
+    <text x="0" y="70" class="lbl">v4 · 134</text>
+    <g transform="translate(78,56)">
+      <rect x="0"     y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="37.2"  y="0" width="193.7" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="232.9" y="0" width="29.4"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="264.3" y="0" width="311.2" height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="577.5" y="0" width="11.7"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="591.2" y="0" width="35.2"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="628.4" y="0" width="70.5"  height="22" rx="3" fill="var(--de-emphasis)"/>
+      <rect x="700.9" y="0" width="35.2"  height="22" rx="3" fill="var(--series-1)"/>
+      <rect x="738.1" y="0" width="64.6"  height="22" rx="3" fill="var(--de-emphasis)"/>
+    </g>
+    <!-- group labels under the v4 row -->
+    <g transform="translate(78,90)">
+      <text x="17"  y="10" class="lbl-mut" text-anchor="middle">core</text>
+      <text x="17"  y="24" class="tick"    text-anchor="middle">6</text>
+      <text x="165" y="10" class="lbl-mut" text-anchor="middle">pokemon_state</text>
+      <text x="165" y="24" class="tick"    text-anchor="middle">33 + 5</text>
+      <text x="427" y="10" class="lbl-mut" text-anchor="middle">belief</text>
+      <text x="427" y="24" class="tick"    text-anchor="middle">53 + 2</text>
+      <text x="609" y="10" class="lbl-mut" text-anchor="middle">action</text>
+      <text x="609" y="24" class="tick"    text-anchor="middle">6</text>
+      <text x="682" y="10" class="lbl-mut" text-anchor="middle">field</text>
+      <text x="682" y="24" class="tick"    text-anchor="middle">12 + 6</text>
+      <text x="770" y="10" class="lbl-mut" text-anchor="middle">tendency</text>
+      <text x="770" y="24" class="tick"    text-anchor="middle">11</text>
+    </g>
+  </svg>
+  <p class="cap">
+    Because the additions sit <em>inside</em> <code>pokemon_state</code>, <code>belief</code> and <code>field</code>, every column laid
+    out after them shifts: <code>v3_numeric_index</code> and <code>v4_numeric_index</code> disagree from index 39
+    onward. That is the point of a new contract — no artifact is ever read under both layouts, and the machinery
+    refuses to mix them at every layer.
+  </p>
+</div>
+
+<div class="card">
+  <p class="cardtitle">Which tokens the pack writes to</p>
+  <div class="tokmap">
+    <div class="tok pack" style="flex:1 0 66px">0<br>field</div>
+    <div class="tok pack" style="flex:6 0 150px">1–6<br>self team</div>
+    <div class="tok pack" style="flex:6 0 150px">7–12<br>opponent team</div>
+    <div class="tok"      style="flex:9 0 150px">13–21<br>action candidates</div>
+    <div class="tok"      style="flex:1 0 66px">22<br>stats</div>
+    <div class="tok" style="flex:14 0 200px;background:none;border:1.5px solid var(--critical);color:var(--critical)">transition history<br>REMOVED (was 64)</div>
+  </div>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--series-1)"></span>carries pack columns</span>
+    <span><span class="sw" style="background:var(--de-emphasis)"></span>untouched by the pack</span>
+  </div>
+  <p class="cap">
+    Part A rides each side's <b>ACTIVE</b> mon token (within the two team blocks); Part B rides the single field
+    token. Nothing is written to the action, stats, or history regions — which is exactly why the pack survives
+    at <code>transition_token_budget = 0</code>.
+  </p>
+</div>
+
+<!-- ============================== PART A ============================== -->
+<h2>Part A — per-mon current state</h2>
+<p>
+  Every A-row is parser-derivable public information and <b>Markov-legal</b>: a function of the current public
+  state plus the immediately-preceding round's public record — the same window the parser already holds.
+</p>
+
+<!-- A1 -->
+<div class="rowhead">
+  <h3>A1 · Forced recharge</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>NUMERIC_MUST_RECHARGE</code> · v4 index 39 · active mon, both sides · 0/1</span>
+</div>
+<p>
+  <b>The correction that motivated the whole pack.</b> An earlier status relay claimed k0 already saw this. It
+  did not, on the side that matters. <code>mustrecharge</code> is not in <code>TRACKED_VOLATILES</code>, so no
+  categorical could ever be emitted and no numeric column existed. The <em>self</em> side was covered by
+  accident — a recharging mon's request offers exactly one action, so the action tokens collapse to a lone legal
+  <code>move:recharge</code>. The <em>opponent</em> side was blind.
+</p>
+
+<div class="card">
+  <p class="cardtitle">The one decision a k0 policy could not see</p>
+  <svg viewBox="0 0 1000 246" role="img" aria-label="Timeline: Hyper Beam lands on turn 1 emitting -mustrecharge; the lock is live across the turn 2 decision; the cant recharge line on turn 2 clears it; turn 3 is clean.">
+    <!-- 90px label gutter, then three equal turn columns across 90..999. -->
+    <g class="tick">
+      <text x="241" y="14" text-anchor="middle">turn 1</text>
+      <text x="544" y="14" text-anchor="middle">turn 2</text>
+      <text x="847" y="14" text-anchor="middle">turn 3</text>
+    </g>
+    <line x1="90" y1="22" x2="999" y2="22" class="gridline"/>
+    <line x1="393" y1="22" x2="393" y2="238" class="gridline"/>
+    <line x1="696" y1="22" x2="696" y2="238" class="gridline"/>
+
+    <!-- protocol lane -->
+    <text x="0" y="70" class="lbl-mut">protocol</text>
+    <g style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px" fill="var(--muted)">
+      <text x="100" y="52">|move|p1a: Slaking|Hyper Beam|p2a</text>
+      <text x="100" y="70" fill="var(--series-1)">|-mustrecharge|p1a: Slaking</text>
+      <text x="403" y="52" fill="var(--series-2)">|cant|p1a: Slaking|recharge</text>
+      <text x="403" y="70">|move|p2a: Blissey|Seismic Toss</text>
+      <text x="706" y="52">|move|p1a: Slaking|Body Slam|p2a</text>
+    </g>
+
+    <!-- tracker lane -->
+    <text x="0" y="112" class="lbl-mut">tracker</text>
+    <rect x="100" y="96" width="283" height="24" rx="4" fill="var(--de-emphasis)"/>
+    <rect x="403" y="96" width="283" height="24" rx="4" fill="var(--series-1)"/>
+    <rect x="706" y="96" width="283" height="24" rx="4" fill="var(--de-emphasis)"/>
+    <text x="241" y="112" class="lbl" text-anchor="middle">0</text>
+    <text x="544" y="112" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="#fff">must_recharge = 1</text>
+    <text x="847" y="112" class="lbl" text-anchor="middle">0 (consumed)</text>
+
+    <!-- decision lane -->
+    <text x="0" y="166" class="lbl-mut">opponent's</text>
+    <text x="0" y="180" class="lbl-mut">decision</text>
+    <g>
+      <rect x="403" y="144" width="283" height="46" rx="5" fill="none" stroke="var(--critical)" stroke-width="1.5"/>
+      <text x="544" y="163" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="var(--critical)">&#9888; blind at k0 (v3)</text>
+      <text x="544" y="181" text-anchor="middle" class="lbl-mut">a free turn — set up, or hit hard</text>
+    </g>
+    <g>
+      <rect x="403" y="200" width="283" height="26" rx="5" fill="none" stroke="var(--good)" stroke-width="1.5"/>
+      <text x="544" y="217" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="var(--good)">&#10003; visible at v4</text>
+    </g>
+  </svg>
+  <p class="cap">
+    The <code>-mustrecharge</code> line lands on the turn the beam <em>hits</em>; the <code>cant</code> lands the turn
+    after. So the flag is true across exactly one decision boundary — the one where the opponent is choosing what to
+    do against a mon that cannot act. The protocol inventory calls <code>-mustrecharge</code> a "semantic alias" of
+    the following turn's <code>cant:recharge</code> transition token, and that is precisely the problem: that row is
+    history-region-only <em>and</em> one decision too late.
+  </p>
+</div>
+
+<div class="note">
+  <b>Why the parser line beats the search lane's reconstruction.</b> <code>engine_search</code> already derived this
+  fact from the round-indexed action record, and now <b>prefers the parser tracker instead</b>. The line is
+  strictly stronger evidence: a <em>missed</em> Hyper Beam never emits it (so gen3's "a miss does not recharge" rule
+  needs no special case), it names its own actor (no species-continuity anchor), and it cannot scroll out of a
+  rolling window (no fail-open branch). One truth, two consumers.
+</div>
+
+<!-- A2 -->
+<div class="rowhead">
+  <h3>A2 · Last executed move</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>CATEGORY_LAST_USED_MOVE</code> · categorical column 51 · active mon, both sides</span>
+</div>
+<p>
+  The pack's largest single surface: what Encore locks, what a Choice-lock read corroborates, and the cadence
+  anchor a k1 row was implicitly supplying. The parser already tracked <code>last_used_move</code> <em>for the
+  world</em> — "Encore's own onStart READS it; a world that omits it makes Encore fail outright" — while the
+  observation had no write anywhere.
+</p>
+
+<div class="card">
+  <p class="cardtitle">Three states, all positive facts</p>
+  <svg viewBox="0 0 1000 150" role="img" aria-label="Three encoding states: padding for never moved, lastmove:switch sentinel for a fresh switch-in, and move:id for an executed move.">
+    <g>
+      <rect x="0" y="8" width="310" height="86" rx="7" fill="none" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="0"/>
+      <text x="18" y="32" class="lbl" style="font-weight:600">padding (row 0)</text>
+      <text x="18" y="54" class="lbl-mut">this mon has never executed a move</text>
+      <text x="18" y="76" class="lbl-mut">nothing is claimed</text>
+    </g>
+    <g>
+      <rect x="345" y="8" width="310" height="86" rx="7" fill="none" stroke="var(--series-3)" stroke-width="1.5"/>
+      <text x="363" y="32" class="lbl" style="font-weight:600">lastmove:switch</text>
+      <text x="363" y="54" class="lbl-mut">came in this turn — lastMove is null</text>
+      <text x="363" y="76" style="font-size:11px" fill="var(--series-3)">a FACT: Encore correctly fails here</text>
+    </g>
+    <g>
+      <rect x="690" y="8" width="310" height="86" rx="7" fill="none" stroke="var(--series-1)" stroke-width="1.5"/>
+      <text x="708" y="32" class="lbl" style="font-weight:600">move:&lt;id&gt;</text>
+      <text x="708" y="54" class="lbl-mut">the executed move identity</text>
+      <text x="708" y="76" style="font-size:11px" fill="var(--series-1)">shares the action token's embedding row</text>
+    </g>
+    <text x="0" y="126" class="lbl-mut">The switch sentinel is deliberately NOT collapsed into padding — the engine models it as</text>
+    <text x="0" y="142" class="lbl-mut"><tspan style="font-family:ui-monospace,Menlo,monospace">LastUsedMove::Switch</tspan>, and merging the two would relabel a fact as ignorance.</text>
+  </svg>
+  <p class="cap">
+    Reusing the existing <code>move:&lt;id&gt;</code> family rather than a private <code>lastmove:&lt;id&gt;</code> one
+    means the identity shares an embedding row with the same move on an action token — the token-type embedding
+    supplies the context. That is why the pack costs <b>zero</b> per-move vocabulary rows: one sentinel plus the
+    ability family, and nothing else.
+  </p>
+</div>
+
+<!-- A3 -->
+<div class="rowhead">
+  <h3>A3 · Truant loaf phase</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>NUMERIC_TRUANT_LOAF</code> · v4 index 40 · active mon, both sides · 0/1</span>
+</div>
+<p>
+  1 = this mon loafs on its next move attempt. The parser already runs the exact gen3 free-running toggle —
+  switch-in seed <code>this.turn !== 0</code>, an unconditional flip at <em>every</em> residual, the post-upkeep
+  replacement guard, and the traced-Truant unknown state — because the <b>world</b> needs it. The observation
+  never saw it.
+</p>
+<div class="note">
+  <b>Why the bit and not the obvious proxy.</b> The toggle flips at every residual whether the mon moved, slept,
+  flinched, was paralysed, recharged, or did nothing. So "moved last round &rarr; loafs now" is a <em>proxy</em>
+  that de-synchronises the first time a holder fails to move for a non-Truant reason — and stays inverted for the
+  rest of the stint. <b>0 encodes both "no holder" and "phase unknown"</b>, mirroring the world's <code>None</code>
+  fallback, which never asserts a phase it cannot prove.
+</div>
+
+<!-- A4 -->
+<div class="rowhead">
+  <h3>A4 · Current traced ability</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>CATEGORY_TRACED_ABILITY</code> · categorical column 52 · active mon</span>
+</div>
+<p>
+  The ability the mon is <em>currently</em> borrowing via Trace, cleared on switch-out.
+</p>
+<div class="card">
+  <p class="cardtitle">Why the belief channel is the wrong source</p>
+  <svg viewBox="0 0 1000 172" role="img" aria-label="Comparison: the belief channel retains the last-ever-traced ability across a switch, granting a stale Levitate; the v4 column clears on switch-out.">
+    <g class="tick">
+      <text x="150" y="14" text-anchor="middle">Gardevoir in vs Claydol</text>
+      <text x="470" y="14" text-anchor="middle">Gardevoir switches out</text>
+      <text x="800" y="14" text-anchor="middle">Gardevoir back in vs Swampert</text>
+    </g>
+    <line x1="0" y1="22" x2="1000" y2="22" class="gridline"/>
+    <line x1="310" y1="22" x2="310" y2="150" class="gridline"/>
+    <line x1="640" y1="22" x2="640" y2="150" class="gridline"/>
+
+    <text x="0" y="56" class="lbl-mut">belief</text>
+    <text x="0" y="70" class="lbl-mut">channel</text>
+    <rect x="70" y="42" width="230" height="26" rx="4" fill="var(--de-emphasis)"/>
+    <text x="185" y="59" class="lbl" text-anchor="middle">levitate</text>
+    <rect x="330" y="42" width="300" height="26" rx="4" fill="var(--de-emphasis)"/>
+    <text x="480" y="59" class="lbl" text-anchor="middle">levitate (retained)</text>
+    <rect x="660" y="42" width="330" height="26" rx="4" fill="var(--critical)"/>
+    <text x="825" y="59" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="#fff">&#9888; levitate — STALE</text>
+
+    <text x="0" y="112" class="lbl-mut">v4</text>
+    <text x="0" y="126" class="lbl-mut">column</text>
+    <rect x="70" y="98" width="230" height="26" rx="4" fill="var(--series-1)"/>
+    <text x="185" y="115" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="#fff">ability:levitate</text>
+    <rect x="330" y="98" width="300" height="26" rx="4" fill="var(--de-emphasis)"/>
+    <text x="480" y="115" class="lbl" text-anchor="middle">cleared</text>
+    <rect x="660" y="98" width="330" height="26" rx="4" fill="var(--good)"/>
+    <text x="825" y="115" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="#fff">&#10003; re-traced from Swampert</text>
+
+    <text x="0" y="164" class="lbl-mut">The stale entry silently granted a Gardevoir Spikes immunity it did not have — the observed bug this column exists to avoid re-creating.</text>
+  </svg>
+</div>
+
+<!-- A5 -->
+<div class="rowhead">
+  <h3>A5 · Last-round damage</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>NUMERIC_LAST_DAMAGE_DEALT</code> / <code>_TAKEN</code> · v4 indices 41–42 · active mon</span>
+</div>
+<p>
+  Point evidence from the previous round, as a fraction of max HP. <b>DEALT</b> is move-attributed only — untagged
+  <code>-damage</code> on the slot opposite the open move window's actor. <b>TAKEN</b> is total: every
+  <code>-damage</code> on the mon, tagged or not, so it includes residuals, hazard chip, recoil and confusion
+  self-hits.
+</p>
+
+<div class="card">
+  <p class="cardtitle">The ledger settles at each turn boundary, and is keyed to the MON</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--series-1)"></span>dealt (move-attributed)</span>
+    <span><span class="sw" style="background:var(--series-2)"></span>taken (all sources)</span>
+  </div>
+  <svg viewBox="0 0 1000 220" role="img" aria-label="Slaking's damage ledger across three turns: at the turn 2 decision it reads dealt 0.40 and taken 0.20; after switching out, the replacement reads zero on both.">
+    <!-- y axis 0..1 -->
+    <g>
+      <line x1="120" y1="30" x2="120" y2="150" class="axis"/>
+      <line x1="120" y1="150" x2="960" y2="150" class="axis"/>
+      <line x1="120" y1="30"  x2="960" y2="30"  class="gridline"/>
+      <line x1="120" y1="90"  x2="960" y2="90"  class="gridline"/>
+      <text x="112" y="34"  class="tick" text-anchor="end">1.0</text>
+      <text x="112" y="94"  class="tick" text-anchor="end">0.5</text>
+      <text x="112" y="154" class="tick" text-anchor="end">0</text>
+    </g>
+    <text x="0" y="34" class="lbl-mut">Slaking's</text>
+    <text x="0" y="48" class="lbl-mut">columns, as</text>
+    <text x="0" y="62" class="lbl-mut">read at each</text>
+    <text x="0" y="76" class="lbl-mut">decision</text>
+
+    <!-- decision @ turn 2: dealt .40 taken .20 -->
+    <g class="hoverable">
+      <title>Decision at turn 2 — Slaking: dealt 0.40 (Hyper Beam), taken 0.20 (Seismic Toss)</title>
+      <rect class="hit" x="170" y="30" width="180" height="120"/>
+      <rect x="196" y="102" width="52" height="48" rx="4" fill="var(--series-1)"/>
+      <rect x="252" y="126" width="52" height="24" rx="4" fill="var(--series-2)"/>
+      <text x="222" y="96"  class="val" text-anchor="middle">0.40</text>
+      <text x="278" y="120" class="val" text-anchor="middle">0.20</text>
+    </g>
+    <text x="250" y="170" class="lbl" text-anchor="middle">decision @ turn 2</text>
+    <text x="250" y="186" class="lbl-mut" text-anchor="middle">Slaking is still in</text>
+
+    <!-- decision @ turn 3 after a switch: 0 / 0 -->
+    <g class="hoverable">
+      <title>Decision at turn 3 after Slaking switched out — the replacement's columns read 0.00 / 0.00</title>
+      <rect class="hit" x="540" y="30" width="180" height="120"/>
+      <rect x="566" y="146" width="52" height="4" rx="2" fill="var(--series-1)"/>
+      <rect x="622" y="146" width="52" height="4" rx="2" fill="var(--series-2)"/>
+      <text x="592" y="140" class="val" text-anchor="middle">0.00</text>
+      <text x="648" y="140" class="val" text-anchor="middle">0.00</text>
+    </g>
+    <text x="620" y="170" class="lbl" text-anchor="middle">decision @ turn 3</text>
+    <text x="620" y="186" class="lbl-mut" text-anchor="middle">Slaking switched out — replacement inherits nothing</text>
+
+    <text x="120" y="212" class="lbl-mut">Numbers from the committed test fixture: Hyper Beam took Blissey 100&rarr;60; Seismic Toss took Slaking 100&rarr;80.</text>
+  </svg>
+  <p class="cap">
+    The pair is deliberately <b>not a mirror</b>: DEALT is move-attributed while TAKEN is total, and both are keyed
+    to the <em>mon</em>, so a mon that just switched in reads 0/0 even though its side dealt and took damage last
+    round. The one attribution error this surface could make is the confusion self-hit — a slower confused mon
+    self-hits with an untagged <code>-damage</code> and no move line of its own, so the
+    <code>|-activate|SLOT|confusion</code> marker closes the move window and keeps that damage out of the previous
+    mover's DEALT column.
+  </p>
+</div>
+<div class="note">
+  <b>Point observation only.</b> The range/stat/variant inference this evidence feeds is the belief layer's job
+  (the Tier-2 residual lane) and is explicitly out of scope: these columns state what happened, they do not
+  conclude anything from it.
+</div>
+
+<!-- ============================== PART B ============================== -->
+<h2>Part B — hazard payoff and credit</h2>
+<p>
+  The credit-assignment fix. Spikes pay off turns after they are laid, in nobody's visible state, so the value head
+  regresses on states that never contain the layers' realized payoff.
+</p>
+<div class="note">
+  <b>Orientation, shared with <code>NUMERIC_SELF_HAZARDS</code> / <code>NUMERIC_OPP_HAZARDS</code>:</b>
+  <code>SELF_*</code> is about <em>our own ground</em> — layers on our side, damage our mons suffered, items of ours
+  knocked off. <code>OPP_*</code> is the opponent's ground, i.e. where <em>our</em> Spikes' and <em>our</em> Knock
+  Offs' payoff shows up. So "credit we earned" is always the <code>OPP_*</code> column, exactly as "layers we laid"
+  is <code>NUMERIC_OPP_HAZARDS</code>.
+</div>
+
+<div class="rowhead">
+  <h3>B1 + B2 · Hazard credit accrued, and expected remaining value</h3>
+  <span class="pill built">built</span>
+  <span class="where">v4 indices 114–117 · field token · per side</span>
+</div>
+
+<div class="card">
+  <p class="cardtitle">A matched (spent, remaining) pair on one scale</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--series-1)"></span>B1 · realized (already taken off)</span>
+    <span><span class="sw" style="background:var(--series-2)"></span>B2 · expected remaining</span>
+  </div>
+  <p style="margin:0 0 14px;color:var(--muted);font-size:12.5px">
+    Worked example — one Spikes layer on <b style="color:var(--txt)">our</b> side; Snorlax already ate 12%;
+    Slaking (grounded) and Skarmory (Flying, exempt) on the bench.
+  </p>
+  <!-- Two near-equal headline numbers whose interest is the DERIVATION, not the
+       comparison: on a shared 0-1 team-HP track 0.020 and 0.021 differ by under a
+       pixel, so a track would imply a precision that isn't there. Derivation rows
+       + one shared context meter is the honest form. -->
+  <div class="derivs">
+    <div class="deriv">
+      <span class="sw" style="background:var(--series-1)"></span>
+      <span class="dlab">B1 · realized</span>
+      <span class="dcalc">0.12 &divide; 6 mons</span>
+      <span class="dval">0.020</span>
+    </div>
+    <div class="deriv">
+      <span class="sw" style="background:var(--series-2)"></span>
+      <span class="dlab">B2 · remaining</span>
+      <span class="dcalc">1 grounded bench mon &times; <sup>1</sup>&frasl;<sub>8</sub> &divide; 6 mons</span>
+      <span class="dval">0.021</span>
+    </div>
+  </div>
+  <p style="margin:16px 0 6px;color:var(--muted);font-size:12px">
+    Where ~0.02 sits on the team-HP scale both columns share:
+  </p>
+  <svg viewBox="0 0 1000 56" role="img" aria-label="Context meter: 0.02 of a team's HP is a sliver at the far left of the zero-to-one scale.">
+    <rect x="0" y="8" width="1000" height="14" rx="7" fill="var(--de-emphasis)"/>
+    <rect x="0" y="8" width="20"   height="14" rx="7" fill="var(--series-1)"/>
+    <g class="tick">
+      <text x="0"    y="42">0</text>
+      <text x="500"  y="42" text-anchor="middle">0.5 of a team's HP</text>
+      <text x="1000" y="42" text-anchor="end">1.0</text>
+    </g>
+  </svg>
+  <p style="margin:12px 0 0;color:var(--muted);font-size:12.5px">
+    One layer is worth a couple of percent of a team either way — and B1 and B2 land in the same place
+    because roughly as much is still owed as has already been paid. Both use the same six-mon denominator, so
+    they read as one <b style="color:var(--txt)">(spent, remaining)</b> pair rather than two unrelated scalars.
+    Skarmory is excluded by the engine's own grounding rule (Flying types and Levitate are exempt); Snorlax is
+    active, so it already paid.
+  </p>
+  <p class="cap">
+    Grounding is evaluated from <b>public knowledge only</b> and is conservative by construction: an unrevealed
+    bench mon, or one whose ability is still ambiguous, counts as grounded. For an expected-value column the honest
+    failure direction is to over-count, never to claim an immunity we cannot see. Our own team is fully known, so
+    the same code is exact on the self side.
+  </p>
+</div>
+
+<div class="rowhead">
+  <h3>B3 · Opponent switch propensity</h3>
+  <span class="pill cov">already present — not re-added</span>
+  <span class="where"><code>NUMERIC_STAT_OPP_SWITCH_COUNT</code> + the per-mon triple</span>
+</div>
+<p>
+  The global (switch count, decision opportunities) pair plus the per-mon (switched-before-attack,
+  stayed-and-attacked, turns-active) triple are already encoded, evidence-mass&nbsp;/64, never bare rates — and the
+  triple is already keyed to <b>the mon that switched out</b>. v4's contribution here was verifying that and
+  changing nothing. See the proposal at the end of this page for the part that <em>is</em> missing.
+</p>
+
+<div class="rowhead">
+  <h3>B4 · Items-removed credit</h3>
+  <span class="pill built">built</span>
+  <span class="where">v4 indices 118–119 · field token · per side</span>
+</div>
+<p>
+  Per-side count of held items publicly removed by the <em>other</em> side's action
+  (<code>-enditem … [from] move: Knock Off</code>). Per-mon removal state was already encoded; what was missing is
+  the <b>credit aggregate</b> the value head needs to price a Knock Off whose payoff is spread over the rest of the
+  game. Trick is excluded — it is a <em>swap</em> whose giving half the belief layer explicitly declines to model,
+  so counting it as removal credit would price a trade as a theft.
+</p>
+
+<div class="card">
+  <p class="cardtitle">Normalisation: why /6 and not the /64 evidence-mass convention</p>
+  <svg viewBox="0 0 1000 210" role="img" aria-label="Range comparison: under a 64 denominator the whole reachable range of the items-removed column spans 0 to 0.094; under a 6 denominator it spans the full 0 to 1.">
+    <!-- axis -->
+    <line x1="150" y1="150" x2="950" y2="150" class="axis"/>
+    <line x1="150" y1="34" x2="150" y2="150" class="gridline"/>
+    <line x1="550" y1="34" x2="550" y2="150" class="gridline"/>
+    <line x1="950" y1="34" x2="950" y2="150" class="gridline"/>
+    <g class="tick">
+      <text x="150" y="168" text-anchor="middle">0</text>
+      <text x="550" y="168" text-anchor="middle">0.5</text>
+      <text x="950" y="168" text-anchor="middle">1.0</text>
+    </g>
+    <text x="550" y="188" class="lbl-mut" text-anchor="middle">encoded column value</text>
+
+    <!-- /64 row -->
+    <text x="0" y="62" class="lbl">&divide; 64 (as sketched)</text>
+    <g class="hoverable">
+      <title>/64: 1 item = 0.016, 6 items (the maximum) = 0.094. The entire reachable range sits in the bottom 9%.</title>
+      <rect class="hit" x="150" y="42" width="800" height="30"/>
+      <rect x="150" y="50" width="75" height="14" rx="3" fill="var(--critical)"/>
+      <text x="243" y="61" class="val" fill="var(--critical)">0 &rarr; 0.094</text>
+      <text x="330" y="61" class="lbl-mut">the whole reachable range — max is 6 items, ever</text>
+    </g>
+
+    <!-- /6 row -->
+    <text x="0" y="118" class="lbl">&divide; 6 (shipped)</text>
+    <g class="hoverable">
+      <title>/6: 1 item = 0.167, 6 items = 1.0. Full dynamic range, and the same team denominator B1/B2 use.</title>
+      <rect class="hit" x="150" y="98" width="800" height="30"/>
+      <rect x="150" y="106" width="800" height="14" rx="3" fill="var(--series-1)"/>
+      <text x="560" y="117" text-anchor="middle" style="font-size:11.5px;font-weight:600" fill="#fff">0 &rarr; 1.0 &nbsp;·&nbsp; one item = 0.167</text>
+    </g>
+  </svg>
+  <p class="cap">
+    A team can lose at most six items, so /64 would pin this column under 0.1 for its entire life and its realistic
+    range (0–2 items) into the bottom 3%. That matters mechanically: the numeric vector goes through one linear
+    projection, and the gradient on a column's weights is proportional to its input value — a 10.7&times; smaller
+    input learns proportionally slower against a shared learning rate and grad-norm clip. /6 also matches the
+    team-HP denominator B1 and B2 use, so the whole Part-B block reads on one scale.
+    <b>This is a documented, deliberate deviation from the plan's sketch.</b>
+  </p>
+</div>
+
+<div class="note">
+  <b>Adjudication caveat (binding, inherited from the plan).</b> FoulPlay's knock-off rate is <em>not</em>
+  automatically the target. Before any training reads this column as a deficiency signal, a G4-style
+  counterfactual probe — replay lost games, search the loser's seat, certify across reseeds — must adjudicate
+  whether self-play's lower usage is actually a deficiency.
+</div>
+
+<!-- ============================== SUPPORT ============================== -->
+<h2>How much support does each row actually have?</h2>
+<p>
+  The plan's own bar for promoting a feature is "<b>encode reachable, not rare</b>." Counted directly from the gen3
+  randbat set data (220 species in the pool), the moves the pack depends on:
+</p>
+
+<div class="card">
+  <p class="cardtitle">Carrier species in the gen3 randbat pool, by move</p>
+  <svg viewBox="0 0 1000 250" role="img" aria-label="Carrier counts: encore 16 species, spikes 11, knock off 4, hyper beam 1, thrash petal dance and outrage 0 each.">
+    <!-- gridlines -->
+    <g>
+      <line x1="215" y1="18" x2="215" y2="212" class="axis"/>
+      <line x1="391" y1="18" x2="391" y2="212" class="gridline"/>
+      <line x1="567" y1="18" x2="567" y2="212" class="gridline"/>
+      <line x1="743" y1="18" x2="743" y2="212" class="gridline"/>
+      <line x1="919" y1="18" x2="919" y2="212" class="gridline"/>
+      <g class="tick">
+        <text x="215" y="230" text-anchor="middle">0</text>
+        <text x="391" y="230" text-anchor="middle">4</text>
+        <text x="567" y="230" text-anchor="middle">8</text>
+        <text x="743" y="230" text-anchor="middle">12</text>
+        <text x="919" y="230" text-anchor="middle">16</text>
+      </g>
+      <text x="567" y="248" class="lbl-mut" text-anchor="middle">species carrying the move (of 220 in the pool)</text>
+    </g>
+
+    <!-- single hue: one series, one color. 4px rounded data-ends at the baseline. -->
+    <g class="hoverable"><title>encore — 16 carrier species, 16 sets. Served by A2.</title>
+      <rect class="hit" x="0" y="24" width="1000" height="26"/>
+      <text x="205" y="42" class="lbl" text-anchor="end">encore</text>
+      <rect x="215" y="28" width="704" height="18" rx="4" fill="var(--series-1)"/>
+      <text x="931" y="42" class="val">16</text>
+      <text x="215" y="42" dx="8" style="font-size:10.5px;fill:#fff;font-weight:600">serves A2</text>
+    </g>
+    <g class="hoverable"><title>spikes — 11 carrier species, 15 sets. Served by B1 and B2.</title>
+      <rect class="hit" x="0" y="56" width="1000" height="26"/>
+      <text x="205" y="74" class="lbl" text-anchor="end">spikes</text>
+      <rect x="215" y="60" width="484" height="18" rx="4" fill="var(--series-1)"/>
+      <text x="711" y="74" class="val">11</text>
+      <text x="215" y="74" dx="8" style="font-size:10.5px;fill:#fff;font-weight:600">serves B1 / B2</text>
+    </g>
+    <g class="hoverable"><title>knock off — 4 carrier species, 4 sets. Served by B4.</title>
+      <rect class="hit" x="0" y="88" width="1000" height="26"/>
+      <text x="205" y="106" class="lbl" text-anchor="end">knock off</text>
+      <rect x="215" y="92" width="176" height="18" rx="4" fill="var(--series-1)"/>
+      <text x="403" y="106" class="val">4</text>
+      <text x="425" y="106" class="lbl-mut">serves B4</text>
+    </g>
+    <g class="hoverable"><title>hyper beam — 1 carrier species (Slaking), 1 set. Served by A1 — and by A3, since Slaking is also the Truant holder.</title>
+      <rect class="hit" x="0" y="120" width="1000" height="26"/>
+      <text x="205" y="138" class="lbl" text-anchor="end">hyper beam</text>
+      <rect x="215" y="124" width="44" height="18" rx="4" fill="var(--series-1)"/>
+      <text x="271" y="138" class="val">1</text>
+      <text x="293" y="138" class="lbl-mut">serves A1 — the pack's <tspan style="font-weight:600">highest-priority</tspan> row (Slaking, who is also A3's Truant holder)</text>
+    </g>
+    <g class="hoverable"><title>thrash / petal dance / outrage — 0 carriers. The rampage lock was checked and NOT promoted.</title>
+      <rect class="hit" x="0" y="152" width="1000" height="26"/>
+      <text x="205" y="170" class="lbl-mut" text-anchor="end">thrash / petal dance / outrage</text>
+      <rect x="215" y="163" width="4" height="4" rx="2" fill="var(--de-emphasis)"/>
+      <text x="231" y="170" class="val" fill="var(--muted)">0</text>
+      <text x="253" y="170" class="lbl-mut">unreachable — the rampage lock was checked and correctly <tspan style="font-weight:600">not</tspan> promoted</text>
+    </g>
+  </svg>
+  <p class="cap">
+    <b>Rarity alone does not disqualify a row.</b> A1 is the plan's highest-priority feature and has exactly
+    <em>one</em> carrier; the plan's own framing for these is "LARGE within its (rare) support," and a free turn is
+    a far bigger decision swing than a removed Leftovers. But it does mean B4 is the thinnest thing in the pack,
+    and that B1/B2 (spikes, 11) and A2 (encore, 16) are where the real support lives. Recorded here as input to the
+    §5 probe rather than acted on.
+  </p>
+</div>
+
+<!-- ============================== PROPOSED ============================== -->
+<h2>Matchup-conditional switch tendency</h2>
+<div class="rowhead" style="margin-top:8px">
+  <h3>Two columns on each opponent mon token</h3>
+  <span class="pill built">built</span>
+  <span class="where"><code>NUMERIC_MON_SWITCHED_VS_ACTIVE</code> / <code>_STAYED_VS_ACTIVE</code>
+    · v4 indices 96–97 · all six opponent tokens</span>
+</div>
+<p>
+  B3's per-mon triple is keyed to the right mon but still marginalises over the thing that determines the
+  behaviour: <b>what it was facing</b>. Switching in gen3 is almost entirely matchup-driven — Skarmory stays in on
+  Snorlax and bails from Magneton. A per-mon rate of "bailed 3 of 7" averages over whatever matchups the game
+  happened to present.
+</p>
+
+<div class="card">
+  <p class="cardtitle">What the marginal count throws away</p>
+  <svg viewBox="0 0 1000 236" role="img" aria-label="A 3 by 3 matchup grid showing Skarmory's switch-outs concentrated against Magneton, versus the single marginal count of 3 out of 7 that the current feature encodes.">
+    <text x="0" y="16" class="lbl">what actually happened &nbsp;<tspan class="lbl-mut">(their mon &times; our mon at the time)</tspan></text>
+    <!-- grid -->
+    <g transform="translate(120,30)">
+      <g class="lbl-mut" style="font-size:10.5px">
+        <text x="60"  y="-4" text-anchor="middle">Magneton</text>
+        <text x="170" y="-4" text-anchor="middle">Snorlax</text>
+        <text x="280" y="-4" text-anchor="middle">Starmie</text>
+      </g>
+      <text x="-8" y="24" class="lbl-mut" text-anchor="end">Skarmory</text>
+      <text x="-8" y="60" class="lbl-mut" text-anchor="end">Blissey</text>
+      <text x="-8" y="96" class="lbl-mut" text-anchor="end">Gengar</text>
+      <!-- row Skarmory: bailed 3/3 vs Magneton, stayed vs others -->
+      <rect x="10"  y="8"  width="100" height="26" rx="3" fill="var(--series-1)"/>
+      <text x="60"  y="26" text-anchor="middle" style="font-size:11px;font-weight:600" fill="#fff">3 / 3 bailed</text>
+      <rect x="120" y="8"  width="100" height="26" rx="3" fill="var(--de-emphasis)"/>
+      <text x="170" y="26" class="lbl-mut" text-anchor="middle">0 / 3</text>
+      <rect x="230" y="8"  width="100" height="26" rx="3" fill="var(--de-emphasis)"/>
+      <text x="280" y="26" class="lbl-mut" text-anchor="middle">0 / 1</text>
+      <!-- other rows, context only -->
+      <rect x="10"  y="44" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+      <rect x="120" y="44" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+      <rect x="230" y="44" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+      <rect x="10"  y="80" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+      <rect x="120" y="80" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+      <rect x="230" y="80" width="100" height="26" rx="3" fill="var(--de-emphasis)" opacity=".55"/>
+    </g>
+
+    <!-- what's encoded -->
+    <g transform="translate(560,30)">
+      <text x="0" y="-14" class="lbl">what B3 encodes today</text>
+      <rect x="0" y="8" width="330" height="26" rx="3" fill="var(--de-emphasis)"/>
+      <text x="165" y="26" class="lbl" text-anchor="middle">Skarmory: switched-out-before-attacking = 3</text>
+      <text x="0" y="58" class="lbl-mut">The <tspan style="font-weight:600" fill="var(--critical)">column</tspan> that matters right now — "…and all three</text>
+      <text x="0" y="74" class="lbl-mut">were against the mon I have out" — is not recoverable</text>
+      <text x="0" y="90" class="lbl-mut">from the aggregate. It lives only in the history region.</text>
+    </g>
+
+    <text x="0" y="176" class="lbl">shipped &nbsp;<tspan class="lbl-mut">— 2 numeric columns on each of the six opponent mon tokens, conditioned on OUR CURRENT ACTIVE:</tspan></text>
+    <text x="18" y="198" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_SWITCHED_VS_ACTIVE &nbsp;times this mon BAILED while facing our current active</text>
+    <text x="18" y="216" class="lbl-mut" style="font-family:ui-monospace,Menlo,monospace;font-size:11px">NUMERIC_MON_STAYED_VS_ACTIVE &nbsp;&nbsp;&nbsp;times it STOOD ITS GROUND under that same condition</text>
+  </svg>
+  <p class="cap">
+    The conditioning variable is free — we know our own active at encode time — and the pair is the literal
+    conditional form of the marginal triple's first two members. (bailed, stayed) rather than
+    (bailed, opportunities) for two reasons: it is the stay-or-switch evidence exactly (a <code>cant</code> turn is
+    an opportunity but not a stay-or-switch datum), and both halves are accumulated at live hook points in
+    <b>both</b> the batch and the incremental fold, so the parity twins cannot drift — an opportunity count would
+    have had to be rebuilt from a turn map the incremental fold prunes. Normalized /8, and it rides the same
+    tendency mask as the triple: same channel, conditioned. Writing it on all six tokens answers two questions at
+    once: will the mon in front of me bail, and which of their mons has historically been willing to face what I
+    have out.
+  </p>
+</div>
+
+<div class="note">
+  <b>Why this belongs to <em>this</em> campaign.</b> The aggregate survives at k0 (it is a token column, not a
+  history row), but the matchup context of each switch is carried solely by the transition rows — so at k0 the
+  model sees "Skarmory bailed 3 times" with no way to recover what it bailed <em>from</em>. And the sharper
+  argument: the raw form of this information was fully available at <b>k64, the worst and least stable arm</b>. The
+  model could not use it; it diluted. That is the pack's central thesis in miniature — if the sufficient statistic
+  is the useful form, encode the statistic rather than widening the window.
+</div>
+
+<p><b>The honest limits.</b></p>
+<ul>
+  <li><b>Sparsity.</b> A game visits maybe 10–25 of the 36 pairings at a few turns each, so a cell is usually small
+    and is empty early. Mitigated rather than solved by the pair encoding — <code>(1,&nbsp;0)</code> and
+    <code>(1,&nbsp;4)</code> stay distinguishable, which is exactly why the design doc forbids bare rates — and an
+    empty cell degrades cleanly to the marginal triple sitting on the same token.</li>
+  <li><b>It was not in the plan.</b> The Part A table does not contain it and the §5 probe's bucket list does not
+    either — it is an owner-approved addition on top. A matchup-conditional switch read is a plausible member of
+    the probe's <em>residual bucket</em>, which the plan calls "the falsifier."</li>
+</ul>
+
+<!-- ============================== TABLE VIEW ============================== -->
+<h2>Table view — every new input</h2>
+<p class="sub">The complete, WCAG-clean equivalent of everything above.</p>
+<table>
+  <tr>
+    <th>Row</th><th>Column</th><th>Kind</th><th>v4 index</th><th>Token</th><th>Encoding</th><th>Status</th>
+  </tr>
+  <tr><td>A1</td><td><code>NUMERIC_MUST_RECHARGE</code></td><td>numeric</td><td class="num">39</td><td>active mon, both sides</td><td>0/1 — publicly locked into a recharge turn</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>A2</td><td><code>CATEGORY_LAST_USED_MOVE</code></td><td>categorical</td><td class="num">51</td><td>active mon, both sides</td><td>padding / <code>lastmove:switch</code> / <code>move:&lt;id&gt;</code></td><td><span class="pill built">built</span></td></tr>
+  <tr><td>A3</td><td><code>NUMERIC_TRUANT_LOAF</code></td><td>numeric</td><td class="num">40</td><td>active mon, both sides</td><td>0/1 — loafs on next move attempt; 0 also = unknown</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>A4</td><td><code>CATEGORY_TRACED_ABILITY</code></td><td>categorical</td><td class="num">52</td><td>active mon</td><td><code>ability:&lt;id&gt;</code>, cleared on switch-out</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>A5</td><td><code>NUMERIC_LAST_DAMAGE_DEALT</code></td><td>numeric</td><td class="num">41</td><td>active mon</td><td>fraction of defender max HP, move-attributed, previous round</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>A5</td><td><code>NUMERIC_LAST_DAMAGE_TAKEN</code></td><td>numeric</td><td class="num">42</td><td>active mon</td><td>fraction of own max HP, all sources, previous round</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B1</td><td><code>NUMERIC_SELF_HAZARD_CREDIT</code></td><td>numeric</td><td class="num">114</td><td>field</td><td>cumulative Spikes damage our side suffered &divide; 6</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B1</td><td><code>NUMERIC_OPP_HAZARD_CREDIT</code></td><td>numeric</td><td class="num">115</td><td>field</td><td>same, their side — the payoff our layers realized</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B2</td><td><code>NUMERIC_SELF_HAZARD_EXPECTED</code></td><td>numeric</td><td class="num">116</td><td>field</td><td>grounded bench &times; layer damage &divide; 6</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B2</td><td><code>NUMERIC_OPP_HAZARD_EXPECTED</code></td><td>numeric</td><td class="num">117</td><td>field</td><td>same, their side</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B4</td><td><code>NUMERIC_SELF_ITEMS_REMOVED_CREDIT</code></td><td>numeric</td><td class="num">118</td><td>field</td><td>our items knocked off &divide; 6</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B4</td><td><code>NUMERIC_OPP_ITEMS_REMOVED_CREDIT</code></td><td>numeric</td><td class="num">119</td><td>field</td><td>their items we knocked off &divide; 6</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B3</td><td><code>NUMERIC_STAT_OPP_SWITCH_COUNT</code> + triple</td><td>—</td><td class="num">—</td><td>stats + opp mons</td><td>marginal form already encoded, /64 — unchanged; the conditional twin is below</td><td><span class="pill cov">covered</span></td></tr>
+  <tr><td>B3+</td><td><code>NUMERIC_MON_SWITCHED_VS_ACTIVE</code></td><td>numeric</td><td class="num">96</td><td>all six opponent mons</td><td>bailed while facing our current active, /8</td><td><span class="pill built">built</span></td></tr>
+  <tr><td>B3+</td><td><code>NUMERIC_MON_STAYED_VS_ACTIVE</code></td><td>numeric</td><td class="num">97</td><td>all six opponent mons</td><td>stood its ground under the same condition, /8</td><td><span class="pill built">built</span></td></tr>
+</table>
+
+<details>
+  <summary>Pool reachability, as a table</summary>
+  <table>
+    <tr><th>Move</th><th class="num">Carrier species</th><th class="num">Sets carrying it</th><th>Pack row served</th></tr>
+    <tr><td>encore</td><td class="num">16</td><td class="num">16</td><td>A2</td></tr>
+    <tr><td>spikes</td><td class="num">11</td><td class="num">15</td><td>B1, B2</td></tr>
+    <tr><td>knock off</td><td class="num">4</td><td class="num">4</td><td>B4</td></tr>
+    <tr><td>hyper beam</td><td class="num">1</td><td class="num">1</td><td>A1 (Slaking; also A3's Truant holder)</td></tr>
+    <tr><td>thrash / petal dance / outrage</td><td class="num">0</td><td class="num">0</td><td>none — rampage lock not promoted</td></tr>
+  </table>
+</details>
+
+<!-- ============================== CONTRACT ============================== -->
+<h2>Contract consequences</h2>
+<p>
+  Every v4 column extends <em>both</em> censuses, so a v4 checkpoint can never share a cache, an env, or a lineage
+  with a v3 one. The machinery refuses to mix them at every layer, by design: schema validation, the encode-time
+  census floors, the checkpoint-provenance latch, and the search-lane contract pin. <b>v2.2 remains the fresh
+  default</b> — adding a schema never moves it, so every running arm keeps collecting under the schema its
+  checkpoints were trained on.
+</p>
+<div class="note">
+  <b>The vocabulary is the same kind of latch.</b> The pack's two categorical families are opt-in via
+  <code>gen3_category_vocabulary(include_feature_pack_v4=True)</code>, exactly like <code>include_turn_merged</code>,
+  because extra rows change the vocabulary <em>size</em> and therefore every embedding table's shape. With the latch
+  off, the enumeration is byte-for-byte what every v2.2/v3 checkpoint was trained against — which is what makes v4
+  safe to land while those arms are still running.
+</div>
+<p>
+  <code>ObservationFeatureMasks.feature_pack_last_move</code> makes A2 independently ablatable, so the plan's arm
+  pair — <b>k0+pack</b> vs <b>k0+pack+lastmove</b> — is two arms differing in exactly one column.
+</p>
+
+<h2>Known gaps</h2>
+<ul>
+  <li><b>Rust leaf encoder / MCTS-eval lane.</b> <code>mcts_eval/resolver.py</code> still lists only v2.2 and v3, so
+    a v4 checkpoint entering that lane is <em>refused loudly</em> rather than silently mis-encoded — the correct
+    fail-closed behaviour until <code>rust/pokezero-search/src/encoder.rs</code> can express the pack. The Python
+    exporter already emits v4 tables. The training and high-fidelity foul-play lanes do not touch that encoder.</li>
+  <li><b>Golden-corpus regeneration at v4</b> — the same gate v3 carries.</li>
+  <li><b>The §5 attribution probe has not been run.</b> It is offline and costs no fleet time. The plan sequences it
+    <em>before</em> the arms so the pack can be trimmed to the rows whose buckets actually show up.</li>
+</ul>
+
+<p class="foot">
+  Generated for the v4 input review. Contract: <code>docs/observation_v4_spec.md</code> ·
+  Tests: <code>tests/test_observation_spec_v4.py</code> ·
+  Launch: the paired-arm launcher in the internal deployment tooling.<br>
+  Data-layer colors are the validated categorical slots 1–3 in both modes
+  (<code>validate_palette.js</code>, surfaces <code>#0f1419</code> dark / <code>#fcfcfb</code> light — all checks
+  pass). Status hues are the reserved good/warning/critical tokens and always ship with an icon and a label.
+</p>
+
+</body>
+</html>

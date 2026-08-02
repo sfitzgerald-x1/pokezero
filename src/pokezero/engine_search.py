@@ -1573,7 +1573,19 @@ class EngineMctsPolicy:
     def _recharging_slots(self, context: PolicyContext) -> tuple[str, ...]:
         """Slots publicly forced to recharge THIS turn (Hyper Beam landed last round).
 
-        Turn-exact signal: the round-indexed public action record (not the
+        PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
+        observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
+        the ``|-mustrecharge|SLOT`` line the sim emits when a recharge move LANDS, which is
+        strictly better evidence than the reconstruction below: a missed Hyper Beam never emits
+        it, the line names its own actor, and it cannot scroll out of a rolling window. Taking it
+        here is what makes the world and the observation ONE PARSER TRUTH with TWO CONSUMERS
+        rather than two derivations that can disagree.
+
+        The reconstruction below remains the fallback for callers whose observation metadata
+        predates the pack (older cached rollouts, hand-built contexts). It is strictly weaker,
+        never stronger, so preferring the tracker can only remove wrong locks, never add one.
+
+        FALLBACK — turn-exact signal: the round-indexed public action record (not the
         rolling event window) must show the opponent's action in the
         immediately-preceding round was a recharge move, and the rolling
         window must not carry a miss marker for it (a missed Hyper Beam does
@@ -1582,6 +1594,15 @@ class EngineMctsPolicy:
         """
 
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        observation_metadata = getattr(context.observation, "metadata", None)
+        if isinstance(observation_metadata, Mapping):
+            tracked = observation_metadata.get("opponent_must_recharge")
+            if tracked is True:
+                return (opponent_slot,)
+            if tracked is False:
+                # An explicit False from the tracker is a public PROOF of no lock, not an absent
+                # signal — do not let the weaker fallback manufacture one behind it.
+                return ()
         trajectory = getattr(context, "trajectory", None)
         round_index = getattr(context, "decision_round_index", None)
         if trajectory is None or not isinstance(round_index, int):

@@ -44,10 +44,23 @@ from typing import Any, Mapping
 # point of having the field: a behaviour change in the exporter must not be
 # silently reused. (Missing this bump caused a trimmed run to reuse cached
 # 87-token tables and fail the root/leaf contract check.)
-EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v4"
+# v5: the exporter's output semantics changed twice in the v4 feature-pack work —
+# default_feature_masks gained feature_pack_last_move, and the categorical map now excludes
+# the per-schema-unreachable families instead of emitting a colliding index. Both were traced
+# as backward-safe by hand (absent mask keys default True on both sides; the crate resolves
+# categoricals by name), but "safe on inspection" is exactly the judgement this field exists
+# to make unnecessary. Bump on an output change; do not re-derive the safety argument.
+EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v5"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
-SUPPORTED_OBSERVATION_SCHEMAS = ("pokezero.observation.v2.2", "pokezero.observation.v3")
+SUPPORTED_OBSERVATION_SCHEMAS = (
+    "pokezero.observation.v2.2",
+    "pokezero.observation.v3",
+    # v4 (the k0 feature pack, history-free): the native encoder reads the pack's boundary
+    # facts off the observation metadata — the same route it already uses for the V3 public
+    # signals — and skips the transition rows entirely, because the contract has none.
+    "pokezero.observation.v4",
+)
 
 TABLES_SCHEMA_VERSION = "pokezero.encoder-tables.v1"
 
@@ -304,6 +317,11 @@ def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Pat
         "stats_block": contract_masks.get("opponent_tendency_stats_block"),
         "tier2_residuals": contract_masks.get("tier2_residuals"),
         "tier2_investment": contract_masks.get("tier2_investment"),
+        # v4 pack A2 ablation: the crate gates a real column on it, so tables that disagree
+        # with the checkpoint would write a column the model was trained to never see.
+        # Checkpoints predating the field are pack-whole by definition (see the config's
+        # from_dict default), which is what the `True` fallback encodes.
+        "feature_pack_last_move": contract_masks.get("feature_pack_last_move", True),
         # The exporter clamps the budget to the physical region, so compare against
         # the same clamp rather than the raw config value.
         "transition_token_budget": min(
@@ -311,11 +329,21 @@ def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Pat
             contract.transition_token_count,
         ),
     }
+    # Tables predating a mask field carry no key for it. Apply the SAME asymmetric default on
+    # both sides — absent means pack-whole — so an older table is compared on its true meaning
+    # rather than reading as None and failing against a checkpoint that is also pack-whole.
+    table_mask_defaults = {"feature_pack_last_move": True}
+
+    def _table_mask(key: str) -> Any:
+        if key in table_masks:
+            return table_masks[key]
+        return table_mask_defaults.get(key)
+
     mismatches.update(
         {
-            f"default_feature_masks.{key}": (table_masks.get(key), expected)
+            f"default_feature_masks.{key}": (_table_mask(key), expected)
             for key, expected in expected_masks.items()
-            if expected is not None and table_masks.get(key) != expected
+            if expected is not None and _table_mask(key) != expected
         }
     )
     # Compare against the CHECKPOINT, not against this build. Getting that

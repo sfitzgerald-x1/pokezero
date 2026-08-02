@@ -173,12 +173,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # train cross-checks them against the model config.
     collect_selfplay_cache.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2", "v3"),
+        choices=("v2.1", "v2.2", "v3", "v4"),
         default=None,
         help=(
             "Observation schema for a FRESH (checkpoint-less) collect: v2.1, "
             "v2.2 (default; turn-merged transition tokens; also flips the schema-derived vocabulary), "
-            "or v3 (turn-merged grouped layout with the V3 public signals). "
+            "v3 (turn-merged grouped layout with the V3 public signals), or v4 (v3 plus the "
+            "k0 feature pack; also flips the feature-pack vocabulary). "
             "With a neural: policy the checkpoint's stamped schema wins and an explicitly "
             "disagreeing flag hard-fails (mask-conflict semantics). Recorded in cache "
             "metadata for the train-side cross-check."
@@ -217,6 +218,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "(byte-identical to pre-investment); adopted from the checkpoint otherwise. Only "
             "meaningful under --observation-schema v2.1/v2.2 (no-op under v2). Recorded in "
             "cache metadata for the train-side cross-check."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
+        "--feature-pack-last-move",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "v4 k0 feature pack, A2 ablation: whether the ACTIVE mon's LAST EXECUTED MOVE "
+            "column is written. Default ON (the pack is whole). --no-feature-pack-last-move "
+            "is the plan's k0+pack arm against the k0+pack+lastmove default, isolating the "
+            "pack's largest single surface. Only meaningful under --observation-schema v4; "
+            "inert under every earlier schema, where the column does not exist."
         ),
     )
     collect_selfplay_cache.add_argument(
@@ -482,12 +495,14 @@ def _explicit_feature_masks_from_args(
     budget = getattr(args, "transition_token_budget", None)
     tier2 = getattr(args, "tier2_residuals", None)
     investment = getattr(args, "tier2_investment", None)
+    pack_last_move = getattr(args, "feature_pack_last_move", None)
     no_stats = bool(getattr(args, "no_stats_block", False))
     no_exact = bool(getattr(args, "no_exact_state", False))
     if (
         budget is None
         and tier2 is None
         and investment is None
+        and pack_last_move is None
         and not no_stats
         and not no_exact
     ):
@@ -516,6 +531,9 @@ def _explicit_feature_masks_from_args(
         tier2_residuals=base.tier2_residuals if tier2 is None else bool(tier2),
         tier2_investment=(
             base.tier2_investment if investment is None else bool(investment)
+        ),
+        feature_pack_last_move=(
+            base.feature_pack_last_move if pack_last_move is None else bool(pack_last_move)
         ),
     )
 
