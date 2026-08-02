@@ -1,9 +1,26 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -192,6 +192,58 @@
+@@ -158,10 +158,11 @@
+     }
+ }
+ 
+-/// Drop ENCORE from `side_ref` and zero its duration counter. Same invariant as
+-/// `end_confusion`: `volatile_status_durations.encore` is 0 whenever the ENCORE
+-/// volatile is absent, so a later Encore on that side starts at the bottom of
+-/// the ladder rather than mid-way up it.
++/// Drop ENCORE from `side_ref` and zero its duration counter. The invariant is
++/// the same one the confusion counter keeps on switch-out:
++/// `volatile_status_durations.encore` is 0 whenever the ENCORE volatile is
++/// absent, so a later Encore on that side starts at the bottom of the ladder
++/// rather than mid-way up it.
+ fn end_encore(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
+     let side = state.get_side(side_ref);
+     let duration = side.volatile_status_durations.encore;
+@@ -192,31 +193,64 @@
  /// Drop CONFUSION from `side_ref` and zero its duration counter, maintaining the
  /// invariant the ladder relies on: `volatile_status_durations.confusion` is 0
  /// whenever the CONFUSION volatile is absent.
+-fn end_confusion(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
 +/// pokezero gen3 fidelity fix: the confusion ladder decides EXPIRY at end of
 +/// turn, but Showdown does not show it there. `confusion.onBeforeMove`
 +/// decrements, snaps out at zero and lets the move through, so `-end confusion`
@@ -39,27 +56,49 @@
 +    side_ref: &SideReference,
 +    instructions: &mut StateInstructions,
 +) {
-+    let side = state.get_side(side_ref);
-+    let duration = side.volatile_status_durations.confusion;
-+    if duration == CONFUSION_SNAP_OUT_PENDING {
-+        return;
-+    }
-+    instructions
-+        .instruction_list
-+        .push(Instruction::ChangeVolatileStatusDuration(
-+            ChangeVolatileStatusDurationInstruction {
-+                side_ref: *side_ref,
-+                volatile_status: PokemonVolatileStatus::CONFUSION,
-+                amount: CONFUSION_SNAP_OUT_PENDING - duration,
-+            },
-+        ));
-+    side.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
-+}
-+
- fn end_confusion(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
      let side = state.get_side(side_ref);
      let duration = side.volatile_status_durations.confusion;
-@@ -2126,7 +2178,38 @@
+-    if duration != 0 {
+-        instructions
+-            .instruction_list
+-            .push(Instruction::ChangeVolatileStatusDuration(
+-                ChangeVolatileStatusDurationInstruction {
+-                    side_ref: *side_ref,
+-                    volatile_status: PokemonVolatileStatus::CONFUSION,
+-                    amount: -duration,
+-                },
+-            ));
+-        side.volatile_status_durations.confusion = 0;
+-    }
++    // Unreachable, and asserted rather than guarded. `chance_confusion_ends`
++    // returns 0.0 for `turns_confused <= 0`, so a counter already parked on the
++    // sentinel cannot re-enter the ladder and cannot be parked twice. An early
++    // `return` here would hold that invariant up silently if it ever broke;
++    // parking twice would write `-4 - (-4) == 0`, quietly reviving the volatile
++    // as a FRESH confusion at the bottom of the ladder. Better to fail loudly in
++    // debug than to leak a second confusion into a searched world.
++    debug_assert_ne!(
++        duration, CONFUSION_SNAP_OUT_PENDING,
++        "confusion snap-out parked twice; the ladder re-entered a pending counter"
++    );
+     instructions
+         .instruction_list
+-        .push(Instruction::RemoveVolatileStatus(
+-            RemoveVolatileStatusInstruction {
++        .push(Instruction::ChangeVolatileStatusDuration(
++            ChangeVolatileStatusDurationInstruction {
+                 side_ref: *side_ref,
+                 volatile_status: PokemonVolatileStatus::CONFUSION,
++                amount: CONFUSION_SNAP_OUT_PENDING - duration,
+             },
+         ));
+-    side.volatile_statuses
+-        .remove(&PokemonVolatileStatus::CONFUSION);
++    side.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
+ }
+ 
+ fn set_last_used_move_as_switch(
+@@ -2126,7 +2160,38 @@
          _ => {}
      }
  
@@ -99,7 +138,18 @@
          .volatile_statuses
          .contains(&PokemonVolatileStatus::CONFUSION)
          && attacker_ability != Abilities::OWNTEMPO
-@@ -4466,7 +4549,7 @@
+@@ -4387,7 +4452,9 @@
+ /// A turn only burns a confusion turn if the CHECK ran, so the ladder is gated
+ /// on the `+1` duration instruction the confusion block emits — the marker is
+ /// carried by both of that block's outcomes (self-hit and move-goes-through) and
+-/// by nothing else, since every other write to this counter is a reset to zero.
++/// by nothing else: every other write to this counter is either a reset to zero
++/// or the snap-out park, which is `CONFUSION_SNAP_OUT_PENDING - duration` and so
++/// always negative. Neither can forge a `+1`.
+ /// Gating on the counter's VALUE instead would be wrong: the counter persists
+ /// across turns, so a Pokemon that spent the turn asleep, flinched, recharging
+ /// or Taunted — none of which reach `confusion.onBeforeMove` in Showdown, all of
+@@ -4466,7 +4533,7 @@
                  expired.update_percentage(chance);
              }
              state.apply_instructions(&expired.instruction_list);

@@ -105,11 +105,27 @@ fn damage_to(branch: &StateInstructions, side: SideReference, amount: i16) -> bo
     })
 }
 
+/// Mirrors `CONFUSION_SNAP_OUT_PENDING` in the engine.
+const CONFUSION_SNAP_OUT_PENDING: i8 = -4;
+
 fn expires_confusion(branch: &StateInstructions) -> bool {
     branch.instruction_list.iter().any(|instruction| {
         matches!(instruction, Instruction::RemoveVolatileStatus(remove)
             if remove.side_ref == SideReference::SideTwo
                 && remove.volatile_status == PokemonVolatileStatus::CONFUSION)
+    })
+}
+
+/// The end-of-turn ladder's snap-out, which now parks the counter on the
+/// sentinel rather than removing the volatile. `expires_confusion` is kept
+/// separate and still means an outright removal, so the tests below can say
+/// which of the two they mean.
+fn parks_snap_out(branch: &StateInstructions) -> bool {
+    branch.instruction_list.iter().any(|instruction| {
+        matches!(instruction, Instruction::ChangeVolatileStatusDuration(change)
+            if change.side_ref == SideReference::SideTwo
+                && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                && change.amount <= CONFUSION_SNAP_OUT_PENDING)
     })
 }
 
@@ -466,15 +482,17 @@ fn confusion_expiry_is_never_emitted_before_showdown_can_observe_it() {
         let expires = branches
             .iter()
             .find(|branch| {
-                expires_confusion(branch)
+                parks_snap_out(branch)
                     && branch.instruction_list.iter().any(|instruction| {
                         matches!(instruction, Instruction::ChangeVolatileStatusDuration(change)
                             if change.side_ref == SideReference::SideTwo
                                 && change.volatile_status == PokemonVolatileStatus::CONFUSION
-                                && change.amount == -(previous_turns + 1))
+                                && change.amount
+                                    == CONFUSION_SNAP_OUT_PENDING - (previous_turns + 1))
                     })
             })
-            .expect("expected residual expiry branch");
+            .expect("expected residual snap-out branch");
+        // Still the original invariant: nothing announces the end here.
         let expire_rendered = rendered(&mut state, expires);
         let expire_events = expire_rendered.lines.join("\n");
         assert!(
@@ -482,11 +500,22 @@ fn confusion_expiry_is_never_emitted_before_showdown_can_observe_it() {
             "{expire_events}"
         );
         assert!(
-            expire_rendered
+            !expires_confusion(expires),
+            "the ladder must park the snap-out, not apply it: {:?}",
+            expires.instruction_list
+        );
+        // ...but it is no longer bought with a rejected branch. The engine now
+        // holds the volatile until the next move, so the renderer has nothing
+        // early to suppress and this line is fully attributable. This is the
+        // whole point of the deferral: `confusion_expiry_timing_unobservable`
+        // was 35% of the clean-band world-construction refusals, and a refused
+        // world is a decision that falls back to raw play.
+        assert!(
+            !expire_rendered
                 .attribution_unsafe
                 .iter()
                 .any(|reason| reason == "confusion_expiry_timing_unobservable"),
-            "{expire_rendered:?}"
+            "the deferral must remove the refusal, not relocate it: {expire_rendered:?}"
         );
     }
 
@@ -511,8 +540,8 @@ fn segmentation_fallback_cannot_leak_confusion_expiry() {
     let branches = generate(&mut state);
     let expires = branches
         .iter()
-        .find(|branch| expires_confusion(branch))
-        .expect("expected residual expiry branch");
+        .find(|branch| parks_snap_out(branch))
+        .expect("expected residual snap-out branch");
     let before = state.serialize();
     // Deliberately supply a switch-first public shape instead of the branch so
     // segmentation fails. Its diagnostic path must not surface the engine's

@@ -1252,6 +1252,10 @@ MAX_SLEEP_TURNS = 4
 MAX_REST_TURNS = 2
 # generate_instructions.rs:45 — the confusion ladder's top rung.
 MAX_CONFUSION_TURNS = 4
+# Mirrors CONFUSION_SNAP_OUT_PENDING in gen3/generate_instructions.rs: the
+# counter value that means "the ladder has snapped this mon out, and the -end is
+# waiting for its next move to announce it".
+CONFUSION_SNAP_OUT_PENDING = -4
 # Guard rail: a pathological cross-product must never explode the boundary cost.
 MAX_HIDDEN_COUNTER_WORLDS = 64
 
@@ -1294,6 +1298,14 @@ def _confusion_counter_variants(spec: Any) -> list[Any]:
     (generate_instructions.rs:106-114), reproducing Showdown's uniform 2-5 roll
     given the elapsed count. The remaining count is private, so the rungs
     0..MAX_CONFUSION_TURNS are swept exactly like sleep's.
+
+    The PENDING rung is swept too. The ladder no longer removes the volatile at
+    end of turn; it parks the counter on ``CONFUSION_SNAP_OUT_PENDING`` so the
+    ``-end`` lands on the next move, where Showdown announces it. A mon observed
+    still carrying CONFUSION may therefore be in that parked state, and it plays
+    differently from every live rung -- its next move is a guaranteed snap-out
+    with no self-hit roll. Omitting it would leave the belief set unable to
+    represent a real, reachable, observationally-identical position.
     """
 
     def side_variants(side: Any) -> list[Any]:
@@ -1301,7 +1313,7 @@ def _confusion_counter_variants(spec: Any) -> list[Any]:
         if "confusion" not in volatiles:
             return [side]
         variants = []
-        for rung in range(0, MAX_CONFUSION_TURNS + 1):
+        for rung in list(range(0, MAX_CONFUSION_TURNS + 1)) + [CONFUSION_SNAP_OUT_PENDING]:
             durations = dict(side.volatile_status_durations or {})
             durations["confusion"] = rung
             variants.append(dataclasses.replace(side, volatile_status_durations=durations))
