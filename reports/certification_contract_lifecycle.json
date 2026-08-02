@@ -35,7 +35,7 @@
  "successor_registration_pending": true,
  "successor_registration_note": "source_code_identity is a frozen, CORRECT snapshot of the classifier at the pinned certification commit -- the classifier the C32 sweep actually executed (the attestation's runtime_readout_sha256 matches it under enforcement_status enforced). The working tree has since moved past it. C32 is therefore an ATTESTED HISTORICAL result and no longer the active registration. A successor contract must be registered before another sweep runs, and C32 must never be re-scored with the current classifier. The live hashes are in successor_pending_identity, which IS asserted; do not restate them here, because prose is not tested and goes stale silently.",
  "successor_pending_identity": {
-  "readout_sha256": "364b30635960c2e9f48e20347521c62611bc39ec3506b5e9b116b9c323744ae3",
+  "readout_sha256": "3fabf43f6b528fb2e18c871f23ce3ea89039a08de952f70051a826a0bced668e",
   "differential_sha256": "ae1bf51d329839379e926bca7596d2bd0c2c6f3b1bdced0d1f28c6d34f422e65",
   "why_pinned": "A boolean 'we have diverged' flag is not a binding -- review passed four tampers with it set, including one that laundered every real unattributed row into a documented family. These are the EXACT bytes the divergence is declared for. Any further edit to either file breaks the assertion and forces a reviewable update here, which is the point."
  },
