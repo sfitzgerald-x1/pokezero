@@ -864,7 +864,7 @@ def _roll_cascade_equivalent(
     room and emits a line. Same transition, same end HP, different component
     COUNT -- and the length check rejected it before any roll tolerance applied.
 
-    THREE constraints, all necessary. Review of #1010 found the first version
+    FIVE constraints, all necessary. Review of #1010 found the first version
     had only the third, which let an observed Leftovers tick match an engine
     Wish plus Leech Seed on equal nets -- different mechanics, not one
     transition at two rolls -- and let the direct component skip the legal-roll
@@ -892,12 +892,14 @@ def _roll_cascade_equivalent(
     if any(_cascade_base(c.source) not in _CASCADE_HEALS or c.delta <= 0 for c in all_heals):
         return False
 
-    # (1) the shared heals must agree in SOURCE AND MAGNITUDE, and exactly one
-    #     extra component may sit on the longer side. Comparing source names
-    #     alone let a shifted magnitude hide inside the "extra": re-review
-    #     showed obs [('', -100), ('movewish', 60)] matching
-    #     eng [('', -100), ('movewish', 44), ('itemleftovers', 16)], where the
-    #     direct components are IDENTICAL so there is no roll gap and no cascade.
+    # (1) exactly one extra component, and the shared heals agree by SOURCE.
+    #     Their MAGNITUDES may differ: in a real cascade the capped heal is
+    #     precisely the one that moved, because a `_to_full` heal restores
+    #     `maxhp - hp_before` and so inherits the preceding roll (see the
+    #     `_to_full` branch of roll_components_agree). Requiring equal
+    #     magnitudes here collapsed this predicate back to the NARROW form C66
+    #     measured at 21 rows and declined to ship -- it rejected the split-gap
+    #     majority, e.g. s18000053/136 where gap 6 = heal gap 3 + residual 3.
     longer, shorter = (
         (engine_heals, observed_heals)
         if len(engine_heals) > len(observed_heals)
@@ -905,49 +907,46 @@ def _roll_cascade_equivalent(
     )
     if len(longer) - len(shorter) != 1:
         return False
-    remaining = Counter((_cascade_base(c.source), c.delta) for c in shorter)
+    remaining = Counter(_cascade_base(c.source) for c in shorter)
     extra_components = []
     for component in longer:
-        key = (_cascade_base(component.source), component.delta)
-        if remaining.get(key):
-            remaining[key] -= 1
+        base = _cascade_base(component.source)
+        if remaining.get(base):
+            remaining[base] -= 1
         else:
             extra_components.append(component)
     if len(extra_components) != 1 or any(remaining.values()):
         return False
     extra = extra_components[0]
 
-    # (2) the extra component must BE the roll gap. This is the identity C66
-    #     measured and named as the thing that licenses the match; the first
-    #     implementation shipped conservation instead, which is weaker.
-    roll_gap = abs(abs(engine_direct[0].delta) - abs(observed_direct[0].delta))
-    if abs(extra.delta) != roll_gap or roll_gap == 0:
+    # (2) the EXTRA must itself be capped, and must be a source the other side
+    #     does not carry. Both sides end at full in a cascade, so the residual
+    #     that filled the gap tops the mon out. This is what rejects a discrete
+    #     mechanic difference -- an engine Leech Seed the observation never saw
+    #     arrives untagged -- and it rejects an extra that merely duplicates a
+    #     shared source to manufacture its own cap flip.
+    if not extra.source.endswith("_to_full"):
+        return False
+    if _cascade_base(extra.source) in {_cascade_base(c.source) for c in shorter}:
         return False
 
-    # (3) a shared heal must have FLIPPED its cap. That is what makes this a
-    #     cascade rather than a discrete mechanic difference: the larger roll
-    #     stopped a Wish or Recover from topping the mon out, which is why a
-    #     residual appeared. Without it, re-review showed
-    #     obs [('', -100), ('itemleftovers', 25)] matching
-    #     eng [('', -106), ('itemleftovers', 25), ('leechseed', 6)] -- an engine
-    #     Leech Seed the observation never saw, admitted purely on arithmetic.
-    observed_caps = {
-        (_cascade_base(c.source), c.source.endswith("_to_full")) for c in observed_heals
-    }
-    engine_caps = {
-        (_cascade_base(c.source), c.source.endswith("_to_full")) for c in engine_heals
-    }
-    shared_bases = {b for b, _ in observed_caps} & {b for b, _ in engine_caps}
+    # (3) a shared heal must have flipped its cap, ON THE SIDE WITH THE SMALLER
+    #     DIRECT ROLL. Direction matters: the smaller roll leaves more HP, so it
+    #     is the side whose heal still tops the mon out. A flip the other way is
+    #     arithmetically impossible from a common start, and without the
+    #     direction check it admitted an engine that took MORE damage yet capped.
+    smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
+    capped_side = observed_heals if smaller_is_observed else engine_heals
+    uncapped_side = engine_heals if smaller_is_observed else observed_heals
+    uncapped_bases = {_cascade_base(c.source) for c in uncapped_side if not c.source.endswith("_to_full")}
     if not any(
-        (base, True) in observed_caps ^ engine_caps
-        or (base, False) in observed_caps ^ engine_caps
-        for base in shared_bases
+        c.source.endswith("_to_full") and _cascade_base(c.source) in uncapped_bases
+        for c in capped_side
     ):
         return False
 
     # (4) the direct component faces the ordinary legal-roll check, INCLUDING
-    #     the crit cross-check the equal-length path applies. Skipping it here
-    #     made the count-mismatch path the one place a crit mismatch passed.
+    #     the crit cross-check the equal-length path applies.
     engine_component = engine_direct[0]
     if (
         support is not None
@@ -971,10 +970,13 @@ def _roll_cascade_equivalent(
     ):
         return False
 
-    # (5) conservation
+    # (5) conservation. With the shape fixed above this IS the general causal
+    #     identity C66 named: the roll gap equals the sum of the increases
+    #     across the healing components, extra included.
     return (observed_direct[0].delta + sum(c.delta for c in observed_heals)) == (
         engine_direct[0].delta + sum(c.delta for c in engine_heals)
     )
+
 
 
 

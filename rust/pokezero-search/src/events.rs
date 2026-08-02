@@ -1522,53 +1522,57 @@ fn render_move_phase(
                     // knows how to read
                     // (reports/c54_sleeptalk_render_contract_mismatch.json).
                     out.mark_attribution_unsafe("sleeptalk_called_unidentified");
-                    let before = [
+                    let mut before = [
                         sim.active_hp(SideReference::SideOne).0,
                         sim.active_hp(SideReference::SideTwo).0,
                     ];
                     for instruction in &called_tail {
                         sim.apply(instruction);
                     }
-                    // DAMAGE ONLY, and never across a switching tail.
+                    // DAMAGE ONLY, and the drag must be RENDERED.
                     //
-                    // A heal direction was added and REVERTED. Re-review of
-                    // #1010 reproduced `|-heal|p2a: Snorlax|100/100|[from]
-                    // residual` for a Snorlax dragged IN by a Sleep-Talk-called
-                    // Roar, which never healed: `before[]` is captured before
-                    // the tail is applied, so a tail containing a Switch makes
-                    // the comparison span two different Pokemon. The old `<`
-                    // guard left that case silent (100 < 50 is false); adding
-                    // the heal branch turned a silent half into a wrong line.
-                    // Roar and Whirlwind are Sleep-Talk-callable and produce
-                    // identical tails, so identify_sleep_talk_called returns
-                    // None and lands exactly here.
+                    // A heal direction was added and reverted: re-review
+                    // reproduced `|-heal|p2a: Snorlax|100/100|[from] residual`
+                    // for a Snorlax dragged IN by a Sleep-Talk-called Roar,
+                    // which never healed. `before[]` predates the tail, so a
+                    // tail containing a Switch made the comparison span two
+                    // Pokemon. The heal direction also had no consumer: the
+                    // differential retags `residual` -> move_unknown_callee
+                    // only for `-damage`.
                     //
-                    // The heal direction also had no consumer: the differential
-                    // retags `residual` -> move_unknown_callee only for
-                    // `-damage`, so a `-heal` carrying that tag lands in the
-                    // exact bucket as ('residual', +n) against Showdown's
-                    // ('heal', +n) and can never match.
+                    // Bailing on a switching tail was the first attempt and was
+                    // ALSO wrong: with no `|drag|` line the consumer's running
+                    // HP stays on the outgoing Pokemon, and the next residual
+                    // is measured against it -- a Leftovers tick reported as
+                    // -14, which is verbatim the C52 impossible component this
+                    // block exists to prevent.
                     //
-                    // The guard below is the precondition for restoring either
-                    // direction. scripts/switch_safe_hp.py is the Python-side
-                    // statement of the same rule.
-                    let tail_switches = called_tail
-                        .iter()
-                        .any(|instruction| matches!(instruction, Instruction::Switch(_)));
-                    if !tail_switches {
-                        for (index, hp_side) in
-                            [SideReference::SideOne, SideReference::SideTwo]
-                                .into_iter()
-                                .enumerate()
-                        {
-                            if sim.active_hp(hp_side).0 < before[index] {
-                                let ident = ctx.active_ident(sim.state, hp_side);
-                                let condition = sim.hp_condition(hp_side);
-                                out.lines.push(format!(
-                                    "|-damage|{ident}|{condition}|[from] residual"
-                                ));
-                                emit_faint_if_dead(sim, hp_side, ctx, out);
-                            }
+                    // The callee is unprovable; the DRAG is not. Rendering it
+                    // re-baselines the consumer and costs no attribution, since
+                    // a drag names no move. reports/c52_impossible_heal_component.json.
+                    for instruction in &called_tail {
+                        if let Instruction::Switch(switch) = instruction {
+                            let details =
+                                ctx.details(sim.state, switch.side_ref, switch.next_index);
+                            let ident = ctx.ident(switch.side_ref, switch.next_index);
+                            let condition = sim.hp_condition(switch.side_ref);
+                            out.lines
+                                .push(format!("|drag|{ident}|{details}|{condition}"));
+                            before[side_usize(switch.side_ref)] =
+                                sim.active_hp(switch.side_ref).0;
+                        }
+                    }
+                    for (index, hp_side) in [SideReference::SideOne, SideReference::SideTwo]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if sim.active_hp(hp_side).0 < before[index] {
+                            let ident = ctx.active_ident(sim.state, hp_side);
+                            let condition = sim.hp_condition(hp_side);
+                            out.lines.push(format!(
+                                "|-damage|{ident}|{condition}|[from] residual"
+                            ));
+                            emit_faint_if_dead(sim, hp_side, ctx, out);
                         }
                     }
                 }

@@ -102,13 +102,55 @@ class RollCascadeTests(unittest.TestCase):
             [comp("", -106), comp("itemleftovers", 25), comp("leechseed", 6)],
         ))
 
-    def test_the_extra_component_must_be_the_roll_gap(self) -> None:
-        """C66 measured this identity and named it as what licenses the match;
-        the first implementation shipped bare conservation instead."""
+    def test_the_split_gap_majority_is_accepted(self) -> None:
+        """C66's general identity: the roll gap equals the sum of increases
+        across ALL healing components, not the extra alone.
+
+        A previous round required the extra to EQUAL the gap. That is C66's
+        narrow form, which the report measured at 21 rows and recorded as "NOT
+        worth implementing", and it rejected the majority the report names --
+        because in a real cascade the capped heal is precisely the one whose
+        magnitude moved. These two are C66's own worked examples."""
+
+        # s18000053/136: gap 6 = heal gap 3 + residual 3
+        self.assertTrue(cascade(
+            [comp("", -99), comp("movewish_to_full", 138)],
+            [comp("", -105), comp("movewish", 141), comp("itemleftovers_to_full", 3)],
+        ))
+        # s18001200/15: gap 9 = heal gap 2 + residual 7
+        self.assertTrue(cascade(
+            [comp("", -113), comp("movewish_to_full", 113)],
+            [comp("", -122), comp("movewish", 115), comp("itemleftovers_to_full", 7)],
+        ))
+
+    def test_the_extra_must_be_capped(self) -> None:
+        """Both sides end at full in a cascade, so the residual that filled the
+        gap tops the mon out. An untagged extra is a discrete mechanic the other
+        side never saw."""
 
         self.assertFalse(cascade(
             [comp("", -41), comp("movewish_to_full", 119)],
-            [comp("", -45), comp("movewish", 111), comp("itemleftovers_to_full", 12)],
+            [comp("", -45), comp("movewish", 119), comp("itemleftovers", 4)],
+        ))
+
+    def test_the_cap_must_flip_on_the_smaller_roll(self) -> None:
+        """The side with the smaller direct roll keeps more HP, so it is the one
+        whose heal still caps. A flip the other way is impossible from a common
+        start, and without the direction check it was admitted."""
+
+        self.assertFalse(cascade(
+            [comp("", -100), comp("movewish", 30), comp("itemleftovers", 25)],
+            [comp("", -106), comp("movewish_to_full", 30), comp("itemleftovers", 25),
+             comp("leechseed_to_full", 6)],
+        ))
+
+    def test_the_extra_may_not_duplicate_a_shared_source(self) -> None:
+        """Otherwise the extra supplies its own cap flip and condition (3) is
+        satisfied by the very component it is meant to constrain."""
+
+        self.assertFalse(cascade(
+            [comp("", -100), comp("itemleftovers", 25)],
+            [comp("", -106), comp("itemleftovers", 25), comp("itemleftovers_to_full", 6)],
         ))
 
     def test_unequal_totals_are_rejected(self) -> None:
