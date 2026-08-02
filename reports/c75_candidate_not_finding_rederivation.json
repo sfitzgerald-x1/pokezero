@@ -1,0 +1,48 @@
+{
+ "schema": "c75-candidate-not-finding-rederivation/1",
+ "closes": "the blocker the audit named for itself. I2_matcher_accounting's entry reads 'no decisive signature ... resolving it needs the reject reason, which these signatures do not measure'. C59 and C60 measured the matcher's own per-row reject reason after that entry was written, so the evidence now exists.",
+ "profiles": {
+  "I3_roll_inherited": {
+   "n": 244,
+   "profile": "exact-component mismatch 244 (100%)",
+   "decisive": true
+  },
+  "I2_matcher_accounting": {
+   "n": 403,
+   "profile": "magnitude only 400 (99%), exact 2, count 1",
+   "decisive": true
+  },
+  "LS_crit_arm_pairing_echo": {
+   "n": 4,
+   "profile": "magnitude only 4 (100%)",
+   "decisive": true
+  },
+  "LS_confusion_fan": {
+   "n": 3,
+   "profile": "source mismatch 3 (100%)",
+   "decisive": true
+  },
+  "I5_boundary_truncation": {
+   "n": 94,
+   "profile": "exact-component 72 (77%), magnitude 16, count 6",
+   "decisive": "dominant but not clean"
+  },
+  "I6_sleeptalk_callee_union": {
+   "n": 49,
+   "profile": "exact 19 (39%), magnitude 16 (33%), source 11 (22%), count 3",
+   "decisive": false
+  },
+  "LS_capped_lethal_shape": {
+   "n": 464,
+   "profile": "count 201 (43%), magnitude 180 (39%), exact 81 (17%)",
+   "decisive": false
+  }
+ },
+ "the_result": "four of seven candidate-not-finding families have a decisive reject signature, three of them essentially pure: I3_roll_inherited is 100% exact-component mismatch across 244 rows, I2_matcher_accounting is 99% magnitude-only across 403. Those are single shapes, not grab-bags, and a single shape can be diagnosed. Two families -- I6 and LS_capped_lethal_shape, the largest at 464 -- are genuinely mixed and stay unresolved.",
+ "what_this_does_and_does_not_establish": {
+  "does": "supplies the evidence the audit said it lacked, and shows that 654 of the 1,261 rows in candidate-not-finding families fail in one identifiable way. The 'next pass' the audit deferred is now possible.",
+  "does_not": "re-bucket anything. A reject signature says WHICH check fires, not whether the cause is engine, instrument or limit. I3 being 100% exact-component mismatch makes it diagnosable; it does not say what the diagnosis is. Claiming otherwise would repeat the error C74 identified -- treating a label as an explanation."
+ },
+ "why_this_is_the_right_place_to_stop": "the audit's own deferral said 'profile recorded for the next pass'. This is that profile, measured against evidence that did not exist when the deferral was written. Carrying it into an actual re-bucketing means diagnosing four shapes, which is a fresh cycle's work and should start from these profiles rather than from a tired session's momentum.",
+ "does_not_reach_a_pass": "no code changed; the gate is unmoved"
+}

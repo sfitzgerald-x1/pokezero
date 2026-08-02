@@ -1,0 +1,82 @@
+{
+ "schema": "c49-search-crate-rest-turns-panic/1",
+ "severity": "certification-infrastructure. This is a CRASH, not a divergence. It raises pyo3_runtime.PanicException out of Rust and kills the calling process -- it took down the C48 audit script on its first run. A sweep shard that reaches this state does not record a divergence, it dies.",
+ "found_by": "reports/c48_stale_consumer_audit.json, as the single state where the two engine consumers disagree",
+ "minimal_reproducer": {
+  "row": "s18600013/89, engine_states index 5",
+  "call": "pokezero_search.branch_events(state, 'extremespeed', 'reversal', ctx, branch_on_damage=True, include_post_state=<either>)",
+  "error": "PanicException: Invalid rest_turns value: 32, at gen3/generate_instructions.rs:2123",
+  "state": "p1 RAYQUAZA status=SLEEP rest_turns=1 (a VALID value); p2 HITMONLEE status=NONE rest_turns=0"
+ },
+ "isolation": {
+  "input_state_is_valid": "rest_turns=1 is in range 0..3, and the arm for 1 wakes the mon and decrements to 0. The 32 is produced DURING execution, not parsed from the state.",
+  "state_roundtrip_excluded": "the crate takes a string while poke_engine takes the object, so a round-trip bug was the first hypothesis. State.from_string(s).to_string() == s for all 7 states of this row. Refuted.",
+  "requires_BOTH_moves": {
+   "extremespeed + reversal": "PANIC",
+   "extremespeed + none": "ok",
+   "none + reversal": "ok",
+   "rockslide|hiddenpowerflying70|earthquake + reversal": "ok"
+  },
+  "requires_the_damage_fan": {
+   "branch_on_damage=True": "PANIC (with include_post_state either way)",
+   "branch_on_damage=False": "ok (either way)"
+  },
+  "consumer_asymmetry": "poke_engine.generate_instructions handles the identical state and choices without error; only the crate path panics"
+ },
+ "untested_hypothesis": {
+  "claim": "the DecrementRestTurns instruction may be reversed without being re-applied once per damage branch, so the counter accumulates to the branch count.",
+  "the_arithmetic_that_suggests_it": "gen3 has 16 damage rolls, and 16 x 2 = 32, the exact panic value",
+  "status": "TESTED AND REFUTED -- see hypothesis_tests below",
+  "why_the_interaction_is_plausible": "Extreme Speed has priority, so it resolves first and changes the defender's HP; Reversal's power is a function of the attacker's remaining HP. With branch_on_damage the first move fans into many HP outcomes, each re-pricing the second. That is the only path here that multiplies branches, and it is the path the flag gates."
+ },
+ "why_it_was_missed_for_so_long": "It surfaced repeatedly in this session's logs as a bare 'thread panicked' line and was filed once as an incidental_finding footnote. It only affects the crate consumer, which is the one the sweep uses, and the reread path I was using for offline work mostly did not reach it.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 476",
+ "hypothesis_tests": {
+  "method": "rest_turns is field 19 of the serialized mon record, so it can be varied directly on the state string. Held everything else fixed and swept it.",
+  "result": {
+   "rest_turns=0": "ok",
+   "rest_turns=1": "PANIC, reports 32",
+   "rest_turns=2": "ok",
+   "rest_turns=3": "ok"
+  },
+  "kills_the_accumulation_lead": "If the counter accumulated once per damage branch from its starting value, rest_turns=2 and 3 would panic too and the reported value would shift with the input. Neither happens: only 1 panics, and the value is a constant 32. The 16 x 2 = 32 arithmetic was a coincidence, exactly as the registration warned it might be.",
+  "kills_a_misindexed_read": "A wrong field offset would surface some other value from the record. 32 does not appear anywhere in this state as a field -- zero occurrences. The value is generated during execution, not read from the input.",
+  "what_the_sweep_localises": "rest_turns == 1 is the WAKE-UP arm (generate_instructions.rs:2083): it is the only arm that changes status, setting SLEEP -> NONE and decrementing to 0. So the trigger is a mid-turn status change interacting with the damage fan, not the counter's magnitude.",
+  "branch_count_hypothesis": {
+   "claim": "32 is the number of damage branches, accumulated one reversal per branch",
+   "test": "counted branches for this exact boundary",
+   "result": {
+    "extremespeed+reversal": "1 branch",
+    "rockslide+reversal": "3",
+    "earthquake+reversal": "2"
+   },
+   "verdict": "REFUTED. The panicking combination produces the FEWEST branches -- one. That inverts the story completely: more branches would mean more accumulation, and the single-branch case is the only one that fails."
+  }
+ },
+ "current_best_characterisation": "A second evaluation of an already-woken Pokemon reads a counter that is neither its input value nor anything derivable from the branch fan. Constant 32 with a single branch points at reading the wrong memory or a stale/aliased state object on the second pass, not at arithmetic. Four hypotheses are eliminated; that one is untested.",
+ "what_would_settle_it": "Print rest_turns immediately after the wake-up arm completes, and at entry to whatever second pass re-enters the match, to see whether 0 is written and then read back as 32 or whether the second pass is reading a different object entirely.",
+ "instrumented_run": {
+  "how": "added an eprintln at the SLEEP match entry, shipped as a temporary patch in the stack with the digest gate disabled, rebuilt both consumers, then removed it and rebuilt clean at d739faa2. An ad-hoc edit to the vendored tree does NOT work: build_search_crate_engine.sh re-runs vendor_poke_engine_src.sh, which re-extracts the sdist and wipes it. I tried that first and the debug string was absent from both .so files, which is how I noticed.",
+  "output": [
+   "PZDBG rest_turns=1  idx=P5 id=RAYQUAZA",
+   "PZDBG rest_turns=32 idx=P5 id=RAYQUAZA",
+   "PANIC"
+  ],
+  "what_it_proves": "The SLEEP match is entered TWICE for the SAME Pokemon (P5, RAYQUAZA) within one branch_events call. First entry sees the true value 1 and takes the wake-up arm, which sets rest_turns to 0. The second entry sees 32. So the corruption happens between the two entries, and the second entry should not be reading a stale-or-mutated counter for a mon that already woke."
+ },
+ "eliminated": [
+  "state round-trip corruption",
+  "accumulation from the input value",
+  "accumulation proportional to branch count",
+  "a mis-indexed read from the serialized state"
+ ],
+ "established": [
+  "the SLEEP match runs twice for the same mon in one call",
+  "the first run is correct (1) and takes the wake-up arm; the second sees 32",
+  "only rest_turns==1 triggers it -- the sole arm that also changes status SLEEP -> NONE",
+  "32 is constant, independent of the input value and of the branch count",
+  "poke_engine handles the identical state and choices; only the crate panics",
+  "it needs a priority move paired with an HP-dependent one (extremespeed + reversal)"
+ ],
+ "BASELINE_NOTE": "The 476 baseline this file reasons from descends from C46's Trick-patch clearance, which is VOID -- the patch was dropped after review falsified it against Showdown. See reports/c46 and reports/c83."
+}

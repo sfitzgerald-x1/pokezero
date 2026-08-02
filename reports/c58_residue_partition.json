@@ -1,0 +1,82 @@
+{
+ "schema": "c58-residue-partition/1",
+ "population": "all 341 unattributed rows at fingerprint c50da60a, post-C55 and post-C57",
+ "method": "for each row, ask where the match lives: in a branch the differential INCLUDES, in one it EXCLUDES as attribution-unsafe, or nowhere. 'Match' is net HP on both slots, exactly or within the legal roll window.",
+ "partition": {
+  "an INCLUDED branch reproduces the observation": {
+   "rows": 183,
+   "share": "53.7%",
+   "bucket": "instrument-artifact",
+   "reading": "the engine reaches the observed HP outcome on a branch the matcher considered and rejected, so the rejection is at the component-decomposition level, not the outcome level"
+  },
+  "no branch reproduces the observation at all": {
+   "rows": 107,
+   "share": "31.4%",
+   "bucket": "engine-gap",
+   "reading": "the transition is outside the engine's enumerated support. The 50 rows confirmed unreachable by the C37 method are a subset."
+  },
+  "only an EXCLUDED attribution-unsafe branch reproduces it": {
+   "rows": 50,
+   "share": "14.7%",
+   "bucket": "comparison-limit",
+   "reading": "C57 admitted the 27 lossy-only branches; these are the ones the renderer says it genuinely cannot attribute. Excluding them is correct -- admitting an unobservable attribution could manufacture a false MATCH."
+  },
+  "error": 1
+ },
+ "why_this_artifact_is_worth_having": "Objective 3 bucketed FAMILIES. This buckets the actual remaining ROWS, which is the thing the certification gate counts. It says how much of the 341 is instrument, how much is engine, and how much is a limit -- 54/31/15 -- so the next fix can be chosen by where the mass is rather than by which shape happens to be legible.",
+ "the_limit_of_the_test": "'Reproduces the observation' is net HP per slot; the matcher compares component decompositions. So the 183 are rows where the OUTCOME is reached and the decomposition is rejected -- which is strong evidence of an instrument issue but not proof, since a branch can legitimately differ in how it splits the same net HP. Calling them instrument-artifact is a bucketing judgement on that evidence, not a measurement of the decomposition itself.",
+ "what_it_implies_for_a_PASS": "107 rows are engine-support gaps and will not yield to matcher work. 50 are a comparison limit the producer itself cannot resolve. Together that is 157 of 341 -- 46% -- that no instrument fix can clear. A PASS at zero unattributed therefore requires either engine changes that widen support, or those shapes closed as documented follow-ups and evidence-backed limits under the contract's own three exits.",
+ "era": {
+  "engine_fingerprint": "c50da60a",
+  "differential_sha256": "dc78c413f08cae137693569cd01931bd49fcc24535ce73210566861e9695b786"
+ },
+ "CORRECTED": {
+  "the_defect_in_my_own_instrument": "The partition used net HP per slot between the boundary's pre and post features. That is meaningless whenever the ACTIVE CHANGED on a slot, because the two HP readings then belong to DIFFERENT Pokemon. Found by reading s18000268/37, where observed p2 nets +17 while the matching branch nets -96 and my test passed it anyway: p2 had switched to Cradily, so 184 and 239 are different mons.",
+  "scope": {
+   "no slot switched (test valid)": 236,
+   "one slot switched": 101,
+   "both switched": 4,
+   "unreliable share": "105 of 341 = 30.8%"
+  },
+  "corrected_partition_over_the_236_valid_rows": {
+   "an INCLUDED branch reproduces the observation": 132,
+   "no branch reproduces it at all": 53,
+   "only an EXCLUDED attribution-unsafe branch does": 50,
+   "error": 1
+  },
+  "what_changed": "The engine-gap bucket falls hardest: 107 -> 53 among rows where the test is valid. The original 107 absorbed switch rows whose HP comparison was nonsense. The instrument bucket falls 183 -> 132. The comparison-limit bucket is unchanged at 50, because it is defined by the branch's lossy severity rather than by the HP test.",
+  "what_the_headline_should_have_been": "Not '54/31/15 instrument/engine/limit over 341'. It is 132/53/50 over the 236 rows the instrument can actually judge, with 105 rows unmeasured by this method. The 46%-cannot-be-cleared-by-matcher-work claim rested on the inflated 107 and does not survive: on valid rows it is 103 of 236, 44%, which happens to land close, but by arithmetic rather than by the evidence I cited.",
+  "how_to_measure_the_105": "compare per-Pokemon rather than per-slot: identify the active on each side before and after, and compare HP for the mon that was actually present. The row payloads carry active_changed and the protocol carries the switch lines, so this is available offline."
+ },
+ "SECOND_CORRECTION_one_consistent_test": {
+  "why": "the first correction fixed the switch bug but left two DIFFERENT tests in one table: net HP for the 236 non-switch rows and nothing for the 105. Comparing buckets across two tests is not a partition. This re-runs a single test -- component-decomposition agreement, which is what the matcher actually compares -- over all 341.",
+  "result": {
+   "no branch reproduces the decomposition": {
+    "no switch": 167,
+    "switch": 98,
+    "total": 265
+   },
+   "only an EXCLUDED attribution-unsafe branch reproduces it": {
+    "no switch": 58,
+    "switch": 0,
+    "total": 58
+   },
+   "an INCLUDED branch reproduces the decomposition": {
+    "no switch": 10,
+    "switch": 7,
+    "total": 17
+   },
+   "error": 1
+  },
+  "this_test_is_a_LOWER_BOUND_on_reproducibility": "my agree() demands identical sources and magnitudes within the legal roll window. The real matcher is more permissive -- capped bases, roll-scaled buckets, the _to_full relaxation. So it UNDERCOUNTS matches, and 17 is a floor rather than an estimate.",
+  "how_the_three_readings_compare": {
+   "original (HP, all 341, switch bug)": "183 instrument / 107 engine / 50 limit",
+   "first correction (HP, 236 valid rows)": "132 / 53 / 50",
+   "this (decomposition, all 341, lower bound)": "17 / 265 / 58"
+  },
+  "why_they_differ_so_much": "HP-level agreement is far weaker than decomposition agreement. A branch can land the same net HP by a different split of sources, which the matcher rejects and my HP test accepted. So the HP reading OVERSTATED the instrument bucket and the decomposition reading understates it; the truth is between 17 and 132, and neither number is the answer.",
+  "what_i_should_not_have_published": "a partition at all, from a test that was not the matcher's. Two corrections in two cycles came from the same root: I built a cheap proxy for 'does the engine reproduce this' and read its output as a bucketing. The only test whose verdict IS the bucketing is the matcher's own, and it is already available -- evaluate_boundary_strict returns exactly that.",
+  "the_measurement_that_would_settle_it": "instrument evaluate_boundary_strict to report, per row, WHICH check rejected the best branch. That is the matcher's own verdict rather than a proxy for it, it needs no new tolerance decisions from me, and it partitions the residue by construction."
+ },
+ "SUPERSEDED_BY": "reports/c59_matcher_verdict_partition.json -- all readings in this file are proxies for the matcher's decision and are withdrawn. The matcher's own verdict: 318 of 341 rejected by the roll-scaled check, 23 by the attributed check."
+}

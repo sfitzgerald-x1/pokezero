@@ -1,0 +1,43 @@
+{
+ "schema": "c39-sleep-talk-mechanism-control/1",
+ "corrects": "reports/c38_sleep_talk_support_gap.json",
+ "population": "the 74 confirmed-unreachable rows from C37: 37 Sleep Talk, 37 not",
+ "finding_1_sleep_talk_is_not_the_mechanism": {
+  "the_control_c38_should_have_run": "the same failure-profile breakdown on the 37 NON-Sleep-Talk unreachable rows",
+  "sleep_talk": {
+   "engine smaller than observed": 17,
+   "larger": 10,
+   "brackets but misses": 9,
+   "zero-delta": 1
+  },
+  "control": {
+   "engine smaller than observed": 20,
+   "larger": 7,
+   "brackets but misses": 9,
+   "zero-delta": 1
+  },
+  "reading": "Indistinguishable. Two claims have to be separated and C38 ran them together: Sleep Talk boundaries are MORE LIKELY to be unreachable (56% vs 33%, which stands from C37), but CONDITIONAL on being unreachable they fail exactly like everything else. Sleep Talk amplifies exposure to a shared defect -- it fans branches, so there are more ways to miss -- without being the defect.",
+  "consequence": "a Sleep-Talk-specific patch is NOT indicated. C38's 'largest identifiable mechanism' framing is withdrawn; it is the largest identifiable MOVE, which is not the same thing."
+ },
+ "finding_2_the_engine_does_not_enumerate_the_roll_fan": {
+  "measured": "the engine enumerates 1-3 distinct nonzero HP deltas per boundary (median 2), never 16",
+  "verified_in_source": "gen3/damage_calc.rs:39 -- `enum DamageRolls { Average, Min, Max }`. At most three representative rolls by design, for search tractability.",
+  "why_i_checked_it": "this was a candidate unifying explanation for the whole 74: if the engine never enumerates the sim's 16 rolls, 'no branch reaches the observed value' could be a design property rather than a gap, and C37's headline would collapse."
+ },
+ "finding_3_but_it_does_not_explain_the_74": {
+  "test": "An Average-roll branch sits at ~92.5% of max damage, so real rolls 85..100 land within 0.919x to 1.081x of it -- +/-8.1%. Anything further than that from EVERY branch cannot be roll collapse.",
+  "result": {
+   "n": 66,
+   "within_8.1_pct": 0,
+   "8.1_to_18_pct": 0,
+   "beyond_18_pct": 66,
+   "median_distance_from_closest_branch": "44% of the observed magnitude",
+   "min": "18.0%",
+   "max": "2014%"
+  },
+  "verdict": "roll collapse EXCLUDED. C37's 74 confirmed support gaps survive the challenge.",
+  "note": "66 not 74 -- the 8 with a zero observed delta or no nonzero branch are excluded from a ratio test rather than counted as passing it."
+ },
+ "what_the_engine_gap_bucket_actually_looks_like": "74 rows, confirmed unreachable, and heterogeneous: roughly half have every engine branch smaller than observed, a quarter larger, a quarter bracketing it, and one is a turn the engine thinks did not happen. There is no single bug here and no single fix. Objective 4 ranks by rows x search-impact, and on this evidence the honest row term is not '37 Sleep Talk' but a set of small heterogeneous shapes, none yet large enough on its own to justify an engine patch before the search term is measured.",
+ "does_not_reach_a_pass": "no code changed; unattributed stays at 485"
+}

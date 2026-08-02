@@ -1,0 +1,188 @@
+{
+ "schema": "c35-same-turn-scoping-premeasure/1",
+ "population": "the 3,549 rows of the C32 sweep that still diverge on the current build (fingerprint 51d56b3f, 53 patches, post-C34), of which 515 are unattributed",
+ "how_the_population_was_built": "Re-read all 7,249 retained C32 rows through the CURRENT build with cert_sweep_reread.reread_row, then re-derived divergence_class with the differential's own classify_divergence. Validation: this reproduces the C34 postmeasure exactly -- 515 unattributed = 433 structural + 37 same_turn + 36 generic + 9 truant -- so the offline instrument agrees with the sweep readout.",
+ "question_1_the_crit_hypothesis": {
+  "claim_tested": "the 37 same_turn_stat_event_gap rows are unpriced crits, which would move them to the engine-gap bucket beside C27 and C31",
+  "verdict": "REFUTED",
+  "evidence": {
+   "deciding_pair_ratios": {
+    "n": 37,
+    "min": 0.7,
+    "median": 0.89,
+    "max": 0.96,
+    "in_crit_band_1.7_to_2.3": 0
+   },
+   "note": "the deciding pair is the one the rule actually inspects: the first miss with exactly one observed and one engine component whose ratio falls in [0.70, 0.96]"
+  },
+  "why_the_earlier_reading_was_wrong": "TWO independent errors, either one fatal. (1) POPULATION: I measured over all 7,249 retained rows, which carry no divergence_class field -- so attribute_row took cls='' and every row fell through to UNATTRIBUTED. The measurement was not mis-scoped, it was invalid at the root. (2) PAIR: I averaged over every component pair on the arm rather than the pair the rule inspects. The rule fires on observed SMALLER than engine (0.70-0.96); a 2x crit ratio cannot trigger it, which the arithmetic said plainly before any measurement did.",
+  "the_correlation_that_misled_me": "24 of the 37 protocols DO contain |-crit|. Crits are present at these boundaries -- they are just not what the rule is complaining about. A true signal on the boundary is not evidence for a claim about the pair."
+ },
+ "question_2_what_is_actually_wrong": {
+  "finding": "32 of 37 rows are decided by a MINORITY arm, not the majority arm.",
+  "this_is_the_C28_defect_at_a_second_site": "C28 scoped the roll_scaled_component rule to the majority arm for exactly this reason -- a small-mass branch was deciding rows whose majority arm a documented family already explained (22 of 29 structural rows on the 52-patch build). The same-turn rule has the identical shape and was never scoped. I4's words apply unchanged: a tie confined to a minority arm cannot explain the majority-arm complaint.",
+  "bucket": "instrument-artifact -- the engine's arm is not wrong here, the rule is reading the wrong arm"
+ },
+ "registered_prediction": {
+  "change": "scope the same-turn boost/status rule in scripts/cert_sweep_readout.py attribute_row to the majority arm only, matching C28's scoping of roll_scaled_component",
+  "counts": {
+   "same_turn_stat_event_gap": {
+    "before": 37,
+    "after": 5
+   },
+   "total_unattributed": {
+    "before": 515,
+    "after": 485
+   },
+   "I2_matcher_accounting": {
+    "before": 379,
+    "after": 403
+   },
+   "structural_component_count_without_supported_sibling": {
+    "before": 433,
+    "after": 435
+   }
+  },
+  "identity_level_falsifier": "Counts matching is NOT sufficient -- C29 passed its count check and failed its identity check. These 32 named rows must move, to these named families, and the 5 named rows must stay. Any substitution falsifies the prediction even at equal counts.",
+  "rows_that_must_move": [
+   {
+    "row": "s18000003/8",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18000403/2",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18000579/54",
+    "to": "I1_cap_state_shape"
+   },
+   {
+    "row": "s18001015/39",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18001016/2",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18001053/11",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18001116/5",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18100483/76",
+    "to": "I3_roll_inherited"
+   },
+   {
+    "row": "s18100621/76",
+    "to": "LS_capped_lethal_shape"
+   },
+   {
+    "row": "s18101072/32",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18101136/19",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18200147/76",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18200416/10",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18200707/49",
+    "to": "LS_capped_lethal_shape"
+   },
+   {
+    "row": "s18300032/6",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18401081/42",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18500115/95",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18500218/25",
+    "to": "LS_capped_lethal_shape"
+   },
+   {
+    "row": "s18500781/23",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18500856/18",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18500956/62",
+    "to": "LS_capped_lethal_shape"
+   },
+   {
+    "row": "s18600123/9",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18600170/58",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18600848/21",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18601086/73",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18601099/5",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18700011/54",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18700272/12",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18700716/34",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18701034/7",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18701130/71",
+    "to": "I2_matcher_accounting"
+   },
+   {
+    "row": "s18701179/9",
+    "to": "I2_matcher_accounting"
+   }
+  ],
+  "rows_that_must_stay": [
+   "s18000931/98",
+   "s18301144/67",
+   "s18400839/40",
+   "s18500337/11",
+   "s18700725/79"
+  ],
+  "does_not_reach_a_pass": "485 unattributed against a required zero. This closes one shape, not the sweep."
+ },
+ "appendix_x_bar": "This verdict REDUCES the residue by 30 rows, so under X.3.3 it carries the higher bar rather than the permissive one. The bar is met by the identity-level falsifier above plus the precedent: the identical correction was made, measured and validated at the roll_scaled_component site in C28.",
+ "era_consequence": "This edits the readout, so readout_sha256 changes and the matcher era advances. Every limit adjudication must be mechanically re-derived against the new era before the audit table can be read as current -- that is the rule, not a courtesy."
+}

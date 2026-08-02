@@ -1,0 +1,94 @@
+{
+ "schema": "c45-truant-counter-adjudication/1",
+ "closes": "the one family the C35 audit still bucketed OPEN -- truant_loaf_phase_drift, 9 rows, 'a predicted-zero counter with fresh nonzero evidence ... a certification failure in its own right'",
+ "correction_to_my_own_reporting": "I told the user twice that condition 3 of the goal -- every remaining family carries a current-era adjudication -- was met after C42. It was not. C42 adjudicated the engine-gap bucket; this family was still bucketed OPEN in the same audit file I cited as evidence.",
+ "what_the_alarm_said": "a counter registered at predicted-zero fired 9 times on a fresh population, which the audit read as an engine-side Truant loaf-phase drift surviving #970",
+ "verdict": "FALSE ALARM. The counter is an instrument-artifact: its rule is over-broad and none of the 9 rows is a Truant loaf boundary.",
+ "evidence": {
+  "step_1_no_loaf_branch": "the engine puts 100% mass on acting and enumerates no loaf branch in 9 of 9 -- which looked like a decisive engine-gap",
+  "step_2_the_volatile": "3 of 9 DO carry the TRUANT volatile on the engine state, which sharpened the apparent gap further",
+  "step_3_what_the_instructions_actually_showed": "every one of those 3 branches begins Switch SideOne: P4/P5/P0 with RemoveVolatileStatus SideOne: TRUANT. They are SWITCH boundaries. The volatile is being removed because the mon leaves the field, and the complaining slot's HP delta belongs to the incoming mon, not to Slaking.",
+  "step_4_the_whole_cohort": {
+   "switch_boundaries": 8,
+   "non_switch": 1,
+   "slaking_NOT_on_the_complaining_slot": 8,
+   "reading": "the complaint is about a different mon than the Slaking in 8 of 9 rows"
+  }
+ },
+ "the_defective_rule": {
+  "location": "scripts/cert_sweep_readout.py attribute_row",
+  "text": "(\"Slaking\" in proto or \"Slakoth\" in proto or \"Truant\" in proto) and one-sided components",
+  "defect": "it gates on the protocol MENTIONING a Slaking anywhere, with no requirement that the boundary be a loaf turn or that the Slaking be the active on the slot being compared. Any switch boundary in a game containing a Slaking qualifies.",
+  "why_this_is_worse_than_a_missed_row": "a predicted-zero counter is a fail-closed alarm. One that fires on unrelated boundaries manufactures certification failures and spends diagnosis time on a mechanism that is not there -- which is exactly what it did here."
+ },
+ "registered_prediction": {
+  "change": "narrow the rule to require a |cant| truant loaf AND the Slaking to be the active on the complaining slot",
+  "sensitivity_preserved": "the narrowed predicate is the exact loaf signature, so a genuine Truant loaf-phase drift still fires. Only the false positives stop.",
+  "counts": {
+   "truant_loaf_phase_drift": {
+    "before": 9,
+    "after": 0
+   },
+   "structural_component_count_without_supported_sibling": {
+    "before": 435,
+    "after": 444
+   },
+   "total_unattributed": {
+    "before": 485,
+    "after": 485
+   }
+  },
+  "appendix_x_bar": "this REDUCES no residue -- 485 before and after -- so it is a relabel and carries the permissive bar, not the higher one",
+  "identity_level_falsifier": "these 9 named rows must move to the named family; C29 passed on counts and failed on identities",
+  "rows_that_must_move": [
+   {
+    "row": "s18001012/6",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18101135/24",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18200629/54",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18500066/10",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18500138/39",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18500530/74",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18500530/81",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18600328/27",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   },
+   {
+    "row": "s18600582/31",
+    "to": "UNATTRIBUTED:structural_component_count_without_supported_sibling"
+   }
+  ]
+ },
+ "prediction_outcome": "CONFIRMED on counts AND identities (9/9 named rows moved as named)",
+ "verification": {
+  "truant_loaf_phase_drift": "9 -> 0",
+  "structural_component_count_without_supported_sibling": "435 -> 444",
+  "total_unattributed": "485 -> 485 (relabel, as registered)",
+  "tests": "64 tests pass across the readout contract, tactics, contract registration and patch pins"
+ },
+ "era_rederivation": {
+  "new_readout_sha256": "0497c6705c7659643a4fa6084052f38bda88b95a9ad9bb558953f1ffc3252157",
+  "audit": "reports/c45_family_bucket_audit.json -- re-derived, not carried forward. No family is bucketed OPEN any longer; truant_loaf_phase_drift is now instrument-artifact with C45 as its evidence.",
+  "c42_revalidated": "C42's engine-gap adjudication was era-stamped on the previous readout hash and was therefore VOID by its own rule. Re-derived rather than re-stamped: the branch-set support measurement returns the identical 74 unreachable rows (37 Sleep Talk, 37 other) from the same 179-row population, because the 9 relabelled rows do not enter that bucket. The adjudication's substance survives the era change on evidence."
+ }
+}

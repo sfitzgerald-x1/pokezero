@@ -1,0 +1,22 @@
+{
+ "schema": "c76-i3-pain-split-diagnosis/1",
+ "follows": "reports/c75 -- I3_roll_inherited was one of four candidate-not-finding families with a decisive reject signature (244 rows, 100% exact-component mismatch)",
+ "what_the_family_actually_is": {
+  "composition": "221 of 244 rows are Pain Split (movepainsplit); the rest are heal, itemleftovers, brn",
+  "shape": "238 of 244 are obs1/eng1 -- one component each side, same source, differing magnitude",
+  "magnitude_differences": {
+   "n": 221,
+   "min": 1,
+   "median": 1,
+   "p90": 3,
+   "max": 38,
+   "distribution": "1 HP x117, 2 x58, 3 x24, 4 x12, then a thin tail to 38",
+   "within_3_HP": "199 of 221 = 90%"
+  }
+ },
+ "the_mechanism": "Pain Split is DETERMINISTIC -- floor((targetHP + userHP) / 2) -- which is why damage_component_events tags it separately and why the matcher compares it EXACTLY. Its own comment says so: 'Pain Split is deterministic ... so its magnitude must be compared exactly.' But deterministic given its INPUTS. When a preceding damage roll differs between engine and simulator, the HP entering the split differs, and the split propagates roughly half of that difference. A 1 HP Pain Split difference is not a Pain Split error; it is a preceding roll difference, halved. The family name -- roll_INHERITED -- states this exactly, and the family was nonetheless bucketed candidate-not-finding for want of the reject profile.",
+ "the_bucket_this_evidence_supports": "comparison-limit. Neither side is wrong: the engine picked a legal roll, the simulator picked another, and Pain Split faithfully propagated the consequence. The matcher rejects it because exact comparison is correct for a deterministic move and incorrect for one whose inputs carry roll variance. 90% of the differences are within 3 HP, which is what halving a legal roll spread produces.",
+ "what_i_am_not_doing": "changing the tolerance. The right bound is half the preceding-damage difference, and C69 showed twice what happens when a principled bound is applied without measuring its blast radius -- 45x the target population, then a false-match rate of 87%. Any Pain Split tolerance needs the same gate: measure how many rows it moves, whether any family shrinks, and its acceptance rate on crossed pairs. That is a registration, not a tail-of-session edit.",
+ "the_thin_tail_matters": "differences of 20, 21 and 36 HP cannot be half a legal roll spread on any reasonable base. Three rows, and they are NOT explained by this diagnosis. A tolerance built for the 90% must not silently absorb them.",
+ "status": "DIAGNOSED, not re-bucketed and not fixed. This is the per-family evidence objective 3 asks for, on the first of the four shapes C75 unblocked."
+}
