@@ -814,6 +814,14 @@ class PublicBattleBeliefEngine:
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
+            # Trace names the TRACED mon's ability on the TRACER's line; redirect to the
+            # ``[of]`` mon, and record nothing at all when it is absent. See _trace_copy_source.
+            is_trace, traced_ident = _trace_copy_source(raw_line)
+            if is_trace:
+                traced_slot = _slot_from_ident(traced_ident) if traced_ident else None
+                if not traced_slot:
+                    return
+                target_slot, target_ident = traced_slot, traced_ident
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
                 self._replace_belief(
@@ -1813,6 +1821,34 @@ def _append_evidence(
     return (*values, evidence)
 
 
+def _trace_copy_source(raw_line: str) -> tuple[bool, Optional[str]]:
+    """``(is_a_Trace_copy, ident of the mon COPIED FROM)`` for an ``-ability`` line.
+
+    ``sim/pokemon.ts setAbility`` emits
+    ``|-ability|<tracer>|<COPIED>|<tracer's own ability>|[from] ability: Trace|[of] <traced>``,
+    so the line's SUBJECT is the tracer while the ability named belongs to the TRACED mon.
+    Attributing it to the subject is wrong in both directions at once: it corrupts the tracer's
+    candidate set with an ability it cannot have, and it throws away a CERTAIN reveal that
+    would narrow the traced mon.
+
+    The corruption is sticky. Trace re-fires on every switch-in and the conflicting-evidence
+    guard keeps the FIRST claim, so one early copy persists for the rest of the battle — the
+    live case being a Gardevoir left holding ``levitate`` and silently granted Spikes immunity.
+
+    ``(True, None)`` means a Trace line whose ``[of]`` is absent: the copy cannot be attributed
+    to anyone, and falling back to the subject is precisely the bug, so callers record nothing.
+
+    Reachability: Trace is live in the gen3 randbats pool (Gardevoir, Porygon2). Both carry
+    Trace on every variant, so the tracer's OWN ability — the third field on the line — is
+    deliberately not recorded anywhere: it could never narrow their candidate sets.
+    """
+
+    if not re.search(r"\[from\] ability: Trace\b", raw_line or ""):
+        return False, None
+    traced = re.search(r"\[of\] ([^|\]]+)", raw_line or "")
+    return True, traced.group(1).strip() if traced else None
+
+
 def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[str]]:
     event_type = _event_value(event, "event_type")
     actor_ident = _event_value(event, "actor_ident")
@@ -1820,6 +1856,9 @@ def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[s
     primary = _event_value(event, "primary")
     raw_line = _event_value(event, "raw_line") or ""
     if event_type in {"-ability", "ability"} and primary:
+        is_trace, traced_ident = _trace_copy_source(raw_line)
+        if is_trace:
+            return traced_ident, (primary if traced_ident else None)
         return target_ident, primary
     if event_type == "-start" and primary and primary.strip().lower().startswith("ability:"):
         # ``|-start|<holder>|ability: X`` (Flash Fire activation): the holder
