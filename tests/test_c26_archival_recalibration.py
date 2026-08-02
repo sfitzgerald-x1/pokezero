@@ -173,7 +173,10 @@ class EmittedArtifactTests(unittest.TestCase):
         if not path.is_file():
             self.skipTest("C26 calibration is not registered in this commit")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["schema"], RECAL.SCHEMA)
+        # The committed C26 artifact records the label it was produced under;
+        # the instrument has since been made cycle-agnostic for reuse, so pin
+        # the historical literal rather than the live constant.
+        self.assertEqual(payload["schema"], "c26-current-engine-archival-calibration/1")
         self.assertEqual(
             payload["source_evidence"]["archive_shard_sha256"],
             list(RECAL.PINNED_ARCHIVE_SHARDS),
