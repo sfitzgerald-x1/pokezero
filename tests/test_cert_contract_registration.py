@@ -17,7 +17,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# The ACTIVE registration. C26's artifacts stay as history and are guarded by
+# The REGISTERED contract for the C32 sweep. Attested and FAILED, so it
+# is historical, not the active registration -- see the lifecycle's
+# successor_registration_note. C26's artifacts stay as history and are guarded by
 # LifecycleTests below; these invariants follow whichever contract is current.
 CONTRACT_PATH = ROOT / "reports" / "c32_current_engine_resweep_spec.json"
 C26_CONTRACT_PATH = ROOT / "reports" / "c26_current_engine_resweep_spec.json"
