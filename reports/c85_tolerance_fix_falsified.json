@@ -21,8 +21,25 @@
  "which_explanation_is_right_is_NOT_established": {
   "possibility_a": "the 120 unrecovered rows are REAL engine defects that the loose version was masking, in which case the sound version is correct and 67 was never an honest number",
   "possibility_b": "the exact-magnitude rule is firing on MISPAIRED components. Promotion moves a component out of the order-insensitive Counter comparison into roll_component_events_agree's POSITIONAL zip, which sorts by magnitude; review flagged this as a known hazard of promotion. If pairing is wrong, the magnitudes being compared are not counterparts at all.",
-  "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences."
+  "how_to_decide": "dump the promoted-uncapped pairs the exact rule rejects and check whether each pair is a genuine counterpart. Possibility (b) predicts systematically mismatched sources; (a) predicts matched sources with small magnitude differences.",
+  "RESOLVED": "hypothesis A"
  },
- "status": "#1025 IS NOT READY. Do not merge it on the strength of the round-nine simulation. The sound version is in the branch with its pins, and this artifact records that its real-data effect is 15% of what was projected.",
- "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet."
+ "status": "#1025 remains NOT READY, but the reason has changed. It is no longer 'the sound fix underperforms'; it is that the LOOSE fix's headline number was substantially masking. Deciding this needs per-row adjudication of the 230 heal disagreements against the engine's actual heal arithmetic -- that is engine-gap work, not matcher work.",
+ "what_this_does_not_change": "the load-bearing measurement stands: without any of these changes the window is 208 divergent, so they cannot simply be deleted either. Neither the loose version nor the sound version is the answer yet.",
+ "the_experiment": {
+  "method": "Classify every equal-length magnitude disagreement in the 187-row sweep's recorded branch_misses by whether the two components share a base source. Mispairing (hypothesis B) predicts systematically MISMATCHED sources; real differences (hypothesis A) predict MATCHED sources with differing magnitudes.",
+  "same_source_pairs": 706,
+  "different_source_pairs": 21,
+  "mispairing_share": 0.029,
+  "same_source_breakdown": {
+   "<direct>": 368,
+   "heal": 230,
+   "movewish": 39,
+   "capped_lethal": 36,
+   "itemleftovers": 29,
+   "recoil": 4
+  },
+  "verdict": "Mispairing accounts for about 3%. The components the exact rule rejects ARE genuine counterparts, and their magnitudes genuinely differ."
+ },
+ "what_this_means_for_the_67": "The loose version reached 67 by tolerating magnitude differences between matched, largely DETERMINISTIC components -- 230 of the disagreements are on `heal`, whose gen3 amount is floor(maxhp/2), and 29 on itemleftovers, which is maxhp/16. Those are the rounding class this program exists to detect. So the 141 rows are not obviously artifacts the matcher should absorb; on this evidence a substantial share are differences the loose tolerance was MASKING. The sound version's 187 may be nearer the truth than the 67, and 67 should stop being quoted as the target."
 }
