@@ -1011,7 +1011,11 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
             pg_corr[t] = {"r": round(r, 4), "n": len(xs), "mean": round(sum(xs) / len(xs), 4)}
 
     metrics = {
-        "metrics_version": METRICS_VERSION, "opponent": opponent, "n_games": n,
+        # measure_seat is provenance, not decoration: a bot-seat and an opponent-seat extraction of
+        # the SAME games are otherwise indistinguishable from the file contents alone, and the two
+        # mean opposite things (what the bot did vs what FoulPlay did).
+        "metrics_version": METRICS_VERSION, "opponent": opponent, "measure_seat": measure_seat,
+        "n_games": n,
         "lineage": lineage or (manifest or {}).get("lineage"),
         "milestone": milestone if milestone is not None else (manifest or {}).get("milestone"),
         "checkpoint": (manifest or {}).get("checkpoint"),

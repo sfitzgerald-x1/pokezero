@@ -1301,3 +1301,34 @@ class MissingInputGuard(unittest.TestCase):
                 self._run([src], out)
             self.assertIn("0 games parsed", str(cm.exception))
             self.assertFalse(os.path.exists(out), "must not write a metrics file")
+
+
+class MeasureSeatProvenance(unittest.TestCase):
+    """The seat an extraction was read from must be recorded in the output.
+
+    A bot-seat and an opponent-seat extraction of the same games are otherwise identical in
+    shape and both carry opponent='foulplay', so nothing in the file distinguishes "what the
+    bot did" from "what FoulPlay did" — the two mean opposite things in the report.
+    """
+
+    def _fp_file(self, d):
+        path = os.path.join(d, "events-0.jsonl.gz")
+        proto = ["|start", "|switch|p1a: X|X|100/100", "|switch|p2a: Y|Y|100/100",
+                 "|turn|1", "|move|p1a: X|Tackle|p2a: Y", "|move|p2a: Y|Tackle|p1a: X",
+                 "|win|Bot p1"]
+        ms = {"p1": [{"species": "X", "moves": ["Tackle"]}],
+              "p2": [{"species": "Y", "moves": ["Tackle"]}]}
+        with gzip.open(path, "wt") as f:
+            f.write(json.dumps({"record": "manifest", "opponent": "foulplay"}) + "\n")
+            f.write(json.dumps({"seed": 1, "opponent": "foulplay", "winner": "p1",
+                                "turn_count": 1, "capped": False, "protocol": proto,
+                                "movesets": ms, "pp_track": []}) + "\n")
+        return path
+
+    def test_measure_seat_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._fp_file(d)
+            for seat in ("bot", "opponent"):
+                m = TE.extract([path], lineage="x", milestone=1, measure_seat=seat)
+                self.assertEqual(m["measure_seat"], seat,
+                                 "seat provenance must be recorded in the metrics")
