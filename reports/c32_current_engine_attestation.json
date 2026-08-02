@@ -1,0 +1,74 @@
+{
+ "schema_version": "pokezero.engine-cert-sweep-attestation/v1",
+ "verdict": "FAIL",
+ "contract_path": "reports/c32_current_engine_resweep_spec.json",
+ "contract_sha256": "cff5d05a68fcd8b22b56255e864ef641f69363895f5b1107349f5e1bc15360c5",
+ "contract_attestation": "reports/c32_cert_contract_attestation.json",
+ "source_commit": "7d85f4b242d20b1e80fca812a47390cadaee08a3",
+ "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+ "readout_sha256": "a8a4c7248327a736c76a423b72a4195d5da6e194678cd6672351d551401835b2",
+ "run": {
+  "run_id": "cert-c32-20260801b",
+  "image_digest": "sha256:7b51a6d2d7cc6519343707e57c458c78cb24c6ced28379bf3d4654bb6e6819e8",
+  "seed_blocks": [
+   18000000,
+   18100000,
+   18200000,
+   18300000,
+   18400000,
+   18500000,
+   18600000,
+   18700000
+  ],
+  "shards_complete": 8,
+  "terminal_failures": 0
+ },
+ "raw_divergence_result": {
+  "games": 10000,
+  "boundaries_measured": 787376,
+  "boundaries_full_round": 821320,
+  "transitions_matched": 779755,
+  "transitions_diverged": 7249,
+  "engine_errors": 0,
+  "in_support_rate": 0.990793,
+  "out_of_support_per_10k_games": 7249,
+  "kpi_era": {
+   "engine_fingerprint": "51d56b3fece9ad5cd3cc4160e41683cc5c222f9cfe79667e65b425a4b30fd777",
+   "differential_sha256": "865a15b38397221a53193025b59fbb9c73d439ecc9aef36ad8193291cb704a1c"
+  },
+  "note": "Raw divergence is NOT required to be zero. This is the fidelity reading, and the first taken on a full registered sweep rather than a probe."
+ },
+ "unexplained_divergence_result": {
+  "unattributed_rows": 3882,
+  "required": 0,
+  "exclusion_counters": {
+   "structural_component_count_without_supported_sibling": 3779,
+   "unattributed_generic": 57,
+   "same_turn_stat_event_gap": 37,
+   "truant_loaf_phase_drift": 9
+  },
+  "note": "This is the certification result. 3,779 of 3,882 unattributed rows are one shape, structural_component_count_without_supported_sibling."
+ },
+ "gate_failures": {
+  "count": 30,
+  "unattributed": 1,
+  "coverage": 1,
+  "families_over_registered_bound": 7,
+  "predicted_zero_counters_nonzero": 3,
+  "contract_schema_defects_of_my_own_making": 0,
+  "coverage_measured": 0.9587,
+  "coverage_floor": 0.97,
+  "classes_observed_but_never_registered": 18
+ },
+ "retention": {
+  "repros_complete_all_shards": true,
+  "rows_retained": 7249
+ },
+ "honest_findings": [
+  "The 60-game probe that showed ZERO unattributed did not predict this; the sweep shows 3,882. One seed band at a 167th of the population was not representative, and the audit table's 'instrument-artifact (resolved)' verdict for the structural counter rested on it. C28-C30 fixed three real defects in that shape; they did not exhaust it.",
+  "Seven of thirteen documented families exceeded their registered upper bounds. Those bounds came from the archive -- a pre-fix, divergence-conditioned population -- used to predict rates on a fresh one. limit:world_substitute_health_unknown at 0.0062 against a 0.0001 risk budget is 62x over: a non-empirical carry-over never tested on fresh data.",
+  "Coverage came in at 0.9587 against the 0.97 floor, independent of attribution, with no advance signal.",
+  "CORRECTED: I recorded 18 gate failures as malformed predicted_class_rates_10k entries in the contract I generated. That was wrong -- all 49 entries are well-formed. The readout iterates observed-union-predicted classes and reports 'predicted class X is not an object' when a class was OBSERVED but never REGISTERED; the message describes a shape while the condition is absence. Those 18 are classes the fresh sweep produced that my archive-derived calibration never saw. That makes them the SAME root error as the seven exceeded family bounds -- calibrating a fresh population from the archive -- not a separate defect."
+ ],
+ "disposition": "Recorded as an honest FAIL. The contract forbids widening attribution after reading the run and forbids amending itself in place, so C32 stands and the residue is the diagnosis queue. A PASS requires a successor cycle: exhaust the structural shape, recalibrate family bounds against a fresh population rather than the archive, understand the coverage shortfall, and fix the predicted-class shape defect."
+}

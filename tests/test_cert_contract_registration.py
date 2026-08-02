@@ -17,16 +17,23 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "reports" / "c26_current_engine_resweep_spec.json"
-CALIBRATION_PATH = ROOT / "reports" / "c26_current_engine_calibration.json"
+# The ACTIVE registration. C26's artifacts stay as history and are guarded by
+# LifecycleTests below; these invariants follow whichever contract is current.
+CONTRACT_PATH = ROOT / "reports" / "c32_current_engine_resweep_spec.json"
+C26_CONTRACT_PATH = ROOT / "reports" / "c26_current_engine_resweep_spec.json"
+CALIBRATION_PATH = ROOT / "reports" / "c32_current_engine_calibration.json"
+C26_CALIBRATION_PATH = ROOT / "reports" / "c26_current_engine_calibration.json"
 LIFECYCLE_PATH = ROOT / "reports" / "certification_contract_lifecycle.json"
-ATTESTATION_PATH = ROOT / "reports" / "c26_current_engine_attestation.json"
+ATTESTATION_PATH = ROOT / "reports" / "c32_current_engine_attestation.json"
+C26_ATTESTATION_PATH = ROOT / "reports" / "c26_current_engine_attestation.json"
 
 # Every seed band certification work has already consumed or reserved in public
 # evidence. The C26 blocks must not touch any of them.
 PUBLIC_CONSUMED_SEED_RANGES = (
-    (2000000, 2701249),  # C14 sweep archive, ledger Appendix Z12
-    (2800000, 3501249),  # C15 registered blocks
+    (2000000, 2701249),   # C14 sweep archive, ledger Appendix Z12
+    (2800000, 3501249),   # C15 registered blocks
+    (16000000, 16701249),  # C26 blocks: burned, not recycled, though never swept
+    (17000000, 17000999),  # C26 diagnostic probe band, reserved outward
 )
 
 
@@ -96,14 +103,30 @@ class SourceIdentityTests(unittest.TestCase):
             self.assertEqual(
                 hashlib.sha256(_show(source, relative)).hexdigest(), registered, relative
             )
-            # The "...and the working tree still runs exactly those bytes" leg
-            # is deliberately NOT asserted here. It made C26 the ACTIVE
-            # registration, which asserts the readout may never change again.
-            # This commit narrows three attribution rules, so it is false by
-            # construction. The registered hashes at the pinned commit stay
-            # immutable evidence -- that IS the assertion above, and it is the
-            # one that matters for an archived contract. C32 is the active
-            # registration and its live binding belongs with it.
+
+    def test_c26_source_identity_is_superseded_not_silently_stale(self) -> None:
+        """C26 is now historical, and that has to be visible rather than implied.
+
+        This used to assert the working tree still ran the registered bytes,
+        which made C26 the ACTIVE registration. C27 moved the engine fingerprint
+        and C28 moved the readout, so it no longer is. The registered hashes at
+        the pinned commit stay immutable evidence -- checked above -- but the
+        working tree has deliberately diverged, exactly as C15's did, and a
+        successor registration is owed before any sweep runs.
+        """
+
+        gates = json.loads(C26_CONTRACT_PATH.read_text(encoding="utf-8"))[
+            "certification_gates"
+        ]
+        current_readout = hashlib.sha256(
+            (ROOT / "scripts" / "cert_sweep_readout.py").read_bytes()
+        ).hexdigest()
+        self.assertNotEqual(
+            current_readout,
+            gates["required_readout_sha256"],
+            "the working tree matches C26 again; either C28 was reverted or the "
+            "successor registration is missing",
+        )
 
 
 class CalibrationAgreementTests(unittest.TestCase):
@@ -209,6 +232,12 @@ class SeedReservationTests(unittest.TestCase):
             (ROOT / "reports" / "c15_resweep_spec.json").read_text(encoding="utf-8")
         )
         historical = {block["start"] for block in c15["certification_gates"]["seed_blocks"]}
+        historical |= {
+            block["start"]
+            for block in json.loads(C26_CONTRACT_PATH.read_text(encoding="utf-8"))[
+                "certification_gates"
+            ]["seed_blocks"]
+        }
         current = {block["start"] for block in _contract()["certification_gates"]["seed_blocks"]}
         self.assertEqual(historical & current, set())
 
@@ -227,11 +256,11 @@ class RetentionTests(unittest.TestCase):
 class ContractAttestationTests(unittest.TestCase):
     """The CONTRACT attestation, which is not the sweep-result attestation."""
 
-    PATH = ROOT / "reports" / "c26_cert_contract_attestation.json"
+    PATH = ROOT / "reports" / "c32_cert_contract_attestation.json"
 
     def _attestation(self) -> dict:
         if not self.PATH.is_file():
-            self.skipTest("the C26 contract attestation is not registered yet")
+            self.skipTest("the active contract attestation is not registered yet")
         return json.loads(self.PATH.read_text(encoding="utf-8"))
 
     def test_attests_the_registered_contract_bytes(self) -> None:
@@ -268,39 +297,70 @@ class ContractAttestationTests(unittest.TestCase):
             attestation["required_engine_fingerprint"],
             gates["required_engine_fingerprint"],
         )
-        self.assertEqual(attestation["registration"]["fresh_c26_measurements_inspected"], 0)
+        # Cycle-labelled key, so match on the shape rather than the label: the
+        # claim is that no fresh measurement was inspected before registration.
+        inspected = [
+            value
+            for key, value in attestation["registration"].items()
+            if key.startswith("fresh_") and key.endswith("_measurements_inspected")
+        ]
+        self.assertEqual(inspected, [0], attestation["registration"])
 
     def test_the_sweep_result_attestation_is_a_different_artifact(self) -> None:
         """A contract attestation must never be mistaken for a sweep result."""
 
-        self._attestation()
+        contract_att = self._attestation()
         self.assertNotEqual(self.PATH, ATTESTATION_PATH)
-        self.assertFalse(ATTESTATION_PATH.exists())
         lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))
         self.assertNotIn(
             str(self.PATH.relative_to(ROOT)), lifecycle["required_absent_artifacts"]
         )
+        if not ATTESTATION_PATH.exists():
+            return
+        # Once the sweep has run, the two must stay distinguishable: one binds
+        # contract BYTES, the other reports a sweep RESULT. Conflating them is how
+        # a registration gets read as a certification.
+        sweep_att = json.loads(ATTESTATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(
+            contract_att["schema_version"], "pokezero.engine-cert-contract-attestation/v1"
+        )
+        self.assertEqual(
+            sweep_att["schema_version"], "pokezero.engine-cert-sweep-attestation/v1"
+        )
+        self.assertIn("verdict", sweep_att)
+        self.assertNotIn("verdict", contract_att)
 
 
 class LifecycleTests(unittest.TestCase):
-    def test_lifecycle_registers_this_contract_and_still_awaits_attestation(self) -> None:
+    def test_c26_is_superseded_without_ever_having_been_executed(self) -> None:
+        """C26 was registered, held, and then superseded — all three recorded.
+
+        This used to assert the lifecycle still pointed at C26. It no longer
+        does: C27/C31 moved the engine and C28/C29/C30 moved the readout, so a
+        new build source is frozen. What must stay true is that C26's own
+        artifacts survive as evidence, that the supersession is explicit rather
+        than implied, and that its sweep attestation never appeared — because the
+        sweep was deliberately never run.
+        """
+
         lifecycle = json.loads(LIFECYCLE_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(lifecycle["stage"], "contract_registered_attestation_pending")
+        superseded = lifecycle["supersedes"]
+        self.assertEqual(superseded["registration"], "C26")
+        self.assertEqual(superseded["status"], "registered_never_executed")
+        self.assertEqual(superseded["contract"], str(C26_CONTRACT_PATH.relative_to(ROOT)))
         self.assertEqual(
-            lifecycle["registered_contract_path"], str(CONTRACT_PATH.relative_to(ROOT))
+            superseded["calibration"], str(C26_CALIBRATION_PATH.relative_to(ROOT))
         )
-        self.assertEqual(
-            lifecycle["registered_contract_sha256"],
-            hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest(),
-        )
-        self.assertEqual(
-            lifecycle["registered_calibration_path"], str(CALIBRATION_PATH.relative_to(ROOT))
-        )
-        self.assertEqual(
+        for relative in (superseded["contract"], superseded["calibration"],
+                         superseded["contract_attestation"], superseded["diagnosis"]):
+            self.assertTrue((ROOT / relative).is_file(), relative)
+        # The SWEEP attestation is the one that must never have appeared.
+        self.assertFalse(C26_ATTESTATION_PATH.exists())
+        self.assertNotIn(
+            str(C26_ATTESTATION_PATH.relative_to(ROOT)),
             lifecycle["required_absent_artifacts"],
-            [str(ATTESTATION_PATH.relative_to(ROOT))],
+            "C26's sweep attestation is no longer pending; it is abandoned",
         )
-        self.assertFalse(ATTESTATION_PATH.exists())
 
 
 if __name__ == "__main__":

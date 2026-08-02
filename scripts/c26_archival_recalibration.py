@@ -51,7 +51,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-SCHEMA = "c26-current-engine-archival-calibration/1"
+# Cycle-agnostic: this instrument is reused every freeze. The C26 artifact
+# records the label it was produced under, which its test pins literally.
+SCHEMA = "engine-archival-calibration/1"
 
 # docs/engine_divergence_ledger_20260728.md, Appendix Z12.6 durability record.
 # Shard order is the sorted glob order, which is shard 0..7.
