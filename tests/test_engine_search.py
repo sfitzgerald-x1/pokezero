@@ -1743,10 +1743,14 @@ class WorldCollapseTest(unittest.TestCase):
         policy = self._policy(early_stop=True)
         native = self._Native([self._report(60, 40, requested=100, stopped=True)])
         self._run(policy, native, [self._world("W")] * 3)
-        self.assertEqual(len(native.calls), 1)
+        self.assertEqual(len(native.calls), 1, "one search for three identical draws")
+        # The SAVINGS are per search (one search saved 40). The WORLD COUNTER is
+        # per world (three worlds stopped). Conflating them is what produced both
+        # the 120-vs-40 over-count and, after the first fix, a 1-vs-3
+        # under-count in the counter whose name says "worlds".
         self.assertEqual(
-            policy.stats.early_stop_triggered_worlds, 1,
-            "one search stopped, not three",
+            policy.stats.early_stop_triggered_worlds, 3,
+            "three WORLDS stopped, even though one search ran",
         )
 
     def test_depth_samples_stay_per_world_not_per_search(self) -> None:
@@ -1758,9 +1762,11 @@ class WorldCollapseTest(unittest.TestCase):
         Found by review; the mutant that reverts it used to survive.
         """
         policy = self._policy(early_stop=False)
-        report = self._report(60, 40, stopped=False)
-        report["max_depth_reached"] = 5
-        native = self._Native([report, dict(report)])
+        deep, shallow = self._report(60, 40, stopped=False), self._report(60, 40, stopped=False)
+        # DISTINCT depths: with both at the same value the weight could attach to
+        # the wrong sample and nothing would notice.
+        deep["max_depth_reached"], shallow["max_depth_reached"] = 5, 2
+        native = self._Native([deep, shallow])
         # 3 draws of A, 1 of B -> 2 searches, but FOUR worlds.
         self._run(policy, native, [self._world("A")] * 3 + [self._world("B")])
         self.assertEqual(len(native.calls), 2, "two unique completions")
@@ -1769,6 +1775,38 @@ class WorldCollapseTest(unittest.TestCase):
             "one sample per WORLD (4), not per search (2)",
         )
         self.assertEqual(sum(policy.stats.depth_reached_histogram.values()), 4)
+        # The SUM, not just the count: dropping the weight here left samples and
+        # the histogram correct while the MEAN was 2.4x wrong, undetected.
+        self.assertEqual(
+            policy.stats.depth_reached_sum, 5 * 3 + 2 * 1,
+            "the weight must reach the sum, or the ladder mean is wrong",
+        )
+        self.assertEqual(policy.stats.depth_reached_histogram[5], 3)
+        self.assertEqual(policy.stats.depth_reached_histogram[2], 1)
+
+    def test_the_early_stop_replay_does_not_multiply_depth_samples(self) -> None:
+        """The replay path must weigh 1, not the group multiplicity.
+
+        Found by review, and a bug my own per-world fix introduced: the replay
+        reuses each stopped RECORD, so a weight smuggled through the record made
+        every replay of an N-group add N again -- 12 samples where 6 was right,
+        and a skewed mean, not merely a skewed count.
+        """
+        policy = self._policy(early_stop=True)
+        # Ambiguous stop -> each stopped world is replayed at full budget.
+        first = self._report(30, 30, requested=100, stopped=True)
+        first["max_depth_reached"] = 2
+        replays = []
+        for _ in range(3):
+            r = self._report(60, 40, requested=100, stopped=False)
+            r["max_depth_reached"] = 2
+            replays.append(r)
+        native = self._Native([first] + replays)
+        self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(
+            policy.stats.depth_reached_samples, 6,
+            "3 worlds searched once + 3 replays = 6, not 3 + 3x3 = 12",
+        )
 
     def test_worlds_stopped_counts_worlds_like_its_name_and_its_sibling(self) -> None:
         """`worlds_stopped` and `full_budget_replays` must share a denominator.
@@ -1789,6 +1827,12 @@ class WorldCollapseTest(unittest.TestCase):
             policy.stats.early_stop_sims_saved, 40,
             "savings are per SEARCH -- 40, not 3x40",
         )
+        self.assertEqual(
+            policy.stats.early_stop_triggered_worlds, 3,
+            "the shard counter says WORLDS; it must not under-report by the "
+            "collapse multiplicity -- the mirror of the 120-vs-40 over-count",
+        )
+        self.assertEqual(early["full_budget_replays"], 0, "a locked stop needs no replay")
 
     def test_telemetry_exposes_both_counters(self) -> None:
         from pokezero.engine_search import EngineMctsStats

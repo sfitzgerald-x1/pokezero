@@ -1290,7 +1290,10 @@ class EngineMctsPolicy:
         search_started = time.perf_counter()
 
         def run_world(
-            record: Mapping[str, Any], early_stop_min_sims: int, sims: int | None = None
+            record: Mapping[str, Any],
+            early_stop_min_sims: int,
+            sims: int | None = None,
+            weight: int = 1,
         ) -> Optional[dict]:
             try:
                 search_args = [
@@ -1353,16 +1356,10 @@ class EngineMctsPolicy:
             reached = report.get("max_depth_reached")
             if reached is not None:
                 reached = int(reached)
-                # Once per WORLD, not once per search. Collapsing duplicates into
-                # one search would otherwise silently redefine this counter --
-                # and it is what the depth ladder reads, so a redefinition makes
-                # the ladder incomparable to every historical run. `multiplicity`
-                # is 1 on the ordinary path.
-                weight = int(record.get("_collapse_multiplicity", 1))
                 self.stats.depth_reached_samples += weight
                 self.stats.depth_reached_sum += reached * weight
-                self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
                 self.stats.depth_reached_histogram[reached] += weight
+                self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
             # Crate-measured phase walls are per-INVOCATION compute, exactly like
             # iterations/model_evals above: a conservatively replayed world spent
             # that encode/model/tree time twice and must report it.
@@ -1446,17 +1443,12 @@ class EngineMctsPolicy:
             multiplicity = len(records)
             lead = records[0]
             sims = None
-            # Stamp the multiplicity BEFORE the search: run_world accumulates
-            # per-world telemetry (depth samples) off this record, so setting it
-            # afterwards left those counters reading 1 and silently per-search.
-            lead = dict(lead)
-            lead["_collapse_multiplicity"] = multiplicity
             if multiplicity > 1:
                 self.stats.worlds_collapsed += multiplicity - 1
                 # The whole point: N draws of one completion buy N x the sims on
                 # ONE tree, not N cold restarts. Total compute is unchanged.
                 sims = config.search_sims * multiplicity
-            report = run_world(lead, stop_floor, sims)
+            report = run_world(lead, stop_floor, sims, multiplicity)
             if report is None:
                 continue
             self.stats.unique_worlds_searched += 1
@@ -1486,7 +1478,12 @@ class EngineMctsPolicy:
                 continue
             _stopped_seen.add(marker)
             stopped_runs.append(record)
-        self.stats.early_stop_triggered_worlds += len(stopped_runs)
+        # WORLDS, matching meta["worlds_stopped"] and full_budget_replays.
+        # Counting searches here under-reported by the collapse multiplicity --
+        # the mirror of the 120-vs-40 over-count this dedupe fixed.
+        self.stats.early_stop_triggered_worlds += sum(
+            int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
+        )
         locked_choice: Optional[str] = None
         full_budget_replays = 0
         simulations_saved = 0
