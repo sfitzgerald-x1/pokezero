@@ -1196,3 +1196,13 @@ poke-engine-gen3-recharge-forced-replacement.patch
 # as a survival. Measured before the patch in
 # reports/c27_kill_split_premeasure.json.
 poke-engine-gen3-crit-kill-split.patch
+# A forced replacement is not the recharger's turn. gen3 consumed MUSTRECHARGE on
+# ANY Choices::NONE, and the recharging side also submits NONE at the opponent's
+# post-KO replacement boundary -- so the engine ate the recharge there while
+# Showdown pays it on the next real turn. The engine therefore believed a Hyper
+# Beam KO skips its own recharge: a free turn on the format's hardest-hitting
+# move, which search will chase. force_switch is set only by a faint and by
+# Baton Pass, and in both it is false while the real turn is generated, so an
+# ordinary recharge turn is untouched. Both directions are pinned by tests in
+# rust/pokezero-search/src/events.rs.
+poke-engine-gen3-recharge-forced-replacement.patch

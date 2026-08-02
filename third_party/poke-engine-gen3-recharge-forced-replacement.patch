@@ -1,22 +1,26 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -2317,12 +2317,19 @@ pub fn generate_instructions_from_move(
+@@ -2317,12 +2317,20 @@
          return;
      }
-
-+    // Showdown consumes MUSTRECHARGE from the recharger's next onBeforeMove.
-+    // An opponent's forced replacement is a separate boundary, so the waiting
-+    // recharger has not reached that hook yet.
-+    let opponent_is_forced_to_switch = state
-+        .get_side_immutable(&attacking_side.get_other_side())
-+        .force_switch;
+ 
++    // A forced replacement is NOT the recharger's turn. When a KO opens the
++    // opponent's replacement boundary, the recharging side also submits
++    // `Choices::NONE` -- but Showdown does not consume the recharge there; it is
++    // paid on the next real turn, which is when `|cant|...|recharge` renders.
++    // Consuming it here let the engine believe a Hyper Beam KO skips its own
++    // recharge, handing the attacker a free turn that search will happily chase.
++    let replacement_boundary = state.side_one.force_switch || state.side_two.force_switch;
      let attacker_side = state.get_side(&attacking_side);
-
+ 
      if choice.move_id == Choices::NONE {
-         if attacker_side
-             .volatile_statuses
-             .contains(&PokemonVolatileStatus::MUSTRECHARGE)
-+            && !opponent_is_forced_to_switch
+-        if attacker_side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::MUSTRECHARGE)
++        if !replacement_boundary
++            && attacker_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::MUSTRECHARGE)
          {
              incoming_instructions
                  .instruction_list

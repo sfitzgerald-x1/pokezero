@@ -13,7 +13,7 @@
   "source_code_identity": {
     "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
     "readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
-    "engine_fingerprint": "a0ae8447fb0fe2a0d58aaae260dd209a2e8a46bb5952a20bc870ed041f6620d0",
-    "engine_patch_count": 52
+    "engine_fingerprint": "776fa1e15cec731d3223b493fab992dc042fd3da8bdee6d4b8c9dc1a1d192c9c",
+    "engine_patch_count": 51
   }
 }
