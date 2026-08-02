@@ -424,6 +424,20 @@ def _blocker_bucket(token: str) -> str:
     return kind
 
 
+def world_cache_key(record: Mapping[str, Any], side_key: str) -> tuple[str, str, str]:
+    """Identity of a SEARCH PROBLEM, for collapsing duplicate belief draws.
+
+    Two sampled worlds with the same serialized state, the same context and the
+    same seat are not two hypotheses; they are one hypothesis drawn twice.
+
+    The per-world SEED is deliberately excluded. Differing seeds are exactly
+    what makes two identical completions look like distinct searches, which is
+    the redundancy being removed -- include the seed and the collapse never
+    fires.
+    """
+    return (str(record["state_str"]), str(record["ctx_json"]), str(side_key))
+
+
 @dataclass
 class EngineMctsStats:
     """Cumulative per-policy telemetry; every fallback is counted, never hidden."""
@@ -446,6 +460,12 @@ class EngineMctsStats:
     item_override_decisions: int = 0
     worlds_attempted: int = 0
     worlds_searched: int = 0
+    # Duplicate draws folded into another world's search (drawn N, searched 1
+    # at N x budget), so `worlds_searched - worlds_collapsed` is the number of
+    # searches actually issued.
+    worlds_collapsed: int = 0
+    # Distinct belief completions actually handed to the native search.
+    unique_worlds_searched: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
     decision_wall_seconds: float = 0.0
@@ -506,6 +526,8 @@ class EngineMctsStats:
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
             "worlds_searched": self.worlds_searched,
+            "worlds_collapsed": self.worlds_collapsed,
+            "unique_worlds_searched": self.unique_worlds_searched,
             "total_iterations": self.total_iterations,
             "search_wall_seconds": self.search_wall_seconds,
             "decision_wall_seconds": self.decision_wall_seconds,
@@ -1260,16 +1282,23 @@ class EngineMctsPolicy:
         turn = int(getattr(replay, "turn_number", 0) or 0)
         config = self._config
 
+        stop_floor = config.early_stop_min_sims if config.early_stop else 0
         world_runs: list[dict[str, Any]] = []
+        # Duplicate belief completions, grouped per DECISION by search-problem
+        # identity. Never shared across turns.
+        duplicates: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         search_started = time.perf_counter()
 
         def run_world(
-            record: Mapping[str, Any], early_stop_min_sims: int
+            record: Mapping[str, Any],
+            early_stop_min_sims: int,
+            sims: int | None = None,
+            weight: int = 1,
         ) -> Optional[dict]:
             try:
                 search_args = [
                     record["state_str"],
-                    config.search_sims,
+                    config.search_sims if sims is None else sims,
                     config.search_batch,
                     self._tables_json,
                     root_inputs,
@@ -1327,10 +1356,10 @@ class EngineMctsPolicy:
             reached = report.get("max_depth_reached")
             if reached is not None:
                 reached = int(reached)
-                self.stats.depth_reached_samples += 1
-                self.stats.depth_reached_sum += reached
+                self.stats.depth_reached_samples += weight
+                self.stats.depth_reached_sum += reached * weight
+                self.stats.depth_reached_histogram[reached] += weight
                 self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
-                self.stats.depth_reached_histogram[reached] += 1
             # Crate-measured phase walls are per-INVOCATION compute, exactly like
             # iterations/model_evals above: a conservatively replayed world spent
             # that encode/model/tree time twice and must report it.
@@ -1387,16 +1416,74 @@ class EngineMctsPolicy:
                 "seed": world_seed,
                 "side_key": side_key,
             }
-            stop_floor = config.early_stop_min_sims if config.early_stop else 0
-            report = run_world(record, stop_floor)
-            if report is not None:
-                record["report"] = report
+            # CONCENTRATE duplicate belief completions instead of skipping them.
+            #
+            # Two worlds with the same serialized state, context and seat are one
+            # hypothesis drawn twice. It is tempting to search it once and reuse
+            # the answer, but that is WRONG about what the duplicate searches
+            # were doing: the per-world seed drives chance-node sampling
+            # (model.rs -> tree.rs sample_branch_index), so repeated draws of one
+            # completion are INDEPENDENT Monte-Carlo estimates whose average
+            # reduces the variance of that completion's contribution. Skipping
+            # them keeps the estimator unbiased but drops its effective sample
+            # size from N to 1 and reinvests nothing -- a strength regression
+            # bought with wall-clock, worst in exactly the fully-revealed case
+            # where every draw is the same.
+            #
+            # So: search each unique completion ONCE at N x the sim budget, and
+            # append N records carrying that report. Same total compute as
+            # searching N times, same belief weighting (aggregation gives every
+            # record weight 1, so N records weigh N), and one tree with N x S
+            # sims dominates the average of N trees with S sims -- deeper, and
+            # UCB gets to exploit the budget instead of restarting cold N times.
+            cache_key = world_cache_key(record, side_key)
+            duplicates.setdefault(cache_key, []).append(record)
+
+        for cache_key, records in duplicates.items():
+            multiplicity = len(records)
+            lead = records[0]
+            sims = None
+            if multiplicity > 1:
+                self.stats.worlds_collapsed += multiplicity - 1
+                # The whole point: N draws of one completion buy N x the sims on
+                # ONE tree, not N cold restarts. Total compute is unchanged.
+                sims = config.search_sims * multiplicity
+            report = run_world(lead, stop_floor, sims, multiplicity)
+            if report is None:
+                continue
+            self.stats.unique_worlds_searched += 1
+            for record in records:
+                # SHALLOW copy: the top-level dicts are distinct but nested
+                # values -- notably report["side_one"], the visit list anyone
+                # would realistically mutate -- are STILL SHARED between twins.
+                # Safe today only because no consumer mutates a report in place
+                # (the replay path rebinds record["report"]). Do not read this as
+                # isolation; deepen it if that ever changes.
+                record["report"] = dict(report)
+                record["_collapse_key"] = cache_key
+                record["_collapse_multiplicity"] = multiplicity
                 world_runs.append(record)
 
-        stopped_runs = [
-            record for record in world_runs if bool(record["report"].get("early_stopped"))
-        ]
-        self.stats.early_stop_triggered_worlds += len(stopped_runs)
+        # Count each SEARCH once, not each record. Duplicate draws share one
+        # search, so counting records attributed a stopped search's savings to
+        # twins that were never issued -- measured at 120 simulations_saved
+        # where the true figure was 40.
+        stopped_runs = []
+        _stopped_seen: set[Any] = set()
+        for record in world_runs:
+            if not bool(record["report"].get("early_stopped")):
+                continue
+            marker = record.get("_collapse_key")
+            if marker in _stopped_seen:
+                continue
+            _stopped_seen.add(marker)
+            stopped_runs.append(record)
+        # WORLDS, matching meta["worlds_stopped"] and full_budget_replays.
+        # Counting searches here under-reported by the collapse multiplicity --
+        # the mirror of the 120-vs-40 over-count this dedupe fixed.
+        self.stats.early_stop_triggered_worlds += sum(
+            int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
+        )
         locked_choice: Optional[str] = None
         full_budget_replays = 0
         simulations_saved = 0
@@ -1480,7 +1567,12 @@ class EngineMctsPolicy:
                     ),
                     "early_stop": {
                         "enabled": config.early_stop,
-                        "worlds_stopped": len(stopped_runs),
+                        # WORLDS, not searches: full_budget_replays counts
+                        # records, so counting searches here put the two on
+                        # different denominators for the same event.
+                        "worlds_stopped": sum(
+                            int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
+                        ),
                         "aggregate_locked": locked_choice is not None,
                         "locked_choice": locked_choice,
                         "full_budget_replays": full_budget_replays,

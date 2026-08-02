@@ -1623,3 +1623,238 @@ class HandcraftedCrateSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorldCollapseTest(unittest.TestCase):
+    """Duplicate belief completions must be CONCENTRATED, not skipped.
+
+    Repeated draws of one completion are not redundant work: the per-world seed
+    drives chance-node sampling, so each is an independent Monte-Carlo estimate
+    and averaging them reduces that completion's variance. Searching once and
+    reusing the answer stays unbiased but throws the extra samples away. So the
+    duplicates are folded into ONE search at N x the sim budget instead.
+
+    These drive the real `_search_model` through the fake native. An earlier
+    version of this class reimplemented the production loop inline, and four
+    mutants -- including "disable the memo entirely" -- passed all of it.
+    """
+
+    # Reuse the existing end-to-end harness WITHOUT subclassing it: subclassing a
+    # TestCase re-runs every one of its tests under this name too.
+    _Native = EarlyStopPolicyIntegrationTests._Native
+    # staticmethod(): a bare assignment rebinds these as instance methods, so
+    # `self` would arrive as the first positional argument.
+    _report = staticmethod(EarlyStopPolicyIntegrationTests._report)
+    _world = staticmethod(EarlyStopPolicyIntegrationTests._world)
+    _context = staticmethod(EarlyStopPolicyIntegrationTests._context)
+
+    def _policy(self, **kw):
+        return EarlyStopPolicyIntegrationTests._policy(self, **kw)
+
+    def _run(self, policy, native, worlds):
+        return EarlyStopPolicyIntegrationTests._run(self, policy, native, worlds)
+
+    def test_duplicates_are_searched_once(self) -> None:
+        policy = self._policy(early_stop=False)
+        native = self._Native([self._report(60, 40, stopped=False)])
+        worlds = [self._world("W"), self._world("W")]
+        self._run(policy, native, worlds)
+        self.assertEqual(len(native.calls), 1, "two draws of one completion = one search")
+        self.assertEqual(policy.stats.worlds_collapsed, 1)
+        self.assertEqual(policy.stats.unique_worlds_searched, 1)
+
+    def test_the_duplicate_budget_is_concentrated_not_discarded(self) -> None:
+        """N draws buy N x the sims on one tree -- same compute, deeper search."""
+        policy = self._policy(early_stop=False)
+        native = self._Native([self._report(60, 40, stopped=False)])
+        base = policy._config.search_sims
+        self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(len(native.calls), 1)
+        # arg 1 of search_batched_multi_encoded is the iteration count
+        self.assertEqual(native.calls[0][1], base * 3)
+
+    def test_distinct_worlds_are_still_searched_separately(self) -> None:
+        policy = self._policy(early_stop=False)
+        native = self._Native([
+            self._report(60, 40, stopped=False),
+            self._report(10, 90, stopped=False),
+        ])
+        self._run(policy, native, [self._world("A"), self._world("B")])
+        self.assertEqual(len(native.calls), 2)
+        self.assertEqual(policy.stats.worlds_collapsed, 0)
+        self.assertEqual(policy.stats.unique_worlds_searched, 2)
+        self.assertEqual(native.calls[0][1], policy._config.search_sims)
+
+    def test_a_single_world_is_unchanged(self) -> None:
+        policy = self._policy(early_stop=False)
+        native = self._Native([self._report(60, 40, stopped=False)])
+        self._run(policy, native, [self._world("W")])
+        self.assertEqual(len(native.calls), 1)
+        self.assertEqual(native.calls[0][1], policy._config.search_sims)
+        self.assertEqual(policy.stats.worlds_collapsed, 0)
+
+    def test_every_draw_still_contributes_its_weight(self) -> None:
+        """The belief must not be flattened.
+
+        Completion A drawn 3x, completion B drawn 1x. Aggregation weights every
+        RECORD equally, so folding the duplicates into one record would turn a
+        3:1 belief into 1:1. Three records must reach the aggregator.
+        """
+        policy = self._policy(early_stop=False)
+        native = self._Native([
+            self._report(100, 0, stopped=False),
+            self._report(0, 100, stopped=False),
+        ])
+        worlds = [self._world("A"), self._world("A"), self._world("A"), self._world("B")]
+        decision = self._run(policy, native, worlds)
+        self.assertEqual(len(native.calls), 2)
+        self.assertEqual(policy.stats.worlds_collapsed, 2)
+        self.assertEqual(policy.stats.unique_worlds_searched, 2)
+
+        # THE ASSERTION THAT MATTERS, and the one this test was missing: look at
+        # the AGGREGATE, not the counters. Review showed that replacing
+        # `for record in records:` with `records[:1]` -- appending one record per
+        # group instead of N, i.e. exactly the belief flattening this change is
+        # built to avoid -- passed all 112 tests. A 3:1 belief silently became
+        # 1:1 and nothing noticed.
+        meta = decision.metadata["engine_mcts"]
+        self.assertEqual(meta["worlds_searched"], 4, "all four DRAWS must reach the aggregator")
+        self.assertEqual(
+            meta["aggregated_choices"],
+            {"alpha": 3.0, "beta": 1.0},
+            "a 3:1 belief must aggregate 3:1, not be flattened to 1:1",
+        )
+
+    def test_reports_are_not_shared_between_twins(self) -> None:
+        policy = self._policy(early_stop=False)
+        native = self._Native([self._report(60, 40, stopped=False)])
+        self._run(policy, native, [self._world("W"), self._world("W")])
+        # One search, so any aliasing would be between the twins' records.
+        self.assertEqual(len(native.calls), 1)
+
+    def test_early_stop_savings_are_not_multiplied_by_duplicates(self) -> None:
+        """A stopped search must be counted once, not once per duplicate draw.
+
+        Found by independent review and measured: three identical worlds with a
+        locked early stop reported 120 simulations_saved where one search had
+        actually saved 40, inflating the headline metric of a DIFFERENT feature
+        by the collapse multiplicity.
+        """
+        policy = self._policy(early_stop=True)
+        native = self._Native([self._report(60, 40, requested=100, stopped=True)])
+        self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(len(native.calls), 1, "one search for three identical draws")
+        # The SAVINGS are per search (one search saved 40). The WORLD COUNTER is
+        # per world (three worlds stopped). Conflating them is what produced both
+        # the 120-vs-40 over-count and, after the first fix, a 1-vs-3
+        # under-count in the counter whose name says "worlds".
+        self.assertEqual(
+            policy.stats.early_stop_triggered_worlds, 3,
+            "three WORLDS stopped, even though one search ran",
+        )
+
+    def test_depth_samples_stay_per_world_not_per_search(self) -> None:
+        """The depth ladder reads this counter; collapsing must not redefine it.
+
+        Concentration searches one tree per unique completion, so counting a
+        depth sample per SEARCH would silently turn a per-world counter into a
+        per-search one -- making the ladder incomparable to every historical run.
+        Found by review; the mutant that reverts it used to survive.
+        """
+        policy = self._policy(early_stop=False)
+        deep, shallow = self._report(60, 40, stopped=False), self._report(60, 40, stopped=False)
+        # DISTINCT depths: with both at the same value the weight could attach to
+        # the wrong sample and nothing would notice.
+        deep["max_depth_reached"], shallow["max_depth_reached"] = 5, 2
+        native = self._Native([deep, shallow])
+        # 3 draws of A, 1 of B -> 2 searches, but FOUR worlds.
+        self._run(policy, native, [self._world("A")] * 3 + [self._world("B")])
+        self.assertEqual(len(native.calls), 2, "two unique completions")
+        self.assertEqual(
+            policy.stats.depth_reached_samples, 4,
+            "one sample per WORLD (4), not per search (2)",
+        )
+        self.assertEqual(sum(policy.stats.depth_reached_histogram.values()), 4)
+        # The SUM, not just the count: dropping the weight here left samples and
+        # the histogram correct while the MEAN was 2.4x wrong, undetected.
+        self.assertEqual(
+            policy.stats.depth_reached_sum, 5 * 3 + 2 * 1,
+            "the weight must reach the sum, or the ladder mean is wrong",
+        )
+        self.assertEqual(policy.stats.depth_reached_histogram[5], 3)
+        self.assertEqual(policy.stats.depth_reached_histogram[2], 1)
+
+    def test_the_early_stop_replay_does_not_multiply_depth_samples(self) -> None:
+        """The replay path must weigh 1, not the group multiplicity.
+
+        Found by review, and a bug my own per-world fix introduced: the replay
+        reuses each stopped RECORD, so a weight smuggled through the record made
+        every replay of an N-group add N again -- 12 samples where 6 was right,
+        and a skewed mean, not merely a skewed count.
+        """
+        policy = self._policy(early_stop=True)
+        # Ambiguous stop -> each stopped world is replayed at full budget.
+        first = self._report(30, 30, requested=100, stopped=True)
+        first["max_depth_reached"] = 2
+        replays = []
+        for _ in range(3):
+            r = self._report(60, 40, requested=100, stopped=False)
+            r["max_depth_reached"] = 2
+            replays.append(r)
+        native = self._Native([first] + replays)
+        self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(
+            policy.stats.depth_reached_samples, 6,
+            "3 worlds searched once + 3 replays = 6, not 3 + 3x3 = 12",
+        )
+
+    def test_worlds_stopped_counts_worlds_like_its_name_and_its_sibling(self) -> None:
+        """`worlds_stopped` and `full_budget_replays` must share a denominator.
+
+        Deduping the early-stop SAVINGS was the real fix (120 reported where 40
+        was true), but applying the same dedupe to `worlds_stopped` put it on a
+        different denominator from `full_budget_replays` for the same event.
+        """
+        policy = self._policy(early_stop=True)
+        # Decisive split so the aggregate LOCKS (leader - runner_up > remaining)
+        # and no full-budget replay follows: 58 - 2 = 56 > 40 remaining.
+        native = self._Native([self._report(58, 2, requested=100, stopped=True)])
+        decision = self._run(policy, native, [self._world("W")] * 3)
+        self.assertEqual(len(native.calls), 1, "one search for three identical draws")
+        early = decision.metadata["engine_mcts"]["early_stop"]
+        self.assertEqual(early["worlds_stopped"], 3, "three WORLDS stopped, one search")
+        self.assertEqual(
+            policy.stats.early_stop_sims_saved, 40,
+            "savings are per SEARCH -- 40, not 3x40",
+        )
+        self.assertEqual(
+            policy.stats.early_stop_triggered_worlds, 3,
+            "the shard counter says WORLDS; it must not under-report by the "
+            "collapse multiplicity -- the mirror of the 120-vs-40 over-count",
+        )
+        self.assertEqual(early["full_budget_replays"], 0, "a locked stop needs no replay")
+
+    def test_telemetry_exposes_both_counters(self) -> None:
+        from pokezero.engine_search import EngineMctsStats
+
+        payload = EngineMctsStats().to_dict()
+        self.assertIn("worlds_collapsed", payload)
+        self.assertIn("unique_worlds_searched", payload)
+
+
+class WorldCacheKeyTest(unittest.TestCase):
+    def test_the_seed_is_excluded(self) -> None:
+        from pokezero.engine_search import world_cache_key
+
+        a = {"state_str": "S", "ctx_json": "C", "seed": 1}
+        b = {"state_str": "S", "ctx_json": "C", "seed": 999}
+        self.assertEqual(world_cache_key(a, "side_one"), world_cache_key(b, "side_one"))
+
+    def test_real_differences_separate(self) -> None:
+        from pokezero.engine_search import world_cache_key
+
+        base = {"state_str": "S", "ctx_json": "C", "seed": 1}
+        k = world_cache_key(base, "side_one")
+        self.assertNotEqual(k, world_cache_key({**base, "state_str": "S2"}, "side_one"))
+        self.assertNotEqual(k, world_cache_key({**base, "ctx_json": "C2"}, "side_one"))
+        self.assertNotEqual(k, world_cache_key(base, "side_two"))
