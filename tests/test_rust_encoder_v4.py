@@ -345,6 +345,125 @@ class RustEncoderV4ParityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match encoder-table layout"):
             rust.encode(wrong)
 
+    def test_a_level_100_opponent_encodes_identically(self) -> None:
+        """The whole corpus is levelled below 100, so nothing here ever exercised the case
+        Showdown signals by OMITTING the level token -- and the native encoder read that
+        omission as "no level information" and zeroed eleven numeric cells, where Python reads
+        it as level 100 and writes real values.
+
+        Nine gen3 randbats species are L100 (Beautifly, Ditto, Ledian, Luvdisc, Magcargo,
+        Nosepass, Shedinja, Spinda, Unown), so this was reachable in every real battle against
+        one. It stayed invisible because the fixture's details strings all carry ", L<n>".
+        """
+        header, inputs, metadata = self._fixture()
+        for mon in metadata["opponent_team"]:
+            # Exactly what sim/pokemon.ts::getUpdatedDetails emits at level 100.
+            mon["details"] = f"{mon['species']}, M"
+        spec, masks = self.backends.observation_contract_from_header(header)
+        reference = self.backends.PythonReferenceBackend(
+            showdown_root=_showdown_root(), header=header
+        )
+        state = self.backends.state_from_row_inputs(inputs)
+        self._publish_credit_values(inputs, state, reference._dex)
+        state = self.backends.state_from_row_inputs(inputs)
+        observation = observation_from_player_state(
+            state,
+            category_vocab=reference._vocab,
+            spec=spec,
+            dex=reference._dex,
+            feature_masks=masks,
+        )
+        want = self.backends.arrays_dict_from_observation_arrays(
+            self.backends.GoldenObservationArrays.from_observation(observation)
+        )
+        tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+        )
+        numeric_columns = tables["layout"]["numeric_columns"]
+        # Reachability: Python must actually WRITE a level here, or the parity assertion below
+        # would hold trivially with both sides zero -- which is the bug, not the fix.
+        level_column = want["numeric_features"][:, numeric_columns["NUMERIC_LEVEL"]]
+        self.assertTrue(numpy.any(level_column), "fixture never reached a level-bearing token")
+        rust = self.backends.RustBackend(
+            tables_json=json.dumps(
+                tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
+            header=header,
+        )
+        got = rust.encode(inputs)
+        for name in self.backends.ARRAY_NAMES:
+            self.assertEqual(
+                numpy.ascontiguousarray(got[name]).tobytes(),
+                numpy.ascontiguousarray(want[name]).tobytes(),
+                name,
+            )
+
+    def test_a_non_list_moves_payload_abandons_the_band_on_both_sides(self) -> None:
+        """The call-site guard for a malformed candidate variant, which the Rust unit tests
+        cannot reach -- they drive the spread core directly, below the guard.
+
+        `as_array` flattens a missing/null/scalar `moves` to an EMPTY list, which would then be
+        evaluated as a real moveless set; Python returns None and abandons the whole band. The
+        two must agree, and a mutation sweep found this the one uncovered branch of the port.
+        """
+        header, inputs, metadata = self._fixture()
+        tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+        )
+        rust = self.backends.RustBackend(
+            tables_json=json.dumps(
+                tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
+            header=header,
+        )
+        columns = tables["layout"]["numeric_columns"]
+        low = columns["NUMERIC_EXPECTED_HP_LOW"]
+        high = columns["NUMERIC_EXPECTED_HP_HIGH"]
+
+        def band(encoded):
+            arr = numpy.asarray(encoded["numeric_features"])
+            return arr[:, low], arr[:, high]
+
+        # REACHABILITY FIRST. If the unmodified fixture has no spread at all, "the band
+        # collapsed" is indistinguishable from "there was never a band", and the assertion
+        # below would hold no matter what the guard did.
+        base_low, base_high = band(rust.encode(inputs))
+        self.assertTrue(
+            numpy.any(base_low != base_high),
+            "fixture carries no real band, so the collapse assertion would be vacuous",
+        )
+
+        # The honest "no set source" state the guard must fall back to.
+        empty = copy.deepcopy(inputs)
+        for entry in empty["observation_metadata"]["belief_view"]["opponent_pokemon"]:
+            entry["candidate_variants"] = []
+        none_low, none_high = band(rust.encode(empty))
+
+        # ONE bad candidate among good ones. Corrupting them ALL would make the test pass
+        # whether or not the guard exists -- every candidate would then yield the same moveless
+        # spread, so min == max and the band collapses either way. A mutation sweep caught
+        # exactly that: deleting the guard left the all-corrupt version green.
+        broken = copy.deepcopy(inputs)
+        entries = broken["observation_metadata"]["belief_view"]["opponent_pokemon"]
+        self.assertTrue(entries, "no opponent belief entries to corrupt")
+        corrupted = 0
+        for entry in entries:
+            variants = entry.get("candidate_variants") or []
+            if len(variants) < 2:
+                continue
+            # `moves` present but NOT a list -- the shape as_array silently flattens to empty.
+            variants[0] = dict(variants[0], moves=None)
+            corrupted += 1
+        self.assertTrue(corrupted, "no opponent had >=2 variants, so the guard is unreachable")
+
+        got_low, got_high = band(rust.encode(broken))
+        self.assertTrue(
+            numpy.array_equal(got_low, none_low) and numpy.array_equal(got_high, none_high),
+            "one unevaluable candidate did not abandon the whole band -- it was skipped, so the "
+            "reported bound is a min/max over a strict subset of the real candidate set",
+        )
 
 if __name__ == "__main__":
     unittest.main()

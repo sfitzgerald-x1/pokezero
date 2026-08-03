@@ -506,8 +506,27 @@ fn condition_features(condition: Option<&str>) -> ConditionFeatures {
 }
 
 /// `showdown._level_from_details`.
+///
+/// A details string with NO `L` token means level 100, not "unknown". Showdown omits the token
+/// when -- and only when -- the level is exactly 100 (`sim/pokemon.ts::getUpdatedDetails`:
+/// ``name + (level === 100 ? '' : `, L${level}`)``). None is returned only when there is no
+/// details string at all, which is the one case that carries no level information.
+///
+/// This returned None for a level-100 mon until 2026-08-03, and the caller treats None as
+/// "skip the whole block", so every L100 opponent encoded with ELEVEN zeroed numeric cells --
+/// NUMERIC_LEVEL plus the entire expected-stat block -- where Python wrote real values. Nine
+/// gen3 randbats species are L100 (Beautifly, Ditto, Ledian, Luvdisc, Magcargo, Nosepass,
+/// Shedinja, Spinda, Unown), so it was not rare. Worse than merely missing: an all-zero stat
+/// block is the DELIBERATE sentinel `_encode_transformed_expected_stats` writes for an
+/// unidentifiable Transform target, so the native leaf was feeding the model a false positive
+/// for a signal it had only ever seen mean something else.
 fn level_from_details(details: Option<&str>) -> Option<i64> {
     let details = details?;
+    if details.is_empty() {
+        // Python's `if not details` treats "" the same as None. Kept distinct from the
+        // no-L-token case below, which is a real level-100 mon.
+        return None;
+    }
     for part in details.split(',') {
         let token = part.trim();
         if let Some(rest) = token.strip_prefix('L') {
@@ -516,7 +535,7 @@ fn level_from_details(details: Option<&str>) -> Option<i64> {
             }
         }
     }
-    None
+    Some(100)
 }
 
 /// `showdown._gen3_stat` (integer arithmetic; all operands non-negative).
@@ -3362,5 +3381,42 @@ mod spread_tests {
         assert!(refused.is_err(), "an illegal spread was emitted: {refused:?}");
         // ...and the same set at its real level is fine, so the guard is not simply always-on.
         assert!(randbats_spread_hp_atk(160, 110, 68, &moves, "leftovers", true).unwrap().is_some());
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::level_from_details;
+
+    /// Values cross-checked against `showdown._level_from_details`, which is the source of truth
+    /// and documents the rule from the vendored `sim/pokemon.ts::getUpdatedDetails`.
+    #[test]
+    fn a_details_string_without_an_l_token_is_level_100() {
+        // The regression: these returned None, and the caller reads None as "skip the block".
+        assert_eq!(level_from_details(Some("Shedinja, M")), Some(100));
+        assert_eq!(level_from_details(Some("Ditto")), Some(100));
+        assert_eq!(level_from_details(Some("Unown, F")), Some(100));
+    }
+
+    #[test]
+    fn an_explicit_level_still_wins() {
+        assert_eq!(level_from_details(Some("Slowbro, L84, M")), Some(84));
+        assert_eq!(level_from_details(Some("Skarmory, L79, F")), Some(79));
+    }
+
+    #[test]
+    fn only_a_missing_details_string_is_unknown() {
+        // Python's `if not details` covers both. Everything else has a level, even if implicit.
+        assert_eq!(level_from_details(None), None);
+        assert_eq!(level_from_details(Some("")), None);
+    }
+
+    #[test]
+    fn a_bare_l_or_a_non_numeric_l_token_is_not_a_level() {
+        // "L" alone and "Lv84" are not level tokens; the mon is still level 100, not unknown.
+        assert_eq!(level_from_details(Some("Ditto, L")), Some(100));
+        assert_eq!(level_from_details(Some("Ditto, Lv84")), Some(100));
+        // ...but a gender token starting with L must not be mistaken for one either.
+        assert_eq!(level_from_details(Some("Ludicolo, M")), Some(100));
     }
 }
