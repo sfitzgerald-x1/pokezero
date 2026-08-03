@@ -1,22 +1,65 @@
 {
  "schema": "c94-method-retraction/1",
- "headline": "C92 is RETRACTED. Its central method -- reading branch_misses to enumerate each engine arm's outcome -- is invalid, and C89's evidence table is wrong for the same reason.",
+ "headline": "C92 (reports/c92_limit_category_retest.json) is RETRACTED. Its central method -- reading branch_misses to enumerate each engine arm's outcome -- is invalid, and C89's evidence table as originally written was wrong for the same reason (corrected in PR #1031).",
  "the_method_error": {
   "what_i_did": "parsed branch_misses with _miss_pairs and read the engine=[...] side as THE BRANCH'S component set, then asked whether the observed net appeared among the arms.",
   "why_it_is_wrong": "engine_transition_differential.py:1893 loops `for slot in (\"p1\",\"p2\")` and does `ok = False; break` on the first failing slot. Each branch therefore contributes exactly ONE miss reason, for ONE slot. A branch whose p1 comparison failed reports nothing about p2.",
   "the_artifact_it_produced": "wherever a branch's miss named the OTHER slot, I computed a net of 0 for the slot I cared about and recorded an 'arm at net 0'. Those zero arms do not exist. Review replayed the true branch sets: 19000029/51 is [-118, -118] not [0, -118]; 19000052/36 is [-192, -192, -192] not [0, -211, -211]; 19000058/19 is [-14, -123, -123] not [0, 0, -123]; 19000074/27 is [-244, -116, -227] not [0, -116, -227].",
-  "the_6.25_percent_tell_i_missed": "I read a 6.25% arm as a 'miss arm'. 6.25% is BASE_CRIT_CHANCE. Hidden Power is 100% accurate in gen3 -- there is no miss arm. That arm was the crit."
+  "the_6.25_percent_tell_i_missed": "I read a 6.25% arm as a 'miss arm'. 6.25% is BASE_CRIT_CHANCE. Hidden Power is 100% accurate in gen3 -- there is no miss arm. That arm was the crit.",
+  "the_field_is_narrower_still": "'one slot per branch' understates it. differential:1934-1937 prints engine= as the ROLL-SCALED SUBSET only; :1944-1948 prints engine_only= as a SET DIFFERENCE; and :1969 and :2220 both TRUNCATE the list. cert_sweep_readout._miss_pairs partitions on the literal 'engine' (:111) and _PAIR_RE (:78) matches both renderings, so it silently consumes engine_only= too. The field is not a component set under any reading."
  },
  "what_is_retracted": {
   "c92_entirely": "the claim that 1 of 8 remaining limit adjudications survives. Every 'reachable / not reachable' verdict in it was computed by the invalid method. The conclusion may be right or wrong; the evidence cannot support it either way.",
-  "c89_evidence_table": "the_deciding_check.result is wrong. For 19000074/27 the engine DOES emit an arm reaching the observed net -244 -- the 1.56% C27 crit-kill arm. 'ABSENT in all four' is false; it is absent in three.",
+  "c89_evidence_table": "AS ORIGINALLY WRITTEN. the_deciding_check.result was wrong: for 19000074/27 the engine DOES emit an arm reaching the observed net -244 -- the 1.56% C27 crit-kill arm. 'ABSENT in all four' is false; it is absent in three. Already corrected on PR #1031, which now reads 'CORRECTED. Absent in THREE of four' and cites this report. reports/c89 does not exist on main.",
   "c89_conclusion_partially_survives": "for 19000029/51, 19000052/36 and 19000058/19 the observed nets (-116, -182, -120 on replay) are genuinely absent from the branch sets, so the residual-decided-lethality mechanism stands for three rows. 19000074/27 needs re-adjudication: its arm reaches the right net but still differs on the OTHER slot, which is a different mechanism."
  },
  "what_is_NOT_affected": {
-  "c91": "STANDS. Its finding -- 15 of 24 limit rows closed by the C88-A matcher fix -- was measured by sweeping before and after, not by reading miss strings. That is a sound method and the result is unchanged.",
-  "c87_c88A_c90_c93": "unaffected. C87 and C88-A were measured by sweep. C90 was read from the two sources directly. C93's ratio evidence comes from majority-arm magnitudes, which is one slot's complaint and is exactly what that field means -- but its 'the crit arm IS present' claim rests on reading a 3.91% arm the same way, so it needs the replay check before it is trusted."
+  "SCOPE_WARNING": "an earlier draft of this key was an affirmative all-clear and was wrong by omission. Review found further artifacts and two LIVE CLASSIFIER CODE PATHS making the same 'what does this arm contain' claim. The survey below replaces it.",
+  "c91": "STANDS. Its finding -- 15 of 24 limit rows closed by the C88-A matcher fix -- was measured by sweeping before and after, not by reading miss strings.",
+  "c87_c88A_c90": "unaffected. C87 and C88-A were measured by sweep; C90 was read from the two sources directly.",
+  "c93": "STANDS, and has since been CONFIRMED BY REPLAY -- see the REPLAY_CONFIRMATION block in reports/c93_crit_tag_renderer_gap.json. An earlier draft of this file said C93's 'the crit arm IS present' claim still needed the replay check; that check has been done and the claim held."
  },
  "the_correct_method": "scripts/replay_residue.py re-derives each branch's full component set against the vendored engine. Any claim about what an engine arm CONTAINS must come from replay, never from branch_misses. branch_misses answers 'why did this branch fail', not 'what did this branch do'.",
  "why_this_matters_beyond_the_two_reports": "This is the same failure the ledger keeps recording: building a cheap proxy for a question and reading its output as the answer. branch_misses is a diagnostic log, and I used it as a data structure. It was consistently wrong rather than randomly wrong, which is why nothing caught it -- the zero arms looked like plausible miss arms.",
- "action": "c92's conclusion is withdrawn pending a replay-based re-test. The 7 rows it moved back to 'open' return to their prior state: filed as limits, adjudication UNVERIFIED rather than falsified."
+ "action": "c92's conclusion is withdrawn pending a replay-based re-test. The 7 rows it moved back to 'open' return to their prior state: filed as limits, adjudication UNVERIFIED rather than falsified.",
+ "retracts": "reports/c92_limit_category_retest.json",
+ "evidence_path": {
+  "how_to_reproduce": "scripts/replay_residue.py --report <sweep.json> --seed <seed> --step <step>",
+  "note": "replay prints BOTH slots' full component sets for every branch, which is the field branch_misses does not provide.",
+  "worked_rows": [
+   "19000029/51",
+   "19000052/36",
+   "19000058/19",
+   "19000074/27"
+  ],
+  "backing_table": "reports/c89_residual_decided_lethality.json key EVIDENCE_TABLE_REGENERATED_FROM_REPLAY, on PR #1031."
+ },
+ "also_contaminated": {
+  "reports/c84_unattributed_anatomy.json": {
+   "status": "CONTAMINATED, on main, and cited by C86 as the current-era decomposition of UNATTRIBUTED.",
+   "method": "its own method key says 'classified through cert_sweep_readout.attribute_row'.",
+   "infected_sub_shapes": [
+    "engine_majority_arm_carries_no_damage (2 rows, :29-35) -- 'every complaining arm has an EMPTY engine component list ... accuracy/miss arms'. This is the phantom-zero arm verbatim. Replay (reports/c96) shows those arms are NOT empty of instructions: they are voided by the renderer's segment() returning None.",
+    "the worked example at :19 -- 'engine arms offer -46, -46, -23 and two empty' -- two more phantoms.",
+    "reverse_direction (:46-51) -- 'the engine arm carries (capped_lethal, -132)', literally the miss-string tuple format."
+   ],
+   "survives": "crit_arm_absent_from_support, which rests on C87's independent sweep evidence -- and which C93 supersedes on the merits anyway.",
+   "superseded_by": "reports/c96_unattributed_source_level_causes.json re-derives all four current UNATTRIBUTED rows from replay."
+  },
+  "scripts/family_bucket_audit.py": {
+   "status": "LIVE CODE PATH computing a published adjudication from miss strings.",
+   "where": "signatures() at :164-185 -- :171 calls readout._miss_pairs(majority), then :181-185 does net_identical = sum(observed) == sum(engine).",
+   "why_it_is_the_same_error": "that is a WHOLE-BOUNDARY net computed from ONE SLOT's partial, roll-scaled, possibly truncated list.",
+   "the_code_warned_about_this": "its own comment at :179-180 says this is the ONLY signature bucket_from_signatures treats as decisive, 'so a false positive here becomes a published adjudication'.",
+   "what_it_published": "reports/c68_family_bucket_audit.json:66 -- '120/120 majority arms reach an IDENTICAL net HP: the end states agree' -- republished as a current-era ADJUDICATED verdict at reports/c86:58-60, which is the I4_attribution_tie instrument-artifact bucket (3 live rows).",
+   "independent_outcome": "reports/c95 re-derived I4 from replay and found the nets ARE identical (a Liquid Ooze heal mislabelled as leechseed rather than itemleftovers). So the I4 VERDICT survives on replay evidence -- but it survives by luck of the method, not because of it, and the audit script must be re-based on replay before it adjudicates anything else."
+  },
+  "scripts/cert_sweep_readout.py": {
+   "status": "LIVE CODE PATH, currently dormant.",
+   "where": "_sibling_arm_carries_observed_components at :117-149; its docstring asserts 'another engine arm actually carries the full observed component multiset' and implements it as Counter(sibling_engine_components) == observed_components at :146-148.",
+   "mitigation": "fires 0 rows in the 39-row residue, so nothing currently rests on it. It must still be re-based on replay before it is relied on."
+  }
+ },
+ "standing_rule": "ANY claim about what an engine arm CONTAINS comes from scripts/replay_residue.py, never from branch_misses. branch_misses answers 'why did this branch fail', not 'what did this branch do'. Recorded in docs/engine_divergence_ledger_20260728.md so it is findable outside the retraction that caused it.",
+ "record_left_inconsistent_on_main": "limit:roll_divergent_lethality is now asserted four ways on main: adjudicated and era_current (c86:18-23), falsified for 15 rows (c91), 7-of-8 failing (c92, now retracted), and unverified (this report). c86 and c92 both carry pointers to this file as of this commit; the family's true status is UNVERIFIED pending a replay-based re-test."
 }
