@@ -1,22 +1,63 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -2585,7 +2585,18 @@
+@@ -2576,6 +2576,13 @@
+         let num_choices = new_choices.len() as f32;
+         for mut new_choice in new_choices {
+             new_choice.sleep_talk_move = true;
++            // get_sleep_talk_choices clones move-table Choices, whose
++            // Choice::default() sets first_move: true, and handle_both_moves
++            // clears it only on the OUTER choice. Left stale, a Sleep Talk used
++            // SECOND fires the 32-way roll enumeration against an already
++            // resolved Flail/Reversal/Substitute -- 12 branches to 144, ~8x
++            // slower per call, for no fidelity gain.
++            new_choice.first_move = choice.first_move;
+             let mut sleep_talk_instructions = incoming_instructions.clone();
+             sleep_talk_instructions.update_percentage(1.0 / num_choices);
+             generate_instructions_from_move(
+@@ -2585,7 +2592,16 @@
                  attacking_side,
                  sleep_talk_instructions,
                  &mut final_instructions,
 -                false,
 +                // pokezero gen3 fidelity fix (sleeptalk_crit_arm): propagate
-+                // branch_on_damage into the called move. Showdown runs the
-+                // Sleep Talk callee through `this.actions.useMove`
-+                // (data/moves.ts, sleeptalk.onHit), which performs the ordinary
-+                // critical-hit roll, and gen3 has no sleeptalk override.
-+                // Hardcoding false sent the callee's damage to the final
++                // branch_on_damage into the called move. Showdown's gen3
++                // sleeptalk override (data/mods/gen3/moves.ts:526) filters the
++                // callee set and then runs it through `this.actions.useMove`
++                // (line 546), which performs the ordinary 1/16 critical-hit
++                // roll. Hardcoding false sent the callee's damage to the final
 +                // `else { regular_damage = avg_damage_dealt }` arm, which emits
-+                // NO crit branch: both the KO-straddling and the non-lethal
-+                // crit partitions are gated on branch_on_damage. A
-+                // Sleep-Talk-called critical hit was therefore reachable in the
-+                // simulator and absent from the engine's support.
++                // NO crit branch, so a Sleep-Talk-called critical hit was
++                // reachable in the simulator and absent from the support.
 +                branch_on_damage,
              );
          }
          return;
+@@ -2777,6 +2793,17 @@
+                 .get_active_immutable()
+                 .ability;
+             let crit_chance = critical_hit_chance(&choice, defender_ability);
++            // run_move reverses everything it applies -- the extra_branches
++            // loop below re-applies for exactly this reason and says so. This
++            // loop did not, so 31 spurious reversals of a DecrementRestTurns
++            // drove rest_turns out of its 0..=3 domain and PANICKED the engine.
++            // Reachable only once Sleep Talk lets a SLEEPING Rest user reach
++            // this path, which is why it stayed latent until now.
++            //
++            // The state arrives APPLIED here, unlike at extra_branches where a
++            // reversal has already happened, so the first iteration must NOT
++            // re-apply -- doing so double-decrements and panics the other way.
++            let mut needs_reapply = false;
+             for (raw_damage, chance) in [
+                 (max_damage, 1.0 - crit_chance),
+                 (max_crit_damage, crit_chance),
+@@ -2785,6 +2812,10 @@
+                     continue;
+                 }
+                 for random in 85..=100 {
++                    if needs_reapply {
++                        state.apply_instructions(&incoming_instructions.instruction_list);
++                    }
++                    needs_reapply = true;
+                     let mut roll_instructions = incoming_instructions.clone();
+                     roll_instructions.update_percentage(chance / 16.0);
+                     let roll_damage = (raw_damage as i32 * random / 100) as i16;

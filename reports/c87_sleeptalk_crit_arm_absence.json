@@ -10,8 +10,9 @@
  "signature": "the observation carries |-crit| and its magnitude is ~2x the LARGEST any engine arm offers (measured ratios 2.13, 2.19, 2.05; a gen3 crit is exactly 2x)",
  "method": "source comparison, per the current program goal. Not signature profiling.",
  "the_reference": {
-  "file": "data/moves.ts, sleeptalk.onHit",
-  "behaviour": "Sleep Talk picks a legal callee and runs `this.actions.useMove(randomMove, pokemon)` -- the ordinary move-execution path, which performs the normal critical-hit roll. gen3 has no sleeptalk override in data/mods/gen3/moves.ts, so base applies. A Sleep-Talk-called Ice Beam can crit at the usual 1/16."
+  "file": "data/mods/gen3/moves.ts:526-547 (the gen3 override), which ends at line 546 in this.actions.useMove",
+  "CORRECTION": "This report previously said 'there is no sleeptalk override in data/mods/gen3/moves.ts, so base applies'. THAT IS FALSE -- gen3 DOES override sleeptalk.onHit (it filters the callee set by nosleeptalk/charge and emits |cant|...|nopp|). The conclusion survives only because the override also ends in this.actions.useMove. For a report whose declared method is source comparison, a false premise about the exact file it cites is the error that matters most, and it was caught by review rather than by me.",
+  "behaviour": "the gen3 override filters the callee set and then runs the chosen move through this.actions.useMove, which reaches the ordinary damage pipeline and the normal crit roll. gen3 crit rate is 1/16 (sim/battle-actions.ts:1629-1646, gen<=5 branch, critMult[1]=16). Nothing about a CALLED move suppresses crits -- only willCrit and the CriticalHit event, which the engine already models."
  },
  "the_engine": {
   "file": "third_party/poke-engine-src/src/gen3/generate_instructions.rs",
@@ -64,6 +65,27 @@
    "main_games_per_hour": 1611,
    "with_c87_games_per_hour": 1394,
    "note": "~13% slower, but session-to-session variance on this machine spans 1394-1618 across identical builds. Treat as indicative, not a measured regression; a controlled throughput run is still owed."
+  },
+  "final_with_both_fixes": {
+   "diverged": 202,
+   "unattributed": 22,
+   "strict_lossy_render": 21,
+   "panics": 0,
+   "games_per_hour": 1588,
+   "vs_main": "main is 208 / lossy_render 102 / 1611 g/h. So lossy_render lands BELOW main and throughput is within noise -- the apparent 13% regression I declined to call a regression was real, and it was the stale first_move, not the crit branching.",
+   "no_panic_gate": "PASS at 188s (main 172.9s; the unfixed patch failed in 7.9s)"
+  }
+ },
+ "REVIEW_FOUND_TWO_MORE_DEFECTS": {
+  "1_reachable_engine_panic": {
+   "what": "the first version of this patch made tests/test_engine_search_no_panic.py fail -- PanicException 'Invalid rest_turns value: 64' -- killing the searcher. PanicException derives from BaseException, so engine_search.py's `except Exception` does not catch it.",
+   "cause": "the 16-roll loop calls run_move 32 times without re-applying between calls, while run_move always reverses. 31 spurious reversals of a DecrementRestTurns drove rest_turns out of its 0..=3 domain. Latent on main because only an AWAKE attacker reaches that path and carries no DecrementRestTurns; Sleep Talk is the only way a SLEEPING Rest user gets there, so propagating branch_on_damage is what made it reachable.",
+   "fix": "re-apply between iterations. Note the state arrives APPLIED here, unlike at extra_branches where a reversal has already happened -- my first attempt applied unconditionally and panicked the other way, rest_turns -1. Guarded with a needs_reapply flag so the first iteration does not re-apply."
+  },
+  "2_stale_first_move": {
+   "what": "Sleep Talk callees inherit first_move=true from Choice::default() via get_sleep_talk_choices; handle_both_moves clears it only on the outer choice. With branch_on_damage propagated, a Sleep Talk used SECOND fired the 32-way enumeration against an already-resolved Flail/Reversal/Substitute.",
+   "measured": "12 branches -> 144, and ~8x slower per call, for zero fidelity gain",
+   "fix": "new_choice.first_move = choice.first_move;"
   }
  }
 }
