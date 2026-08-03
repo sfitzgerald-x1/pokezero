@@ -1461,3 +1461,111 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
     }
     assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
 }
+
+/// `none_matched` IS reachable, and the cause is the OPPONENT's chosen move.
+///
+/// Found by independent review after two wrong answers from me. The identifier
+/// regenerates every Sleep Talk candidate against a hardcoded
+/// `&Choice::default()` for the defender (`events.rs`,
+/// `identify_sleep_talk_called`). But the engine gates C31's 32-roll
+/// enumeration on the REAL defender choice: `branch_on_damage && choice
+/// .first_move && pending_hp_reading_move(defender_choice)`, where
+/// `pending_hp_reading_move` is {SUBSTITUTE, FLAIL, REVERSAL}. So when the
+/// defender picks one of those and the sleeper moves first, the engine emits one
+/// of 32 specific rolls while the renderer regenerates the ordinary 2-branch
+/// max/crit collapse against a `NONE` move. Nothing matches.
+///
+/// This is why the earlier "0 of 7,560 combinations" sweep found nothing: it
+/// varied the SLEEPER's state exhaustively and held the opponent on Splash,
+/// which is exactly the zero case. Coverage, not weighting.
+///
+/// It matters because it is renderer-side: 88 of 393 gen3 randbats sets carry
+/// Substitute, Flail or Reversal, and the fix is to thread the real defender
+/// choice (and `first_move`) into the identifier rather than to patch the
+/// engine. `ambiguous` is the arm that needs an engine change; this one does
+/// not. Tracked separately so this PR stays telemetry-only.
+#[test]
+fn the_none_matched_subcase_is_reachable_via_the_defenders_move() {
+    // Sleep Talk + a realistic randbats callee set, sleeper FASTER, defender on
+    // Substitute, damage branching on (production: tree.rs plies 1-2).
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::BODYSLAM);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::EARTHQUAKE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M3, Choices::REST);
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SUBSTITUTE);
+    state.side_one.get_active().speed = 1;
+    state.side_two.get_active().speed = 500;
+
+    let before = format!("{state:?}");
+    let branches = generate_instructions_from_move_pair(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        true,
+    );
+    assert_eq!(before, format!("{state:?}"), "generation mutated the source state");
+
+    let mut none_matched = 0usize;
+    for branch in &branches {
+        let r = render_branch_events(
+            &mut state.clone(),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            &branch.instruction_list,
+            true,
+            &EventContext {
+                species: [vec!["Lead".into()], vec!["Opponent".into()]],
+                turn: 1,
+                hp_percent: [false, false],
+            },
+        );
+        for reason in &r.attribution_unsafe {
+            if !reason.starts_with("sleeptalk_called_unidentified") {
+                continue;
+            }
+            if reason == "sleeptalk_called_unidentified:none_matched" {
+                none_matched += 1;
+                // Contract tag stays bare on this arm too.
+                assert!(
+                    r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
+                    "the differential matches the lossy tag EXACTLY: {:?}",
+                    r.lossy
+                );
+                assert!(
+                    !r.lossy
+                        .iter()
+                        .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+                    "a sub-cased lossy tag would change which branches the \
+                     differential accepts: {:?}",
+                    r.lossy
+                );
+            }
+        }
+    }
+
+    assert!(
+        none_matched > 0,
+        "the defender-move axis must still reach `none_matched`; if this fires, \
+         either the renderer now threads the real defender choice (good -- delete \
+         this test and keep the fix) or the arm regressed to reporting `ambiguous` \
+         (bad -- the largest failure class is being mis-diagnosed)"
+    );
+}
