@@ -1,0 +1,52 @@
+{
+ "schema": "c90-source-level-cause/1",
+ "shape": "gen3 contact-flag divergence: two moves make contact in gen3 that do not in the base data the engine is built from",
+ "rows_in_this_window": 1,
+ "identities": [
+  "19000021/34"
+ ],
+ "was": "reports/c88 sub-shape C, filed NOT YET DETERMINED",
+ "the_boundary": {
+  "row": "19000021/34",
+  "protocol": "Rayquaza uses Overheat on Sharpedo; Sharpedo faints; Showdown then emits |-damage|p1a: Rayquaza|189/262|[from] ability: Rough Skin|[of] p2a: Sharpedo",
+  "miss": "observed_only=[('abilityroughskin', -16)] engine_only=[] -- the engine emits nothing"
+ },
+ "the_reference": {
+  "rough_skin": "data/mods/gen3/abilities.ts:162-169 overrides roughskin to source.baseMaxhp / 16. Base (modern) is /8. The engine already has the gen3 value.",
+  "the_actual_cause": "data/mods/gen3/moves.ts:470-473 overrides OVERHEAT's flags to { contact: 1, protect: 1, mirror: 1, metronome: 1 }. Base overheat (data/moves.ts) has flags { protect, mirror, metronome } and NO contact. So in gen3 Overheat makes contact and Rough Skin fires."
+ },
+ "the_engine": {
+  "rough_skin": "src/gen3/abilities.rs:193 implements ROUGHSKIN correctly -- maxhp/16, attacker's maxhp, gated on damage_dealt > 0 && choice.flags.contact. The ability is not the problem.",
+  "the_gap": "src/choices.rs builds OVERHEAT from the BASE flag set, with no contact. So choice.flags.contact is false and the ability hook never fires."
+ },
+ "exhaustive_enumeration": {
+  "method": "diff every gen3 moves.ts override carrying contact:1 against the same move in base data/moves.ts",
+  "gen3_overrides_with_contact": [
+   "ancientpower",
+   "astonish",
+   "bide",
+   "needlearm",
+   "overheat",
+   "struggle"
+  ],
+  "differ_from_base": [
+   "ancientpower",
+   "overheat"
+  ],
+  "already_agree": [
+   "astonish",
+   "bide",
+   "needlearm",
+   "struggle"
+  ],
+  "verified_in_engine": "choices.rs has contact absent for both OVERHEAT and ANCIENTPOWER (control: TACKLE has contact true)",
+  "so_the_shape_is_exactly_two_moves": true
+ },
+ "disposition": {
+  "class": "ENGINE FIX",
+  "the_fix": "add contact to OVERHEAT and ANCIENTPOWER in the gen3 build. Bounded and exhaustively enumerated -- exactly two moves, verified against the reference rather than sampled.",
+  "blast_radius_warning": "contact is not only Rough Skin. It also gates Static, Poison Point, Flame Body, Effect Spore, Cute Charm, Rocky Helmet-likes and King's Rock in some generations. Adding it changes behaviour anywhere those interact, so this needs the same measured treatment C87 got -- branch counts, the tactics gate, and a check that no currently-matched row becomes divergent.",
+  "not_yet_implemented": true
+ },
+ "note_on_size": "one row in this 200-game window, so by rows x search-impact it ranks below the matcher shapes. Recorded now because the cause is fully established and the enumeration is exhaustive; the fix can be scheduled on its merits."
+}
