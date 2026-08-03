@@ -1,0 +1,51 @@
+{
+ "schema": "c97-last-uncaused-row/1",
+ "purpose": "19000074/27 was the last row in the current-era residue with no written source-level cause. This is that cause.",
+ "method": "scripts/replay_residue.py --report /tmp/sweep_bd.json --seed 19000074 --step 27 (the 35-row post-#1042 sweep).",
+ "era": {
+  "engine_fingerprint_note": "replayed on the tree carrying #1039 and #1042. The row is present and unchanged in both the 39-row and 35-row sweeps, so neither merged fix touches it."
+ },
+ "boundary": {
+  "class": "component_missing_in_engine:sandstorm",
+  "showdown": "Rapidash switches in at 244/244. Furret's Return CRITS for 241, leaving it at 3/244. Sandstorm upkeep then deals its tick: Rapidash 3 -> 0 fnt, Furret -18. Rapidash faints, and Furret's Liechi Berry activates.",
+  "observed": "p1 sandstorm=-18 | p2 move=-241, capped_lethal=-3",
+  "engine_arms": [
+   {
+    "pct": 93.75,
+    "p2": "itemleftovers=+15, sandstorm=-15, move=-116",
+    "reading": "the NON-crit arm. Rapidash survives at 128, takes the sandstorm tick and its Leftovers."
+   },
+   {
+    "pct": 4.69,
+    "p2": "itemleftovers=+15, sandstorm=-15, move=-227",
+    "reading": "crit-SURVIVE. At 227 the survivor sits at 17, sandstorm 15 leaves it at 2 -- ALIVE."
+   },
+   {
+    "pct": 1.56,
+    "p2": "capped_lethal=-244",
+    "reading": "crit-KILL. The crit is lethal on the hit itself."
+   }
+  ]
+ },
+ "the_cause": {
+  "one_line": "RESIDUAL-DECIDED LETHALITY. Whether Rapidash survives the turn is decided by the crit roll, because the sandstorm tick is lethal only for high crit rolls -- and the engine collapses the crit-survive fan to a single representative that lands on the wrong side of that threshold.",
+  "the_threshold": "Rapidash maxhp 244, sandstorm tick 244/16 = 15. A crit leaving it at 15 or less dies to the residual; a crit leaving it at 16 or more survives. Showdown's realised crit of 241 leaves 3 -- dead. The engine's crit-survive representative, average_non_kill_crit_damage = 227, leaves 17 -- alive, by two HP.",
+  "why_no_arm_reproduces_it": "the crit-kill-split partitions the crit into exactly two arms: crit-KILL at defender_active.hp, and crit-SURVIVE at ONE averaged representative. 'Survived the hit and then died to the residual' is a third outcome that neither arm can express, and it is reachable for every crit roll from 229 to 243.",
+  "the_net_coincidence_that_hid_it": "reports/c89 reclassified this row OUT of residual-decided lethality on the grounds that its p2 NET (-244) is reachable via the 1.56% crit-kill arm. The net does coincide and the COMPONENTS do not: observed p2 is move=-241 plus capped_lethal=-3 (survived the hit at 3, died to sandstorm), while the arm is capped_lethal=-244 alone (died to the hit). Same net HP, different mechanism, and the matcher rightly rejects on components. Reading the net as the outcome is the same conflation reports/c94 retracted a whole method for.",
+  "corroborating_detail": "the engine's surviving arms carry itemleftovers=+15 on p2 and the observation does not. That is consistent, not a second defect: in Showdown Rapidash faints to the sandstorm tick and never reaches its Leftovers, while in those arms it survives and does."
+ },
+ "reclassification": {
+  "rejoins": "reports/c89_residual_decided_lethality.json",
+  "effect": "that family is 4 rows, not 3. 19000029/51, 19000052/36, 19000058/19 and this one.",
+  "supersedes": "C89's 'reclassified out, mechanism open' entry for this row, and its hypothesis that the engine's crit-kill arm defers the OTHER side's residual on a faint. That hypothesis is wrong: p1's sandstorm tick is present and correct in every arm that runs the residual phase."
+ },
+ "disposition": {
+  "class": "ENGINE SUPPORT GAP -- not a comparison limit",
+  "reasoning": "by the charter's definitions, exactly as reports/c96 argues for Belly Drum: a comparison limit is one no same-transition partition can reach. A partition DOES reach this -- enumerating the crit fan rather than averaging it would produce an arm at 241 that dies to sandstorm. The realised roll is legal and absent from the support. The per-roll simulation is correct; the SUPPORT is incomplete.",
+  "the_shape_of_the_fix": "the crit-survive arm needs to split on the residual-lethality threshold the same way the crit-kill split already splits on the hit-lethality threshold -- i.e. partition the non-kill crit rolls into those that die to the pending residual and those that do not. That is a strictly larger change than adding an enum arm to an allowlist, and it is the same family of change as the crit-kill split itself.",
+  "implemented": false,
+  "gate": "needs a tactics-suite and no-panic gate plus a single-variable re-sweep reporting matched and skip alongside diverged, per PR #1038.",
+  "expected_scope": "4 rows in this window, all four of C89's family."
+ },
+ "what_this_completes": "every shape in the current-era 35-row residue now has a written source-level cause. This was the last row without one. It does NOT mean every shape has an implemented disposition -- see the ledger of open fixes -- and it does not mean the residue is all comparison limits. On the evidence so far, ZERO rows in this residue have survived as genuine comparison limits: every one examined has resolved to an engine or renderer defect, including the one row (Belly Drum) that was filed as a limit and turned out not to be."
+}
