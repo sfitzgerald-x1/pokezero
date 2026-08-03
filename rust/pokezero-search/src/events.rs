@@ -248,6 +248,27 @@ impl RenderedEvents {
         self.attribution_unsafe.push(reason.to_string());
     }
 
+    /// Refuse with a DIAGNOSTIC sub-case while keeping the `lossy` tag stable.
+    ///
+    /// The two channels have different consumers and different contracts.
+    /// `attribution_unsafe` is what `reject_attribution_unsafe` joins into the
+    /// error the Python seam keys `world_failure_reasons` by -- the probe's
+    /// measurement channel, where splitting a class costs nothing.
+    ///
+    /// `lossy` is a CONTRACT. `scripts/engine_transition_differential.py` matches
+    /// it exactly (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide whether a
+    /// branch is still usable, and `tests/test_matcher_tolerance_promotion.py`
+    /// pins that. Splitting the lossy tag would silently change which branches
+    /// the differential accepts -- and that file's bytes are pinned by the
+    /// certification lifecycle, so it cannot be edited to follow along without
+    /// its own attestation.
+    ///
+    /// So: sub-case to the measurement channel, stable tag to the contract.
+    fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        self.mark_lossy(lossy_tag);
+        self.attribution_unsafe.push(subcase.to_string());
+    }
+
     pub fn is_attribution_unsafe(&self) -> bool {
         !self.attribution_unsafe.is_empty()
     }
@@ -1569,8 +1590,9 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            match identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage) {
-                Some(called_choice) => {
+            let ident = identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage);
+            match ident {
+                SleepTalkIdent::Matched(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
@@ -1582,7 +1604,7 @@ fn render_move_phase(
                         Some("Sleep Talk"),
                     );
                 }
-                None => {
+                SleepTalkIdent::NoneMatched | SleepTalkIdent::Ambiguous => {
                     // The called move is not provable from this delta, so its
                     // HP change gets no public action owner. It must still be
                     // DESCRIBED. Emitting nothing left the consumer's running
@@ -1601,7 +1623,20 @@ fn render_move_phase(
                     // consumer's half by emitting the generic tag it already
                     // knows how to read
                     // (reports/c54_sleeptalk_render_contract_mismatch.json).
-                    out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    // Name WHICH cause. `ambiguous` can only be fixed by the
+                    // engine recording the called move; `none_matched` means the
+                    // replay diverges from what the engine did and may be fixable
+                    // in the renderer. Splitting them is what decides that, and
+                    // this class is 48.9% of all world failures.
+                    out.mark_attribution_unsafe_subcase(
+                        "sleeptalk_called_unidentified",
+                        match ident {
+                            SleepTalkIdent::Ambiguous => {
+                                "sleeptalk_called_unidentified:ambiguous"
+                            }
+                            _ => "sleeptalk_called_unidentified:none_matched",
+                        },
+                    );
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
                     // whatever HP movement follows. The previous version applied
@@ -2551,12 +2586,33 @@ fn render_move_phase(
 /// matching the branch tail exactly. Returns the MUTATED candidate choice
 /// (the engine's own modification pass applied) or None when zero or
 /// multiple candidates match (ambiguous delta — documented insufficiency).
+/// Why `identify_sleep_talk_called` could not name the called move.
+///
+/// The two causes need OPPOSITE fixes and the single `None` hid which one was
+/// happening. `Ambiguous` means two candidates regenerate byte-identical tails,
+/// which no amount of renderer cleverness can separate -- only the engine
+/// recording which move it actually called can. `NoneMatched` means the
+/// regeneration reproduced NO candidate's tail, which is a different defect: the
+/// replay diverges from what the engine really did, and it is potentially fixable
+/// without touching the engine.
+///
+/// `sleeptalk_called_unidentified` is 48.9% of world failures on the era-55
+/// probe -- larger than every other class combined -- so which of these two it
+/// actually is decides the whole next phase of work.
+enum SleepTalkIdent {
+    Matched(Box<Choice>),
+    /// No candidate regenerated the observed tail.
+    NoneMatched,
+    /// Two or more candidates regenerate the SAME tail.
+    Ambiguous,
+}
+
 fn identify_sleep_talk_called(
     state: &mut State,
     side: SideReference,
     tail: &[Instruction],
     branch_on_damage: bool,
-) -> Option<Choice> {
+) -> SleepTalkIdent {
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -2583,12 +2639,15 @@ fn identify_sleep_talk_called(
             .any(|branch| branch.instruction_list.as_slice() == tail)
         {
             if matched.is_some() {
-                return None; // ambiguous
+                return SleepTalkIdent::Ambiguous;
             }
             matched = Some(choice);
         }
     }
-    matched
+    match matched {
+        Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
+        None => SleepTalkIdent::NoneMatched,
+    }
 }
 
 /// Expected collapsed damage values (regular, crit) for the attacking side's

@@ -1374,3 +1374,81 @@ fn a_two_sided_refusal_keys_canonically_and_fits_the_python_seam() {
          splitting one measurement across two buckets"
     );
 }
+/// The sleep-talk refusal must name its cause in `attribution_unsafe` while
+/// leaving the `lossy` tag exactly as it was.
+///
+/// `sleeptalk_called_unidentified` is 48.9% of world failures on the era-55
+/// probe -- bigger than every other class combined -- and the single slug hid
+/// which of two OPPOSITE problems was happening. `ambiguous` (two candidates
+/// regenerate byte-identical tails) can only be fixed by the engine recording
+/// which move it called. `none_matched` (no candidate reproduces the tail) means
+/// the replay diverges from what the engine did, which is a different defect.
+///
+/// The `lossy` tag must NOT split: `engine_transition_differential.py` matches it
+/// with `set(lossy) == {_SLEEPTALK_LOSSY_MARKER}` to decide branch usability, and
+/// that file's bytes are pinned by the certification lifecycle. Splitting it
+/// would silently change which branches the differential accepts.
+#[test]
+fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    // Two callees whose instruction lists are BYTE-IDENTICAL: Harden and
+    // Withdraw are both +1 Defense on the user. Splash and Harden do NOT work --
+    // Harden emits a boost and Splash emits nothing, so the tails differ and the
+    // engine identifies each correctly. Ambiguity needs genuinely equal effects.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+
+    let branches = generate(&mut state);
+    let mut saw_subcase = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        for reason in &r.attribution_unsafe {
+            if reason.starts_with("sleeptalk_called_unidentified") {
+                saw_subcase = true;
+                assert_ne!(
+                    reason, "sleeptalk_called_unidentified",
+                    "the bare slug carries no cause and cannot be measured: {:?}",
+                    r.attribution_unsafe
+                );
+                assert!(
+                    reason == "sleeptalk_called_unidentified:ambiguous"
+                        || reason == "sleeptalk_called_unidentified:none_matched",
+                    "unexpected sub-case slug: {reason}"
+                );
+            }
+        }
+        // The lossy CONTRACT tag stays bare, whatever the sub-case is.
+        if r.attribution_unsafe
+            .iter()
+            .any(|x| x.starts_with("sleeptalk_called_unidentified"))
+        {
+            assert!(
+                r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
+                "the differential matches the lossy tag EXACTLY; it must stay \
+                 unsplit: {:?}",
+                r.lossy
+            );
+            assert!(
+                !r.lossy
+                    .iter()
+                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+                "a sub-cased lossy tag would change which branches the \
+                 differential accepts: {:?}",
+                r.lossy
+            );
+        }
+    }
+    assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+}
