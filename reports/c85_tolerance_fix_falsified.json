@@ -79,5 +79,12 @@
   },
   "the_correction": "The bound redesign I made the centrepiece -- and got wrong across four rounds -- is worth 3 of 144 rows. The substance is threading a slot-wide damage budget into a comparison that was operating on 1 HP. Main's 0.18*scale+1 was never operative either: its caller does not pass scale, so production ran at 1 HP too.",
   "the_67_was_never_a_mystery": "reconstructing main's fraction bound WITH the threading scores 67 on the current tree, to the row. The 'unlocated gap' of the previous four rounds was this."
+ },
+ "REMEASURED_ON_CURRENT_MAIN": {
+  "why": "the original 208 -> 64 was measured against a main that predates C87. C87 moved the baseline to 202, so the headline had to be re-derived rather than carried forward.",
+  "main_now": 202,
+  "with_this_pr": 58,
+  "reduction": 144,
+  "note": "the reduction is the same 144 rows; the two fixes compose without overlap. Quoting 64 after C87 landed would have been a stale number of exactly the kind this ledger keeps having to mark."
  }
 }
