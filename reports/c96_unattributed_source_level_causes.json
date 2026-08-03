@@ -1,10 +1,11 @@
 {
  "schema": "c96-unattributed-source-level-causes/2",
- "REVISION_NOTE": "v1 filed 19000073/1 as a COMPARISON LIMIT, rested that on a false statement about the harness, and gave a cause for 19000093/53 that the renderer source refutes. Rewritten after adversarial review. The premise held: all four rows are knowable from the two sources, and none needed an attribution rule widened.",
+ "REVISION_NOTE": "v1 filed 19000073/1 as a COMPARISON LIMIT, rested that on a false statement about the harness, and gave a cause for 19000093/53 that the renderer source refutes. Rewritten after adversarial review. THE GOAL PREMISE DID NOT SIMPLY HOLD: the premise under test is 'unattributed is a gap in the classifier, never a gap in what is knowable', and 19000073/1 turned out to be an ENGINE SUPPORT GAP, which is not a classifier gap. Two of the four rows remain UNDETERMINED and OPEN, so their knowability is exactly what is unestablished. What did hold: no row needed an attribution rule widened. See the tally for the honest count.",
  "era": {
   "engine_fingerprint": "d9cab2b1cf9fc011e410229b46e6aa7ec9c400231c5671d0979b1fcda2dfd260",
   "note": "third_party/poke-engine-src is gitignored; engine line citations are valid at this fingerprint only.",
-  "artifact": "/tmp/sweep_exact.json, uncommitted and unhashed -- a real weakness."
+  "artifact": "/tmp/sweep_exact.json, uncommitted and unhashed -- a real weakness.",
+  "renderer_era": "the engine fingerprint alone cannot carry this era: PR #1039 (renderer-only, 39 -> 36) merged into this branch AFTER the sweep was taken, and a renderer change leaves the engine fingerprint unmoved. The four rows were drawn from the 39-divergent / 4-unattributed reading at main before #1039."
  },
  "19000073_1": {
   "STATUS": "RECLASSIFIED. v1 called this a comparison limit. It is an ENGINE SUPPORT GAP.",
@@ -14,7 +15,7 @@
   "the_gates_are_faithful": "Showdown data/moves.ts:1223 refuses when target.hp <= maxhp/2; the engine gen3/choice_effects.rs:642-650 fires when attacker.hp > maxhp/2 with INTEGER division. Identical on both parities: for maxhp = 2k both fire at hp > k; for maxhp = 2k+1 Showdown fires at hp > k+0.5 i.e. hp >= k+1, and the engine's integer maxhp/2 = k fires at hp > k i.e. hp >= k+1. Damage agrees too -- directDamage floors via clampIntRange, so 130.5 -> 130 = the engine's 261/2. The per-roll simulation is CORRECT.",
   "showdown_predicate_is_wider_than_v1_quoted": "moves.ts:1223 is `target.hp <= target.maxhp/2 || target.boosts.atk >= 6 || target.maxhp === 1`. The engine implements NEITHER of the other two disjuncts: at atk +6 above half HP it still pays maxhp/2 and pushes a Boost of amount 0 (Showdown refuses outright); at maxhp == 1 it fires with damage 0 (Showdown's Shedinja clause refuses). Neither rejects this row, but v1 elided two thirds of the predicate on the line it cited, and both are separate latent engine bugs.",
   "v1s_FALSE_PREMISE": "v1 said 'without branch_on_damage the engine offers one representative non-crit roll'. branch_on_damage IS ON. engine_transition_differential.py:1824-1826 and scripts/replay_residue.py:118 both pass True. The realised roll is absent for a different reason entirely.",
-  "the_real_cause": "the 16-roll preservation this row needs already exists and Belly Drum is simply not on its allowlist. generate_instructions.rs:2909-2916 keeps all sixteen gen3 rolls when branch_on_damage && choice.first_move && pending_hp_reading_move(defender_choice) && fixed_damage.is_none(). pending_hp_reading_move at :1379-1384 is `FLAIL | REVERSAL | SUBSTITUTE`. Thunderbolt moves first and Belly Drum is the defender_choice, so the gate would fire -- BELLYDRUM is just missing from the enum.",
+  "the_real_cause": "the 16-roll preservation this row needs already exists and Belly Drum is simply not on its allowlist. generate_instructions.rs:2911-2915 keeps all sixteen gen3 rolls when branch_on_damage && choice.first_move && pending_hp_reading_move(defender_choice) && fixed_damage.is_none(). pending_hp_reading_move at :1379-1384 is `FLAIL | REVERSAL | SUBSTITUTE`. Thunderbolt moves first and Belly Drum is the defender_choice, so the gate would fire -- BELLYDRUM is just missing from the enum.",
   "the_precedent_is_exact": "third_party/poke-engine-gen3-substitute-hp-gate.patch added SUBSTITUTE to that same allowlist for the same reason: gen3 refuses Substitute below a quarter of max, so a roll range straddling the quarter decides whether it happens at all, and collapsing to a representative drops one side from the support. Substitute's gate is maxhp/4 (choice_effects.rs:871); Belly Drum's is maxhp/2 (:645). Same class, already adjudicated once as an ENGINE defect and fixed by an ENGINE patch.",
   "why_v1s_label_was_the_charter_failure": "the charter defines a comparison limit as one no same-transition partition can reach -- permanent -- and an engine gap as the support lacking a transition the sim can reach. A partition reaches this; the realised roll 127 = floor(146*87/100) is legal and absent from the support. v1 also used limit:roll_divergent_lethality as its shape precedent, which the charter names as one of three adjudications that turned out to rest on incomplete branch support. It was re-running the exact failure mode, citing the canonical instance of it as warrant.",
   "disposition": {
@@ -23,11 +24,13 @@
    "the_fix": "add BELLYDRUM to pending_hp_reading_move.",
    "gate": "needs a tactics-suite regression gate and a single-variable re-sweep reporting matched and skip alongside diverged, per the rules in PR #1038.",
    "expected_cost": "widening the allowlist multiplies branch counts on affected boundaries; that cost must be measured, not assumed negligible."
-  }
+  },
+  "allowlist_completeness_is_OPEN": "pending_hp_reading_move is an enumeration and has now been found short twice. Endeavor (damage = target.hp - user.hp) and Pain Split (averages both HPs) also read the user's HP after a first-mover hit. Adding BELLYDRUM does NOT close the class; it closes one row. Recorded as an open question.",
+  "rank_and_prediction": "not yet ranked by the charter's search-impact formula, and no class-split prediction with a stated ceiling was pre-registered before the measurement run, which method rule #3 asks for. Belly Drum swings Attack to +6 and so prices KO margins, which is where C27 argued the value is -- so the rank is plausibly higher than its one row suggests, but that is an assertion until computed."
  },
  "19000093_51": {
-  "STATUS": "CAUSED. Disposition softened -- v1's 'NOT an engine error' outran the evidence.",
-  "confirmed": "events.rs:766-779: when segment() returns None the branch is returned with ZERO components while the instruction list itself is complete and correct (both hits, Showdown's order). Over 85% of the branch mass is voided this way.",
+  "STATUS": "UNDETERMINED -- renderer or engine composition. The void mechanism is established; the cause of the segmentation failure is not.",
+  "confirmed": "events.rs:766-779: when segment() returns None the branch is returned with ZERO components while the instruction list itself was OBSERVED complete and correct on replay -- an observation, not an established property, since the same entry allows that the pair-generated list may be an engine composition artifact (both hits, Showdown's order). Over 85% of the branch mass is voided this way.",
   "v1s_named_candidate_is_REFUTED": "v1 guessed the missing first-mover DecrementPP broke the split. It cannot: segment() does not read move markers at all. It re-runs generate_instructions_from_move per side and PREFIX-MATCHES the regenerated list against the full one (events.rs:410-412, :453-460, :478-490), so a marker absent from the engine's list is equally absent from the regeneration.",
   "what_segmentation_failure_actually_means": "the PAIR-generated instruction list is not reproducible by composing the two per-move generations. That is at least as plausibly an engine composition artifact as a renderer one.",
   "disposition": {
@@ -68,5 +71,6 @@
  "side_findings": {
   "c95_I5_hedge": "v1 claimed to settle it by citing events.rs:751-765. That range is pre_ply_replacement, which does not gate the end-of-turn phase at all -- it is read by finish_ply to decide the |turn| line. The gating function is end_of_turn_triggered at :372-390. And 'extend the replacement predicate to the double-switch shape' as worded would suppress residuals on an ordinary VOLUNTARY double switch, which is a full turn and must keep its Leftovers. PR #1037 implemented a both-actives-fainted version and was still closed as a regression.",
   "c84": "the contamination claim stands and is already applied on main via reports/c94. v1 stated it as though unaddressed."
- }
+ },
+ "provenance_weakness": "v2 argues more correctly than v1 and is LESS CHECKABLE: v1 carried verbatim replay-derived component sets and raw instruction lists for the four rows and v2 dropped them while rewriting. Combined with the artifact being uncommitted and unhashed, the report is argument without exhibits. The C94 standing rule exists precisely because arm-content claims need replay behind them. Restoring the exhibits is outstanding."
 }
