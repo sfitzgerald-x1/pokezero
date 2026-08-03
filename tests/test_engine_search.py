@@ -23,6 +23,8 @@ from pokezero.engine_search import (  # noqa: E402
     EngineMctsPolicy,
     EngineMctsStats,
     EngineSearchFallbackError,
+    _REASON_DETAIL_LIMIT,
+    _bounded_reason_detail,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
 )
@@ -1619,6 +1621,73 @@ class HandcraftedCrateSearchTests(unittest.TestCase):
             stats["world_failure_reasons"],
         )
         self.assertIn(decision.action_index, (0, 1, 4))
+
+
+class BoundedReasonDetailTests(unittest.TestCase):
+    """Overflowing a telemetry key must never make two reasons look like one.
+
+    The old seam was a bare ``[:160]``. Independent review on #1030 showed that
+    silently aliases: two DIFFERENT attract sub-case sets that share a prefix
+    truncated to byte-identical `world_failure_reasons` keys, and the label that
+    got cut was `+volatile` -- one of the non-downgradeable arms the sub-case
+    split exists to measure. A measurement that hides its answer inside a bucket
+    belonging to a different question is worse than one that is merely coarse.
+    """
+
+    def test_the_budget_itself_is_pinned(self) -> None:
+        # Every other assertion here is expressed RELATIVE to the constant, so
+        # they all move with it and none of them notices a re-narrowed budget.
+        # The crate mirrors this number as a hardcoded literal
+        # (`PY_REASON_DETAIL_LIMIT` in gen3_confusion_event_renderer.rs) and
+        # cannot see this side, so without this pin the two silently
+        # desynchronise. Found by independent review as a surviving mutant.
+        self.assertGreaterEqual(_REASON_DETAIL_LIMIT, 512)
+
+    def test_a_limit_smaller_than_the_suffix_still_honours_the_bound(self) -> None:
+        for limit in (0, 1, 5, 18, 19):
+            self.assertLessEqual(len(_bounded_reason_detail("q" * 100, limit=limit)), limit)
+
+    def test_short_reasons_are_untouched(self) -> None:
+        text = "attract_empty_tail_ambiguous:paralyzed+miss"
+        self.assertEqual(_bounded_reason_detail(text), text)
+
+    def test_boundary_is_inclusive(self) -> None:
+        exact = "x" * _REASON_DETAIL_LIMIT
+        self.assertEqual(_bounded_reason_detail(exact), exact)
+        self.assertEqual(len(_bounded_reason_detail("x" * (_REASON_DETAIL_LIMIT + 1))),
+                         _REASON_DETAIL_LIMIT)
+
+    def test_overflow_stays_within_budget(self) -> None:
+        self.assertLessEqual(
+            len(_bounded_reason_detail("y" * (_REASON_DETAIL_LIMIT * 4))),
+            _REASON_DETAIL_LIMIT,
+        )
+
+    def test_overflow_announces_itself(self) -> None:
+        self.assertIn("~trunc:", _bounded_reason_detail("z" * (_REASON_DETAIL_LIMIT + 50)))
+
+    def test_distinct_reasons_sharing_a_prefix_keep_distinct_keys(self) -> None:
+        # The exact failure review reproduced, scaled to the current limit: the
+        # shorter set is a strict prefix of the longer one, so a bare slice put
+        # both in the same bucket and the trailing sub-case vanished.
+        shared = "attribution-unsafe renderer branch rejected before tree/model fold: " + (
+            "attract_empty_tail_ambiguous:paralyzed+cannot_act," * 12
+        )
+        short = shared + "attract_empty_tail_ambiguous:paralyzed+miss"
+        long = short + "+volatile"
+
+        self.assertGreater(len(short), _REASON_DETAIL_LIMIT, "fixture must overflow")
+        self.assertEqual(short[:_REASON_DETAIL_LIMIT], long[:_REASON_DETAIL_LIMIT],
+                         "fixture must alias under a bare slice, or it proves nothing")
+        self.assertNotEqual(
+            _bounded_reason_detail(short),
+            _bounded_reason_detail(long),
+            "two different sub-case sets collapsed into one telemetry bucket",
+        )
+
+    def test_truncation_is_deterministic_across_calls(self) -> None:
+        text = "w" * (_REASON_DETAIL_LIMIT + 7)
+        self.assertEqual(_bounded_reason_detail(text), _bounded_reason_detail(text))
 
 
 if __name__ == "__main__":

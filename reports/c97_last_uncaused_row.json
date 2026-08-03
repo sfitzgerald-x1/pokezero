@@ -92,5 +92,6 @@
   "amend_c89_on_main": "OWED. reports/c89 on main still reads rows: 3, reclassified_out: ['19000074/27'] and the retired p1-slot hypothesis, with no forward pointer to this report. Deferred to its own PR under the repo's keep-pointer-changes-dedicated discipline, but it is owed, not optional.",
   "re_adjudicate_the_seven_limit_rows": "OWED, and filed twice already -- reports/c91 ('Every remaining limit adjudication should be re-tested') and reports/c89 ('open a follow-up to replay all 24 and name them'). Neither ran. Until it does, the 7 limit:roll_divergent_lethality rows are unexamined at the current era, not cleared.",
   "two_open_rows": "19000093/51 and 19000093/53 remain OPEN per reports/c96 and are not addressed by this report."
- }
+ },
+ "COMMIT_SUBJECT_ON_MAIN_IS_INACCURATE": "the squash commit that landed this report reads 'reports: C97 -- cause for 19000074/27, the last uncaused row (#1043)'. THAT SUBJECT IS FALSE and is claim #1 from scope_of_this_claim. I corrected the report body and the PR description and never the PR TITLE, which is what becomes the squash subject -- so the withdrawn claim reached the permanent history on the one surface I did not check. Published history is not rewritten; this key is the correction. The accurate subject would have been 'cause for the last open row of C89's family'."
 }
