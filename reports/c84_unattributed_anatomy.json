@@ -1,5 +1,5 @@
 {
- "CONTAMINATED_BY_RETRACTED_METHOD": "reports/c94_method_retraction.json. Three of this file's four sub-shapes read branch_misses as a branch's component set -- 'empty engine component list', 'two empty', and the (capped_lethal, -132) tuple are all phantoms of that reading. Superseded by reports/c96_unattributed_source_level_causes.json, which re-derives all four current UNATTRIBUTED rows from replay. crit_arm_absent_from_support survives on C87's sweep evidence and is superseded on the merits by reports/c93.",
+ "CONTAMINATED_BY_RETRACTED_METHOD": "reports/c94_method_retraction.json. Three of this file's four sub-shapes read branch_misses as a branch's component set -- 'empty engine component list', 'two empty', and the (capped_lethal, -132) tuple are all phantoms of that reading. Superseded by reports/c96_unattributed_source_level_causes.json (PR #1036, not yet on main), which re-derives all four current UNATTRIBUTED rows from replay. crit_arm_absent_from_support survives: those rows were CLOSED BY C87's shipped engine fix. C93 supersedes the INFERENCE PATTERN ('observed ~2x best arm implies arm absent'), not those rows -- it concerns ten different I2 rows.",
  "schema": "c84-unattributed-anatomy/1",
  "era": {
   "engine_fingerprint": "e5f4c7b16fe2895a",

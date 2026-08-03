@@ -43,8 +43,9 @@
     "the worked example at :19 -- 'engine arms offer -46, -46, -23 and two empty' -- two more phantoms.",
     "reverse_direction (:46-51) -- 'the engine arm carries (capped_lethal, -132)', literally the miss-string tuple format."
    ],
-   "survives": "crit_arm_absent_from_support, which rests on C87's independent sweep evidence -- and which C93 supersedes on the merits anyway.",
-   "superseded_by": "reports/c96_unattributed_source_level_causes.json re-derives all four current UNATTRIBUTED rows from replay."
+   "survives": "crit_arm_absent_from_support. Those rows (19000038/66, 19000141/35, 19000175/103) were CLOSED BY C87's shipped engine fix. C93 does not supersede those rows -- it concerns ten different I2 rows where the crit arm is present but untagged. What C93 supersedes is the INFERENCE PATTERN 'observed ~2x best arm implies arm absent'.",
+   "superseded_by": "reports/c96_unattributed_source_level_causes.json, on PR #1036 and NOT on main, which re-derives all four current UNATTRIBUTED rows from replay.",
+   "fair_reading_of_c84": "c84's sub-shape KEY is engine_majority_arm_carries_no_damage, but its BODY reads those rows as 'accuracy/miss arms' holding tiny mass (7.5%, 2.0%, 0.5%). The contamination claim is about the key and the empty-list evidence; the body at least noticed the arms were small."
   },
   "scripts/family_bucket_audit.py": {
    "status": "LIVE CODE PATH computing a published adjudication from miss strings.",
@@ -52,7 +53,8 @@
    "why_it_is_the_same_error": "that is a WHOLE-BOUNDARY net computed from ONE SLOT's partial, roll-scaled, possibly truncated list.",
    "the_code_warned_about_this": "its own comment at :179-180 says this is the ONLY signature bucket_from_signatures treats as decisive, 'so a false positive here becomes a published adjudication'.",
    "what_it_published": "reports/c68_family_bucket_audit.json:66 -- '120/120 majority arms reach an IDENTICAL net HP: the end states agree' -- republished as a current-era ADJUDICATED verdict at reports/c86:58-60, which is the I4_attribution_tie instrument-artifact bucket (3 live rows).",
-   "independent_outcome": "reports/c95 re-derived I4 from replay and found the nets ARE identical (a Liquid Ooze heal mislabelled as leechseed rather than itemleftovers). So the I4 VERDICT survives on replay evidence -- but it survives by luck of the method, not because of it, and the audit script must be re-based on replay before it adjudicates anything else."
+   "independent_outcome": "C95 re-derived I4 from replay and confirmed the NETS ARE IDENTICAL, so the net_identical OBSERVATION holds. But C95 dispositions the row as an ENGINE or RENDERER FIX, which CONTESTS the instrument-artifact bucket: the +19 is the seeder's own Leftovers tick and the engine renders it as a leechseed heal. The signature survived replay; the BUCKET IS NOW OPEN, not confirmed. (C95 is on PR #1034 and is not on main.) The audit script must be re-based on replay before it adjudicates anything else.",
+   "two_ways_the_net_check_fails": "(a) ALWAYS: the leap from one slot to 'the end states agree'. (b) ADDITIONALLY, when the miss is the ROLL-SCALED kind: the exact-bucket components were never compared at all. When the miss is the attributed-components kind the two lists are symmetric differences, so shared components cancel and sum(only_obs)==sum(only_eng) does validly imply the nets agree FOR THAT SLOT -- (a) still applies, (b) does not."
   },
   "scripts/cert_sweep_readout.py": {
    "status": "LIVE CODE PATH, currently dormant.",

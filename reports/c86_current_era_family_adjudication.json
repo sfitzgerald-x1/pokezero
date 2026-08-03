@@ -59,7 +59,7 @@
    "adjudication": "ADJUDICATED. 120/120 majority arms reach an IDENTICAL net HP: the end states agree and only the decomposition differs.",
    "evidence": "reports/c68_family_bucket_audit.json",
    "era_current": true,
-   "METHOD_WARNING": "the 'identical net HP' signature backing this adjudication is computed from branch_misses by scripts/family_bucket_audit.py:164-185 -- the method retracted in reports/c94_method_retraction.json. The verdict independently SURVIVES replay (reports/c95), but the audit script must be re-based on replay before it adjudicates anything else."
+   "METHOD_WARNING": "the 'identical net HP' signature backing this adjudication is computed from branch_misses by scripts/family_bucket_audit.py:164-185 -- the method retracted in reports/c94_method_retraction.json. Replay (C95, PR #1034, not on main) confirms the NETS are identical, so the signature holds -- but C95 dispositions the row as an ENGINE or RENDERER FIX, which CONTESTS this instrument-artifact bucket. Treat the bucket as OPEN."
   },
   "UNATTRIBUTED": {
    "rows": 8,
