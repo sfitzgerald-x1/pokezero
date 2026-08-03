@@ -1,0 +1,34 @@
+{
+ "schema": "c91-adjudication-correction/1",
+ "headline": "limit:roll_divergent_lethality was adjudicated as an evidence-backed COMPARISON LIMIT. 15 of its 24 rows were a matcher artifact, and the C88-A cap-vs-cap fix closed them.",
+ "measured": {
+  "before": 58,
+  "after": 39,
+  "closed": 19,
+  "newly_divergent": 0,
+  "closed_from_limit_roll_divergent_lethality": 15,
+  "closed_from_LS_capped_lethal_shape": 4
+ },
+ "the_prediction_and_the_surprise": {
+  "predicted": "4 rows, C88 sub-shape A",
+  "actual": "19. The 4 predicted, plus 15 that had been sitting in a family declared unanswerable.",
+  "why": "the same one-sided capped_lethal test rejected them. A residual that kills is clipped to each arm's own remaining HP; when BOTH arms are clipped the arm that took less direct damage legitimately carries the LARGER cap. The old rule asserted the observed cap could only ever be smaller."
+ },
+ "MY_CHECK_WAS_TOO_NARROW": {
+  "what_i_did": "in reports/c89 I tested whether the limit:roll_divergent_lethality rows shared sub-shape B's signature -- observed net absent from every arm, plus a residual. 0 of 8 sampled matched, and I recorded that the family's comparison-limit adjudication STANDS.",
+  "why_that_was_wrong": "the check answered 'are these C89's mechanism?', which was a fair question with a correct answer. I reported it as 'the adjudication is sound', which is a different and much larger claim. They were not C89's mechanism; they were C88-A's, and I had already written C88-A's cause down.",
+  "the_lesson": "a negative result against ONE hypothesis is not evidence for an adjudication. Ruling out a mechanism narrows the space; it does not confirm the label."
+ },
+ "what_this_says_about_the_audit": "limit was reserved for cases the methodology genuinely cannot settle. 15 of 24 rows in the largest such family were settleable by a 20-line matcher change. Every remaining 'limit' adjudication should be re-tested against the same question -- is the observed outcome reachable once the matcher stops rejecting on an unsound inequality -- before it is trusted.",
+ "residue_now": {
+  "total": 39,
+  "I2_matcher_accounting": 10,
+  "LS_capped_lethal_shape": 8,
+  "limit:roll_divergent_lethality": 7,
+  "UNATTRIBUTED": 4,
+  "I3_roll_inherited": 3,
+  "I5_boundary_truncation": 3,
+  "I4_attribution_tie": 3,
+  "limit:world_sample_drag_target": 1
+ }
+}
