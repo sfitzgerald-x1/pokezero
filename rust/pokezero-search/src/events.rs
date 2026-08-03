@@ -2906,14 +2906,22 @@ fn render_residual_instruction(
 /// side is the k-th firing damage phase for that side. The plan below predicts
 /// which phases fire using PRESENCE predicates only — never damage formulas —
 /// and is used ONLY when its predicted counts match the counts actually emitted.
-/// On any mismatch the side falls back to the per-instruction cause helpers.
-/// For DAMAGE that fallback is loud rather than confidently wrong —
-/// `residual_damage_cause` ends in a generic `residual` tag that diverges. For
-/// HEALS it is NOT: `residual_heal_cause` has no such terminal case and always
-/// names a specific cause, so a mismatch there yields a confidently wrong label
-/// rather than a visible one. That asymmetry is the mechanism behind every H.1
-/// mislabel, so the predicates below must mirror the engine's own emission
-/// gates exactly — a slot booked that the engine never fills is not a harmless
+/// On any mismatch the side falls back to the per-instruction cause helpers,
+/// and BOTH of them guess from fixed-priority state rather than from position.
+/// That guessing is the H.1 mechanism, and it bites on both sides: of the 30
+/// H.1 rows in `docs/engine_divergence_ledger_20260728.md`, 21 are damage-side
+/// (`sandstorm|psn`, `partialtrap|sandstorm`, `leechseed|psn`, `sandstorm|brn`)
+/// and 9 are heal-side.
+///
+/// The two helpers differ only in their LAST resort, and only when no state
+/// predicate matches at all: `residual_damage_cause` ends in a generic
+/// `residual` that diverges loudly (`:3063`), while `residual_heal_cause` ends
+/// in a specific `item: Leftovers` (`:3124`) and is therefore confidently wrong
+/// even in the fall-through case. That is a narrow extra hazard on the heal
+/// side, NOT the whole mechanism.
+///
+/// Either way the predicates below must mirror the engine's own emission gates
+/// exactly: a slot booked that the engine never fills is not a harmless
 /// over-count, it silently corrupts the tag on a sibling heal.
 ///
 /// TWO of those entries are cross-side, which is why this plan has to know the
@@ -3026,8 +3034,9 @@ impl ResidualPlan {
             // phase 10.4 — after weather chip at phase 8 — so a mon at full HP
             // when the plan is built is routinely below max by the time the
             // tick actually fires, and the engine does emit it. Measured: that
-            // guard alone costs 5 rows (matched 15187 -> 15182) on seeds
-            // 19000000-19000199. Same trap as the drain slot documented in
+            // guard alone costs 5 rows on seeds 19000000-19000199: matched
+            // 15187 -> 15182 AND diverged 36 -> 41 (component_missing_in_engine
+            // :psn 2 -> 7). The rows became divergences, not skips. Same trap as the drain slot documented in
             // `a_near_full_hp_seeder_still_over_books_the_drain_slot`: these
             // predicates cannot use HP without modelling the phase order.
             if active.item == Items::LEFTOVERS {
@@ -3967,9 +3976,10 @@ mod tests {
     /// books two, the reconcile disables the side, and the tick renders
     /// `Leech Seed`.
     ///
-    /// The `active.hp < active.maxhp` guard added for Leftovers does NOT close
-    /// this. Evaluated on the pre-residual state, 307 < 312 holds and the drain
-    /// slot is still booked. Closing it needs the drain predicate to know the
+    /// An `active.hp < active.maxhp` guard does NOT close this, which is why
+    /// this PR does not add one (see the NOTE on the Leftovers slot above, and
+    /// the 5-row cost measured there). Evaluated on the pre-residual state,
+    /// 307 < 312 holds and the drain slot would still be booked. Closing it needs the drain predicate to know the
     /// seeder's HP AFTER its own earlier heal phases, which this plan
     /// deliberately avoids — it is documented as using presence predicates
     /// only, never HP formulas. Doing it properly means modelling the heal
