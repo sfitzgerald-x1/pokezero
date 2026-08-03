@@ -1,0 +1,63 @@
+{
+ "schema": "c95-source-level-causes/1",
+ "method": "scripts/replay_residue.py -- full branch sets, per reports/c94. Not branch_misses.",
+ "covers": "the last three families with no written cause: I4_attribution_tie, I3_roll_inherited, I5_boundary_truncation. 9 rows.",
+ "I4_attribution_tie": {
+  "rows": 3,
+  "identities": [
+   "19000180/54",
+   "19000180/57",
+   "19000180/60"
+  ],
+  "note": "all three are the same game and the same recurring situation",
+  "boundary": "Shiftry Leech Seeds Swalot, which has LIQUID OOZE. Showdown: |-heal|p1a: Shiftry|+19|[from] item: Leftovers, |-damage|p2a: Swalot|-39|[from] Leech Seed, |-damage|p1a: Shiftry|-39|[from] ability: Liquid Ooze",
+  "observed": "p1 abilityliquidooze=-39, itemleftovers=+19 | p2 leechseed=-39",
+  "engine_90pct": "p1 abilityliquidooze=-39, leechseed=+19 | p2 leechseed=-39",
+  "the_difference": "the engine labels Shiftry's +19 as LEECHSEED; Showdown labels it ITEM: LEFTOVERS. Nets are identical (-20 on p1 either way) -- only the attribution differs, which is exactly what this family is named for.",
+  "which_is_right": "Showdown. 19 is Shiftry's Leftovers tick (312/16 = 19.5 -> 19). Under Liquid Ooze the Leech Seed drain does not heal the seeder at all -- it damages it, which is the -39 both sides agree on. So an engine leechseed HEAL of +19 alongside a liquidooze -39 double-counts the mechanism and coincidentally equals the Leftovers value.",
+  "disposition": {
+   "class": "ENGINE or RENDERER FIX",
+   "detail": "the Leech Seed heal must be suppressed when the target has Liquid Ooze, not emitted and then offset. Verify whether the engine suppresses it internally and only the renderer mislabels, or whether the engine really applies both.",
+   "not_implemented": true
+  }
+ },
+ "I3_roll_inherited": {
+  "rows": 3,
+  "identities": [
+   "19000016/2",
+   "19000016/49",
+   "19000198/22"
+  ],
+  "boundary": "Jirachi Ice Punches Swalot, Swalot Pain Splits",
+  "observed": "p2 itemleftovers=+19, movepainsplit=-5, move=-40",
+  "engine_75pct": "p2 itemleftovers=+19, movepainsplit=-4, move=-43",
+  "the_difference": "the direct roll differs (-40 vs -43, inside the window) AND the Pain Split differs by 1 (-5 vs -4).",
+  "the_cause": "Pain Split averages the two Pokemon's CURRENT HP, so its magnitude is a function of the HP left after the damage roll. A different legal roll gives a different post-damage HP and therefore a different Pain Split. movepainsplit is in the EXACT bucket, so a 1 HP difference is rejected outright.",
+  "why_this_is_familiar": "it is the same shape as the capped-heal and capped-lethal cascades already fixed -- a component whose magnitude INHERITS the damage roll, compared as if deterministic. The family name, roll_inherited, says so.",
+  "disposition": {
+   "class": "MATCHER FIX",
+   "detail": "movepainsplit must be roll-aware: either roll-scaled, or cascade-handled with a bound derived from the roll gap as the capped-heal work does. It is NOT deterministic.",
+   "not_implemented": true
+  }
+ },
+ "I5_boundary_truncation": {
+  "rows": 3,
+  "identities": [
+   "19000020/50",
+   "19000059/27",
+   "19000098/79"
+  ],
+  "boundary": "both sides switch. Showdown emits |switch|, |switch|, |turn|47 -- no upkeep section and NO components at all.",
+  "observed": "p1 (none) | p2 (none)",
+  "engine_100pct": "p1 itemleftovers=+18 | p2 itemleftovers=+18",
+  "the_difference": "the engine applies end-of-turn Leftovers on a boundary Showdown treats as a replacement, not a turn.",
+  "the_cause": "a forced-replacement boundary is not a full turn: Showdown runs no residual phase, which is why the protocol has no upkeep block. The engine runs end-of-turn regardless. This is boundary SEGMENTATION -- the engine is answering for a turn that did not happen.",
+  "disposition": {
+   "class": "ENGINE or HARNESS FIX",
+   "detail": "either the engine must not run end-of-turn on a replacement boundary, or the harness must not ask it to. Determine which by checking how the differential segments a double-switch step before patching the engine.",
+   "not_implemented": true
+  }
+ },
+ "what_this_completes": "every family in the current 39-row residue now has a written source-level cause. Remaining without one: 19000074/27 alone (reclassified out of c89 -- the engine's crit-kill arm defers the other side's residual on a faint) and the 4 UNATTRIBUTED rows.",
+ "none_are_comparison_limits": "all three dispositions are fixes. None is a case the methodology cannot settle."
+}
