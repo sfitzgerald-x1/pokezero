@@ -18,6 +18,18 @@ of which run more than one type. That is set DATA, not the wire, and conflating 
 produced the wrong premise. It is why the matcher has to be lenient: the belief engine sees
 ``hiddenpower`` and the candidate variants carry ``hiddenpowergrass``.
 
+The typed tests below therefore guard the POOL side, not a typed reveal. Every one of the
+``revealed_moves=`` call sites originates from the public ``|move|`` channel, so in gen3 the
+matcher's typed-REVEALED branch is genuinely unreachable. What a broken matcher would corrupt is
+``possible_moves`` and the HP-type-derived IV spread (``gen3_damage.HIDDEN_POWER_IVS``, which
+feeds the opponent stat bands). The typed tests are a proxy for THAT consumer.
+
+Stated precisely because the first version of this note claimed the type reaches the matcher via
+the player's own request. It does not: ``_hidden_power_variant_from_name`` feeds
+``_self_move_mechanics_id`` -- "the mechanics lookup ONLY", per its own docstring -- and never
+the belief matcher. That was a second plausible-but-wrong rationale on the same file, which is
+how the first one calcified.
+
 So the property worth pinning is not that the type survives -- it never arrives. It is that the
 untyped reveal DEGRADES SAFELY: no narrowing, rather than excluding every typed variant. A
 "tighter" matcher requiring an exact id would collapse all 130 Hidden-Power-carrying species to
@@ -58,7 +70,7 @@ class HiddenPowerProtocolPremiseTest(unittest.TestCase):
 
     def test_gen3_move_lines_never_carry_the_hidden_power_type(self) -> None:
         lines = []
-        for log in sorted(CAPTURES.glob("lines-battle-gen3randombattle-*.log")):
+        for log in sorted(CAPTURES.parent.rglob("*.log")):
             lines += [
                 line
                 for line in log.read_text(encoding="utf-8").splitlines()
@@ -117,14 +129,32 @@ class HiddenPowerBeliefDegradationTest(unittest.TestCase):
         """
         from pokezero.randbat import _revealed_move_matches_variant
 
-        typed_pool = {"hiddenpowergrass", "surf"}
-        self.assertTrue(
-            _revealed_move_matches_variant("Hidden Power", typed_pool),
-            "an untyped reveal excluded a typed variant -- it must degrade, not eliminate",
+        # EVERY typed id in the pool, not one. A review mutation that dropped leniency for a
+        # single type slipped through when only Grass was exercised, and the untyped reveal is
+        # the ONLY form gen3 emits -- so a per-type hole is a per-type silent set-collapse.
+        typed_ids = sorted(
+            {
+                move
+                for universe in _SOURCE.universes.values()
+                for variant in universe.variants
+                for move in variant.moves
+                if move.startswith("hiddenpower") and move != "hiddenpower"
+            }
         )
-        # ...and leniency is not blanket permissiveness: a DIFFERENT typed id still excludes.
-        self.assertTrue(_revealed_move_matches_variant("Hidden Power Grass", typed_pool))
-        self.assertFalse(_revealed_move_matches_variant("Hidden Power Fire", typed_pool))
+        self.assertGreaterEqual(len(typed_ids), 13, typed_ids)
+        for typed_id in typed_ids:
+            with self.subTest(typed_id=typed_id):
+                pool = {typed_id, "surf"}
+                self.assertTrue(
+                    _revealed_move_matches_variant("Hidden Power", pool),
+                    f"an untyped reveal excluded {typed_id} -- it must degrade, not eliminate",
+                )
+                # ...and leniency is not blanket permissiveness: the matching typed name still
+                # matches, and a DIFFERENT one still excludes.
+                pretty = "Hidden Power " + typed_id[len("hiddenpower") :].capitalize()
+                self.assertTrue(_revealed_move_matches_variant(pretty, pool), pretty)
+                other = "Hidden Power Fire" if typed_id != "hiddenpowerfire" else "Hidden Power Ice"
+                self.assertFalse(_revealed_move_matches_variant(other, pool), other)
 
     def test_the_untyped_reveal_costs_a_solve_that_the_typed_form_would_have_bought(self) -> None:
         """Quantifies what gen3's masking actually costs belief, against a NO-REVEAL baseline
