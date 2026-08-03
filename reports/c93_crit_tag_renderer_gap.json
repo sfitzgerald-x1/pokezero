@@ -2,7 +2,7 @@
  "schema": "c93-source-level-cause/1",
  "family": "I2_matcher_accounting",
  "rows": 10,
- "headline": "All ten rows are crit-arm-absence, and the crit arm IS in the engine's support. The matcher rejects it because the RENDERER never tagged it as a crit.",
+ "headline": "I2_matcher_accounting is ten CRIT-TAG rows. Showdown crits, the engine's crit arm IS present in the support with damage inside the legal roll window, but the renderer does not tag it |-crit|, so the matcher never pairs the two. NOT crit-arm-absence -- that is the C77/C87 shape and this is its opposite.",
  "the_signature": {
   "observation": "every one of the ten is a ~2x ratio between the observed direct hit and the engine's majority arm",
   "ratios": {
@@ -38,9 +38,10 @@
    "matcher: treat support.critical as UNKNOWN rather than False when the branch carries no |-crit| line, and fall back to magnitude agreement. Narrower, does not fix the protocol, but does not require a crate rebuild."
   ],
   "not_yet_implemented": true,
-  "prediction_if_fixed": "these 10 rows match. NOT registered as a measurement yet -- I have established the chain from source but have NOT confirmed by instrumentation that these specific engine arms lack the |-crit| line. That is the next step and it is one probe."
+  "the_fix": "NOT 'read the engine's crit flag' -- there is no crit flag at the render site; instruction.rs:515-518 is DamageInstruction { side_ref, damage_amount } and nothing more. C77 already recorded the implementable form: carry the BRANCH'S OWN roll representative into crit_collapsed so the two are comparable by construction.",
+  "prediction_if_fixed": "deliberately not registered as a numeric prediction. The row count this closes should be measured by single-variable re-sweep, not forecast."
  },
- "honest_gap_in_this_finding": "CLOSED -- see REPLAY_CONFIRMATION.",
+ "honest_gap_in_this_finding": "NARROWED, not closed. The gap was 'I have not directly observed the absence of the |-crit| line in these ten branches'. scripts/replay_residue.py CANNOT observe that: it feeds branch['events'] straight into damage_components (:121-127) and prints only per-slot component tuples (:129-136); the only protocol lines it prints are the OBSERVED Showdown slice (:72-76). The engine branch's rendered lines are never displayed. What replay closed is a DIFFERENT gap -- fragment versus complete branch set. Tag absence is still inferred here, though C77 measured it directly at the gate on 451 evaluations.",
  "REPLAY_CONFIRMATION": {
   "method": "scripts/replay_residue.py, which re-derives each branch's FULL component set against the vendored engine. This is the method c94 establishes as correct; branch_misses cannot answer it, because it reports one slot per branch.",
   "row": "19000091/40",
@@ -56,5 +57,20 @@
   "what_it_establishes": "the 3.91% arm matches the observation on EVERY component -- both Leftovers ticks exact -- and differs only on the direct hit, -51 against -52, which passes in isolation (window around 51 is 45.9 to 56.6). The crit arm is present, complete and numerically agreeing, and the row is still divergent.",
   "therefore": "by elimination over a COMPLETE branch set rather than a fragment, the only remaining rejector is the crit cross-check at engine_transition_differential.py:1342, which fails when observed.critical is not support.critical. The observation carries |-crit|, so support.critical is False -- the renderer did not tag the engine's own crit arm. That is the exact-value gate at events.rs:2156-2162.",
   "c94s_trap_in_miniature": "the 2.34% arm's miss string reads 'obs=[itemleftovers 14] eng=[]', which my retracted method would have read as an arm at net 0. Replay shows p2 capped_lethal=-55 with no p1 components -- the miss reported p1's complaint only. The fragment happened to be accurate FOR p1, which is exactly why the error stayed invisible."
- }
+ },
+ "NAMING_CORRECTION": "an earlier version of this file was headed 'crit-arm-absence', which is the C77/C87 shape name and the OPPOSITE of this finding. A reader indexing on the headline would have got the retracted claim.",
+ "the_mechanism_why_the_values_differ": {
+  "this_is_the_load_bearing_step": "an earlier version asserted the values differ without saying why, which would let a reader assume both are the engine's collapsed crit damage and conclude the gate fires fine.",
+  "crit_collapsed": "events.rs:2494-2533 expected_damage_values sets crit_collapsed = (max_crit_damage as f32 * 0.925) as i16.",
+  "what_the_arm_actually_carries": "third_party/poke-engine-gen3-crit-kill-split.patch partitions the crit arm into crit-kill (damage = defender_active.hp) and crit-survive (damage = average_non_kill_crit_damage). NEITHER equals (max_crit_damage * 0.925) as i16.",
+  "worked": "19000091/40: max_noncrit 29 -> regular_collapsed int(26.825) = 26 (matches the -26 arm); max_crit 58 -> crit_collapsed int(53.65) = 53; crit-survive average over the 10 non-lethal rolls = 51.4 -> 51 (matches the crit arm). 51 != 53, so the gate does not fire. Masses check exactly: 93.75% = 1-1/16, 3.91% = (1/16)(10/16), 2.34% = (1/16)(6/16)."
+ },
+ "already_measured_by_C77": {
+  "note": "C77 established this same root cause by INSTRUMENTATION, which is stronger than this report's re-derivation. It should have been cited from the start.",
+  "evidence": "reports/c77_i2_crit_arm_absence.json condition_identified_by_instrumentation -- 451 evaluations instrumented at the gate, 'exact value match against crit_collapsed: 449 (99.6%)', and the_answer: 'the blocker is Some(damage.damage_amount) == crit_collapsed, an EXACT equality.'",
+  "consequence": "this report's novelty is narrower than an earlier draft implied. Its contribution is tying the ten CURRENT-ERA rows to that already-measured blocker and naming the crit-kill-split as the reason the values differ."
+ },
+ "evidence_strength": "confirmed on 1 row by replay (19000091/40), inferred on 9. The ratio table establishes per-row that the OBSERVATION is a crit -- all ten ratios are achievable as (legal crit roll)/(collapsed non-crit arm), including the apparent outlier 62/28. It does NOT establish per-row that the crit ARM is present, which is this report's actual claim and precisely the axis C77 measured as splitting ~217 engine-gap / 173 renderer-gap.",
+ "unremarked_precondition": "the :1342 cross-check only fires when support is not None, which needs a pre-damage |switch| or nonzero boost in the ENGINE branch's events (_event_changes_roll_state :612-626, gated :697-716). The conclusion survives -- legal is accept-only and never a veto (:953-957), so with support None the branch would have MATCHED and the row would not be divergent, hence support must be non-None -- but 'the only remaining rejector' depends on a structural condition this report did not check.",
+ "not_the_largest_family": "LS_capped_lethal_shape is 12 rows in reports/c86 and also unadjudicated. I2 at 10 is the second largest."
 }
