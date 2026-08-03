@@ -2702,14 +2702,24 @@ fn identify_sleep_talk_called(
         // is `true` (`choices.rs`), so a second-moving Sleep Talk regenerated its
         // callee as if it had moved first.
         //
-        // HONEST STATUS: DEFENSIVE, and NOT pinned by a test. Reverting this line
-        // alone leaves the suite green. I probed for a state where it matters --
-        // sleeper moving second, across Substitute/Flail/Reversal and low/high HP
-        // on both sides -- and found none: when the sleeper moves second the
-        // engine's enumeration gate does not fire either, so the two agree by
-        // accident rather than by construction. Kept because agreeing by accident
-        // with a gate that reads `choice.first_move` is one engine change away
-        // from being wrong, and this is the same line of code as the fix above.
+        // NOT pinned by a test -- reverting this line alone leaves the suite
+        // green -- but it is NOT a no-op and NOT an accident, and the reason is
+        // worth keeping so nobody deletes it as dead weight.
+        //
+        // It does flip the value: the candidate's move-table default is `true`,
+        // and `outer_choice.first_move` is `false` whenever Sleep Talk moves
+        // second, which four crate tests reach. It changes no observable outcome
+        // for a STRUCTURAL reason: C31's enumeration exists to preserve rolls
+        // because a PENDING HP-reading move will read HP later in the turn. When
+        // the sleeper moves second the defender's Substitute/Flail/Reversal has
+        // already resolved, so nothing is pending, the gate's purpose is moot,
+        // and its preconditions cannot produce a differing tail.
+        //
+        // Keep it anyway: it mirrors the engine one-for-one, and the two other
+        // `!choice.first_move` sites it makes reachable inside the probe (drag
+        // and force-switch early returns) are blocked only because they stop the
+        // attacker's move executing, leaving no callee tail to identify. That is
+        // a structural argument about today's engine, not an invariant.
         choice.first_move = outer_choice.first_move;
         let mut generated: Vec<StateInstructions> = Vec::with_capacity(4);
         generate_instructions_from_move(
