@@ -1,5 +1,5 @@
 {
- "schema": "c97-last-uncaused-row/1",
+ "schema": "c97-last-uncaused-row/2",
  "purpose": "19000074/27 was the last row in the UNATTRIBUTED set with no written source-level cause. This is that cause. It is NOT the last uncaused row in the residue -- see scope_of_this_claim.",
  "method": "scripts/replay_residue.py --report /tmp/sweep_bd.json --seed 19000074 --step 27 (the 35-row post-#1042 sweep).",
  "era": {
@@ -34,7 +34,7 @@
  "the_cause": {
   "one_line": "RESIDUAL-DECIDED LETHALITY. Whether Rapidash survives the turn is decided by the crit roll, because the sandstorm tick is lethal only for high crit rolls -- and the engine collapses the crit-survive fan to a single representative that lands on the wrong side of that threshold.",
   "the_threshold": "Rapidash maxhp 244, sandstorm tick 244/16 = 15. A crit leaving it at 15 or less dies to the residual; a crit leaving it at 16 or more survives. Showdown's realised crit of 241 leaves 3 -- dead. The engine's crit-survive representative, average_non_kill_crit_damage = 227, leaves 17 -- alive, by two HP.",
-  "why_no_arm_reproduces_it": "the crit-kill-split partitions the crit into exactly two arms: crit-KILL at defender_active.hp, and crit-SURVIVE at ONE averaged representative. 'Survived the hit and then died to the residual' is a third outcome that neither arm can express, and it is reachable for every crit roll from 229 to 243.",
+  "why_no_arm_reproduces_it": "the crit-kill-split partitions the crit into exactly two arms: crit-KILL at defender_active.hp, and crit-SURVIVE at ONE averaged representative. 'Survived the hit and then died to the residual' is a third outcome that neither arm can express, and it is reachable on SIX of the sixteen crit rolls (229, 231, 234, 236, 239, 241). See quantification.",
   "the_net_coincidence_that_hid_it": "CORRECTED. An earlier draft said C89 reclassified this row out by reading the net as the outcome, and called that the same conflation C94 retracted a method for. THAT MISATTRIBUTES TO C89 AN ARGUMENT C89 MADE ITSELF. C89's key 19000074_27_precision says, verbatim: 'its p2 NET is reachable via the 1.56% crit-kill arm, but the COMPONENTS are not ... Only the net coincides. Given C94 retracted a whole method for conflating a net with a component set, this distinction is load-bearing.' Same numbers, same C94 citation. C89 explicitly REFUSED the conflation. C89's actual ground for moving the row out was the p1 slot -- that the crit-kill arm carries no p1 components -- which it filed as an explicit hypothesis and flagged as one. The rejoin to the family is defensible on mechanism; the account of why it left was not, and is withdrawn.",
   "corroborating_detail": "the engine's surviving arms carry itemleftovers=+15 on p2 and the observation does not. That is consistent, not a second defect: in Showdown Rapidash faints to the sandstorm tick and never reaches its Leftovers, while in those arms it survives and does."
  },
@@ -84,5 +84,10 @@
   "why_it_is_still_not_this_row_s_cause": "because the deferral is FAITHFUL gen3 behaviour -- the patch documents scripts/gen3_switch_differential.py::faintresiduals verifying that Showdown sends the replacement before the residual block -- so it is not a defect at all. It simply is not what rejects this boundary, because Showdown's crit did not KO on the hit."
  },
  "quantification": "the crit roll set is floor(252*R/100) for R in 85..100 = {214,216,219,221,224,226,229,231,234,236,239,241,244,246,249,252}. 241 is R=96. Four rolls kill on the hit; SIX (229,231,234,236,239,241) survive the hit and die to sandstorm -- 2.34% absolute mass, not the 15 values an earlier 'every roll from 229 to 243' invited. The sharper statement: the 4.69% crit-survive arm covers 12 rolls and MIS-PRICES HALF OF ITS OWN MASS.",
- "prior_art_supporting_this_disposition": "scripts/family_bucket_audit.py:57-83 ALREADY buckets limit:roll_divergent_lethality as 'engine-gap (partially resolved)' and names this exact fix as registered next work: 'extend the threshold partition to residual lethality, the third threshold after KO (C27) and Substitute viability (C31)'. This report should have cited it."
+ "prior_art_supporting_this_disposition": "scripts/family_bucket_audit.py:57-83 ALREADY buckets limit:roll_divergent_lethality as 'engine-gap (partially resolved)' and names this exact fix as registered next work: 'extend the threshold partition to residual lethality, the third threshold after KO (C27) and Substitute viability (C31)'. This report should have cited it.",
+ "outstanding": {
+  "amend_c89_on_main": "OWED. reports/c89 on main still reads rows: 3, reclassified_out: ['19000074/27'] and the retired p1-slot hypothesis, with no forward pointer to this report. Deferred to its own PR under the repo's keep-pointer-changes-dedicated discipline, but it is owed, not optional.",
+  "re_adjudicate_the_seven_limit_rows": "OWED, and filed twice already -- reports/c91 ('Every remaining limit adjudication should be re-tested') and reports/c89 ('open a follow-up to replay all 24 and name them'). Neither ran. Until it does, the 7 limit:roll_divergent_lethality rows are unexamined at the current era, not cleared.",
+  "two_open_rows": "19000093/51 and 19000093/53 remain OPEN per reports/c96 and are not addressed by this report."
+ }
 }
