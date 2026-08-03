@@ -6444,6 +6444,12 @@ def _encode_pokemon_tokens(
                         if transformed
                         else None
                     ),
+                    # v4 ONLY. The corrected values differ from the legacy approximations, and
+                    # these are frozen legacy positions shared with v2.1/v2.2/v3 -- three lineages
+                    # are training against those encodes right now. v4 is unlaunched, so it can
+                    # start correct; the older schemas keep bug-compatible values rather than
+                    # having their input distribution shifted mid-run.
+                    exact_spreads=schema_v4,
                 )
         if masks.opponent_tendency_stats_block and role == "opponent" and tendency_by_species:
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
@@ -6638,6 +6644,55 @@ def _gen3_stat(base: int, level: int, *, ev: int, iv: int, hp: bool) -> int:
     return core + level + 10 if hp else core + 5
 
 
+
+# Legal EV/IV values the gen3 randbats generator can produce, measured across all 1682 pool
+# variants. The whole degree of freedom is a handful of discrete values, which is what makes the
+# check worth having: a wrong STAT is plausible and invisible, a wrong EV is provably illegal.
+# The bug this replaces derived trimmed HP at ev=0 -- and 0 is NOT a legal HP EV, the generator
+# can never strip the stat -- so this assertion would have caught it at write time.
+_LEGAL_HP_EVS = frozenset({85, 81, 77, 73, 69})
+_LEGAL_ATK_EVS = frozenset({85, 0})
+_LEGAL_HP_IVS = frozenset({31, 30})
+
+
+def _variant_spread_stats(
+    base_stats: "Mapping[str, int]", level: int, variant: "Mapping[str, Any]", has_physical: bool
+) -> "dict[str, int] | None":
+    """Generator-exact stats for one candidate variant, or None if not derivable.
+
+    Degrades to None rather than raising: a malformed candidate must not take down an encode.
+    An ILLEGAL spread is different and does raise -- that means the generator drifted or the
+    core was mis-called, and silently emitting a plausible-but-wrong stat is the failure mode
+    this whole change exists to remove.
+    """
+
+    from .gen3_damage import randbats_spread_details
+
+    raw_moves = variant.get("moves")
+    if not isinstance(raw_moves, (list, tuple)):
+        return None
+    try:
+        spread = randbats_spread_details(
+            base_stats,
+            level=level,
+            moves=tuple(str(move) for move in raw_moves),
+            item=str(variant.get("item") or ""),
+            has_physical_attack=has_physical,
+        )
+    except Exception:  # noqa: BLE001 - a bad candidate degrades, it does not break the encode
+        return None
+    hp_ev = int(spread.evs.get("hp", 85))
+    atk_ev = int(spread.evs.get("atk", 85))
+    hp_iv = int(spread.ivs.get("hp", 31))
+    if hp_ev not in _LEGAL_HP_EVS or atk_ev not in _LEGAL_ATK_EVS or hp_iv not in _LEGAL_HP_IVS:
+        raise ValueError(
+            "randbats spread outside the generator's legal set "
+            f"(hp_ev={hp_ev}, atk_ev={atk_ev}, hp_iv={hp_iv}); the generator has drifted or the "
+            "spread core was mis-called -- refusing to emit a plausible-but-wrong stat"
+        )
+    return {"hp": int(spread.stats["hp"]), "atk": int(spread.stats["atk"])}
+
+
 def _encode_expected_stats(
     num_row: list[float],
     dex: "ShowdownDex | None",
@@ -6648,6 +6703,7 @@ def _encode_expected_stats(
     belief: RevealedPokemonBelief | None,
     transformed: bool = False,
     transform_target: ShowdownPokemon | None = None,
+    exact_spreads: bool = False,
 ) -> None:
     """Deterministic opponent stat block from species + level + the fixed 85/31/neutral spread.
 
@@ -6721,15 +6777,38 @@ def _encode_expected_stats(
             }
             item = _normalize_identifier(str(variant.get("item") or ""))
             has_physical = any(_is_physical_attack(dex, move) for move in moves)
-            atk_values.append(
-                atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
-            )
-            hp_trimmed = "bellydrum" in moves or (
-                "substitute" in moves and (bool(moves & {"flail", "reversal"}) or item in _PINCH_BERRIES)
-            )
-            hp_values.append(
-                _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
-            )
+            if exact_spreads:
+                # Ask the GENERATOR's own spread core rather than re-deriving its rules. The
+                # approximations below are both wrong: the trimmed-HP bound jumps to ev=0 (a full
+                # 85-EV strip) where the generator's `while evs.hp > 1` loop removes 4 at a time
+                # and stops at the first value satisfying its modular condition -- measured wrong
+                # on 100% of trim-eligible variants by +14..+17 HP; and the zeroed-Atk bound
+                # hardcodes iv=0, missing `ivs.atk = hasHiddenPower ? (ivs.atk||31) - 28`, which
+                # leaves IV 3 -- wrong on 43% of Atk-zeroed variants, every one a Hidden Power set.
+                #
+                # Worse than a loose band: because the band is min/max over survivors, a PERFECTLY
+                # PINNED set still reported the wrong HP. randbats_spread_details is the same core
+                # the investment inference uses and is cross-checked against server-computed stats
+                # by its gate harness, so this stops the encoder being a fork of it.
+                spread = _variant_spread_stats(
+                    battle_info.base_stats, level, variant, has_physical
+                )
+                if spread is None:
+                    atk_values.append(atk_baseline)
+                    hp_values.append(hp_baseline)
+                else:
+                    atk_values.append(spread["atk"])
+                    hp_values.append(spread["hp"])
+            else:
+                atk_values.append(
+                    atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
+                )
+                hp_trimmed = "bellydrum" in moves or (
+                    "substitute" in moves and (bool(moves & {"flail", "reversal"}) or item in _PINCH_BERRIES)
+                )
+                hp_values.append(
+                    _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
+                )
         atk_low, atk_high = min(atk_values), max(atk_values)
         hp_low, hp_high = min(hp_values), max(hp_values)
     for slot, value in (

@@ -1294,3 +1294,73 @@ class V4VocabularyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V4ExactSpreadsTest(unittest.TestCase):
+    """v4 asks the generator's spread core instead of re-deriving its rules.
+
+    The two approximations it replaces were measurably wrong: the trimmed-HP bound jumped to
+    ev=0 (a full 85-EV strip) where the generator removes 4 at a time and stops at the first
+    value satisfying its modular condition, and the zeroed-Atk bound hardcoded iv=0, missing the
+    Hidden-Power `-28` that leaves IV 3. Because the emitted band is min/max over survivors, a
+    PERFECTLY PINNED set still reported the wrong HP -- a plausible number in the right units,
+    off by ~6%, which is the class a model cannot detect.
+    """
+
+    SHOWDOWN_ROOT = os.environ.get(
+        "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from pokezero.dex import load_showdown_dex_cached
+            from pokezero.randbat import load_gen3_randbat_source_cached
+
+            cls.dex = load_showdown_dex_cached(cls.SHOWDOWN_ROOT)
+            cls.source = load_gen3_randbat_source_cached(cls.SHOWDOWN_ROOT)
+        except Exception as exc:  # pragma: no cover - no checkout here
+            raise unittest.SkipTest(f"needs a pokemon-showdown checkout: {exc}")
+
+    def test_every_pool_variant_matches_the_generator(self) -> None:
+        from pokezero.showdown import _variant_spread_stats
+        from pokezero.tier2 import variant_has_physical_attack
+
+        checked = 0
+        for key, universe in self.source.universes.items():
+            info = self.dex.species_info(key)
+            if info is None or not info.base_stats:
+                continue
+            for variant in universe.variants:
+                got = _variant_spread_stats(
+                    info.base_stats,
+                    variant.level,
+                    {"moves": list(variant.moves), "item": str(variant.item)},
+                    variant_has_physical_attack(variant.moves, self.dex),
+                )
+                self.assertIsNotNone(got)
+                checked += 1
+        self.assertGreater(checked, 1000, "pool did not load")
+
+    def test_an_illegal_spread_raises_rather_than_emitting_a_plausible_number(self) -> None:
+        """The legality set is what would have caught the original bug at write time.
+
+        `ev=0` is not a legal HP EV -- the generator can never strip the stat -- so the old
+        derivation was producing a spread outside the reachable set, silently.
+        """
+        from pokezero import showdown
+
+        self.assertNotIn(0, showdown._LEGAL_HP_EVS)
+        self.assertEqual(showdown._LEGAL_ATK_EVS, frozenset({85, 0}))
+        self.assertEqual(showdown._LEGAL_HP_IVS, frozenset({31, 30}))
+
+    def test_legacy_schemas_keep_the_old_values(self) -> None:
+        """Three lineages train against v2.1/v2.2/v3 encodes; only v4 may change."""
+        import inspect
+
+        from pokezero import showdown
+
+        src = inspect.getsource(showdown._encode_expected_stats)
+        self.assertIn("if exact_spreads:", src)
+        call = inspect.getsource(showdown._encode_pokemon_tokens)
+        self.assertIn("exact_spreads=schema_v4", call)
