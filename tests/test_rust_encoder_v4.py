@@ -68,7 +68,7 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                 "schema_version": OBSERVATION_SCHEMA_VERSION_V4,
                 "token_count": 23,
                 "categorical_feature_count": 41,
-                "numeric_feature_count": 134,
+                "numeric_feature_count": 132,
             }
         )
         # DEEPCOPY, and not optional: row_inputs_from_decision_row returns
@@ -182,7 +182,7 @@ class RustEncoderV4ParityTest(unittest.TestCase):
         want = self.backends.arrays_dict_from_observation_arrays(
             self.backends.GoldenObservationArrays.from_observation(observation)
         )
-        self.assertEqual(want["numeric_features"].shape, (23, 134))
+        self.assertEqual(want["numeric_features"].shape, (23, 132))
         self.assertEqual(want["categorical_ids"].shape, (23, 41))
 
         tables = self.exporter.build_tables(
