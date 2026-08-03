@@ -466,6 +466,18 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                     f"Python zeroed the expected-stat block for details={label}, so this "
                     f"assertion could not distinguish the fix from the bug: {block!r}",
                 )
+                # ...and the level column is what proves the fixture REACHED the level-free
+                # case. `block > 0` alone does not: it is true for an ordinary details string
+                # too, so a rewrite that silently stopped landing would leave this test green
+                # with zero coverage -- the same hole the L100 test above was just fixed for.
+                # Python writes 0.0 here precisely because the parser returned None, and 0.79
+                # if the rewrite missed.
+                level_column = want["numeric_features"][:, columns["NUMERIC_LEVEL"]]
+                self.assertTrue(
+                    numpy.all(level_column[opponent] == 0.0),
+                    f"fixture did not reach the level-free case for details={label}: opponent "
+                    f"levels are {level_column[opponent]!r}",
+                )
                 rust = self.backends.RustBackend(tables_json=tables_json, header=header)
                 got = rust.encode(inputs)
                 for name in self.backends.ARRAY_NAMES:
