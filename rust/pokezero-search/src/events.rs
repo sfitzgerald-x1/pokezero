@@ -875,6 +875,9 @@ pub fn render_branch_events(
         seg.first,
         first_mc,
         &seg.first_choice,
+        // The DEFENDER's mutated choice. Sleep Talk's identifier needs it: the
+        // engine gates its 32-roll damage enumeration on the defender's move.
+        &seg.second_choice,
         &instructions[..seg.p1_end],
         branch_on_damage,
         ctx,
@@ -885,6 +888,7 @@ pub fn render_branch_events(
         second_ref,
         second_mc,
         &seg.second_choice,
+        &seg.first_choice,
         &instructions[seg.p1_end..seg.p2_end],
         branch_on_damage,
         ctx,
@@ -986,6 +990,7 @@ fn render_action_phase(
     side: SideReference,
     mc: &MoveChoice,
     mutated_choice: &Choice,
+    defender_choice: &Choice,
     segment: &[Instruction],
     branch_on_damage: bool,
     ctx: &EventContext,
@@ -998,6 +1003,7 @@ fn render_action_phase(
             sim,
             side,
             mutated_choice,
+            defender_choice,
             segment,
             branch_on_damage,
             ctx,
@@ -1531,6 +1537,11 @@ fn render_move_phase(
     sim: &mut Sim<'_>,
     side: SideReference,
     choice: &Choice,
+    // The DEFENDER's mutated choice for this ply. Only Sleep Talk's identifier
+    // consumes it today, but it is threaded generically because the engine's
+    // damage enumeration is a function of BOTH choices, so any future
+    // regeneration needs it for the same reason.
+    defender_choice: &Choice,
     segment: &[Instruction],
     branch_on_damage: bool,
     ctx: &EventContext,
@@ -1610,13 +1621,23 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            let ident = identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage);
+            let ident = identify_sleep_talk_called(
+                sim.state,
+                side,
+                defender_choice,
+                choice,
+                &called_tail,
+                branch_on_damage,
+            );
             match ident {
                 SleepTalkIdent::Matched(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
                         &called_choice,
+                        // Same defender for the callee's ply -- it is the same
+                        // ply, one level down.
+                        defender_choice,
                         &called_tail,
                         branch_on_damage,
                         ctx,
@@ -2659,6 +2680,8 @@ fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
 fn identify_sleep_talk_called(
     state: &mut State,
     side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
     tail: &[Instruction],
     branch_on_damage: bool,
 ) -> SleepTalkIdent {
@@ -2673,11 +2696,43 @@ fn identify_sleep_talk_called(
     for candidate in candidates {
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
+        // Inherit the OUTER Sleep Talk choice's move order, exactly as the engine
+        // does for the callee (`generate_instructions.rs`:
+        // `new_choice.first_move = choice.first_move`). The move table's default
+        // is `true` (`choices.rs`), so a second-moving Sleep Talk regenerated its
+        // callee as if it had moved first.
+        //
+        // NOT pinned by a test -- reverting this line alone leaves the suite
+        // green -- but it is NOT a no-op and NOT an accident, and the reason is
+        // worth keeping so nobody deletes it as dead weight.
+        //
+        // It does flip the value: the candidate's move-table default is `true`,
+        // and `outer_choice.first_move` is `false` whenever Sleep Talk moves
+        // second, which four crate tests reach. It changes no observable outcome
+        // for a STRUCTURAL reason: C31's enumeration exists to preserve rolls
+        // because a PENDING HP-reading move will read HP later in the turn. When
+        // the sleeper moves second the defender's Substitute/Flail/Reversal has
+        // already resolved, so nothing is pending, the gate's purpose is moot,
+        // and its preconditions cannot produce a differing tail.
+        //
+        // Keep it anyway: it mirrors the engine one-for-one, and the two other
+        // `!choice.first_move` sites it makes reachable inside the probe (drag
+        // and force-switch early returns) are blocked only because they stop the
+        // attacker's move executing, leaving no callee tail to identify. That is
+        // a structural argument about today's engine, not an invariant.
+        choice.first_move = outer_choice.first_move;
         let mut generated: Vec<StateInstructions> = Vec::with_capacity(4);
         generate_instructions_from_move(
             state,
             &mut choice,
-            &Choice::default(),
+            // The REAL defender choice, not `Choice::default()`. The engine gates
+            // its 32-roll damage enumeration on
+            // `pending_hp_reading_move(defender_choice)` -- {SUBSTITUTE, FLAIL,
+            // REVERSAL} -- so regenerating against a `NONE` move produced the
+            // ordinary 2-branch max/crit collapse while the engine had emitted one
+            // of 32 rolls. Nothing matched, the callee was unidentifiable, and the
+            // whole world was refused as `sleeptalk_called_unidentified:none_matched`.
+            defender_choice,
             side,
             StateInstructions::default(),
             &mut generated,
