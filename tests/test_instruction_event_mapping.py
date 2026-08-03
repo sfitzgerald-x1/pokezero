@@ -286,8 +286,24 @@ class BranchEventsTest(unittest.TestCase):
         self.assertTrue(flagged, report["branches"])
         for branch in flagged:
             self.assertTrue(branch["attribution_unsafe"], branch)
+            # PREFIX match: the reason carries a `:<subcase>` suffix now, while
+            # the `lossy` tag above stays bare (that one is the differential's
+            # contract). Exact-matching here is what broke when the split landed.
+            self.assertTrue(
+                any(
+                    reason.startswith("sleeptalk_called_unidentified")
+                    for reason in branch["attribution_unsafe_reasons"]
+                ),
+                branch,
+            )
+            # ...and the sub-case is the whole point, so pin WHICH one. Two
+            # candidates regenerate identical tails here, so it must be
+            # `ambiguous`; reading it as `none_matched` would send the fix at
+            # the renderer instead of at the engine.
             self.assertIn(
-                "sleeptalk_called_unidentified", branch["attribution_unsafe_reasons"], branch
+                "sleeptalk_called_unidentified:ambiguous",
+                branch["attribution_unsafe_reasons"],
+                branch,
             )
             self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertIn("|-activate|p1a: Rattata|confusion", branch["events"])
@@ -312,11 +328,21 @@ class BranchEventsTest(unittest.TestCase):
         unsafe = [
             branch
             for branch in report["branches"]
-            if "sleeptalk_called_unidentified" in branch["attribution_unsafe_reasons"]
+            # PREFIX match: the reason now carries a `:<subcase>` suffix.
+            if any(
+                reason.startswith("sleeptalk_called_unidentified")
+                for reason in branch["attribution_unsafe_reasons"]
+            )
         ]
         self.assertTrue(unsafe, report["branches"])
         for branch in unsafe:
             self.assertTrue(branch["attribution_unsafe"], branch)
+            # Tackle and Scratch share a tail, so this is the `ambiguous` cause.
+            self.assertIn(
+                "sleeptalk_called_unidentified:ambiguous",
+                branch["attribution_unsafe_reasons"],
+                branch,
+            )
             self.assertLess(branch["post"]["p2"]["active_hp"], 100, branch)
             self.assertEqual(branch["post"]["p1"]["active_status"], "sleep", branch)
             self.assertIn("|cant|p1a: Rattata|slp", branch["events"])

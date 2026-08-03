@@ -248,6 +248,47 @@ impl RenderedEvents {
         self.attribution_unsafe.push(reason.to_string());
     }
 
+    /// Refuse with a DIAGNOSTIC sub-case while keeping the `lossy` tag stable.
+    ///
+    /// The two channels have different consumers and different contracts.
+    /// `attribution_unsafe` is what `reject_attribution_unsafe` joins into the
+    /// error the Python seam keys `world_failure_reasons` by -- the probe's
+    /// measurement channel, where splitting a class costs nothing.
+    ///
+    /// `lossy` is a CONTRACT. `scripts/engine_transition_differential.py` matches
+    /// it exactly (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide whether a
+    /// branch is still usable, and `tests/test_matcher_tolerance_promotion.py`
+    /// pins that. Splitting the lossy tag would silently change which branches
+    /// the differential accepts -- and that file's bytes are pinned by the
+    /// certification lifecycle, so it cannot be edited to follow along without
+    /// its own attestation.
+    ///
+    /// So: sub-case to the measurement channel, stable tag to the contract.
+    /// `&'static str` on BOTH arguments is deliberate, not an oversight beside
+    /// the `&str` siblings above: these are contract labels and must stay
+    /// literals. Widening them would let a caller pass a formatted string and
+    /// mint an unbounded set of `world_failure_reasons` keys.
+    fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        // The two arguments must name the SAME class, or this helper quietly
+        // becomes the bug it exists to prevent: a branch whose contract tag and
+        // measurement reason disagree changes which branches the differential
+        // accepts, with nothing to notice. Nothing else relates them.
+        //
+        // A plain `assert!`, NOT `debug_assert!`: the campaign wheels are built
+        // `maturin build --release` (scripts/build_search_crate_engine.sh,
+        // build_search_crate_model.sh), where debug assertions compile out --
+        // so a debug_assert would guard only `cargo test`, which is the one
+        // place the single call site is already correct by construction. The
+        // refusal path is rare, so one `starts_with` costs nothing on the
+        // artifact we actually ship.
+        assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
+        self.mark_lossy(lossy_tag);
+        self.attribution_unsafe.push(subcase.to_string());
+    }
+
     pub fn is_attribution_unsafe(&self) -> bool {
         !self.attribution_unsafe.is_empty()
     }
@@ -1569,8 +1610,9 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            match identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage) {
-                Some(called_choice) => {
+            let ident = identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage);
+            match ident {
+                SleepTalkIdent::Matched(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
@@ -1582,7 +1624,7 @@ fn render_move_phase(
                         Some("Sleep Talk"),
                     );
                 }
-                None => {
+                SleepTalkIdent::NoneMatched | SleepTalkIdent::Ambiguous => {
                     // The called move is not provable from this delta, so its
                     // HP change gets no public action owner. It must still be
                     // DESCRIBED. Emitting nothing left the consumer's running
@@ -1601,7 +1643,15 @@ fn render_move_phase(
                     // consumer's half by emitting the generic tag it already
                     // knows how to read
                     // (reports/c54_sleeptalk_render_contract_mismatch.json).
-                    out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    // Name WHICH cause. `ambiguous` can only be fixed by the
+                    // engine recording the called move; `none_matched` means the
+                    // replay diverges from what the engine did and may be fixable
+                    // in the renderer. Splitting them is what decides that, and
+                    // this class is 48.9% of all world failures.
+                    out.mark_attribution_unsafe_subcase(
+                        SLEEPTALK_LOSSY_TAG,
+                        sleeptalk_subcase_slug(&ident),
+                    );
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
                     // whatever HP movement follows. The previous version applied
@@ -2546,17 +2596,72 @@ fn render_move_phase(
     }
 }
 
+/// Why `identify_sleep_talk_called` could not name the called move.
+///
+/// The two causes need OPPOSITE fixes and the single `None` hid which one was
+/// happening. `Ambiguous` means two candidates regenerate byte-identical tails,
+/// which no amount of renderer cleverness can separate -- only the engine
+/// recording which move it actually called can. `NoneMatched` means the
+/// regeneration reproduced NO candidate's tail, which is a different defect: the
+/// replay diverges from what the engine really did, and it is potentially fixable
+/// without touching the engine.
+///
+/// `sleeptalk_called_unidentified` is 48.9% of world failures on the era-55
+/// probe -- larger than every other class combined -- so which of these two it
+/// actually is decides the whole next phase of work.
+enum SleepTalkIdent {
+    Matched(Box<Choice>),
+    /// No candidate regenerated the observed tail.
+    NoneMatched,
+    /// Two or more candidates regenerate the SAME tail.
+    Ambiguous,
+}
+
+/// The CONTRACT tag. `engine_transition_differential.py` matches this exactly
+/// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, so it
+/// must never carry a sub-case suffix. Named once so the two call sites cannot
+/// drift apart.
+const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
+
+/// Measurement label for a failed Sleep Talk identification.
+///
+/// Split out of the render path so the ident-to-label mapping is testable
+/// WITHOUT needing an engine state that reaches each variant. That matters:
+/// independent review showed the previous end-to-end `none_matched` fixture only
+/// reached that arm on a STALE vendored engine missing patch C87
+/// (`poke-engine-gen3-sleeptalk-crit-arm.patch`), and on a faithful build the
+/// arm is not reachable at all on the gen3 randbats set pool. Pinning the
+/// mapping here keeps the label honest even for a variant production may never
+/// produce -- an unreachable arm must still be labelled correctly if the engine
+/// ever regresses into producing it.
+fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
+    match ident {
+        SleepTalkIdent::Ambiguous => "sleeptalk_called_unidentified:ambiguous",
+        SleepTalkIdent::NoneMatched => "sleeptalk_called_unidentified:none_matched",
+        // Exhaustive on purpose. A `_` arm would send a future variant into
+        // `none_matched` with no compiler error -- a silent MIS-DIAGNOSIS of the
+        // largest failure class rather than a crash. `Matched` cannot reach here:
+        // the caller destructures it in the success arm.
+        SleepTalkIdent::Matched(_) => {
+            unreachable!("Matched is handled by the identifying arm above")
+        }
+    }
+}
+
 /// Identify which move Sleep Talk called by re-generating each sleep-talk
 /// candidate's instructions from the current (prelude-applied) state and
-/// matching the branch tail exactly. Returns the MUTATED candidate choice
-/// (the engine's own modification pass applied) or None when zero or
-/// multiple candidates match (ambiguous delta — documented insufficiency).
+/// matching the branch tail exactly.
+///
+/// Returns [`SleepTalkIdent::Matched`] with the MUTATED candidate choice (the
+/// engine's own modification pass applied), or one of the two failure variants.
+/// Those two used to be a single `None`, which conflated causes that need
+/// opposite fixes -- see [`SleepTalkIdent`].
 fn identify_sleep_talk_called(
     state: &mut State,
     side: SideReference,
     tail: &[Instruction],
     branch_on_damage: bool,
-) -> Option<Choice> {
+) -> SleepTalkIdent {
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -2583,12 +2688,15 @@ fn identify_sleep_talk_called(
             .any(|branch| branch.instruction_list.as_slice() == tail)
         {
             if matched.is_some() {
-                return None; // ambiguous
+                return SleepTalkIdent::Ambiguous;
             }
             matched = Some(choice);
         }
     }
-    matched
+    match matched {
+        Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
+        None => SleepTalkIdent::NoneMatched,
+    }
 }
 
 /// Expected collapsed damage values (regular, crit) for the attacking side's
@@ -3473,6 +3581,53 @@ pub fn branch_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin WHICH cause maps to which label, without needing an engine state
+    /// that reaches each variant.
+    ///
+    /// Independent review found this mapping was completely unpinned: swapping
+    /// the two literals left the entire crate suite green. The obvious fix --
+    /// an end-to-end fixture per arm -- turned out to be impossible for
+    /// `none_matched`: the fixture that appeared to reach it only did so on a
+    /// STALE vendored engine missing `poke-engine-gen3-sleeptalk-crit-arm.patch`
+    /// (C87). On a faithful build that patch makes the callee's regenerated tail
+    /// match, so the arm is not reachable at all on the gen3 randbats set pool
+    /// (measured: 7,560 state combinations across all 70 Sleep Talk variants,
+    /// zero `none_matched`).
+    ///
+    /// An unreachable arm still has to be labelled correctly if the engine ever
+    /// regresses into producing it -- and mislabelling is expensive in a
+    /// specific direction, because `ambiguous` is the arm fixable ONLY by an
+    /// engine change. So pin the mapping directly rather than pinning nothing.
+    #[test]
+    fn sleeptalk_subcases_map_to_their_own_labels() {
+        assert_eq!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
+            "sleeptalk_called_unidentified:ambiguous"
+        );
+        assert_eq!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched),
+            "sleeptalk_called_unidentified:none_matched"
+        );
+    }
+
+    /// Both labels must stay inside the contract tag's namespace, or
+    /// `mark_attribution_unsafe_subcase`'s assertion trips in production and the
+    /// differential starts seeing a tag it does not recognise.
+    #[test]
+    fn every_sleeptalk_subcase_belongs_to_the_lossy_contract_tag() {
+        for ident in [SleepTalkIdent::Ambiguous, SleepTalkIdent::NoneMatched] {
+            let slug = sleeptalk_subcase_slug(&ident);
+            assert!(
+                slug.starts_with(SLEEPTALK_LOSSY_TAG),
+                "{slug} escapes the contract tag {SLEEPTALK_LOSSY_TAG}"
+            );
+            assert_ne!(
+                slug, SLEEPTALK_LOSSY_TAG,
+                "the bare tag carries no cause and cannot be measured"
+            );
+        }
+    }
 
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
 
