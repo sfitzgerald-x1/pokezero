@@ -1255,6 +1255,40 @@ class TrainMaskFlagsTest(unittest.TestCase):
             (cache / "metadata.json").write_text(json.dumps({}))
             _require_cache_masks_match_model_config([cache], wide_model)
 
+    def test_a_zero_capacity_is_a_real_capacity_not_a_missing_one(self) -> None:
+        """v4 REMOVES the transition region, so its capacity is 0 and its only budget is 0.
+
+        Resolving `transition_token_capacity or TRANSITION_TOKEN_COUNT` sent that zero through a
+        FALSY-zero to the legacy 128, so a non-zero budget on a v4 spec passed validation, was
+        accepted, and was then silently ignored by an encoder with no region to apply it to. That
+        made v4's own contract text -- "there is no transition_token_budget knob left to mis-set"
+        -- false, and failed QUIETLY, which is the worse half.
+        """
+        from pokezero.observation import V4_TRANSITION_TOKEN_COUNT
+        from pokezero.rollout_cli import _explicit_feature_masks_from_args, build_arg_parser
+
+        self.assertEqual(V4_TRANSITION_TOKEN_COUNT, 0, "premise: v4 carries no region")
+
+        def resolve(budget: str):
+            args = build_arg_parser().parse_args(
+                [
+                    "collect-selfplay-training-cache",
+                    "--games", "1", "--out", "cache-out",
+                    "--transition-token-budget", budget,
+                ]
+            )
+            return _explicit_feature_masks_from_args(
+                args, transition_token_capacity=V4_TRANSITION_TOKEN_COUNT
+            )
+
+        # 0 is the only admissible budget under v4, and it must still resolve.
+        self.assertEqual(resolve("0").transition_token_budget, 0)
+        # Anything else must be REFUSED rather than accepted-then-ignored.
+        for budget in ("1", "32", "128"):
+            with self.subTest(budget=budget):
+                with self.assertRaises(ValueError):
+                    resolve(budget)
+
     def test_collect_flags_resolve_explicit_masks_and_cache_metadata_records_them(self) -> None:
         import json
 
@@ -1289,6 +1323,15 @@ class TrainMaskFlagsTest(unittest.TestCase):
                 # under a different pack shape; caches predating the field are defaulted to
                 # True on read, the same asymmetry tier2_investment uses.
                 "feature_pack_last_move": True,
+                # The belief-narrowing switch. Recorded like every other mask, and defaulted
+                # FALSE on read: it is the one mask whose "on" state changes columns that
+                # exist under every schema (candidate-set count, uncertainty), so a cache
+                # predating the field cannot have been collected with it on.
+                "investment_belief_narrowing": False,
+                # The item-certainty narrowing switch. Same FALSE default on read and for the
+                # same reason: it moves the candidate-set count and uncertainty columns, which
+                # exist under every schema, so a cache predating the field cannot have had it on.
+                "item_belief_narrowing": False,
             },
         )
 
