@@ -20,7 +20,8 @@
    "bucket": "comparison-limit",
    "adjudication": "self-attributing documented limit; the observed and engine arms differ on whether a roll was lethal, which the branch snapshot cannot settle.",
    "evidence": "reports/c41_lethality_claim_retraction.json",
-   "era_current": true
+   "era_current": true,
+   "STATUS_CONTESTED": "reports/c91 closed 15 of these rows by matcher fix and reports/c94 returns the remainder to UNVERIFIED. 'era_current: true' below overstates the record."
   },
   "limit:world_sample_drag_target": {
    "rows": 1,
@@ -57,7 +58,8 @@
    "bucket": "instrument-artifact",
    "adjudication": "ADJUDICATED. 120/120 majority arms reach an IDENTICAL net HP: the end states agree and only the decomposition differs.",
    "evidence": "reports/c68_family_bucket_audit.json",
-   "era_current": true
+   "era_current": true,
+   "METHOD_WARNING": "the 'identical net HP' signature backing this adjudication is computed from branch_misses by scripts/family_bucket_audit.py:164-185 -- the method retracted in reports/c94_method_retraction.json. Replay (C95, PR #1034, not on main) confirms the NETS are identical, so the signature holds -- but C95 dispositions the row as an ENGINE or RENDERER FIX, which CONTESTS this instrument-artifact bucket. Treat the bucket as OPEN."
   },
   "UNATTRIBUTED": {
    "rows": 8,
