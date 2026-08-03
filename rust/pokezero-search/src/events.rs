@@ -3831,6 +3831,53 @@ mod tests {
         );
     }
 
+    /// Same shape, but the SEEDED mon has Liquid Ooze, so there is no drain
+    /// heal to be silent about — the engine emits the reversed drain as a
+    /// negative Heal on the seeder instead
+    /// (`gen3/generate_instructions.rs:3624-3647`).
+    ///
+    /// Planning a drain slot anyway leaves `plan.heal` one longer than
+    /// `emitted_heal` (which counts only `heal_amount > 0`), the reconcile
+    /// marks the side unusable, and the seeder's Leftovers tick falls through
+    /// to the `[from] Leech Seed` fallback — ledger H.1, in the one case the
+    /// test above does not cover. Reverting the `LIQUIDOOZE` conjunct in
+    /// `drains_opponent` makes this fail with `Leech Seed` in place of
+    /// `item: Leftovers`; verified in both directions.
+    #[test]
+    fn liquid_ooze_leaves_the_seeders_leftovers_tick_correctly_tagged() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let seeder = state.side_one.get_active();
+            seeder.maxhp = 312;
+            seeder.hp = 200;
+            seeder.item = Items::LEFTOVERS;
+        }
+        state.side_two.get_active().ability = Abilities::LIQUIDOOZE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        // Sap damage on side two, the reversed drain as a NEGATIVE heal on the
+        // seeder, then the seeder's own Leftovers tick (312 / 16 = 19).
+        let segment = vec![
+            Instruction::Damage(poke_engine::instruction::DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 39,
+            }),
+            heal_one(-39),
+            heal_one(19),
+        ];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec![
+                "ability: Liquid Ooze|[of] p2a: Squirtle".to_string(),
+                "item: Leftovers".to_string(),
+            ],
+            "the reversed drain is tagged Liquid Ooze, and the +19 is the \
+             seeder's own Leftovers tick — not a Leech Seed drain"
+        );
+    }
+
     // --- positional residual attribution (ledger H.1) ---------------------
 
     /// Render a whole residual segment through the plan, returning the `[from]`
