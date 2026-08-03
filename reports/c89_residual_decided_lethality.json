@@ -12,7 +12,8 @@
  "the_deciding_check": {
   "question": "is the OBSERVED outcome present in ANY engine arm? If yes it is a branch-set-versus-sample comparison limit; if no it is an engine gap.",
   "result": "CORRECTED. Absent in THREE of four, not four. 19000074/27's p2 net IS reachable via the 1.56% crit-kill arm; it fails on the OTHER slot. See EVIDENCE_TABLE_REGENERATED_FROM_REPLAY.",
-  "therefore": "ENGINE GAP for three rows. The fourth is a separate, newly-identified cause and is open."
+  "therefore": "ENGINE GAP for three rows. The fourth is a separate, newly-identified cause and is open.",
+  "19000074_27_precision": "its p2 NET is reachable via the 1.56% crit-kill arm, but the COMPONENTS are not: observed p2 is move=-241 plus capped_lethal=-3 (survived the hit at 3, died to sandstorm), while the arm is capped_lethal=-244 alone (died to the hit). Only the net coincides. Given C94 retracted a whole method for conflating a net with a component set, this distinction is load-bearing."
  },
  "worked_example": {
   "row": "19000029/51",
@@ -27,11 +28,17 @@
   "search_cost_warning": "this adds a partition to every damaging move against a defender with a pending residual, which is common. C87 showed a branch-count change can be an 8x regression when it fires on the wrong path. Measure branch counts and the tactics suite before shipping."
  },
  "checked_and_rejected": {
-  "hypothesis": "the 24 rows adjudicated as limit:roll_divergent_lethality might be this same mechanism misfiled",
-  "test": "sample 8 of them and ask whether the observed net is absent from every arm and a residual is present",
-  "result": "0 of 8. Their observed net is usually PRESENT in an arm (19000001/11 obs -92 against arms [-92, 0]), which is the genuine branch-set-versus-sample case. The existing comparison-limit adjudication for that family STANDS.",
-  "value": "this is the check that would have turned a 4-row finding into a false 28-row one.",
-  "RETRACTED": "This section concluded that limit:roll_divergent_lethality's comparison-limit adjudication STANDS. FALSIFIED: #1032 closed 15 of those 24 rows as a matcher artifact (reports/c91). The check here was sound as far as it went -- those rows are not THIS mechanism -- but I reported a negative result against one hypothesis as confirmation of the label, which it is not. The control row quoted, 19000001/11, was also misread by the branch_misses method: its arms are [-92, -92], not [-92, 0]."
+  "PRIOR_TEXT": {
+   "hypothesis": "the 24 rows adjudicated as limit:roll_divergent_lethality might be this same mechanism misfiled",
+   "test": "sample 8 of them and ask whether the observed net is absent from every arm and a residual is present",
+   "result": "0 of 8. Their observed net is usually PRESENT in an arm (19000001/11 obs -92 against arms [-92, 0]), which is the genuine branch-set-versus-sample case. The existing comparison-limit adjudication for that family STANDS.",
+   "value": "this is the check that would have turned a 4-row finding into a false 28-row one.",
+   "RETRACTED": "This section concluded that limit:roll_divergent_lethality's comparison-limit adjudication STANDS. FALSIFIED: #1032 closed 15 of those 24 rows as a matcher artifact (reports/c91). The check here was sound as far as it went -- those rows are not THIS mechanism -- but I reported a negative result against one hypothesis as confirmation of the label, which it is not. The control row quoted, 19000001/11, was also misread by the branch_misses method: its arms are [-92, -92], not [-92, 0]."
+  },
+  "STATUS": "NOT RE-VERIFIED AFTER C94. The '0 of 8 -- their observed net is usually PRESENT in an arm' number was computed from branch_misses and has not been regenerated through replay. Its 8 rows were never named, so it cannot be audited. The soundness claim is withdrawn.",
+  "why_the_conclusion_is_retained_anyway": "a bias argument, not data: the broken parse fabricates phantom net-0 arms and hides real ones, so it biases toward 'absent'. Finding 'present' in spite of that bias is conservative. That argument supports the CONCLUSION; it does not support the sentence 'usually PRESENT', which is withdrawn.",
+  "counterexamples_found_by_review": "replaying 10 of the 24 limit:roll_divergent_lethality rows found at least two where a slot's observed outcome is absent from EVERY arm: 19000024/61 (Showdown: p1 takes nothing; only engine arm p1 capped_lethal=-95 -- a Destiny Bond row) and 19000077/47 (Showdown: p2 takes nothing; only arm p2 capped_lethal=-270 -- a Rest row). Neither is residual-decided lethality, so this report's conclusion survives, but BOTH LOOK LIKE ENGINE BUGS SITTING UNDER A limit: LABEL and need their own adjudication.",
+  "action": "open a follow-up to replay all 24 limit:roll_divergent_lethality rows and name them."
  },
  "EVIDENCE_TABLE_REGENERATED_FROM_REPLAY": {
   "why": "the original table was built by parsing branch_misses, which reports ONE slot per branch (engine_transition_differential.py:1893 breaks on the first failing slot). Every 'arm at net 0' in it was a fragment, not a branch. See reports/c94. Regenerated with scripts/replay_residue.py, which re-derives each branch's full component set.",
@@ -75,5 +82,11 @@
    "observed_outcome_reachable": "PARTIALLY -- the 1.56% crit-kill arm reaches p2's net of -244, but carries NO p1 components, so it omits the sandstorm -18 that Showdown applied to p1.",
    "mechanism": "NOT residual-decided lethality. A DIFFERENT cause: the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint, where Showdown still applies it. Reclassified out of this finding and open."
   }
- }
+ },
+ "identities_note": "four identities are listed; 19000074/27 is RECLASSIFIED OUT by this report and is not one of the three.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "line_number_warning": "engine line citations in this report drift. The Case B and straddle tests cited as ~2887, ~2849 and ~2877 are at generate_instructions.rs:3049, :3006 and :3035 on the current tree -- a consistent ~157-line shift. third_party/poke-engine-src is gitignored (.gitignore:19) so nothing pins them; treat them as valid at this fingerprint only."
+ },
+ "reclassified_row_is_a_hypothesis": "19000074/27's stated mechanism -- 'the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint' -- is inferred from one replayed arm with no source line. It is a HYPOTHESIS, not a deciding check, and the row is filed open."
 }

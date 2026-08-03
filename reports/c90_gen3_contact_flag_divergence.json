@@ -1,6 +1,6 @@
 {
  "schema": "c90-source-level-cause/1",
- "shape": "gen3 contact-flag divergence: two moves make contact in gen3 that do not in the base data the engine is built from",
+ "shape": "gen3 contact-flag divergence: gen3 moves.ts both ADDS and REMOVES contact relative to the base data the engine is built from",
  "rows_in_this_window": 1,
  "identities": [
   "19000021/34"
@@ -17,36 +17,55 @@
  },
  "the_engine": {
   "rough_skin": "src/gen3/abilities.rs:193 implements ROUGHSKIN correctly -- maxhp/16, attacker's maxhp, gated on damage_dealt > 0 && choice.flags.contact. The ability is not the problem.",
-  "the_gap": "src/choices.rs builds OVERHEAT from the BASE flag set, with no contact. So choice.flags.contact is false and the ability hook never fires."
+  "the_gap": "choices.rs builds OVERHEAT from the BASE flag set, with no contact, so choice.flags.contact is false and the ability hook never fires. Note choices.rs:11710 ALREADY forks OVERHEAT on cfg!(feature = \"gen3\") for base_power (140 vs 130) -- only the flags block was not forked, so there is already a home for the fix."
  },
  "exhaustive_enumeration": {
-  "method": "diff every gen3 moves.ts override carrying contact:1 against the same move in base data/moves.ts",
-  "gen3_overrides_with_contact": [
-   "ancientpower",
-   "astonish",
-   "bide",
-   "needlearm",
-   "overheat",
-   "struggle"
+  "SUPERSEDED_METHOD": "'diff every gen3 moves.ts override carrying contact:1 against the same move in base data/moves.ts'. One-directional by construction, so it could only ever find additions. It also read only data/mods/gen3/moves.ts, while gen3 inherits through gen4, gen5 and up -- a contact flag set in a LATER-gen mod also lands in gen3. finalgambit is exactly that case; it does not exist in gen3, so the additions direction came out right by luck, not by method.",
+  "corrected_method": "resolve the full mod inheritance chain (gen3 -> gen4 -> ... -> base) and compare the EFFECTIVE gen3 flag set against the engine's, in both directions.",
+  "additions_gen3_has_contact_base_does_not": [
+   {
+    "move": "ancientpower",
+    "showdown": "data/mods/gen3/moves.ts:21 flags {contact,protect,mirror,metronome}; base data/moves.ts:404 has no contact",
+    "engine": "choices.rs has no contact"
+   },
+   {
+    "move": "overheat",
+    "showdown": "data/mods/gen3/moves.ts:472 flags {contact,protect,mirror,metronome}; base data/moves.ts:13117 has no contact",
+    "engine": "choices.rs has no contact"
+   }
   ],
-  "differ_from_base": [
-   "ancientpower",
-   "overheat"
+  "removals_base_has_contact_gen3_does_not": [
+   {
+    "move": "covet",
+    "showdown": "data/mods/gen3/moves.ts:186 flags {protect,mirror,noassist}; base data/moves.ts:3103 has contact:1",
+    "engine": "choices.rs:3072 and :3088 contact: true -- WRONG for gen3"
+   },
+   {
+    "move": "fakeout",
+    "showdown": "data/mods/gen3/moves.ts:267 flags {protect,mirror,metronome}; base data/moves.ts:5092 has contact:1",
+    "engine": "choices.rs:5069 contact: true -- WRONG for gen3"
+   },
+   {
+    "move": "feintattack",
+    "showdown": "data/mods/gen3/moves.ts:271 flags {protect,mirror,metronome}; base data/moves.ts:5194 has contact:1",
+    "engine": "choices.rs:5202 contact: true -- WRONG for gen3"
+   }
   ],
-  "already_agree": [
-   "astonish",
-   "bide",
-   "needlearm",
-   "struggle"
-  ],
-  "verified_in_engine": "choices.rs has contact absent for both OVERHEAT and ANCIENTPOWER (control: TACKLE has contact true)",
-  "so_the_shape_is_exactly_two_moves": true
+  "removals_are_live_bugs_of_the_same_class_opposite_sign": "the engine fires Rough Skin / Static / Poison Point / Flame Body / Effect Spore / Cute Charm on a gen3 Fake Out, Covet or Feint Attack where Showdown does not. Latent, not observed: zero uses of the three in this 200-game window -- which is exactly why enumeration was supposed to catch them and sampling would not.",
+  "bide_was_a_grep_artifact": "an earlier version listed bide among gen3 overrides carrying contact. It has no flags override in gen3/moves.ts; the contact:1 at gen3/moves.ts:91 is inside bide's nested condition damage move. A tell that the enumeration was textual rather than resolved.",
+  "surface_size": 5
  },
  "disposition": {
   "class": "ENGINE FIX",
-  "the_fix": "add contact to OVERHEAT and ANCIENTPOWER in the gen3 build. Bounded and exhaustively enumerated -- exactly two moves, verified against the reference rather than sampled.",
-  "blast_radius_warning": "contact is not only Rough Skin. It also gates Static, Poison Point, Flame Body, Effect Spore, Cute Charm, Rocky Helmet-likes and King's Rock in some generations. Adding it changes behaviour anywhere those interact, so this needs the same measured treatment C87 got -- branch counts, the tactics gate, and a check that no currently-matched row becomes divergent.",
+  "the_fix": "in the gen3 build, ADD contact to OVERHEAT and ANCIENTPOWER, and REMOVE it from COVET, FAKEOUT and FEINTATTACK.",
+  "scope": "five moves, two directions, derived by resolving the mod chain rather than grepping one file.",
+  "blast_radius_warning": "contact gates Rough Skin, Static, Poison Point, Flame Body, Effect Spore, Cute Charm and King's Rock-likes. Changing it in EITHER direction changes behaviour wherever those interact, so this needs the measured treatment C87 got: branch counts, the tactics gate, and a check that no currently-matched row becomes divergent. The three removals have zero observed uses in this window, so the sweep will not evidence them -- they need a targeted probe.",
   "not_yet_implemented": true
  },
- "note_on_size": "one row in this 200-game window, so by rows x search-impact it ranks below the matcher shapes. Recorded now because the cause is fully established and the enumeration is exhaustive; the fix can be scheduled on its merits."
+ "note_on_size": "one OBSERVED row in this 200-game window. The three removals are latent. By rows x search-impact this ranks below the matcher shapes; recorded now because the cause is established and the enumeration is finally two-directional.",
+ "CORRECTION": "an earlier version of this file claimed the shape was 'exactly two moves' and called the enumeration exhaustive. It was not. The method searched gen3 overrides CARRYING contact:1, which structurally cannot find moves where gen3 REMOVES a contact flag the base data has. Review found three such moves. The surface is five, in two directions.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "note": "third_party/poke-engine-src is gitignored, so engine line numbers are not pinned by this repo. Cited line numbers are valid at this fingerprint only."
+ }
 }
