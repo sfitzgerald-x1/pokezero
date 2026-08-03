@@ -73,19 +73,22 @@
    "panics": 0,
    "games_per_hour": 1588,
    "vs_main": "main is 208 / lossy_render 102 / 1611 g/h. So lossy_render lands BELOW main and throughput is within noise -- the apparent 13% regression I declined to call a regression was real, and it was the stale first_move, not the crit branching.",
-   "no_panic_gate": "PASS at 188s (main 172.9s; the unfixed patch failed in 7.9s)"
+   "no_panic_gate": "PASS at 188s (main 172.9s; the unfixed patch failed in 7.9s)",
+   "throughput_SETTLED": "Controlled sequential same-machine pair by review: 1535 -> 1512 games/h, -1.5%. The 'controlled throughput run is owed' note is CLOSED. My earlier 1394-vs-1611 reading was machine noise plus the stale first_move."
   }
  },
  "REVIEW_FOUND_TWO_MORE_DEFECTS": {
   "1_reachable_engine_panic": {
    "what": "the first version of this patch made tests/test_engine_search_no_panic.py fail -- PanicException 'Invalid rest_turns value: 64' -- killing the searcher. PanicException derives from BaseException, so engine_search.py's `except Exception` does not catch it.",
    "cause": "the 16-roll loop calls run_move 32 times without re-applying between calls, while run_move always reverses. 31 spurious reversals of a DecrementRestTurns drove rest_turns out of its 0..=3 domain. Latent on main because only an AWAKE attacker reaches that path and carries no DecrementRestTurns; Sleep Talk is the only way a SLEEPING Rest user gets there, so propagating branch_on_damage is what made it reachable.",
-   "fix": "re-apply between iterations. Note the state arrives APPLIED here, unlike at extra_branches where a reversal has already happened -- my first attempt applied unconditionally and panicked the other way, rest_turns -1. Guarded with a needs_reapply flag so the first iteration does not re-apply."
+   "fix": "re-apply between iterations. Note the state arrives APPLIED here, unlike at extra_branches where a reversal has already happened -- my first attempt applied unconditionally and panicked the other way, rest_turns -1. Guarded with a needs_reapply flag so the first iteration does not re-apply.",
+   "cause_CORRECTED": "My stated reason for the latency was WRONG, and wrong in a direction that UNDERSTATED this fix. I wrote that only an AWAKE attacker reaches the 16-roll loop and carries no DecrementRestTurns, so Sleep Talk was the only way in. Review disproved it: a Rest user WAKING THIS TURN pushes ChangeStatus plus DecrementRestTurns at generate_instructions.rs:2083-2101 and then continues AWAKE into the damage path with a non-empty prefix. With no Sleep Talk in either moveset, main panics 6 of 12 on a wake-from-Rest grid and 19 of 400 on randomized MCTS states (rest_turns 16, 32, 33, 34, 64); this PR panics 0 in both. The imbalance is LIVE ON MAIN, so this closes a pre-existing engine panic class rather than merely one the patch would have introduced. The loop came from poke-engine-gen3-final-defects.patch and was widened by substitute-hp-gate; C87 is the first change to balance it."
   },
   "2_stale_first_move": {
    "what": "Sleep Talk callees inherit first_move=true from Choice::default() via get_sleep_talk_choices; handle_both_moves clears it only on the outer choice. With branch_on_damage propagated, a Sleep Talk used SECOND fired the 32-way enumeration against an already-resolved Flail/Reversal/Substitute.",
    "measured": "12 branches -> 144, and ~8x slower per call, for zero fidelity gain",
    "fix": "new_choice.first_move = choice.first_move;"
-  }
+  },
+  "3_still_open_pre_existing": "identify_sleep_talk_called (rust/pokezero-search/src/events.rs:2413-2438) passes &Choice::default() as defender_choice and never propagates first_move, so it still cannot reproduce the 32-roll tail when Sleep Talk moves FIRST against Flail/Reversal/Substitute. That is the remaining 21 lossy_render. Not this PR's to fix; recorded as the next renderer shape."
  }
 }
