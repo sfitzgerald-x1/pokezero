@@ -1227,3 +1227,12 @@ poke-engine-gen3-substitute-hp-gate.patch
 # unpatched ladder. Touches gen3/generate_instructions.rs only; authored against
 # the confusion-duration-patched tree.
 poke-engine-gen3-confusion-snapout-timing.patch
+
+# C87: Sleep Talk callees must branch on damage like any other move. Showdown's
+# gen3 override (data/mods/gen3/moves.ts:526) filters the callee set and then
+# runs it through this.actions.useMove, which performs the ordinary crit roll.
+# Passing branch_on_damage=false sent the callee to the no-crit-arm path, so a
+# Sleep-Talk-called crit was reachable in the sim and absent from the support.
+# Also clears the stale first_move and balances the 16-roll loop's apply/reverse.
+# Registered in reports/c87_sleeptalk_crit_arm_absence.json.
+poke-engine-gen3-sleeptalk-crit-arm.patch
