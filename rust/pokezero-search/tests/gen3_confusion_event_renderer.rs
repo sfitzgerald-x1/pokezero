@@ -1479,10 +1479,14 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
 /// varied the SLEEPER's state exhaustively and held the opponent on Splash,
 /// which is exactly the zero case. Coverage, not weighting.
 ///
-/// It matters because it is renderer-side: 88 of 393 gen3 randbats sets carry
-/// Substitute, Flail or Reversal, and the fix is to thread the real defender
-/// choice (and `first_move`) into the identifier rather than to patch the
-/// engine. `ambiguous` is the arm that needs an engine change; this one does
+/// It matters because it is renderer-side. Reach: 294 of 1682 rolled gen3
+/// randbats VARIANTS (17.5%) carry Substitute, Flail or Reversal -- the
+/// variant level is the right one, since that is how a world is sampled; the
+/// movepool-membership figure is 88 of 393 sets. Neither is the probability the
+/// opponent PICKS one of those moves on a given turn, which is what the actual
+/// mass depends on and which nothing here measures. The fix is to thread the
+/// real defender choice (and `first_move`) into the identifier rather than to
+/// patch the engine. `ambiguous` is the arm that needs an engine change; this one does
 /// not. Tracked separately so this PR stays telemetry-only.
 #[test]
 fn the_none_matched_subcase_is_reachable_via_the_defenders_move() {
