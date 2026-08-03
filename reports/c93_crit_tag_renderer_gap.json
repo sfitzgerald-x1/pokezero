@@ -2,7 +2,7 @@
  "schema": "c93-source-level-cause/1",
  "family": "I2_matcher_accounting",
  "rows": 10,
- "headline": "I2_matcher_accounting is ten CRIT-TAG rows. Showdown crits, the engine's crit arm IS present in the support with damage inside the legal roll window, but the renderer does not tag it |-crit|, so the matcher never pairs the two. NOT crit-arm-absence -- that is the C77/C87 shape and this is its opposite.",
+ "headline": "I2_matcher_accounting is ten rows whose OBSERVATION is a crit. On the one row replayed (19000091/40) the engine's crit arm IS present with damage inside the legal roll window and the renderer simply fails to tag it |-crit|, so the matcher never pairs the two. CONFIRMED ON 1 OF 10. For the other nine the same cause is consistent but NOT established: Case A (the non-crit range straddling the KO) is also untagged, is genuine crit-arm-absence, and presents the same ~2x ratio signature. Distinguishing them needs the branch-mass check recorded below, which has not been run.",
  "the_signature": {
   "observation": "every one of the ten is a ~2x ratio between the observed direct hit and the engine's majority arm",
   "ratios": {
@@ -27,16 +27,12 @@
   "worked_example": "19000091/40 -- Medicham's Brick Break crits Ariados for 52 (296 maxhp, |-crit| in the observed protocol). The engine's crit arm carries -51. Magnitude agreement is not the problem: roll_components_agree([-52], [-51], None) returns True in isolation, and 52 sits inside the window 45.9-56.6.",
   "what_rejects_it": "the crit cross-check at engine_transition_differential.py:1342. `observed_component.critical is not support.critical` returns False outright, regardless of magnitude.",
   "why_support_critical_is_wrong": "support.critical comes from _direct_hit_is_critical(events, ...), which reads the ENGINE BRANCH'S RENDERED PROTOCOL for a |-crit| line. It does not read the engine's own crit flag.",
-  "the_renderer_gate": "rust/pokezero-search/src/events.rs:2156-2162 emits |-crit| only when Some(damage.damage_amount) == crit_collapsed EXACTLY, and crit_collapsed != regular_collapsed, and the hit is not a KO. An EXACT-VALUE equality. Any crit arm whose damage is not byte-equal to the single collapsed crit value goes untagged.",
+  "the_renderer_gate": "rust/pokezero-search/src/events.rs:2156-2162 emits |-crit| only when Some(damage.damage_amount) == crit_collapsed EXACTLY, and crit_collapsed != regular_collapsed, and the hit is not a KO. An EXACT-VALUE equality. A crit arm produced by the KO-STRADDLE path (Case B with a straddle) carries a damage value that is not byte-equal to the single collapsed crit value, so it goes untagged. A NON-straddling crit arm is set to exactly that value and IS tagged correctly -- see MECHANISM_IS_STRADDLE_CONDITIONAL.",
   "the_chain": "renderer omits |-crit| -> _direct_hit_is_critical returns False -> support.critical False -> the cross-check rejects an observed crit against the engine's own crit arm, on identity rather than on magnitude."
  },
  "disposition": {
   "class": "MATCHER or RENDERER FIX, not an engine gap",
   "why_not_engine": "the crit arm is present in the support with a magnitude that agrees. Nothing is missing from the engine.",
-  "two_candidate_fixes": [
-   "renderer: widen the |-crit| gate from exact-value equality to the engine's actual crit flag, so a crit arm is tagged whatever roll it carries. This is the root cause and is recorded in the ledger as a known 173-row gap.",
-   "matcher: treat support.critical as UNKNOWN rather than False when the branch carries no |-crit| line, and fall back to magnitude agreement. Narrower, does not fix the protocol, but does not require a crate rebuild."
-  ],
   "not_yet_implemented": true,
   "the_fix": "there is no crit flag at the render site -- instruction.rs:515-518 is DamageInstruction { side_ref, damage_amount } and nothing more. C77 recorded the implementable form: carry the BRANCH'S OWN roll representative into crit_collapsed so the two are comparable by construction. For the crit-KILL arm that is not sufficient on its own, because the KO guard blocks it independently; Showdown does emit |-crit| on a killing crit, so that guard needs revisiting too.",
   "prediction_if_fixed": "deliberately not registered as a numeric prediction. The row count this closes should be measured by single-variable re-sweep, not forecast."
@@ -62,7 +58,7 @@
  "the_mechanism_why_the_values_differ": {
   "this_is_the_load_bearing_step": "an earlier version asserted the values differ without saying why, which would let a reader assume both are the engine's collapsed crit damage and conclude the gate fires fine.",
   "crit_collapsed": "events.rs:2494-2533 expected_damage_values sets crit_collapsed = (max_crit_damage as f32 * 0.925) as i16.",
-  "what_the_arm_actually_carries": "third_party/poke-engine-gen3-crit-kill-split.patch partitions the crit arm into crit-kill (damage = defender_active.hp) and crit-survive (damage = average_non_kill_crit_damage). NEITHER equals (max_crit_damage * 0.925) as i16.",
+  "what_the_arm_actually_carries": "third_party/poke-engine-gen3-crit-kill-split.patch partitions the crit arm into crit-kill (damage = defender_active.hp) and crit-survive (damage = average_non_kill_crit_damage). in general NEITHER equals (max_crit_damage * 0.925) as i16 -- and for the crit-KILL arm the operative blocker is the KO guard rather than value inequality.",
   "worked": "19000091/40: max_noncrit 29 -> regular_collapsed int(26.825) = 26 (matches the -26 arm); max_crit 58 -> crit_collapsed int(53.65) = 53; crit-survive average over the 10 non-lethal rolls = 51.4 -> 51 (matches the crit arm). 51 != 53, so the gate does not fire. Masses check exactly: 93.75% = 1-1/16, 3.91% = (1/16)(10/16), 2.34% = (1/16)(6/16)."
  },
  "already_measured_by_C77": {
@@ -74,7 +70,7 @@
  "unremarked_precondition": "the :1342 cross-check only fires when support is not None, which needs a pre-damage |switch| or nonzero boost in the ENGINE branch's events (_event_changes_roll_state :612-626, gated :697-716). The conclusion survives -- legal is accept-only and never a veto (:953-957), so with support None the branch would have MATCHED and the row would not be divergent, hence support must be non-None -- but 'the only remaining rejector' depends on a structural condition this report did not check.",
  "not_the_largest_family": "LS_capped_lethal_shape is 12 rows in reports/c86 and also unadjudicated. I2 at 10 is the second largest.",
  "MECHANISM_IS_STRADDLE_CONDITIONAL": {
-  "correction": "an earlier revision said 'ANY crit arm whose damage is not byte-equal to crit_collapsed goes untagged' and 'NEITHER equals'. Both overreach. There are four paths that set a crit arm's damage and the mechanism covers one.",
+  "correction": "an earlier revision of the mechanism text overreached, saying ANY crit arm not byte-equal to crit_collapsed goes untagged. Those sentences are now EDITED IN PLACE above rather than corrected from here, so the document reads correctly top-to-bottom. There are four paths that set a crit arm's damage and this mechanism covers one.",
   "the_four_paths": [
    {
     "path": "Case A -- the NON-CRIT range straddles the KO (generate_instructions.rs:3006-3032)",
@@ -103,5 +99,7 @@
  },
  "precision_on_NEITHER_equals": "for the crit-KILL arm the operative blocker is the KO guard (damage.damage_amount < pre_hp fails when damage == defender_active.hp), not value inequality -- and defender_active.hp COULD coincidentally equal int(max_crit * 0.925). For the crit-SURVIVE arm, average_non_kill_crit_damage can in principle land on that value when the kill threshold sits near the top of the roll fan. 'In general does not equal' is the correct claim; C77's 449 of 451 rather than 451/451 is consistent with exactly this.",
  "C77_measured_the_condition_but_its_EXPLANATION_is_wrong": "C77's the_answer attributes the mismatch to the engine collapsing its roll fan to at most three representatives (DamageRolls Average|Min|Max) with the rendered branch not carrying the same representative. In gen3 that is not what happens: calculate_damage_rolls requests DamageRolls::Max (gen3/generate_instructions.rs:5124) and the renderer applies the single 0.925 itself, so crit_collapsed IS the Average representative by construction. C77 measured WHICH condition fires correctly; its account of WHY is wrong, and the crit-kill-split is the real answer. This report supersedes C77's explanation while deferring to its measurement.",
- "C77_449_of_451_is_conditioned": "C77's method line says it replayed the I2 crit rows -- rows selected BECAUSE the match failed. Given that Case B-no-straddle tags correctly, 99.6% cannot be a general property of the gate. It is a rate within an already-failing population, not a base rate."
+ "C77_449_of_451_is_conditioned": "C77's method line says it replayed the I2 crit rows -- rows selected BECAUSE the match failed. Given that Case B-no-straddle tags correctly, 99.6% cannot be a general property of the gate. It is a rate within an already-failing population, not a base rate.",
+ "EDITING_DISCIPLINE": "review round three found this file had accumulated five correction keys sitting BELOW the claims they corrected, so a reader going top-to-bottom -- or grepping a field name -- hit the retracted version while the correction sat 40 lines further down under a key they had no reason to look for. That is structurally the same failure as C94: the artifact looks authoritative and the error stays invisible. Corrections are now applied IN PLACE; this key is the changelog.",
+ "line_citation_durability": "engine citations point into third_party/poke-engine-src, which is NOT tracked in git (fetched by scripts/vendor_poke_engine_src.sh), so those line numbers can drift with no diff and are not reproducible from the repo alone. third_party/poke-engine-gen3-crit-kill-split.patch IS tracked and is the durable citation for the mechanism."
 }
