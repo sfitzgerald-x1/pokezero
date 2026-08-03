@@ -260,9 +260,26 @@ impl RenderedEvents {
 /// the whole world instead.
 pub fn reject_attribution_unsafe(rendered: &RenderedEvents, lane: &str) -> PyResult<()> {
     if rendered.is_attribution_unsafe() {
+        // DEDUPE before joining. The Python seam truncates this message at 160
+        // chars to build a `world_failure_reasons` key, and the prefix eats 68 of
+        // them -- so with two sides refusing for the SAME reason the duplicate
+        // pushed the second copy past the cliff and minted a garbage bucket
+        // (`...paralyzed+mis`, `...paralyzed+can`). A truncated key silently drops
+        // the label it cut, which for the attract sub-cases means hiding exactly
+        // the non-downgradeable mass the measurement exists to find.
+        //
+        // Both sides refusing identically is the common case, not the exotic one,
+        // so deduping removes the overflow at its source rather than widening the
+        // limit and waiting for a longer slug to cross it again.
+        let mut reasons: Vec<&str> = Vec::with_capacity(rendered.attribution_unsafe.len());
+        for reason in &rendered.attribution_unsafe {
+            if !reasons.contains(&reason.as_str()) {
+                reasons.push(reason);
+            }
+        }
         return Err(PyValueError::new_err(format!(
             "attribution-unsafe renderer branch rejected before {lane}: {}",
-            rendered.attribution_unsafe.join(",")
+            reasons.join(",")
         )));
     }
     Ok(())

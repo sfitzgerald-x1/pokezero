@@ -1194,12 +1194,71 @@ fn the_attract_subcase_reports_every_live_predicate_not_just_the_first() {
     let miss = slugs(&mut miss_state);
     assert!(!miss.is_empty(), "expected an attract refusal to measure");
     assert!(
-        miss.iter().any(|reason| reason.contains("paralyzed")
-            && reason.contains("miss")),
+        // Exact joint string, not two `contains` calls. Order is source-order so
+        // the bucket key is stable across builds; asserting the parts separately
+        // let a swap of the pushes pass green, which would split one bucket into
+        // permutations and silently halve both counts.
+        miss.iter()
+            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed+miss"),
         "a paralyzed attacker using a 70%-accuracy move must report BOTH          predicates, or the miss mass hides inside the paralyzed bucket: {miss:?}"
     );
     assert!(
         !miss.iter().any(|r| r == "attract_empty_tail_ambiguous:paralyzed"),
         "the clean-paralyzed slug must not be emitted when miss is also live: {miss:?}"
+    );
+}
+
+/// Every sub-case literal must be pinned, not just the two that were convenient.
+///
+/// Found by independent review: renaming `noop`, `volatile` or `cannot_act` left
+/// the entire suite green. `noop` is the worst of those to leave unpinned -- it
+/// carries the largest non-downgradeable mass (37.5% when the target is immune),
+/// so a refactor that renamed or dropped it would make the probe read the
+/// non-downgradeable share as ZERO. That is the same wrong-direction error as the
+/// first-match bucketing this telemetry was written to fix.
+///
+/// Also pins the joint slug's FIXED ordering. Order is source-order rather than
+/// evaluation-order so the key is stable, but nothing asserted it, and a swap
+/// would silently split one bucket into permutations across builds.
+#[test]
+fn every_attract_subcase_literal_is_pinned() {
+    fn slug_for(state: &mut State) -> Vec<String> {
+        let branches = generate(state);
+        branches
+            .iter()
+            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+            .collect()
+    }
+
+    // noop: the move cannot change anything -- a Normal move into a Ghost.
+    let mut noop_state = attracted_paralyzed_state(false);
+    noop_state.side_one.get_active().types =
+        (poke_engine::state::PokemonType::GHOST, poke_engine::state::PokemonType::TYPELESS);
+    let noop = slug_for(&mut noop_state);
+    assert!(
+        noop.iter().any(|reason| reason.contains("noop")),
+        "the immune-target arm must report `noop`: {noop:?}"
+    );
+    // ...and the joint order is source-order, not evaluation-order.
+    assert!(
+        noop.iter().any(|reason| reason.contains("paralyzed+noop")),
+        "joint slug order must be fixed as `paralyzed+noop`: {noop:?}"
+    );
+
+    // cannot_act: Splash can never act. Note the ATTACKER is side TWO -- that is
+    // where `attracted_paralyzed_state` puts ATTRACT and PARALYZE -- so the move
+    // has to be replaced there. Replacing side one's move instead leaves the
+    // attacker on Tackle and the slug comes back a bare `:paralyzed`, which is
+    // how this fixture was wrong the first time.
+    let mut cant_state = attracted_paralyzed_state(false);
+    cant_state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    let cant = slug_for(&mut cant_state);
+    assert!(
+        cant.iter().any(|reason| reason.contains("cannot_act")),
+        "Splash must report `cannot_act`: {cant:?}"
     );
 }
