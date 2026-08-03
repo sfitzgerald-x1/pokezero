@@ -600,11 +600,18 @@ fn randbats_spread_hp_atk(
     let mut atk_iv = 31i64;
     let hp_type = hidden_power_type_of(moves).map(|t| t.to_string());
     if let Some(hp_type) = hp_type.as_deref() {
-        let Some(overrides) = hidden_power_ivs(hp_type) else {
-            // An unrecognized Hidden Power type is a candidate we cannot evaluate, not one we
-            // may evaluate as all-31: the real set would carry overrides we do not know.
-            return Ok(None);
-        };
+        // `HIDDEN_POWER_IVS.get(hp_type, {})` -- an UNRECOGNIZED type takes the same branch as
+        // `dark`: no IV overrides, but `hp_type is not None` still holds, so Atk zeroing below
+        // uses 31-28=3 rather than 0.
+        //
+        // Refusing here instead would arguably be safer in the abstract, and an earlier draft
+        // did. It is the wrong call for this file: refusing makes the native encoder disagree
+        // with Python on an input Python accepts, which is the exact train/serve divergence
+        // this port exists to remove -- and it would be a divergence the parity test cannot
+        // see, since the corpus never carries an unknown type. All 16 gen3 types are in the
+        // table, so nothing reaches this branch today. If the fallback is wrong it is wrong in
+        // gen3_damage.py, and that is where it should be fixed and then ported.
+        let overrides = hidden_power_ivs(hp_type).unwrap_or(&[]);
         for (stat, value) in overrides {
             match *stat {
                 "hp" => hp_iv = *value,
@@ -1631,6 +1638,15 @@ fn encode_expected_stats(
                     .unwrap_or(false)
             });
             if layout.is_v4() {
+                // `_variant_spread_stats` returns None when `moves` is not a list, and the
+                // caller treats that as unevaluable. `as_array` flattens missing/null/scalar
+                // to an EMPTY Vec, which would instead be evaluated here as a moveless set --
+                // a real spread for a variant that does not exist. Check the raw value.
+                if !get(variant, "moves").is_array() {
+                    atk_values.clear();
+                    hp_values.clear();
+                    break;
+                }
                 // V4 asks the generator's own spread core; see randbats_spread_hp_atk.
                 let Some((hp, atk)) = randbats_spread_hp_atk(
                     // The BATTLE species' HP base, matching the Python twin, which hands the
@@ -3314,11 +3330,37 @@ mod spread_tests {
     }
 
     #[test]
-    fn an_unknown_hidden_power_type_is_unevaluable_rather_than_all_31() {
-        // Degrades to None, which the caller reads as "abandon the whole band". Treating it as
-        // an all-31 set would emit a stat the real variant does not have.
-        assert_eq!(spread(60, 65, 80, &["hiddenpowerfairy"], "leftovers", false), None);
-        // ...and the generic, untyped move is not a Hidden Power set at all, so it evaluates.
-        assert!(spread(60, 65, 80, &["hiddenpower"], "leftovers", false).is_some());
+    fn an_unknown_hidden_power_type_follows_python_and_takes_the_dark_branch() {
+        // Python's `HIDDEN_POWER_IVS.get(hp_type, {})` gives an unknown type no overrides while
+        // leaving `hp_type is not None` true, so Atk zeroing uses 31-28=3. Byte-identical to
+        // `dark`, whose overrides are legitimately empty. Pinned because an earlier draft
+        // refused here instead, and the parity test could not see the difference: the corpus
+        // carries no unknown type, so the divergence would have shipped silently.
+        assert_eq!(
+            spread(60, 65, 80, &["hiddenpowerfairy"], "leftovers", false),
+            spread(60, 65, 80, &["hiddenpowerdark"], "leftovers", false),
+        );
+        assert_eq!(
+            spread(60, 65, 80, &["hiddenpowerfairy"], "leftovers", false),
+            Some((227, 111)),
+        );
+        // ...and the generic, untyped move carries no type at all, so Atk falls to IV 0 (109),
+        // not 3 (111). The two branches must stay distinguishable.
+        assert_eq!(spread(60, 65, 80, &["hiddenpower"], "leftovers", false), Some((227, 109)));
+    }
+
+    #[test]
+    fn an_illegal_spread_is_refused_rather_than_emitted() {
+        // Survived a mutation sweep: replacing the whole legality check with `if false` left
+        // every other test green, because no gen3 variant reaches an illegal spread AT ITS OWN
+        // POOL LEVEL. Belly Drum at L1 does -- the trim loop runs all the way down to hp_ev 1,
+        // far past the generator's floor of 69 -- so the guard is reachable and now pinned.
+        // Verified against the Python core, which reaches the same illegal hp_ev=1 and whose
+        // `_variant_spread_stats` raises on it.
+        let moves: Vec<String> = ["bellydrum", "bodyslam"].iter().map(|m| m.to_string()).collect();
+        let refused = randbats_spread_hp_atk(160, 110, 1, &moves, "leftovers", true);
+        assert!(refused.is_err(), "an illegal spread was emitted: {refused:?}");
+        // ...and the same set at its real level is fine, so the guard is not simply always-on.
+        assert!(randbats_spread_hp_atk(160, 110, 68, &moves, "leftovers", true).unwrap().is_some());
     }
 }
