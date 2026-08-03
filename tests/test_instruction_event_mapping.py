@@ -517,7 +517,10 @@ class BranchEventsTest(unittest.TestCase):
                 unsafe = [
                     branch
                     for branch in report["branches"]
-                    if "attract_empty_tail_ambiguous" in branch["attribution_unsafe_reasons"]
+                    if any(
+                        reason.startswith("attract_empty_tail_ambiguous")
+                        for reason in branch["attribution_unsafe_reasons"]
+                    )
                 ]
                 self.assertTrue(unsafe, report["branches"])
                 for branch in unsafe:
