@@ -232,11 +232,18 @@ fn active_status_transition(
 }
 
 impl RenderedEvents {
-    fn mark_lossy(&mut self, reason: &'static str) {
+    // `&str`, not `&'static str`. Both of these immediately `.to_string()`, so
+    // the 'static bound was incidental rather than a deliberate guard against
+    // unbounded reason cardinality -- and nothing downstream is a metrics sink:
+    // every aggregator over `world_failure_reasons` is a plain Counter/dict
+    // merge with no top-N, no label cap and no Prometheus/wandb export. Widened
+    // so the attract refusal can name the JOINT set of live predicates, which a
+    // fixed table of 31 boolean combinations could not do readably.
+    fn mark_lossy(&mut self, reason: &str) {
         self.lossy.push(reason.to_string());
     }
 
-    fn mark_attribution_unsafe(&mut self, reason: &'static str) {
+    fn mark_attribution_unsafe(&mut self, reason: &str) {
         self.mark_lossy(reason);
         self.attribution_unsafe.push(reason.to_string());
     }
@@ -1889,20 +1896,53 @@ fn render_move_phase(
             // fold tracks -- and only then is an engine marker instruction worth
             // its patch-stack and digest cost.
             //
-            // Ordered most- to least-specific; first match wins, so a branch that
-            // is both paralyzed and a possible miss reports `paralyzed`.
-            let subcase = if attacker_paralyzed {
-                "attract_empty_tail_ambiguous:paralyzed"
-            } else if empty_tail_can_be_accuracy_miss {
-                "attract_empty_tail_ambiguous:miss"
-            } else if deterministic_noop {
-                "attract_empty_tail_ambiguous:noop"
-            } else if volatile_empty_tail_ambiguous {
-                "attract_empty_tail_ambiguous:volatile"
-            } else {
-                "attract_empty_tail_ambiguous:cannot_act"
-            };
-            out.mark_attribution_unsafe(subcase);
+            // Emit EVERY live predicate, not the first match. They are not
+            // mutually exclusive, and a first-match bucket answers the wrong
+            // question in the expensive direction: `attacker_paralyzed` is a
+            // property of the ATTACKER while `miss`/`noop` are properties of the
+            // MOVE, so they co-occur freely, and testing paralysis first hides
+            // the non-downgradeable arms inside the one bucket that looks safe
+            // to downgrade.
+            //
+            // Measured on the fork masses (`ATTRACT_IMMOBILIZE_CHANCE` 1/2, then
+            // the 0.25 paralysis roll on the surviving half):
+            //   clean paralyzed-only      attract .500 / par .125          -> 80/20
+            //   paralyzed + Thunder       + miss .1125                     -> 15.3% miss
+            //   paralyzed + immune target + noop .375                      -> 37.5% noop
+            // The contamination is unrecoverable once collapsed, so a
+            // `paralyzed`-dominant read would say "ship the lossy downgrade"
+            // while a third of that mass is the case that erases a `|move|`
+            // reveal. Emitting the joint set keeps the probe able to answer its
+            // own question, and the realized cardinality is small (~8).
+            //
+            // Order within the slug is FIXED, not predicate-evaluation order, so
+            // the key is stable across runs and aggregators can sum it.
+            let mut parts: Vec<&str> = Vec::new();
+            if attacker_paralyzed {
+                parts.push("paralyzed");
+            }
+            if empty_tail_can_be_accuracy_miss {
+                parts.push("miss");
+            }
+            if deterministic_noop {
+                parts.push("noop");
+            }
+            if volatile_empty_tail_ambiguous {
+                parts.push("volatile");
+            }
+            if !move_could_act {
+                parts.push("cannot_act");
+            }
+            // Unreachable: the enclosing `if` fired, so at least one predicate is
+            // live. Named rather than silently empty so a future edit that breaks
+            // that correspondence is visible in the measurement.
+            if parts.is_empty() {
+                parts.push("unclassified");
+            }
+            out.mark_attribution_unsafe(&format!(
+                "attract_empty_tail_ambiguous:{}",
+                parts.join("+")
+            ));
             return;
         }
         // The action is uniquely immobilized, but the engine does not retain

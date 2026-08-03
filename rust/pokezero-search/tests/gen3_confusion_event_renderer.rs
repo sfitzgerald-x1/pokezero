@@ -1149,12 +1149,57 @@ fn the_attract_refusal_names_its_subcase() {
             "malformed sub-case slug: {reason}"
         );
     }
-    // This fixture is attracted AND paralyzed, which is the arm that decides
-    // whether a cheap lossy downgrade is available.
+    // Tackle at 100% accuracy into a normal target: paralysis is the only live
+    // predicate, so this is the CLEAN paralyzed case -- the one where the cheap
+    // lossy downgrade really would be safe.
     assert!(
         reasons
             .iter()
             .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed"),
         "{reasons:?}"
+    );
+}
+
+/// The slug must report EVERY live predicate, not just the first one.
+///
+/// Found by independent review, and it is the difference between a probe that
+/// answers its question and one that answers it backwards. `attacker_paralyzed`
+/// is a property of the ATTACKER; `miss` and `noop` are properties of the MOVE.
+/// They co-occur freely, so a first-match bucket files the non-downgradeable
+/// arms under the one label that looks safe to downgrade -- and the contamination
+/// is unrecoverable from the emitted data, because the other predicates are
+/// discarded at the refusal.
+///
+/// Measured masses at the refusal: a paralyzed attacker using a 70%-accuracy move
+/// carries 15.3% miss, and one whose target is immune carries 37.5% noop. Reading
+/// either as "paralyzed" would say "ship the lossy downgrade" over mass that
+/// erases a `|move|` reveal.
+#[test]
+fn the_attract_subcase_reports_every_live_predicate_not_just_the_first() {
+    fn slugs(state: &mut State) -> Vec<String> {
+        let branches = generate(state);
+        branches
+            .iter()
+            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+            .collect()
+    }
+
+    // Paralyzed + a move that can miss. THUNDER is 70% accuracy in gen3.
+    let mut miss_state = attracted_paralyzed_state(false);
+    miss_state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
+    let miss = slugs(&mut miss_state);
+    assert!(!miss.is_empty(), "expected an attract refusal to measure");
+    assert!(
+        miss.iter().any(|reason| reason.contains("paralyzed")
+            && reason.contains("miss")),
+        "a paralyzed attacker using a 70%-accuracy move must report BOTH          predicates, or the miss mass hides inside the paralyzed bucket: {miss:?}"
+    );
+    assert!(
+        !miss.iter().any(|r| r == "attract_empty_tail_ambiguous:paralyzed"),
+        "the clean-paralyzed slug must not be emitted when miss is also live: {miss:?}"
     );
 }
