@@ -871,6 +871,16 @@ class PublicBattleBeliefEngine:
                 if not traced_slot:
                     return
                 target_slot, target_ident = traced_slot, traced_ident
+                traced_belief = self._target_belief(target_slot, target_ident)
+                # Trace copies whatever the target is CURRENTLY running, which for a transformed
+                # mon is its copy target's ability, not its own. Recording it as a certain reveal
+                # writes a fact the mon cannot have -- a Ditto transformed into Claydol yields
+                # `revealed_ability=Levitate` on Ditto, whose only pool ability is Limber, and the
+                # set collapses to the inconsistent fallback. It widens rather than dropping the
+                # true variant, so it is safe, but it is a wrong and sticky fact. The engine
+                # already tracks the flag, so simply decline the reveal.
+                if traced_belief is not None and traced_belief.transformed:
+                    return
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
                 self._replace_belief(

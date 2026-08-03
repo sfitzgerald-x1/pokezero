@@ -1641,16 +1641,6 @@ class LocalShowdownEnv:
             tracker = self._tier2_tracker_for(player)
             investment_tracker = self._investment_tracker_for(player)
 
-            def _narrowings() -> int:
-                """Total belief narrowings applied by EITHER tier2 producer so far."""
-
-                return (tracker.belief_narrowing_count if tracker is not None else 0) + (
-                    investment_tracker.belief_narrowing_count
-                    if investment_tracker is not None
-                    else 0
-                )
-
-            narrowings_before = _narrowings()
             if tracker is not None:
                 state = replace(
                     state,
@@ -1670,28 +1660,19 @@ class LocalShowdownEnv:
                             for index, token in enumerate(state.transition_tokens)
                         ),
                     )
-            if _narrowings() != narrowings_before:
-                # A tracker just narrowed the SHARED belief engine, but this state's belief
-                # view was snapshotted from it a few lines above — so it is now stale.
-                # Re-derive it, keeping the annotated token stream (extraction does not
-                # depend on the belief engine, only the belief view does).
-                #
-                # This is not an optimisation, it is what makes the observation a function
-                # of the STATE rather than of how many times this method has been called:
-                # narrowing is monotone, so without the refresh the first call after a
-                # conclusion would encode the pre-narrowing belief and every later call the
-                # post-narrowing one, and a root and its leaves would disagree. One pass
-                # suffices — re-deriving survivors from an already-narrowed set reproduces
-                # it exactly, so a tracker's idempotent re-narrow cannot fire a second
-                # change.
-                #
-                # Checked once, AFTER both producers: either of them can narrow, and the
-                # Choice Band producer runs first, so the check cannot live inside the
-                # investment branch.
-                state = replace(
-                    _normalize(),
-                    transition_tokens=state.transition_tokens,
-                )
+            # NO REFRESH HERE, deliberately. An earlier version re-derived the player view
+            # whenever a producer narrowed, on the reasoning that the view snapshotted a few
+            # lines above was now stale and a root and its leaves would otherwise disagree.
+            # That reasoning was wrong and the block was dead: deleting it produced BIT-IDENTICAL
+            # encodes across 136k numeric rows with each switch on and off. `resolved_player_view`
+            # does not re-summarize, and `_apply_variant_pin` runs only from the belief engine's
+            # own `_upsert`/`_replace_belief` paths -- so pins are never re-applied at snapshot
+            # time, which is what actually makes the observation independent of call count.
+            #
+            # The real consequence, which belongs in the limitations rather than being papered
+            # over by a no-op: a narrowing does not reach the ENCODE until the next event that
+            # re-summarizes that mon. The pin is recorded immediately and is monotone, so nothing
+            # is lost -- it lands one reveal later than the conclusion.
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
             # the annotation substrate and the per-mon pinned-surface derivation source.

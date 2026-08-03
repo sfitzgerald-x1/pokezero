@@ -4192,7 +4192,7 @@ def observation_from_player_state(
     # instead, which is a strictly richer surface than this lossy class projection — see
     # _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES. The exclusion has to be surgical because
     # ``schema_v2_1`` means "carries the v2.1 blocks" and v4 inherits it for every OTHER
-    # block (PP-validity bits, sub HP, the pinned CB conclusion), so the column is switched
+    # block (PP-validity bits, sub HP), so the column is switched
     # off by name rather than by turning that flag off.
     tier2_investment_pinned: dict[str, float] = {}
     if (

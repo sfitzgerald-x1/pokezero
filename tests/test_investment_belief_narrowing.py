@@ -22,6 +22,7 @@ from pokezero.belief import PublicBattleBeliefEngine, belief_key, variant_identi
 from pokezero.category_vocab import build_category_vocabulary
 from pokezero.investment import (
     InvestmentConclusion,
+    InvestmentConfig,
     InvestmentLiveTracker,
     _surviving_variant_payloads,
 )
@@ -86,6 +87,11 @@ def _drive(lines, *, narrow, tracker=None, engine=None):
             own_team=_OWN_TEAM,
             dex=_DEX,
             narrow_belief_candidates=narrow,
+            # These fixtures are about NARROWING, not about the strike threshold: they supply a
+            # single clean pin so the conclusion exists at all. The shipped default is 2 (k=1 is
+            # opt-in because flipping it is an ungated encode change on a live column), so the
+            # opt-in is stated here rather than silently inherited.
+            config=InvestmentConfig(required_pin_strikes=1),
         )
     fed = 0
     for upto in (5, 10, len(lines)):

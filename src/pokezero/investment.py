@@ -41,7 +41,7 @@ Evidence discipline (same as base Tier 2's CB bit):
   (belief-elimination alone never fires the bit — mirrors ``cb-pinned-by-elimination``);
 - an observation consistent with NO candidate variant is off-model and yields no
   evidence in either direction (the precision guard);
-- monotone accrual, concluding on the FIRST clean pin (``required_pin_strikes``, default 1
+- monotone accrual; ``required_pin_strikes`` (default 2, opt-in 1
   — see the config field for the deductive rationale and the k=1/k=2 measurement); any
   conflicting pin or margin-rejection of a previously pinned value before conclusion
   permanently blocks that axis for the mon.
@@ -131,7 +131,18 @@ class InvestmentConfig:
     # under BOTH settings — 54/54 hp_value, 52/52 hp_class, 40/40 defense at k=1 against
     # 10/10, 10/10, 6/6 at k=2 — with zero blocked mons either way. k=2 bought no precision
     # and cost 5.4x HP / 6.7x defense coverage (31.4% vs 5.8% of mixed-family HP mons).
-    required_pin_strikes: int = 1
+    #
+    # DEFAULT STAYS 2. The k=1 evidence above is sound, but flipping the default is an UNGATED
+    # encode change on a LIVE channel: `tier2_investment` is enabled on running lineages, and a
+    # differential over 136k numeric rows showed 89 rows moving 0.0 -> 0.5 in columns 139 and 152.
+    # Every other behaviour change in this work sits behind a default-False switch; this one had
+    # no gate and no cache provenance bit, so a k=1 cache and a k=2 cache carried IDENTICAL mask
+    # metadata and would have been mixed in one training run with no error.
+    #
+    # So k=1 is opt-in (`--investment-pin-strikes 1`), and the value is recorded in cache metadata
+    # so the mismatch is caught rather than silently averaged. v4 arms can take the coverage win
+    # from game 0; a mid-run lineage does not have its input distribution shifted underneath it.
+    required_pin_strikes: int = 2
     # Passed through to the shared damage core (our own pinch abilities / Flail
     # breakpoints; own-side fractions are exact but the band costs nothing).
     pinch_ambiguity_band: float = 0.04

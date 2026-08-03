@@ -196,6 +196,10 @@ class ObservationFeatureMasks:
       residuals live while the investment column was constant zero — one switch could not
       mask investment off for them without also darkening residuals. Default False until
       v2.1 training adopts the column; pre-v2.1 pipelines encode byte-identically.
+    - ``feature_pack_last_move``: whether the v4 k0 feature pack writes its A2 column, the
+      ACTIVE mon's last executed move (``CATEGORY_LAST_USED_MOVE``). Default True — the pack
+      is whole unless an arm deliberately ablates it.
+
       This exists because A2 is the pack's LARGEST single surface, and the k0-feature-pack
       plan's arm design is exactly ``k0+pack`` against ``k0+pack+lastmove``: two arms whose
       only difference is this column, so the read attributes whatever moves to A2 rather than

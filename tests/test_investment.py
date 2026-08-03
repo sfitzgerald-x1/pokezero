@@ -266,25 +266,28 @@ class SpreadDetailsTest(unittest.TestCase):
 
 
 _TWO_STRIKE = InvestmentConfig(required_pin_strikes=2)
+_ONE_STRIKE = InvestmentConfig(required_pin_strikes=1)
 
 
 class HpPinTest(unittest.TestCase):
-    def test_the_default_is_one_strike(self) -> None:
-        """The lattice test is deductive: an impossible roll excludes a variant outright.
+    def test_the_default_stays_two_strikes(self) -> None:
+        """k=1 is sound but OPT-IN, because flipping the default is an ungated encode change.
 
-        Corroboration cannot make an exclusion sounder — it only delays the freeze. The
-        k=1/k=2 gate pair (runs/investment-gate-strikes-20260802/) measured precision 1.000
-        under both while k=2 cost 5.4x HP coverage, so the default concludes on the first
-        clean pin. ``required_pin_strikes`` stays configurable for the delayed-freeze arm.
+        The lattice test is deductive — an impossible roll excludes a variant outright, and the
+        k=1/k=2 gate pair (runs/investment-gate-strikes-20260802/) measured precision 1.000 under
+        both while k=2 cost 5.4x HP coverage. But `tier2_investment` is live on running lineages,
+        and a differential showed 89 of 136k numeric rows moving 0.0 -> 0.5 in the investment
+        columns. A k=1 cache and a k=2 cache also carry identical mask metadata, so they would
+        mix silently. Hence: default 2, opt in with --investment-pin-strikes 1.
         """
-        self.assertEqual(InvestmentConfig().required_pin_strikes, 1)
+        self.assertEqual(InvestmentConfig().required_pin_strikes, 2)
 
     def test_one_strike_pins_trimmed_hp(self) -> None:
         damage = 130
         lines = _leads(_TRIMMED_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_TRIMMED_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_TRIMMED_HP, prior_hp=_TRIMMED_HP - damage)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         strikes = inference.strikes
         self.assertEqual(len(strikes), 2)
         for strike in strikes:
@@ -318,7 +321,7 @@ class HpPinTest(unittest.TestCase):
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.hp_value, _FULL_HP)
         self.assertEqual(conclusion.hp_class, "full")
@@ -328,7 +331,7 @@ class HpPinTest(unittest.TestCase):
         """The k=1 counterpart of the old "single strike never concludes" case."""
         lines = _leads(_TRIMMED_HP)
         lines += _strike_lines(130, turn=1, max_hp=_TRIMMED_HP)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         self.assertEqual(inference.strikes[0].hp_pin, _TRIMMED_HP)
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.hp_value, _TRIMMED_HP)
@@ -514,7 +517,7 @@ class DefensePinTest(unittest.TestCase):
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines, source=source)
+        inference = _infer(lines, source=source, config=_ONE_STRIKE)
         for strike in inference.strikes:
             self.assertEqual(strike.disqualifiers, ())
             self.assertEqual(strike.defense_pin, _DEF_REDUCED)
@@ -536,7 +539,7 @@ class DefensePinTest(unittest.TestCase):
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines, source=source)
+        inference = _infer(lines, source=source, config=_ONE_STRIKE)
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.defense_values, {"def": _DEF_FULL})
         self.assertEqual(conclusion.defense_classes, {"def": "full"})

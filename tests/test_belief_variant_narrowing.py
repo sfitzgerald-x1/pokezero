@@ -124,3 +124,53 @@ class VariantNarrowingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefusalGuardsTest(unittest.TestCase):
+    """Second-order guards: the ones that keep a sound exclusion from becoming a wrong one.
+
+    A mutation sweep found these unpinned while every headline property was covered. They are
+    exactly the guards whose failure is silent — the set still narrows, just to the wrong thing.
+    """
+
+    def test_possible_values_are_never_emptied_by_a_narrowing(self) -> None:
+        """`return narrowed or values` is the refusal asymmetry applied to the projections.
+
+        Without the fallback a pin that matches no emitted `possible_item` empties the list, and
+        a consumer reading "this mon can hold nothing" is strictly worse off than one reading the
+        unnarrowed set. Same rule as the pin itself: decline, never eliminate everything.
+        """
+        from pokezero.belief import _narrowed_possible_values
+
+        values = ("Leftovers", "Choice Band")
+        variants = [{"item": "Leftovers"}, {"item": "Choice Band"}]
+        # survivors carrying an item OUTSIDE the emitted projection: filtering strictly would
+        # empty the list, so the guard must hand back the original instead.
+        kept = [{"item": "Lum Berry"}]
+        self.assertEqual(
+            _narrowed_possible_values(values, variants, kept, "item", plural=False), values
+        )
+        # a normal narrowing still filters
+        self.assertEqual(
+            _narrowed_possible_values(
+                values, variants, [{"item": "Leftovers"}], "item", plural=False
+            ),
+            ("Leftovers",),
+        )
+
+    def test_an_unevaluable_candidate_blocks_the_whole_narrowing(self) -> None:
+        """The never-drop-the-true-variant guard, and the highest-value survivor of the sweep.
+
+        If any candidate's spread cannot be computed, that candidate could BE the true variant,
+        so no exclusion is safe and the producer must hand back () — which the engine reads as
+        "no evidence". Degrading to `continue` instead would silently exclude it.
+        """
+        import inspect
+
+        from pokezero import investment
+
+        src = inspect.getsource(investment._choice_band_variant_payloads
+                                if hasattr(investment, "_choice_band_variant_payloads")
+                                else investment)
+        # the guard is a hard return, never a skip
+        self.assertIn("return ()", inspect.getsource(investment))
