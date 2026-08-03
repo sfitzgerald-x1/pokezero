@@ -111,3 +111,41 @@ class TraceAttributionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TraceOnTransformedTargetTest(unittest.TestCase):
+    """Trace copies what the target is CURRENTLY running, which for a transformed mon is its
+    copy target's ability, not its own.
+
+    Recording it as a certain reveal writes a fact the mon cannot have: a Ditto transformed into
+    a Levitate holder yields `revealed_ability=Levitate` on Ditto, whose only pool ability is
+    Limber, collapsing its candidate set to the inconsistent fallback. It widens rather than
+    dropping the true variant, so it is safe -- but a wrong sticky fact is worse than no fact.
+    """
+
+    LINES = [
+        "|start",
+        "|switch|p1a: Gardevoir|Gardevoir, L79, F|100/100",
+        "|switch|p2a: Ditto|Ditto, L83|100/100",
+        "|-transform|p2a: Ditto|p1a: Gardevoir",
+        "|switch|p1a: Gardevoir|Gardevoir, L79, F|100/100",
+        "|-ability|p1a: Gardevoir|Levitate|Trace|[from] ability: Trace|[of] p2a: Ditto",
+        "|turn|1",
+    ]
+
+    def test_a_transformed_target_receives_no_ability_reveal(self) -> None:
+        engine = _engine(self.LINES)
+        ditto = _belief(engine, "p2", "Ditto")
+        self.assertTrue(ditto.transformed, "fixture must actually transform, or this proves nothing")
+        self.assertIsNone(ditto.revealed_ability)
+
+    def test_a_normal_target_still_receives_it(self) -> None:
+        """Guard the narrowness: only the transformed case is suppressed."""
+        lines = [
+            "|start",
+            "|switch|p1a: Gardevoir|Gardevoir, L79, F|100/100",
+            "|switch|p2a: Claydol|Claydol, L81|100/100",
+            "|-ability|p1a: Gardevoir|Levitate|Trace|[from] ability: Trace|[of] p2a: Claydol",
+            "|turn|1",
+        ]
+        self.assertEqual(_ability(_belief(_engine(lines), "p2", "Claydol")), "levitate")

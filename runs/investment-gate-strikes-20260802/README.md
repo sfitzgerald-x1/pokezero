@@ -7,7 +7,7 @@ harness, same policy (move-biased random-legal, `move_bias=0.75`, both seats), *
 **120 games**, randbats **source hash `f9e35e1f`**. Only `--required-pin-strikes` differs,
 so every difference below is attributable to it.
 
-- `k1/summary.json` — `required_pin_strikes=1` (the new default)
+- `k1/summary.json` — `required_pin_strikes=1` (opt-in; the shipped default stays 2)
 - `k2/summary.json` — `required_pin_strikes=2` (the previous default)
 
 ## Result
@@ -24,7 +24,7 @@ Both arms PASS the gate on precision and calibration; the strike-level ledger is
 (5435 assessed, 3425 clean, 64 HP pins, 46 defense pins) because `required_pin_strikes` only
 governs when an axis FREEZES, never how a strike is assessed.
 
-## Why the default moved to 1
+## Why k=1 is available but NOT the default
 
 The lattice test is **deductive**, not evidential. Our attacker stats are exactly known, so
 each candidate defender variant admits exactly 16 legal per-hit damage values; an observed
@@ -43,3 +43,15 @@ produced from a **different checkout** against randbats source hash `e648ed6a`, 
 different `margin-ambiguity` count) and are **not** the right comparison point for this
 decision. The k=2 arm here was re-run on the current source so both arms of the comparison
 share a source hash.
+
+
+## Correction (2026-08-02)
+
+An earlier version of this README said the default moved to 1. It did not, and should not:
+flipping it is an UNGATED encode change on a live channel. `tier2_investment` is enabled on
+running lineages, and a differential over 261,683 numeric rows showed the shift landing in
+columns 120/139/152. Worse, cache metadata records `feature_masks` only, so a k=1 cache and a
+k=2 cache are indistinguishable and would be averaged together silently.
+
+The measurement below stands -- precision 1.000 under both, k=2 costing 5.4x HP coverage --
+but the default stays 2 until k=1 has a provenance discriminator and a wired opt-in.

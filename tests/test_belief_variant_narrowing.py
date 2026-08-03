@@ -159,18 +159,76 @@ class RefusalGuardsTest(unittest.TestCase):
         )
 
     def test_an_unevaluable_candidate_blocks_the_whole_narrowing(self) -> None:
-        """The never-drop-the-true-variant guard, and the highest-value survivor of the sweep.
+        """The never-drop-the-true-variant guard, and the highest-value survivor of a mutation sweep.
 
         If any candidate's spread cannot be computed, that candidate could BE the true variant,
-        so no exclusion is safe and the producer must hand back () — which the engine reads as
-        "no evidence". Degrading to `continue` instead would silently exclude it.
+        so no exclusion is safe: the producer must hand back () -- which the engine reads as "no
+        evidence" -- rather than skipping it and narrowing to the rest.
+
+        The previous version of this test searched the module source for "return ()", which the
+        module contains twice, so neutering the guard left the other one and the assertion passed.
+        This drives the real function with a candidate whose spread is unevaluable.
         """
-        import inspect
+        from unittest import mock
 
         from pokezero import investment
+        from pokezero.investment import InvestmentConclusion, _surviving_variant_payloads
 
-        src = inspect.getsource(investment._choice_band_variant_payloads
-                                if hasattr(investment, "_choice_band_variant_payloads")
-                                else investment)
-        # the guard is a hard return, never a skip
-        self.assertIn("return ()", inspect.getsource(investment))
+        variants = (
+            {"moves": ["surf"], "item": "Leftovers", "level": 84},
+            {"moves": ["psychic"], "item": "Leftovers", "level": 84},
+        )
+        conclusion = InvestmentConclusion(defender_key="p2:slowbro", hp_value=301)
+
+        # Reachability first: with every candidate evaluable the call must narrow to something.
+        with mock.patch.object(
+            investment, "_variant_spread", return_value=mock.Mock(stats={"hp": 301, "def": 1, "spd": 1})
+        ):
+            narrowed = _surviving_variant_payloads(
+                conclusion=conclusion,
+                candidate_variants=variants,
+                species_key="slowbro",
+                dex=None,
+                spread_cache={},
+            )
+        self.assertTrue(narrowed, "fixture never reaches the narrowing path")
+
+        # One unevaluable candidate must abandon the whole narrowing.
+        calls = {"n": 0}
+
+        def _one_bad(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return mock.Mock(stats={"hp": 301, "def": 1, "spd": 1})
+
+        with mock.patch.object(investment, "_variant_spread", side_effect=_one_bad):
+            self.assertEqual(
+                _surviving_variant_payloads(
+                    conclusion=conclusion,
+                    candidate_variants=variants,
+                    species_key="slowbro",
+                    dex=None,
+                    spread_cache={},
+                ),
+                (),
+            )
+
+
+class ApplySideRefusalTest(unittest.TestCase):
+    """The apply-side twin of never-eliminate-everything, on the ENCODE path.
+
+    `narrow_candidate_variants` refuses a contradictory survivor list; `_apply_variant_pin` must
+    refuse the same way when a standing pin matches NOTHING in a freshly-summarized set. Dropping
+    that check empties `candidate_variants`, and a consumer reading "this mon can be nothing" is
+    strictly worse off than one reading the unnarrowed set -- a wrong belief costs more than an
+    absent one.
+    """
+
+    def test_a_pin_matching_no_current_variant_leaves_the_set_intact(self) -> None:
+        engine = _engine()
+        # Pin an identity the source will never emit for this species.
+        engine.narrow_candidate_variants(KEY, [{"moves": ["nonexistentmove"], "item": "", "level": 1}])
+        belief = _summarized(engine)
+        self.assertEqual(len(belief.candidate_variants), 3, "the set was emptied by a stale pin")
+        self.assertEqual(engine.variant_pin_conflicts.get(KEY), 1, "the contradiction was not counted")

@@ -139,9 +139,17 @@ class InvestmentConfig:
     # no gate and no cache provenance bit, so a k=1 cache and a k=2 cache carried IDENTICAL mask
     # metadata and would have been mixed in one training run with no error.
     #
-    # So k=1 is opt-in (`--investment-pin-strikes 1`), and the value is recorded in cache metadata
-    # so the mismatch is caught rather than silently averaged. v4 arms can take the coverage win
-    # from game 0; a mid-run lineage does not have its input distribution shifted underneath it.
+    # So k=1 stays available but is NOT reachable from the live encode path today. This comment
+    # previously claimed two mechanisms that do not exist -- a `--investment-pin-strikes` flag and
+    # a cache-metadata record of the value. Neither was written. What exists:
+    # `scripts/investment_gate.py --required-pin-strikes` for the OFFLINE gate, and this field for
+    # direct construction. LocalShowdownEnv builds the tracker with no `config=`, so the live path
+    # is k=2 with no way to change it.
+    #
+    # That makes the cache-mixing hazard UNREACHABLE rather than guarded, which is a different
+    # claim and worth stating plainly. Before k=1 is ever wired to the live path it needs a
+    # provenance discriminator: cache metadata records `feature_masks` only, so a k=1 cache and a
+    # k=2 cache are indistinguishable and would be averaged together silently.
     required_pin_strikes: int = 2
     # Passed through to the shared damage core (our own pinch abilities / Flail
     # breakpoints; own-side fractions are exact but the band costs nothing).
@@ -850,8 +858,9 @@ class InvestmentLiveTracker:
         self._defender_levels: dict[str, int] = {}
         self._assessed_until = 0
         # Monotone count of narrowings that actually CHANGED the shared belief engine.
-        # The caller watches it to know that a belief view snapshotted before ``observe``
-        # is now stale (see LocalShowdownEnv._state_for_player).
+        # Diagnostic only. An earlier caller watched this to re-derive a belief view it
+        # believed stale; that block was dead -- pins are applied only from the belief
+        # engine's own summarize path -- and has been removed.
         self._belief_narrowings = 0
 
     def clone(self) -> "InvestmentLiveTracker":

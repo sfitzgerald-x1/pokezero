@@ -105,7 +105,7 @@ def main() -> int:
             "contradicting later strike can still block it. This flag is what produced "
             "runs/investment-gate-strikes-20260802 (k=1 vs k=2 on identical replays): "
             "precision 1.000 both ways, zero blocked mons both ways, 5.4x more HP coverage "
-            "at k=1 — which is why the default is now 1."
+            "at k=1 — which is why k=1 is available -- but the shipped default stays 2, because flipping it is an ungated encode change on a live channel with no cache-provenance discriminator."
         ),
     )
     args = parser.parse_args()

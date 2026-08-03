@@ -1258,8 +1258,9 @@ class Tier2LiveTracker:
         self._cb_non_ko: set[str] = set()
         self._cb_bit_indices: set[int] = set()
         # Monotone count of narrowings that actually CHANGED the shared belief engine.
-        # The caller watches it to know that a belief view snapshotted before ``annotate``
-        # is now stale (see LocalShowdownEnv._state_for_player).
+        # Diagnostic only. An earlier caller watched this to re-derive a belief view it
+        # believed stale; that block was dead -- pins are applied only from the belief
+        # engine's own summarize path -- and has been removed.
         self._belief_narrowings = 0
 
     def clone(self) -> "Tier2LiveTracker":
