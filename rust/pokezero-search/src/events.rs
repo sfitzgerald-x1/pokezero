@@ -1874,7 +1874,35 @@ fn render_move_phase(
             || attacker_paralyzed
             || !move_could_act
         {
-            out.mark_attribution_unsafe("attract_empty_tail_ambiguous");
+            // Name WHICH ambiguity refused, not just that one did. The five
+            // predicates are function-local and were discarded at the refusal, so
+            // no artifact recorded the split and no script could recover it --
+            // which left the only available plan "patch the engine and hope".
+            //
+            // The split decides the fix, and the two answers are far apart. If
+            // `paralyzed` dominates, this is downgradeable to lossy in a few
+            // lines: both outcomes are "no move used, no reveal, no PP", Attract
+            // dominates 4:1 (50% vs 12.5%), and that is a WIDER margin than the
+            // par-over-miss guess this renderer already ships. If the noop/miss
+            // arms dominate it is not downgradeable at any price -- those erase a
+            // `|move|` reveal, and the miss arm also suppresses a PP decrement the
+            // fold tracks -- and only then is an engine marker instruction worth
+            // its patch-stack and digest cost.
+            //
+            // Ordered most- to least-specific; first match wins, so a branch that
+            // is both paralyzed and a possible miss reports `paralyzed`.
+            let subcase = if attacker_paralyzed {
+                "attract_empty_tail_ambiguous:paralyzed"
+            } else if empty_tail_can_be_accuracy_miss {
+                "attract_empty_tail_ambiguous:miss"
+            } else if deterministic_noop {
+                "attract_empty_tail_ambiguous:noop"
+            } else if volatile_empty_tail_ambiguous {
+                "attract_empty_tail_ambiguous:volatile"
+            } else {
+                "attract_empty_tail_ambiguous:cannot_act"
+            };
+            out.mark_attribution_unsafe(subcase);
             return;
         }
         // The action is uniquely immobilized, but the engine does not retain

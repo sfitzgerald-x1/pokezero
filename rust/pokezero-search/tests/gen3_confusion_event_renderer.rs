@@ -871,7 +871,7 @@ fn attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion() {
                 events
                     .attribution_unsafe
                     .iter()
-                    .any(|reason| reason == "attract_empty_tail_ambiguous")
+                    .any(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -1114,5 +1114,47 @@ fn an_ordinary_confusion_check_is_not_misread_as_a_snap_out() {
     assert!(
         events.contains("|-activate|p2a: Opponent|confusion"),
         "a surviving confusion check announces itself: {events}"
+    );
+}
+
+/// The refusal must name WHICH ambiguity refused, not just that one did.
+///
+/// The five predicates behind `attract_empty_tail_ambiguous` were function-local
+/// and discarded at the refusal, so nothing recorded the split -- which meant the
+/// only available plan for this refusal class was "patch the engine and hope".
+/// The split decides the fix: the `paralyzed` arm is downgradeable to lossy (both
+/// outcomes are "no move used, no reveal, no PP", and Attract dominates 4:1),
+/// while the noop/miss arms are not downgradeable at any price because they erase
+/// a `|move|` reveal.
+///
+/// Pinned so the sub-case cannot silently collapse back to a single bare slug,
+/// which would quietly destroy the measurement again.
+#[test]
+fn the_attract_refusal_names_its_subcase() {
+    let mut state = attracted_paralyzed_state(false);
+    let branches = generate(&mut state);
+    let reasons: Vec<String> = branches
+        .iter()
+        .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+        .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+        .collect();
+    assert!(!reasons.is_empty(), "expected an attract refusal to measure");
+    for reason in &reasons {
+        assert_ne!(
+            reason, "attract_empty_tail_ambiguous",
+            "the bare slug carries no sub-case and cannot be measured: {reasons:?}"
+        );
+        assert!(
+            reason.starts_with("attract_empty_tail_ambiguous:"),
+            "malformed sub-case slug: {reason}"
+        );
+    }
+    // This fixture is attracted AND paralyzed, which is the arm that decides
+    // whether a cheap lossy downgrade is available.
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed"),
+        "{reasons:?}"
     );
 }
