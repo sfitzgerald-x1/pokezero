@@ -41,12 +41,14 @@
   "the_cause": "Pain Split averages the two mons' CURRENT HP, so its magnitude is a function of the HP left after the damage roll: a different legal roll gives a different Pain Split. movepainsplit is in the EXACT bucket (_ROLL_SCALED_SOURCES, engine_transition_differential.py:310-312, which does not contain 'residual' or 'movepainsplit'), so a 1 HP difference is compared for equality and rejected.",
   "worked_19000016_2": "Jirachi 266/266, Swalot 316 -> 276 after move=-40. floor((266+276)/2) = 271, so Swalot 276->271 = -5, and Jirachi's half is capped at 266 and silent. The engine arm at movepainsplit=-4 needs floor((266+s)/2) = s-4, i.e. s in {273,274}, i.e. a roll of 42 or 43 -- both legal. Verified independently by review.",
   "scope_correction": "v1 described 'Jirachi Ice Punches, Swalot Pain Splits' and 'the Pain Split differs by 1' for all three rows. That describes 19000016/2 only. 19000016/49 is Psychic, not Ice Punch.",
-  "19000198_22_REASSIGNED": "NOT this shape. Its majority-arm gap is -91 vs -120 on a NON-CRIT arm against an observed |-crit|, which is the C93 crit-tag shape, not roll inheritance. Moved out of I3.",
   "disposition": {
    "class": "MATCHER FIX",
    "implemented": false,
    "detail": "movepainsplit must be roll-aware -- either roll-scaled, or cascade-handled with a bound derived from the roll gap, as the capped-heal work does. The heal_to_full precedent at engine_transition_differential.py:301-310 is a genuine analogue. Requires a pin that fails when reverted."
-  }
+  },
+  "19000198_22": "RESTORED to I3 after review. An earlier v2 draft moved it to C93's crit-tag shape on the grounds that its MAJORITY arm is non-crit -- true and irrelevant, because the matcher accepts a boundary if ANY branch matches, so the row turns on the 6.25% crit arm. Both misses read 'attributed components differ', the EXACT-component path; a crit-tag rejection would surface as 'roll-scaled components differ'. So on p1 the crit arm CLEARED the roll check and the crit cross-check (engine_transition_differential.py:1342) and its direct hit agreed -- the symmetric difference contains only movepainsplit, -91 observed against -89, a 2 HP difference from a different legal crit roll. That is I3's mechanism unmixed, and the I3 fix closes it: 2/89 = 2.2%, inside the +/-9% band.",
+  "why_this_row_matters_most": "it is the strongest argument for the I3 fix, not the weakest. It shows the exact-bucket rejection biting a MINORITY arm that has already passed the roll and crit gates -- so a roll-aware movepainsplit has to be branch-set-aware, not just tolerant on the majority arm. The other two rows both happen to differ by 1 and do not force that.",
+  "classifier_agrees": "cert_sweep_readout.attribute_row puts 19000198/22 in I3_roll_inherited. The earlier draft's prose contradicted the binding instrument silently."
  },
  "I5_boundary_truncation": {
   "rows": 3,
@@ -68,9 +70,7 @@
     "engine_extra": "psn -16 (Crawdaunt 257/16, toxic) -- NOT itemleftovers as v1 claimed",
     "divergence_class": "component_extra_in_engine:psn"
    },
-   "19000098/79": {
-    "shape": "NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5."
-   }
+   "19000098/79": "{'shape': 'NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5.'} EVICTED WITH NO DESTINATION AND NO CAUSE. Candidate worth checking cheaply: with the I5 rule bypassed, cert_sweep_readout.py:363-364 ('roll-scaled' in majority and 'capped_lethal' in majority) would send it to LS_capped_lethal_shape, and its 75% majority miss matches both substrings. Not verified."
   },
   "v1_causal_claim_RETRACTED": "v1 said 'a forced-replacement boundary is not a full turn: Showdown runs no residual phase'. That is FALSE as a general gen3 rule and the repo already said so. gen3 sends the replacement out BEFORE the residual block (generate_instructions.rs:3222-3246, PR #876, verified against the real sim by scripts/gen3_switch_differential.py::faintresiduals), so residuals run and APPLY TO THE REPLACEMENT. tests/fixtures/showdown/explosion-seed148.log.gz turn 7 is exactly this shape and shows Showdown healing the incoming replacement and emitting |upkeep.",
   "the_actual_distinguisher": "whether the residual block ALREADY RAN, not the shape of the ply. An ACTION-phase faint defers residuals to the replacement ply, which then applies them to the replacements. A RESIDUAL-phase faint (both actives die inside the block) has already executed it, so the replacement ply is bare. Both remaining rows are the second kind. force_switch cannot distinguish them, and in this harness it is reconstructed from the self request only (src/pokezero/engine_world.py:411, :496), so it is true on side one for both.",
@@ -79,14 +79,16 @@
    "implemented": false,
    "downgraded_from": "v1 said 'ENGINE or HARNESS FIX' and asserted 'the engine is answering for a turn that did not happen'. Neither is supported.",
    "why_not_simply_a_fix": "a correct fix needs a 'residuals already ran this turn' state marker that survives the world reconstruction, landed in the ENGINE's end_of_turn_triggered with the renderer replica following. A shape predicate cannot express it -- PR #1037 tried exactly that and was closed as a regression: it pushed 39 boundaries into skip:strict_all_branches_lossy, 37 of which previously MATCHED.",
-   "note": "whether this is ultimately a fix or a comparison limit turns on that check, which has not been run."
-  }
+   "note": "whether this is ultimately a fix or a comparison limit turns on that check, which has not been run.",
+   "the_limit_side": "stated symmetrically so the label does not lean. At this boundary Showdown's protocol is BARE -- no |upkeep|, no components -- and per the_actual_distinguisher the discriminating fact (whether the residual block already ran) is a property of the PREVIOUS ply. Nothing observable at the boundary the differential is asked to evaluate separates the two cases, and engine_world.py:411/:496 reconstructs from the self request only. If the segmentation cannot be made to carry cross-step state, this is not settleable by this comparison -- which is exactly what the program reserves 'comparison limit' for. It stays UNDETERMINED because the harness DOES hold the prior step's protocol in the same game, so a look-back is possible."
+  },
+  "both_rows_are_residual_phase_faints": "DERIVED, not measured: bare replacement ply plus #876 implies the block was already consumed. The retained repros contain no prior-ply protocol."
  },
  "tally": {
   "caused_and_fixed": 3,
-  "caused_not_implemented": 2,
+  "caused_not_implemented": 3,
   "undetermined": 2,
-  "reassigned_to_other_shapes": 2,
-  "comment": "v1 claimed 9 rows across three clean shapes with all three dispositions being fixes. The honest count is 3 fixed, 2 caused, 2 undetermined and 2 belonging to other families."
+  "evicted_cause_open": 1,
+  "note": "19000198/22 is restored to I3, so I3 is 3 rows and 'reassigned_to_other_shapes' is retired -- it laundered one unexplained row into 'belongs elsewhere'. 19000098/79 is evicted with its cause open and no verified destination."
  }
 }
