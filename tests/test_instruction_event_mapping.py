@@ -797,17 +797,53 @@ class BranchEventsTest(unittest.TestCase):
             s2_speed=1,
             s2_volatile_statuses=("confusion",),
         )
-        expiry = next(
+        # Asserted over EVERY branch rather than one picked out by its refusal
+        # reason. The engine now parks the snap-out and applies it on the next
+        # move, so the snapped-out branch and the still-confused branch are
+        # observationally identical -- which is precisely why the old code had to
+        # refuse one of them. There is no longer a branch to single out, and
+        # quantifying over all of them is the stronger statement anyway.
+        expiry_branches = json.loads(
+            pokezero_search.branch_events(expiry_state, "splash", "splash", CTX, True, False)
+        )["branches"]
+        moved = [
             branch
-            for branch in json.loads(
-                pokezero_search.branch_events(expiry_state, "splash", "splash", CTX, True, False)
-            )["branches"]
-            if "confusion_expiry_timing_unobservable" in branch["attribution_unsafe_reasons"]
-            and "|move|p2a: Chansey|splash||[still]" in branch["events"]
+            for branch in expiry_branches
+            if "|move|p2a: Chansey|splash||[still]" in branch["events"]
+        ]
+        self.assertTrue(moved, expiry_branches)
+        # Existence proof that the ladder actually forked, so the assertions
+        # below cannot pass by there being no snap-out to mis-render.
+        # `assertTrue(moved)` alone is NOT sufficient: the plain
+        # move-goes-through branch satisfies it even with the ladder deleted, and
+        # the park is by construction invisible in the event stream.
+        #
+        # Confusion starts at rung 0, so the check burns it to rung 1 and the
+        # ladder ends it with probability 1/4, crossed with the 50% self-hit:
+        # 37.5 / 12.5 / 37.5 / 12.5. Delete the fork and this collapses to two
+        # branches at 50/50.
+        #
+        # Scope: this pins the FORK, which happens at end of turn. That the
+        # parked snap-out then LANDS on the next move is pinned at the crate
+        # level, where the state is reachable -- `_build_state` cannot express a
+        # parked counter.
+        self.assertEqual(
+            sorted(round(branch["percentage"], 4) for branch in expiry_branches),
+            [12.5, 12.5, 37.5, 37.5],
+            expiry_branches,
         )
-        self.assertIn("|move|p2a: Chansey|splash||[still]", expiry["events"])
-        self.assertNotIn("|-end|p2a: Chansey|confusion", expiry["events"])
-        self.assertTrue(expiry["attribution_unsafe"], expiry)
+        for branch in moved:
+            # The original invariant: the end is never announced early.
+            self.assertNotIn("|-end|p2a: Chansey|confusion", branch["events"], branch)
+            # ...and it no longer costs a refused branch. This is the point of
+            # the deferral: confusion_expiry_timing_unobservable was 35% of the
+            # clean-band world-construction refusals, and every refused world is
+            # a decision that falls back to raw play.
+            self.assertNotIn(
+                "confusion_expiry_timing_unobservable",
+                branch["attribution_unsafe_reasons"],
+                branch,
+            )
 
         wake_state = _build_state(
             ("splash",),
