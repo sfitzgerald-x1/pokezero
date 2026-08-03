@@ -6610,19 +6610,21 @@ Measured instance, the closed PR #1037 (`scott/i5-double-faint-replacement`):
 
 Both sides reconcile to 15224.
 
-The two sweeps carry different `source_commit`s (`cbcb6d27`, `5d7f2ed0`), which
-rule 3 below would reject. The numbers survive: the intervening matcher change
-(#1032) is counter- and class-neutral, confirmed because `sweep_i4` at
-`a723ea2e` differs from the `cbcb6d27` baseline by exactly the three rows #1039
-targets and by nothing else. Stated here rather than left for a reader to
-notice, since the exhibit would otherwise be disqualified by its own rule. The patch pushed 39 boundaries into the skip
-bucket, **37 of which previously matched**; the 2 that were divergent stopped
-being evaluated rather than being fixed. Reported as "39 → 37", it looked like
-the first fidelity win of the era. It was a regression in 37 boundaries.
+Baseline is `sweep_base.json` (`a723ea2e`, fingerprint `d9cab2b1…`) and test is
+`sweep_i5.json` (fingerprint `ff749be8…`). The two trees differ only in `docs/`
+and `reports/` plus the renderer patch itself, so this pair is single-variable
+under rule 3 below.
+
+Separately, `sweep_exact.json` (`cbcb6d27`) has the **same fingerprint** as
+`sweep_base` and **byte-identical counters**, while running a *different*
+matcher — pre- and post-#1032. That is a direct measurement that #1032 was
+counter- and class-neutral, and it is also a demonstration of rule 3's blind
+spot: `engine_build_fingerprint` does not hash `scripts/`, so the fingerprint
+alone would not have told us if those two had disagreed.
 
 The mechanism generalises to any renderer change: a predicate that makes
 `segment()` return `None` sends that **branch** to `segmentation_failed`
-(`rust/pokezero-search/src/events.rs:766-779`), which is not in
+(`rust/pokezero-search/src/events.rs:808-821`), which is not in
 `_TELEMETRY_ONLY_LOSSY_MARKERS` (`scripts/engine_transition_differential.py:354-370`,
 `:1872`).
 
@@ -6651,12 +6653,33 @@ Rules:
    skip:strict_all_branches_lossy == boundaries_measured` on both sides. Summing
    all `skip:*` does **not** reconcile (it is 2,322 here); that one counter is
    the one in the identity.
-3. Baseline and test must differ **only** by the patch under test. Pin
-   `engine_fingerprint` and assert a clean tree. `source_commit` does **not**
-   pin the code: `/tmp/sweep_ph.json` and `/tmp/sweep_ph2.json` share a
-   `source_commit` and have different fingerprints and different counters, and
-   any committed patch necessarily changes the field anyway.
+3. Baseline and test must differ **only** by the patch under test, and you must
+   be able to **show** that from the artifacts. Record `engine_fingerprint`
+   *and* a hash of the counter-computing harness, then exhibit the
+   baseline↔test diff.
+
+   `source_commit` does not pin the code: `sweep_ph.json` and `sweep_ph2.json`
+   share one and have different fingerprints and different counters, and any
+   committed patch changes the field anyway.
+
+   But `engine_fingerprint` alone is **not sufficient either**, and the gap is
+   exactly the one this section is about. `build_inputs()`
+   (`scripts/engine_build_fingerprint.py:123-131`) hashes the patch stack,
+   `rust/pokezero-search/src/**` and the Cargo inputs — **not `scripts/`**. So a
+   change to `engine_transition_differential.py`, the file that computes these
+   very counters, leaves the fingerprint untouched. `sweep_exact` and
+   `sweep_base` are that case: identical fingerprint, different matcher.
+
+   "Assert a clean tree" is *not* the rule, because it is unauditable —
+   `_provenance()` (`engine_transition_differential.py:2437-2454`) records only
+   `source_commit`, `engine_fingerprint` and `image_commit`, so no artifact says
+   whether the tree was dirty — and enforcing it literally would reject four of
+   the five sweeps this section rests on, whose patches were deliberately
+   uncommitted at measurement time.
+
+   **Owed:** add `harness_sha256` and `worktree_dirty` to `_provenance()`. Until
+   then rules 1 and 2 are checkable from the JSON and rule 3 is not.
 4. The renderer keeps a replica of the engine's `end_of_turn_triggered`
-   (`events.rs:364`, original at `gen3/generate_instructions.rs:4646` — engine line numbers drift, `third_party/poke-engine-src` is gitignored). Changing
+   (`events.rs:406`, original at `gen3/generate_instructions.rs:4646` — engine line numbers drift, `third_party/poke-engine-src` is gitignored). Changing
    one without the other desynchronises them and shows up as mass
    `segmentation_failed`, not as a divergence.
