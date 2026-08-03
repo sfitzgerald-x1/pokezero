@@ -10,7 +10,7 @@
   "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
   "_original_content_removed": true
  },
- "status": "RESOLVED. Final measured position: main 208, this PR 64, a 144-row reduction decomposed in $.DECOMPOSITION as threading 123 / promotion 17 / bound shape 3 / severity 0. EVERY section of this file other than $.RESOLVED and $.DECOMPOSITION -- including all of $.CORRECTION -- is falsified and marked. Read those two keys only.",
+ "status": "RESOLVED. CURRENT measured position is in $.REMEASURED_ON_CURRENT_MAIN: main 202, this PR 58. $.RESOLVED and $.DECOMPOSITION carry 208/64, which is the PRE-C87 (54-patch) era and is superseded -- their row attribution and the 123/17/3/0 decomposition remain correct, only the two totals are stale. Every other section of this file is falsified and marked. Read $.REMEASURED_ON_CURRENT_MAIN first, then $.DECOMPOSITION for the breakdown.",
  "what_this_does_not_change": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
  "the_experiment": {
   "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
@@ -78,7 +78,8 @@
    "prefix_correctness": 0
   },
   "the_correction": "The bound redesign I made the centrepiece -- and got wrong across four rounds -- is worth 3 of 144 rows. The substance is threading a slot-wide damage budget into a comparison that was operating on 1 HP. Main's 0.18*scale+1 was never operative either: its caller does not pass scale, so production ran at 1 HP too.",
-  "the_67_was_never_a_mystery": "reconstructing main's fraction bound WITH the threading scores 67 on the current tree, to the row. The 'unlocated gap' of the previous four rounds was this."
+  "the_67_was_never_a_mystery": "reconstructing main's fraction bound WITH the threading scores 67 on the current tree, to the row. The 'unlocated gap' of the previous four rounds was this.",
+  "ERA": "pre-C87, 54-patch engine. The 208 and 64 totals are superseded by $.REMEASURED_ON_CURRENT_MAIN (202 and 58); the 144-row reduction and the per-change decomposition are unchanged."
  },
  "REMEASURED_ON_CURRENT_MAIN": {
   "why": "the original 208 -> 64 was measured against a main that predates C87. C87 moved the baseline to 202, so the headline had to be re-derived rather than carried forward.",

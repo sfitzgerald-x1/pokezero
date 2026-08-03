@@ -93,7 +93,39 @@
  },
  "certification_verdict": {
   "gate": "zero unattributed",
-  "measured": 8,
-  "result": "FAILS"
+  "measured": 4,
+  "result": "FAILS",
+  "NOTE": "4 at the current era; the 8 below is pre-C87. See REMEASURED_ON_CURRENT_MAIN."
+ },
+ "REMEASURED_ON_CURRENT_MAIN": {
+  "why": "everything below was measured BEFORE C87 (#1028) landed. The file is titled current_era and carried no marker, while its sibling c85 got one. No test binds it, so nothing catches the drift.",
+  "era": {
+   "was": "e5f4c7b16fe2895a, 53 patches",
+   "now": "d9cab2b1cf9fc011, 55 patches"
+  },
+  "counts": {
+   "diverged": {
+    "was": 64,
+    "now": 58
+   },
+   "limit:roll_divergent_lethality": {
+    "was": 24,
+    "now": 22
+   },
+   "UNATTRIBUTED": {
+    "was": 8,
+    "now": 4
+   },
+   "adjudicated_rows": {
+    "was": 28,
+    "now": 26
+   },
+   "summary": {
+    "was": "28 of 64 rows adjudicated",
+    "now": "26 of 58"
+   }
+  },
+  "what_survives_unchanged": "every other family row count is still exact -- LS_capped_lethal_shape 12, I2 10, I3 3, I5 3, I4 3, world_sample_drag_target 1 -- and every qualitative conclusion holds: certification still FAILS, objective 4 is still unsatisfied, and the same four candidate-not-finding families still hold 28 rows.",
+  "neatly": "the 4 rows that went are exactly the mechanisms this file's own unattributed entry lists first -- 3 crit-arm-absent-from-support and 1 crit at a non-doubling ratio. C87 closed them."
  }
 }
