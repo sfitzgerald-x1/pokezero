@@ -16,7 +16,8 @@
    "the_reference": "a residual that kills is clipped to whatever HP remains. Each arm clips to ITS OWN remaining HP, so the arm that took LESS direct damage has MORE left and its cap is LARGER. Conservation is exact.",
    "the_matcher": "scripts/engine_transition_differential.py, the capped_lethal branch of roll_components_agree (~line 809), tests `abs(obs) <= abs(eng) + 1`. Its comment says the capped value 'can only ever be SMALLER than the uncapped tick the engine carries -- here the one-sided inequality IS the sound test'. That is true only when ONE side is capped. When BOTH are, the direction is set by which arm took less damage, and the observed cap is legitimately the larger one. 19000002/61: |obs| 40 > |eng| 32 + 1, so it rejects a pair that conserves exactly.",
    "disposition": "MATCHER FIX. The exact mirror of the capped-HEAL cascade #1025 addresses: two caps differ by precisely the direct-damage difference, in the opposite direction. Needs the same difference bound, and a pin that fails when the one-sided test is restored.",
-   "why_not_an_engine_gap": "the engine's arm is a legal roll and its capped_lethal is correctly clipped. Nothing is missing from the support."
+   "why_not_an_engine_gap": "the engine's arm is a legal roll and its capped_lethal is correctly clipped. Nothing is missing from the support.",
+   "SHIPPED_AS": "#1032, merged. It OVER-DELIVERED: predicted 4 rows, closed 19. The extra 15 were in limit:roll_divergent_lethality, which falsified that family's comparison-limit adjudication (reports/c91). The matcher locus quoted here has since moved -- the both-capped branch now sits above the one-sided test it cites."
   },
   "B_lethality_disagreement": {
    "rows": 4,
@@ -29,7 +30,8 @@
    "signature": "one side kills and the other does not; the nets differ (obs -100 vs eng -107 + capped_lethal -11 = -118)",
    "reading": "the engine's arm KO'd where the observation did not, or the reverse. This looks like the same class as limit:roll_divergent_lethality, which is already adjudicated as a comparison limit.",
    "disposition": "NOT YET DETERMINED. The deciding question is whether the OBSERVED outcome is present in the engine's branch SET. If a non-killing arm exists and simply lost the majority, it is a branch-selection/comparison limit. If no arm reproduces the observation, it is an engine gap. That check is the next step and has not been run.",
-   "not_a_limit_yet": true
+   "not_a_limit_yet": false,
+   "RESOLVED_BY": "reports/c89, in the same commit. 'That check has not been run' is stale: it was run. Three of the four rows are an engine gap (residual-decided lethality); the fourth, 19000074/27, is a separate cause -- the engine's crit-kill arm defers the other side's residual on a faint."
   },
   "C_component_absent_from_the_engine": {
    "rows": 4,
@@ -41,9 +43,13 @@
    ],
    "signature": "the observation carries a component the engine emits nothing for -- abilityroughskin -16 vs [], +24 vs +23, +17 vs [], -24 vs []",
    "reading": "at least one (19000021/34, Rough Skin) is an ability the engine does not model on that path -- an engine gap. The +24/+23 row is a magnitude difference, not an absence, and does not belong with the other three.",
-   "disposition": "NOT YET DETERMINED. Needs per-row source comparison; these are probably 2-3 further distinct causes."
+   "disposition": "NOT YET DETERMINED. Needs per-row source comparison; these are probably 2-3 further distinct causes.",
+   "RESOLVED_IN_PART_BY": "reports/c90, in the same PR, resolves 19000021/34. NOTE this section's reading is WRONG on that row: it says Rough Skin is 'an ability the engine does not model on that path'. c90 shows the opposite -- abilities.rs:193 implements it correctly with the gen3 /16 divisor. The cause is the missing contact flag on OVERHEAT in choices.rs, since gen3 overrides Overheat to make contact and the engine builds from base data."
   }
  },
  "what_this_establishes": "12 rows resolve into 4 with a stated matcher cause and disposition, and 8 that need further per-row source work but are now separated into two clearly different questions rather than one opaque family. The 'candidate-not-finding' label was hiding a partition, not a hard problem.",
- "method_note": "This took one classification pass over the retained repros plus reading two functions. No new instrumentation. c75 concluded these families needed 'evidence the current signatures do not measure' -- true of SIGNATURE profiling, and not true of reading the rows."
+ "method_note": "This took one classification pass over the retained repros plus reading two functions. No new instrumentation. c75 concluded these families needed 'evidence the current signatures do not measure' -- true of SIGNATURE profiling, and not true of reading the rows.",
+ "era": {
+  "note": "written at the 64-divergence era (engine e5f4c7b1, 53 patches, seeds 19000000-19000199). On current main the family is 8 rows -- sub-shape A's four closed when #1032 shipped."
+ }
 }
