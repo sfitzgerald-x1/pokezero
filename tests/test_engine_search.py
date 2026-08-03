@@ -1702,11 +1702,23 @@ class WorldAbortRateTests(unittest.TestCase):
     These tests pin the denominator that makes the real rate visible.
     """
 
-    def test_rates_are_zero_when_nothing_ran(self) -> None:
+    def test_an_empty_denominator_reports_none_not_a_healthy_zero(self) -> None:
+        # 0.0 would say "no worlds aborted" when the truth is "nothing was
+        # measured". Broken-instrument-reads-as-healthy is the failure this whole
+        # metric exists to prevent, so it must not be the metric's own behaviour.
+        # `depth_reached_mean` sets the precedent for omitting instead.
         stats = EngineMctsStats().to_dict()
         self.assertEqual(stats["worlds_constructed"], 0)
-        self.assertEqual(stats["world_search_abort_rate"], 0.0)
-        self.assertEqual(stats["world_construction_failure_rate"], 0.0)
+        self.assertIsNone(stats["world_search_abort_rate"])
+        self.assertIsNone(stats["belief_sample_rejection_rate"])
+
+    def test_a_searched_world_with_no_denominator_does_not_read_as_healthy(self) -> None:
+        # The shard-fixture bug found in review: worlds_searched populated,
+        # worlds_constructed not. Must not report a clean 0.0 abort rate.
+        stats = EngineMctsStats()
+        stats.worlds_attempted = 160
+        stats.worlds_searched = 152
+        self.assertIsNone(stats.to_dict()["world_search_abort_rate"])
 
     def test_the_two_failure_modes_are_separated(self) -> None:
         # 10 attempts -> 8 built -> 6 searched. Those are two DIFFERENT defects
@@ -1718,7 +1730,7 @@ class WorldAbortRateTests(unittest.TestCase):
         stats.worlds_constructed = 8
         stats.worlds_searched = 6
         payload = stats.to_dict()
-        self.assertAlmostEqual(payload["world_construction_failure_rate"], 0.2)
+        self.assertAlmostEqual(payload["belief_sample_rejection_rate"], 0.2)
         self.assertAlmostEqual(payload["world_search_abort_rate"], 0.25)
 
     def test_a_partial_abort_is_not_a_fallback_but_is_still_visible(self) -> None:
@@ -1733,7 +1745,14 @@ class WorldAbortRateTests(unittest.TestCase):
         policy = harness._policy(early_stop=False)
         # `decide()` owns this increment at its single dispatch point; the test
         # enters at `_search_model`, so it stands in for that here.
-        policy.stats.worlds_constructed = 2
+        #
+        # Deliberately NOT 2. Setting the cumulative counter equal to
+        # `len(worlds)` makes those two expressions alias, and the per-decision
+        # metadata assertion below then cannot tell them apart -- independent
+        # review showed the cumulative-counter mutant surviving exactly that way.
+        # 7 stands in for "six worlds already constructed on earlier decisions",
+        # so this decision's metadata must read 2 while the counter reads 9.
+        policy.stats.worlds_constructed = 7
         native = harness._Native(
             [
                 harness._report(56, 4, stopped=False),
@@ -1752,9 +1771,9 @@ class WorldAbortRateTests(unittest.TestCase):
         stats = policy.stats.to_dict()
         self.assertEqual(stats["fallback_decisions"], 0, "a partial abort is not a fallback")
         self.assertEqual(stats["worlds_searched"], 1)
-        self.assertEqual(stats["worlds_constructed"], 2)
-        self.assertAlmostEqual(stats["world_search_abort_rate"], 0.5)
+        self.assertEqual(stats["worlds_constructed"], 7)
         self.assertEqual(decision.metadata["engine_mcts"]["worlds_searched"], 1)
+        # PER DECISION (2), never the running total (7).
         self.assertEqual(decision.metadata["engine_mcts"]["worlds_constructed"], 2)
 
     def test_the_denominator_is_incremented_on_the_real_decision_path(self) -> None:
@@ -1802,7 +1821,159 @@ class WorldAbortRateTests(unittest.TestCase):
         stats = policy.stats.to_dict()
         self.assertEqual(stats["worlds_constructed"], 3)
         self.assertEqual(stats["worlds_attempted"], 3)
-        self.assertEqual(stats["world_construction_failure_rate"], 0.0)
+        self.assertEqual(stats["belief_sample_rejection_rate"], 0.0)
+
+    def test_partial_construction_over_two_decisions_keeps_the_two_rates_apart(self) -> None:
+        """The case that separates `len(worlds)` from every look-alike.
+
+        Found by independent review: with a sampler that ALWAYS succeeds,
+        `len(worlds)` and `config.worlds` are indistinguishable, and a
+        per-decision metadata value is indistinguishable from the cumulative
+        counter. Both mutants survived. This drives `decide()` twice with a
+        PARTIALLY failing sampler so the three quantities all differ:
+
+          * requested 3, sampler yields 2 -> `len(worlds)` 2, `config.worlds` 3
+          * after two decisions the cumulative counter is 4, the per-decision
+            value is still 2
+
+        Without this, worlds lost to CONSTRUCTION get re-attributed to
+        `world_search_abort_rate`, re-merging the exact two defects this PR
+        exists to separate.
+        """
+        import unittest.mock as mock
+
+        from pokezero.engine_world import EngineWorld
+
+        module = mock.Mock()
+        module.monte_carlo_tree_search.return_value = OwnSideSelectionTests._Result()
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=module,
+            config=EngineMctsConfig(worlds=3, sample_retry_factor=1),
+        )
+        candidates = [
+            {"action_index": 0, "kind": "move", "legal": True, "move_id": "earthquake"},
+            {"action_index": 1, "kind": "move", "legal": True, "move_id": "surf"},
+        ]
+        mask = (True, True, False, False, False, False, False, False, False)
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": (), "p2": ()},
+        )
+
+        # 3 attempts per decision, retry factor 1: the middle one is rejected by
+        # the belief sampler, so each decision constructs exactly 2 of 3.
+        attempts = {"n": 0}
+
+        def sampler(**_kwargs):
+            attempts["n"] += 1
+            return (None, "rejected") if attempts["n"] % 3 == 2 else (object(), None)
+
+        decisions = []
+        with mock.patch(
+            "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+            side_effect=sampler,
+        ), mock.patch(
+            "pokezero.engine_search.world_battle_spec", return_value=world
+        ), mock.patch(
+            "pokezero.engine_search.build_poke_engine_state", return_value=object()
+        ):
+            for _ in range(2):
+                context = _FakeContext(_FakeObservation(mask, candidates))
+                decisions.append(
+                    policy.select_action_with_context(context, rng=random.Random(0))
+                )
+
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["worlds_attempted"], 6)
+        # 2 per decision, NOT config.worlds (3) and NOT worlds_attempted (6).
+        self.assertEqual(stats["worlds_constructed"], 4)
+        self.assertEqual(stats["worlds_searched"], 4)
+        # Construction loss must NOT leak into the abort rate.
+        self.assertEqual(stats["world_search_abort_rate"], 0.0)
+        self.assertAlmostEqual(stats["belief_sample_rejection_rate"], 1.0 / 3.0)
+
+        # Per-decision metadata is PER DECISION, not the running total: both
+        # decisions report 2, not 2 then 4.
+        for decision in decisions:
+            self.assertEqual(
+                decision.metadata["engine_mcts"]["worlds_constructed"], 2, decision.metadata
+            )
+
+    def test_a_searching_path_reports_its_own_decisions_denominator(self) -> None:
+        """Same mutant, on a path that can actually abort a world.
+
+        The two-decision test above runs the legacy `hp_fraction` path, which
+        never aborts, so it cannot tell a per-decision value from the cumulative
+        counter on the paths that matter. This drives `decide()` end to end on
+        `hp_fraction_crate` twice, with construction losing a world each time AND
+        the crate aborting one of the survivors, and asserts the metadata is
+        per-decision. Substituting `self.stats.worlds_constructed` here reports 2
+        then 4 and fails.
+        """
+        import unittest.mock as mock
+
+        from pokezero.engine_world import EngineWorld
+
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=object(),
+            config=EngineMctsConfig(
+                leaf_eval="hp_fraction_crate", search_sims=64, search_depth=4,
+                worlds=3, sample_retry_factor=1,
+            ),
+        )
+        mask = (True, True, False, False, True, False, False, False, False)
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": (), "p2": ()},
+        )
+
+        attempts = {"n": 0}
+
+        def sampler(**_kwargs):
+            attempts["n"] += 1
+            return (None, "rejected") if attempts["n"] % 3 == 2 else (object(), None)
+
+        # Two constructed worlds per decision; the crate aborts the second.
+        good = _crate_report([{"move": "earthquake", "visits": 64, "q": 0.6}], [],
+                             max_depth_reached=2)
+        crate = _FakeCrate([good, ValueError("boom"), good, ValueError("boom")])
+
+        decisions = []
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            with mock.patch(
+                "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+                side_effect=sampler,
+            ), mock.patch(
+                "pokezero.engine_search.world_battle_spec", return_value=world
+            ), mock.patch(
+                "pokezero.engine_search.build_poke_engine_state",
+                side_effect=lambda *a, **k: _FakeState(),
+            ), patch.dict(sys.modules, {"pokezero_search": crate}):
+                for _ in range(2):
+                    context = _FakeContext(_FakeObservation(mask, _candidates()))
+                    decisions.append(
+                        policy.select_action_with_context(context, rng=random.Random(0))
+                    )
+
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["worlds_constructed"], 4)
+        self.assertEqual(stats["worlds_searched"], 2)
+        # Now BOTH defects are present and must stay separated.
+        self.assertAlmostEqual(stats["world_search_abort_rate"], 0.5)
+        self.assertAlmostEqual(stats["belief_sample_rejection_rate"], 1.0 / 3.0)
+        for decision in decisions:
+            engine = decision.metadata["engine_mcts"]
+            self.assertEqual(engine["worlds_constructed"], 2, decision.metadata)
+            self.assertEqual(engine["worlds_searched"], 1, decision.metadata)
 
     def test_a_healthy_decision_reports_a_zero_abort_rate(self) -> None:
         harness = EarlyStopPolicyIntegrationTests()
