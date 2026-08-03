@@ -6571,3 +6571,22 @@ A synthetic post-upkeep `|drag|`
 is deliberately rejected: Gen 3 resolves phazing in the move action before the
 residual action emits `|upkeep|`. The proof is construction-only, so V2, V2.1,
 and V2.2 observation identities remain byte-identical.
+
+## Standing rule: arm contents come from replay, never from `branch_misses`
+
+Any claim about what an engine arm *contains* must be derived with
+`scripts/replay_residue.py`, which prints both slots' full component sets for
+every branch. `branch_misses` answers "why did this branch fail", not "what did
+this branch do": `engine_transition_differential.py:1893` loops
+`for slot in ("p1","p2")` and breaks on the first failing slot, so a branch
+contributes exactly one reason for one slot — and even that is the roll-scaled
+subset (`:1934-1937`), or a set difference (`:1944-1948`), and is truncated at
+`:1969` and `:2220`.
+
+Reading it as a component set manufactures arms that are not there. It fails
+*consistently* rather than randomly, so internal cross-checks do not catch it;
+C92 was retracted in full and C84 and C89 were corrected for this. Two
+classifier paths still compute on it and are flagged in
+`reports/c94_method_retraction.json`: `scripts/family_bucket_audit.py:164-185`
+(decisive, published an adjudication) and
+`scripts/cert_sweep_readout.py:117-149` (currently fires no rows).
