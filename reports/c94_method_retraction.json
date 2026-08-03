@@ -1,0 +1,22 @@
+{
+ "schema": "c94-method-retraction/1",
+ "headline": "C92 is RETRACTED. Its central method -- reading branch_misses to enumerate each engine arm's outcome -- is invalid, and C89's evidence table is wrong for the same reason.",
+ "the_method_error": {
+  "what_i_did": "parsed branch_misses with _miss_pairs and read the engine=[...] side as THE BRANCH'S component set, then asked whether the observed net appeared among the arms.",
+  "why_it_is_wrong": "engine_transition_differential.py:1893 loops `for slot in (\"p1\",\"p2\")` and does `ok = False; break` on the first failing slot. Each branch therefore contributes exactly ONE miss reason, for ONE slot. A branch whose p1 comparison failed reports nothing about p2.",
+  "the_artifact_it_produced": "wherever a branch's miss named the OTHER slot, I computed a net of 0 for the slot I cared about and recorded an 'arm at net 0'. Those zero arms do not exist. Review replayed the true branch sets: 19000029/51 is [-118, -118] not [0, -118]; 19000052/36 is [-192, -192, -192] not [0, -211, -211]; 19000058/19 is [-14, -123, -123] not [0, 0, -123]; 19000074/27 is [-244, -116, -227] not [0, -116, -227].",
+  "the_6.25_percent_tell_i_missed": "I read a 6.25% arm as a 'miss arm'. 6.25% is BASE_CRIT_CHANCE. Hidden Power is 100% accurate in gen3 -- there is no miss arm. That arm was the crit."
+ },
+ "what_is_retracted": {
+  "c92_entirely": "the claim that 1 of 8 remaining limit adjudications survives. Every 'reachable / not reachable' verdict in it was computed by the invalid method. The conclusion may be right or wrong; the evidence cannot support it either way.",
+  "c89_evidence_table": "the_deciding_check.result is wrong. For 19000074/27 the engine DOES emit an arm reaching the observed net -244 -- the 1.56% C27 crit-kill arm. 'ABSENT in all four' is false; it is absent in three.",
+  "c89_conclusion_partially_survives": "for 19000029/51, 19000052/36 and 19000058/19 the observed nets (-116, -182, -120 on replay) are genuinely absent from the branch sets, so the residual-decided-lethality mechanism stands for three rows. 19000074/27 needs re-adjudication: its arm reaches the right net but still differs on the OTHER slot, which is a different mechanism."
+ },
+ "what_is_NOT_affected": {
+  "c91": "STANDS. Its finding -- 15 of 24 limit rows closed by the C88-A matcher fix -- was measured by sweeping before and after, not by reading miss strings. That is a sound method and the result is unchanged.",
+  "c87_c88A_c90_c93": "unaffected. C87 and C88-A were measured by sweep. C90 was read from the two sources directly. C93's ratio evidence comes from majority-arm magnitudes, which is one slot's complaint and is exactly what that field means -- but its 'the crit arm IS present' claim rests on reading a 3.91% arm the same way, so it needs the replay check before it is trusted."
+ },
+ "the_correct_method": "scripts/replay_residue.py re-derives each branch's full component set against the vendored engine. Any claim about what an engine arm CONTAINS must come from replay, never from branch_misses. branch_misses answers 'why did this branch fail', not 'what did this branch do'.",
+ "why_this_matters_beyond_the_two_reports": "This is the same failure the ledger keeps recording: building a cheap proxy for a question and reading its output as the answer. branch_misses is a diagnostic log, and I used it as a data structure. It was consistently wrong rather than randomly wrong, which is why nothing caught it -- the zero arms looked like plausible miss arms.",
+ "action": "c92's conclusion is withdrawn pending a replay-based re-test. The 7 rows it moved back to 'open' return to their prior state: filed as limits, adjudication UNVERIFIED rather than falsified."
+}
