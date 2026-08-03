@@ -15,6 +15,7 @@ from pokezero.investment import conclusion_column_code
 from pokezero.observation import ObservationFeatureMasks
 from pokezero.showdown import (
     NUMERIC_TIER2_INVESTMENT_PINNED,
+    NUMERIC_TM2_INVESTMENT,
     NUMERIC_TT_INVESTMENT_BIT,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
@@ -114,13 +115,27 @@ class LiveInvestmentPopulationTest(unittest.TestCase):
                 # conclusion_column_code — the authoritative current-state surface must
                 # agree exactly with the tracker's per-mon view, and stay 0.0 for
                 # unconcluded mons.
+                #
+                # The env's default spec is v2.2, so the ENCODED transition region is the
+                # TURN-MERGED stream, not the per-action one: row i carries
+                # turn_merged_tokens[i].first/.second, and the per-action codes reach it
+                # only through annotate_turn_merged_tokens. Comparing the per-action
+                # stream positionally here happened to hold while conclusions were rare
+                # enough that almost every row was 0.0 on both sides; it is not the
+                # contract, and the k=1 default (more concluded mons) exposes that. Read
+                # the sub-blocks the encoder actually reads.
                 for player in ("p1", "p2"):
                     state = env._state_for_player(player)
                     observation = env.observe(player)
-                    encoded = state.transition_tokens[-budget:]
+                    encoded = state.turn_merged_tokens[-budget:]
                     for offset, token in enumerate(encoded):
                         row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset]
-                        self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], token.investment)
+                        self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], token.first.investment)
+                        second = token.second
+                        self.assertEqual(
+                            row[NUMERIC_TM2_INVESTMENT],
+                            second.investment if second is not None else 0.0,
+                        )
                     tracker = env._investment_trackers.get(player)
                     expected_by_species: dict[str, float] = {}
                     if tracker is not None:
@@ -139,10 +154,10 @@ class LiveInvestmentPopulationTest(unittest.TestCase):
                         pinned_checked += 1
             finally:
                 env.close()
-        # The sweep must actually exercise the live pin path. CONCLUSIONS are rare by
-        # design (two-strike rule; the gate saw 22 over 240 perspectives), so the
-        # floor is on single-strike pin events, which the gate saw at ~0.5 per
-        # perspective under move-biased play.
+        # The sweep must actually exercise the live pin path. Conclusions are still
+        # uncommon under the k=1 default (the gate saw 54 HP conclusions over 240
+        # perspectives), so the floor stays on single-strike pin events, which the gate
+        # saw at ~0.5 per perspective under move-biased play.
         self.assertGreater(pin_strikes, 0)
         # Both perspectives of all eight seeds must have exercised the pinned-column
         # comparison across the full opponent bench.
