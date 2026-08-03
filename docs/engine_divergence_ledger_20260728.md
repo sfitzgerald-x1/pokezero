@@ -6590,3 +6590,45 @@ classifier paths still compute on it and are flagged in
 `reports/c94_method_retraction.json`: `scripts/family_bucket_audit.py:164-185`
 (decisive, published an adjudication) and
 `scripts/cert_sweep_readout.py:117-149` (currently fires no rows).
+
+## Standing rule: never report divergence count without the skip and matched counters
+
+`transitions_diverged` alone is not a safe metric. A change can lower it by
+moving boundaries **out of evaluation** rather than by fixing them, and the
+repro artifact will not show it — the dropped rows simply vanish from the repro
+set with no new classes and no churn, which reads as a clean improvement.
+
+Measured instance, the closed PR #1037 (`scott/i5-double-faint-replacement`):
+
+| counter | baseline | patch | delta |
+|---|---|---|---|
+| `boundaries_measured` | 15224 | 15224 | 0 |
+| `transition:matched` | 15184 | 15147 | **−37** |
+| `transition:diverged` | 39 | 37 | −2 |
+| `strict:lossy_render` | 11 | 50 | **+39** |
+| `skip:strict_all_branches_lossy` | 1 | 40 | **+39** |
+
+Both sides reconcile to 15224. The patch pushed 39 boundaries into the skip
+bucket, **37 of which previously matched**; the 2 that were divergent stopped
+being evaluated rather than being fixed. Reported as "39 → 37", it looked like
+the first fidelity win of the era. It was a regression in 37 boundaries.
+
+The mechanism generalises to any renderer change: a predicate that makes
+`segment()` return `None` sends the whole branch to `segmentation_failed`
+(`rust/pokezero-search/src/events.rs:766-779`), which is not in
+`_TELEMETRY_ONLY_LOSSY_MARKERS`, so every branch is lossy and the boundary is
+skipped (`scripts/engine_transition_differential.py:354-370`, `:1872`, `:2190`).
+Renderer changes can therefore *always* buy a lower divergence count by
+rendering less.
+
+Rules:
+
+1. Report `transition:matched`, `skip:*` and `transition:diverged` together.
+   A fidelity claim requires `matched` to go **up** or hold, never down.
+2. Check the counters reconcile to `boundaries_measured` on both sides.
+3. `source_commit` must match between baseline and test sweep, or the run is
+   not single-variable regardless of what the patch says.
+4. The renderer keeps a replica of the engine's `end_of_turn_triggered`
+   (`events.rs:364`, original at `gen3/generate_instructions.rs:4637`). Changing
+   one without the other desynchronises them and shows up as mass
+   `segmentation_failed`, not as a divergence.
