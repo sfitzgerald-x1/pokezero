@@ -1,7 +1,15 @@
 {
- "schema": "c95-source-level-causes/1",
- "method": "scripts/replay_residue.py -- full branch sets, per reports/c94. Not branch_misses.",
- "covers": "the last three families with no written cause: I4_attribution_tie, I3_roll_inherited, I5_boundary_truncation. 9 rows.",
+ "schema": "c95-final-three-shapes/2",
+ "REVISION_NOTE": "v1 of this report was WRONG on I4's mechanism and wrong on two of I5's three rows, and it labelled percentages and cross-slot components as replay-derived when they were miss-derived. Rewritten after adversarial review. What v1 got right: the three row memberships, and that I3 is roll-inherited.",
+ "era": {
+  "engine_fingerprint_at_authoring": "d9cab2b1cf9fc011e410229b46e6aa7ec9c400231c5671d0979b1fcda2dfd260",
+  "note": "third_party/poke-engine-src is gitignored; engine line citations are valid at this fingerprint only."
+ },
+ "provenance": {
+  "replayed": "one row per family was replayed with scripts/replay_residue.py. Those rows are named per family below.",
+  "miss_derived": "the remaining rows' percentages and component lists in v1 came from branch_misses, NOT replay, and were presented as though they were replayed. Per reports/c94 that field reports one slot per branch and is a roll-scaled, truncated subset even of that. All such figures are removed from this revision rather than relabelled.",
+  "artifact": "/tmp/sweep_exact.json, the 39-row current-era sweep. Uncommitted and unhashed -- a real weakness of this report."
+ },
  "I4_attribution_tie": {
   "rows": 3,
   "identities": [
@@ -9,16 +17,16 @@
    "19000180/57",
    "19000180/60"
   ],
-  "note": "all three are the same game and the same recurring situation",
-  "boundary": "Shiftry Leech Seeds Swalot, which has LIQUID OOZE. Showdown: |-heal|p1a: Shiftry|+19|[from] item: Leftovers, |-damage|p2a: Swalot|-39|[from] Leech Seed, |-damage|p1a: Shiftry|-39|[from] ability: Liquid Ooze",
-  "observed": "p1 abilityliquidooze=-39, itemleftovers=+19 | p2 leechseed=-39",
-  "engine_90pct": "p1 abilityliquidooze=-39, leechseed=+19 | p2 leechseed=-39",
-  "the_difference": "the engine labels Shiftry's +19 as LEECHSEED; Showdown labels it ITEM: LEFTOVERS. Nets are identical (-20 on p1 either way) -- only the attribution differs, which is exactly what this family is named for.",
-  "which_is_right": "Showdown. 19 is Shiftry's Leftovers tick (312/16 = 19.5 -> 19). Under Liquid Ooze the Leech Seed drain does not heal the seeder at all -- it damages it, which is the -39 both sides agree on. So an engine leechseed HEAL of +19 alongside a liquidooze -39 double-counts the mechanism and coincidentally equals the Leftovers value.",
+  "STATUS": "CAUSED AND FIXED. Merged as PR #1039.",
+  "v1_was_wrong": "v1 said the engine emits a leechseed heal alongside the liquidooze damage, double-counting the mechanism, and that the +19 'coincidentally' equalled Leftovers. BOTH HALVES ARE FALSE. The engine already suppresses the drain under Liquid Ooze unconditionally -- gen3/generate_instructions.rs:3624-3647 is a hard if/else and no path emits both. And it was not a coincidence.",
+  "the_real_cause": "a renderer predicate. events.rs drains_opponent keyed only on the opponent being seeded and both mons alive, so it planned a drain-heal slot the engine never emits. The reversed drain is a NEGATIVE Heal and emitted_heal counts only heal_amount > 0, so plan.heal ran one longer than emitted_heal, the reconcile marked the side unusable, and the seeder's Leftovers tick fell through to the [from] Leech Seed fallback. Ledger H.1.",
+  "the_identification": "three-for-three, at three different max HPs: the mislabelled heal is always exactly the SEEDER'S OWN maxhp/16 -- Shiftry 312->19, Magmar 246->15, Meganium 275->17. It was not a coincidence that the value matched Leftovers. It WAS Leftovers.",
   "disposition": {
-   "class": "ENGINE or RENDERER FIX",
-   "detail": "the Leech Seed heal must be suppressed when the target has Liquid Ooze, not emitted and then offset. Verify whether the engine suppresses it internally and only the renderer mislabels, or whether the engine really applies both.",
-   "not_implemented": true
+   "class": "RENDERER FIX",
+   "implemented": true,
+   "pr": 1039,
+   "measured": "transition:matched 15184 -> 15187 (+3), transition:diverged 39 -> 36 (-3), skip and lossy unchanged, both sides reconciling to 15224, 0 engine errors.",
+   "pin": "liquid_ooze_leaves_the_seeders_leftovers_tick_correctly_tagged, verified in both directions."
   }
  },
  "I3_roll_inherited": {
@@ -28,16 +36,16 @@
    "19000016/49",
    "19000198/22"
   ],
-  "boundary": "Jirachi Ice Punches Swalot, Swalot Pain Splits",
-  "observed": "p2 itemleftovers=+19, movepainsplit=-5, move=-40",
-  "engine_75pct": "p2 itemleftovers=+19, movepainsplit=-4, move=-43",
-  "the_difference": "the direct roll differs (-40 vs -43, inside the window) AND the Pain Split differs by 1 (-5 vs -4).",
-  "the_cause": "Pain Split averages the two Pokemon's CURRENT HP, so its magnitude is a function of the HP left after the damage roll. A different legal roll gives a different post-damage HP and therefore a different Pain Split. movepainsplit is in the EXACT bucket, so a 1 HP difference is rejected outright.",
-  "why_this_is_familiar": "it is the same shape as the capped-heal and capped-lethal cascades already fixed -- a component whose magnitude INHERITS the damage roll, compared as if deterministic. The family name, roll_inherited, says so.",
+  "STATUS": "CAUSED for two rows. The third is a different shape and is reassigned.",
+  "replayed": "19000016/2",
+  "the_cause": "Pain Split averages the two mons' CURRENT HP, so its magnitude is a function of the HP left after the damage roll: a different legal roll gives a different Pain Split. movepainsplit is in the EXACT bucket (_ROLL_SCALED_SOURCES, engine_transition_differential.py:310-312, which does not contain 'residual' or 'movepainsplit'), so a 1 HP difference is compared for equality and rejected.",
+  "worked_19000016_2": "Jirachi 266/266, Swalot 316 -> 276 after move=-40. floor((266+276)/2) = 271, so Swalot 276->271 = -5, and Jirachi's half is capped at 266 and silent. The engine arm at movepainsplit=-4 needs floor((266+s)/2) = s-4, i.e. s in {273,274}, i.e. a roll of 42 or 43 -- both legal. Verified independently by review.",
+  "scope_correction": "v1 described 'Jirachi Ice Punches, Swalot Pain Splits' and 'the Pain Split differs by 1' for all three rows. That describes 19000016/2 only. 19000016/49 is Psychic, not Ice Punch.",
+  "19000198_22_REASSIGNED": "NOT this shape. Its majority-arm gap is -91 vs -120 on a NON-CRIT arm against an observed |-crit|, which is the C93 crit-tag shape, not roll inheritance. Moved out of I3.",
   "disposition": {
    "class": "MATCHER FIX",
-   "detail": "movepainsplit must be roll-aware: either roll-scaled, or cascade-handled with a bound derived from the roll gap as the capped-heal work does. It is NOT deterministic.",
-   "not_implemented": true
+   "implemented": false,
+   "detail": "movepainsplit must be roll-aware -- either roll-scaled, or cascade-handled with a bound derived from the roll gap, as the capped-heal work does. The heal_to_full precedent at engine_transition_differential.py:301-310 is a genuine analogue. Requires a pin that fails when reverted."
   }
  },
  "I5_boundary_truncation": {
@@ -47,17 +55,38 @@
    "19000059/27",
    "19000098/79"
   ],
-  "boundary": "both sides switch. Showdown emits |switch|, |switch|, |turn|47 -- no upkeep section and NO components at all.",
-  "observed": "p1 (none) | p2 (none)",
-  "engine_100pct": "p1 itemleftovers=+18 | p2 itemleftovers=+18",
-  "the_difference": "the engine applies end-of-turn Leftovers on a boundary Showdown treats as a replacement, not a turn.",
-  "the_cause": "a forced-replacement boundary is not a full turn: Showdown runs no residual phase, which is why the protocol has no upkeep block. The engine runs end-of-turn regardless. This is boundary SEGMENTATION -- the engine is answering for a turn that did not happen.",
+  "STATUS": "NOT A SINGLE SHAPE. v1 gave one boundary and one component set for all three; two of the three were wrong.",
+  "replayed": "19000020/50",
+  "per_row": {
+   "19000020/50": {
+    "shape": "double-faint replacement",
+    "engine_extra": "itemleftovers +18 on both sides",
+    "pre_state_hp": "p1 0, p2 0"
+   },
+   "19000059/27": {
+    "shape": "double-faint replacement",
+    "engine_extra": "psn -16 (Crawdaunt 257/16, toxic) -- NOT itemleftovers as v1 claimed",
+    "divergence_class": "component_extra_in_engine:psn"
+   },
+   "19000098/79": {
+    "shape": "NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5."
+   }
+  },
+  "v1_causal_claim_RETRACTED": "v1 said 'a forced-replacement boundary is not a full turn: Showdown runs no residual phase'. That is FALSE as a general gen3 rule and the repo already said so. gen3 sends the replacement out BEFORE the residual block (generate_instructions.rs:3222-3246, PR #876, verified against the real sim by scripts/gen3_switch_differential.py::faintresiduals), so residuals run and APPLY TO THE REPLACEMENT. tests/fixtures/showdown/explosion-seed148.log.gz turn 7 is exactly this shape and shows Showdown healing the incoming replacement and emitting |upkeep.",
+  "the_actual_distinguisher": "whether the residual block ALREADY RAN, not the shape of the ply. An ACTION-phase faint defers residuals to the replacement ply, which then applies them to the replacements. A RESIDUAL-phase faint (both actives die inside the block) has already executed it, so the replacement ply is bare. Both remaining rows are the second kind. force_switch cannot distinguish them, and in this harness it is reconstructed from the self request only (src/pokezero/engine_world.py:411, :496), so it is true on side one for both.",
   "disposition": {
-   "class": "ENGINE or HARNESS FIX",
-   "detail": "either the engine must not run end-of-turn on a replacement boundary, or the harness must not ask it to. Determine which by checking how the differential segments a double-switch step before patching the engine.",
-   "not_implemented": true
+   "class": "UNDETERMINED pending a segmentation check",
+   "implemented": false,
+   "downgraded_from": "v1 said 'ENGINE or HARNESS FIX' and asserted 'the engine is answering for a turn that did not happen'. Neither is supported.",
+   "why_not_simply_a_fix": "a correct fix needs a 'residuals already ran this turn' state marker that survives the world reconstruction, landed in the ENGINE's end_of_turn_triggered with the renderer replica following. A shape predicate cannot express it -- PR #1037 tried exactly that and was closed as a regression: it pushed 39 boundaries into skip:strict_all_branches_lossy, 37 of which previously MATCHED.",
+   "note": "whether this is ultimately a fix or a comparison limit turns on that check, which has not been run."
   }
  },
- "what_this_completes": "every family in the current 39-row residue now has a written source-level cause. Remaining without one: 19000074/27 alone (reclassified out of c89 -- the engine's crit-kill arm defers the other side's residual on a faint) and the 4 UNATTRIBUTED rows.",
- "none_are_comparison_limits": "all three dispositions are fixes. None is a case the methodology cannot settle."
+ "tally": {
+  "caused_and_fixed": 3,
+  "caused_not_implemented": 2,
+  "undetermined": 2,
+  "reassigned_to_other_shapes": 2,
+  "comment": "v1 claimed 9 rows across three clean shapes with all three dispositions being fixes. The honest count is 3 fixed, 2 caused, 2 undetermined and 2 belonging to other families."
+ }
 }
