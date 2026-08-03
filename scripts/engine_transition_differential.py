@@ -339,6 +339,35 @@ _ROLL_SCALED_SOURCES = frozenset(
 # broader predicate is latent, not exercised — but it is the predicate, and
 # `test_named_residual_is_NOT_reclassified` pins the boundary.
 _SLEEPTALK_LOSSY_MARKER = "sleeptalk_called_unidentified"
+
+# ALLOWLIST, not an exclusion. Markers whose telemetry is incomplete while the
+# public action window is still EXACT, so the branch remains usable for
+# matching. Everything else -- including every mark_attribution_unsafe marker,
+# and the synthetic `empty_instruction_list` placeholder the renderer emits
+# when the engine produced no instructions at all -- still disqualifies.
+#
+# Written as an allowlist deliberately. The first version expressed this as
+# "skip on attribution_unsafe rather than lossy", which is behaviourally
+# identical TODAY (attract_immobilization_source_unknown is the only
+# non-unsafe marker) but silently admits any future mark_lossy call. An
+# exclusion-shaped rule fails open as the renderer grows.
+_TELEMETRY_ONLY_LOSSY_MARKERS = frozenset({
+    _SLEEPTALK_LOSSY_MARKER,
+    "attract_immobilization_source_unknown",
+})
+
+
+def branch_render_is_usable(lossy: Sequence[str]) -> bool:
+    """Whether a branch's render is complete enough to match against.
+
+    ALLOWLIST, extracted so it can be pinned. This shipped as an exclusion
+    (`attribution_unsafe or empty_instruction_list`) while a constant claiming
+    to be the allowlist sat unused beside it, under a comment asserting the
+    allowlist had been chosen deliberately. The comment described code that did
+    not exist, and reverting the exclusion broke no test.
+    """
+
+    return not lossy or set(lossy) <= _TELEMETRY_ONLY_LOSSY_MARKERS
 _UNATTRIBUTED_DAMAGE_SOURCE = "residual"
 _UNKNOWN_CALLEE_SOURCE = "move_unknown_callee"
 # Sources whose rendering the mapper is known not to reproduce line-for-line;
@@ -742,8 +771,25 @@ def branch_component_legal_rolls(
 
 def _split_component_events(
     components: Sequence[DamageComponent],
+    *,
+    capped_bases: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Counter, list[DamageComponent]]:
-    """Event-preserving counterpart to :func:`_split_components`."""
+    """Event-preserving counterpart to :func:`_split_components`.
+
+    ``capped_bases`` names base sources that EITHER side reported as capped on
+    this slot. Whether a heal caps depends on the damage roll, so cap
+    membership makes the roll-scaled list's LENGTH roll-dependent -- and the
+    comparison rejects on length before any tolerance applies, so two arms
+    differing only by a legal roll read as structurally different (seed
+    17000013 step 12: Leftovers caps at 290/290 against the observed -84 and
+    does not against the engine's -90). Promoting both sides fixes that.
+
+    PROMOTION IS FOR LENGTH ONLY. A promoted component that is NOT itself
+    capped is still a deterministic quantity and is compared EXACTLY; see
+    roll_components_agree. The first version of this let promotion also grant
+    the 9 % roll window, so a 2 HP discrepancy between two gen3 heals -- the
+    exact rounding class this program exists to find -- started matching.
+    """
 
     exact: Counter = Counter()
     rolled: list[DamageComponent] = []
@@ -752,7 +798,11 @@ def _split_component_events(
             continue
         capped = component.source.endswith("_to_full")
         base = component.source[: -len("_to_full")] if capped else component.source
-        if component.source in _ROLL_SCALED_SOURCES or capped:
+        if (
+            component.source in _ROLL_SCALED_SOURCES
+            or capped
+            or base in capped_bases
+        ):
             rolled.append(component)
         else:
             exact[(component.source, component.delta)] += 1
@@ -771,6 +821,7 @@ def roll_components_agree(
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
     scale: int | None = None,
+    damage_scales: tuple[int, int] | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -784,13 +835,34 @@ def roll_components_agree(
         return False
     if scale is None:
         scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
+    # SLOT-WIDE, threaded in. Computing this from `observed`/`engine` was the
+    # bug: roll_component_events_agree calls this with ONE component at a time,
+    # and _roll_damage_scale excludes heals, so for a heal pair the local value
+    # is 0 and the bound collapses to 1 HP -- far tighter than intended, not
+    # looser. The deficit difference is a property of the SLOT's damage, not of
+    # the single component being compared.
+    if damage_scales is None:
+        _obs_damage = _roll_damage_scale(observed)
+        _eng_damage = _roll_damage_scale(engine)
+    else:
+        _obs_damage, _eng_damage = damage_scales
+    _damage_difference = abs(_obs_damage - _eng_damage)
     for (obs_source, obs), (_eng_source, eng) in zip(
         sorted(observed, key=lambda pair: pair[1]),
         sorted(engine, key=lambda pair: pair[1]),
     ):
         if obs == eng:
             continue
-        if obs_source.endswith("_to_full"):
+        if not obs_source.endswith("_to_full") and not _eng_source.endswith(
+            "_to_full"
+        ) and obs_source not in _ROLL_SCALED_SOURCES:
+            # PROMOTED BUT NOT CAPPED -- compare exactly. Reaching here at all
+            # means capped_bases promoted this component for LENGTH; it is a
+            # deterministic gen3 quantity (a bare -heal is floor(maxhp/2)) and
+            # nothing about it is roll-scaled. Granting it the roll window is
+            # how 20 vs 18 started matching.
+            return False
+        if obs_source.endswith("_to_full") or _eng_source.endswith("_to_full"):
             # A heal that tops the mon out restores `maxhp - hp_before`, so the
             # two sims differ by exactly their difference in `hp_before` — which
             # is bounded by the 85-100 % spread of the damage that preceded it in
@@ -803,9 +875,30 @@ def roll_components_agree(
             # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
             # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
             # of flooring slack.
-            if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
-                continue
-            return False
+            # BOUND BY THE DAMAGE DIFFERENCE, NOT 0.18x THE MAGNITUDE.
+            #
+            # Two arms of one step share a start, so their deficits differ by
+            # exactly the damage they took differently. A cap restores
+            # `maxhp - hp_before`, so the two caps differ by that same amount --
+            # not by a fraction of either arm's total damage.
+            #
+            # 0.18 * scale + 1 was a 48 HP window on a 300-damage slot and
+            # accepted caps of 40 and 85 against IDENTICAL -260 direct rolls,
+            # where the deficit difference is exactly zero. Reviewer measured
+            # the difference bound at 99.99 % recovery against 99.89 % for the
+            # fraction bound -- strictly better AND sound.
+            if abs(abs(obs) - abs(eng)) > _damage_difference + 1:
+                return False
+            # DIRECTION. The arm that took MORE damage has the deeper deficit,
+            # so its cap must be the larger. A symmetric absolute bound accepts
+            # the inversion: obs damage 155 with cap 160 against eng damage 165
+            # with an uncapped 155 passes |160-155| <= |165-155|, but the arm
+            # that took less cannot have the deeper deficit.
+            if _obs_damage > _eng_damage and abs(obs) < abs(eng):
+                return False
+            if _eng_damage > _obs_damage and abs(eng) < abs(obs):
+                return False
+            continue
         if obs_source == "capped_lethal":
             # A residual that KILLED was clipped by the HP that happened to
             # remain, so it can only ever be SMALLER than the uncapped tick the
@@ -1182,6 +1275,10 @@ def roll_component_events_agree(
             observed_all=observed_all,
             engine_all=engine_all,
         )
+    _slot_damage = (
+        _roll_damage_scale([(c.source, c.delta) for c in observed]),
+        _roll_damage_scale([(c.source, c.delta) for c in engine]),
+    )
     for observed_component, engine_component in zip(observed, engine):
         selected_direct_event = (
             support is not None
@@ -1204,6 +1301,7 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
+            damage_scales=_slot_damage,
         ):
             return False
     return True
@@ -1706,7 +1804,19 @@ def evaluate_boundary_strict(
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            if lossy and not sleeptalk_union:
+            # ACTUALLY the allowlist now. This shipped as the exclusion form
+            # while a constant named _TELEMETRY_ONLY_LOSSY_MARKERS sat unused
+            # above it, under a comment claiming the allowlist was chosen
+            # deliberately because an exclusion "fails open as the renderer
+            # grows". The comment described code that did not exist.
+            #
+            # A branch is usable only if EVERY marker it carries is one whose
+            # telemetry is incomplete while the public action window is still
+            # exact. Anything else -- including the synthetic
+            # empty_instruction_list placeholder, which carries events ["|"]
+            # and would match any HP-free boundary against a branch that
+            # verified nothing -- disqualifies it.
+            if not branch_render_is_usable(lossy):
                 counts["strict:lossy_render"] += 1
                 continue
             if sleeptalk_union:
@@ -1731,7 +1841,32 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
+                # If EITHER side marks a base source as capped on this slot,
+                # both sides treat it as roll-scaled HERE, so a cap present on
+                # one side and absent on the other cannot change the list's
+                # LENGTH. Magnitude is unaffected: an uncapped promoted
+                # component is still compared exactly.
+                #
+                # Recomputed PER BRANCH and never written back into the shared
+                # obs_exact/obs_rolled. C29 assigned back into them, so a
+                # promotion earned by one branch leaked into every later branch
+                # and state, whose own capped_bases were empty -- and since the
+                # engine side was already per-branch, the two sides then
+                # disagreed about which bucket an identical component was in.
+                capped_bases = {
+                    component.source[: -len("_to_full")]
+                    for component in list(observed_components[slot])
+                    + list(engine_components[label])
+                    if component.source.endswith("_to_full")
+                }
                 obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
+                if capped_bases:
+                    obs_exact_branch, obs_rolled_branch = _split_component_events(
+                        observed_components[slot], capped_bases=capped_bases
+                    )
+                    eng_exact, eng_rolled = _split_component_events(
+                        engine_components[label], capped_bases=capped_bases
+                    )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.

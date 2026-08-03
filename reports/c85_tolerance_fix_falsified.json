@@ -1,0 +1,91 @@
+{
+ "schema": "c85-tolerance-fix-falsified/1",
+ "what_was_proposed": "Review round nine implemented and measured a corrected form of #1025's tolerance changes -- promote for LENGTH only, compare promoted-but-uncapped components EXACTLY, and bound a cap difference by the DIFFERENCE of the two arms' damage rather than 0.18x its magnitude. On 75,630 simulated realizable cap-bearing pairs it measured 99.99% recovery against 99.89% for the version that shipped, while rejecting both physically impossible pairs. I implemented exactly that design.",
+ "what_the_real_corpus_says": {
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
+ },
+ "the_finding": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+ "which_explanation_is_right_is_NOT_established": {
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
+ },
+ "status": "RESOLVED. CURRENT measured position is in $.REMEASURED_ON_CURRENT_MAIN: main 202, this PR 58. $.RESOLVED and $.DECOMPOSITION carry 208/64, which is the PRE-C87 (54-patch) era and is superseded -- their row attribution and the 123/17/3/0 decomposition remain correct, only the two totals are stale. Every other section of this file is falsified and marked. Read $.REMEASURED_ON_CURRENT_MAIN first, then $.DECOMPOSITION for the breakdown.",
+ "what_this_does_not_change": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+ "the_experiment": {
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
+ },
+ "what_this_means_for_the_67": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+ "CORRECTION": {
+  "what_i_got_wrong": "c85's first two readings were both wrong, and the second one -- 'the loose tolerance was substantially MASKING' -- was wrong in a way that would have misdirected the engine-gap burndown.",
+  "error_1_the_heals_are_not_deterministic": {
+   "claimed": "230 disagreements on `heal`, deterministic at floor(maxhp/2), so the loose tolerance was masking real defects",
+   "measured": "ALL 230 are capped: 213 capped-vs-capped, 17 capped-vs-plain. ZERO have neither side capped.",
+   "why_it_matters": "a capped heal restores maxhp - hp_before, so its magnitude is LEGITIMATELY roll-dependent. These are the cascade shape the predicate exists to recognise, not deterministic-value disagreements. There was no masking here."
+  },
+  "error_2_my_exact_rule_does_nothing": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "error_3_the_sound_bound_is_looser_not_tighter": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "error_4_the_comparison_was_confounded": {
+   "what_i_did": "compared 67 (old predicate + loose tolerance) against 187 (post-#1020 predicate + sound tolerance) and attributed the whole gap to the tolerance redesign",
+   "the_flaw": "#1020 merged round eight's pre-direct-hit guard and other constraints in between, so the two measurements used DIFFERENT predicates. The gap is not attributable to the tolerance work."
+  },
+  "the_clean_measurement": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "what_is_now_open": "why the old loose stack reached 67 on the old predicate while the current predicate sits at 208 without tolerance changes. That gap is #1020's tightening, not the tolerance changes, and it is unmeasured. It is either correct rejection of unsound accepts -- round eight showed 91% of one accept class was impossible -- or over-tightening. That is the next measurement, and it is a question about #1020, which is already merged.",
+  "status_now": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "error_5_the_1020_attribution_was_also_wrong": {
+   "claimed": "the ~140-row gap between the old loose stack's 67 and main's 208 is #1020's tightening",
+   "measured": "disabled ALL THREE of #1020's added guards -- pre-direct-hit, prefix floor, extra-side -- on current main, rebuilt, re-swept the same window: 208. IDENTICAL to main.",
+   "conclusion": "#1020's guards reject nothing in this window. Inert, exactly as the round-nine reviewer predicted they would be until the bucket promotion lands. Third wrong attribution in this chain."
+  },
+  "what_is_actually_open": "FALSIFIED -- measured on the collapsed-bound tree, which was my own bug. See $.RESOLVED and $.DECOMPOSITION for the corrected figures.",
+  "error_6_the_severity_candidate_is_also_eliminated": {
+   "test": "single-variable: reverted the severity allowlist to the ORIGINAL exclusion form (admit any branch whose attribution_unsafe is false, except the synthetic empty placeholder), changed nothing else, rebuilt, re-swept the same window.",
+   "result": 187,
+   "conclusion": "identical to the allowlist version. The severity change is not the cause either."
+  }
+ },
+ "method_note": "Every attribution error here came from comparing two sweeps that differed in more than one way and crediting the difference to the change of interest. The fix is what settled the #1020 question: mutate exactly one thing on one tree and re-sweep. Eight minutes, and it overturned three rounds of reasoning.",
+ "ELIMINATED_CANDIDATES": {
+  "_FALSIFIED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+  "_original_content_removed": true
+ },
+ "STILL_UNLOCATED": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+ "what_is_safe_to_say": "FALSIFIED -- measured on the collapsed-bound tree. See $.RESOLVED and $.DECOMPOSITION.",
+ "RESOLVED": {
+  "the_cause": "My own bug, and it was in the code the whole time. `_damage_difference` was computed INSIDE roll_components_agree from its `observed`/`engine` arguments -- but the equal-length caller passes ONE component at a time, and _roll_damage_scale excludes heals. For a heal pair the local value is therefore 0 and the bound collapses to 1 HP.",
+  "why_it_evaded_four_rounds": "The bound was far TIGHTER than intended, which is the opposite of what I asserted for three rounds. My offline analysis computed the damage difference from the FULL miss lists and concluded the sound bound was LOOSER (300 accepts vs 180) -- a correct calculation of a quantity the code never computes. The proxy disagreed with the program and I trusted the proxy.",
+  "the_fix": "thread the slot-wide (obs_damage, eng_damage) pair from both call sites, exactly as slot_scale used to be threaded.",
+  "measured": {
+   "main_no_tolerance": 208,
+   "loose_original": 67,
+   "sound_unthreaded": 187,
+   "sound_threaded": 64
+  },
+  "the_result": "64 divergent -- BETTER than the loose version's 67, with a bound that is sound. All five impossible pairs still reject and all 88 tests pass. So the sound design was right all along; my implementation of it was wrong, and every conclusion I drew from that measurement was an artifact of my own defect.",
+  "found_by": "the mechanical step I should have taken first: diff the tree that produced the 67 against the current one and read what actually differs, instead of naming candidates from reasoning. It took one diff."
+ },
+ "DECOMPOSITION": {
+  "source": "independent review, single-variable sweeps on one tree, engine byte-identical throughout",
+  "main": 208,
+  "this_pr": 64,
+  "reduction": 144,
+  "attribution": {
+   "damage_scales_threading": 123,
+   "capped_bases_promotion": 17,
+   "bound_shape_difference_vs_fraction": 3,
+   "severity_change": 0,
+   "prefix_correctness": 0
+  },
+  "the_correction": "The bound redesign I made the centrepiece -- and got wrong across four rounds -- is worth 3 of 144 rows. The substance is threading a slot-wide damage budget into a comparison that was operating on 1 HP. Main's 0.18*scale+1 was never operative either: its caller does not pass scale, so production ran at 1 HP too.",
+  "the_67_was_never_a_mystery": "reconstructing main's fraction bound WITH the threading scores 67 on the current tree, to the row. The 'unlocated gap' of the previous four rounds was this.",
+  "ERA": "pre-C87, 54-patch engine. The 208 and 64 totals are superseded by $.REMEASURED_ON_CURRENT_MAIN (202 and 58); the 144-row reduction and the per-change decomposition are unchanged."
+ },
+ "REMEASURED_ON_CURRENT_MAIN": {
+  "why": "the original 208 -> 64 was measured against a main that predates C87. C87 moved the baseline to 202, so the headline had to be re-derived rather than carried forward.",
+  "main_now": 202,
+  "with_this_pr": 58,
+  "reduction": 144,
+  "note": "the reduction is the same 144 rows; the two fixes compose without overlap. Quoting 64 after C87 landed would have been a stale number of exactly the kind this ledger keeps having to mark."
+ }
+}
