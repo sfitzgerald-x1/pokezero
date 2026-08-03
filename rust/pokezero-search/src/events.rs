@@ -2913,16 +2913,24 @@ fn render_residual_instruction(
 /// (`sandstorm|psn`, `partialtrap|sandstorm`, `leechseed|psn`, `sandstorm|brn`)
 /// and 9 are heal-side.
 ///
-/// The two helpers differ only in their LAST resort, and only when no state
-/// predicate matches at all: `residual_damage_cause` ends in a generic
-/// `residual` that diverges loudly (`:3063`), while `residual_heal_cause` ends
-/// in a specific `item: Leftovers` (`:3124`) and is therefore confidently wrong
-/// even in the fall-through case. That is a narrow extra hazard on the heal
-/// side, NOT the whole mechanism.
+/// The two helpers share no predicate — damage goes own-status, own-LeechSeed,
+/// weather, partialtrap; heal goes Wish-by-instruction-lookahead,
+/// OPPONENT-LeechSeed, own Leftovers, and only the heal side looks ahead at
+/// all. The difference that matters FOR THIS HAZARD is the last resort, and
+/// only when no predicate matches: `residual_damage_cause` ends in a generic
+/// `residual` that diverges loudly (`:3175`), while `residual_heal_cause` ends
+/// in a specific `item: Leftovers` (`:3236`) and so is confidently wrong even
+/// in the fall-through case. A narrow extra hazard on the heal side, not the
+/// whole mechanism.
 ///
-/// Either way the predicates below must mirror the engine's own emission gates
-/// exactly: a slot booked that the engine never fills is not a harmless
-/// over-count, it silently corrupts the tag on a sibling heal.
+/// The predicates below must therefore mirror the engine's gates AS THEY WILL
+/// EVALUATE WHEN THE TICK FIRES — which is NOT the same as transcribing them.
+/// This plan is built on the PRE-RESIDUAL state, while the engine's gates run
+/// after earlier phases have already moved HP. For an HP-dependent gate the two
+/// disagree, and copying it across is a measured 5-row regression: see the NOTE
+/// on the Leftovers slot below. A slot booked that the engine never fills is
+/// not a harmless over-count — it silently corrupts the tag on a sibling
+/// heal — but the cure is to model the phase order, not to copy the gate.
 ///
 /// TWO of those entries are cross-side, which is why this plan has to know the
 /// engine's speed order and is not simply a per-side constant:
