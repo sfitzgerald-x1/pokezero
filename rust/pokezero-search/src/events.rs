@@ -253,6 +253,41 @@ impl RenderedEvents {
     }
 }
 
+/// Canonical `world_failure_reasons` label for a refused event stream.
+///
+/// This is a MEASUREMENT KEY, not prose: the Python seam counts it verbatim
+/// into `world_failure_reasons`, so two refusals with the same content must
+/// produce the same bytes. Two rules earn that:
+///
+/// **Dedupe** — both sides refusing for the SAME reason is the common case, and
+/// the duplicate copy is pure length with no information in it.
+///
+/// **Sort** — push order here is RENDER order, which is SPEED order. Without a
+/// sort the identical pair `{miss, cannot_act}` keys as `...:miss,...:cannot_act`
+/// or `...:cannot_act,...:miss` depending only on who moved first, splitting one
+/// measurement across two buckets and halving each count. The order WITHIN a
+/// slug was already fixed for exactly this reason (see the attract sub-case
+/// emitter below); the order BETWEEN slugs was not, which left the bug
+/// half-fixed — found by independent review on #1030.
+///
+/// Length is bounded at the seam rather than here, by `_bounded_reason_detail`
+/// in `src/pokezero/engine_search.py`. That truncation is non-aliasing, so a
+/// slug set that does overflow can never masquerade as a different one.
+///
+/// Split out of [`reject_attribution_unsafe`] so it is testable without a
+/// Python interpreter: the label is the thing under test, the `PyErr` wrapper
+/// is not.
+pub fn attribution_unsafe_label(rendered: &RenderedEvents) -> String {
+    let mut reasons: Vec<&str> = Vec::with_capacity(rendered.attribution_unsafe.len());
+    for reason in &rendered.attribution_unsafe {
+        if !reasons.contains(&reason.as_str()) {
+            reasons.push(reason);
+        }
+    }
+    reasons.sort_unstable();
+    reasons.join(",")
+}
+
 /// Refuse an event stream whose action attribution is not observable from the
 /// engine delta. Callers must do this before advancing a fold or encoding a
 /// leaf: treating a rejected chance branch as a zero-weight branch would lose
@@ -260,26 +295,9 @@ impl RenderedEvents {
 /// the whole world instead.
 pub fn reject_attribution_unsafe(rendered: &RenderedEvents, lane: &str) -> PyResult<()> {
     if rendered.is_attribution_unsafe() {
-        // DEDUPE before joining. The Python seam truncates this message at 160
-        // chars to build a `world_failure_reasons` key, and the prefix eats 68 of
-        // them -- so with two sides refusing for the SAME reason the duplicate
-        // pushed the second copy past the cliff and minted a garbage bucket
-        // (`...paralyzed+mis`, `...paralyzed+can`). A truncated key silently drops
-        // the label it cut, which for the attract sub-cases means hiding exactly
-        // the non-downgradeable mass the measurement exists to find.
-        //
-        // Both sides refusing identically is the common case, not the exotic one,
-        // so deduping removes the overflow at its source rather than widening the
-        // limit and waiting for a longer slug to cross it again.
-        let mut reasons: Vec<&str> = Vec::with_capacity(rendered.attribution_unsafe.len());
-        for reason in &rendered.attribution_unsafe {
-            if !reasons.contains(&reason.as_str()) {
-                reasons.push(reason);
-            }
-        }
         return Err(PyValueError::new_err(format!(
             "attribution-unsafe renderer branch rejected before {lane}: {}",
-            reasons.join(",")
+            attribution_unsafe_label(rendered)
         )));
     }
     Ok(())

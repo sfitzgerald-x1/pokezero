@@ -14,7 +14,7 @@ use poke_engine::instruction::{Instruction, StateInstructions};
 use poke_engine::state::{
     PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
 };
-use pokezero_search::events::{render_branch_events, EventContext};
+use pokezero_search::events::{attribution_unsafe_label, render_branch_events, EventContext};
 
 fn confused_state(move_id: Choices) -> State {
     let mut state = State::default();
@@ -1260,5 +1260,117 @@ fn every_attract_subcase_literal_is_pinned() {
     assert!(
         cant.iter().any(|reason| reason.contains("cannot_act")),
         "Splash must report `cannot_act`: {cant:?}"
+    );
+}
+
+/// Mirror of `_REASON_DETAIL_LIMIT` in `src/pokezero/engine_search.py`.
+///
+/// The refusal message crosses into Python and becomes a `world_failure_reasons`
+/// key; that seam is the only place a length limit exists. Pinning it from this
+/// side means a future slug that outgrows the budget fails HERE, in the crate
+/// suite that owns the slug, rather than silently at the seam in a campaign run.
+const PY_REASON_DETAIL_LIMIT: usize = 512;
+
+/// Both sides refusing with DIFFERENT sub-case sets must key canonically and fit.
+///
+/// Found by independent review. The first fix deduped IDENTICAL reasons, which
+/// missed the likelier case: `miss`/`noop`/`cannot_act` are properties of the
+/// MOVE, and the two sides have different moves, so two-sided refusals usually
+/// carry two DIFFERENT slugs. Two bugs lived in that gap:
+///
+/// 1. **Truncation.** At the old 160-char seam the joined pair overflowed and the
+///    tail label was cut. `{paralyzed+cannot_act, paralyzed+miss}` and
+///    `{paralyzed+cannot_act, paralyzed+miss+volatile}` both landed in the same
+///    `...paralyzed+mis` bucket — the `+volatile` arm, which is exactly the
+///    non-downgradeable mass this whole split exists to measure, vanished into a
+///    bucket that looked like a different question.
+/// 2. **Order.** The join preserved render order, which is SPEED order, so the
+///    same pair of sub-cases keyed two ways depending only on who moved first.
+///
+/// Asserting the label rather than the `PyErr` keeps this test interpreter-free.
+#[test]
+fn a_two_sided_refusal_keys_canonically_and_fits_the_python_seam() {
+    // Both sides attracted AND paralyzed, with moves that add DIFFERENT second
+    // predicates: Splash can never act, Thunder is 70% accurate in gen3.
+    fn two_sided_state(lead_is_faster: bool) -> State {
+        let mut state = attracted_paralyzed_state(false);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::ATTRACT);
+        state.side_one.get_active().status = PokemonStatus::PARALYZE;
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
+        // Speed decides RENDER order, which is what the sort has to neutralise.
+        state.side_one.get_active().speed = if lead_is_faster { 500 } else { 1 };
+        state.side_two.get_active().speed = if lead_is_faster { 1 } else { 500 };
+        state
+    }
+
+    let mut labels = Vec::new();
+    for lead_is_faster in [true, false] {
+        let mut state = two_sided_state(lead_is_faster);
+        let branches = generate(&mut state);
+        let two_sided = branches
+            .iter()
+            .map(|branch| rendered(&mut state.clone(), branch))
+            .find(|events| {
+                events
+                    .attribution_unsafe
+                    .iter()
+                    .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+                    .count()
+                    >= 2
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a branch where BOTH sides refuse; \
+                     lead_is_faster={lead_is_faster}"
+                )
+            });
+
+        let label = attribution_unsafe_label(&two_sided);
+
+        // Distinct slugs, so dedupe alone could not have saved this.
+        assert!(
+            label.contains("cannot_act") && label.contains("miss"),
+            "fixture must produce two DIFFERENT sub-case sets, got: {label}"
+        );
+
+        // Canonical order: sorted, never render/speed order.
+        let mut sorted = label.split(',').collect::<Vec<_>>();
+        sorted.sort_unstable();
+        assert_eq!(
+            label,
+            sorted.join(","),
+            "reasons must be sorted so one measurement lands in one bucket: {label}"
+        );
+
+        // Fits the seam WITH the prefix the Python side prepends. The lane string
+        // varies; `tree/model fold` is the longest in use.
+        let full = format!(
+            "attribution-unsafe renderer branch rejected before tree/model fold: {label}"
+        );
+        assert!(
+            full.len() <= PY_REASON_DETAIL_LIMIT,
+            "refusal message is {} chars, over the {PY_REASON_DETAIL_LIMIT}-char seam \
+             budget -- it would be truncated into a `world_failure_reasons` key: {full}",
+            full.len()
+        );
+
+        labels.push(label);
+    }
+
+    // The whole point of the sort: speed order must not change the key.
+    assert_eq!(
+        labels[0], labels[1],
+        "the same pair of sub-cases keyed two ways depending on who moved first, \
+         splitting one measurement across two buckets"
     );
 }
