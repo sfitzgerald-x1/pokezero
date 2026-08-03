@@ -1738,8 +1738,11 @@ class WorldAbortRateTests(unittest.TestCase):
 
         One of two worlds aborts. The decision succeeds, so `fallback_rate`
         stays 0 and every existing metric calls this healthy -- while the
-        aggregate actually rests on half the sampled hypotheses. Only
-        `world_search_abort_rate` reports it.
+        aggregate actually rests on half the sampled hypotheses.
+
+        This test pins the per-decision metadata against a hand-seeded counter;
+        the abort RATE itself is asserted by the three end-to-end `decide()`
+        tests below, which are the only place the real denominator is built.
         """
         harness = EarlyStopPolicyIntegrationTests()
         policy = harness._policy(early_stop=False)
@@ -1750,8 +1753,9 @@ class WorldAbortRateTests(unittest.TestCase):
         # `len(worlds)` makes those two expressions alias, and the per-decision
         # metadata assertion below then cannot tell them apart -- independent
         # review showed the cumulative-counter mutant surviving exactly that way.
-        # 7 stands in for "six worlds already constructed on earlier decisions",
-        # so this decision's metadata must read 2 while the counter reads 9.
+        # 7 stands in for "seven worlds already constructed on earlier
+        # decisions". Entering at `_search_model` never increments, so the
+        # counter stays 7 while this decision's metadata must read 2.
         policy.stats.worlds_constructed = 7
         native = harness._Native(
             [
@@ -1974,6 +1978,91 @@ class WorldAbortRateTests(unittest.TestCase):
             engine = decision.metadata["engine_mcts"]
             self.assertEqual(engine["worlds_constructed"], 2, decision.metadata)
             self.assertEqual(engine["worlds_searched"], 1, decision.metadata)
+
+    def test_the_increment_is_reached_on_the_model_path_the_campaign_runs(self) -> None:
+        """`leaf_eval="model"` is the only path FoulPlay actually runs.
+
+        Found by independent review as a third surviving mutant: guarding the
+        increment with `if self._config.leaf_eval != "model"` left all 96 tests
+        green, because every model-path test enters at `_search_model` with a
+        hand-seeded counter and nothing observes whether `_search` incremented
+        before dispatching. Under that mutant every FoulPlay shard reports
+        `worlds_constructed: 0` and `world_search_abort_rate: null` forever --
+        a dead metric on the one path anyone runs.
+
+        `foulplay_bridge.py:2475`, `mcts_acceptance_h2h.py:97` and
+        `k0_grid_h2h.py:158` all select "model".
+        """
+        import unittest.mock as mock
+
+        from pokezero.engine_world import EngineWorld
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy._config = replace(policy._config, worlds=3, sample_retry_factor=1)
+        policy.stats = EngineMctsStats()
+        # `_policy()` builds via `object.__new__` for the `_search_model`-entry
+        # tests, so the attributes only `_search` touches are absent.
+        policy._fixed_override = None
+        policy._dex = None
+        policy._set_source = None
+        policy._module = object()
+        policy._env_tier2_source = None
+
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": ("rattata",), "p2": ("chansey",)},
+        )
+        attempts = {"n": 0}
+
+        def sampler(**_kwargs):
+            attempts["n"] += 1
+            return (None, "rejected") if attempts["n"] % 3 == 2 else (object(), None)
+
+        # Two worlds constructed per decision; the crate aborts one of them.
+        native = harness._Native(
+            [harness._report(56, 4, stopped=False), ValueError("attribution-unsafe")]
+        )
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            with mock.patch(
+                "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+                side_effect=sampler,
+            ), mock.patch(
+                "pokezero.engine_search.world_battle_spec", return_value=world
+            ), mock.patch(
+                "pokezero.engine_search.build_poke_engine_state",
+                side_effect=lambda *a, **k: SimpleNamespace(to_string=lambda: "S"),
+            ), patch.dict(
+                sys.modules, {"pokezero_search": fake_module}
+            ), patch.object(
+                EngineMctsPolicy,
+                "_advance_live_fold",
+                return_value=SimpleNamespace(to_payload=lambda: {}),
+            ), patch.object(
+                EngineMctsPolicy, "_native", return_value=native
+            ), patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ), patch.object(
+                EngineMctsPolicy, "_root_inputs_json", return_value="{}"
+            ):
+                decision = policy.select_action_with_context(
+                    harness._context(), rng=random.Random(7)
+                )
+
+        stats = policy.stats.to_dict()
+        # The increment ran: without it these are 0 and the rate is None.
+        self.assertEqual(stats["worlds_constructed"], 2)
+        self.assertEqual(stats["worlds_searched"], 1)
+        self.assertAlmostEqual(stats["world_search_abort_rate"], 0.5)
+        self.assertEqual(decision.metadata["engine_mcts"]["worlds_constructed"], 2)
 
     def test_a_healthy_decision_reports_a_zero_abort_rate(self) -> None:
         harness = EarlyStopPolicyIntegrationTests()

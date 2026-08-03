@@ -579,12 +579,25 @@ class EngineMctsStats:
             #     which needs the trigger to be a belief-sampled OPPONENT
             #     property, since that is the only thing that differs per world.
             #
+            # Even in the belief-sampled arm the exponent is AT MOST W and
+            # collapses toward 1 as the posterior concentrates: worlds are
+            # exchangeable draws from ONE decision-level posterior, gen3 randbat
+            # pools are small, and a species whose pool reliably contains two
+            # identical-tail moves refuses in every world. Duplicate draws (cf.
+            # `scott/collapse-identical-worlds`) cut the effective W further.
+            #
             # Do NOT reason from the per-world seed: `tree.rs` uses rng only in
             # `sample_branch_index`, for traversal. `expand_edge` prices EVERY
             # enumerated branch of a joint action, and `select()` is pure PUCT
             # with no rng -- so a refusal fires when the search expands an unsafe
             # joint action, not when it draws an unlucky outcome. Distinct seeds
             # do not buy independence.
+            #
+            # Caveat on the numerator: `worlds_constructed` is charged before
+            # `_search_model`'s own pre-flight, so a `root_inputs_failed` or
+            # `early_stop_replay_failed` fallback charges W phantom aborts here.
+            # Both are visible in `fallback_reasons`; check there before reading
+            # a near-1.0 abort rate as a renderer-refusal problem.
             "world_search_abort_rate": (
                 1.0 - (self.worlds_searched / self.worlds_constructed)
                 if self.worlds_constructed
