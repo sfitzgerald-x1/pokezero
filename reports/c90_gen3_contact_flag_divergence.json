@@ -1,0 +1,71 @@
+{
+ "schema": "c90-source-level-cause/1",
+ "shape": "gen3 contact-flag divergence: gen3 moves.ts both ADDS and REMOVES contact relative to the base data the engine is built from",
+ "rows_in_this_window": 1,
+ "identities": [
+  "19000021/34"
+ ],
+ "was": "reports/c88 sub-shape C, filed NOT YET DETERMINED",
+ "the_boundary": {
+  "row": "19000021/34",
+  "protocol": "Rayquaza uses Overheat on Sharpedo; Sharpedo faints; Showdown then emits |-damage|p1a: Rayquaza|189/262|[from] ability: Rough Skin|[of] p2a: Sharpedo",
+  "miss": "observed_only=[('abilityroughskin', -16)] engine_only=[] -- the engine emits nothing"
+ },
+ "the_reference": {
+  "rough_skin": "data/mods/gen3/abilities.ts:162-169 overrides roughskin to source.baseMaxhp / 16. Base (modern) is /8. The engine already has the gen3 value.",
+  "the_actual_cause": "data/mods/gen3/moves.ts:470-473 overrides OVERHEAT's flags to { contact: 1, protect: 1, mirror: 1, metronome: 1 }. Base overheat (data/moves.ts) has flags { protect, mirror, metronome } and NO contact. So in gen3 Overheat makes contact and Rough Skin fires."
+ },
+ "the_engine": {
+  "rough_skin": "src/gen3/abilities.rs:193 implements ROUGHSKIN correctly -- maxhp/16, attacker's maxhp, gated on damage_dealt > 0 && choice.flags.contact. The ability is not the problem.",
+  "the_gap": "choices.rs builds OVERHEAT from the BASE flag set, with no contact, so choice.flags.contact is false and the ability hook never fires. Note choices.rs:11710 ALREADY forks OVERHEAT on cfg!(feature = \"gen3\") for base_power (140 vs 130) -- only the flags block was not forked, so there is already a home for the fix."
+ },
+ "exhaustive_enumeration": {
+  "SUPERSEDED_METHOD": "'diff every gen3 moves.ts override carrying contact:1 against the same move in base data/moves.ts'. One-directional by construction, so it could only ever find additions. It also read only data/mods/gen3/moves.ts, while gen3 inherits through gen4, gen5 and up -- a contact flag set in a LATER-gen mod also lands in gen3. finalgambit is exactly that case; it does not exist in gen3, so the additions direction came out right by luck, not by method.",
+  "corrected_method": "resolve the full mod inheritance chain (gen3 -> gen4 -> ... -> base) and compare the EFFECTIVE gen3 flag set against the engine's, in both directions.",
+  "additions_gen3_has_contact_base_does_not": [
+   {
+    "move": "ancientpower",
+    "showdown": "data/mods/gen3/moves.ts:21 flags {contact,protect,mirror,metronome}; base data/moves.ts:404 has no contact",
+    "engine": "choices.rs has no contact"
+   },
+   {
+    "move": "overheat",
+    "showdown": "data/mods/gen3/moves.ts:472 flags {contact,protect,mirror,metronome}; base data/moves.ts:13117 has no contact",
+    "engine": "choices.rs has no contact"
+   }
+  ],
+  "removals_base_has_contact_gen3_does_not": [
+   {
+    "move": "covet",
+    "showdown": "data/mods/gen3/moves.ts:186 flags {protect,mirror,noassist}; base data/moves.ts:3103 has contact:1",
+    "engine": "choices.rs:3072 and :3088 contact: true -- WRONG for gen3"
+   },
+   {
+    "move": "fakeout",
+    "showdown": "data/mods/gen3/moves.ts:267 flags {protect,mirror,metronome}; base data/moves.ts:5092 has contact:1",
+    "engine": "choices.rs:5069 contact: true -- WRONG for gen3"
+   },
+   {
+    "move": "feintattack",
+    "showdown": "data/mods/gen3/moves.ts:271 flags {protect,mirror,metronome}; base data/moves.ts:5194 has contact:1",
+    "engine": "choices.rs:5202 contact: true -- WRONG for gen3"
+   }
+  ],
+  "removals_are_live_bugs_of_the_same_class_opposite_sign": "the engine fires Rough Skin / Static / Poison Point / Flame Body / Effect Spore / Cute Charm on a gen3 Fake Out, Covet or Feint Attack where Showdown does not. Latent, not observed: zero uses of the three in this 200-game window -- which is exactly why enumeration was supposed to catch them and sampling would not.",
+  "bide_was_a_grep_artifact": "an earlier version listed bide among gen3 overrides carrying contact. It has no flags override in gen3/moves.ts; the contact:1 at gen3/moves.ts:91 is inside bide's nested condition damage move. A tell that the enumeration was textual rather than resolved.",
+  "surface_size": 5
+ },
+ "disposition": {
+  "class": "ENGINE FIX",
+  "the_fix": "in the gen3 build, ADD contact to OVERHEAT and ANCIENTPOWER, and REMOVE it from COVET, FAKEOUT and FEINTATTACK.",
+  "scope": "five moves, two directions, derived by resolving the mod chain rather than grepping one file.",
+  "blast_radius_warning": "contact gates six abilities that the gen3 build actually implements, every one of them behind attacker_choice.flags.contact: ROUGHSKIN (abilities.rs:193), POISONPOINT (:672), EFFECTSPORE (:693), CUTECHARM (:721), FLAMEBODY (:745), STATIC (:779). King's Rock is NOT among them -- the gen3 build has no King's Rock at all, so an earlier draft's mention of it was over-inclusion. Changing it in EITHER direction changes behaviour wherever those interact, so this needs the measured treatment C87 got: branch counts, the tactics gate, and a check that no currently-matched row becomes divergent. The three removals have zero observed uses in this window, so the sweep will not evidence them -- they need a targeted probe.",
+  "not_yet_implemented": true
+ },
+ "note_on_size": "one OBSERVED row in this 200-game window. The three removals are latent. By rows x search-impact this ranks below the matcher shapes; recorded now because the cause is established and the enumeration is finally two-directional.",
+ "CORRECTION": "an earlier version of this file claimed the shape was 'exactly two moves' and called the enumeration exhaustive. It was not. The method searched gen3 overrides CARRYING contact:1, which structurally cannot find moves where gen3 REMOVES a contact flag the base data has. Review found three such moves. The surface is five, in two directions.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "note": "third_party/poke-engine-src is gitignored, so engine line numbers are not pinned by this repo. Cited line numbers are valid at this fingerprint only."
+ }
+}

@@ -1,0 +1,95 @@
+{
+ "schema": "c89-source-level-cause/1",
+ "shape": "residual-decided lethality: the representative-roll collapse erases a surviving outcome that a later end-of-turn residual would have produced",
+ "rows": 3,
+ "identities": [
+  "19000029/51",
+  "19000052/36",
+  "19000058/19",
+  "19000074/27"
+ ],
+ "was": "reports/c88 sub-shape B, filed NOT YET DETERMINED pending the branch-set check",
+ "the_deciding_check": {
+  "question": "is the OBSERVED outcome present in ANY engine arm? If yes it is a branch-set-versus-sample comparison limit; if no it is an engine gap.",
+  "result": "CORRECTED. Absent in THREE of four, not four. 19000074/27's p2 net IS reachable via the 1.56% crit-kill arm; it fails on the OTHER slot. See EVIDENCE_TABLE_REGENERATED_FROM_REPLAY.",
+  "therefore": "ENGINE GAP for three rows. The fourth is a separate, newly-identified cause and is open.",
+  "19000074_27_precision": "its p2 NET is reachable via the 1.56% crit-kill arm, but the COMPONENTS are not: observed p2 is move=-241 plus capped_lethal=-3 (survived the hit at 3, died to sandstorm), while the arm is capped_lethal=-244 alone (died to the hit). Only the net coincides. Given C94 retracted a whole method for conflating a net with a component set, this distinction is load-bearing."
+ },
+ "worked_example": {
+  "row": "19000029/51",
+  "story": "Blaziken at 118/262. Ursaring's Hidden Power rolls -100, leaving 18; Sandstorm takes 16; Blaziken SURVIVES at 2 and eats its Salac Berry. The engine's representative roll is -107, leaving 11; Sandstorm then kills.",
+  "engine_arms": "6.25% miss (net 0) and 93.75% hit at -107 plus capped_lethal -11. No arm survives.",
+  "the_mechanism": "the direct hit cannot KO in either case (max_damage ~115 < hp 118), so generate_instructions.rs takes its Case B path at ~2887 and collapses the sixteen 85-100 rolls to one 0.925 representative. But a later END-OF-TURN RESIDUAL makes that same roll range straddle a lethality threshold: -100 survives sandstorm, -107 does not. The engine's straddle tests only ask whether the DIRECT hit kills (max_damage_dealt >= defender_active.hp at ~2849, max_damage_dealt < hp at ~2877). Neither considers residual damage, so the surviving outcome is never enumerated."
+ },
+ "why_this_is_the_same_family_as_C27_and_C31": "both were representative-roll collapses that erased a reachable position a LATER effect reads -- C27 the KO threshold within the crit range, C31 the quarter-HP Substitute gate. This is the third instance: the reader is end-of-turn residual damage rather than a same-turn move.",
+ "disposition": {
+  "class": "ENGINE FIX",
+  "the_fix": "extend the straddle test to account for pending end-of-turn residual damage: partition when (max_damage + residual) >= hp and (min_damage + residual) < hp, using the identity compare_health_with_damage_multiples already provides. NOT YET IMPLEMENTED -- residual magnitude depends on weather, item, status and ability, so computing it at that point needs care and a cost measurement, exactly as C87 did.",
+  "search_cost_warning": "this adds a partition to every damaging move against a defender with a pending residual, which is common. C87 showed a branch-count change can be an 8x regression when it fires on the wrong path. Measure branch counts and the tactics suite before shipping."
+ },
+ "checked_and_rejected": {
+  "PRIOR_TEXT": {
+   "hypothesis": "the 24 rows adjudicated as limit:roll_divergent_lethality might be this same mechanism misfiled",
+   "test": "sample 8 of them and ask whether the observed net is absent from every arm and a residual is present",
+   "result": "0 of 8. Their observed net is usually PRESENT in an arm (19000001/11 obs -92 against arms [-92, 0]), which is the genuine branch-set-versus-sample case. The existing comparison-limit adjudication for that family STANDS.",
+   "value": "this is the check that would have turned a 4-row finding into a false 28-row one.",
+   "RETRACTED": "This section concluded that limit:roll_divergent_lethality's comparison-limit adjudication STANDS. FALSIFIED: #1032 closed 15 of those 24 rows as a matcher artifact (reports/c91). The check here was sound as far as it went -- those rows are not THIS mechanism -- but I reported a negative result against one hypothesis as confirmation of the label, which it is not. The control row quoted, 19000001/11, was also misread by the branch_misses method: its arms are [-92, -92], not [-92, 0]."
+  },
+  "STATUS": "NOT RE-VERIFIED AFTER C94. The '0 of 8 -- their observed net is usually PRESENT in an arm' number was computed from branch_misses and has not been regenerated through replay. Its 8 rows were never named, so it cannot be audited. The soundness claim is withdrawn.",
+  "why_the_conclusion_is_retained_anyway": "CORRECTED after review. The earlier wording -- 'the parse biases toward absent, so finding present anyway is conservative' -- was wrong: the broken parse has TWO failure modes pulling in OPPOSITE directions. Hiding real arms biases toward 'absent'. But FABRICATING a phantom net-0 arm biases toward 'PRESENT' whenever the observed slot net is itself 0. Both counterexamples below are exactly zero-net-slot rows, so under the broken parse both would have been scored 'present' falsely. A one-directional claim about a two-directional error is the shape of the thing C94 retracted.\nThe conclusion survives via a step the earlier text did not make: A SLOT WHOSE OBSERVED NET IS 0 CANNOT BE RESIDUAL-DECIDED LETHALITY BY CONSTRUCTION, because the mechanism requires the observed side to take a direct hit AND a residual, which is necessarily nonzero. So the false-PRESENT mode can only mis-score rows that structurally cannot be this mechanism, and the false-ABSENT mode is conservative. With that clause the argument closes.",
+  "counterexamples_found_by_review": "replaying 10 of the 24 limit:roll_divergent_lethality rows found at least two where a slot's observed outcome is absent from EVERY arm: 19000024/61 (Showdown: p1 takes nothing; only engine arm p1 capped_lethal=-95 -- a Destiny Bond row) and 19000077/47 (Showdown: p2 takes nothing; only arm p2 capped_lethal=-270 -- a Rest row). Neither is residual-decided lethality, so this report's conclusion survives, but BOTH LOOK LIKE ENGINE BUGS SITTING UNDER A limit: LABEL and need their own adjudication.",
+  "action": "open a follow-up to replay all 24 limit:roll_divergent_lethality rows and name them."
+ },
+ "EVIDENCE_TABLE_REGENERATED_FROM_REPLAY": {
+  "why": "the original table was built by parsing branch_misses, which reports ONE slot per branch (engine_transition_differential.py:1893 breaks on the first failing slot). Every 'arm at net 0' in it was a fragment, not a branch. See reports/c94. Regenerated with scripts/replay_residue.py, which re-derives each branch's full component set.",
+  "19000029/51": {
+   "observed": "p1 sandstorm=-17 | p2 sandstorm=-16, move=-100  (SURVIVES at 2, eats Salac)",
+   "arms": [
+    "93.75%  p1 sandstorm=-17 | p2 move=-107, capped_lethal=-11  (DIES)",
+    "6.25%   p1 (none) | p2 capped_lethal=-118  (DIES)"
+   ],
+   "observed_outcome_reachable": false,
+   "mechanism": "residual-decided lethality -- CONFIRMED"
+  },
+  "19000052/36": {
+   "observed": "p1 brn=-38, itemleftovers=+19, move=-163 | p2 itemleftovers=+15, move=-45",
+   "arms": [
+    "87.89%  p1 itemleftovers=+19, move=-177, capped_lethal=-34 | p2 move=-42",
+    "5.86%   same p1 | p2 move=-86",
+    "6.25%  p1 capped_lethal=-192 | p2 (none)"
+   ],
+   "observed_outcome_reachable": false,
+   "note": "no arm carries p1's brn=-38 -- the burn tick is what it survives to take",
+   "mechanism": "residual-decided lethality -- CONFIRMED (burn, not sandstorm)"
+  },
+  "19000058/19": {
+   "observed": "p1 psn=-14, move=-106  (SURVIVES)",
+   "arms": [
+    "10.00%  p1 psn=-14 only  (a REAL miss arm -- no move damage)",
+    "84.38%  p1 move=-112, capped_lethal=-11  (DIES)",
+    "5.62%   p1 capped_lethal=-123  (DIES)"
+   ],
+   "observed_outcome_reachable": false,
+   "mechanism": "residual-decided lethality -- CONFIRMED"
+  },
+  "19000074/27": {
+   "observed": "p1 sandstorm=-18 | p2 move=-241, capped_lethal=-3",
+   "arms": [
+    "93.75%  p1 sandstorm=-18 | p2 itemleftovers=+15, sandstorm=-15, move=-116",
+    "1.56%   p1 (NONE) | p2 capped_lethal=-244",
+    "4.69%   p1 sandstorm=-18 | p2 itemleftovers=+15, sandstorm=-15, move=-227"
+   ],
+   "observed_outcome_reachable": "PARTIALLY -- the 1.56% crit-kill arm reaches p2's net of -244, but carries NO p1 components, so it omits the sandstorm -18 that Showdown applied to p1.",
+   "mechanism": "NOT residual-decided lethality. A DIFFERENT cause: the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint, where Showdown still applies it. Reclassified out of this finding and open."
+  }
+ },
+ "identities_note": "four identities are listed; 19000074/27 is RECLASSIFIED OUT by this report and is not one of the three.",
+ "era": {
+  "engine_fingerprint": "e5f4c7b16fe2895a",
+  "line_number_warning": "engine line citations in this report drift. The Case B and straddle tests cited as ~2887, ~2849 and ~2877 are at generate_instructions.rs:3049, :3006 and :3035 on the current tree -- a consistent ~157-line shift. third_party/poke-engine-src is gitignored (.gitignore:19) so nothing pins them; treat them as valid at this fingerprint only."
+ },
+ "reclassified_row_is_a_hypothesis": "19000074/27's stated mechanism -- 'the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint' -- is inferred from one replayed arm with no source line. It is a HYPOTHESIS, not a deciding check, and the row is filed open.",
+ "reclassified_out": [
+  "19000074/27"
+ ]
+}

@@ -1,4 +1,6 @@
 {
+ "RETRACTED_BY": "reports/c94_method_retraction.json",
+ "RETRACTION_NOTE": "every 'reachable / not reachable' verdict below was computed by reading branch_misses as a branch's component set. That field reports one slot per branch and is a roll-scaled, truncated subset even of that. The conclusions may be right or wrong; this evidence cannot support them either way. Do not cite this file. Re-test with scripts/replay_residue.py.",
  "schema": "c92-limit-category-retest/1",
  "headline": "The comparison-limit category is 1-of-8 correct in the current residue. C91 showed 15 of 24 rows in the largest limit family were a matcher artifact; this re-tests the survivors and finds 7 of the remaining 8 also fail the definition.",
  "the_test": {
