@@ -38,7 +38,7 @@
    "matcher: treat support.critical as UNKNOWN rather than False when the branch carries no |-crit| line, and fall back to magnitude agreement. Narrower, does not fix the protocol, but does not require a crate rebuild."
   ],
   "not_yet_implemented": true,
-  "the_fix": "NOT 'read the engine's crit flag' -- there is no crit flag at the render site; instruction.rs:515-518 is DamageInstruction { side_ref, damage_amount } and nothing more. C77 already recorded the implementable form: carry the BRANCH'S OWN roll representative into crit_collapsed so the two are comparable by construction.",
+  "the_fix": "there is no crit flag at the render site -- instruction.rs:515-518 is DamageInstruction { side_ref, damage_amount } and nothing more. C77 recorded the implementable form: carry the BRANCH'S OWN roll representative into crit_collapsed so the two are comparable by construction. For the crit-KILL arm that is not sufficient on its own, because the KO guard blocks it independently; Showdown does emit |-crit| on a killing crit, so that guard needs revisiting too.",
   "prediction_if_fixed": "deliberately not registered as a numeric prediction. The row count this closes should be measured by single-variable re-sweep, not forecast."
  },
  "honest_gap_in_this_finding": "NARROWED, not closed. The gap was 'I have not directly observed the absence of the |-crit| line in these ten branches'. scripts/replay_residue.py CANNOT observe that: it feeds branch['events'] straight into damage_components (:121-127) and prints only per-slot component tuples (:129-136); the only protocol lines it prints are the OBSERVED Showdown slice (:72-76). The engine branch's rendered lines are never displayed. What replay closed is a DIFFERENT gap -- fragment versus complete branch set. Tag absence is still inferred here, though C77 measured it directly at the gate on 451 evaluations.",
@@ -72,5 +72,36 @@
  },
  "evidence_strength": "confirmed on 1 row by replay (19000091/40), inferred on 9. The ratio table establishes per-row that the OBSERVATION is a crit -- all ten ratios are achievable as (legal crit roll)/(collapsed non-crit arm), including the apparent outlier 62/28. It does NOT establish per-row that the crit ARM is present, which is this report's actual claim and precisely the axis C77 measured as splitting ~217 engine-gap / 173 renderer-gap.",
  "unremarked_precondition": "the :1342 cross-check only fires when support is not None, which needs a pre-damage |switch| or nonzero boost in the ENGINE branch's events (_event_changes_roll_state :612-626, gated :697-716). The conclusion survives -- legal is accept-only and never a veto (:953-957), so with support None the branch would have MATCHED and the row would not be divergent, hence support must be non-None -- but 'the only remaining rejector' depends on a structural condition this report did not check.",
- "not_the_largest_family": "LS_capped_lethal_shape is 12 rows in reports/c86 and also unadjudicated. I2 at 10 is the second largest."
+ "not_the_largest_family": "LS_capped_lethal_shape is 12 rows in reports/c86 and also unadjudicated. I2 at 10 is the second largest.",
+ "MECHANISM_IS_STRADDLE_CONDITIONAL": {
+  "correction": "an earlier revision said 'ANY crit arm whose damage is not byte-equal to crit_collapsed goes untagged' and 'NEITHER equals'. Both overreach. There are four paths that set a crit arm's damage and the mechanism covers one.",
+  "the_four_paths": [
+   {
+    "path": "Case A -- the NON-CRIT range straddles the KO (generate_instructions.rs:3006-3032)",
+    "arm": "crit mass is MERGED INTO THE KO ARM at defender_active.hp; branch_chance at :3025 is (1-crit_rate)(k/16) + crit_rate",
+    "tagged": "no -- and NO DISTINCT CRIT ARM EXISTS. This is genuine crit-arm-absence, the C77 217-row bucket and the OPPOSITE of this report's finding. Documented at docs/crate_search_design.md:264-265."
+   },
+   {
+    "path": "Case B -- the CRIT range straddles the KO (:3051-3076)",
+    "arm": "crit-kill at defender_active.hp (:3069), crit-survive at average_non_kill_crit_damage (:3074)",
+    "tagged": "no -- THIS is this report's mechanism"
+   },
+   {
+    "path": "Case B -- no straddle (:3077-3080)",
+    "arm": "(max_crit_damage as f32 * 0.925) as i16 (:3079)",
+    "tagged": "YES, byte-identical to crit_collapsed. The gate fires correctly. This is the COMMON case."
+   },
+   {
+    "path": "branch_on_damage == false (:3082-3084)",
+    "arm": "none",
+    "tagged": "no -- the C87 shape"
+   }
+  ],
+  "consequence_for_the_headline": "the mechanism implies a testable precondition: each of the ten rows must be Case B-with-straddle. A non-straddling crit gets tagged and cannot be in this family at all. But it does NOT license 'all ten, one cause', because CASE A IS ALSO UNTAGGED and is genuine crit-arm-absence -- a Case A row presents the same ~2x ratio signature and would be misfiled here.",
+  "how_to_settle_it_cheaply": "the branch-mass fingerprint separates them with no instrumentation and no rebuild. Case A: two arms, the KO arm's mass INCLUDING the crit rate. Case B-straddle: three arms whose two small arms sum to exactly crit_rate (the 93.75 / 3.91 / 2.34 already collected on 19000091/40). Case B-no-straddle: 93.75 / 6.25, and tagged. One replay_residue.py run per row, reading only percentages.",
+  "status": "NOT RUN for the nine unreplayed rows. Case A is an unexcluded alternative for them."
+ },
+ "precision_on_NEITHER_equals": "for the crit-KILL arm the operative blocker is the KO guard (damage.damage_amount < pre_hp fails when damage == defender_active.hp), not value inequality -- and defender_active.hp COULD coincidentally equal int(max_crit * 0.925). For the crit-SURVIVE arm, average_non_kill_crit_damage can in principle land on that value when the kill threshold sits near the top of the roll fan. 'In general does not equal' is the correct claim; C77's 449 of 451 rather than 451/451 is consistent with exactly this.",
+ "C77_measured_the_condition_but_its_EXPLANATION_is_wrong": "C77's the_answer attributes the mismatch to the engine collapsing its roll fan to at most three representatives (DamageRolls Average|Min|Max) with the rendered branch not carrying the same representative. In gen3 that is not what happens: calculate_damage_rolls requests DamageRolls::Max (gen3/generate_instructions.rs:5124) and the renderer applies the single 0.925 itself, so crit_collapsed IS the Average representative by construction. C77 measured WHICH condition fires correctly; its account of WHY is wrong, and the crit-kill-split is the real answer. This report supersedes C77's explanation while deferring to its measurement.",
+ "C77_449_of_451_is_conditioned": "C77's method line says it replayed the I2 crit rows -- rows selected BECAUSE the match failed. Given that Case B-no-straddle tags correctly, 99.6% cannot be a general property of the gate. It is a rate within an already-failing population, not a base rate."
 }
