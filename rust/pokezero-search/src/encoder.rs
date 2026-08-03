@@ -512,10 +512,14 @@ fn condition_features(condition: Option<&str>) -> ConditionFeatures {
 /// ``name + (level === 100 ? '' : `, L${level}`)``). None is returned only when there is no
 /// details string at all, which is the one case that carries no level information.
 ///
-/// This returned None for a level-100 mon until 2026-08-03, and the caller treats None as
-/// "skip the whole block", so every L100 opponent encoded with ELEVEN zeroed numeric cells --
-/// NUMERIC_LEVEL plus the entire expected-stat block -- where Python wrote real values. Nine
-/// gen3 randbats species are L100 (Beautifly, Ditto, Ledian, Luvdisc, Magcargo, Nosepass,
+/// None therefore means "no level information", with one unreachable exception: an `L` token
+/// too large for i64 fails to parse and also yields None, where Python's unbounded `int()`
+/// would not. A level token would need 19 digits to get there.
+///
+/// This returned None for a level-100 mon until 2026-08-03. Of the three callers, `:1607`
+/// treats None as "skip the whole block", so every L100 opponent encoded with ELEVEN zeroed
+/// numeric cells -- ten from that block plus NUMERIC_LEVEL, which `:1433` skips separately --
+/// where Python wrote real values. Nine gen3 randbats species are L100 (Beautifly, Ditto, Ledian, Luvdisc, Magcargo, Nosepass,
 /// Shedinja, Spinda, Unown), so it was not rare. Worse than merely missing: an all-zero stat
 /// block is the DELIBERATE sentinel `_encode_transformed_expected_stats` writes for an
 /// unidentifiable Transform target, so the native leaf was feeding the model a false positive
@@ -1604,9 +1608,17 @@ fn encode_expected_stats(
         return Ok(());
     }
 
-    let Some(level) = level_from_details(details) else {
-        return Ok(());
-    };
+    // `showdown.py:6743-6745` does this fix in TWO halves and both are load bearing:
+    // `_level_from_details` returns 100 for a token-less details string, AND this caller
+    // coerces a None level to 100 anyway -- "belt-and-suspenders ... rather than silently
+    // zeroing this otherwise-deterministic block". Porting only the first half left
+    // `details` of None or "" still zeroing all ten expected-stat columns, which is the very
+    // sentinel collision this change exists to remove, just on a neighbouring input shape.
+    //
+    // The other two callers of level_from_details do NOT coerce, and must not: `:1433` mirrors
+    // `if level is not None` (an absent level writes no NUMERIC_LEVEL) and `:1587` mirrors
+    // `if level is None ... return` in the transformed path. Only this one.
+    let level = level_from_details(details).unwrap_or(100);
     let Some(battle_info) = tables.species_info(battle_species) else {
         return Ok(());
     };
