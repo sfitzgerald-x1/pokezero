@@ -20,6 +20,7 @@ from pokezero.observation import (
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
@@ -50,10 +51,16 @@ from pokezero.showdown import (
     NUMERIC_SELF_HAZARD_EXPECTED,
     NUMERIC_SELF_ITEMS_REMOVED_CREDIT,
     NUMERIC_STALL_COUNTER,
+    NUMERIC_SUB_HP_FRACTION,
+    NUMERIC_TIER2_CB_PINNED,
+    NUMERIC_TIER2_INVESTMENT_PINNED,
     NUMERIC_TRUANT_LOAF,
+    NUMERIC_TT_CB_BIT,
+    NUMERIC_TT_INVESTMENT_BIT,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
     SELF_POKEMON_TOKEN_OFFSET,
+    V3_DROPPED_LEGACY_NUMERIC_INDICES,
     V3_NUMERIC_LAYOUT_GROUPS,
     V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     V3_REPLAY_OBSERVATION_SPEC,
@@ -250,9 +257,11 @@ class V4SchemaTableTest(unittest.TestCase):
         self.assertEqual(spec.transition_token_count, 0)
         self.assertEqual(spec.token_count, 23)
         self.assertLess(spec.token_count, V3_REPLAY_OBSERVATION_SPEC.token_count)
-        # v3's surface, minus the 34-column history group and the 12 turn-merged categorical
-        # columns, plus the 13-column feature pack and its 2 categorical rows.
-        self.assertEqual(spec.numeric_feature_count, 134)
+        # v3's surface, minus the 34-column history group, minus the two retired pinned tier2
+        # columns (NUMERIC_TIER2_CB_PINNED / NUMERIC_TIER2_INVESTMENT_PINNED), minus the 12
+        # turn-merged categorical columns, plus the 13-column feature pack and its 2
+        # categorical rows.
+        self.assertEqual(spec.numeric_feature_count, 132)
         self.assertEqual(spec.categorical_feature_count, 41)
         # v4 is a grouped-layout schema but NOT a turn-merged one: the two axes are separate.
         self.assertNotIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
@@ -290,11 +299,19 @@ class V4LayoutTest(unittest.TestCase):
                 NUMERIC_OPP_ITEMS_REMOVED_CREDIT,
             ),
         }
+        # Two v3 current-state columns are RETIRED at v4 (not carried to a new index): the
+        # pinned tier2 PAIR, whose evidence now narrows the belief candidate set instead. Both
+        # sit in pokemon_state.
+        retired = (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED)
+        for column in retired:
+            self.assertIn(column, dict(V3_NUMERIC_LAYOUT_GROUPS)["pokemon_state"])
+            self.assertNotIn(column, v4_groups["pokemon_state"])
         for name, v3_indices in v3_groups.items():
             if name == "history":
                 continue
+            carried = tuple(i for i in v3_indices if i not in retired)
             self.assertEqual(
-                v4_groups[name], v3_indices + expected_additions.get(name, ()), name
+                v4_groups[name], carried + expected_additions.get(name, ()), name
             )
 
     def test_every_writer_column_is_carried_or_explicitly_dropped(self) -> None:
@@ -304,13 +321,25 @@ class V4LayoutTest(unittest.TestCase):
             carried | V4_DROPPED_LEGACY_NUMERIC_INDICES,
             set(range(V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
         )
-        # V4 drops everything v3 dropped, PLUS the whole history group.
+        # V4 drops everything v3 dropped, PLUS the whole history group, PLUS the two retired
+        # current-state columns.
         self.assertLess(
             {24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104},
             set(V4_DROPPED_LEGACY_NUMERIC_INDICES),
         )
         history = {i for n, idx in V3_NUMERIC_LAYOUT_GROUPS if n == "history" for i in idx}
         self.assertTrue(history <= set(V4_DROPPED_LEGACY_NUMERIC_INDICES))
+        for column in (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED):
+            self.assertIn(column, V4_DROPPED_LEGACY_NUMERIC_INDICES)
+            self.assertNotIn(column, history)
+        # ...and nothing else. The retirement is exactly the pinned tier2 pair, two columns
+        # wide. Their as-of-strike history twins (119/120) come out with the region, not here.
+        self.assertEqual(
+            set(V4_DROPPED_LEGACY_NUMERIC_INDICES)
+            - set(V3_DROPPED_LEGACY_NUMERIC_INDICES)
+            - history,
+            {NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED},
+        )
         self.assertEqual(
             V4_ONLY_NUMERIC_INDICES,
             frozenset(range(V4_NUMERIC_BASE, V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
@@ -321,12 +350,21 @@ class V4LayoutTest(unittest.TestCase):
         # The pack is appended INSIDE pokemon_state, so every column laid out after that group
         # shifts. This is the concrete reason the two contracts can never share an artifact —
         # asserted rather than left implicit.
-        self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), v4_numeric_index(NUMERIC_STALL_COUNTER))
-        self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
-        # +5 from the pokemon_state insertions and +2 from the belief insertions, both laid
-        # out before the field group.
+        #
+        # Columns BEFORE the retired pinned tier2 pair (138/139) still align — sub HP at 137 is
+        # the last of them; everything after shifts down two, then up by the group insertions.
         self.assertEqual(
-            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 7
+            v3_numeric_index(NUMERIC_SUB_HP_FRACTION), v4_numeric_index(NUMERIC_SUB_HP_FRACTION)
+        )
+        self.assertEqual(
+            v4_numeric_index(NUMERIC_STALL_COUNTER),
+            v3_numeric_index(NUMERIC_STALL_COUNTER) - 2,
+        )
+        self.assertNotEqual(v3_numeric_index(NUMERIC_OPP_HAZARDS), v4_numeric_index(NUMERIC_OPP_HAZARDS))
+        # -2 for the retired pair, +5 from the pokemon_state insertions and +2 from the
+        # belief insertions, all laid out before the field group.
+        self.assertEqual(
+            v4_numeric_index(NUMERIC_OPP_HAZARDS), v3_numeric_index(NUMERIC_OPP_HAZARDS) + 5
         )
 
     def test_schema_aware_lookup_reports_pack_columns_as_absent_under_v3(self) -> None:
@@ -339,6 +377,41 @@ class V4LayoutTest(unittest.TestCase):
             self.assertEqual(
                 numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column),
                 V4_NUMERIC_INDEX_BY_LEGACY_INDEX[column],
+            )
+
+    def test_the_pinned_tier2_columns_are_retired_from_v4_only(self) -> None:
+        """v2.1/v2.2/v3 checkpoints have columns 138/139 in their input layout; v4 never did."""
+
+        for column in (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED):
+            self.assertIsNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column), column
+            )
+            with self.assertRaisesRegex(ValueError, "dropped from v4"):
+                numeric_index_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column)
+            for schema in (
+                OBSERVATION_SCHEMA_VERSION_V2_1,
+                OBSERVATION_SCHEMA_VERSION_V2_2,
+                OBSERVATION_SCHEMA_VERSION_V3,
+            ):
+                self.assertIsNotNone(
+                    numeric_index_if_present_for_schema(schema, column), (schema, column)
+                )
+
+    def test_the_as_of_strike_tier2_twins_leave_with_the_history_region(self) -> None:
+        """119/120 need no retirement clause — they are history columns.
+
+        Worth pinning explicitly: it is the reason v4 carries NO encoded surface at all for
+        either tier2 conclusion, so the belief narrowing is their only consumer there.
+        """
+
+        for column in (NUMERIC_TT_CB_BIT, NUMERIC_TT_INVESTMENT_BIT):
+            history = {i for n, idx in V3_NUMERIC_LAYOUT_GROUPS if n == "history" for i in idx}
+            self.assertIn(column, history)
+            self.assertIsNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column), column
+            )
+            self.assertIsNotNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V3, column), column
             )
 
 
@@ -1022,20 +1095,21 @@ class V4HistoryIsGoneTest(V4EncodeTestBase):
         )
         observation.validate(V4_REPLAY_OBSERVATION_SPEC)
 
-    def test_the_tier2_pinned_conclusions_survive_the_trim(self) -> None:
-        # They were never history columns — they live on the opponent MON token as the
-        # current-state form, derived from a stream that is still EXTRACTED, just not encoded.
-        from pokezero.showdown import NUMERIC_TIER2_CB_PINNED
+    def test_the_tier2_derivation_survives_the_trim_even_though_its_columns_do_not(self) -> None:
+        # v4 retires BOTH pinned tier2 columns (the conclusions narrow the belief candidate set
+        # there instead), and the as-of-strike twins left with the history region — so v4 has no
+        # encoded tier2 surface at all.
+        from pokezero.showdown import NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED
 
-        self.assertIsNotNone(
-            numeric_index_if_present_for_schema(
-                OBSERVATION_SCHEMA_VERSION_V4, NUMERIC_TIER2_CB_PINNED
+        for column in (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED):
+            self.assertIsNone(
+                numeric_index_if_present_for_schema(OBSERVATION_SCHEMA_VERSION_V4, column), column
             )
-        )
-        # Column presence is not evidence the DERIVATION survived. The pinned conclusions come
-        # off state.transition_tokens, which normalize still populates at
-        # include_turn_merged=False — assert that stream is non-empty on the production path,
-        # since an empty one would leave the column silently constant-zero.
+        # Column absence is not evidence the DERIVATION went away: it feeds the belief narrowing
+        # now, and that reads the SAME stream. The conclusions come off state.transition_tokens,
+        # which normalize still populates at include_turn_merged=False — assert that stream is
+        # non-empty on the production path, since an empty one would leave the tier2 trackers
+        # with nothing to assess and the narrowing silently inert.
         state = self._state(_RECHARGE_LINES)
         self.assertTrue(
             state.transition_tokens,
@@ -1220,3 +1294,262 @@ class V4VocabularyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V4ExactSpreadsTest(V4EncodeTestBase):
+    """v4 asks the generator's spread core instead of re-deriving its rules.
+
+    The two approximations it replaces were measurably wrong: the trimmed-HP bound jumped to
+    ev=0 (a full 85-EV strip) where the generator removes 4 EVs at a time and stops at the first
+    value satisfying its modular condition, and the zeroed-Atk bound hardcoded iv=0, missing the
+    Hidden-Power `-28` that leaves IV 3. Because the emitted band is min/max over survivors, a
+    PERFECTLY PINNED set still reported the wrong HP -- a plausible number in the right units,
+    ~6% off, which is the class a model cannot detect.
+    """
+
+    SHOWDOWN_ROOT = os.environ.get(
+        "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from pokezero.dex import load_showdown_dex_cached
+            from pokezero.randbat import load_gen3_randbat_source_cached
+
+            cls.dex = load_showdown_dex_cached(cls.SHOWDOWN_ROOT)
+            cls.source = load_gen3_randbat_source_cached(cls.SHOWDOWN_ROOT)
+        except Exception as exc:  # pragma: no cover - no checkout here
+            raise unittest.SkipTest(f"needs a pokemon-showdown checkout: {exc}")
+
+    def test_every_pool_variant_matches_the_generator_exactly(self) -> None:
+        """COMPARE, do not merely resolve. The old bug produced a value for every variant too.
+
+        Checks the emitted HP and Atk against randbats_spread_details for all ~1682 variants,
+        and separately asserts the legacy approximations disagree on the families the fix is
+        about -- so a regression to either one fails here rather than looking plausible.
+        """
+        from pokezero.gen3_damage import randbats_spread_details
+        from pokezero.showdown import _gen3_stat, _variant_spread_stats
+        from pokezero.tier2 import variant_has_physical_attack
+
+        pinch = {"Salac Berry", "Petaya Berry", "Liechi Berry"}
+        checked = legacy_hp_wrong = legacy_atk_wrong = 0
+        for key, universe in self.source.universes.items():
+            info = self.dex.species_info(key)
+            if info is None or not info.base_stats:
+                continue
+            for variant in universe.variants:
+                has_physical = variant_has_physical_attack(variant.moves, self.dex)
+                got = _variant_spread_stats(
+                    info.base_stats,
+                    variant.level,
+                    {"moves": list(variant.moves), "item": str(variant.item)},
+                    has_physical,
+                )
+                self.assertIsNotNone(got)
+                truth = randbats_spread_details(
+                    info.base_stats,
+                    level=variant.level,
+                    moves=variant.moves,
+                    item=variant.item,
+                    has_physical_attack=has_physical,
+                )
+                self.assertEqual(got["hp"], int(truth.stats["hp"]), key)
+                self.assertEqual(got["atk"], int(truth.stats["atk"]), key)
+                checked += 1
+
+                moves = set(variant.moves)
+                trimmed = "bellydrum" in moves or (
+                    "substitute" in moves
+                    and (moves & {"flail", "reversal"} or str(variant.item) in pinch)
+                )
+                if trimmed and _gen3_stat(
+                    info.base_stats["hp"], variant.level, ev=0, iv=31, hp=True
+                ) != got["hp"]:
+                    legacy_hp_wrong += 1
+                if not has_physical and _gen3_stat(
+                    info.base_stats["atk"], variant.level, ev=0, iv=0, hp=False
+                ) != got["atk"]:
+                    legacy_atk_wrong += 1
+
+        self.assertGreater(checked, 1000, "pool did not load")
+        # The whole point: the legacy derivations were wrong on real, common families.
+        self.assertGreater(legacy_hp_wrong, 40, "trimmed-HP families no longer differ")
+        self.assertGreater(legacy_atk_wrong, 200, "Hidden-Power Atk families no longer differ")
+
+    def test_an_unevaluable_candidate_abandons_the_band_rather_than_inventing_one(self) -> None:
+        """A WRONG belief costs more than an ABSENT one -- so degrade, never fabricate.
+
+        Substituting the baseline for an unevaluable candidate and then taking min/max emits a
+        bound partly derived from a value no real variant has, and the model reads that exactly
+        as confidently as a true one. The correct degradation is the documented no-set-source
+        state: low == high == baseline, an honest "unknown".
+        """
+        from unittest import mock
+
+        from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
+
+        variants = (
+            {"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},
+            {"moves": ["tackle"], "item": "Leftovers", "level": 80},
+        )
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2", species="Charizard", candidate_variants=variants
+        )
+
+        def _encode(side_effect=None):
+            row = [0.0] * 300
+            ctx = (
+                mock.patch.object(showdown, "_variant_spread_stats", side_effect=side_effect)
+                if side_effect
+                else mock.patch.object(
+                    showdown, "_variant_spread_stats", wraps=showdown._variant_spread_stats
+                )
+            )
+            with ctx:
+                showdown._encode_expected_stats(
+                    row,
+                    self.dex,
+                    base_species="Charizard",
+                    battle_species="Charizard",
+                    details="Charizard, L80, M",
+                    belief=belief,
+                    exact_spreads=True,
+                )
+            return (
+                row[showdown.NUMERIC_EXPECTED_HP],
+                row[showdown.NUMERIC_EXPECTED_HP_LOW],
+                row[showdown.NUMERIC_EXPECTED_HP_HIGH],
+            )
+
+        base, low, high = _encode()
+        self.assertNotEqual(low, high, "fixture must produce a real band when all are evaluable")
+
+        # One candidate unevaluable -> the band must COLLAPSE to the baseline, not straddle a
+        # fabricated value.
+        base2, low2, high2 = _encode(side_effect=lambda *a, **k: None)
+        self.assertEqual(low2, base2)
+        self.assertEqual(high2, base2)
+
+    def test_only_v4_gets_the_corrected_spreads(self) -> None:
+        """BEHAVIOURAL scoping. Three lineages train against v2.1/v2.2/v3 encodes right now.
+
+        These are frozen legacy positions, so correcting them for the older schemas would shift
+        a live input distribution mid-run. v4 is unlaunched and can simply start correct. Applying
+        the fix to every schema passes every other test in this file, so the scoping is pinned
+        here by comparing what the two encoders actually emit, not by reading the source.
+        """
+        from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
+
+        # A trim-eligible variant: the family where the legacy derivation is wrong by +14..+17.
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2",
+            species="Charizard",
+            candidate_variants=({"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},),
+        )
+
+        def _hp_low(exact: bool) -> float:
+            row = [0.0] * 300
+            showdown._encode_expected_stats(
+                row,
+                self.dex,
+                base_species="Charizard",
+                battle_species="Charizard",
+                details="Charizard, L80, M",
+                belief=belief,
+                exact_spreads=exact,
+            )
+            return row[showdown.NUMERIC_EXPECTED_HP_LOW]
+
+        legacy, corrected = _hp_low(False), _hp_low(True)
+        self.assertNotEqual(
+            legacy, corrected, "the fix must actually change this family, or it proves nothing"
+        )
+        # v4 takes the corrected value; every earlier schema keeps the legacy one.
+        self.assertGreater(corrected, legacy, "the generator trims only a few EVs, not all 85")
+
+    def test_only_v4_reaches_the_corrected_path(self) -> None:
+        """Catches the scoping regression every value-level test misses.
+
+        Passing `exact_spreads=True` unconditionally changes what three LIVE lineages are fed,
+        and it passes every other assertion here because those exercise the flag directly. This
+        asserts the CALL SITE, and asserts reachability first -- an earlier version of this test
+        passed vacuously because its fixture had no candidate variants, so the path was never
+        reached under either schema and the mutation sailed through.
+        """
+        from unittest import mock
+
+        from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
+
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2",
+            species="Charizard",
+            candidate_variants=({"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},),
+        )
+
+        def _calls(exact: bool) -> int:
+            with mock.patch.object(
+                showdown, "_variant_spread_stats", wraps=showdown._variant_spread_stats
+            ) as spy:
+                showdown._encode_expected_stats(
+                    [0.0] * 300,
+                    self.dex,
+                    base_species="Charizard",
+                    battle_species="Charizard",
+                    details="Charizard, L80, M",
+                    belief=belief,
+                    exact_spreads=exact,
+                )
+                return spy.call_count
+
+        # REACHABILITY first: without this the "not called" assertion below proves nothing.
+        self.assertGreater(_calls(True), 0, "fixture never reaches the corrected path")
+        self.assertEqual(_calls(False), 0, "the legacy path invoked the corrected derivation")
+
+        # And the call site must pass the SCHEMA, not a constant. Reaching this behaviourally
+        # needs a set-source-backed belief inside a full v3 encode, which this harness does not
+        # build; the assertions above already pin what the flag DOES, so this pins only who
+        # supplies it. Hardcoding True here changes the input distribution of three live
+        # lineages and is otherwise invisible to every test in this file.
+        import inspect
+
+        self.assertIn(
+            "exact_spreads=schema_v4", inspect.getsource(showdown._encode_pokemon_tokens)
+        )
+
+    def test_an_illegal_spread_actually_raises(self) -> None:
+        """Assert the BEHAVIOUR, not the constants.
+
+        `ev=0` is not a legal HP EV -- the generator can never strip the stat -- so the original
+        bug produced a spread outside the reachable set. Emitting a plausible-but-wrong stat is
+        the failure being removed, so an out-of-set spread must raise rather than degrade.
+        """
+        from unittest import mock
+
+        from pokezero import showdown
+
+        class _Bogus:
+            evs = {"hp": 0, "atk": 85}
+            ivs = {"hp": 31}
+            stats = {"hp": 1, "atk": 1}
+
+        with mock.patch("pokezero.gen3_damage.randbats_spread_details", return_value=_Bogus()):
+            with self.assertRaises(ValueError) as caught:
+                showdown._variant_spread_stats(
+                    {"hp": 100, "atk": 100}, 80, {"moves": ["tackle"], "item": ""}, True
+                )
+        self.assertIn("legal set", str(caught.exception))
+
+    def test_a_malformed_candidate_degrades_instead_of_breaking_the_encode(self) -> None:
+        """An illegal SPREAD raises; a malformed CANDIDATE must not take down an encode."""
+        from pokezero.showdown import _variant_spread_stats
+
+        self.assertIsNone(
+            _variant_spread_stats({"hp": 100, "atk": 100}, 80, {"moves": None, "item": ""}, True)
+        )
+
+
