@@ -2918,8 +2918,8 @@ fn render_residual_instruction(
 /// OPPONENT-LeechSeed, own Leftovers, and only the heal side looks ahead at
 /// all. The difference that matters FOR THIS HAZARD is the last resort, and
 /// only when no predicate matches: `residual_damage_cause` ends in a generic
-/// `residual` that diverges loudly (`:3175`), while `residual_heal_cause` ends
-/// in a specific `item: Leftovers` (`:3236`) and so is confidently wrong even
+/// `residual` at its terminal that diverges loudly, while `residual_heal_cause`
+/// terminates in a specific `item: Leftovers` and so is confidently wrong even
 /// in the fall-through case. A narrow extra hazard on the heal side, not the
 /// whole mechanism.
 ///
