@@ -822,6 +822,7 @@ def roll_components_agree(
     legal: set[int] | None,
     scale: int | None = None,
     damage_scales: tuple[int, int] | None = None,
+    direct_damage_scales: tuple[int, int] | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -897,6 +898,46 @@ def roll_components_agree(
             if _obs_damage > _eng_damage and abs(obs) < abs(eng):
                 return False
             if _eng_damage > _obs_damage and abs(eng) < abs(obs):
+                return False
+            continue
+        if obs_source == "capped_lethal" and _eng_source == "capped_lethal":
+            # BOTH sides clipped. The one-sided test below is unsound here.
+            #
+            # A residual that kills is clipped to whatever HP remains, so each
+            # arm clips to ITS OWN remainder: the arm that took LESS direct
+            # damage has MORE left and therefore the LARGER cap. reports/c88
+            # found these nets agreeing to the point -- -125 + -40 = -133 + -32
+            # = -165 -- while the old rule asserted the observed cap "can only
+            # ever be SMALLER" and rejected them.
+            #
+            # THE BASIS MUST EXCLUDE capped_lethal ITSELF. Conservation makes
+            # the slot-wide totals identical (165 vs 165, difference 0), so a
+            # slot-wide bound rejects every one of these. It is the DIRECT
+            # damage that differs, and the two caps differ by exactly that much.
+            if direct_damage_scales is None:
+                # No slot context (a direct caller, or a test). Fall back to the
+                # one-sided test rather than rejecting: it is SOUND in the
+                # direction it checks -- an observed cap below the engine's is
+                # legitimate whether one side or both are clipped. Only the
+                # obs > eng direction needed the basis, and rejecting here
+                # regressed test_clipped_residual_below_engine_agrees.
+                if abs(obs) <= abs(eng) + 1:
+                    continue
+                return False
+            obs_direct, eng_direct = direct_damage_scales
+            # AN EQUALITY, NOT A BOUND. Both arms are seeded from the same
+            # pre_hp and a capped_lethal means the slot ends at exactly 0, so
+            # the deltas sum to -pre_hp on BOTH arms by construction. The exact
+            # bucket must already match, so the roll-scaled sums are equal too,
+            # and with one cap the cap gap equals the direct gap EXACTLY.
+            #
+            # Review measured this over the whole window: 1,797 cap-vs-cap
+            # comparisons, 45 accepted with unequal caps, and all 45 satisfy the
+            # equality. The +/-1 slack was never load-bearing, and the two
+            # direction guards it replaced were subsumed -- one of which no test
+            # pinned. This form additionally rejects three physically impossible
+            # pairs the inequality accepted, at an identical divergence row set.
+            if (abs(obs) - abs(eng)) != (eng_direct - obs_direct):
                 return False
             continue
         if obs_source == "capped_lethal":
@@ -1275,6 +1316,16 @@ def roll_component_events_agree(
             observed_all=observed_all,
             engine_all=engine_all,
         )
+    # Basis for cap-vs-cap comparisons: DIRECT damage only, excluding the
+    # capped residual being compared. See the capped_lethal branch.
+    _direct_damage = (
+        _roll_damage_scale(
+            [(c.source, c.delta) for c in observed if c.source != "capped_lethal"]
+        ),
+        _roll_damage_scale(
+            [(c.source, c.delta) for c in engine if c.source != "capped_lethal"]
+        ),
+    )
     _slot_damage = (
         _roll_damage_scale([(c.source, c.delta) for c in observed]),
         _roll_damage_scale([(c.source, c.delta) for c in engine]),
@@ -1302,6 +1353,7 @@ def roll_component_events_agree(
             [(engine_component.source, engine_component.delta)],
             legal,
             damage_scales=_slot_damage,
+            direct_damage_scales=_direct_damage,
         ):
             return False
     return True

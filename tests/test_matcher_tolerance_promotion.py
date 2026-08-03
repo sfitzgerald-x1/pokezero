@@ -305,3 +305,99 @@ class SeverityIsAnAllowlist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CappedLethalCascade(unittest.TestCase):
+    """Both sides clipped: the cap difference IS the direct-damage difference.
+
+    reports/c88 sub-shape A. A residual that kills is clipped to whatever HP
+    remains, so each arm clips to its OWN remainder and the arm that took LESS
+    direct damage has the LARGER cap. Conservation is exact. The old rule
+    asserted the observed cap "can only ever be SMALLER than the uncapped tick
+    the engine carries" -- sound when only ONE side is capped, false when both
+    are -- and rejected pairs that conserve to the point.
+
+    The mirror of the capped-HEAL cascade, in the damage direction.
+    """
+
+    def test_the_real_corpus_rows_now_match(self) -> None:
+        for ident, obs_direct, obs_cap, eng_direct, eng_cap in (
+            ("19000002/61", -125, -40, -133, -32),
+            ("19000016/85", -45, -67, -47, -65),
+        ):
+            with self.subTest(row=ident):
+                self.assertEqual(obs_direct + obs_cap, eng_direct + eng_cap)
+                self.assertTrue(
+                    roll_component_events_agree(
+                        [comp("", obs_direct, 0), comp("capped_lethal", obs_cap, 1)],
+                        [comp("", eng_direct, 0), comp("capped_lethal", eng_cap, 1)],
+                        support=None, target_side="side_one", pre_legal=None,
+                    )
+                )
+
+    def test_the_arm_that_took_more_damage_must_have_the_smaller_cap(self) -> None:
+        """Direction. Inverting it is physically impossible: less HP left
+        cannot produce a larger clip."""
+
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -133, 0), comp("capped_lethal", -40, 1)],
+                [comp("", -125, 0), comp("capped_lethal", -32, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
+    def test_the_mirror_direction_is_also_rejected(self) -> None:
+        """Review found the eng_direct > obs_direct guard UNPINNED: deleting it
+        passed all 103 tests. The pinning test asserted only one half while its
+        docstring claimed both. The equality form subsumes both guards, and this
+        pins the half that was uncovered."""
+
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -125, 0), comp("capped_lethal", -32, 1)],
+                [comp("", -133, 0), comp("capped_lethal", -40, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
+    def test_the_one_hp_slack_cannot_be_abused(self) -> None:
+        """The old +/-1 slack let the nets differ by 1 HP in a step whose value
+        is exactly determined -- implying two different pre-HP values for one
+        boundary. The equality rejects it."""
+
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -125, 0), comp("capped_lethal", -41, 1)],
+                [comp("", -133, 0), comp("capped_lethal", -32, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
+    def test_a_cap_gap_wider_than_the_direct_gap_is_rejected(self) -> None:
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -125, 0), comp("capped_lethal", -60, 1)],
+                [comp("", -133, 0), comp("capped_lethal", -32, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
+    def test_the_basis_excludes_the_cap_itself(self) -> None:
+        """The trap. Conservation makes the SLOT-WIDE totals identical -- 165
+        vs 165, difference 0 -- so a slot-wide bound rejects every one of these.
+        Passing the slot basis where the direct basis belongs reproduces that.
+        """
+
+        self.assertFalse(
+            roll_components_agree(
+                [("capped_lethal", -40)], [("capped_lethal", -32)], None,
+                damage_scales=(165, 165), direct_damage_scales=(165, 165),
+            )
+        )
+        self.assertTrue(
+            roll_components_agree(
+                [("capped_lethal", -40)], [("capped_lethal", -32)], None,
+                damage_scales=(165, 165), direct_damage_scales=(125, 133),
+            )
+        )
