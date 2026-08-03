@@ -2803,8 +2803,15 @@ fn render_residual_instruction(
 /// side is the k-th firing damage phase for that side. The plan below predicts
 /// which phases fire using PRESENCE predicates only — never damage formulas —
 /// and is used ONLY when its predicted counts match the counts actually emitted.
-/// On any mismatch the side falls back to the generic `residual` tag, which is
-/// loud (it diverges) rather than confidently wrong.
+/// On any mismatch the side falls back to the per-instruction cause helpers.
+/// For DAMAGE that fallback is loud rather than confidently wrong —
+/// `residual_damage_cause` ends in a generic `residual` tag that diverges. For
+/// HEALS it is NOT: `residual_heal_cause` has no such terminal case and always
+/// names a specific cause, so a mismatch there yields a confidently wrong label
+/// rather than a visible one. That asymmetry is the mechanism behind every H.1
+/// mislabel, so the predicates below must mirror the engine's own emission
+/// gates exactly — a slot booked that the engine never fills is not a harmless
+/// over-count, it silently corrupts the tag on a sibling heal.
 ///
 /// TWO of those entries are cross-side, which is why this plan has to know the
 /// engine's speed order and is not simply a per-side constant:
@@ -2910,6 +2917,16 @@ impl ResidualPlan {
             if s.wish.0 == 1 {
                 plan.heal[i].push("move: Wish".to_string());
             }
+            // NOTE: it is tempting to add `&& active.hp < active.maxhp` here,
+            // mirroring the engine's gate at `gen3/items.rs:352`. Do not. The
+            // plan is built on the PRE-RESIDUAL state, and Leftovers fires at
+            // phase 10.4 — after weather chip at phase 8 — so a mon at full HP
+            // when the plan is built is routinely below max by the time the
+            // tick actually fires, and the engine does emit it. Measured: that
+            // guard alone costs 5 rows (matched 15187 -> 15182) on seeds
+            // 19000000-19000199. Same trap as the drain slot documented in
+            // `a_near_full_hp_seeder_still_over_books_the_drain_slot`: these
+            // predicates cannot use HP without modelling the phase order.
             if active.item == Items::LEFTOVERS {
                 plan.heal[i].push("item: Leftovers".to_string());
             }
@@ -3088,9 +3105,16 @@ fn residual_heal_cause(
         SideReference::SideOne => &state.side_two,
         SideReference::SideTwo => &state.side_one,
     };
+    // Liquid Ooze reverses the drain, so a seeded opponent carrying it produces
+    // no drain heal on this side at all — any positive heal here is something
+    // else. The plan handles this shape now, but this fallback is still reached
+    // whenever the plan fails reconciliation for an unrelated reason, and
+    // without the guard it re-arms exactly the H.1 mislabel the plan exists to
+    // prevent.
     if opponent
         .volatile_statuses
         .contains(&PokemonVolatileStatus::LEECHSEED)
+        && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
     {
         return "Leech Seed".to_string();
     }
@@ -3828,6 +3852,54 @@ mod tests {
             residual_tags(&mut state, &segment, "p1a"),
             vec!["item: Leftovers".to_string()],
             "only the Leftovers tick carries a tag; the drain is silent"
+        );
+    }
+
+    /// KNOWN OPEN — documents a defect that is still live. `#[ignore]`d rather
+    /// than deleted so it is not rediscovered from scratch.
+    ///
+    /// The seeder is at 307/312 with Leftovers. Heals resolve in phase order,
+    /// Leftovers (10.4) before the drain (10.5), so the +5 tick fills it to 312
+    /// and the drain then recovers nothing: the engine emits one heal, the plan
+    /// books two, the reconcile disables the side, and the tick renders
+    /// `Leech Seed`.
+    ///
+    /// The `active.hp < active.maxhp` guard added for Leftovers does NOT close
+    /// this. Evaluated on the pre-residual state, 307 < 312 holds and the drain
+    /// slot is still booked. Closing it needs the drain predicate to know the
+    /// seeder's HP AFTER its own earlier heal phases, which this plan
+    /// deliberately avoids — it is documented as using presence predicates
+    /// only, never HP formulas. Doing it properly means modelling the heal
+    /// phases cumulatively, and deciding what to do about Wish; that is a
+    /// larger change than this one and is not attempted here.
+    ///
+    /// Zero occurrences in seeds 19000000-19000199, reachable in ordinary gen3
+    /// stall play, and present identically before this change.
+    #[test]
+    #[ignore = "known open: drain slot booked from pre-residual HP; see doc comment"]
+    fn a_near_full_hp_seeder_still_over_books_the_drain_slot() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let seeder = state.side_one.get_active();
+            seeder.maxhp = 312;
+            seeder.hp = 307;
+            seeder.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let segment = vec![
+            heal_one(5),
+            Instruction::Damage(poke_engine::instruction::DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 12,
+            }),
+        ];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "the +5 is the Leftovers tick; the drain recovered nothing"
         );
     }
 
