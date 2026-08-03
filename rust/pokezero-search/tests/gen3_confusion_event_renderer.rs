@@ -1597,6 +1597,23 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
     // engine on each: hardcoding the regeneration to `false` breaks the shallow
     // plies, hardcoding it to `true` breaks the deep ones. A fixture at one
     // setting only catches one of those.
+    //
+    // ...and run over TWO callee sets, because parametrising the setting is not
+    // enough on its own. Review demonstrated that the bod -> `true` mutant
+    // survives a set of nine ordinary damaging callees: the engine's unbranched
+    // collapsed damage (94) happens to coincide with one of the renderer's
+    // branched values for all of them, so the mutant is invisible. It is NOT
+    // invisible for Petal Dance, whose crit arm restructures the tail rather
+    // than just changing an integer -- KO -> ToggleSideOneForceSwitch, and no
+    // LOCKEDMOVE duration instruction -- so 94 is in neither branch. The lesson
+    // generalises: a damage-integer-only fixture cannot catch a
+    // branching-shape divergence.
+    for (label, fourth_move) in [
+        // The realistic RestTalk shape, kept because it is what randbats rolls.
+        ("resttalk", Choices::REST),
+        // The shape-changing callee that actually exercises the deep-ply arm.
+        ("shape-changing", Choices::PETALDANCE),
+    ] {
     for branch_on_damage in [true, false] {
         let mut state = confused_state(Choices::SLEEPTALK);
         state
@@ -1616,7 +1633,7 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
         state
             .side_two
             .get_active()
-            .replace_move(PokemonMoveIndex::M3, Choices::REST);
+            .replace_move(PokemonMoveIndex::M3, fourth_move);
         // Splash reads no HP, so C31's 32-roll enumeration does not fire and the
         // renderer's regeneration is on the same footing as the engine.
         state
@@ -1666,7 +1683,8 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
         assert!(
             identified_a_damaging_callee,
             "no branch identified a damaging Sleep Talk callee at \
-             branch_on_damage={branch_on_damage}. If the regeneration stops \
+             branch_on_damage={branch_on_damage}, callee set {label}. If the \
+             regeneration stops \
              tracking the engine's setting, damaging callees become \
              unidentifiable and the largest failure class inflates -- with a \
              suite that only checks for refusals staying green."
@@ -1674,8 +1692,9 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
         assert_eq!(
             none_matched, 0,
             "a defender that reads no HP must not produce `none_matched` \
-             (branch_on_damage={branch_on_damage}); that arm belongs to the \
-             pending_hp_reading_move gate"
+             (branch_on_damage={branch_on_damage}, callee set {label}); that arm \
+             belongs to the pending_hp_reading_move gate"
         );
+    }
     }
 }
