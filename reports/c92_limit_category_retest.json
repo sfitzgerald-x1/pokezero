@@ -1,0 +1,84 @@
+{
+ "schema": "c92-limit-category-retest/1",
+ "headline": "The comparison-limit category is 1-of-8 correct in the current residue. C91 showed 15 of 24 rows in the largest limit family were a matcher artifact; this re-tests the survivors and finds 7 of the remaining 8 also fail the definition.",
+ "the_test": {
+  "definition": "the goal reserves 'limit' for what the methodology genuinely cannot settle -- the canonical case being the engine enumerating a branch SET against Showdown's single realised sample. That is only true if the OBSERVED outcome is reachable in the branch set and the disagreement is merely which arm was sampled.",
+  "so_the_check_is": "is the observed net present among the engine's arms?"
+ },
+ "results": {
+  "19000198/33": {
+   "obs": -116,
+   "arms": [
+    -84,
+    -116
+   ],
+   "reachable": true,
+   "verdict": "GENUINE LIMIT -- the observation is an arm the engine offers; only the sampled arm differs."
+  },
+  "19000024/61": {
+   "obs": 0,
+   "arms": [
+    -95
+   ],
+   "reachable": false
+  },
+  "19000077/47": {
+   "obs": 0,
+   "arms": [
+    -270
+   ],
+   "reachable": false
+  },
+  "19000089/53": {
+   "obs": 0,
+   "arms": [
+    -217
+   ],
+   "reachable": false
+  },
+  "19000199/61": {
+   "obs": 0,
+   "arms": [
+    -316
+   ],
+   "reachable": false
+  },
+  "19000147/125": {
+   "obs": -78,
+   "arms": [
+    -134,
+    -134,
+    0
+   ],
+   "reachable": false
+  },
+  "19000191/63": {
+   "obs": -137,
+   "arms": [
+    -106,
+    -123,
+    0
+   ],
+   "reachable": false
+  },
+  "19000008/54": {
+   "obs": 16,
+   "arms": [
+    -52
+   ],
+   "reachable": false,
+   "note": "filed limit:world_sample_drag_target; the observation is a HEAL against a damaging arm."
+  }
+ },
+ "the_visible_sub_shape": "Four of the seven -- 19000024/61, 19000077/47, 19000089/53, 19000199/61 -- share one signature: the observation took NO damage at all (net 0) while the engine offers a single damaging arm and no zero arm. That is an accuracy/immunity/protect outcome missing from the support, not a sampling disagreement. It is the same class as C89: a reachable sim outcome absent from the engine's branch set, i.e. an ENGINE GAP.",
+ "combined_with_c91": {
+  "limit_rows_originally": 25,
+  "closed_by_a_matcher_fix": 15,
+  "still_filed_as_limit": 8,
+  "actually_meet_the_definition": 1,
+  "so": "1 of 25 limit adjudications in this window survives scrutiny."
+ },
+ "what_this_means_for_the_stop_condition": "The goal stops when the remaining divergence is ONLY dispositions of the third kind. On these numbers almost nothing currently labelled a limit is one -- so the residue is far more tractable than the family table suggests, and simultaneously the stop condition is further away, because rows previously written off as unanswerable are in fact open work. Both readings are the same fact: the label was doing no work.",
+ "how_the_category_went_wrong": "'limit' was assigned from a divergence CLASS name -- roll_divergent_lethality -- rather than from the branch-set test. The class name describes what the matcher complained about, not whether the disagreement is settleable. Nothing re-derived the label against evidence once the class was assigned, and the era-stamping discipline re-derived the STAMP, not the JUDGEMENT.",
+ "disposition": "the 7 rows return to open. 4 are a named sub-shape (no-damage outcome absent from support) and are next in rows-x-impact order after the current PR."
+}
