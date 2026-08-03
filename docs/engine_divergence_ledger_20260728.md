@@ -6664,20 +6664,20 @@ Rules:
 
    But `engine_fingerprint` alone is **not sufficient either**, and the gap is
    exactly the one this section is about. `build_inputs()`
-   (`scripts/engine_build_fingerprint.py:123-131`) hashes the patch stack,
+   (`build_inputs()` in `scripts/engine_build_fingerprint.py`) hashes the patch stack,
    `rust/pokezero-search/src/**` and the Cargo inputs — **not `scripts/`**. So a
    change to `engine_transition_differential.py`, the file that computes these
    very counters, leaves the fingerprint untouched. `sweep_exact` and
    `sweep_base` are that case: identical fingerprint, different matcher.
 
    "Assert a clean tree" is *not* the rule, because it is unauditable —
-   `_provenance()` (`engine_transition_differential.py:2437-2454`) records only
+   `_checkpoint_provenance()` in `engine_transition_differential.py` records only
    `source_commit`, `engine_fingerprint` and `image_commit`, so no artifact says
    whether the tree was dirty — and enforcing it literally would reject four of
    the five sweeps this section rests on, whose patches were deliberately
    uncommitted at measurement time.
 
-   **Owed:** add `harness_sha256` and `worktree_dirty` to `_provenance()`. Until
+   **Owed:** add `harness_sha256` and `worktree_dirty` to `_checkpoint_provenance()`. Until
    then rules 1 and 2 are checkable from the JSON and rule 3 is not.
 4. The renderer keeps a replica of the engine's `end_of_turn_triggered`
    (`events.rs:406`, original at `gen3/generate_instructions.rs:4646` — engine line numbers drift, `third_party/poke-engine-src` is gitignored). Changing
