@@ -40,5 +40,21 @@
   "not_yet_implemented": true,
   "prediction_if_fixed": "these 10 rows match. NOT registered as a measurement yet -- I have established the chain from source but have NOT confirmed by instrumentation that these specific engine arms lack the |-crit| line. That is the next step and it is one probe."
  },
- "honest_gap_in_this_finding": "The rejection path is established by elimination: magnitude agrees in isolation, so the cross-check is the only remaining rejector. I have NOT directly observed the absence of the |-crit| line in these ten branches -- the retained repros do not carry engine branch events. Confirming it means re-rendering one boundary and reading the branch protocol. Until then the chain is source-derived, not measured."
+ "honest_gap_in_this_finding": "CLOSED -- see REPLAY_CONFIRMATION.",
+ "REPLAY_CONFIRMATION": {
+  "method": "scripts/replay_residue.py, which re-derives each branch's FULL component set against the vendored engine. This is the method c94 establishes as correct; branch_misses cannot answer it, because it reports one slot per branch.",
+  "row": "19000091/40",
+  "observed": {
+   "p1": "itemleftovers=+14",
+   "p2": "itemleftovers=+18, move=-52, |-crit| present"
+  },
+  "engine_branches": {
+   "93.75%": "p1 itemleftovers=+14 | p2 itemleftovers=+18, move=-26   (non-crit arm)",
+   "3.91%": "p1 itemleftovers=+14 | p2 itemleftovers=+18, move=-51   (THE CRIT ARM)",
+   "2.34%": "p1 (none) | p2 capped_lethal=-55"
+  },
+  "what_it_establishes": "the 3.91% arm matches the observation on EVERY component -- both Leftovers ticks exact -- and differs only on the direct hit, -51 against -52, which passes in isolation (window around 51 is 45.9 to 56.6). The crit arm is present, complete and numerically agreeing, and the row is still divergent.",
+  "therefore": "by elimination over a COMPLETE branch set rather than a fragment, the only remaining rejector is the crit cross-check at engine_transition_differential.py:1342, which fails when observed.critical is not support.critical. The observation carries |-crit|, so support.critical is False -- the renderer did not tag the engine's own crit arm. That is the exact-value gate at events.rs:2156-2162.",
+  "c94s_trap_in_miniature": "the 2.34% arm's miss string reads 'obs=[itemleftovers 14] eng=[]', which my retracted method would have read as an arm at net 0. Replay shows p2 capped_lethal=-55 with no p1 components -- the miss reported p1's complaint only. The fragment happened to be accurate FOR p1, which is exactly why the error stayed invisible."
+ }
 }
