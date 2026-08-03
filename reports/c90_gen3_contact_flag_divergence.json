@@ -59,7 +59,7 @@
   "class": "ENGINE FIX",
   "the_fix": "in the gen3 build, ADD contact to OVERHEAT and ANCIENTPOWER, and REMOVE it from COVET, FAKEOUT and FEINTATTACK.",
   "scope": "five moves, two directions, derived by resolving the mod chain rather than grepping one file.",
-  "blast_radius_warning": "contact gates Rough Skin, Static, Poison Point, Flame Body, Effect Spore, Cute Charm and King's Rock-likes. Changing it in EITHER direction changes behaviour wherever those interact, so this needs the measured treatment C87 got: branch counts, the tactics gate, and a check that no currently-matched row becomes divergent. The three removals have zero observed uses in this window, so the sweep will not evidence them -- they need a targeted probe.",
+  "blast_radius_warning": "contact gates six abilities that the gen3 build actually implements, every one of them behind attacker_choice.flags.contact: ROUGHSKIN (abilities.rs:193), POISONPOINT (:672), EFFECTSPORE (:693), CUTECHARM (:721), FLAMEBODY (:745), STATIC (:779). King's Rock is NOT among them -- the gen3 build has no King's Rock at all, so an earlier draft's mention of it was over-inclusion. Changing it in EITHER direction changes behaviour wherever those interact, so this needs the measured treatment C87 got: branch counts, the tactics gate, and a check that no currently-matched row becomes divergent. The three removals have zero observed uses in this window, so the sweep will not evidence them -- they need a targeted probe.",
   "not_yet_implemented": true
  },
  "note_on_size": "one OBSERVED row in this 200-game window. The three removals are latent. By rows x search-impact this ranks below the matcher shapes; recorded now because the cause is established and the enumeration is finally two-directional.",
