@@ -370,6 +370,21 @@ fn move_order(state: &State, c1: &Choice, c2: &Choice) -> Order {
 /// removal and the residual instructions failed the grammar as
 /// `segmentation_failed`).
 fn end_of_turn_triggered(state: &State, s1: &MoveChoice, s2: &MoveChoice) -> bool {
+    // Double-faint replacement ply: both actives are fainted and both sides are
+    // sending in a replacement. Showdown runs no residual phase here — the
+    // protocol is `|switch|`, `|switch|`, `|turn|` with no upkeep block at all,
+    // because a replacement is not a turn and the faint ply that preceded it
+    // already ran residuals. The one-sided shapes are handled at the bottom of
+    // this function; this is the two-sided one, and it has to be tested before
+    // the `force_switch` check below, which a replacement sets and which would
+    // otherwise short-circuit straight to `true`.
+    if matches!(s1, MoveChoice::Switch(_))
+        && matches!(s2, MoveChoice::Switch(_))
+        && state.side_one.get_active_immutable().hp <= 0
+        && state.side_two.get_active_immutable().hp <= 0
+    {
+        return false;
+    }
     if state.side_one.force_switch || state.side_two.force_switch {
         return true;
     }
