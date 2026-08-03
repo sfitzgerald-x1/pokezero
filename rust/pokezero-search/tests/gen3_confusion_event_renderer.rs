@@ -1569,3 +1569,109 @@ fn the_none_matched_subcase_is_reachable_via_the_defenders_move() {
          (bad -- the largest failure class is being mis-diagnosed)"
     );
 }
+
+/// A Sleep Talk callee must sometimes be IDENTIFIED, not only refused.
+///
+/// Every other sleeptalk fixture in this file asserts a refusal, which left the
+/// happy path completely unpinned. Independent review showed the consequence:
+/// hardcoding the regeneration's `branch_on_damage` to either `false` or `true`
+/// left all 343 tests green. The `false` variant is the serious one -- it
+/// re-creates the exact pre-C87 divergence (renderer collapses damage while the
+/// engine branches it), so under production's `branch_on_damage: true` every
+/// damaging callee would fail to identify and be refused as `none_matched`. The
+/// measurement would swing wholesale with a green suite, because a fixture that
+/// only asserts `none_matched > 0` is satisfied by MORE refusals.
+///
+/// Same shape as the `none_matched` fixture but with the defender on a move that
+/// does NOT trip `pending_hp_reading_move`, so identification should succeed.
+/// This is also the only test that pins C87's engine/renderer alignment from the
+/// correct side.
+#[test]
+fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
+    // Run at BOTH damage-branching settings. Production uses `true` for plies
+    // 1-2 (`tree.rs:545`) and `false` deeper, and the renderer must track the
+    // engine on each: hardcoding the regeneration to `false` breaks the shallow
+    // plies, hardcoding it to `true` breaks the deep ones. A fixture at one
+    // setting only catches one of those.
+    for branch_on_damage in [true, false] {
+        let mut state = confused_state(Choices::SLEEPTALK);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state.side_two.get_active().status = PokemonStatus::SLEEP;
+        state.side_two.get_active().rest_turns = 0;
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M1, Choices::BODYSLAM);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M2, Choices::EARTHQUAKE);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M3, Choices::REST);
+        // Splash reads no HP, so C31's 32-roll enumeration does not fire and the
+        // renderer's regeneration is on the same footing as the engine.
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state.side_one.get_active().speed = 1;
+        state.side_two.get_active().speed = 500;
+
+        let branches = generate_instructions_from_move_pair(
+            &mut state,
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            branch_on_damage,
+        );
+
+        let mut identified_a_damaging_callee = false;
+        let mut none_matched = 0usize;
+        for branch in &branches {
+            let r = render_branch_events(
+                &mut state.clone(),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &branch.instruction_list,
+                branch_on_damage,
+                &EventContext {
+                    species: [vec!["Lead".into()], vec!["Opponent".into()]],
+                    turn: 1,
+                    hp_percent: [false, false],
+                },
+            );
+            if r.attribution_unsafe
+                .iter()
+                .any(|x| x == "sleeptalk_called_unidentified:none_matched")
+            {
+                none_matched += 1;
+                continue;
+            }
+            let text = r.lines.join("\n");
+            if text.contains("|[from] Sleep Talk")
+                && (text.contains("|bodyslam|") || text.contains("|earthquake|"))
+            {
+                identified_a_damaging_callee = true;
+            }
+        }
+
+        assert!(
+            identified_a_damaging_callee,
+            "no branch identified a damaging Sleep Talk callee at \
+             branch_on_damage={branch_on_damage}. If the regeneration stops \
+             tracking the engine's setting, damaging callees become \
+             unidentifiable and the largest failure class inflates -- with a \
+             suite that only checks for refusals staying green."
+        );
+        assert_eq!(
+            none_matched, 0,
+            "a defender that reads no HP must not produce `none_matched` \
+             (branch_on_damage={branch_on_damage}); that arm belongs to the \
+             pending_hp_reading_move gate"
+        );
+    }
+}
