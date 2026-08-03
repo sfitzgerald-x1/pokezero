@@ -2913,11 +2913,21 @@ impl ResidualPlan {
             if active.item == Items::LEFTOVERS {
                 plan.heal[i].push("item: Leftovers".to_string());
             }
+            // Liquid Ooze reverses the drain: the seeder takes damage instead of
+            // healing, and the engine emits that as a NEGATIVE Heal on the
+            // seeder (gen3/generate_instructions.rs:3624-3647, where the
+            // positive-drain branch is the `else`). There is no drain heal to
+            // place, so planning a slot for one leaves `plan.heal` one longer
+            // than `emitted_heal` — which counts only `heal_amount > 0` — the
+            // reconcile below marks the whole side unusable, and the seeder's
+            // Leftovers tick falls through to the `[from] Leech Seed` label.
+            // That is the legacy H.1 bug this plan exists to prevent.
             drains_opponent[i] = opponent
                 .volatile_statuses
                 .contains(&PokemonVolatileStatus::LEECHSEED)
                 && active.hp > 0
-                && opponent.get_active_immutable().hp > 0;
+                && opponent.get_active_immutable().hp > 0
+                && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE;
         }
 
         // The seeder's silent drain heal is emitted at the SEEDED side's 10.5
