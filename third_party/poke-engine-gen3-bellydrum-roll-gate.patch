@@ -1,0 +1,22 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1375,9 +1375,18 @@
+ /// support entirely (seed 17000037 step 55: eight of sixteen Psychic crit rolls
+ /// leave Gyarados' Substitute failing, and the representative roll is on the
+ /// succeeding side while Showdown's roll was not).
++///
++/// Belly Drum is the same shape one gate wider: gen3 refuses it unless the user
++/// is above HALF its maximum (Showdown `data/moves.ts:1223`
++/// `target.hp <= target.maxhp / 2`; engine `choice_effects.rs:645`
++/// `attacker.hp > attacker.maxhp / 2`, faithful on both parities). A roll range
++/// straddling the half decides whether the drum happens at all -- whether
++/// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
++/// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
++/// fires, while the representative 135 leaves 126 and it correctly declines).
+ fn pending_hp_reading_move(choice: &Choice) -> bool {
+     matches!(
+         choice.move_id,
+-        Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE
++        Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE | Choices::BELLYDRUM
+     )
+ }

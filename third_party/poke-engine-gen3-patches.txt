@@ -1236,3 +1236,12 @@ poke-engine-gen3-confusion-snapout-timing.patch
 # Also clears the stale first_move and balances the 16-roll loop's apply/reverse.
 # Registered in reports/c87_sleeptalk_crit_arm_absence.json.
 poke-engine-gen3-sleeptalk-crit-arm.patch
+
+# Belly Drum reads the user's own HP as a GATE after the attacker's hit lands:
+# gen3 refuses it unless the user is above half its maximum. A damage roll range
+# straddling that half decides whether the drum happens at all, so collapsing to
+# a representative roll drops one side from the branch support. Exactly the
+# Substitute case (maxhp/4) one gate wider (maxhp/2); the per-roll gates
+# themselves are faithful, the SUPPORT was incomplete.
+# Registered in reports/c96_unattributed_source_level_causes.json.
+poke-engine-gen3-bellydrum-roll-gate.patch
