@@ -1,73 +1,72 @@
 {
- "schema": "c96-unattributed-source-level-causes/1",
- "premise": "the goal's: unattributed is a gap in the classifier, never a gap in what is knowable. All four rows resolved by replay against the two reference sources. None needed an attribution rule widened.",
- "method": "scripts/replay_residue.py on /tmp/sweep_exact.json (39-row current-era sweep). Full branch sets, per the C94 retraction.",
- "note_on_c84": "C84 anatomised the THEN-8 unattributed rows using branch_misses and is contaminated by the C94 method error -- its 'engine majority arm carries no damage / empty engine component list' reading (rows 19000093/51,53) is exactly the phantom that method produces. Replay shows those arms are NOT empty of instructions; they are voided by the renderer. C84's crit-arm-absent reading is likewise superseded by C93. C84 needs the same retraction treatment as C92.",
- "rows": {
-  "19000073/1": {
-   "family_now": "UNATTRIBUTED",
-   "class": "roll_scaled_component",
-   "boundary": "Manectric Thunderbolt into Linoone (maxhp 261), then Linoone Belly Drum",
-   "showdown": "Thunderbolt -127 leaves 134/261; Belly Drum then costs 130 leaving 4/261 and sets atk to +6",
-   "observed": "p1 move=-127, move=-130",
-   "engine_84pct": "p1 move=-135 ONLY -- no Belly Drum damage, no boost",
-   "cause": "the Belly Drum HP GATE is straddled by the damage roll. Showdown moves.ts:1222-1227 refuses when target.hp <= maxhp/2 (130.5); the engine gen3/choice_effects.rs:642-650 refuses when NOT attacker.hp > maxhp/2 (integer 130). The two gates are FAITHFUL to each other on both parities. With the realised roll 127 the survivor is at 134 > gate, so Belly Drum fires. With the engine's collapsed representative roll 135 the survivor is at 126 <= gate, so Belly Drum correctly declines. The engine is RIGHT for the roll it was shown.",
-   "why_no_matching_arm": "damage collapsing. Without branch_on_damage the engine offers one representative non-crit roll (135) plus crit arms (253, capped_lethal 261); the realised 127 is not among them, so no arm can carry the Belly Drum consequence.",
-   "disposition": {
-    "class": "COMPARISON LIMIT",
-    "detail": "the same shape as the registered limit:roll_divergent_lethality, with the threshold being Belly Drum's maxhp/2 gate rather than 0 HP. A branch set against a single realised sample: the methodology cannot settle it while the realised roll is absent from the support.",
-    "caveat": "this is a limit only because damage is collapsed. It is not a statement that the engine is wrong -- it is demonstrably right. If branch_on_damage were extended to roll-gated self-damage effects the row would resolve, so the limit is a property of the instrument's resolution, not of the engine."
-   }
-  },
-  "19000093/51": {
-   "family_now": "UNATTRIBUTED",
-   "class": "roll_scaled_component",
-   "boundary": "Rayquaza Rock Slide into Seaking; Seaking Hydro Pump into Rayquaza; rain upkeep; Seaking Leftovers",
-   "observed": "p1 move=-62 | p2 itemleftovers=+18, move=-102",
-   "engine": "the three largest arms (44.30%, 25.31%, 11.81% -- over 85% of the mass) carry NO components at all and are marked LOSSY=['segmentation_failed']. Only 10% of the mass is usable.",
-   "cause": "NOT an engine error. The underlying instruction list of the majority arm is correct and complete: Damage SideTwo 94, DecrementPP SideTwo M2, Damage SideOne 63, DecrementWeatherTurnsRemaining, Heal SideTwo 18 -- both hits present, in Showdown's order. The RENDERER voids it. rust/pokezero-search/src/events.rs:766-779: when segment() returns None the branch is returned with zero components. segment() (events.rs:416+) searches for a first-mover instruction prefix with a consistent second-mover continuation and yields None when no split is consistent; on this boundary none is.",
-   "not_isolated": "the specific predicate inside segment() that rejects every split here is NOT yet pinned. Candidate worth checking first: the first mover's DecrementPP is absent from the list while the second mover's is present, so a PP-marker-delimited split has nothing to anchor the first segment on.",
-   "disposition": {
-    "class": "RENDERER FIX",
-    "detail": "segment() must not void a branch whose instruction list is well-formed. Failing that, the matcher must not treat a segmentation_failed branch as a usable arm carrying zero components -- silently reading 'no components' off a branch that was never rendered is the same reading error C94 retracted, promoted into the instrument.",
-    "not_implemented": true
-   }
-  },
-  "19000093/53": {
-   "family_now": "UNATTRIBUTED",
-   "class": "roll_scaled_component",
-   "boundary": "Rayquaza Dragon Dance; Seaking Megahorn into Rayquaza (resisted); rain ends; Seaking Leftovers",
-   "observed": "p1 move=-53 | p2 itemleftovers=+18",
-   "engine_79pct": "p1 residual=-55 | p2 itemleftovers=+18",
-   "cause": "a LABELLING error, not a numeric one. Raw instructions are Boost SideOne Attack 1, Boost SideOne Speed 1, Damage SideOne 55, DecrementWeatherTurnsRemaining, ChangeWeather RAIN->NONE, Heal SideTwo 18 -- Megahorn's damage in exactly Showdown's position. But no move marker (DecrementPP / SetLastUsedMove for SideTwo) precedes it, so the segmenter files it in the RESIDUAL segment. residual is an EXACT-bucket component, so the legal roll difference 55 vs 53 is compared for equality and rejected. In the move bucket the same pair matches under ordinary roll tolerance.",
-   "contrast": "19000093/51 above DOES carry DecrementPP SideTwo for the second mover. The marker is emitted inconsistently between the two boundaries, which is the thing to fix.",
-   "disposition": {
-    "class": "RENDERER or ENGINE FIX",
-    "detail": "emit the second mover's move marker consistently so its damage lands in the move segment. A move's damage must never be bucketed as a residual -- that silently converts a roll-tolerant comparison into an exact one.",
-    "not_implemented": true
-   }
-  },
-  "19000152/53": {
-   "family_now": "UNATTRIBUTED",
-   "class": "roll_scaled_component",
-   "boundary": "p1 switches to Armaldo; Espeon Hidden Power into Armaldo; Espeon Leftovers; Espeon perish count reaches 0 and it faints",
-   "showdown": "|-heal|p2a: Espeon|132/224|[from] item: Leftovers, then |-start|p2a: Espeon|perish0, |upkeep|, |faint|p2a: Espeon -- the faint carries NO -damage line",
-   "observed": "p1 move=-118 | p2 itemleftovers=+14",
-   "engine_75pct": "p1 move=-111 | p2 itemleftovers=+14, capped_lethal=-132",
-   "cause": "a representation difference about how a non-damaging faint is expressed. Perish Song kills by setting HP to 0 with no damage message, so Showdown's component set has nothing for it. The engine renders the same state change as capped_lethal=-132 (Espeon's full HP after its Leftovers tick), which the matcher counts as an extra engine component with no observed counterpart. Both descriptions of the end state are identical; only the event vocabulary differs.",
-   "roll_note": "p1's -118 vs -111 is an ordinary Hidden Power roll difference inside the window and is not what rejects this row.",
-   "disposition": {
-    "class": "MATCHER or RENDERER FIX",
-    "detail": "a |faint| with no preceding |-damage| must reconcile against an engine capped_lethal equal to the victim's remaining HP. Either the renderer should not emit a damage component for a perish/curse-class faint, or the matcher should recognise the pairing. This is decidable from both sources and is NOT a comparison limit.",
-    "not_implemented": true
-   }
+ "schema": "c96-unattributed-source-level-causes/2",
+ "REVISION_NOTE": "v1 filed 19000073/1 as a COMPARISON LIMIT, rested that on a false statement about the harness, and gave a cause for 19000093/53 that the renderer source refutes. Rewritten after adversarial review. The premise held: all four rows are knowable from the two sources, and none needed an attribution rule widened.",
+ "era": {
+  "engine_fingerprint": "d9cab2b1cf9fc011e410229b46e6aa7ec9c400231c5671d0979b1fcda2dfd260",
+  "note": "third_party/poke-engine-src is gitignored; engine line citations are valid at this fingerprint only.",
+  "artifact": "/tmp/sweep_exact.json, uncommitted and unhashed -- a real weakness."
+ },
+ "19000073_1": {
+  "STATUS": "RECLASSIFIED. v1 called this a comparison limit. It is an ENGINE SUPPORT GAP.",
+  "boundary": "Manectric Thunderbolt into Linoone (maxhp 261), then Linoone Belly Drum",
+  "showdown": "Thunderbolt -127 leaves 134/261; Belly Drum then costs 130, leaving 4/261, and sets atk to +6",
+  "engine_84pct": "move=-135 only. No Belly Drum damage, no boost.",
+  "the_gates_are_faithful": "Showdown data/moves.ts:1223 refuses when target.hp <= maxhp/2; the engine gen3/choice_effects.rs:642-650 fires when attacker.hp > maxhp/2 with INTEGER division. Identical on both parities: for maxhp = 2k both fire at hp > k; for maxhp = 2k+1 Showdown fires at hp > k+0.5 i.e. hp >= k+1, and the engine's integer maxhp/2 = k fires at hp > k i.e. hp >= k+1. Damage agrees too -- directDamage floors via clampIntRange, so 130.5 -> 130 = the engine's 261/2. The per-roll simulation is CORRECT.",
+  "showdown_predicate_is_wider_than_v1_quoted": "moves.ts:1223 is `target.hp <= target.maxhp/2 || target.boosts.atk >= 6 || target.maxhp === 1`. The engine implements NEITHER of the other two disjuncts: at atk +6 above half HP it still pays maxhp/2 and pushes a Boost of amount 0 (Showdown refuses outright); at maxhp == 1 it fires with damage 0 (Showdown's Shedinja clause refuses). Neither rejects this row, but v1 elided two thirds of the predicate on the line it cited, and both are separate latent engine bugs.",
+  "v1s_FALSE_PREMISE": "v1 said 'without branch_on_damage the engine offers one representative non-crit roll'. branch_on_damage IS ON. engine_transition_differential.py:1824-1826 and scripts/replay_residue.py:118 both pass True. The realised roll is absent for a different reason entirely.",
+  "the_real_cause": "the 16-roll preservation this row needs already exists and Belly Drum is simply not on its allowlist. generate_instructions.rs:2909-2916 keeps all sixteen gen3 rolls when branch_on_damage && choice.first_move && pending_hp_reading_move(defender_choice) && fixed_damage.is_none(). pending_hp_reading_move at :1379-1384 is `FLAIL | REVERSAL | SUBSTITUTE`. Thunderbolt moves first and Belly Drum is the defender_choice, so the gate would fire -- BELLYDRUM is just missing from the enum.",
+  "the_precedent_is_exact": "third_party/poke-engine-gen3-substitute-hp-gate.patch added SUBSTITUTE to that same allowlist for the same reason: gen3 refuses Substitute below a quarter of max, so a roll range straddling the quarter decides whether it happens at all, and collapsing to a representative drops one side from the support. Substitute's gate is maxhp/4 (choice_effects.rs:871); Belly Drum's is maxhp/2 (:645). Same class, already adjudicated once as an ENGINE defect and fixed by an ENGINE patch.",
+  "why_v1s_label_was_the_charter_failure": "the charter defines a comparison limit as one no same-transition partition can reach -- permanent -- and an engine gap as the support lacking a transition the sim can reach. A partition reaches this; the realised roll 127 = floor(146*87/100) is legal and absent from the support. v1 also used limit:roll_divergent_lethality as its shape precedent, which the charter names as one of three adjudications that turned out to rest on incomplete branch support. It was re-running the exact failure mode, citing the canonical instance of it as warrant.",
+  "disposition": {
+   "class": "ENGINE FIX",
+   "implemented": false,
+   "the_fix": "add BELLYDRUM to pending_hp_reading_move.",
+   "gate": "needs a tactics-suite regression gate and a single-variable re-sweep reporting matched and skip alongside diverged, per the rules in PR #1038.",
+   "expected_cost": "widening the allowlist multiplies branch counts on affected boundaries; that cost must be measured, not assumed negligible."
+  }
+ },
+ "19000093_51": {
+  "STATUS": "CAUSED. Disposition softened -- v1's 'NOT an engine error' outran the evidence.",
+  "confirmed": "events.rs:766-779: when segment() returns None the branch is returned with ZERO components while the instruction list itself is complete and correct (both hits, Showdown's order). Over 85% of the branch mass is voided this way.",
+  "v1s_named_candidate_is_REFUTED": "v1 guessed the missing first-mover DecrementPP broke the split. It cannot: segment() does not read move markers at all. It re-runs generate_instructions_from_move per side and PREFIX-MATCHES the regenerated list against the full one (events.rs:410-412, :453-460, :478-490), so a marker absent from the engine's list is equally absent from the regeneration.",
+  "what_segmentation_failure_actually_means": "the PAIR-generated instruction list is not reproducible by composing the two per-move generations. That is at least as plausibly an engine composition artifact as a renderer one.",
+  "disposition": {
+   "class": "UNDETERMINED -- renderer or engine composition",
+   "implemented": false,
+   "note": "v1 filed this RENDERER FIX / NOT an engine error with the predicate admittedly unpinned. The hedge was honest; the disposition on top of it was not."
+  }
+ },
+ "19000093_53": {
+  "STATUS": "BUCKET CLAIM CONFIRMED, CAUSE REFUTED.",
+  "confirmed": "_ROLL_SCALED_SOURCES at engine_transition_differential.py:310-312 does not contain 'residual', so a residual component is exact-compared; move damage is source '' and gets roll tolerance. 55 vs 53 rejects in one bucket and passes in the other. That part of v1 holds.",
+  "v1s_cause_is_REFUTED": "v1 said the missing move marker causes the segmenter to file Megahorn's damage as a residual, and prescribed emitting the marker consistently. segment() does not read markers (see 51 above), so the prescribed fix cannot work. The 'inconsistent emission' is also a deliberate commented engine rule, not an inconsistency: generate_instructions.rs:2800-2803 only decrements PP when the move is under 10 PP 'since that is when it starts to matter'. Hydro Pump (5) qualifies; Megahorn (10) and Rock Slide do not. SetLastUsedMove is separately gated on state.use_last_used_move (:2849), off in these states.",
+  "v1s_own_contrast_was_counter_evidence": "v1 offered row 51 as showing the marker IS emitted elsewhere. Row 51 has the marker and is the row that fails segmentation outright; row 53 lacks it and segments fine. That is the opposite of the claimed correlation.",
+  "disposition": {
+   "class": "OPEN -- bucket effect understood, cause not",
+   "implemented": false
+  }
+ },
+ "19000152_53": {
+  "STATUS": "CAUSED. Unchanged from v1 and independently confirmed by review.",
+  "cause": "Perish Song kills with no damage message: base data/moves.ts onEnd emits |-start| perish0 then target.faint(), and faint() emits |faint| with no |-damage|. gen3 has no perishsong override; gen4's overrides only onResidualOrder. So Showdown's component set is empty for the faint while the engine renders capped_lethal=-132. Identical end states, different event vocabulary.",
+  "why_tolerance_does_not_save_it": "capped_lethal IS roll-scaled, but with no observed counterpart this is a COUNT mismatch, not a magnitude one, so tolerance never applies.",
+  "disposition": {
+   "class": "MATCHER or RENDERER FIX",
+   "implemented": false,
+   "detail": "a |faint| with no preceding |-damage| must reconcile against an engine capped_lethal equal to the victim's remaining HP. Both sides are fully determined from source, so this is NOT a comparison limit."
   }
  },
  "tally": {
-  "engine_fixes": 0,
-  "renderer_or_matcher_fixes": 3,
-  "comparison_limits": 1,
-  "comment": "three of the four are instrument defects and one is a genuine limit. NOT ONE of the four required an attribution rule to be widened, and in none of them is the gen3 engine's simulation wrong."
+  "engine_support_gaps": 1,
+  "caused_not_implemented": 1,
+  "undetermined": 2,
+  "comparison_limits": 0,
+  "v1_said": "0 engine fixes, 3 renderer/matcher fixes, 1 comparison limit, and 'in none of them is the engine's simulation wrong'.",
+  "why_that_was_wrong": "it collapsed the two objectives the charter keeps apart. On 19000073/1 the per-roll simulation IS right and the engine is STILL at fault, because the fidelity objective is about whether the support contains every reachable sim transition, not about per-roll correctness. Written as v1 wrote it, the sentence is the exact reading the charter says will not surface that class of error.",
+  "honest_position": "one engine support gap, one caused matcher/renderer fix, two undetermined, and no comparison limits."
  },
- "bonus_finding_for_c95_I5": "C95 left I5 hedged between engine and harness. events.rs:751-765 settles it: the renderer already special-cases replacement plies, but only for (switch, none) shapes -- 'Replacement / pivot plies ((switch, none) shapes): no end-of-turn phase'. I5's boundary is (switch, SWITCH), which that predicate does not cover, so end_of_turn_triggered returns true and Leftovers is applied on a turn Showdown never ran. The fix is to extend the existing replacement predicate to the double-switch shape, in the renderer."
+ "side_findings": {
+  "c95_I5_hedge": "v1 claimed to settle it by citing events.rs:751-765. That range is pre_ply_replacement, which does not gate the end-of-turn phase at all -- it is read by finish_ply to decide the |turn| line. The gating function is end_of_turn_triggered at :372-390. And 'extend the replacement predicate to the double-switch shape' as worded would suppress residuals on an ordinary VOLUNTARY double switch, which is a full turn and must keep its Leftovers. PR #1037 implemented a both-actives-fainted version and was still closed as a regression.",
+  "c84": "the contamination claim stands and is already applied on main via reports/c94. v1 stated it as though unaddressed."
+ }
 }
