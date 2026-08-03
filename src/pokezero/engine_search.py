@@ -32,6 +32,7 @@ Shared boundaries (both modes):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import random
@@ -422,6 +423,45 @@ def _blocker_bucket(token: str) -> str:
     if kind == "baton-pass" and operand:
         return f"{kind}:{operand}"
     return kind
+
+
+# Budget for one crate-error `world_failure_reasons` key. Was 160, which the
+# attract sub-case split (#1030) outgrew: the refusal message is
+# `attribution-unsafe renderer branch rejected before <lane>: <slugs>`, whose
+# prefix alone eats ~68 chars, and one fully-live attract slug is 68 more
+# (`attract_empty_tail_ambiguous:paralyzed+miss+noop+volatile+cannot_act`). Two
+# sides refusing with DIFFERENT slug sets is routine and blew straight past 160.
+_REASON_DETAIL_LIMIT = 512
+
+
+def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
+    """Bound a telemetry reason so overflow is VISIBLE, never silently aliasing.
+
+    A plain ``text[:limit]`` is the wrong instrument for a measurement key. It
+    drops the tail without saying so, and — worse — two different reasons that
+    share a prefix collapse onto the SAME key: the attract sub-case sets
+    ``{paralyzed+cannot_act, paralyzed+miss}`` and
+    ``{paralyzed+cannot_act, paralyzed+miss+volatile}`` both truncated to the
+    identical ``...paralyzed+mis`` bucket at 160. The `+volatile` arm is exactly
+    the non-downgradeable mass the split exists to find, so the old seam could
+    hide the answer inside a bucket that looked like a different question.
+
+    Overflow now carries a digest of the FULL text, so distinct reasons keep
+    distinct keys and the truncation announces itself in the label rather than
+    having to be inferred from a suspiciously round length.
+    """
+
+    if len(text) <= limit:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+    suffix = f"~trunc:{digest}"
+    # A limit too small to hold the suffix keeps the digest and drops the head:
+    # the identity of the reason is worth more than a few leading characters,
+    # and returning something LONGER than the requested bound would defeat the
+    # only job this function has. `max(..., 0)` alone did not guard this.
+    if limit <= len(suffix):
+        return suffix[:limit]
+    return f"{text[: limit - len(suffix)]}{suffix}"
 
 
 @dataclass
@@ -867,7 +907,9 @@ class EngineMctsPolicy:
                 )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
-                    str(error).splitlines()[0][:160] if str(error) else type(error).__name__
+                    _bounded_reason_detail(str(error).splitlines()[0])
+                    if str(error)
+                    else type(error).__name__
                 )
                 self.stats.world_failure_reasons[f"crate_search_hp: {detail}"] += 1
                 continue
@@ -1299,7 +1341,11 @@ class EngineMctsPolicy:
                     native.search_batched_multi_encoded(*search_args)
                 )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
-                detail = str(error).splitlines()[0][:160] if str(error) else type(error).__name__
+                detail = (
+                    _bounded_reason_detail(str(error).splitlines()[0])
+                    if str(error)
+                    else type(error).__name__
+                )
                 reason = (
                     f"native_early_stop_unsupported: {detail}"
                     if early_stop_min_sims and isinstance(error, TypeError)
