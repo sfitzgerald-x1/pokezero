@@ -485,6 +485,14 @@ class EngineMctsStats:
     # substituted instead of failing closed. Telemetry only, as above.
     item_override_decisions: int = 0
     worlds_attempted: int = 0
+    # Worlds that survived CONSTRUCTION and were handed to the search. The
+    # difference between this and `worlds_attempted` is belief-sampling and
+    # world-building failure; the difference between this and `worlds_searched`
+    # is the search ABORTING on an attribution-unsafe branch. Without this
+    # counter those two very different defects are only separable by parsing the
+    # `world_failure_reasons` taxonomy, which is why the second one has been
+    # invisible. See `world_search_abort_rate` in `to_dict`.
+    worlds_constructed: int = 0
     worlds_searched: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
@@ -545,7 +553,67 @@ class EngineMctsStats:
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
+            "worlds_constructed": self.worlds_constructed,
             "worlds_searched": self.worlds_searched,
+            # THE PER-WORLD ABORT RATE. `fallback_rate` is a LOWER BOUND on it.
+            #
+            # A decision falls back only when EVERY world fails (`_search_model`
+            # returns `crate_search_failed` on `worlds_searched_here == 0`), so a
+            # decision that searched 1 of 4 constructed worlds is not a fallback
+            # and is invisible in every other metric -- while its belief
+            # aggregate rests on a quarter of the sampled hypotheses. That is a
+            # search-quality loss, not just a reporting gap.
+            #
+            # How much bigger the per-world rate is than `fallback_rate` depends
+            # on how CORRELATED aborts are across the worlds of one decision, and
+            # the honest answer is that we do not know yet -- measuring it is why
+            # this counter exists. The bound:
+            #
+            #   * Linear (`fallback ~= abort`) when the refusal trigger is shared
+            #     PUBLIC state. Attract and confusion are public volatiles, and
+            #     our own sleeping mon's Sleep Talk moveset is fully known, so
+            #     every world of that decision refuses together. Worlds also
+            #     share blocked_slots/encored_moves/removed_item_species and the
+            #     same self-side legal moves.
+            #   * `fallback ~= abort^W` only if aborts were iid across worlds --
+            #     which needs the trigger to be a belief-sampled OPPONENT
+            #     property, since that is the only thing that differs per world.
+            #
+            # Even in the belief-sampled arm the exponent is AT MOST W and
+            # collapses toward 1 as the posterior concentrates: worlds are
+            # exchangeable draws from ONE decision-level posterior, gen3 randbat
+            # pools are small, and a species whose pool reliably contains two
+            # identical-tail moves refuses in every world. Duplicate draws (cf.
+            # `scott/collapse-identical-worlds`) cut the effective W further.
+            #
+            # Do NOT reason from the per-world seed: `tree.rs` uses rng only in
+            # `sample_branch_index`, for traversal. `expand_edge` prices EVERY
+            # enumerated branch of a joint action, and `select()` is pure PUCT
+            # with no rng -- so a refusal fires when the search expands an unsafe
+            # joint action, not when it draws an unlucky outcome. Distinct seeds
+            # do not buy independence.
+            #
+            # Caveat on the numerator: `worlds_constructed` is charged before
+            # `_search_model`'s own pre-flight, so a `root_inputs_failed` or
+            # `early_stop_replay_failed` fallback charges W phantom aborts here.
+            # Both are visible in `fallback_reasons`; check there before reading
+            # a near-1.0 abort rate as a renderer-refusal problem.
+            "world_search_abort_rate": (
+                1.0 - (self.worlds_searched / self.worlds_constructed)
+                if self.worlds_constructed
+                else None
+            ),
+            # NOT a per-world loss rate -- named for what it is. The denominator
+            # counts construction ATTEMPTS including retries (`worlds` x
+            # `sample_retry_factor`, 16 by default), so a decision that retried
+            # its way to a full world set and one that gave up half of them can
+            # read the same. Use `worlds_constructed` against `decisions x
+            # config.worlds` if you want the per-world version.
+            "belief_sample_rejection_rate": (
+                1.0 - (self.worlds_constructed / self.worlds_attempted)
+                if self.worlds_attempted
+                else None
+            ),
             "total_iterations": self.total_iterations,
             "search_wall_seconds": self.search_wall_seconds,
             "decision_wall_seconds": self.decision_wall_seconds,
@@ -814,6 +882,12 @@ class EngineMctsPolicy:
         if not worlds:
             return self._fallback(context, rng, "no_worlds_constructed")
 
+        # Counted HERE, at the single dispatch point, rather than at the append
+        # above: this is exactly the list every search path is about to receive,
+        # so the denominator cannot drift from what `worlds_searched` counts no
+        # matter which leaf_eval runs.
+        self.stats.worlds_constructed += len(worlds)
+
         if self._config.leaf_eval == "model":
             return self._search_model(context, worlds, live_fold, rng)
         if self._config.leaf_eval == "hp_fraction_crate":
@@ -848,6 +922,12 @@ class EngineMctsPolicy:
             metadata={
                 "engine_mcts": {
                     "worlds_searched": len(worlds),
+                    # Always equal to `worlds_searched` here -- this legacy path
+                    # has no per-world abort, so its abort rate is structurally
+                    # zero. Emitted anyway so every leaf_eval carries the same
+                    # denominator and a consumer never has to special-case which
+                    # path a shard came from.
+                    "worlds_constructed": len(worlds),
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
                     },
@@ -943,6 +1023,9 @@ class EngineMctsPolicy:
                 "engine_mcts": {
                     "leaf_eval": "hp_fraction_crate",
                     "worlds_searched": worlds_searched_here,
+                    # This path aborts worlds too (`crate_search_hp:`), so it
+                    # needs the same per-decision denominator as the model path.
+                    "worlds_constructed": len(worlds),
                     "max_depth_reached": max(depths_reached),
                     "depths_reached": tuple(depths_reached),
                     "aggregated_choices": {
@@ -1518,6 +1601,13 @@ class EngineMctsPolicy:
                 "engine_mcts": {
                     "leaf_eval": "model",
                     "worlds_searched": worlds_searched_here,
+                    # Per-decision denominator. A decision that searched 1 of 4
+                    # constructed worlds is NOT a fallback and so is invisible in
+                    # `fallback_rate`, but its belief aggregate rests on a
+                    # quarter of the sampled hypotheses. Carrying the
+                    # denominator per decision is what lets a shard tell a
+                    # healthy decision from a barely-survived one.
+                    "worlds_constructed": len(worlds),
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
                     },

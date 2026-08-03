@@ -1374,3 +1374,333 @@ fn a_two_sided_refusal_keys_canonically_and_fits_the_python_seam() {
          splitting one measurement across two buckets"
     );
 }
+/// The sleep-talk refusal must name its cause in `attribution_unsafe` while
+/// leaving the `lossy` tag exactly as it was.
+///
+/// `sleeptalk_called_unidentified` is 48.9% of world failures on the era-55
+/// probe -- bigger than every other class combined -- and the single slug hid
+/// which of two OPPOSITE problems was happening. `ambiguous` (two candidates
+/// regenerate byte-identical tails) can only be fixed by the engine recording
+/// which move it called. `none_matched` (no candidate reproduces the tail) means
+/// the replay diverges from what the engine did, which is a different defect.
+///
+/// The `lossy` tag must NOT split: `engine_transition_differential.py` matches it
+/// with `set(lossy) == {_SLEEPTALK_LOSSY_MARKER}` to decide branch usability, and
+/// that file's bytes are pinned by the certification lifecycle. Splitting it
+/// would silently change which branches the differential accepts.
+#[test]
+fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    // Two callees whose instruction lists are BYTE-IDENTICAL: Harden and
+    // Withdraw are both +1 Defense on the user. Splash and Harden do NOT work --
+    // Harden emits a boost and Splash emits nothing, so the tails differ and the
+    // engine identifies each correctly. Ambiguity needs genuinely equal effects.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+
+    let branches = generate(&mut state);
+    let mut saw_subcase = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        for reason in &r.attribution_unsafe {
+            if reason.starts_with("sleeptalk_called_unidentified") {
+                saw_subcase = true;
+                assert_ne!(
+                    reason, "sleeptalk_called_unidentified",
+                    "the bare slug carries no cause and cannot be measured: {:?}",
+                    r.attribution_unsafe
+                );
+                // Pin WHICH sub-case, not merely that one of the two appeared.
+                // Accepting either is a tautology over the implementation's only
+                // two outputs: independent review swapped the literals and the
+                // whole 336-test suite stayed green. Harden and Withdraw
+                // regenerate byte-identical tails, so the cause is `ambiguous`
+                // by construction -- and `ambiguous` is the arm the PR's own
+                // table says is fixable ONLY by an engine change, so reading it
+                // as `none_matched` would send the next phase at the renderer
+                // and waste the cycle.
+                assert_eq!(
+                    reason, "sleeptalk_called_unidentified:ambiguous",
+                    "two byte-identical callees must report `ambiguous`: {:?}",
+                    r.attribution_unsafe
+                );
+            }
+        }
+        // The lossy CONTRACT tag stays bare, whatever the sub-case is.
+        if r.attribution_unsafe
+            .iter()
+            .any(|x| x.starts_with("sleeptalk_called_unidentified"))
+        {
+            assert!(
+                r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
+                "the differential matches the lossy tag EXACTLY; it must stay \
+                 unsplit: {:?}",
+                r.lossy
+            );
+            assert!(
+                !r.lossy
+                    .iter()
+                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+                "a sub-cased lossy tag would change which branches the \
+                 differential accepts: {:?}",
+                r.lossy
+            );
+        }
+    }
+    assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+}
+
+/// REGRESSION: the defender's move must no longer break Sleep Talk attribution.
+///
+/// This fixture used to assert the OPPOSITE. `identify_sleep_talk_called`
+/// regenerated every candidate against a hardcoded `&Choice::default()`, while
+/// the engine gates its 32-roll damage enumeration on the real defender choice --
+/// `branch_on_damage && choice.first_move && pending_hp_reading_move(defender)`,
+/// where `pending_hp_reading_move` is {SUBSTITUTE, FLAIL, REVERSAL}. Defender
+/// picks one, sleeper moves first: engine emits one of 32 rolls, renderer
+/// regenerates the ordinary 2-branch max/crit collapse against a `NONE` move,
+/// nothing matches, and the ENTIRE WORLD is refused as
+/// `sleeptalk_called_unidentified:none_matched`.
+///
+/// Measured before the fix: 25 / 37 / 31 refused branches for Substitute / Flail
+/// / Reversal with the sleeper first, 0 for every other defender move tried.
+/// Reach: 294 of 1682 rolled gen3 randbats variants (17.5%) carry one of those
+/// three. (That is not the probability the opponent PICKS it on a given turn,
+/// which is what the mass actually depends on and which nothing here measures.)
+///
+/// Both halves of the fix are load-bearing and both are pinned below:
+///   * the real defender choice reaches the regeneration, and
+///   * the candidate inherits the outer Sleep Talk choice's `first_move`, since
+///     the move table's default is `true` and a second-moving Sleep Talk
+///     regenerated its callee as if it had moved first.
+///
+/// Petal Dance is in the callee set deliberately: its crit arm restructures the
+/// tail (KO -> force-switch, no LOCKEDMOVE duration) rather than only changing a
+/// damage integer. Every bug found in this area was invisible to
+/// damage-integer-only fixtures.
+#[test]
+fn the_defenders_move_no_longer_breaks_sleeptalk_attribution() {
+    for defender in [Choices::SUBSTITUTE, Choices::FLAIL, Choices::REVERSAL] {
+        for sleeper_first in [true, false] {
+            let mut state = confused_state(Choices::SLEEPTALK);
+            state
+                .side_two
+                .volatile_statuses
+                .remove(&PokemonVolatileStatus::CONFUSION);
+            state.side_two.get_active().status = PokemonStatus::SLEEP;
+            state.side_two.get_active().rest_turns = 0;
+            state
+                .side_two
+                .get_active()
+                .replace_move(PokemonMoveIndex::M1, Choices::BODYSLAM);
+            state
+                .side_two
+                .get_active()
+                .replace_move(PokemonMoveIndex::M2, Choices::EARTHQUAKE);
+            // Shape-changing callee, not just a different damage integer.
+            state
+                .side_two
+                .get_active()
+                .replace_move(PokemonMoveIndex::M3, Choices::PETALDANCE);
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, defender);
+            // Both move orders: `first_move` is the second half of the fix.
+            state.side_one.get_active().speed = if sleeper_first { 1 } else { 500 };
+            state.side_two.get_active().speed = if sleeper_first { 500 } else { 1 };
+
+            let before = format!("{state:?}");
+            let branches = generate_instructions_from_move_pair(
+                &mut state,
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                true,
+            );
+            assert_eq!(
+                before,
+                format!("{state:?}"),
+                "generation mutated the source state"
+            );
+
+            let mut none_matched = 0usize;
+            let mut identified = 0usize;
+            for branch in &branches {
+                let r = render_branch_events(
+                    &mut state.clone(),
+                    &MoveChoice::Move(PokemonMoveIndex::M0),
+                    &MoveChoice::Move(PokemonMoveIndex::M0),
+                    &branch.instruction_list,
+                    true,
+                    &EventContext {
+                        species: [vec!["Lead".into()], vec!["Opponent".into()]],
+                        turn: 1,
+                        hp_percent: [false, false],
+                    },
+                );
+                if r.attribution_unsafe
+                    .iter()
+                    .any(|x| x == "sleeptalk_called_unidentified:none_matched")
+                {
+                    none_matched += 1;
+                    continue;
+                }
+                let text = r.lines.join("\n");
+                if text.contains("|[from] Sleep Talk") {
+                    identified += 1;
+                }
+            }
+
+            assert_eq!(
+                none_matched, 0,
+                "defender {defender:?} (sleeper_first={sleeper_first}) still refuses \
+                 the world: the regeneration is not seeing the real defender choice, \
+                 or not inheriting first_move. Every refused world here is a whole \
+                 world's search discarded."
+            );
+            assert!(
+                identified > 0,
+                "defender {defender:?} (sleeper_first={sleeper_first}) produced no \
+                 identified callee at all -- the refusal is gone but so is the \
+                 attribution, which is not a fix"
+            );
+        }
+    }
+}
+
+/// A Sleep Talk callee must sometimes be IDENTIFIED, not only refused.
+///
+/// Every other sleeptalk fixture in this file asserts a refusal, which left the
+/// happy path completely unpinned. Independent review showed the consequence:
+/// hardcoding the regeneration's `branch_on_damage` to either `false` or `true`
+/// left all 343 tests green. The `false` variant is the serious one -- it
+/// re-creates the exact pre-C87 divergence (renderer collapses damage while the
+/// engine branches it), so under production's `branch_on_damage: true` every
+/// damaging callee would fail to identify and be refused as `none_matched`. The
+/// measurement would swing wholesale with a green suite, because a fixture that
+/// only asserts `none_matched > 0` is satisfied by MORE refusals.
+///
+/// Same shape as the `none_matched` fixture but with the defender on a move that
+/// does NOT trip `pending_hp_reading_move`, so identification should succeed.
+/// This is also the only test that pins C87's engine/renderer alignment from the
+/// correct side.
+#[test]
+fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
+    // Run at BOTH damage-branching settings. Production uses `true` for plies
+    // 1-2 (`tree.rs:545`) and `false` deeper, and the renderer must track the
+    // engine on each: hardcoding the regeneration to `false` breaks the shallow
+    // plies, hardcoding it to `true` breaks the deep ones. A fixture at one
+    // setting only catches one of those.
+    //
+    // ...and run over TWO callee sets, because parametrising the setting is not
+    // enough on its own. Review demonstrated that the bod -> `true` mutant
+    // survives a set of nine ordinary damaging callees: the engine's unbranched
+    // collapsed damage (94) happens to coincide with one of the renderer's
+    // branched values for all of them, so the mutant is invisible. It is NOT
+    // invisible for Petal Dance, whose crit arm restructures the tail rather
+    // than just changing an integer -- KO -> ToggleSideOneForceSwitch, and no
+    // LOCKEDMOVE duration instruction -- so 94 is in neither branch. The lesson
+    // generalises: a damage-integer-only fixture cannot catch a
+    // branching-shape divergence.
+    for (label, fourth_move) in [
+        // The realistic RestTalk shape, kept because it is what randbats rolls.
+        ("resttalk", Choices::REST),
+        // The shape-changing callee that actually exercises the deep-ply arm.
+        ("shape-changing", Choices::PETALDANCE),
+    ] {
+    for branch_on_damage in [true, false] {
+        let mut state = confused_state(Choices::SLEEPTALK);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state.side_two.get_active().status = PokemonStatus::SLEEP;
+        state.side_two.get_active().rest_turns = 0;
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M1, Choices::BODYSLAM);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M2, Choices::EARTHQUAKE);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M3, fourth_move);
+        // Splash reads no HP, so C31's 32-roll enumeration does not fire and the
+        // renderer's regeneration is on the same footing as the engine.
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state.side_one.get_active().speed = 1;
+        state.side_two.get_active().speed = 500;
+
+        let branches = generate_instructions_from_move_pair(
+            &mut state,
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            branch_on_damage,
+        );
+
+        let mut identified_a_damaging_callee = false;
+        let mut none_matched = 0usize;
+        for branch in &branches {
+            let r = render_branch_events(
+                &mut state.clone(),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &branch.instruction_list,
+                branch_on_damage,
+                &EventContext {
+                    species: [vec!["Lead".into()], vec!["Opponent".into()]],
+                    turn: 1,
+                    hp_percent: [false, false],
+                },
+            );
+            if r.attribution_unsafe
+                .iter()
+                .any(|x| x == "sleeptalk_called_unidentified:none_matched")
+            {
+                none_matched += 1;
+                continue;
+            }
+            let text = r.lines.join("\n");
+            if text.contains("|[from] Sleep Talk")
+                && (text.contains("|bodyslam|") || text.contains("|earthquake|"))
+            {
+                identified_a_damaging_callee = true;
+            }
+        }
+
+        assert!(
+            identified_a_damaging_callee,
+            "no branch identified a damaging Sleep Talk callee at \
+             branch_on_damage={branch_on_damage}, callee set {label}. If the \
+             regeneration stops \
+             tracking the engine's setting, damaging callees become \
+             unidentifiable and the largest failure class inflates -- with a \
+             suite that only checks for refusals staying green."
+        );
+        assert_eq!(
+            none_matched, 0,
+            "a defender that reads no HP must not produce `none_matched` \
+             (branch_on_damage={branch_on_damage}, callee set {label}); that arm \
+             belongs to the pending_hp_reading_move gate"
+        );
+    }
+    }
+}

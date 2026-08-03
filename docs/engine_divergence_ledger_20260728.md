@@ -6590,3 +6590,96 @@ classifier paths still compute on it and are flagged in
 `reports/c94_method_retraction.json`: `scripts/family_bucket_audit.py:164-185`
 (decisive, published an adjudication) and
 `scripts/cert_sweep_readout.py:117-149` (currently fires no rows).
+
+## Standing rule: never report divergence count without the skip and matched counters
+
+`transitions_diverged` alone is not a safe metric. A change can lower it by
+moving boundaries **out of evaluation** rather than by fixing them, and the
+repro artifact will not show it — the dropped rows simply vanish from the repro
+set with no new classes and no churn, which reads as a clean improvement.
+
+Measured instance, the closed PR #1037 (`scott/i5-double-faint-replacement`):
+
+| counter | baseline | patch | delta |
+|---|---|---|---|
+| `boundaries_measured` | 15224 | 15224 | 0 |
+| `transition:matched` | 15184 | 15147 | **−37** |
+| `transition:diverged` | 39 | 37 | −2 |
+| `strict:lossy_render` | 11 | 50 | **+39** |
+| `skip:strict_all_branches_lossy` | 1 | 40 | **+39** |
+
+Both sides reconcile to 15224.
+
+Baseline is `sweep_base.json` (`a723ea2e`, fingerprint `d9cab2b1…`) and test is
+`sweep_i5.json` (fingerprint `ff749be8…`). The two trees differ only in `docs/`
+and `reports/` plus the renderer patch itself, so this pair is single-variable
+under rule 3 below.
+
+Separately, `sweep_exact.json` (`cbcb6d27`) has the **same fingerprint** as
+`sweep_base` and **byte-identical counters**, while running a *different*
+matcher — pre- and post-#1032. That is a direct measurement that #1032 was
+counter- and class-neutral, and it is also a demonstration of rule 3's blind
+spot: `engine_build_fingerprint` does not hash `scripts/`, so the fingerprint
+alone would not have told us if those two had disagreed.
+
+The mechanism generalises to any renderer change: a predicate that makes
+`segment()` return `None` sends that **branch** to `segmentation_failed`
+(`rust/pokezero-search/src/events.rs:808-821`), which is not in
+`_TELEMETRY_ONLY_LOSSY_MARKERS` (`scripts/engine_transition_differential.py:354-370`,
+`:1872`).
+
+There are then **two** outcomes, and only the first removes the boundary:
+
+* **Every** branch lossy → `usable_branches == 0` → the boundary is skipped
+  (`:1964-1968`, `:2190`) and leaves the denominator. This is what #1037 did.
+* **Some** branches lossy → the boundary is still evaluated, on a rump branch
+  set, which can turn a matched boundary into a *divergent* one. This is live on
+  main today: `strict:lossy_render` is 11 against
+  `skip:strict_all_branches_lossy` of 1, and row `19000093/51` is evaluated as
+  divergent with 11 branches and ~10% of its mass surviving.
+
+So a renderer change **can** buy a lower divergence count by rendering less —
+not *always*, since skipping a matched boundary does not lower `diverged` at all
+(#1037 skipped 39 and moved `diverged` by only −2), and partial lossiness can
+raise it.
+
+Rules:
+
+1. Report `transition:matched`, `skip:*` and `transition:diverged` together.
+   A fidelity claim requires `matched` to go **up** or hold — or, if it falls,
+   a per-row account of which rows left `matched` and why. A fix that removes a
+   *spurious* match correctly lowers it.
+2. Check that `transition:matched + transition:diverged +
+   skip:strict_all_branches_lossy == boundaries_measured` on both sides. Summing
+   all `skip:*` does **not** reconcile (it is 2,322 here); that one counter is
+   the one in the identity.
+3. Baseline and test must differ **only** by the patch under test, and you must
+   be able to **show** that from the artifacts. Record `engine_fingerprint`
+   *and* a hash of the counter-computing harness, then exhibit the
+   baseline↔test diff.
+
+   `source_commit` does not pin the code: `sweep_ph.json` and `sweep_ph2.json`
+   share one and have different fingerprints and different counters, and any
+   committed patch changes the field anyway.
+
+   But `engine_fingerprint` alone is **not sufficient either**, and the gap is
+   exactly the one this section is about. `build_inputs()`
+   (`build_inputs()` in `scripts/engine_build_fingerprint.py`) hashes the patch stack,
+   `rust/pokezero-search/src/**` and the Cargo inputs — **not `scripts/`**. So a
+   change to `engine_transition_differential.py`, the file that computes these
+   very counters, leaves the fingerprint untouched. `sweep_exact` and
+   `sweep_base` are that case: identical fingerprint, different matcher.
+
+   "Assert a clean tree" is *not* the rule, because it is unauditable —
+   `_checkpoint_provenance()` in `engine_transition_differential.py` records only
+   `source_commit`, `engine_fingerprint` and `image_commit`, so no artifact says
+   whether the tree was dirty — and enforcing it literally would reject four of
+   the five sweeps this section rests on, whose patches were deliberately
+   uncommitted at measurement time.
+
+   **Owed:** add `harness_sha256` and `worktree_dirty` to `_checkpoint_provenance()`. Until
+   then rules 1 and 2 are checkable from the JSON and rule 3 is not.
+4. The renderer keeps a replica of the engine's `end_of_turn_triggered`
+   (`events.rs:406`, original at `gen3/generate_instructions.rs:4646` — engine line numbers drift, `third_party/poke-engine-src` is gitignored). Changing
+   one without the other desynchronises them and shows up as mass
+   `segmentation_failed`, not as a divergence.
