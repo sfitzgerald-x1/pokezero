@@ -925,12 +925,19 @@ def roll_components_agree(
                     continue
                 return False
             obs_direct, eng_direct = direct_damage_scales
-            if abs(abs(obs) - abs(eng)) > abs(obs_direct - eng_direct) + 1:
-                return False
-            # Direction: more direct damage means less HP left, so a SMALLER cap.
-            if obs_direct > eng_direct and abs(obs) > abs(eng):
-                return False
-            if eng_direct > obs_direct and abs(eng) > abs(obs):
+            # AN EQUALITY, NOT A BOUND. Both arms are seeded from the same
+            # pre_hp and a capped_lethal means the slot ends at exactly 0, so
+            # the deltas sum to -pre_hp on BOTH arms by construction. The exact
+            # bucket must already match, so the roll-scaled sums are equal too,
+            # and with one cap the cap gap equals the direct gap EXACTLY.
+            #
+            # Review measured this over the whole window: 1,797 cap-vs-cap
+            # comparisons, 45 accepted with unequal caps, and all 45 satisfy the
+            # equality. The +/-1 slack was never load-bearing, and the two
+            # direction guards it replaced were subsumed -- one of which no test
+            # pinned. This form additionally rejects three physically impossible
+            # pairs the inequality accepted, at an identical divergence row set.
+            if (abs(obs) - abs(eng)) != (eng_direct - obs_direct):
                 return False
             continue
         if obs_source == "capped_lethal":

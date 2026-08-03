@@ -347,6 +347,33 @@ class CappedLethalCascade(unittest.TestCase):
             )
         )
 
+    def test_the_mirror_direction_is_also_rejected(self) -> None:
+        """Review found the eng_direct > obs_direct guard UNPINNED: deleting it
+        passed all 103 tests. The pinning test asserted only one half while its
+        docstring claimed both. The equality form subsumes both guards, and this
+        pins the half that was uncovered."""
+
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -125, 0), comp("capped_lethal", -32, 1)],
+                [comp("", -133, 0), comp("capped_lethal", -40, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
+    def test_the_one_hp_slack_cannot_be_abused(self) -> None:
+        """The old +/-1 slack let the nets differ by 1 HP in a step whose value
+        is exactly determined -- implying two different pre-HP values for one
+        boundary. The equality rejects it."""
+
+        self.assertFalse(
+            roll_component_events_agree(
+                [comp("", -125, 0), comp("capped_lethal", -41, 1)],
+                [comp("", -133, 0), comp("capped_lethal", -32, 1)],
+                support=None, target_side="side_one", pre_legal=None,
+            )
+        )
+
     def test_a_cap_gap_wider_than_the_direct_gap_is_rejected(self) -> None:
         self.assertFalse(
             roll_component_events_agree(
