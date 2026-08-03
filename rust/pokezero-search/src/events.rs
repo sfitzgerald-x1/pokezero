@@ -265,6 +265,15 @@ impl RenderedEvents {
     ///
     /// So: sub-case to the measurement channel, stable tag to the contract.
     fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        // The two arguments must name the SAME class, or this helper quietly
+        // becomes the bug it exists to prevent: a branch whose contract tag and
+        // measurement reason disagree changes which branches the differential
+        // accepts, with nothing to notice. Nothing else relates them, so relate
+        // them here.
+        debug_assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
         self.mark_lossy(lossy_tag);
         self.attribution_unsafe.push(subcase.to_string());
     }
@@ -1634,7 +1643,19 @@ fn render_move_phase(
                             SleepTalkIdent::Ambiguous => {
                                 "sleeptalk_called_unidentified:ambiguous"
                             }
-                            _ => "sleeptalk_called_unidentified:none_matched",
+                            SleepTalkIdent::NoneMatched => {
+                                "sleeptalk_called_unidentified:none_matched"
+                            }
+                            // Exhaustive on purpose. A `_` arm here would send a
+                            // future `Matched` -- or any variant added later --
+                            // into `none_matched` with no compiler error, which
+                            // is a silent MIS-DIAGNOSIS of the largest failure
+                            // class rather than a crash. `Matched` cannot reach
+                            // this point today: it is destructured by the
+                            // enclosing match's success arm.
+                            SleepTalkIdent::Matched(_) => unreachable!(
+                                "Matched is handled by the identifying arm above"
+                            ),
                         },
                     );
                     // Walk the tail IN ORDER, rendering a drag at the moment
@@ -2581,11 +2602,6 @@ fn render_move_phase(
     }
 }
 
-/// Identify which move Sleep Talk called by re-generating each sleep-talk
-/// candidate's instructions from the current (prelude-applied) state and
-/// matching the branch tail exactly. Returns the MUTATED candidate choice
-/// (the engine's own modification pass applied) or None when zero or
-/// multiple candidates match (ambiguous delta — documented insufficiency).
 /// Why `identify_sleep_talk_called` could not name the called move.
 ///
 /// The two causes need OPPOSITE fixes and the single `None` hid which one was
@@ -2607,6 +2623,14 @@ enum SleepTalkIdent {
     Ambiguous,
 }
 
+/// Identify which move Sleep Talk called by re-generating each sleep-talk
+/// candidate's instructions from the current (prelude-applied) state and
+/// matching the branch tail exactly.
+///
+/// Returns [`SleepTalkIdent::Matched`] with the MUTATED candidate choice (the
+/// engine's own modification pass applied), or one of the two failure variants.
+/// Those two used to be a single `None`, which conflated causes that need
+/// opposite fixes -- see [`SleepTalkIdent`].
 fn identify_sleep_talk_called(
     state: &mut State,
     side: SideReference,
