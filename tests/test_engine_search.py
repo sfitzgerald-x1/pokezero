@@ -1634,6 +1634,19 @@ class BoundedReasonDetailTests(unittest.TestCase):
     belonging to a different question is worse than one that is merely coarse.
     """
 
+    def test_the_budget_itself_is_pinned(self) -> None:
+        # Every other assertion here is expressed RELATIVE to the constant, so
+        # they all move with it and none of them notices a re-narrowed budget.
+        # The crate mirrors this number as a hardcoded literal
+        # (`PY_REASON_DETAIL_LIMIT` in gen3_confusion_event_renderer.rs) and
+        # cannot see this side, so without this pin the two silently
+        # desynchronise. Found by independent review as a surviving mutant.
+        self.assertGreaterEqual(_REASON_DETAIL_LIMIT, 512)
+
+    def test_a_limit_smaller_than_the_suffix_still_honours_the_bound(self) -> None:
+        for limit in (0, 1, 5, 18, 19):
+            self.assertLessEqual(len(_bounded_reason_detail("q" * 100, limit=limit)), limit)
+
     def test_short_reasons_are_untouched(self) -> None:
         text = "attract_empty_tail_ambiguous:paralyzed+miss"
         self.assertEqual(_bounded_reason_detail(text), text)

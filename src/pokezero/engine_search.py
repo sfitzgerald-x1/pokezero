@@ -455,7 +455,13 @@ def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
         return text
     digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
     suffix = f"~trunc:{digest}"
-    return f"{text[: max(limit - len(suffix), 0)]}{suffix}"
+    # A limit too small to hold the suffix keeps the digest and drops the head:
+    # the identity of the reason is worth more than a few leading characters,
+    # and returning something LONGER than the requested bound would defeat the
+    # only job this function has. `max(..., 0)` alone did not guard this.
+    if limit <= len(suffix):
+        return suffix[:limit]
+    return f"{text[: limit - len(suffix)]}{suffix}"
 
 
 @dataclass
