@@ -6794,11 +6794,18 @@ def _encode_expected_stats(
                     battle_info.base_stats, level, variant, has_physical
                 )
                 if spread is None:
-                    atk_values.append(atk_baseline)
-                    hp_values.append(hp_baseline)
-                else:
-                    atk_values.append(spread["atk"])
-                    hp_values.append(spread["hp"])
+                    # An unevaluable candidate makes the whole BAND unsound, and substituting
+                    # the baseline for it would be worse than emitting nothing: min/max would
+                    # then report a bound partly derived from a value no real variant has, and
+                    # the model would read it as confidently as a true one. A wrong belief costs
+                    # more than an absent one, so abandon the narrowing entirely and fall back
+                    # to the documented no-set-source state (low == high == baseline), which is
+                    # an honest "unknown" rather than a fabricated range.
+                    atk_values = []
+                    hp_values = []
+                    break
+                atk_values.append(spread["atk"])
+                hp_values.append(spread["hp"])
             else:
                 atk_values.append(
                     atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
@@ -6809,8 +6816,9 @@ def _encode_expected_stats(
                 hp_values.append(
                     _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
                 )
-        atk_low, atk_high = min(atk_values), max(atk_values)
-        hp_low, hp_high = min(hp_values), max(hp_values)
+        if atk_values and hp_values:
+            atk_low, atk_high = min(atk_values), max(atk_values)
+            hp_low, hp_high = min(hp_values), max(hp_values)
     for slot, value in (
         (NUMERIC_EXPECTED_HP, hp_baseline),
         (NUMERIC_EXPECTED_HP_LOW, hp_low),

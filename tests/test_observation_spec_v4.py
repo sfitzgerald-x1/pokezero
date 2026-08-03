@@ -1296,15 +1296,15 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class V4ExactSpreadsTest(unittest.TestCase):
+class V4ExactSpreadsTest(V4EncodeTestBase):
     """v4 asks the generator's spread core instead of re-deriving its rules.
 
     The two approximations it replaces were measurably wrong: the trimmed-HP bound jumped to
-    ev=0 (a full 85-EV strip) where the generator removes 4 at a time and stops at the first
+    ev=0 (a full 85-EV strip) where the generator removes 4 EVs at a time and stops at the first
     value satisfying its modular condition, and the zeroed-Atk bound hardcoded iv=0, missing the
     Hidden-Power `-28` that leaves IV 3. Because the emitted band is min/max over survivors, a
     PERFECTLY PINNED set still reported the wrong HP -- a plausible number in the right units,
-    off by ~6%, which is the class a model cannot detect.
+    ~6% off, which is the class a model cannot detect.
     """
 
     SHOWDOWN_ROOT = os.environ.get(
@@ -1322,45 +1322,234 @@ class V4ExactSpreadsTest(unittest.TestCase):
         except Exception as exc:  # pragma: no cover - no checkout here
             raise unittest.SkipTest(f"needs a pokemon-showdown checkout: {exc}")
 
-    def test_every_pool_variant_matches_the_generator(self) -> None:
-        from pokezero.showdown import _variant_spread_stats
+    def test_every_pool_variant_matches_the_generator_exactly(self) -> None:
+        """COMPARE, do not merely resolve. The old bug produced a value for every variant too.
+
+        Checks the emitted HP and Atk against randbats_spread_details for all ~1682 variants,
+        and separately asserts the legacy approximations disagree on the families the fix is
+        about -- so a regression to either one fails here rather than looking plausible.
+        """
+        from pokezero.gen3_damage import randbats_spread_details
+        from pokezero.showdown import _gen3_stat, _variant_spread_stats
         from pokezero.tier2 import variant_has_physical_attack
 
-        checked = 0
+        pinch = {"Salac Berry", "Petaya Berry", "Liechi Berry"}
+        checked = legacy_hp_wrong = legacy_atk_wrong = 0
         for key, universe in self.source.universes.items():
             info = self.dex.species_info(key)
             if info is None or not info.base_stats:
                 continue
             for variant in universe.variants:
+                has_physical = variant_has_physical_attack(variant.moves, self.dex)
                 got = _variant_spread_stats(
                     info.base_stats,
                     variant.level,
                     {"moves": list(variant.moves), "item": str(variant.item)},
-                    variant_has_physical_attack(variant.moves, self.dex),
+                    has_physical,
                 )
                 self.assertIsNotNone(got)
+                truth = randbats_spread_details(
+                    info.base_stats,
+                    level=variant.level,
+                    moves=variant.moves,
+                    item=variant.item,
+                    has_physical_attack=has_physical,
+                )
+                self.assertEqual(got["hp"], int(truth.stats["hp"]), key)
+                self.assertEqual(got["atk"], int(truth.stats["atk"]), key)
                 checked += 1
+
+                moves = set(variant.moves)
+                trimmed = "bellydrum" in moves or (
+                    "substitute" in moves
+                    and (moves & {"flail", "reversal"} or str(variant.item) in pinch)
+                )
+                if trimmed and _gen3_stat(
+                    info.base_stats["hp"], variant.level, ev=0, iv=31, hp=True
+                ) != got["hp"]:
+                    legacy_hp_wrong += 1
+                if not has_physical and _gen3_stat(
+                    info.base_stats["atk"], variant.level, ev=0, iv=0, hp=False
+                ) != got["atk"]:
+                    legacy_atk_wrong += 1
+
         self.assertGreater(checked, 1000, "pool did not load")
+        # The whole point: the legacy derivations were wrong on real, common families.
+        self.assertGreater(legacy_hp_wrong, 40, "trimmed-HP families no longer differ")
+        self.assertGreater(legacy_atk_wrong, 200, "Hidden-Power Atk families no longer differ")
 
-    def test_an_illegal_spread_raises_rather_than_emitting_a_plausible_number(self) -> None:
-        """The legality set is what would have caught the original bug at write time.
+    def test_an_unevaluable_candidate_abandons_the_band_rather_than_inventing_one(self) -> None:
+        """A WRONG belief costs more than an ABSENT one -- so degrade, never fabricate.
 
-        `ev=0` is not a legal HP EV -- the generator can never strip the stat -- so the old
-        derivation was producing a spread outside the reachable set, silently.
+        Substituting the baseline for an unevaluable candidate and then taking min/max emits a
+        bound partly derived from a value no real variant has, and the model reads that exactly
+        as confidently as a true one. The correct degradation is the documented no-set-source
+        state: low == high == baseline, an honest "unknown".
+        """
+        from unittest import mock
+
+        from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
+
+        variants = (
+            {"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},
+            {"moves": ["tackle"], "item": "Leftovers", "level": 80},
+        )
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2", species="Charizard", candidate_variants=variants
+        )
+
+        def _encode(side_effect=None):
+            row = [0.0] * 300
+            ctx = (
+                mock.patch.object(showdown, "_variant_spread_stats", side_effect=side_effect)
+                if side_effect
+                else mock.patch.object(
+                    showdown, "_variant_spread_stats", wraps=showdown._variant_spread_stats
+                )
+            )
+            with ctx:
+                showdown._encode_expected_stats(
+                    row,
+                    self.dex,
+                    base_species="Charizard",
+                    battle_species="Charizard",
+                    details="Charizard, L80, M",
+                    belief=belief,
+                    exact_spreads=True,
+                )
+            return (
+                row[showdown.NUMERIC_EXPECTED_HP],
+                row[showdown.NUMERIC_EXPECTED_HP_LOW],
+                row[showdown.NUMERIC_EXPECTED_HP_HIGH],
+            )
+
+        base, low, high = _encode()
+        self.assertNotEqual(low, high, "fixture must produce a real band when all are evaluable")
+
+        # One candidate unevaluable -> the band must COLLAPSE to the baseline, not straddle a
+        # fabricated value.
+        base2, low2, high2 = _encode(side_effect=lambda *a, **k: None)
+        self.assertEqual(low2, base2)
+        self.assertEqual(high2, base2)
+
+    def test_only_v4_gets_the_corrected_spreads(self) -> None:
+        """BEHAVIOURAL scoping. Three lineages train against v2.1/v2.2/v3 encodes right now.
+
+        These are frozen legacy positions, so correcting them for the older schemas would shift
+        a live input distribution mid-run. v4 is unlaunched and can simply start correct. Applying
+        the fix to every schema passes every other test in this file, so the scoping is pinned
+        here by comparing what the two encoders actually emit, not by reading the source.
         """
         from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
 
-        self.assertNotIn(0, showdown._LEGAL_HP_EVS)
-        self.assertEqual(showdown._LEGAL_ATK_EVS, frozenset({85, 0}))
-        self.assertEqual(showdown._LEGAL_HP_IVS, frozenset({31, 30}))
+        # A trim-eligible variant: the family where the legacy derivation is wrong by +14..+17.
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2",
+            species="Charizard",
+            candidate_variants=({"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},),
+        )
 
-    def test_legacy_schemas_keep_the_old_values(self) -> None:
-        """Three lineages train against v2.1/v2.2/v3 encodes; only v4 may change."""
+        def _hp_low(exact: bool) -> float:
+            row = [0.0] * 300
+            showdown._encode_expected_stats(
+                row,
+                self.dex,
+                base_species="Charizard",
+                battle_species="Charizard",
+                details="Charizard, L80, M",
+                belief=belief,
+                exact_spreads=exact,
+            )
+            return row[showdown.NUMERIC_EXPECTED_HP_LOW]
+
+        legacy, corrected = _hp_low(False), _hp_low(True)
+        self.assertNotEqual(
+            legacy, corrected, "the fix must actually change this family, or it proves nothing"
+        )
+        # v4 takes the corrected value; every earlier schema keeps the legacy one.
+        self.assertGreater(corrected, legacy, "the generator trims only a few EVs, not all 85")
+
+    def test_only_v4_reaches_the_corrected_path(self) -> None:
+        """Catches the scoping regression every value-level test misses.
+
+        Passing `exact_spreads=True` unconditionally changes what three LIVE lineages are fed,
+        and it passes every other assertion here because those exercise the flag directly. This
+        asserts the CALL SITE, and asserts reachability first -- an earlier version of this test
+        passed vacuously because its fixture had no candidate variants, so the path was never
+        reached under either schema and the mutation sailed through.
+        """
+        from unittest import mock
+
+        from pokezero import showdown
+        from pokezero.belief import RevealedPokemonBelief
+
+        belief = RevealedPokemonBelief(
+            showdown_slot="p2",
+            species="Charizard",
+            candidate_variants=({"moves": ["substitute", "flail"], "item": "Salac Berry", "level": 80},),
+        )
+
+        def _calls(exact: bool) -> int:
+            with mock.patch.object(
+                showdown, "_variant_spread_stats", wraps=showdown._variant_spread_stats
+            ) as spy:
+                showdown._encode_expected_stats(
+                    [0.0] * 300,
+                    self.dex,
+                    base_species="Charizard",
+                    battle_species="Charizard",
+                    details="Charizard, L80, M",
+                    belief=belief,
+                    exact_spreads=exact,
+                )
+                return spy.call_count
+
+        # REACHABILITY first: without this the "not called" assertion below proves nothing.
+        self.assertGreater(_calls(True), 0, "fixture never reaches the corrected path")
+        self.assertEqual(_calls(False), 0, "the legacy path invoked the corrected derivation")
+
+        # And the call site must pass the SCHEMA, not a constant. Reaching this behaviourally
+        # needs a set-source-backed belief inside a full v3 encode, which this harness does not
+        # build; the assertions above already pin what the flag DOES, so this pins only who
+        # supplies it. Hardcoding True here changes the input distribution of three live
+        # lineages and is otherwise invisible to every test in this file.
         import inspect
+
+        self.assertIn(
+            "exact_spreads=schema_v4", inspect.getsource(showdown._encode_pokemon_tokens)
+        )
+
+    def test_an_illegal_spread_actually_raises(self) -> None:
+        """Assert the BEHAVIOUR, not the constants.
+
+        `ev=0` is not a legal HP EV -- the generator can never strip the stat -- so the original
+        bug produced a spread outside the reachable set. Emitting a plausible-but-wrong stat is
+        the failure being removed, so an out-of-set spread must raise rather than degrade.
+        """
+        from unittest import mock
 
         from pokezero import showdown
 
-        src = inspect.getsource(showdown._encode_expected_stats)
-        self.assertIn("if exact_spreads:", src)
-        call = inspect.getsource(showdown._encode_pokemon_tokens)
-        self.assertIn("exact_spreads=schema_v4", call)
+        class _Bogus:
+            evs = {"hp": 0, "atk": 85}
+            ivs = {"hp": 31}
+            stats = {"hp": 1, "atk": 1}
+
+        with mock.patch("pokezero.gen3_damage.randbats_spread_details", return_value=_Bogus()):
+            with self.assertRaises(ValueError) as caught:
+                showdown._variant_spread_stats(
+                    {"hp": 100, "atk": 100}, 80, {"moves": ["tackle"], "item": ""}, True
+                )
+        self.assertIn("legal set", str(caught.exception))
+
+    def test_a_malformed_candidate_degrades_instead_of_breaking_the_encode(self) -> None:
+        """An illegal SPREAD raises; a malformed CANDIDATE must not take down an encode."""
+        from pokezero.showdown import _variant_spread_stats
+
+        self.assertIsNone(
+            _variant_spread_stats({"hp": 100, "atk": 100}, 80, {"moves": None, "item": ""}, True)
+        )
+
+
