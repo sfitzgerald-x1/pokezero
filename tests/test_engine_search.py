@@ -1690,5 +1690,137 @@ class BoundedReasonDetailTests(unittest.TestCase):
         self.assertEqual(_bounded_reason_detail(text), _bounded_reason_detail(text))
 
 
+class WorldAbortRateTests(unittest.TestCase):
+    """`fallback_rate` hides the per-world abort rate behind an exponent.
+
+    A decision falls back only when EVERY world fails, and each world is
+    searched under its own seed, so the reported fallback rate is roughly the
+    per-world abort rate raised to the Wth power. At W=4 a 60% per-world abort
+    rate surfaces as a ~13% fallback rate, which reads as "mostly fine" while
+    three quarters of the sampled belief is being discarded on every decision.
+
+    These tests pin the denominator that makes the real rate visible.
+    """
+
+    def test_rates_are_zero_when_nothing_ran(self) -> None:
+        stats = EngineMctsStats().to_dict()
+        self.assertEqual(stats["worlds_constructed"], 0)
+        self.assertEqual(stats["world_search_abort_rate"], 0.0)
+        self.assertEqual(stats["world_construction_failure_rate"], 0.0)
+
+    def test_the_two_failure_modes_are_separated(self) -> None:
+        # 10 attempts -> 8 built -> 6 searched. Those are two DIFFERENT defects
+        # (belief sampling / world building vs. the search aborting on an
+        # attribution-unsafe branch) and were previously only separable by
+        # parsing the `world_failure_reasons` taxonomy.
+        stats = EngineMctsStats()
+        stats.worlds_attempted = 10
+        stats.worlds_constructed = 8
+        stats.worlds_searched = 6
+        payload = stats.to_dict()
+        self.assertAlmostEqual(payload["world_construction_failure_rate"], 0.2)
+        self.assertAlmostEqual(payload["world_search_abort_rate"], 0.25)
+
+    def test_a_partial_abort_is_not_a_fallback_but_is_still_visible(self) -> None:
+        """The case the whole counter exists for.
+
+        One of two worlds aborts. The decision succeeds, so `fallback_rate`
+        stays 0 and every existing metric calls this healthy -- while the
+        aggregate actually rests on half the sampled hypotheses. Only
+        `world_search_abort_rate` reports it.
+        """
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        # `decide()` owns this increment at its single dispatch point; the test
+        # enters at `_search_model`, so it stands in for that here.
+        policy.stats.worlds_constructed = 2
+        native = harness._Native(
+            [
+                harness._report(56, 4, stopped=False),
+                ValueError("attribution-unsafe renderer branch rejected before leaf encode"),
+            ]
+        )
+
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            decision = harness._run(
+                policy, native, [harness._world("world-a"), harness._world("world-b")]
+            )
+
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["fallback_decisions"], 0, "a partial abort is not a fallback")
+        self.assertEqual(stats["worlds_searched"], 1)
+        self.assertEqual(stats["worlds_constructed"], 2)
+        self.assertAlmostEqual(stats["world_search_abort_rate"], 0.5)
+        self.assertEqual(decision.metadata["engine_mcts"]["worlds_searched"], 1)
+        self.assertEqual(decision.metadata["engine_mcts"]["worlds_constructed"], 2)
+
+    def test_the_denominator_is_incremented_on_the_real_decision_path(self) -> None:
+        """Pins the increment itself, not just the arithmetic over it.
+
+        The counter lives at `decide()`'s single dispatch point, which the
+        `_search_model`-entry tests above bypass. Without this, deleting the
+        increment leaves the whole suite green and every abort rate silently
+        reads 0.0 -- a broken measurement that looks like a clean bill of health,
+        which is the exact failure this metric exists to prevent.
+        """
+        import unittest.mock as mock
+
+        from pokezero.engine_world import EngineWorld
+
+        module = mock.Mock()
+        module.monte_carlo_tree_search.return_value = OwnSideSelectionTests._Result()
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=module,
+            config=EngineMctsConfig(worlds=3, sample_retry_factor=1),
+        )
+        candidates = [
+            {"action_index": 0, "kind": "move", "legal": True, "move_id": "earthquake"},
+            {"action_index": 1, "kind": "move", "legal": True, "move_id": "surf"},
+        ]
+        mask = (True, True, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, candidates))
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": (), "p2": ()},
+        )
+        with mock.patch(
+            "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+            return_value=(object(), None),
+        ), mock.patch(
+            "pokezero.engine_search.world_battle_spec", return_value=world
+        ), mock.patch(
+            "pokezero.engine_search.build_poke_engine_state", return_value=object()
+        ):
+            policy.select_action_with_context(context, rng=random.Random(0))
+
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["worlds_constructed"], 3)
+        self.assertEqual(stats["worlds_attempted"], 3)
+        self.assertEqual(stats["world_construction_failure_rate"], 0.0)
+
+    def test_a_healthy_decision_reports_a_zero_abort_rate(self) -> None:
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy.stats.worlds_constructed = 2
+        native = harness._Native(
+            [
+                harness._report(56, 4, stopped=False),
+                harness._report(56, 4, stopped=False),
+            ]
+        )
+        harness._run(
+            policy, native, [harness._world("world-a"), harness._world("world-b")]
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["worlds_searched"], 2)
+        self.assertEqual(stats["world_search_abort_rate"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

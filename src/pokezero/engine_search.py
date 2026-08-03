@@ -485,6 +485,14 @@ class EngineMctsStats:
     # substituted instead of failing closed. Telemetry only, as above.
     item_override_decisions: int = 0
     worlds_attempted: int = 0
+    # Worlds that survived CONSTRUCTION and were handed to the search. The
+    # difference between this and `worlds_attempted` is belief-sampling and
+    # world-building failure; the difference between this and `worlds_searched`
+    # is the search ABORTING on an attribution-unsafe branch. Without this
+    # counter those two very different defects are only separable by parsing the
+    # `world_failure_reasons` taxonomy, which is why the second one has been
+    # invisible. See `world_search_abort_rate` in `to_dict`.
+    worlds_constructed: int = 0
     worlds_searched: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
@@ -545,7 +553,32 @@ class EngineMctsStats:
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
+            "worlds_constructed": self.worlds_constructed,
             "worlds_searched": self.worlds_searched,
+            # THE PER-WORLD ABORT RATE, which `fallback_rate` does not show.
+            #
+            # A decision only falls back when EVERY world fails (`_search_model`
+            # returns `crate_search_failed` on `worlds_searched_here == 0`), and
+            # each world is searched under its own seed, so refusals are largely
+            # independent across worlds. The reported `fallback_rate` is
+            # therefore roughly this rate raised to the Wth power -- at W=4 a
+            # 60% per-world abort rate shows up as a ~13% fallback rate.
+            #
+            # That exponent is why the fallback number reads as "mostly fine"
+            # while most individual worlds are being thrown away: a decision
+            # that does not fall back may still have searched 1 of 4 worlds, and
+            # a belief-weighted aggregate over one surviving world is a much
+            # worse decision than the fallback rate implies. Report both.
+            "world_search_abort_rate": (
+                1.0 - (self.worlds_searched / self.worlds_constructed)
+                if self.worlds_constructed
+                else 0.0
+            ),
+            "world_construction_failure_rate": (
+                1.0 - (self.worlds_constructed / self.worlds_attempted)
+                if self.worlds_attempted
+                else 0.0
+            ),
             "total_iterations": self.total_iterations,
             "search_wall_seconds": self.search_wall_seconds,
             "decision_wall_seconds": self.decision_wall_seconds,
@@ -813,6 +846,12 @@ class EngineMctsPolicy:
 
         if not worlds:
             return self._fallback(context, rng, "no_worlds_constructed")
+
+        # Counted HERE, at the single dispatch point, rather than at the append
+        # above: this is exactly the list every search path is about to receive,
+        # so the denominator cannot drift from what `worlds_searched` counts no
+        # matter which leaf_eval runs.
+        self.stats.worlds_constructed += len(worlds)
 
         if self._config.leaf_eval == "model":
             return self._search_model(context, worlds, live_fold, rng)
@@ -1518,6 +1557,13 @@ class EngineMctsPolicy:
                 "engine_mcts": {
                     "leaf_eval": "model",
                     "worlds_searched": worlds_searched_here,
+                    # Per-decision denominator. A decision that searched 1 of 4
+                    # constructed worlds is NOT a fallback and so is invisible in
+                    # `fallback_rate`, but its belief aggregate rests on a
+                    # quarter of the sampled hypotheses. Carrying the
+                    # denominator per decision is what lets a shard tell a
+                    # healthy decision from a barely-survived one.
+                    "worlds_constructed": len(worlds),
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
                     },
