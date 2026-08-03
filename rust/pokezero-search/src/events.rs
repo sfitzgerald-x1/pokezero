@@ -232,11 +232,18 @@ fn active_status_transition(
 }
 
 impl RenderedEvents {
-    fn mark_lossy(&mut self, reason: &'static str) {
+    // `&str`, not `&'static str`. Both of these immediately `.to_string()`, so
+    // the 'static bound was incidental rather than a deliberate guard against
+    // unbounded reason cardinality -- and nothing downstream is a metrics sink:
+    // every aggregator over `world_failure_reasons` is a plain Counter/dict
+    // merge with no top-N, no label cap and no Prometheus/wandb export. Widened
+    // so the attract refusal can name the JOINT set of live predicates, which a
+    // fixed table of 31 boolean combinations could not do readably.
+    fn mark_lossy(&mut self, reason: &str) {
         self.lossy.push(reason.to_string());
     }
 
-    fn mark_attribution_unsafe(&mut self, reason: &'static str) {
+    fn mark_attribution_unsafe(&mut self, reason: &str) {
         self.mark_lossy(reason);
         self.attribution_unsafe.push(reason.to_string());
     }
@@ -244,6 +251,41 @@ impl RenderedEvents {
     pub fn is_attribution_unsafe(&self) -> bool {
         !self.attribution_unsafe.is_empty()
     }
+}
+
+/// Canonical `world_failure_reasons` label for a refused event stream.
+///
+/// This is a MEASUREMENT KEY, not prose: the Python seam counts it verbatim
+/// into `world_failure_reasons`, so two refusals with the same content must
+/// produce the same bytes. Two rules earn that:
+///
+/// **Dedupe** — both sides refusing for the SAME reason is the common case, and
+/// the duplicate copy is pure length with no information in it.
+///
+/// **Sort** — push order here is RENDER order, which is SPEED order. Without a
+/// sort the identical pair `{miss, cannot_act}` keys as `...:miss,...:cannot_act`
+/// or `...:cannot_act,...:miss` depending only on who moved first, splitting one
+/// measurement across two buckets and halving each count. The order WITHIN a
+/// slug was already fixed for exactly this reason (see the attract sub-case
+/// emitter below); the order BETWEEN slugs was not, which left the bug
+/// half-fixed — found by independent review on #1030.
+///
+/// Length is bounded at the seam rather than here, by `_bounded_reason_detail`
+/// in `src/pokezero/engine_search.py`. That truncation is non-aliasing, so a
+/// slug set that does overflow can never masquerade as a different one.
+///
+/// Split out of [`reject_attribution_unsafe`] so it is testable without a
+/// Python interpreter: the label is the thing under test, the `PyErr` wrapper
+/// is not.
+pub fn attribution_unsafe_label(rendered: &RenderedEvents) -> String {
+    let mut reasons: Vec<&str> = Vec::with_capacity(rendered.attribution_unsafe.len());
+    for reason in &rendered.attribution_unsafe {
+        if !reasons.contains(&reason.as_str()) {
+            reasons.push(reason);
+        }
+    }
+    reasons.sort_unstable();
+    reasons.join(",")
 }
 
 /// Refuse an event stream whose action attribution is not observable from the
@@ -255,7 +297,7 @@ pub fn reject_attribution_unsafe(rendered: &RenderedEvents, lane: &str) -> PyRes
     if rendered.is_attribution_unsafe() {
         return Err(PyValueError::new_err(format!(
             "attribution-unsafe renderer branch rejected before {lane}: {}",
-            rendered.attribution_unsafe.join(",")
+            attribution_unsafe_label(rendered)
         )));
     }
     Ok(())
@@ -1874,7 +1916,68 @@ fn render_move_phase(
             || attacker_paralyzed
             || !move_could_act
         {
-            out.mark_attribution_unsafe("attract_empty_tail_ambiguous");
+            // Name WHICH ambiguity refused, not just that one did. The five
+            // predicates are function-local and were discarded at the refusal, so
+            // no artifact recorded the split and no script could recover it --
+            // which left the only available plan "patch the engine and hope".
+            //
+            // The split decides the fix, and the two answers are far apart. If
+            // `paralyzed` dominates, this is downgradeable to lossy in a few
+            // lines: both outcomes are "no move used, no reveal, no PP", Attract
+            // dominates 4:1 (50% vs 12.5%), and that is a WIDER margin than the
+            // par-over-miss guess this renderer already ships. If the noop/miss
+            // arms dominate it is not downgradeable at any price -- those erase a
+            // `|move|` reveal, and the miss arm also suppresses a PP decrement the
+            // fold tracks -- and only then is an engine marker instruction worth
+            // its patch-stack and digest cost.
+            //
+            // Emit EVERY live predicate, not the first match. They are not
+            // mutually exclusive, and a first-match bucket answers the wrong
+            // question in the expensive direction: `attacker_paralyzed` is a
+            // property of the ATTACKER while `miss`/`noop` are properties of the
+            // MOVE, so they co-occur freely, and testing paralysis first hides
+            // the non-downgradeable arms inside the one bucket that looks safe
+            // to downgrade.
+            //
+            // Measured on the fork masses (`ATTRACT_IMMOBILIZE_CHANCE` 1/2, then
+            // the 0.25 paralysis roll on the surviving half):
+            //   clean paralyzed-only      attract .500 / par .125          -> 80/20
+            //   paralyzed + Thunder       + miss .1125                     -> 15.3% miss
+            //   paralyzed + immune target + noop .375                      -> 37.5% noop
+            // The contamination is unrecoverable once collapsed, so a
+            // `paralyzed`-dominant read would say "ship the lossy downgrade"
+            // while a third of that mass is the case that erases a `|move|`
+            // reveal. Emitting the joint set keeps the probe able to answer its
+            // own question, and the realized cardinality is small (~8).
+            //
+            // Order within the slug is FIXED, not predicate-evaluation order, so
+            // the key is stable across runs and aggregators can sum it.
+            let mut parts: Vec<&str> = Vec::new();
+            if attacker_paralyzed {
+                parts.push("paralyzed");
+            }
+            if empty_tail_can_be_accuracy_miss {
+                parts.push("miss");
+            }
+            if deterministic_noop {
+                parts.push("noop");
+            }
+            if volatile_empty_tail_ambiguous {
+                parts.push("volatile");
+            }
+            if !move_could_act {
+                parts.push("cannot_act");
+            }
+            // Unreachable: the enclosing `if` fired, so at least one predicate is
+            // live. Named rather than silently empty so a future edit that breaks
+            // that correspondence is visible in the measurement.
+            if parts.is_empty() {
+                parts.push("unclassified");
+            }
+            out.mark_attribution_unsafe(&format!(
+                "attract_empty_tail_ambiguous:{}",
+                parts.join("+")
+            ));
             return;
         }
         // The action is uniquely immobilized, but the engine does not retain

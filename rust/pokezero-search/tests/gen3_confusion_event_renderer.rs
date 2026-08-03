@@ -14,7 +14,7 @@ use poke_engine::instruction::{Instruction, StateInstructions};
 use poke_engine::state::{
     PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
 };
-use pokezero_search::events::{render_branch_events, EventContext};
+use pokezero_search::events::{attribution_unsafe_label, render_branch_events, EventContext};
 
 fn confused_state(move_id: Choices) -> State {
     let mut state = State::default();
@@ -871,7 +871,7 @@ fn attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion() {
                 events
                     .attribution_unsafe
                     .iter()
-                    .any(|reason| reason == "attract_empty_tail_ambiguous")
+                    .any(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -1114,5 +1114,263 @@ fn an_ordinary_confusion_check_is_not_misread_as_a_snap_out() {
     assert!(
         events.contains("|-activate|p2a: Opponent|confusion"),
         "a surviving confusion check announces itself: {events}"
+    );
+}
+
+/// The refusal must name WHICH ambiguity refused, not just that one did.
+///
+/// The five predicates behind `attract_empty_tail_ambiguous` were function-local
+/// and discarded at the refusal, so nothing recorded the split -- which meant the
+/// only available plan for this refusal class was "patch the engine and hope".
+/// The split decides the fix: the `paralyzed` arm is downgradeable to lossy (both
+/// outcomes are "no move used, no reveal, no PP", and Attract dominates 4:1),
+/// while the noop/miss arms are not downgradeable at any price because they erase
+/// a `|move|` reveal.
+///
+/// Pinned so the sub-case cannot silently collapse back to a single bare slug,
+/// which would quietly destroy the measurement again.
+#[test]
+fn the_attract_refusal_names_its_subcase() {
+    let mut state = attracted_paralyzed_state(false);
+    let branches = generate(&mut state);
+    let reasons: Vec<String> = branches
+        .iter()
+        .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+        .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+        .collect();
+    assert!(!reasons.is_empty(), "expected an attract refusal to measure");
+    for reason in &reasons {
+        assert_ne!(
+            reason, "attract_empty_tail_ambiguous",
+            "the bare slug carries no sub-case and cannot be measured: {reasons:?}"
+        );
+        assert!(
+            reason.starts_with("attract_empty_tail_ambiguous:"),
+            "malformed sub-case slug: {reason}"
+        );
+    }
+    // Tackle at 100% accuracy into a normal target: paralysis is the only live
+    // predicate, so this is the CLEAN paralyzed case -- the one where the cheap
+    // lossy downgrade really would be safe.
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed"),
+        "{reasons:?}"
+    );
+}
+
+/// The slug must report EVERY live predicate, not just the first one.
+///
+/// Found by independent review, and it is the difference between a probe that
+/// answers its question and one that answers it backwards. `attacker_paralyzed`
+/// is a property of the ATTACKER; `miss` and `noop` are properties of the MOVE.
+/// They co-occur freely, so a first-match bucket files the non-downgradeable
+/// arms under the one label that looks safe to downgrade -- and the contamination
+/// is unrecoverable from the emitted data, because the other predicates are
+/// discarded at the refusal.
+///
+/// Measured masses at the refusal: a paralyzed attacker using a 70%-accuracy move
+/// carries 15.3% miss, and one whose target is immune carries 37.5% noop. Reading
+/// either as "paralyzed" would say "ship the lossy downgrade" over mass that
+/// erases a `|move|` reveal.
+#[test]
+fn the_attract_subcase_reports_every_live_predicate_not_just_the_first() {
+    fn slugs(state: &mut State) -> Vec<String> {
+        let branches = generate(state);
+        branches
+            .iter()
+            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+            .collect()
+    }
+
+    // Paralyzed + a move that can miss. THUNDER is 70% accuracy in gen3.
+    let mut miss_state = attracted_paralyzed_state(false);
+    miss_state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
+    let miss = slugs(&mut miss_state);
+    assert!(!miss.is_empty(), "expected an attract refusal to measure");
+    assert!(
+        // Exact joint string, not two `contains` calls. Order is source-order so
+        // the bucket key is stable across builds; asserting the parts separately
+        // let a swap of the pushes pass green, which would split one bucket into
+        // permutations and silently halve both counts.
+        miss.iter()
+            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed+miss"),
+        "a paralyzed attacker using a 70%-accuracy move must report BOTH          predicates, or the miss mass hides inside the paralyzed bucket: {miss:?}"
+    );
+    assert!(
+        !miss.iter().any(|r| r == "attract_empty_tail_ambiguous:paralyzed"),
+        "the clean-paralyzed slug must not be emitted when miss is also live: {miss:?}"
+    );
+}
+
+/// Every sub-case literal must be pinned, not just the two that were convenient.
+///
+/// Found by independent review: renaming `noop`, `volatile` or `cannot_act` left
+/// the entire suite green. `noop` is the worst of those to leave unpinned -- it
+/// carries the largest non-downgradeable mass (37.5% when the target is immune),
+/// so a refactor that renamed or dropped it would make the probe read the
+/// non-downgradeable share as ZERO. That is the same wrong-direction error as the
+/// first-match bucketing this telemetry was written to fix.
+///
+/// Also pins the joint slug's FIXED ordering. Order is source-order rather than
+/// evaluation-order so the key is stable, but nothing asserted it, and a swap
+/// would silently split one bucket into permutations across builds.
+#[test]
+fn every_attract_subcase_literal_is_pinned() {
+    fn slug_for(state: &mut State) -> Vec<String> {
+        let branches = generate(state);
+        branches
+            .iter()
+            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
+            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+            .collect()
+    }
+
+    // noop: the move cannot change anything -- a Normal move into a Ghost.
+    let mut noop_state = attracted_paralyzed_state(false);
+    noop_state.side_one.get_active().types =
+        (poke_engine::state::PokemonType::GHOST, poke_engine::state::PokemonType::TYPELESS);
+    let noop = slug_for(&mut noop_state);
+    assert!(
+        noop.iter().any(|reason| reason.contains("noop")),
+        "the immune-target arm must report `noop`: {noop:?}"
+    );
+    // ...and the joint order is source-order, not evaluation-order.
+    assert!(
+        noop.iter().any(|reason| reason.contains("paralyzed+noop")),
+        "joint slug order must be fixed as `paralyzed+noop`: {noop:?}"
+    );
+
+    // cannot_act: Splash can never act. Note the ATTACKER is side TWO -- that is
+    // where `attracted_paralyzed_state` puts ATTRACT and PARALYZE -- so the move
+    // has to be replaced there. Replacing side one's move instead leaves the
+    // attacker on Tackle and the slug comes back a bare `:paralyzed`, which is
+    // how this fixture was wrong the first time.
+    let mut cant_state = attracted_paralyzed_state(false);
+    cant_state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    let cant = slug_for(&mut cant_state);
+    assert!(
+        cant.iter().any(|reason| reason.contains("cannot_act")),
+        "Splash must report `cannot_act`: {cant:?}"
+    );
+}
+
+/// Mirror of `_REASON_DETAIL_LIMIT` in `src/pokezero/engine_search.py`.
+///
+/// The refusal message crosses into Python and becomes a `world_failure_reasons`
+/// key; that seam is the only place a length limit exists. Pinning it from this
+/// side means a future slug that outgrows the budget fails HERE, in the crate
+/// suite that owns the slug, rather than silently at the seam in a campaign run.
+const PY_REASON_DETAIL_LIMIT: usize = 512;
+
+/// Both sides refusing with DIFFERENT sub-case sets must key canonically and fit.
+///
+/// Found by independent review. The first fix deduped IDENTICAL reasons, which
+/// missed the likelier case: `miss`/`noop`/`cannot_act` are properties of the
+/// MOVE, and the two sides have different moves, so two-sided refusals usually
+/// carry two DIFFERENT slugs. Two bugs lived in that gap:
+///
+/// 1. **Truncation.** At the old 160-char seam the joined pair overflowed and the
+///    tail label was cut. `{paralyzed+cannot_act, paralyzed+miss}` and
+///    `{paralyzed+cannot_act, paralyzed+miss+volatile}` both landed in the same
+///    `...paralyzed+mis` bucket — the `+volatile` arm, which is exactly the
+///    non-downgradeable mass this whole split exists to measure, vanished into a
+///    bucket that looked like a different question.
+/// 2. **Order.** The join preserved render order, which is SPEED order, so the
+///    same pair of sub-cases keyed two ways depending only on who moved first.
+///
+/// Asserting the label rather than the `PyErr` keeps this test interpreter-free.
+#[test]
+fn a_two_sided_refusal_keys_canonically_and_fits_the_python_seam() {
+    // Both sides attracted AND paralyzed, with moves that add DIFFERENT second
+    // predicates: Splash can never act, Thunder is 70% accurate in gen3.
+    fn two_sided_state(lead_is_faster: bool) -> State {
+        let mut state = attracted_paralyzed_state(false);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::ATTRACT);
+        state.side_one.get_active().status = PokemonStatus::PARALYZE;
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
+        // Speed decides RENDER order, which is what the sort has to neutralise.
+        state.side_one.get_active().speed = if lead_is_faster { 500 } else { 1 };
+        state.side_two.get_active().speed = if lead_is_faster { 1 } else { 500 };
+        state
+    }
+
+    let mut labels = Vec::new();
+    for lead_is_faster in [true, false] {
+        let mut state = two_sided_state(lead_is_faster);
+        let branches = generate(&mut state);
+        let two_sided = branches
+            .iter()
+            .map(|branch| rendered(&mut state.clone(), branch))
+            .find(|events| {
+                events
+                    .attribution_unsafe
+                    .iter()
+                    .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
+                    .count()
+                    >= 2
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a branch where BOTH sides refuse; \
+                     lead_is_faster={lead_is_faster}"
+                )
+            });
+
+        let label = attribution_unsafe_label(&two_sided);
+
+        // Distinct slugs, so dedupe alone could not have saved this.
+        assert!(
+            label.contains("cannot_act") && label.contains("miss"),
+            "fixture must produce two DIFFERENT sub-case sets, got: {label}"
+        );
+
+        // Canonical order: sorted, never render/speed order.
+        let mut sorted = label.split(',').collect::<Vec<_>>();
+        sorted.sort_unstable();
+        assert_eq!(
+            label,
+            sorted.join(","),
+            "reasons must be sorted so one measurement lands in one bucket: {label}"
+        );
+
+        // Fits the seam WITH the prefix the Python side prepends. The lane string
+        // varies; `tree/model fold` is the longest in use.
+        let full = format!(
+            "attribution-unsafe renderer branch rejected before tree/model fold: {label}"
+        );
+        assert!(
+            full.len() <= PY_REASON_DETAIL_LIMIT,
+            "refusal message is {} chars, over the {PY_REASON_DETAIL_LIMIT}-char seam \
+             budget -- it would be truncated into a `world_failure_reasons` key: {full}",
+            full.len()
+        );
+
+        labels.push(label);
+    }
+
+    // The whole point of the sort: speed order must not change the key.
+    assert_eq!(
+        labels[0], labels[1],
+        "the same pair of sub-cases keyed two ways depending on who moved first, \
+         splitting one measurement across two buckets"
     );
 }
