@@ -91,5 +91,12 @@
  "reclassified_row_is_a_hypothesis": "19000074/27's stated mechanism -- 'the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint' -- is inferred from one replayed arm with no source line. It is a HYPOTHESIS, not a deciding check, and the row is filed open.",
  "reclassified_out": [
   "19000074/27"
- ]
+ ],
+ "AMENDED_BY_C97": "reports/c97_last_uncaused_row.json causes 19000074/27 and RETURNS IT TO THIS FAMILY. This file's rows: 3 and reclassified_out: ['19000074/27'] are superseded -- the family is FOUR rows.",
+ "C97_on_this_report": {
+  "the_reclassification": "C97 accepts that this report was RIGHT to distinguish the net from the components. An earlier C97 draft accused this report of conflating them; that was withdrawn. This report's 19000074_27_precision key made the net-vs-components argument itself, citing C94.",
+  "the_p1_slot_hypothesis": "HALF RIGHT, and the wrong half is load-bearing. This report says the engine's crit-kill arm 'defers the OTHER side's end-of-turn residual on a faint, where Showdown still applies it'. The deferral is real -- end_of_turn_is_deferred, generate_instructions.rs:3250 -- but the trailing clause is FALSE: Showdown defers too, per poke-engine-gen3-residual-defer-on-faint.patch and gen3_switch_differential.py::faintresiduals. So the deferral is faithful gen3 behaviour, not a defect, and is not this row's cause.",
+  "the_actual_cause": "residual-decided lethality, the same mechanism as this family's other three rows. The crit-survive arm collapses to average_non_kill_crit_damage = 227, leaving 17 HP, while six of the sixteen crit rolls (229-241) leave 15 or less and die to the sandstorm tick. The arm mis-prices half its own mass."
+ },
+ "shape_needs_widening": "this report's shape string says the collapse 'erases a SURVIVING outcome'. 19000074/27 erases a DYING one. And the stated fix targets the non-crit representative, while that row needs the same partition at a second site (generate_instructions.rs:3080-3083). The family's shape and fix text need widening, not just its row count."
 }

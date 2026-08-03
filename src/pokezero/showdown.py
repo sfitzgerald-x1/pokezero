@@ -319,9 +319,17 @@ NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_
 # and every later assessed strike), so the same ``masks.tier2_residuals`` gate + the
 # belief-source double-gate govern it: pipelines that never ran the Tier-2 inference
 # carry unannotated tokens and the column stays 0.0.
-# LAYER SEPARATION (architectural invariant): Tier-2 conclusions NEVER mutate the belief
-# engine's Tier-1 candidate sets — the exact/protocol layer stays inference-free; this is
-# a parallel tier2-layer feature carried on the same token, not a belief-fact write.
+# LAYER SEPARATION, SUPERSEDED: this column was introduced under an invariant that Tier-2
+# conclusions never mutate the belief engine's Tier-1 candidate sets. That invariant now holds
+# only with ``masks.investment_belief_narrowing`` OFF (its default). With it on, the CB
+# conclusion NARROWS the mon's candidate variants to those holding a Choice Band — the owner's
+# ruling being that "this mon holds a Choice Band" is a statement about a first-class belief
+# field, since ``item`` is already a candidate-set discriminator, and belongs there rather than
+# in a reserved bit. The narrowing is monotone and refusal-asymmetric (see
+# PublicBattleBeliefEngine.narrow_candidate_variants), never a widening.
+# RETIRED AT V4 (and only at v4), for exactly that reason — see
+# _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES. v2.1/v2.2/v3 keep it: their checkpoints have it
+# in their input layout.
 NUMERIC_TIER2_CB_PINNED = NUMERIC_SUB_HP_FRACTION + 1  # 138
 # The per-mon twin of NUMERIC_TT_INVESTMENT_BIT — the AUTHORITATIVE current-state form of
 # the defender-side investment conclusion (the CB_PINNED derivation mirrored to the
@@ -1000,18 +1008,57 @@ _V4_NUMERIC_LAYOUT_ADDITIONS: Mapping[str, tuple[int, ...]] = {
 # has no surface left to sit on. What those rows were carrying is either named as current state
 # by the feature pack (recharge, last move, last-round damage) or deliberately let go.
 #
-# Two survivors from the tier2 family are NOT dropped, because they were never history columns:
-# NUMERIC_TIER2_CB_PINNED and NUMERIC_TIER2_INVESTMENT_PINNED live on the opponent MON token as
-# the authoritative CURRENT-STATE form of those conclusions. They are still derived from the
-# extracted token stream — extraction keeps running, only the ENCODING of the rows is gone.
+# The two per-mon PINNED tier2 columns (138/139) are not history columns — they live on the
+# opponent MON token as the authoritative CURRENT-STATE form of those conclusions — so the
+# history sweep does not reach them. V4 retires them anyway, for the separate reason spelled
+# out below. Their derivation is unaffected either way: the transition stream is still
+# EXTRACTED under v4, only its row ENCODING is gone.
 _V4_HISTORY_GROUP_INDICES = frozenset(
     index for name, indices in _V3_NUMERIC_LAYOUT_GROUPS if name == "history" for index in indices
 )
+# V4-ONLY drops that are not history rows. Retiring a live current-state column is a schema
+# break, which is why this set is empty for every schema that has shipped an artifact and why
+# it is spelled separately from the history sweep above.
+#
+# BOTH pinned tier2 conclusions now NARROW THE BELIEF CANDIDATE SET
+# (ObservationFeatureMasks.investment_belief_narrowing) instead of being projected onto a
+# reserved scalar:
+#
+#   - NUMERIC_TIER2_INVESTMENT_PINNED (139), the defender-side investment pin;
+#   - NUMERIC_TIER2_CB_PINNED (138), the attacker-side Choice Band conclusion, whose
+#     survivors are that mon's candidate variants holding a Choice Band. ``item`` is already
+#     a candidate-set discriminator, so "this mon holds a Choice Band" is a statement about
+#     a first-class belief field, not about a reserved bit.
+#
+# A narrowing moves NUMERIC_CANDIDATE_SET_COUNT (5) and NUMERIC_UNCERTAINTY (6) — frozen
+# legacy positions present in EVERY schema, on every opponent-mon token — plus the
+# possible_items / possible_moves / possible_abilities surfaces, and it sharpens every sampled
+# search world. Against that, 139 is a lossy +/-1 / +/-0.5 class projection that discards the
+# integer and the axis, and 138 is a single bit that says "Choice Band" while the belief
+# surface can say WHICH sets remain and therefore what this mon's other moves are.
+#
+# Dropped from V4 ONLY. v2.1/v2.2/v3 keep both columns intact: checkpoints trained under those
+# schemas have them in their input layout, and removing them would be a silent census break for
+# artifacts that exist. V4 is unlaunched and its censuses are EXACT-matched, so here it is a
+# clean census edit now and a loud schema break later.
+_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES = frozenset(
+    (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED)
+)
 V4_DROPPED_LEGACY_NUMERIC_INDICES = (
-    V3_DROPPED_LEGACY_NUMERIC_INDICES | _V4_HISTORY_GROUP_INDICES
+    V3_DROPPED_LEGACY_NUMERIC_INDICES
+    | _V4_HISTORY_GROUP_INDICES
+    | _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES
 )
 _V4_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = tuple(
-    (name, indices + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()))
+    (
+        name,
+        tuple(
+            index
+            for index in indices
+            if index not in _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES
+        )
+        + _V4_NUMERIC_LAYOUT_ADDITIONS.get(name, ()),
+    )
     for name, indices in _V3_NUMERIC_LAYOUT_GROUPS
     if name != "history"
 )
@@ -1034,14 +1081,19 @@ if set(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V4_DROPPED_LEGACY_NUMERIC_INDICES
     raise AssertionError("v4 numeric layout must account for every v4 writer column")
 
 _V4_NUMERIC_FEATURE_COUNT = len(V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
-# v4 = the v3 public surface, MINUS the history group, PLUS the feature pack.
+# v4 = the v3 public surface, MINUS the history group, MINUS the retired current-state
+# columns, PLUS the feature pack.
 _V4_NUMERIC_FEATURE_COUNT_EXPECTED = (
-    _V3_NUMERIC_FEATURE_COUNT - len(_V4_HISTORY_GROUP_INDICES) + V4_NUMERIC_EXTRA
+    _V3_NUMERIC_FEATURE_COUNT
+    - len(_V4_HISTORY_GROUP_INDICES)
+    - len(_V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES)
+    + V4_NUMERIC_EXTRA
 )
 if _V4_NUMERIC_FEATURE_COUNT != _V4_NUMERIC_FEATURE_COUNT_EXPECTED:
     raise AssertionError(
-        "v4 must be the v3 public surface minus history plus the feature pack "
-        f"({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), got {_V4_NUMERIC_FEATURE_COUNT}"
+        "v4 must be the v3 public surface minus history minus the retired current-state "
+        f"columns plus the feature pack ({_V4_NUMERIC_FEATURE_COUNT_EXPECTED} columns), "
+        f"got {_V4_NUMERIC_FEATURE_COUNT}"
     )
 
 
@@ -4112,10 +4164,15 @@ def observation_from_player_state(
     # the monotone as-of-strike bit makes "any assessed strike of this mon carries it"
     # exactly the tracker's per-mon conclusion, and reading the FULL (untruncated) token
     # list here is what makes the pinned form robust to the K-budget truncation the
-    # history surface is subject to. Tier-2 conclusions never touch the Tier-1 belief
-    # candidate sets (layer separation; see the column comment).
+    # history surface is subject to.
+    #
+    # RETIRED AT V4 (and only at v4): the conclusion narrows the belief candidate set there
+    # instead — a strictly richer surface than this one bit, and the reason the exclusion is
+    # spelled by name (``and not schema_v4``) rather than by turning ``schema_v2_1`` off:
+    # that flag means "carries the v2.1 blocks" and v4 inherits it for the PP-validity bits
+    # and sub HP. See _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES.
     tier2_cb_pinned_species: frozenset[str] = frozenset()
-    if schema_v2_1 and feature_masks.tier2_residuals:
+    if schema_v2_1 and not schema_v4 and feature_masks.tier2_residuals:
         opponent_slot = state.perspective.opponent_showdown_slot
         tier2_cb_pinned_species = frozenset(
             _normalize_identifier(token.actor_species)
@@ -4129,10 +4186,21 @@ def observation_from_player_state(
     # an HP conclusion upgrades over a defense-only pin, never retracts), so the LAST
     # annotated strike of each defender carries the tracker's current per-mon conclusion,
     # and reading the FULL untruncated token list keeps the pinned form robust to
-    # K-budget truncation. Triple-gated like the tt-row write (v2.1 schema + both
-    # masks); layer separation holds — Tier-1 candidate sets are never touched.
+    # K-budget truncation. Triple-gated like the tt-row write (v2.1 schema + both masks).
+    #
+    # RETIRED AT V4 (and only at v4): the conclusion narrows the belief candidate set there
+    # instead, which is a strictly richer surface than this lossy class projection — see
+    # _V4_DROPPED_CURRENT_STATE_NUMERIC_INDICES. The exclusion has to be surgical because
+    # ``schema_v2_1`` means "carries the v2.1 blocks" and v4 inherits it for every OTHER
+    # block (PP-validity bits, sub HP), so the column is switched
+    # off by name rather than by turning that flag off.
     tier2_investment_pinned: dict[str, float] = {}
-    if schema_v2_1 and feature_masks.tier2_residuals and feature_masks.tier2_investment:
+    if (
+        schema_v2_1
+        and not schema_v4
+        and feature_masks.tier2_residuals
+        and feature_masks.tier2_investment
+    ):
         self_slot = state.perspective.showdown_slot
         for token in state.transition_tokens:
             if (
@@ -6376,6 +6444,12 @@ def _encode_pokemon_tokens(
                         if transformed
                         else None
                     ),
+                    # v4 ONLY. The corrected values differ from the legacy approximations, and
+                    # these are frozen legacy positions shared with v2.1/v2.2/v3 -- three lineages
+                    # are training against those encodes right now. v4 is unlaunched, so it can
+                    # start correct; the older schemas keep bug-compatible values rather than
+                    # having their input distribution shifted mid-run.
+                    exact_spreads=schema_v4,
                 )
         if masks.opponent_tendency_stats_block and role == "opponent" and tendency_by_species:
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
@@ -6570,6 +6644,55 @@ def _gen3_stat(base: int, level: int, *, ev: int, iv: int, hp: bool) -> int:
     return core + level + 10 if hp else core + 5
 
 
+
+# Legal EV/IV values the gen3 randbats generator can produce, measured across all 1682 pool
+# variants. The whole degree of freedom is a handful of discrete values, which is what makes the
+# check worth having: a wrong STAT is plausible and invisible, a wrong EV is provably illegal.
+# The bug this replaces derived trimmed HP at ev=0 -- and 0 is NOT a legal HP EV, the generator
+# can never strip the stat -- so this assertion would have caught it at write time.
+_LEGAL_HP_EVS = frozenset({85, 81, 77, 73, 69})
+_LEGAL_ATK_EVS = frozenset({85, 0})
+_LEGAL_HP_IVS = frozenset({31, 30})
+
+
+def _variant_spread_stats(
+    base_stats: "Mapping[str, int]", level: int, variant: "Mapping[str, Any]", has_physical: bool
+) -> "dict[str, int] | None":
+    """Generator-exact stats for one candidate variant, or None if not derivable.
+
+    Degrades to None rather than raising: a malformed candidate must not take down an encode.
+    An ILLEGAL spread is different and does raise -- that means the generator drifted or the
+    core was mis-called, and silently emitting a plausible-but-wrong stat is the failure mode
+    this whole change exists to remove.
+    """
+
+    from .gen3_damage import randbats_spread_details
+
+    raw_moves = variant.get("moves")
+    if not isinstance(raw_moves, (list, tuple)):
+        return None
+    try:
+        spread = randbats_spread_details(
+            base_stats,
+            level=level,
+            moves=tuple(str(move) for move in raw_moves),
+            item=str(variant.get("item") or ""),
+            has_physical_attack=has_physical,
+        )
+    except Exception:  # noqa: BLE001 - a bad candidate degrades, it does not break the encode
+        return None
+    hp_ev = int(spread.evs.get("hp", 85))
+    atk_ev = int(spread.evs.get("atk", 85))
+    hp_iv = int(spread.ivs.get("hp", 31))
+    if hp_ev not in _LEGAL_HP_EVS or atk_ev not in _LEGAL_ATK_EVS or hp_iv not in _LEGAL_HP_IVS:
+        raise ValueError(
+            "randbats spread outside the generator's legal set "
+            f"(hp_ev={hp_ev}, atk_ev={atk_ev}, hp_iv={hp_iv}); the generator has drifted or the "
+            "spread core was mis-called -- refusing to emit a plausible-but-wrong stat"
+        )
+    return {"hp": int(spread.stats["hp"]), "atk": int(spread.stats["atk"])}
+
+
 def _encode_expected_stats(
     num_row: list[float],
     dex: "ShowdownDex | None",
@@ -6580,6 +6703,7 @@ def _encode_expected_stats(
     belief: RevealedPokemonBelief | None,
     transformed: bool = False,
     transform_target: ShowdownPokemon | None = None,
+    exact_spreads: bool = False,
 ) -> None:
     """Deterministic opponent stat block from species + level + the fixed 85/31/neutral spread.
 
@@ -6653,17 +6777,48 @@ def _encode_expected_stats(
             }
             item = _normalize_identifier(str(variant.get("item") or ""))
             has_physical = any(_is_physical_attack(dex, move) for move in moves)
-            atk_values.append(
-                atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
-            )
-            hp_trimmed = "bellydrum" in moves or (
-                "substitute" in moves and (bool(moves & {"flail", "reversal"}) or item in _PINCH_BERRIES)
-            )
-            hp_values.append(
-                _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
-            )
-        atk_low, atk_high = min(atk_values), max(atk_values)
-        hp_low, hp_high = min(hp_values), max(hp_values)
+            if exact_spreads:
+                # Ask the GENERATOR's own spread core rather than re-deriving its rules. The
+                # approximations below are both wrong: the trimmed-HP bound jumps to ev=0 (a full
+                # 85-EV strip) where the generator's `while evs.hp > 1` loop removes 4 at a time
+                # and stops at the first value satisfying its modular condition -- measured wrong
+                # on 100% of trim-eligible variants by +14..+17 HP; and the zeroed-Atk bound
+                # hardcodes iv=0, missing `ivs.atk = hasHiddenPower ? (ivs.atk||31) - 28`, which
+                # leaves IV 3 -- wrong on 43% of Atk-zeroed variants, every one a Hidden Power set.
+                #
+                # Worse than a loose band: because the band is min/max over survivors, a PERFECTLY
+                # PINNED set still reported the wrong HP. randbats_spread_details is the same core
+                # the investment inference uses and is cross-checked against server-computed stats
+                # by its gate harness, so this stops the encoder being a fork of it.
+                spread = _variant_spread_stats(
+                    battle_info.base_stats, level, variant, has_physical
+                )
+                if spread is None:
+                    # An unevaluable candidate makes the whole BAND unsound, and substituting
+                    # the baseline for it would be worse than emitting nothing: min/max would
+                    # then report a bound partly derived from a value no real variant has, and
+                    # the model would read it as confidently as a true one. A wrong belief costs
+                    # more than an absent one, so abandon the narrowing entirely and fall back
+                    # to the documented no-set-source state (low == high == baseline), which is
+                    # an honest "unknown" rather than a fabricated range.
+                    atk_values = []
+                    hp_values = []
+                    break
+                atk_values.append(spread["atk"])
+                hp_values.append(spread["hp"])
+            else:
+                atk_values.append(
+                    atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
+                )
+                hp_trimmed = "bellydrum" in moves or (
+                    "substitute" in moves and (bool(moves & {"flail", "reversal"}) or item in _PINCH_BERRIES)
+                )
+                hp_values.append(
+                    _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
+                )
+        if atk_values and hp_values:
+            atk_low, atk_high = min(atk_values), max(atk_values)
+            hp_low, hp_high = min(hp_values), max(hp_values)
     for slot, value in (
         (NUMERIC_EXPECTED_HP, hp_baseline),
         (NUMERIC_EXPECTED_HP_LOW, hp_low),

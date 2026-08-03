@@ -265,13 +265,29 @@ class SpreadDetailsTest(unittest.TestCase):
         self.assertIn(131, set(_rolls(_DEF_REDUCED)) - set(_rolls(_DEF_FULL)))
 
 
+_TWO_STRIKE = InvestmentConfig(required_pin_strikes=2)
+_ONE_STRIKE = InvestmentConfig(required_pin_strikes=1)
+
+
 class HpPinTest(unittest.TestCase):
-    def test_two_strikes_pin_trimmed_hp(self) -> None:
+    def test_the_default_stays_two_strikes(self) -> None:
+        """k=1 is sound but OPT-IN, because flipping the default is an ungated encode change.
+
+        The lattice test is deductive — an impossible roll excludes a variant outright, and the
+        k=1/k=2 gate pair (runs/investment-gate-strikes-20260802/) measured precision 1.000 under
+        both while k=2 cost 5.4x HP coverage. But `tier2_investment` is live on running lineages,
+        and a differential showed 89 of 136k numeric rows moving 0.0 -> 0.5 in the investment
+        columns. A k=1 cache and a k=2 cache also carry identical mask metadata, so they would
+        mix silently. Hence: default 2, opt in with --investment-pin-strikes 1.
+        """
+        self.assertEqual(InvestmentConfig().required_pin_strikes, 2)
+
+    def test_one_strike_pins_trimmed_hp(self) -> None:
         damage = 130
         lines = _leads(_TRIMMED_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_TRIMMED_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_TRIMMED_HP, prior_hp=_TRIMMED_HP - damage)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         strikes = inference.strikes
         self.assertEqual(len(strikes), 2)
         for strike in strikes:
@@ -282,30 +298,49 @@ class HpPinTest(unittest.TestCase):
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.hp_value, _TRIMMED_HP)
         self.assertEqual(conclusion.hp_class, "trimmed")
+        self.assertEqual(conclusion.hp_pin_turns, (1,))
+        # Tokens: two lead switches, then the two strike tokens. Under k=1 the FIRST
+        # strike concludes, so its own token and every later assessed strike token of
+        # that defender carry the code (monotone as-of-strike), value -1 (trimmed).
+        self.assertEqual(inference.token_codes, {2: -1.0, 3: -1.0})
+
+    def test_two_strike_config_delays_the_freeze_to_the_second(self) -> None:
+        """k=2 is still a supported arm: same conclusion, one strike later."""
+        damage = 130
+        lines = _leads(_TRIMMED_HP)
+        lines += _strike_lines(damage, turn=1, max_hp=_TRIMMED_HP)
+        lines += _strike_lines(damage, turn=2, max_hp=_TRIMMED_HP, prior_hp=_TRIMMED_HP - damage)
+        inference = _infer(lines, config=_TWO_STRIKE)
+        conclusion = inference.conclusions["p2:slowbro"]
+        self.assertEqual(conclusion.hp_value, _TRIMMED_HP)
         self.assertEqual(conclusion.hp_pin_turns, (1, 2))
-        # Tokens: two lead switches, then the two strike tokens. The code lands on the
-        # CONCLUDING strike's token only (two-strike rule), value -1 (trimmed).
         self.assertEqual(inference.token_codes, {3: -1.0})
 
-    def test_two_strikes_pin_full_hp(self) -> None:
+    def test_one_strike_pins_full_hp(self) -> None:
         damage = 130
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.hp_value, _FULL_HP)
         self.assertEqual(conclusion.hp_class, "full")
-        self.assertEqual(inference.token_codes, {3: 1.0})
+        self.assertEqual(inference.token_codes, {2: 1.0, 3: 1.0})
 
-    def test_single_strike_never_concludes(self) -> None:
+    def test_a_lone_clean_strike_concludes(self) -> None:
+        """The k=1 counterpart of the old "single strike never concludes" case."""
         lines = _leads(_TRIMMED_HP)
         lines += _strike_lines(130, turn=1, max_hp=_TRIMMED_HP)
-        inference = _infer(lines)
+        inference = _infer(lines, config=_ONE_STRIKE)
         self.assertEqual(inference.strikes[0].hp_pin, _TRIMMED_HP)
         conclusion = inference.conclusions["p2:slowbro"]
-        self.assertIsNone(conclusion.hp_value)
-        self.assertEqual(inference.token_codes, {})
+        self.assertEqual(conclusion.hp_value, _TRIMMED_HP)
+        self.assertEqual(conclusion.hp_pin_turns, (1,))
+        self.assertEqual(inference.token_codes, {2: -1.0})
+        # Under k=2 the same lone strike is only a pending pin.
+        two_strike = _infer(lines, config=_TWO_STRIKE)
+        self.assertIsNone(two_strike.conclusions["p2:slowbro"].hp_value)
+        self.assertEqual(two_strike.token_codes, {})
 
     def test_seismic_toss_pins_the_denominator(self) -> None:
         # Fixed exact damage (our level, 80): the trimmed family matches exactly, the
@@ -476,13 +511,13 @@ class PrecisionGuardTest(unittest.TestCase):
 
 
 class DefensePinTest(unittest.TestCase):
-    def test_two_strikes_pin_reduced_def(self) -> None:
+    def test_one_strike_pins_reduced_def(self) -> None:
         source = FakeSource({"slowbro": [_VARIANT_DEF_REDUCED, _VARIANT_DEF_FULL]})
         damage = 131  # unique to the IV-30 def lattice (max roll)
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines, source=source)
+        inference = _infer(lines, source=source, config=_ONE_STRIKE)
         for strike in inference.strikes:
             self.assertEqual(strike.disqualifiers, ())
             self.assertEqual(strike.defense_pin, _DEF_REDUCED)
@@ -492,9 +527,10 @@ class DefensePinTest(unittest.TestCase):
         self.assertIsNone(conclusion.hp_value)
         self.assertEqual(conclusion.defense_values, {"def": _DEF_REDUCED})
         self.assertEqual(conclusion.defense_classes, {"def": "reduced"})
-        self.assertEqual(inference.token_codes, {3: -0.5})
+        self.assertEqual(inference.token_codes, {2: -0.5, 3: -0.5})
+        self.assertEqual(_infer(lines, source=source, config=_TWO_STRIKE).token_codes, {3: -0.5})
 
-    def test_two_strikes_pin_full_def(self) -> None:
+    def test_one_strike_pins_full_def(self) -> None:
         source = FakeSource({"slowbro": [_VARIANT_DEF_REDUCED, _VARIANT_DEF_FULL]})
         reduced = set(_rolls(_DEF_REDUCED))
         damage = max(set(_rolls(_DEF_FULL)) - reduced,
@@ -503,11 +539,11 @@ class DefensePinTest(unittest.TestCase):
         lines = _leads(_FULL_HP)
         lines += _strike_lines(damage, turn=1, max_hp=_FULL_HP)
         lines += _strike_lines(damage, turn=2, max_hp=_FULL_HP, prior_hp=_FULL_HP - damage)
-        inference = _infer(lines, source=source)
+        inference = _infer(lines, source=source, config=_ONE_STRIKE)
         conclusion = inference.conclusions["p2:slowbro"]
         self.assertEqual(conclusion.defense_values, {"def": _DEF_FULL})
         self.assertEqual(conclusion.defense_classes, {"def": "full"})
-        self.assertEqual(inference.token_codes, {3: 0.5})
+        self.assertEqual(inference.token_codes, {2: 0.5, 3: 0.5})
 
 
 class ColumnCodeTest(unittest.TestCase):
