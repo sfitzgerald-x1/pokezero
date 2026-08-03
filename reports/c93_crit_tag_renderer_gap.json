@@ -1,0 +1,44 @@
+{
+ "schema": "c93-source-level-cause/1",
+ "family": "I2_matcher_accounting",
+ "rows": 10,
+ "headline": "All ten rows are crit-arm-absence, and the crit arm IS in the engine's support. The matcher rejects it because the RENDERER never tagged it as a crit.",
+ "the_signature": {
+  "observation": "every one of the ten is a ~2x ratio between the observed direct hit and the engine's majority arm",
+  "ratios": {
+   "19000018/126": "256/127",
+   "19000033/23": "62/28",
+   "19000041/16": "291/149",
+   "19000091/40": "52/26",
+   "19000092/15": "125/61",
+   "19000105/25": "147/77",
+   "19000125/29": "264/140",
+   "19000135/31": "270/136",
+   "19000175/13": "242/128",
+   "19000188/14": "80/42"
+  },
+  "so": "a gen3 crit is exactly 2x. These are all critical hits."
+ },
+ "but_this_is_NOT_c87": {
+  "why": "C87 was the Sleep Talk path passing branch_on_damage=false, so no crit arm existed. Here the crit arm DOES exist. 19000091/40 offers three arms: 2.34% (leftovers), 93.75% at -26, and 3.91% at -51. The -51 arm is the crit.",
+  "and": "all three recursive generate_instructions_from_move call sites now pass branch_on_damage through, so the enumeration is not the gap."
+ },
+ "the_actual_cause": {
+  "worked_example": "19000091/40 -- Medicham's Brick Break crits Ariados for 52 (296 maxhp, |-crit| in the observed protocol). The engine's crit arm carries -51. Magnitude agreement is not the problem: roll_components_agree([-52], [-51], None) returns True in isolation, and 52 sits inside the window 45.9-56.6.",
+  "what_rejects_it": "the crit cross-check at engine_transition_differential.py:1342. `observed_component.critical is not support.critical` returns False outright, regardless of magnitude.",
+  "why_support_critical_is_wrong": "support.critical comes from _direct_hit_is_critical(events, ...), which reads the ENGINE BRANCH'S RENDERED PROTOCOL for a |-crit| line. It does not read the engine's own crit flag.",
+  "the_renderer_gate": "rust/pokezero-search/src/events.rs:2156-2162 emits |-crit| only when Some(damage.damage_amount) == crit_collapsed EXACTLY, and crit_collapsed != regular_collapsed, and the hit is not a KO. An EXACT-VALUE equality. Any crit arm whose damage is not byte-equal to the single collapsed crit value goes untagged.",
+  "the_chain": "renderer omits |-crit| -> _direct_hit_is_critical returns False -> support.critical False -> the cross-check rejects an observed crit against the engine's own crit arm, on identity rather than on magnitude."
+ },
+ "disposition": {
+  "class": "MATCHER or RENDERER FIX, not an engine gap",
+  "why_not_engine": "the crit arm is present in the support with a magnitude that agrees. Nothing is missing from the engine.",
+  "two_candidate_fixes": [
+   "renderer: widen the |-crit| gate from exact-value equality to the engine's actual crit flag, so a crit arm is tagged whatever roll it carries. This is the root cause and is recorded in the ledger as a known 173-row gap.",
+   "matcher: treat support.critical as UNKNOWN rather than False when the branch carries no |-crit| line, and fall back to magnitude agreement. Narrower, does not fix the protocol, but does not require a crate rebuild."
+  ],
+  "not_yet_implemented": true,
+  "prediction_if_fixed": "these 10 rows match. NOT registered as a measurement yet -- I have established the chain from source but have NOT confirmed by instrumentation that these specific engine arms lack the |-crit| line. That is the next step and it is one probe."
+ },
+ "honest_gap_in_this_finding": "The rejection path is established by elimination: magnitude agrees in isolation, so the cross-check is the only remaining rejector. I have NOT directly observed the absence of the |-crit| line in these ten branches -- the retained repros do not carry engine branch events. Confirming it means re-rendering one boundary and reading the branch protocol. Until then the chain is source-derived, not measured."
+}
