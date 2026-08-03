@@ -32,6 +32,7 @@
 //!   (`copyVolatileFrom` shallow-clones the volatile object and `confusion` has
 //!   no `noCopy` in gen3's chain); an ordinary switch drops both.
 
+use poke_engine::engine::abilities::Abilities;
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
@@ -110,9 +111,9 @@ fn drops_confusion(list: &[Instruction]) -> bool {
 ///
 /// It is NOT disjoint from the switch-out reset in general: a switch at rung 4
 /// emits exactly `-4`, which satisfies this predicate. Rung 4 is unreachable
-/// from internal play -- the ladder forces the snap-out there -- but it IS swept
-/// by `_confusion_counter_variants`, so the overlap is real rather than
-/// theoretical. It is safe here only because a switch never shares a branch with
+/// from internal play -- the ladder forces the snap-out there -- but a state
+/// deserialized from outside the engine can carry it, so the overlap is real
+/// rather than theoretical. It is safe here only because a switch never shares a
 /// the ladder, and no test mixes the two. Anything that keys on this predicate
 /// across a switch boundary needs a different discriminator.
 fn defers_snap_out(list: &[Instruction]) -> bool {
@@ -710,30 +711,39 @@ fn a_new_confusion_starts_at_the_bottom_of_the_ladder() {
 /// snap-out nor the counter burn happens on a turn spent asleep.
 #[test]
 fn a_rest_asleep_turn_neither_consumes_the_park_nor_burns_a_turn() {
-    for rest_turns in [2i8, 3i8] {
+    // Early Bird is a SEPARATELY gated arm (`3 if EARLYBIRD`, which decrements
+    // twice and lands at 1), so it needs its own case -- review pointed out that
+    // deleting its gate line would otherwise go undetected.
+    for (rest_turns, early_bird) in [(2i8, false), (3i8, false), (3i8, true)] {
         let mut state = confused_state(0);
         state.side_one.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
         state.side_one.get_active().status = PokemonStatus::SLEEP;
         state.side_one.get_active().rest_turns = rest_turns;
+        if early_bird {
+            state.side_one.get_active().ability = Abilities::EARLYBIRD;
+        }
 
         let branches = both_splash(&mut state);
         for branch in &branches {
             assert!(
                 !drops_confusion(&branch.instruction_list),
-                "rest_turns={}: the park must not be consumed while asleep: {:?}",
+                "rest_turns={} early_bird={}: the park must not be consumed while asleep: {:?}",
                 rest_turns,
+                early_bird,
                 branch.instruction_list
             );
             assert!(
                 !burns_a_confusion_turn(&branch.instruction_list),
-                "rest_turns={}: a turn spent asleep burns no confusion turn: {:?}",
+                "rest_turns={} early_bird={}: a turn spent asleep burns no confusion turn: {:?}",
                 rest_turns,
+                early_bird,
                 branch.instruction_list
             );
             assert!(
                 !hits_itself(&branch.instruction_list),
-                "rest_turns={}: no self-hit roll while asleep: {:?}",
+                "rest_turns={} early_bird={}: no self-hit roll while asleep: {:?}",
                 rest_turns,
+                early_bird,
                 branch.instruction_list
             );
         }
@@ -745,14 +755,16 @@ fn a_rest_asleep_turn_neither_consumes_the_park_nor_burns_a_turn() {
                 .side_one
                 .volatile_statuses
                 .contains(&PokemonVolatileStatus::CONFUSION),
-            "rest_turns={}: the volatile must survive the sleeping turn",
-            rest_turns
+            "rest_turns={} early_bird={}: the volatile must survive the sleeping turn",
+            rest_turns,
+            early_bird
         );
         assert_eq!(
             state.side_one.volatile_status_durations.confusion,
             CONFUSION_SNAP_OUT_PENDING,
-            "rest_turns={}: the park must still be pending",
-            rest_turns
+            "rest_turns={} early_bird={}: the park must still be pending",
+            rest_turns,
+            early_bird
         );
     }
 }
@@ -772,8 +784,24 @@ fn a_sleep_talk_turn_still_consumes_the_parked_snap_out() {
         .side_one
         .get_active()
         .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+    // Sleep Talk needs something to CALL. Without a second move
+    // `get_sleep_talk_choices()` is empty, the recursion emits nothing, and the
+    // branch set comes back EMPTY -- which makes `.all()` trivially true and the
+    // whole control vacuous. That is exactly how the first version of this test
+    // shipped, and review caught it: mutating both Rest arms to
+    // `reaches_confusion_handler = false` -- the precise over-broad gate this
+    // test exists to prevent -- left it green.
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
 
     let branches = both_splash(&mut state);
+    assert!(
+        !branches.is_empty(),
+        "the fixture must actually produce Sleep Talk branches, or this control \
+         asserts nothing"
+    );
     assert!(
         branches
             .iter()

@@ -103,7 +103,7 @@
  }
  
  fn set_last_used_move_as_switch(
-@@ -1918,6 +1957,34 @@
+@@ -1918,6 +1957,50 @@
      let current_active_index = attacking_side.active_index;
      let attacker_ability = attacking_side.get_active_immutable().ability;
      let attacker_active = attacking_side.get_active();
@@ -130,15 +130,31 @@
 +    // `slp.onBeforeMove` announces `|cant|slp` and returns UNDEFINED rather than
 +    // false (data/mods/gen3/conditions.ts). The event keeps running down the
 +    // priority list, confusion's handler DOES fire, and a Sleep Talk turn burns a
-+    // confusion turn and can snap out. Snore is not implemented in this engine.
-+    // Pinned by `rest_sleep_talk_keeps_the_same_sleep_and_confusion_gate_order`,
-+    // which caught this gate when it was first written too broadly.
++    // confusion turn and can snap out. Pinned by
++    // `rest_sleep_talk_keeps_the_same_sleep_and_confusion_gate_order`, which
++    // caught this gate when it was first written too broadly.
++    //
++    // Snore IS implemented (`Choices::SNORE`, 40 BP, sound, 30% flinch), but this
++    // engine models it as NOT sleepUsable everywhere -- the natural-sleep arm
++    // hardcodes `== Choices::SLEEPTALK` too -- so a sleeping Snore user is
++    // blocked with `|cant|slp` and correctly does not consume the park. Matching
++    // that here keeps the gate self-consistent; the Showdown divergence in
++    // treating Snore as unusable while asleep is PRE-EXISTING and out of scope.
++
++    // (4) The natural-sleep arm is described in the confusion block below. Note
++    // one case that description does not cover: at `chance_to_wake == 0` with a
++    // non-Sleep-Talk move there is no woke branch at all -- the still-asleep
++    // branch leaves at 100% and `incoming` continues at 0% and DOES reach the
++    // confusion block. Harmless for the snap-out (the `percentage > 0.0` guard
++    // drops it) but the pre-existing `+1` arm still pushes its self-hit clone, so
++    // two zero-mass branches leak out. Pre-existing; noted so the reachability
++    // story below is not read as more complete than it is.
 +    let sleep_usable_move = attacker_choice.move_id == Choices::SLEEPTALK;
 +    let mut reaches_confusion_handler = true;
      match attacker_active.status {
          PokemonStatus::FREEZE => {
              let mut still_frozen_instruction = incoming_instructions.clone();
-@@ -2100,6 +2167,8 @@
+@@ -2100,6 +2183,8 @@
                          ));
                  }
                  3 if attacker_active.ability == Abilities::EARLYBIRD => {
@@ -147,7 +163,7 @@
                      attacker_active.rest_turns = 1;
                      for _ in 0..2 {
                          incoming_instructions.instruction_list.push(
-@@ -2111,6 +2180,7 @@
+@@ -2111,6 +2196,7 @@
                  }
                  // Pokemon is asleep because of Rest, and will stay asleep this turn
                  2 | 3 => {
@@ -155,7 +171,7 @@
                      attacker_active.rest_turns -= 1;
                      incoming_instructions
                          .instruction_list
-@@ -2126,11 +2196,45 @@
+@@ -2126,11 +2212,45 @@
          _ => {}
      }
  
@@ -204,23 +220,26 @@
          // pokezero gen3 fidelity fix (confusion duration): burn one attacking
          // turn off the bounded counter. Showdown's `confusion.onBeforeMove`
          // decrements `time` on every turn the handler actually runs, and the
-@@ -2138,9 +2242,12 @@
+@@ -2138,9 +2258,15 @@
          // — recharge (11), sleep and freeze (10), flinch (8), Disable (7),
          // Taunt (5). The engine reproduces that reachability exactly: recharge,
          // flinch, Disable and Taunt short-circuit in `cannot_use_move` before
 -        // this function is entered, and the sleep/freeze arms above push their
 -        // "no move" branches to `final_instructions` without falling through
 -        // here. Attract (2) and paralysis (1) are LOWER priority than confusion
-+        // this function is entered; the natural-sleep and freeze arms above push
-+        // their "no move" branches to `final_instructions` and continue as the
-+        // woke/thawed branch; and the two REST "stays asleep" arms -- which DO
-+        // fall through -- clear `reaches_confusion_handler`. That last case used
++        // this function is entered; the freeze arm and the mixed-chance
++        // natural-sleep arm push their "no move" branches to `final_instructions`
++        // and continue as the thawed/woke branch; and the two REST "stays asleep"
++        // arms -- which DO fall through -- clear `reaches_confusion_handler`.
++        // (At `chance_to_wake == 0` the natural-sleep arm instead zeroes
++        // `incoming`'s mass rather than producing a woke branch; see the note by
++        // the flag's declaration.) That last case used
 +        // to be missed, so a Rest-asleep confused mon burned a turn off the
 +        // counter that Showdown leaves untouched. Attract (2) and paralysis (1) are LOWER priority than confusion
          // (3) and are resolved after this block, so a fully-paralyzed or
          // infatuation-immobilized turn still burns a confusion turn — as it does
          // in Showdown.
-@@ -4387,7 +4494,9 @@
+@@ -4387,7 +4513,9 @@
  /// A turn only burns a confusion turn if the CHECK ran, so the ladder is gated
  /// on the `+1` duration instruction the confusion block emits — the marker is
  /// carried by both of that block's outcomes (self-hit and move-goes-through) and
@@ -231,7 +250,7 @@
  /// Gating on the counter's VALUE instead would be wrong: the counter persists
  /// across turns, so a Pokemon that spent the turn asleep, flinched, recharging
  /// or Taunted — none of which reach `confusion.onBeforeMove` in Showdown, all of
-@@ -4466,7 +4575,7 @@
+@@ -4466,7 +4594,7 @@
                  expired.update_percentage(chance);
              }
              state.apply_instructions(&expired.instruction_list);
