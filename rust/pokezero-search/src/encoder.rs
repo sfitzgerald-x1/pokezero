@@ -529,6 +529,163 @@ fn gen3_stat(base: i64, level: i64, ev: i64, iv: i64, hp: bool) -> i64 {
     }
 }
 
+/// `gen3_damage.HIDDEN_POWER_IVS`, transcribed from the vendored `data/typechart.ts` `HPivs`
+/// tables. Unlisted stats stay 31. Dark carries no overrides (all-31 IS its spread), which is
+/// why the table returns an empty slice rather than None for it -- "no overrides" and "not a
+/// Hidden Power set" take DIFFERENT branches in the Atk-zeroing rule below.
+fn hidden_power_ivs(hp_type: &str) -> Option<&'static [(&'static str, i64)]> {
+    Some(match hp_type {
+        "bug" => &[("atk", 30), ("def", 30), ("spd", 30)],
+        "dark" => &[],
+        "dragon" => &[("atk", 30)],
+        "electric" => &[("spa", 30)],
+        "fighting" => &[("def", 30), ("spa", 30), ("spd", 30), ("spe", 30)],
+        "fire" => &[("atk", 30), ("spa", 30), ("spe", 30)],
+        "flying" => &[("hp", 30), ("atk", 30), ("def", 30), ("spa", 30), ("spd", 30)],
+        "ghost" => &[("def", 30), ("spd", 30)],
+        "grass" => &[("atk", 30), ("spa", 30)],
+        "ground" => &[("spa", 30), ("spd", 30)],
+        "ice" => &[("atk", 30), ("def", 30)],
+        "poison" => &[("def", 30), ("spa", 30), ("spd", 30)],
+        "psychic" => &[("atk", 30), ("spe", 30)],
+        "rock" => &[("def", 30), ("spd", 30), ("spe", 30)],
+        "steel" => &[("spd", 30)],
+        "water" => &[("atk", 30), ("def", 30), ("spa", 30)],
+        _ => return None,
+    })
+}
+
+/// `gen3_damage.hidden_power_type`: the type suffix of the set's Hidden Power move, if any.
+fn hidden_power_type_of(moves: &[String]) -> Option<&str> {
+    moves
+        .iter()
+        .find_map(|m| m.strip_prefix("hiddenpower").filter(|rest| !rest.is_empty()))
+}
+
+/// The generator's legal spread set. Any value outside it means the generator drifted or this
+/// core was mis-called, and the Python twin RAISES rather than emit a plausible-but-wrong stat.
+const LEGAL_HP_EVS: [i64; 5] = [85, 81, 77, 73, 69];
+const LEGAL_ATK_EVS: [i64; 2] = [85, 0];
+const LEGAL_HP_IVS: [i64; 2] = [31, 30];
+
+/// Native twin of `gen3_damage.randbats_spread_details`, narrowed to the two stats the encoder
+/// bands: `(hp, atk)`. Mirrors `data/random-battles/gen3/teams.ts` -- 85 EVs / 31 IVs / neutral
+/// everywhere, then Hidden Power IV overrides, the first HP-trim loop, Atk zeroing, and the
+/// second HP-trim pass.
+///
+/// Exists because at V4 the Python encoder stopped approximating this and started asking the
+/// generator's own spread core (`showdown._variant_spread_stats`), while this crate kept the old
+/// approximation -- so the two encoders disagreed on `NUMERIC_EXPECTED_{HP,ATK}_LOW` for the same
+/// state. A model trained on Python-encoded rows and searched with a native leaf would read a
+/// different stat band at the leaf than it was trained on. The approximation is wrong in two
+/// specific ways, both measured: the trimmed-HP bound jumped straight to ev=0 (a full 85-EV
+/// strip) where the generator removes 4 at a time and stops at the first value satisfying its
+/// modular condition, and the zeroed-Atk bound hardcoded iv=0, missing the Hidden Power
+/// `ivs.atk - 28` carry-through.
+///
+/// `Ok(None)` = not derivable, which the caller must treat as "abandon the whole band" rather
+/// than "skip this candidate": an unevaluable candidate could BE the true variant, so excluding
+/// it from a min/max would report a bound no real variant has.
+fn randbats_spread_hp_atk(
+    hp_base: i64,
+    atk_base: i64,
+    level: i64,
+    moves: &[String],
+    item: &str,
+    has_physical_attack: bool,
+) -> PyResult<Option<(i64, i64)>> {
+    let mut hp_ev = 85i64;
+    let mut atk_ev = 85i64;
+    let mut hp_iv = 31i64;
+    let mut atk_iv = 31i64;
+    let hp_type = hidden_power_type_of(moves).map(|t| t.to_string());
+    if let Some(hp_type) = hp_type.as_deref() {
+        let Some(overrides) = hidden_power_ivs(hp_type) else {
+            // An unrecognized Hidden Power type is a candidate we cannot evaluate, not one we
+            // may evaluate as all-31: the real set would carry overrides we do not know.
+            return Ok(None);
+        };
+        for (stat, value) in overrides {
+            match *stat {
+                "hp" => hp_iv = *value,
+                "atk" => atk_iv = *value,
+                _ => {}
+            }
+        }
+    }
+    let hp_value = |hp_ev: i64, hp_iv: i64| gen3_stat(hp_base, level, hp_ev, hp_iv, true);
+
+    let has = |name: &str| moves.iter().any(|m| m == name);
+    let has_substitute = has("substitute");
+    let flail_reversal = has("flail") || has("reversal");
+    let pinch_item = matches!(item, "salacberry" | "petayaberry" | "liechiberry");
+
+    // First HP-trim loop (teams.ts "Prepare optimal HP"). The trailing `else break` is load
+    // bearing: a set with none of these shapes leaves 85 EVs untouched.
+    while hp_ev > 1 {
+        let hp = hp_value(hp_ev, hp_iv);
+        if has_substitute && flail_reversal {
+            if hp % 4 > 0 {
+                break;
+            }
+        } else if has_substitute && pinch_item {
+            if hp % 4 == 0 {
+                break;
+            }
+        } else if has("bellydrum") {
+            if hp % 2 > 0 {
+                break;
+            }
+        } else {
+            break;
+        }
+        hp_ev -= 4;
+    }
+
+    // Minimize confusion damage: no physical attacks and no Transform -> zero Atk.
+    if !has_physical_attack && !has("transform") {
+        atk_ev = 0;
+        // `(ivs.atk || 31) - 28` in the generator: a Hidden Power set keeps its overridden Atk
+        // IV and drops 28 from it (31 -> 3, or 30 -> 2), it does NOT fall to 0.
+        atk_iv = if hp_type.is_some() {
+            (if atk_iv == 0 { 31 } else { atk_iv }) - 28
+        } else {
+            0
+        };
+    }
+
+    // Second HP-trim pass.
+    let mut hp = hp_value(hp_ev, hp_iv);
+    if has_substitute && (has("endeavor") || flail_reversal) {
+        if hp % 4 == 0 {
+            hp_ev -= 4;
+        }
+    } else if has_substitute && pinch_item {
+        while hp % 4 > 0 {
+            hp_ev -= 4;
+            hp = hp_value(hp_ev, hp_iv);
+        }
+    }
+
+    if !LEGAL_HP_EVS.contains(&hp_ev)
+        || !LEGAL_ATK_EVS.contains(&atk_ev)
+        || !LEGAL_HP_IVS.contains(&hp_iv)
+    {
+        return Err(err(&format!(
+            "randbats spread outside the generator's legal set (hp_ev={hp_ev}, atk_ev={atk_ev}, \
+             hp_iv={hp_iv}); the generator has drifted or the spread core was mis-called -- \
+             refusing to emit a plausible-but-wrong stat"
+        )));
+    }
+    // Shedinja (the only base-1-HP species): the engine pins max HP to 1.
+    let hp_stat = if hp_base == 1 {
+        1
+    } else {
+        hp_value(hp_ev, hp_iv)
+    };
+    Ok(Some((hp_stat, gen3_stat(atk_base, level, atk_ev, atk_iv, false))))
+}
+
 // Sorted-by-normalized-key dedupe keeping the first-seen original string:
 // `showdown._compact_belief_values`.
 fn compact_belief_values(values: &[String], limit: Option<usize>) -> Vec<String> {
@@ -1473,21 +1630,54 @@ fn encode_expected_stats(
                     .map(|info| info.gen3_category == "Physical" && info.base_power > 0)
                     .unwrap_or(false)
             });
-            atk_values.push(if has_physical {
-                atk_baseline
+            if layout.is_v4() {
+                // V4 asks the generator's own spread core; see randbats_spread_hp_atk.
+                let Some((hp, atk)) = randbats_spread_hp_atk(
+                    // The BATTLE species' HP base, matching the Python twin, which hands the
+                    // spread core `battle_info.base_stats` whole while taking the BASELINE's
+                    // hp from `hp_info`. The two differ only on a forme change, and the
+                    // transformed path returns before reaching here.
+                    battle_info.base_stats.get("hp").copied().unwrap_or(0),
+                    atk_base,
+                    level,
+                    &moves,
+                    &item,
+                    has_physical,
+                )?
+                else {
+                    // Unevaluable candidate: abandon the whole band rather than exclude it.
+                    // Substituting the baseline would report a bound partly derived from a
+                    // value no real variant has, and the model reads that as confidently as
+                    // a true one. Falling back to low == high == baseline is an honest
+                    // "unknown"; a fabricated range is not.
+                    atk_values.clear();
+                    hp_values.clear();
+                    break;
+                };
+                atk_values.push(atk);
+                hp_values.push(hp);
             } else {
-                gen3_stat(atk_base, level, 0, 0, false)
-            });
-            let has = |name: &str| moves.iter().any(|m| m == name);
-            let hp_trimmed = has("bellydrum")
-                || (has("substitute")
-                    && (has("flail") || has("reversal") || pinch_berries.contains(&item.as_str())));
-            hp_values.push(if hp_trimmed {
-                gen3_stat(hp_base, level, 0, 31, true)
-            } else {
-                hp_baseline
-            });
+                atk_values.push(if has_physical {
+                    atk_baseline
+                } else {
+                    gen3_stat(atk_base, level, 0, 0, false)
+                });
+                let has = |name: &str| moves.iter().any(|m| m == name);
+                let hp_trimmed = has("bellydrum")
+                    || (has("substitute")
+                        && (has("flail")
+                            || has("reversal")
+                            || pinch_berries.contains(&item.as_str())));
+                hp_values.push(if hp_trimmed {
+                    gen3_stat(hp_base, level, 0, 31, true)
+                } else {
+                    hp_baseline
+                });
+            }
         }
+        // `unwrap_or(baseline)` is the empty-vector case, which is now reachable two ways: no
+        // variants at all, and the v4 abandon-the-band break above. Both mean the same thing --
+        // collapse to the baseline.
         atk_low = *atk_values.iter().min().unwrap_or(&atk_baseline);
         atk_high = *atk_values.iter().max().unwrap_or(&atk_baseline);
         hp_low = *hp_values.iter().min().unwrap_or(&hp_baseline);
@@ -3017,5 +3207,118 @@ impl NativeEncoder {
         let products = fold.inner().products();
         let encoded = encode_row_value(&self.tables, &row, Some(&products))?;
         encoded_to_dict(py, &encoded)
+    }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::randbats_spread_hp_atk;
+
+    /// Every expected value here was produced by the PYTHON source of truth --
+    /// `gen3_damage.randbats_spread_details` -- not by re-deriving the rules by hand. That is the
+    /// whole point: this port exists because the crate had its own approximation of the
+    /// generator, and a test written from the same reading that produced the port would
+    /// reproduce the same misreading.
+    fn spread(
+        hp_base: i64,
+        atk_base: i64,
+        level: i64,
+        moves: &[&str],
+        item: &str,
+        has_physical: bool,
+    ) -> Option<(i64, i64)> {
+        let moves: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
+        randbats_spread_hp_atk(hp_base, atk_base, level, &moves, item, has_physical).unwrap()
+    }
+
+    #[test]
+    fn plain_set_is_the_untrimmed_baseline() {
+        assert_eq!(
+            spread(95, 125, 78, &["earthquake", "rockslide"], "", true),
+            Some((276, 240))
+        );
+    }
+
+    #[test]
+    fn belly_drum_trims_hp_by_steps_not_to_zero_evs() {
+        // hp_ev 85 -> 77: TWO steps of the generator's loop. The approximation this port
+        // replaced jumped straight to ev=0, which reports 320 -- 9 HP low, and low by a
+        // DIFFERENT amount for every species, so it does not even fail consistently.
+        assert_eq!(
+            spread(160, 110, 68, &["bellydrum", "bodyslam", "rest", "sleeptalk"], "leftovers", true),
+            Some((329, 189))
+        );
+    }
+
+    #[test]
+    fn substitute_pinch_berry_trims_through_the_second_pass() {
+        assert_eq!(
+            spread(40, 100, 84, &["substitute", "flail", "endure"], "salacberry", true),
+            Some((203, 216))
+        );
+    }
+
+    #[test]
+    fn substitute_endeavor_trims_one_step_in_the_second_pass() {
+        assert_eq!(
+            spread(40, 100, 84, &["substitute", "endeavor", "protect"], "leftovers", true),
+            Some((204, 216))
+        );
+    }
+
+    #[test]
+    fn atk_zeroing_without_hidden_power_uses_iv_zero() {
+        assert_eq!(
+            spread(95, 75, 84, &["surf", "psychic", "thunderwave", "rest"], "leftovers", false),
+            Some((297, 131))
+        );
+    }
+
+    #[test]
+    fn atk_zeroing_with_hidden_power_keeps_iv_minus_28() {
+        // ivs.atk = 30 (Hidden Power Ice override) - 28 = 2, NOT 0. The old approximation
+        // hardcoded iv=0 here and was wrong on 43% of Atk-zeroed variants, every one an HP set.
+        assert_eq!(
+            spread(60, 65, 80, &["hiddenpowerice", "thunderbolt", "icebeam", "substitute"], "leftovers", false),
+            Some((227, 110))
+        );
+    }
+
+    #[test]
+    fn hidden_power_flying_lowers_the_hp_iv_too() {
+        // The only HP type whose override touches `hp`, so it is the only one that moves the
+        // HP stat off the all-31 value: 227 -> 226.
+        assert_eq!(
+            spread(60, 65, 80, &["hiddenpowerflying", "thunderbolt", "icebeam", "rest"], "leftovers", false),
+            Some((226, 110))
+        );
+    }
+
+    #[test]
+    fn shedinja_hp_is_pinned_to_one() {
+        assert_eq!(
+            spread(1, 90, 84, &["shadowball", "silverwind", "protect"], "lumberry", true),
+            Some((1, 199))
+        );
+    }
+
+    #[test]
+    fn transform_suppresses_atk_zeroing() {
+        // The generator zeroes Atk only when the set has no physical attack AND no Transform.
+        // Ditto-with-Transform therefore keeps the 85/31 Atk, and dropping the `transform`
+        // clause would silently halve it.
+        let with = spread(96, 60, 76, &["transform"], "leftovers", false);
+        let without = spread(96, 60, 76, &["splash"], "leftovers", false);
+        assert_ne!(with, without);
+        assert_eq!(with, spread(96, 60, 76, &["transform"], "leftovers", true));
+    }
+
+    #[test]
+    fn an_unknown_hidden_power_type_is_unevaluable_rather_than_all_31() {
+        // Degrades to None, which the caller reads as "abandon the whole band". Treating it as
+        // an all-31 set would emit a stat the real variant does not have.
+        assert_eq!(spread(60, 65, 80, &["hiddenpowerfairy"], "leftovers", false), None);
+        // ...and the generic, untyped move is not a Hidden Power set at all, so it evaluates.
+        assert!(spread(60, 65, 80, &["hiddenpower"], "leftovers", false).is_some());
     }
 }
