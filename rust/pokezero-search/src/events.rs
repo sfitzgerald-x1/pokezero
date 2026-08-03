@@ -1015,9 +1015,19 @@ fn render_none_phase(
     }
 }
 
+/// Restore amount for a deferred confusion snap-out. Mirrors
+/// `-CONFUSION_SNAP_OUT_PENDING` in the gen3 engine patch, and is deliberately
+/// NOT the ladder's `+1` "check ran" marker: at `+1` the two are
+/// indistinguishable and the snap-out renders a fabricated `-activate` with no
+/// `-end`, which the world layer then never clears.
+const CONFUSION_SNAP_OUT_RESTORE: i8 = 4;
+
 struct MovePrelude {
     used_move: bool,
     woke_up: bool,
+    /// The ladder's deferred snap-out was consumed in this phase: emit `-end`
+    /// and no `-activate`, and let the move through with no self-hit roll.
+    confusion_snapped_out: bool,
     /// The exact 40-power damage the engine would emit for the pre-move
     /// confusion self-hit, if this phase actually reached that handler.
     ///
@@ -1041,6 +1051,7 @@ fn consume_move_prelude(
     let mut prelude = MovePrelude {
         used_move: true,
         woke_up: false,
+        confusion_snapped_out: false,
         confusion_self_hit_damage: None,
     };
     // Attacker already fainted (first mover KO'd it before it could act) or
@@ -1191,6 +1202,33 @@ fn consume_move_prelude(
             // remains in the move segment, the following lone self-damage is
             // no longer recognized as a cancelled move and can be rendered as
             // the selected move's self-cost (notably Substitute).
+            // The deferred snap-out, published where Showdown publishes it.
+            // The ladder already decided this confusion ends; the engine parks
+            // that as a negative duration and consumes it at the victim's next
+            // move attempt, which is where `confusion.onBeforeMove` snaps out.
+            // Showdown emits `-end` and NO `-activate` on this turn, and lets
+            // the move through with no self-hit roll -- so this arm must not
+            // set `confusion_self_hit_damage`. Matched on the restore amount,
+            // which is deliberately not the ladder's `+1` marker.
+            Instruction::ChangeVolatileStatusDuration(change)
+                if change.side_ref == side
+                    && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && change.amount == CONFUSION_SNAP_OUT_RESTORE =>
+            {
+                prelude.confusion_snapped_out = true;
+                sim.apply(ins);
+                *cursor += 1;
+            }
+            Instruction::RemoveVolatileStatus(remove)
+                if remove.side_ref == side
+                    && remove.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && prelude.confusion_snapped_out =>
+            {
+                let ident = ctx.active_ident(sim.state, side);
+                out.lines.push(format!("|-end|{ident}|confusion"));
+                sim.apply(ins);
+                *cursor += 1;
+            }
             Instruction::ChangeVolatileStatusDuration(change)
                 if change.side_ref == side
                     && change.volatile_status == PokemonVolatileStatus::CONFUSION
@@ -2722,9 +2760,13 @@ fn render_residual_instruction(
             // volatile visible through the next decision boundary and snaps
             // out only when that mon next attempts to move. Emitting -end here
             // would leak the engine's future branch into public state early.
-            // We cannot defer an event across independent renderer calls, so
-            // retain the exact engine endpoint only as an unsafe diagnostic
-            // branch and reject it before fold/encoder advancement.
+            // The engine now defers the snap-out itself, so this arm is no
+            // longer reachable from engine-generated instructions -- the ladder
+            // parks the counter instead of removing the volatile here. It is
+            // KEPT as a fail-closed backstop: if the deferral ever regresses, or
+            // a hand-built instruction list removes CONFUSION at end of turn,
+            // refusing the world is still the right answer. Do not delete it in
+            // a dead-code sweep.
             out.mark_attribution_unsafe("confusion_expiry_timing_unobservable");
             sim.apply(ins);
         }

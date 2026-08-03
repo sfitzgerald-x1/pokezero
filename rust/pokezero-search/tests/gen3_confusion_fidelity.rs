@@ -32,6 +32,7 @@
 //!   (`copyVolatileFrom` shallow-clones the volatile object and `confusion` has
 //!   no `noCopy` in gen3's chain); an ordinary switch drops both.
 
+use poke_engine::engine::abilities::Abilities;
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
@@ -43,6 +44,11 @@ use poke_engine::state::{
 /// Showdown's `time` is uniform on {2,3,4,5}, so the number of attacking turns
 /// that carry a self-hit roll is uniform on {1,2,3,4}.
 const MAX_CONFUSED_TURNS: i8 = 4;
+
+/// Mirrors `CONFUSION_SNAP_OUT_PENDING` in the engine. The end-of-turn ladder no
+/// longer removes the volatile; it parks the counter here so the `|-end|` can be
+/// announced on the next move, which is where Showdown announces it.
+const CONFUSION_SNAP_OUT_PENDING: i8 = -4;
 
 /// `generate_instructions_from_move_pair` must leave `state` untouched.
 fn generate(state: &mut State, side_one: &MoveChoice, side_two: &MoveChoice) -> Vec<StateInstructions> {
@@ -94,6 +100,43 @@ fn drops_confusion(list: &[Instruction]) -> bool {
         }
         _ => false,
     })
+}
+
+/// The ladder's snap-out as it is now expressed at end of turn: the counter is
+/// parked on the sentinel instead of the volatile being removed.
+///
+/// Keyed on `amount <= CONFUSION_SNAP_OUT_PENDING`. Parking from a live rung `d`
+/// in `1..=4` writes `-4 - d`, so every real mark is at most `-5`, and the `+1`
+/// confusion-check burn is nowhere near it.
+///
+/// It is NOT disjoint from the switch-out reset in general: a switch at rung 4
+/// emits exactly `-4`, which satisfies this predicate. Rung 4 is unreachable
+/// from internal play -- the ladder forces the snap-out there -- but a state
+/// deserialized from outside the engine can carry it, so the overlap is real
+/// rather than theoretical. It is safe here only because a switch never shares a
+/// the ladder, and no test mixes the two. Anything that keys on this predicate
+/// across a switch boundary needs a different discriminator.
+fn defers_snap_out(list: &[Instruction]) -> bool {
+    list.iter().any(|instruction| match instruction {
+        Instruction::ChangeVolatileStatusDuration(change) => {
+            change.side_ref == SideReference::SideOne
+                && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                && change.amount <= CONFUSION_SNAP_OUT_PENDING
+        }
+        _ => false,
+    })
+}
+
+/// Confusion stops carrying self-hit rolls after this branch, whether the
+/// volatile is removed outright (switch, Own Tempo) or parked pending its
+/// announcement (the end-of-turn ladder).
+///
+/// Every probability pin below is stated against this predicate and keeps the
+/// number it had when the ladder removed the volatile in place. That equality
+/// is the evidence the deferral moved WHEN the end is announced without moving
+/// any mass.
+fn snaps_out(list: &[Instruction]) -> bool {
+    drops_confusion(list) || defers_snap_out(list)
 }
 
 fn burns_a_confusion_turn(list: &[Instruction]) -> bool {
@@ -164,7 +207,7 @@ fn snap_out_chance_matches_the_showdown_duration_roll() {
         let mut state = confused_state(burned);
         let branches = both_splash(&mut state);
         assert_close(
-            mass(&branches, drops_confusion),
+            mass(&branches, snaps_out),
             expected,
             &format!("snap-out mass with {} turn(s) already burned", burned),
         );
@@ -181,7 +224,7 @@ fn confusion_lasts_a_uniform_one_to_four_attacking_turns() {
     for burned in 0..MAX_CONFUSED_TURNS {
         let mut state = confused_state(burned);
         let branches = both_splash(&mut state);
-        let ends_now = mass(&branches, drops_confusion) / 100.0;
+        let ends_now = mass(&branches, snaps_out) / 100.0;
         assert_close(
             survival * ends_now * 100.0,
             25.0,
@@ -193,8 +236,15 @@ fn confusion_lasts_a_uniform_one_to_four_attacking_turns() {
 }
 
 /// Drive the never-snaps-out path for real, applying instructions turn by turn:
-/// after four attacking turns the volatile is gone on EVERY branch and the
-/// counter is back to zero, so a permanent confusion cannot survive here.
+/// after four attacking turns EVERY branch has snapped out, and one ply later
+/// the volatile is gone and the counter is back to zero — so a permanent
+/// confusion cannot survive here.
+///
+/// The last ply is the point. The ladder now parks the snap-out instead of
+/// applying it, so "the volatile is gone" is only true after the next move
+/// consumes the mark. Stopping at the mark would pin a deferral that is allowed
+/// never to land, which is a confusion that never ends — the exact upstream bug
+/// this file exists to keep fixed.
 #[test]
 fn confusion_never_persists_past_four_attacking_turns() {
     let mut state = confused_state(0);
@@ -204,7 +254,7 @@ fn confusion_never_persists_past_four_attacking_turns() {
             let survivor = branches
                 .iter()
                 .find(|branch| {
-                    !drops_confusion(&branch.instruction_list)
+                    !snaps_out(&branch.instruction_list)
                         && !hits_itself(&branch.instruction_list)
                 })
                 .unwrap_or_else(|| panic!("no still-confused branch on attacking turn {}", turn))
@@ -218,8 +268,8 @@ fn confusion_never_persists_past_four_attacking_turns() {
         } else {
             for branch in &branches {
                 assert!(
-                    drops_confusion(&branch.instruction_list),
-                    "confusion must be gone after {} attacking turns: {:?}",
+                    snaps_out(&branch.instruction_list),
+                    "confusion must snap out after {} attacking turns: {:?}",
                     MAX_CONFUSED_TURNS,
                     branch.instruction_list
                 );
@@ -227,18 +277,57 @@ fn confusion_never_persists_past_four_attacking_turns() {
             let survivor = branches[0].clone();
             state.apply_instructions(&survivor.instruction_list);
             assert!(
-                !state
+                state
                     .side_one
                     .volatile_statuses
                     .contains(&PokemonVolatileStatus::CONFUSION),
-                "confusion must not outlive the ladder"
+                "the volatile is held one ply so the next move can announce its end"
             );
             assert_eq!(
-                state.side_one.volatile_status_durations.confusion, 0,
-                "the counter must be zeroed with the volatile"
+                state.side_one.volatile_status_durations.confusion,
+                CONFUSION_SNAP_OUT_PENDING,
+                "the forced rung must park the counter on the sentinel"
             );
         }
     }
+
+    // The ply the deferral exists for. It must be deterministic, remove the
+    // volatile, carry no self-hit roll, and not burn a fifth confused turn.
+    let snap = both_splash(&mut state);
+    assert_eq!(
+        snap.len(),
+        1,
+        "a parked snap-out leaves nothing left to roll: {:?}",
+        snap
+    );
+    let list = snap.into_iter().next().unwrap().instruction_list;
+    assert!(
+        drops_confusion(&list),
+        "the parked snap-out must actually remove the volatile: {:?}",
+        list
+    );
+    assert!(
+        !hits_itself(&list),
+        "Showdown's snap-out turn lets the move through with no self-hit: {:?}",
+        list
+    );
+    assert!(
+        !burns_a_confusion_turn(&list),
+        "the snap-out turn is not a confused attacking turn: {:?}",
+        list
+    );
+    state.apply_instructions(&list);
+    assert!(
+        !state
+            .side_one
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::CONFUSION),
+        "confusion must not outlive the ladder"
+    );
+    assert_eq!(
+        state.side_one.volatile_status_durations.confusion, 0,
+        "the counter must be zeroed with the volatile"
+    );
 }
 
 /// The ladder must not eat into the self-hit: gen3's `randomChance(1, 2)` is
@@ -315,7 +404,7 @@ fn paralysis_is_rolled_after_the_confusion_check() {
         "self-hit mass for a paralyzed + confused Pokemon",
     );
     assert_close(
-        mass(&branches, drops_confusion),
+        mass(&branches, snaps_out),
         100.0 / 3.0,
         "snap-out mass for a paralyzed + confused Pokemon",
     );
@@ -332,12 +421,23 @@ fn paralysis_is_rolled_after_the_confusion_check() {
 // Composition with the residual deferral (residual-defer-on-faint patch)
 // ---------------------------------------------------------------------------
 
-fn removals_of_confusion(list: &[Instruction]) -> usize {
+/// Counts the ladder firing, however it expresses itself.
+///
+/// This deliberately counts BOTH the outright removal and the parked mark. The
+/// removal count alone is now zero on every end-of-turn branch, so a
+/// `<= 1`/`== 0` pin written against it would still be green with the ladder
+/// firing twice — the "fires once" guard would have quietly stopped guarding.
+fn snap_outs_of_confusion(list: &[Instruction]) -> usize {
     list.iter()
         .filter(|instruction| match instruction {
             Instruction::RemoveVolatileStatus(remove) => {
                 remove.side_ref == SideReference::SideOne
                     && remove.volatile_status == PokemonVolatileStatus::CONFUSION
+            }
+            Instruction::ChangeVolatileStatusDuration(change) => {
+                change.side_ref == SideReference::SideOne
+                    && change.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && change.amount <= CONFUSION_SNAP_OUT_PENDING
             }
             _ => false,
         })
@@ -368,7 +468,7 @@ fn confusion_ladder_fires_once_when_residuals_are_deferred() {
     // Same rung as the undeferred case: burning the second turn ends confusion
     // with probability 1/3 whether or not the opponent fainted.
     assert_close(
-        mass(&branches, drops_confusion),
+        mass(&branches, snaps_out),
         100.0 / 3.0,
         "snap-out mass on a ply whose residuals are deferred",
     );
@@ -378,9 +478,17 @@ fn confusion_ladder_fires_once_when_residuals_are_deferred() {
             "the confusion check ran, so every branch carries the marker: {:?}",
             branch.instruction_list
         );
-        assert!(
-            removals_of_confusion(&branch.instruction_list) <= 1,
-            "the ladder must not fire twice within one ply: {:?}",
+        // Pinned in BOTH directions, per branch. `<= 1` alone is satisfied by
+        // zero, so a helper that had stopped recognising the ladder entirely
+        // would still pass it -- the guard would read green while guarding
+        // nothing. Mutation-checked: forcing the counter to 0 survives `<= 1`
+        // and is killed by this.
+        let expected = usize::from(snaps_out(&branch.instruction_list));
+        assert_eq!(
+            snap_outs_of_confusion(&branch.instruction_list),
+            expected,
+            "the ladder must fire exactly once on a branch that snaps out, and \
+             not at all on one that does not: {:?}",
             branch.instruction_list
         );
     }
@@ -390,7 +498,7 @@ fn confusion_ladder_fires_once_when_residuals_are_deferred() {
     let ko_survivor = branches
         .iter()
         .find(|branch| {
-            !drops_confusion(&branch.instruction_list)
+            !snaps_out(&branch.instruction_list)
                 && branch
                     .instruction_list
                     .contains(&Instruction::ToggleSideTwoForceSwitch)
@@ -420,7 +528,7 @@ fn confusion_ladder_fires_once_when_residuals_are_deferred() {
             branch.instruction_list
         );
         assert_eq!(
-            removals_of_confusion(&branch.instruction_list),
+            snap_outs_of_confusion(&branch.instruction_list),
             0,
             "the ladder must not fire again on the replacement ply: {:?}",
             branch.instruction_list
@@ -518,7 +626,7 @@ fn a_passed_confusion_resumes_the_ladder_where_the_passer_left_it() {
         .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
     let branches = both_splash(&mut state);
     assert_close(
-        mass(&branches, drops_confusion),
+        mass(&branches, snaps_out),
         50.0,
         "receiver's snap-out mass two turns into the ladder",
     );
@@ -585,5 +693,120 @@ fn a_new_confusion_starts_at_the_bottom_of_the_ladder() {
         state.side_one.volatile_status_durations.confusion, 0,
         "a fresh confusion must reset the counter: {:?}",
         branches[0].instruction_list
+    );
+}
+
+/// A turn the mon cannot act on must not consume the parked snap-out.
+///
+/// Found by independent review, and it was a REGRESSION rather than a missing
+/// nicety: the ladder's parked snap-out was published on a Rest-asleep turn, so
+/// the publicly visible CONFUSION volatile was deleted from the world with no
+/// protocol line to explain it -- and because the renderer's `DecrementRestTurns`
+/// arm emits `|cant|slp` and drains the rest of the list, the world was ACCEPTED.
+/// Silently wrong beats refused only in the wrong direction; before the deferral
+/// this position was always refused.
+///
+/// Showdown resolves sleep at `onBeforeMove` priority 10 and confusion at 3, and
+/// the sleep handler returns false, short-circuiting the event. So neither the
+/// snap-out nor the counter burn happens on a turn spent asleep.
+#[test]
+fn a_rest_asleep_turn_neither_consumes_the_park_nor_burns_a_turn() {
+    // Early Bird is a SEPARATELY gated arm (`3 if EARLYBIRD`, which decrements
+    // twice and lands at 1), so it needs its own case -- review pointed out that
+    // deleting its gate line would otherwise go undetected.
+    for (rest_turns, early_bird) in [(2i8, false), (3i8, false), (3i8, true)] {
+        let mut state = confused_state(0);
+        state.side_one.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        state.side_one.get_active().rest_turns = rest_turns;
+        if early_bird {
+            state.side_one.get_active().ability = Abilities::EARLYBIRD;
+        }
+
+        let branches = both_splash(&mut state);
+        for branch in &branches {
+            assert!(
+                !drops_confusion(&branch.instruction_list),
+                "rest_turns={} early_bird={}: the park must not be consumed while asleep: {:?}",
+                rest_turns,
+                early_bird,
+                branch.instruction_list
+            );
+            assert!(
+                !burns_a_confusion_turn(&branch.instruction_list),
+                "rest_turns={} early_bird={}: a turn spent asleep burns no confusion turn: {:?}",
+                rest_turns,
+                early_bird,
+                branch.instruction_list
+            );
+            assert!(
+                !hits_itself(&branch.instruction_list),
+                "rest_turns={} early_bird={}: no self-hit roll while asleep: {:?}",
+                rest_turns,
+                early_bird,
+                branch.instruction_list
+            );
+        }
+
+        let survivor = branches[0].clone();
+        state.apply_instructions(&survivor.instruction_list);
+        assert!(
+            state
+                .side_one
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::CONFUSION),
+            "rest_turns={} early_bird={}: the volatile must survive the sleeping turn",
+            rest_turns,
+            early_bird
+        );
+        assert_eq!(
+            state.side_one.volatile_status_durations.confusion,
+            CONFUSION_SNAP_OUT_PENDING,
+            "rest_turns={} early_bird={}: the park must still be pending",
+            rest_turns,
+            early_bird
+        );
+    }
+}
+
+/// Positive control for the gate above, so it cannot be widened into "asleep
+/// never snaps out". Sleep Talk is gen3's only `sleepUsable` move: `slp`
+/// announces `|cant|slp` and returns UNDEFINED, so the BeforeMove event keeps
+/// running and confusion's handler DOES fire. A parked mon using Sleep Talk
+/// therefore snaps out on schedule.
+#[test]
+fn a_sleep_talk_turn_still_consumes_the_parked_snap_out() {
+    let mut state = confused_state(0);
+    state.side_one.volatile_status_durations.confusion = CONFUSION_SNAP_OUT_PENDING;
+    state.side_one.get_active().status = PokemonStatus::SLEEP;
+    state.side_one.get_active().rest_turns = 2;
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+    // Sleep Talk needs something to CALL. Without a second move
+    // `get_sleep_talk_choices()` is empty, the recursion emits nothing, and the
+    // branch set comes back EMPTY -- which makes `.all()` trivially true and the
+    // whole control vacuous. That is exactly how the first version of this test
+    // shipped, and review caught it: mutating both Rest arms to
+    // `reaches_confusion_handler = false` -- the precise over-broad gate this
+    // test exists to prevent -- left it green.
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+
+    let branches = both_splash(&mut state);
+    assert!(
+        !branches.is_empty(),
+        "the fixture must actually produce Sleep Talk branches, or this control \
+         asserts nothing"
+    );
+    assert!(
+        branches
+            .iter()
+            .all(|branch| drops_confusion(&branch.instruction_list)),
+        "every Sleep Talk branch must consume the park: {:?}",
+        branches
     );
 }
