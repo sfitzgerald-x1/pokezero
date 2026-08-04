@@ -210,3 +210,68 @@ Queue, ordered by rows × search impact:
 
 Divergence count reported as an outcome: **9** after #1065, from 208 at the era
 baseline.
+
+---
+
+# Addendum — A2 implementation spec, read out of the phase itself
+
+Recorded because the ordering is the hard part of A2 and was only partially known
+before: earlier notes had the heals and damage ticks but not their position
+relative to Wish or the weather decrement. Line numbers are the vendored patched
+tree at `main` 5953328d, `src/gen3/generate_instructions.rs`.
+
+**The order the mirror must reproduce, for the defender's own HP:**
+
+| # | step | site | effect |
+|---|---|---|---|
+| 7 | Wish | `:3615-3638` | heal, only when `wish.0 == 1` **and** `0 < hp < maxhp` |
+| 8 | weather decrement, then chip | `:3647-3657` | **decrements first**; if `turns_remaining` hits 0 the weather ENDS and there is **no chip this turn** |
+| 10.3 | abilities → `ability_end_of_turn` | `:3729` | Rain Dish heal |
+| 10.4 | items → `item_end_of_turn` | `:3747` | Leftovers heal, threshold berries |
+| 10.5 | Leech Seed | `:3756` | damage |
+| 10.6 | status | `:3807` | brn `maxhp/8`, psn `maxhp/8`, tox `maxhp/16 * (count+1)` |
+| 10.9 | partial trap | `:3914` | damage |
+
+Two consequences the current `pending_residual_damage` gets wrong by
+construction, both already visible in the residue:
+
+1. **Heals precede every damage tick** (7, 10.3, 10.4 before 10.5, 10.6, 10.9),
+   so a damage-only sum puts the threshold too low. This is `19000147/125` and
+   `19000191/63`.
+2. **The chip does not happen on the expiring turn**, because the decrement at
+   `:3647-3652` runs before it. `weather_is_active` ignores `turns_remaining`, so
+   a mirror that consults it counts a chip that never lands — the over-count
+   direction, and the one that can make the engine *worse* than not partitioning.
+
+**Why a net sum is unsound, concretely.** Weather at 8 can kill before the heal
+at 10.4. With `hp_after_move = 10`, weather chip 15 and Leftovers 18, the net is
+`-3` — "never dies" — but the defender is dead at step 8 and never reaches the
+heal. So the mirror cannot sum; it must evaluate in order with each clamp applied.
+
+**Shape of the fix.** Replace the magnitude question with a survival question:
+
+    fn survives_residual_phase(state, side_ref, hp_after_move) -> bool
+
+simulating the table above with every clamp (heals capped at `maxhp`, each damage
+tick clamped to remaining HP, and `stop_residuals_if_battle_ended` semantics).
+`survives` is monotonic non-decreasing in `hp_after_move`, so there is a unique
+`h* = min{h : survives(h)}` and damage `d` is residual-lethal iff
+`hp - d < h*`, i.e. the partition threshold is `hp - h* + 1`. Locate `h*` by
+bisection over `[1, hp]` — about ten evaluations.
+
+**Monotonicity caveat, and the safe default.** Threshold berries break the
+monotonicity the bisection depends on: Sitrus fires at `hp <= maxhp/2`, so a
+*lower* starting HP can finish *higher*. Until that is handled, the mirror must
+**decline to partition** whenever the defender holds a threshold berry, rather
+than bisect through a non-monotonic predicate. Declining is safe in the way
+over-partitioning is not: under-counting can only fall back to the pre-partition
+behaviour, which is where `main` already sat, whereas an over-count moves
+probability mass onto an arm that does not happen. The same conservative default
+should cover any phase member not yet mirrored, so the mirror is never *more*
+wrong than no partition.
+
+**Acceptance for the A2 fix**, so it is not gradeable on the counter alone:
+`19000052/36`, `19000147/125` and `19000191/63` close; `boundaries_measured`
+holds at 15,224; `transitions_matched` rises; zero newly divergent; and a mass
+probe in the style of `probe_residual_partition_masses` confirms the new
+thresholds against a reconstruction that shares no arithmetic with the mirror.
