@@ -1,0 +1,110 @@
+{
+ "schema": "c99-measured-residue-baseline/1",
+ "why": "every prior statement of the residue's composition in this programme was quoted from an earlier message or artifact rather than re-derived. This is a measurement, run on main at e83ee94f, with the classifier applied to the retained repros of that same sweep. Numbers here are checkable; nothing is carried forward.",
+ "measured": {
+  "commit": "e83ee94f",
+  "engine_fingerprint": "8b54e9a49b7ca937",
+  "artifact": "/tmp/sweep_now.json (uncommitted)",
+  "window": "200 games, seeds 19000000-19000199",
+  "transitions_diverged": 35,
+  "transition_matched": 15188,
+  "skip_strict_all_branches_lossy": 1,
+  "strict_lossy_render": 11,
+  "boundaries_measured": 15224,
+  "engine_errors": 0,
+  "reconciles": "15188 + 35 + 1 == 15224"
+ },
+ "families": {
+  "I2_matcher_accounting": {
+   "rows": 10,
+   "kind": "FIX",
+   "cause": "reports/c93 -- crit arm present, renderer fails to tag |-crit|",
+   "identities": [
+    "19000018/126",
+    "19000033/23",
+    "19000041/16",
+    "19000091/40",
+    "19000092/15",
+    "19000105/25",
+    "19000125/29",
+    "19000135/31",
+    "19000175/13",
+    "19000188/14"
+   ],
+   "note": "largest family. An earlier summary called this I6_sleeptalk_callee_union, which was a name carried from a review message and is wrong -- classify_row returns I2_matcher_accounting."
+  },
+  "LS_capped_lethal_shape": {
+   "rows": 8,
+   "kind": "FIX",
+   "identities": [
+    "19000021/34",
+    "19000029/51",
+    "19000052/36",
+    "19000058/19",
+    "19000071/55",
+    "19000074/27",
+    "19000112/32",
+    "19000125/226"
+   ],
+   "note": "contains C89's residual-decided-lethality family (19000029/51, 19000052/36, 19000058/19) plus 19000074/27, which reports/c97 returned to it. Also 19000021/34, the C90 contact-flag row."
+  },
+  "limit:roll_divergent_lethality": {
+   "rows": 7,
+   "kind": "LIMIT, UNEXAMINED AT THIS ERA",
+   "note": "the only pass that examined these is reports/c92, retracted. reports/c91 and reports/c89 each filed a replay-based re-adjudication; neither ran."
+  },
+  "I3_roll_inherited": {
+   "rows": 3,
+   "kind": "MATCHER FIX",
+   "cause": "reports/c95 -- Pain Split magnitude inherits the damage roll but movepainsplit is in the EXACT bucket",
+   "identities": [
+    "19000016/2",
+    "19000016/49",
+    "19000198/22"
+   ]
+  },
+  "I5_boundary_truncation": {
+   "rows": 3,
+   "kind": "FIX / UNDETERMINED",
+   "identities": [
+    "19000020/50",
+    "19000059/27",
+    "19000098/79"
+   ],
+   "note": "reports/c95 v2: two are residual-phase double-faint replacements, 19000098/79 is a Destiny Bond move ply and was evicted with its cause open."
+  },
+  "UNATTRIBUTED": {
+   "rows": 3,
+   "identities": [
+    "19000093/51",
+    "19000093/53",
+    "19000152/53"
+   ],
+   "note": "19000152/53 IS caused (reports/c96, Perish Song faint with no damage event). 19000093/51 and /53 are the two rows with no written cause -- see reports/c98 for two refuted candidates and two live ones."
+  },
+  "limit:world_sample_drag_target": {
+   "rows": 1,
+   "kind": "LIMIT, REGISTERED",
+   "identities": [
+    "19000008/54"
+   ],
+   "note": "scripts/family_bucket_audit.py buckets this comparison-limit, 'Documented, not inferred'. Unretracted."
+  }
+ },
+ "split": {
+  "limit_rows": 8,
+  "non_limit_rows": 27
+ },
+ "what_the_stop_condition_needs": {
+  "clause_1_every_shape_caused": "TWO ROWS SHORT -- 19000093/51 and 19000093/53. Everything else has a written cause.",
+  "clause_2_only_limits_remain": "REACHABLE, and the path is implementation rather than investigation. It does NOT require rows to BE limits; it requires that once the fixable rows are closed, only limits remain. All 27 non-limit rows already have a cause and a named fix. An earlier summary called this clause unreachable and cited the existence of a genuine registered limit as evidence -- which supports the clause rather than undermining it. That claim is withdrawn.",
+  "sized_queue_by_rows": [
+   "I2 crit-tag renderer fix: 10",
+   "LS_capped_lethal_shape: 8 (includes C89's 4-row residual-lethality partition and C90's contact flags)",
+   "limit:roll_divergent_lethality re-adjudication: 7",
+   "I3 Pain Split roll-awareness: 3",
+   "I5: 2 implementable + 1 open",
+   "UNATTRIBUTED: 1 caused (Perish Song) + 2 uncaused"
+  ]
+ }
+}
