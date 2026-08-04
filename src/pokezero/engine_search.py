@@ -448,14 +448,20 @@ _REASON_DETAIL_LIMIT = 512
 # and called the raw count unmeasured on that basis; it took one query to disprove.
 #
 # 79 is comfortably under the ceiling below, but it is a MEASUREMENT of one campaign,
-# not a property of the key space, which is why the ceiling exists.
+# not a property of the key space, which is why the ceiling exists. Independently
+# corroborated during review from 124 world_failure_reasons dumps recovered from pod
+# logs on a different (51-patch) build: 33 raw -> 30 collapsed, a 1.10x ratio against
+# this 79/72 = 1.097. Corroboration, not reproduction -- that recovery had no PVC
+# access. In those 33 keys, 19 carried a species, 1 a move, and NONE carried a number,
+# so the turn-number and max-HP key generators have zero observed instances.
 _FALLBACK_SAMPLES_PER_CLASS = 3
 
 # Ceiling on distinct keys, so the report size is bounded UNCONDITIONALLY rather than
-# by however many classes the data happens to mint. 256 is ~3x era 57's observed 72
-# classes plus the 7 reasons; worst case ~768 entries. Overflow is COUNTED and emitted,
-# never silently dropped -- a truncated sample that looks complete is how a coverage
-# claim goes wrong.
+# by however many classes the data happens to mint. 256 is ~3x the 79 raw keys era 57
+# actually produced. Reason keys are EXEMPT (see _fallback), so the key total is the
+# ceiling plus at most 7 and the worst case is ~790 entries -- measured 262 keys / 786
+# entries / 124 KB. Overflow is COUNTED and emitted, never silently dropped: a truncated
+# sample that looks complete is how a coverage claim goes wrong.
 _FALLBACK_SAMPLE_KEY_CEILING = 256
 
 
@@ -2018,7 +2024,10 @@ class EngineMctsPolicy:
         # the rare reason ends up with no address at all. That is the exact era-57
         # failure mode this store exists to prevent, on the other axis. The reason
         # set is closed and small (7 literals), so this adds at most 7 keys.
-        # Reason key FIRST, and exempt from the ceiling. Both matter. The ceiling
+        # Reason key FIRST, and exempt from the ceiling. The EXEMPTION is what carries
+        # the property -- reverting the ordering alone leaves the suite green, so the
+        # ordering is defence-in-depth, not load-bearing, and is recorded as such rather
+        # than claimed as tested. The ceiling
         # below exists to bound an unbounded CLASS space; applying it to reason keys
         # reintroduced the very bug this loop was fixed for -- past 256 classes a rare
         # reason lost its key and became unaddressable again, and because classes were
