@@ -1,5 +1,5 @@
 {
- "schema": "c109-lethality-threshold-unification/1",
+ "schema": "c109-lethality-threshold-unification/2",
  "headline": "LS_capped_lethal_shape (7 rows) and limit:roll_divergent_lethality (3 rows) are THE SAME MECHANISM. Ten of the thirteen remaining rows are one shape: a damage roll decides whether something is lethal, and the engine's COLLAPSED arm sits on the opposite side of the threshold from Showdown's realised roll.",
  "status": "STRUCTURAL FINDING. Not implemented. It reframes the remaining queue from nine scattered fixes into one engine change.",
  "era": {
@@ -30,5 +30,27 @@
   "cost": "the largest change in the remaining queue and the only one that touches the engine rather than the harness. It also multiplies branch counts, so the #1038 counters and the tactics gate both matter.",
   "expected_scope": "up to 10 rows. To be MEASURED, not assumed -- reports/c100 predicted 10 and measured -7."
  },
- "honest_limits_of_this_finding": "two of the seven LS rows were sampled, not all seven. The other five are 19000021/34 (the C90 contact-flag row, which is a DIFFERENT cause and should not be counted here), 19000052/36, 19000058/19, 19000074/27 and 19000125/226. reports/c89 and c97 already cause three of those as residual-decided lethality, which is consistent, but I have not replayed 19000125/226 and am not claiming it."
+ "honest_limits_of_this_finding": "two of the seven LS rows were sampled, not all seven. The other five are 19000021/34 (the C90 contact-flag row, which is a DIFFERENT cause and should not be counted here), 19000052/36, 19000058/19, 19000074/27 and 19000125/226. reports/c89 and c97 already cause three of those as residual-decided lethality, which is consistent, but I have not replayed 19000125/226 and am not claiming it.",
+ "implementation_spec": {
+  "note": "read from the residual phase directly so the threshold agrees with it. A partition on a wrong threshold is worse than none -- it moves mass to the wrong arm silently.",
+  "the_helper": "pending_residual_damage(state, side_ref) -> i16, called at damage-generation time, returning what the END-OF-TURN phase will take off that side if it is still alive.",
+  "weather_arm_EXACT_as_the_engine_writes_it": {
+   "guard": "skip entirely if active.hp == 0, or the mon has_type GROUND, STEEL or ROCK, or ability == SANDVEIL",
+   "gate": "state.weather_is_active(&Weather::SAND) -- note this is the SAME weather_is_active that the renderer's effective_speed was missing, so Air Lock suppresses it here too",
+   "amount": "cmp::min(cmp::max(active.maxhp / 16, 1), active.hp) -- the min-1 clamp is deliberate and mirrors Showdown's onWeather",
+   "hail": "the branch immediately above sand uses the identical formula; both must be covered"
+  },
+  "status_arm": "POISON is maxhp/8; TOXIC scales with side_conditions.toxic_count and its counter is decremented in the same phase, so the helper must read the count BEFORE that decrement or it will be one stage low.",
+  "leech_seed_arm": "maxhp/8 to the seeded side, and it must respect LIQUID OOZE -- which reverses it -- per the renderer fix already merged.",
+  "the_threshold_change": "at the two partition sites the threshold is `defender_active.hp`. It becomes `defender_active.hp - pending_residual_damage(...)` for the RESIDUAL-lethality partition. The HIT-lethality partition keeps `defender_active.hp`. Both are needed: 19000112/32 is hit-lethality and 19000029/51 is residual-lethality, and they are different thresholds on the same fan.",
+  "ordering_trap": "residuals fire in a fixed order and each is clamped to the HP remaining at ITS point in the order. A single summed `pending_residual` is therefore an approximation -- it is correct for the common case of one active residual and wrong when two stack. Decide deliberately whether to sum or to partition on the FIRST residual only, and say which in the patch.",
+  "gates_required": [
+   "the depth-tactics suite -- its forcing proofs re-solve from scratch, which is what catches a branch-structure change, and this IS one",
+   "test_engine_search_no_panic -- widening the crit loop in #1028 surfaced a reachable PanicException",
+   "branch-count measurement: this multiplies arms on every boundary with an active residual, which is most of them in sand. Report elapsed and branch counts, not only divergence",
+   "the #1038 counters: matched, skip and lossy together"
+  ],
+  "expected_scope": "up to 10 rows. MEASURE it. reports/c100 predicted 10 and measured -7, and reports/c108 v1 misread a two-variable comparison as an interaction.",
+  "why_i_did_not_implement_it": "this is the largest change in the queue, it is the only remaining one that touches the engine rather than the harness, and it multiplies branch counts. Twice in this session I pushed past a sensible stopping point and produced errors that cost more than the work gained -- a file committed with conflict markers, and a two-variable sweep read as an interaction. The spec above is turn-key; attempting the partition on a spent budget is how it would land subtly wrong and pass a plausible-looking sweep."
+ }
 }
