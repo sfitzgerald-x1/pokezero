@@ -38,8 +38,15 @@ only: no classifier change, no fidelity change.**
 | 19000112/32 | `component_missing_in_engine:itemleftovers` | **A6** White Herb absent from gen3 — *not* A1 | engine fix |
 | 19000125/226 | `component_missing_in_engine:psn` | **A5** contact-ability trigger precedes the same-turn wake | engine fix |
 | 19000147/125 | `limit:roll_divergent_lethality` | **A2** unmirrored residual **heal** | engine fix — misfiled as a limit |
-| 19000191/63 | `limit:roll_divergent_lethality` | **A2** unmirrored residual **heal** | engine fix — misfiled as a limit |
+| 19000191/63 | `component_magnitude:heal` ¹ | **A7** collapsed lethal arm discards the clamped sap | engine fix |
 | 19000198/33 | `limit:roll_divergent_lethality` | **A3** — same stale read | **CLOSED** by #1065 |
+
+¹ **Era note.** Every other class in this table is read at the era stamped
+above (`main` 9acc9d30, artifact `/tmp/sweep_f1.json`, 11 divergent). This row's
+class is re-read **post-#1066**, because A2 moved it off
+`limit:roll_divergent_lethality`. Verified against the live classifier at that
+later era, but its provenance differs from the other ten rows and must not be read
+as contemporaneous with them.
 
 **Six causes. Zero rows demonstrated to be genuine comparison limits.** All three
 rows v1 called limits are accounted for: one closed on an engine fix, one reduces
@@ -210,3 +217,121 @@ Queue, ordered by rows × search impact:
 
 Divergence count reported as an outcome: **9** after #1065, from 208 at the era
 baseline.
+
+
+---
+
+# Addendum — A2 implementation spec, read out of the phase itself
+
+Recorded because the ordering is the hard part of A2 and was only partially known
+before: earlier notes had the heals and damage ticks but not their position
+relative to Wish or the weather decrement. Line numbers are the vendored patched
+tree at `main` 5953328d, `src/gen3/generate_instructions.rs`.
+
+**The order the mirror must reproduce, for the defender's own HP:**
+
+| # | step | site | effect |
+|---|---|---|---|
+| 7 | Wish | `:3615-3638` | heal, only when `wish.0 == 1` **and** `0 < hp < maxhp` |
+| 8 | weather decrement, then chip | `:3647-3657` | **decrements first**; if `turns_remaining` hits 0 the weather ENDS and there is **no chip this turn** |
+| 10.3 | abilities → `ability_end_of_turn` | `:3729` | Rain Dish heal |
+| 10.4 | items → `item_end_of_turn` | `:3747` | Leftovers heal, threshold berries |
+| 10.5 | Leech Seed | `:3756` | damage |
+| 10.6 | status | `:3807` | brn `maxhp/8`, psn `maxhp/8`, tox `maxhp/16 * (count+1)` |
+| 10.9 | partial trap | `:3914` | damage |
+
+Two consequences the current `pending_residual_damage` gets wrong by
+construction, both already visible in the residue:
+
+1. **Heals precede every damage tick** (7, 10.3, 10.4 before 10.5, 10.6, 10.9),
+   so a damage-only sum puts the threshold too low. This is `19000147/125` and
+   `19000191/63`.
+2. **The chip does not happen on the expiring turn**, because the decrement at
+   `:3647-3652` runs before it. `weather_is_active` ignores `turns_remaining`, so
+   a mirror that consults it counts a chip that never lands — the over-count
+   direction, and the one that can make the engine *worse* than not partitioning.
+
+**Why a net sum is unsound, concretely.** Weather at 8 can kill before the heal
+at 10.4. With `hp_after_move = 10`, weather chip 15 and Leftovers 18, the net is
+`-3` — "never dies" — but the defender is dead at step 8 and never reaches the
+heal. So the mirror cannot sum; it must evaluate in order with each clamp applied.
+
+**Shape of the fix.** Replace the magnitude question with a survival question:
+
+    fn survives_residual_phase(state, side_ref, hp_after_move) -> bool
+
+simulating the table above with every clamp (heals capped at `maxhp`, each damage
+tick clamped to remaining HP, and `stop_residuals_if_battle_ended` semantics).
+`survives` is monotonic non-decreasing in `hp_after_move`, so there is a unique
+`h* = min{h : survives(h)}` and damage `d` is residual-lethal iff
+`hp - d < h*`, i.e. the partition threshold is `hp - h* + 1`. Locate `h*` by
+bisection over `[1, hp]` — about ten evaluations.
+
+**Monotonicity caveat, and the safe default.** Threshold berries break the
+monotonicity the bisection depends on: Sitrus fires at `hp <= maxhp/2`, so a
+*lower* starting HP can finish *higher*. Until that is handled, the mirror must
+**decline to partition** whenever the defender holds a threshold berry, rather
+than bisect through a non-monotonic predicate. Declining is safe in the way
+over-partitioning is not: under-counting can only fall back to the pre-partition
+behaviour, which is where `main` already sat, whereas an over-count moves
+probability mass onto an arm that does not happen. The same conservative default
+should cover any phase member not yet mirrored, so the mirror is never *more*
+wrong than no partition.
+
+**Acceptance for the A2 fix**, so it is not gradeable on the counter alone:
+`19000052/36`, `19000147/125` and `19000191/63` close; `boundaries_measured`
+holds at 15,224; `transitions_matched` rises; zero newly divergent; and a mass
+probe in the style of `probe_residual_partition_masses` confirms the new
+thresholds against a reconstruction that shares no arithmetic with the mirror.
+
+---
+
+# Addendum 2 — A7, and a retraction of the phrase "roll granularity"
+
+`19000191/63` was described after the A2 work as a "roll-granularity defect".
+**That phrasing is wrong and is withdrawn.** It implies rounding or precision
+loss. There is none: gen3 damage rolls are exact integers and every clamp in the
+end-of-turn phase is integer arithmetic. Nothing is lost to precision anywhere in
+this row.
+
+## The actual mechanism
+
+A2 fixed this row's *threshold* — 108 is correct, and the engine's lethality
+verdict now agrees with Showdown, which is why the class moved off
+`limit:roll_divergent_lethality`. What survives is a different defect.
+
+The engine collapses the residual-lethal arm onto a single representative damage,
+its minimum (108), because for **lethality** all seven rolls in that arm are
+interchangeable — every one of them kills. That collapse is sound only if death is
+the sole observable consequence. It is not. Leech Seed's sap is
+`min(maxhp / 8, hp)`, clamped to the victim's HP *at step 10.5*, and that HP is
+roll-dependent:
+
+| roll | after move | +Leftovers (14) | sap `min(29, hp)` | heal delivered cross-side |
+|---|---|---|---|---|
+| 108 | 15 | 29 | 29 | **29** |
+| 109 | 14 | 28 | 28 | **28** |
+| 110 | 13 | 27 | 27 | **27** |
+
+All three die. But 10.5 heals the *other* side by the sapped amount, so the
+opponent's heal is 29 / 28 / 27. Showdown rolled 109 and emitted
+`|-heal|p2a: Tangela|229/277 par|[silent]` = **+28**; the collapsed arm offers only
+**+29**. Hence `component_magnitude:heal`.
+
+## Why this is the program's recurring shape, not a special case
+
+This is the same structural defect as the crit-kill split (C27) and the
+residual-lethality partition (C109/A2): **a collapsed arm whose members differ in
+an observable the collapse discarded.** Each of those fixes partitions one arm on
+one threshold because the collapse was hiding one distinction. Here the discarded
+distinction is the clamped sap.
+
+**Disposition: engine fix — an ENGINE SUPPORT GAP, not a limit and not a
+methodology artifact.** The clamp binds only when
+`hp_after_move + leftovers_heal < maxhp / 8`; above that boundary every roll saps
+the full `maxhp / 8` and the rolls genuinely are interchangeable. So the lethal arm
+needs partitioning at exactly that boundary, in the same shape as every prior
+partition in this stack.
+
+Filed as **A7** and queued alongside the Case A three-way partition, not off to one
+side as something the methodology cannot reach.
