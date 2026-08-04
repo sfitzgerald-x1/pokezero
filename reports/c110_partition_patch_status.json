@@ -1,0 +1,18 @@
+{
+ "schema": "c110-residual-partition-patch-status/1",
+ "purpose": "Exact state of the residual-lethality partition patch, so the next attempt does not repeat six rebuild cycles of mine.",
+ "the_patch": "third_party/poke-engine-gen3-residual-lethality-partition.patch, committed on scott/c109-partition. Content is correct and reviewed against the residual phase. Applies-check FAILS.",
+ "what_the_patch_does": "adds pending_residual_damage() mirroring the residual phase tick-for-tick with its guards, binds it before defender_active takes its mutable borrow, and partitions the non-crit fan on hp-minus-pending in the branch where the fan cannot kill on the hit.",
+ "ruled_out_by_direct_test": [
+  "hunk line numbers: anchors verified in the vendored tree at 1388 / 2930 / 3057",
+  "hunk line COUNTS: computed programmatically from the bodies, not counted by hand",
+  "context bytes: all seven of hunk 1's context lines compared character-by-character against the vendored file -- all match",
+  "blank context lines: space-prefixed, which they must be in unified diff",
+  "file format: byte-compared against poke-engine-gen3-substitute-hp-gate.patch, a patch that applies cleanly. Same header shape, trailing newline present, no CRLF",
+  "my own earlier git-apply invocation: I ran it from inside the sdist root so git resolved paths against the repo root and prefixed the cwd. Its output, including an apparent double-blank-line search, is an ARTIFACT of that and should be ignored"],
+ "the_real_symptom": "patch(1) -p1 --dry-run --fuzz=0 from the sdist root reports ALL THREE hunks failing. Three of three is systematic, not per-hunk arithmetic -- which is what I spent four cycles adjusting.",
+ "the_hypothesis_i_did_not_get_to_test": "the build re-extracts the pristine sdist and replays the manifest, so the tree my anchors were read from is a DIFFERENT object from the tree the applicator patches. Note the substitute-hp-gate patch anchors its function at 1326 while that same function sits at 1388 in the fully-patched vendored tree -- a +62 shift. If patches anchor against positions earlier in the replay than the final state, anchors read from the vendored tree are wrong by the cumulative shift of every patch after that point.",
+ "the_one_command_that_settles_it": "extract the pristine sdist to a scratch dir, replay the manifest in order stopping BEFORE this patch, then grep that tree for the three anchor lines. Those are the correct numbers. Do NOT read them from third_party/poke-engine-src.",
+ "cost_of_my_approach": "six full two-consumer rebuild cycles, and the patch was destroyed once by a git checkout before being committed. The systematic signal -- three of three hunks failing -- was visible in the first patch(1) run and I kept treating it as an arithmetic problem.",
+ "everything_else_about_the_change_is_ready": "the summing argument is sound for lethality (each tick clamps to the HP left at its point, so death iff hp <= sum); the guards mirror the phase; the borrow issue is fixed; the gates required are recorded in reports/c109."
+}
