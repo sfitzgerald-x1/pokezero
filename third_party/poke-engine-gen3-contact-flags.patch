@@ -1,0 +1,50 @@
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -435,6 +435,8 @@
+             category: MoveCategory::Special,
+             move_type: PokemonType::ROCK,
+             flags: Flags {
++                // Gen 3 makes Ancient Power a contact move; Gen 4+ does not.
++                contact: cfg!(feature = "gen3"),
+                 protect: true,
+                 ..Default::default()
+             },
+@@ -3069,7 +3071,8 @@
+                 category: MoveCategory::Physical,
+                 move_type: PokemonType::NORMAL,
+                 flags: Flags {
+-                    contact: true,
++                    // Gen 3 Covet is not a contact move; Gen 4+ is.
++                    contact: !cfg!(feature = "gen3"),
+                     protect: true,
+                     ..Default::default()
+                 },
+@@ -5066,7 +5069,8 @@
+             priority: 3,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
+-                contact: true,
++                // Gen 3 Fake Out is not a contact move; Gen 4+ is.
++                contact: !cfg!(feature = "gen3"),
+                 protect: true,
+                 ..Default::default()
+             },
+@@ -5199,7 +5203,8 @@
+             category: MoveCategory::Physical,
+             move_type: PokemonType::DARK,
+             flags: Flags {
+-                contact: true,
++                // Gen 3 Feint Attack is not a contact move; Gen 4+ is.
++                contact: !cfg!(feature = "gen3"),
+                 protect: true,
+                 ..Default::default()
+             },
+@@ -11722,6 +11727,8 @@
+                 category: MoveCategory::Special,
+                 move_type: PokemonType::FIRE,
+                 flags: Flags {
++                    // Gen 3 makes Overheat a contact move; Gen 4+ does not.
++                    contact: cfg!(feature = "gen3"),
+                     protect: true,
+                     ..Default::default()
+                 },

@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 56-patch stack. Only generate_instructions.rs
+# Post-patch content pins for the 58-patch stack. Only generate_instructions.rs
 # moved: crit-kill-split, substitute-hp-gate and bellydrum-roll-gate all touch it. choice_effects.rs
 # and abilities.rs are BOTH byte-identical to the 52-patch pins -- the dropped
 # trick-attacker-item patch was the only thing that would have moved
@@ -35,7 +35,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # one changed digest is what makes the update a measurement rather than a paste:
 # drift in the vendored source would have moved all three.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "6b66b8578649c466a8c9668ed3ce018115218571aa8908b6ba520342f1d98641",
+    "src/gen3/generate_instructions.rs": "9ce51e12a7650610f3a3cdcc150106e7a6a3014c40858b51fed10d5e6c139338",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
@@ -118,9 +118,9 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 [entry.name for entry in applied[-3:]],
                 [
-                    "poke-engine-gen3-confusion-snapout-timing.patch",
-                    "poke-engine-gen3-sleeptalk-crit-arm.patch",
                     "poke-engine-gen3-bellydrum-roll-gate.patch",
+                    "poke-engine-gen3-residual-lethality-partition.patch",
+                    "poke-engine-gen3-contact-flags.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

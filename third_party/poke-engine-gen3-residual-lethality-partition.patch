@@ -1,0 +1,176 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1385,6 +1385,59 @@
+ /// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
+ /// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
+ /// fires, while the representative 135 leaves 126 and it correctly declines).
++/// What the END-OF-TURN phase will take off `side_ref` if it is still alive.
++///
++/// Summing is sound for the LETHALITY question specifically: every tick clamps to
++/// the HP remaining at its own point in the order, so total damage dealt is
++/// `min(hp, sum)` and the defender dies iff `hp <= sum`. It would NOT be sound if
++/// this were used for a magnitude. Registered in reports/c109.
++///
++/// Mirrors add_end_of_turn_instructions tick for tick INCLUDING its guards. A
++/// threshold from a different formula than the phase applies would move
++/// probability mass to the wrong arm silently -- worse than not partitioning.
++fn pending_residual_damage(state: &State, side_ref: &SideReference) -> i16 {
++    let side = state.get_side_immutable(side_ref);
++    let active = side.get_active_immutable();
++    if active.hp <= 0 {
++        return 0;
++    }
++    let mut total: i16 = 0;
++    if state.weather_is_active(&Weather::HAIL) {
++        if !active.has_type(&PokemonType::ICE) {
++            total += cmp::max(active.maxhp / 16, 1);
++        }
++    } else if state.weather_is_active(&Weather::SAND)
++        && !active.has_type(&PokemonType::GROUND)
++        && !active.has_type(&PokemonType::STEEL)
++        && !active.has_type(&PokemonType::ROCK)
++        && active.ability != Abilities::SANDVEIL
++    {
++        total += cmp::max(active.maxhp / 16, 1);
++    }
++    match active.status {
++        PokemonStatus::POISON => total += cmp::max(active.maxhp / 8, 1),
++        PokemonStatus::TOXIC => {
++            // Mirror the phase EXACTLY: normalize in i16 (storage is i8), then
++            // stage = normalized + 1. See `let stage = normalized_toxic_count + 1`
++            // in add_end_of_turn_instructions. `max(count, 1)` coincides with the
++            // phase only at count 0 and understates every higher ladder rung by a
++            // full stage, which puts the residual threshold in the wrong place and
++            // hands the surviving arm rolls that in fact die. Measured: at
++            // toxic_count 1 the real tick is maxhp/8, not maxhp/16.
++            let normalized = cmp::min(cmp::max(side.side_conditions.toxic_count as i16, 0), 14);
++            total += cmp::max(active.maxhp / 16, 1) * (normalized + 1);
++        }
++        _ => {}
++    }
++    if side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::LEECHSEED)
++    {
++        total += cmp::max(active.maxhp / 8, 1);
++    }
++    cmp::min(total, active.hp)
++}
++
+ fn pending_hp_reading_move(choice: &Choice) -> bool {
+     matches!(
+         choice.move_id,
+@@ -2453,6 +2506,13 @@
+     mut final_instructions: &mut Vec<StateInstructions>,
+     branch_on_damage: bool,
+ ) {
++    // Bound at FUNCTION level, before anything borrows `state`. The
++    // residual-lethality partition further down needs it, and every site there
++    // already holds a borrow of `state` through `defender_active`. An earlier
++    // placement next to `crit_chance` was in a SIBLING block whose scope closes
++    // before the use. reports/c109.
++    let pending_at_end_of_turn =
++        pending_residual_damage(state, &attacking_side.get_other_side());
+     if state.use_damage_dealt {
+         reset_damage_dealt(
+             state.get_side(&attacking_side),
+@@ -3056,6 +3116,50 @@
+             };
+             // The non-crit roll can never kill here, so it keeps its average.
+             regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
++
++            // The residual split below must NOT scale `incoming_instructions`
++            // in place: every crit arm further down clones it, and the design
++            // has those clones carry the FULL pre-crit mass, with the single
++            // `1.0 - crit_rate` reduction applied once at the end. Reducing it
++            // early silently multiplies the crit arms by the non-crit residual
++            // factor and parks the stolen mass on the non-crit survive arm.
++            // The total still sums to 1.0, so no conservation check can see it.
++            // Carry the factor and fold it into that one reduction instead.
++            let mut residual_survive_factor = 1.0_f32;
++
++            // ...but a residual still can. This arm exists BECAUSE the fan cannot
++            // kill on the hit -- yet a roll leaving the defender at or below its
++            // pending end-of-turn damage kills one phase later. Collapsing to
++            // 0.925 * max picks one side of THAT threshold and drops the other, so
++            // the engine asserts a residual KO a legal roll would not have scored,
++            // or the reverse. Seed 19000029 step 51: Showdown's roll left the
++            // defender above the sandstorm tick and it lived; the collapsed
++            // representative left it below and the tick killed.
++            //
++            // Same identity Case A and the crit split already use; no second one.
++            if pending_at_end_of_turn > 0 {
++                let residual_threshold = defender_active.hp - pending_at_end_of_turn;
++                let min_damage_dealt = (max_damage_dealt as f32 * 0.85) as i16;
++                if residual_threshold > 0
++                    && max_damage_dealt >= residual_threshold
++                    && min_damage_dealt < residual_threshold
++                {
++                    let (average_surviving_damage, num_residual_kill_rolls) =
++                        compare_health_with_damage_multiples(max_damage_dealt, residual_threshold);
++                    let residual_kill_chance =
++                        (1.0 - crit_rate) * (num_residual_kill_rolls as f32 / 16.0);
++                    if residual_kill_chance > 0.0 {
++                        // Cloned from the UNREDUCED mass, so this arm is
++                        // (1 - crit_rate) * n/16 as intended.
++                        let mut kill_ins = incoming_instructions.clone();
++                        kill_ins.update_percentage(residual_kill_chance);
++                        extra_branches.push((kill_ins, residual_threshold));
++                        residual_survive_factor =
++                            1.0 - (num_residual_kill_rolls as f32 / 16.0);
++                        regular_damage = average_surviving_damage;
++                    }
++                }
++            }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
+             if crit_rate > 0.0
+                 && max_crit_damage >= defender_active.hp
+@@ -3083,11 +3187,44 @@
+                     extra_branches.push((survive_ins, average_non_kill_crit_damage));
+                 }
+             } else {
+-                let mut branch_ins = incoming_instructions.clone();
+-                branch_ins.update_percentage(crit_rate);
+-                extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
++                // The CRIT fan gets the same residual treatment as the non-crit
++                // one above: it cannot kill on the hit here, but a residual still
++                // can, and collapsing to 0.925 * max_crit picks one side of that
++                // threshold. reports/c109.
++                let crit_residual_threshold = defender_active.hp - pending_at_end_of_turn;
++                let min_crit_roll = (max_crit_damage as f32 * 0.85) as i16;
++                if pending_at_end_of_turn > 0
++                    && crit_residual_threshold > 0
++                    && max_crit_damage >= crit_residual_threshold
++                    && min_crit_roll < crit_residual_threshold
++                {
++                    let (average_surviving_crit, num_crit_residual_kills) =
++                        compare_health_with_damage_multiples(
++                            max_crit_damage,
++                            crit_residual_threshold,
++                        );
++                    let crit_residual_kill = crit_rate * (num_crit_residual_kills as f32 / 16.0);
++                    let crit_survive = crit_rate - crit_residual_kill;
++                    if crit_residual_kill > 0.0 {
++                        let mut k = incoming_instructions.clone();
++                        k.update_percentage(crit_residual_kill);
++                        extra_branches.push((k, crit_residual_threshold));
++                    }
++                    if crit_survive > 0.0 {
++                        let mut sv = incoming_instructions.clone();
++                        sv.update_percentage(crit_survive);
++                        extra_branches.push((sv, average_surviving_crit));
++                    }
++                } else {
++                    let mut branch_ins = incoming_instructions.clone();
++                    branch_ins.update_percentage(crit_rate);
++                    extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
++                }
+             }
+-            incoming_instructions.update_percentage(1.0 - crit_rate);
++            // One reduction, applied after every crit arm has been cloned:
++            // (1 - crit_rate) * (1 - n/16). Masses then sum to exactly 1.0 as
++            // (1-cr)*n/16 + (1-cr)*(1-n/16) + cr.
++            incoming_instructions.update_percentage((1.0 - crit_rate) * residual_survive_factor);
+         } else {
+             regular_damage = avg_damage_dealt;
+         }

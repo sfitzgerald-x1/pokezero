@@ -104,11 +104,32 @@ fn terminal_residual_roll_limit_state() -> State {
     state
 }
 
-/// This is an ablation pin, not a fidelity assertion. The compact result below
-/// demonstrates why the withdrawn Toxic-only splitter cannot be restored: a
-/// correct comparison must evaluate the complete move pair and residual queue.
+/// SUPERSEDED, deliberately. This was an ablation pin asserting that no
+/// production residual roll splitter was installed, on the stated ground that
+/// "a correct comparison must evaluate the complete move pair and residual
+/// queue". `poke-engine-gen3-residual-lethality-partition.patch` installs one,
+/// so the ablation no longer describes the tree and the assertion is replaced
+/// by the behaviour it should now exhibit -- not deleted to let a change pass.
+///
+/// The bar the old comment set is met FOR THIS FIXTURE, which is why the split
+/// is exact here: the defender's entire residual queue is one Toxic tick, and
+/// the mirror reproduces it (`toxic_count` 2 -> stage 3 -> 362/16 * 3 = 66).
+/// The defender carries no Leftovers, so nothing heals ahead of the tick.
+///
+/// It is NOT met in general. `pending_residual_damage` still does not mirror
+/// Burn, partial trap, Future Sight, Wish, Rain Dish, Leftovers or threshold
+/// berries, and heals run BEFORE damage in the phase (10.3/10.4 ahead of
+/// 10.5/10.6/10.9). Fixtures involving those are still mispriced; see the
+/// review notes on PR #1062. Do not read this test as clearing that.
+///
+/// Expected values derived independently of the partition's arithmetic:
+/// max non-crit roll 123, threshold 182 - 66 = 116, and 6 of the 16 rolls
+/// floor(123 * r / 100), r in 85..=100, reach 116. So the residual-KO arm is
+/// (1 - 1/16) * 6/16 = 35.1562%, the surviving arm takes the rest of the
+/// non-crit mass at 58.5938%, and the crit arm keeps 6.25% because max_crit
+/// 246 kills on the hit.
 #[test]
-fn terminal_residual_roll_split_remains_an_explicit_comparison_limit() {
+fn terminal_residual_roll_split_is_partitioned_on_residual_lethality() {
     let mut state = terminal_residual_roll_limit_state();
     let before = format!("{:?}", state);
     let branches = poke_engine::engine::generate_instructions::generate_instructions_from_move_pair(
@@ -123,11 +144,46 @@ fn terminal_residual_roll_split_remains_an_explicit_comparison_limit() {
         (branches.iter().map(|branch| branch.percentage).sum::<f32>() - 100.0).abs() < 1e-6,
         "the compact ablation must preserve probability mass"
     );
-    assert_eq!(branches.len(), 2, "no production residual roll splitter is installed");
-    assert!(branches.iter().any(|branch| {
-        damages(&branch.instruction_list, SideReference::SideTwo).first() == Some(&113)
-            && heals(&branch.instruction_list, SideReference::SideOne) == vec![19]
-    }));
+    assert_eq!(
+        branches.len(),
+        3,
+        "the residual-lethality partition must split the non-crit fan"
+    );
+
+    // Surviving arm: representative roll 109 (the average of the ten rolls
+    // below the threshold), then the full 66 tick, and the attacker's
+    // Leftovers still ticks because the battle has not ended.
+    assert!(
+        branches.iter().any(|branch| {
+            damages(&branch.instruction_list, SideReference::SideTwo) == vec![109, 66]
+                && heals(&branch.instruction_list, SideReference::SideOne) == vec![19]
+                && (branch.percentage - 58.5938).abs() < 0.001
+        }),
+        "missing the residual-surviving arm at 58.5938%"
+    );
+
+    // Residual-KO arm: 116 + 66 == 182 exactly, and the Leftovers heal is
+    // ABSENT because side two has no other live Pokemon, so
+    // stop_residuals_if_battle_ended fires before order 10 reaches side one.
+    assert!(
+        branches.iter().any(|branch| {
+            damages(&branch.instruction_list, SideReference::SideTwo) == vec![116, 66]
+                && heals(&branch.instruction_list, SideReference::SideOne).is_empty()
+                && (branch.percentage - 35.1562).abs() < 0.001
+        }),
+        "missing the residual-KO arm at 35.1562%"
+    );
+
+    // Crit arm untouched by the split: max_crit 246 >= 182 kills on the hit,
+    // so it keeps the full base crit rate. This is the assertion that fails if
+    // the non-crit split ever scales the crit arms again.
+    assert!(
+        branches.iter().any(|branch| {
+            damages(&branch.instruction_list, SideReference::SideTwo) == vec![182]
+                && (branch.percentage - 6.25).abs() < 0.001
+        }),
+        "the crit arm must keep the full 6.25%, unscaled by the non-crit split"
+    );
 }
 
 /// Side two's active is poisoned on 1 HP, so the residual block kills it — and it is

@@ -260,6 +260,297 @@ def probe_burned_struggle() -> None:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 5: Gen 3 contact flags (patch 58).
+# Gen 3 assigns contact differently from Gen 4+: Overheat and Ancient Power
+# make contact, while Covet, Fake Out and Feint Attack do not. Upstream
+# poke-engine carries the Gen 4+ flags. Rough Skin is the observable: it only
+# retaliates on contact, so the flag shows up as a recoil Damage instruction
+# against the attacker.
+# ---------------------------------------------------------------------------
+def probe_contact_flags() -> None:
+    def attacker_takes_rough_skin(move: str) -> bool:
+        attacker = pe.Pokemon(
+            id="attacker", level=100,
+            types=("normal", "typeless"), base_types=("normal", "typeless"),
+            hp=320, maxhp=320, ability="none", item="none",
+            attack=200, defense=180, special_attack=200,
+            special_defense=170, speed=200,
+            moves=[pe.Move(id=move, pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="defender", level=100,
+            types=("water", "typeless"), base_types=("water", "typeless"),
+            hp=320, maxhp=320, ability="roughskin", item="none",
+            attack=180, defense=180, special_attack=170,
+            special_defense=170, speed=100,
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        state = _mk_state(attacker, defender)
+        branches = pe.generate_instructions(state, move, "splash")
+        lines = [str(i) for b in branches for i in b.instruction_list]
+        # Rough Skin costs the attacker maxhp/16 == 20.
+        return any(l == "Damage SideOne: 20" for l in lines)
+
+    for move, want_contact in (
+        ("overheat", True),
+        ("ancientpower", True),
+        ("covet", False),
+        ("fakeout", False),
+        ("feintattack", False),
+    ):
+        got = attacker_takes_rough_skin(move)
+        _report(
+            f"gen3-contact-{move}",
+            got == want_contact,
+            f"expected contact={want_contact} (rough skin recoil), got {got}",
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Probe 6: residual-lethality partition, incl. the Toxic ladder (patch 57).
+# A damage roll can decide lethality one phase later. The branch that cannot
+# kill on the hit must still split on `hp - pending_residual_damage`.
+#
+# The Toxic rung is the sharp case: add_end_of_turn_instructions computes
+# `stage = normalized_toxic_count + 1`, so a counter of 1 ticks maxhp/8, not
+# maxhp/16. Mirroring it as `max(count, 1)` coincides only at count 0 and
+# puts the threshold a full stage too high for every rung above it, handing
+# the surviving arm rolls that in fact die.
+#
+# Fixture: 123/238 defender, max non-crit roll 122 (so the fan cannot kill on
+# the hit), Rock Slide at 90% accuracy.
+#   count 0 -> tick 14, threshold 123-14 = 109. min roll 103 < 109 <= max 122,
+#              so the fan straddles the threshold: SPLIT (4 branches).
+#   count 1 -> tick 28, threshold 123-28 =  95. min roll 103 > 95, so EVERY
+#              non-crit roll is residual-lethal: NO split (3 branches).
+# Under the old `max(count, 1)` mirror both cases split at 109, which is the
+# regression this pins.
+# ---------------------------------------------------------------------------
+def probe_residual_lethality_partition() -> None:
+    def state_for(toxic_count: int):
+        attacker = pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=150,
+            moves=[pe.Move(id="rockslide", pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="fearow", level=81,
+            types=("normal", "flying"), base_types=("normal", "flying"),
+            hp=123, maxhp=238, ability="none", item="none",
+            attack=170, defense=145, special_attack=110,
+            special_defense=125, speed=180, status="toxic",
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        state = pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+            side_two=pe.Side(
+                active_index="0", pokemon=[defender] + [_dummy()] * 5,
+                side_conditions=pe.SideConditions(toxic_count=toxic_count),
+            ),
+            weather="none", terrain="none", trick_room=False,
+        )
+        return state
+
+    def branches(toxic_count: int) -> list:
+        return pe.generate_instructions(
+            state_for(toxic_count), "rockslide", "splash"
+        )
+
+    # The whole fixture rests on the fan being unable to kill on the hit while
+    # straddling the count-0 threshold. Assert that, do not assume it: if a
+    # damage-formula patch shifts the roll, every branch count below is
+    # meaningless and this is the assertion that says so.
+    max_regular = pe.calculate_damage(
+        state_for(0), "rockslide", "splash", False
+    )[0][0]
+    _report(
+        "residual-partition-fixture",
+        max_regular == 122,
+        f"fixture requires max non-crit roll 122 (< 123 hp, > threshold 109), "
+        f"got {max_regular}",
+    )
+    straddling = branches(0)
+    saturated = branches(1)
+    _report(
+        "residual-partition-splits-when-fan-straddles",
+        len(straddling) == 4,
+        f"toxic_count=0 (tick 14, threshold 109): expected 4 branches, "
+        f"got {len(straddling)}",
+    )
+    _report(
+        "residual-partition-toxic-stage-is-count-plus-one",
+        len(saturated) == 3,
+        f"toxic_count=1 (tick 28, threshold 95) leaves no surviving roll, so "
+        f"the fan must NOT split: expected 3 branches, got {len(saturated)}. "
+        f"4 means the mirror used max(count, 1) instead of count + 1.",
+    )
+    # The saturated case must also actually kill: 112 + clamped 11 == 123.
+    hit = [b for b in saturated if 80.0 < b.percentage < 90.0]
+    lethal = bool(hit) and sum(
+        int(str(i).split(": ")[1])
+        for i in hit[0].instruction_list
+        if str(i).startswith("Damage SideTwo")
+    ) == 123
+    _report(
+        "residual-partition-saturated-arm-is-lethal",
+        lethal,
+        "the single non-crit arm must sum to exactly the defender's 123 hp",
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# Probe 7: residual-partition branch MASSES (patch 57).
+#
+# Branch counts and damage sums cannot see a probability-mass leak, and neither
+# can the transition differential -- it compares roll-scaled components, not
+# masses, so a leak measures as "neutral" on a 200-game sweep. This probe
+# compares the engine's total KO mass against an independent reconstruction:
+# enumerate the 16 gen3 rolls as floor(max * r / 100) for r in 85..=100, read
+# the true residual tick from a turn where neither side attacks, and count the
+# rolls that die. No reference to the partition's own arithmetic.
+#
+# The regression this pins is real and was caught in review: the non-crit
+# residual split used to call `incoming_instructions.update_percentage` in
+# place, but every crit arm below clones that same value, so the crit arms were
+# silently scaled by the non-crit factor and the stolen mass landed on the
+# non-crit survive arm. Totals still summed to 100%, so no conservation check
+# could see it.
+#
+# NOTE on probe design: an HP-reading move (flail, bellydrum, painsplit) would
+# force the engine's own 16-roll fan and look like a cleaner oracle, but every
+# such move perturbs HP by construction, and the two confounds push in OPPOSITE
+# directions:
+#   * Belly Drum's self-halving is emitted as damage on the defender's own side,
+#     so it INFLATES any metric summing damage to the defender.
+#   * a flail KO of the attacker ends the battle, so
+#     `stop_residuals_if_battle_ended` removes the defender's own tick from the
+#     instruction list -- the branch then scores as a survival and the metric
+#     DEFLATES.
+# An earlier version of this comment said both inflate; that was wrong for
+# flail, and the sign matters when reading such a probe's output.
+#
+# ALSO KNOWN, and not fixed here: `compare_health_with_damage_multiples`
+# accumulates its roll ladder in f32, so for 174 of the first 400 `max` values
+# the top rung lands one below `max`. Kill counts therefore differ from the true
+# `floor(max * r / 100)` fan for exactly the positions where
+# `threshold == max_damage`, where the ladder counts 0 kills and the truth counts
+# 1. Repro: hp 185/320 poisoned -> tick 40, threshold 145 == max 145; truth
+# 12.1094%, engine 6.2500% with no split at all. This predates the partition and
+# is inherited from an identity three pre-existing paths share (Case A has the
+# analogue at `threshold == hp == max_damage`), so it is registered rather than
+# fixed here. None of the cases below sits on that boundary.
+# ---------------------------------------------------------------------------
+def probe_residual_partition_masses() -> None:
+    def build(hp, maxhp, status, toxic_count, weather, attacker_move):
+        attacker = pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=250,
+            moves=[pe.Move(id=attacker_move, pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="fearow", level=81,
+            types=("normal", "flying"), base_types=("normal", "flying"),
+            hp=hp, maxhp=maxhp, ability="none", item="none",
+            attack=170, defense=145, special_attack=110,
+            special_defense=125, speed=100, status=status,
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        kw = {}
+        if toxic_count is not None:
+            kw["side_conditions"] = pe.SideConditions(toxic_count=toxic_count)
+        return pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+            side_two=pe.Side(active_index="0", pokemon=[defender] + [_dummy()] * 5, **kw),
+            weather=weather, terrain="none", trick_room=False,
+        )
+
+    def damage_to_defender(branch) -> int:
+        return sum(
+            int(str(i).split(": ")[1])
+            for i in branch.instruction_list
+            if str(i).startswith("Damage SideTwo")
+        )
+
+    accuracy, crit_rate = 0.9, 1.0 / 16.0
+
+    def compare(label, hp, maxhp, status, toxic_count, weather):
+        # True residual tick, measured with no attack in play. Two limits on
+        # this oracle, both fine for the fixtures below and both worth knowing
+        # before adding another: it sums only damage, so a fixture carrying
+        # Leftovers or a threshold berry would net the heal against the tick and
+        # mis-measure it; and `expected` below assumes the miss branch is never
+        # itself a KO, which fails if hp <= tick.
+        quiet = build(hp, maxhp, status, toxic_count, weather, "splash")
+        tick = damage_to_defender(
+            pe.generate_instructions(quiet, "splash", "splash")[0]
+        )
+        assert tick < hp, "fixture invalid: the residual alone would KO"
+        state = build(hp, maxhp, status, toxic_count, weather, "rockslide")
+        max_regular = pe.calculate_damage(state, "rockslide", "splash", False)[0][0]
+        max_crit = pe.calculate_damage(state, "rockslide", "splash", True)[0][1]
+        rolls = range(85, 101)
+        n_regular = sum(
+            1 for r in rolls if hp - (max_regular * r // 100) - tick <= 0
+        )
+        n_crit = sum(
+            1 for r in rolls
+            if hp - (max_crit * r // 100) <= 0
+            or hp - (max_crit * r // 100) - tick <= 0
+        )
+        expected = accuracy * (
+            (1.0 - crit_rate) * n_regular / 16.0 + crit_rate * n_crit / 16.0
+        ) * 100.0
+        actual = sum(
+            b.percentage
+            for b in pe.generate_instructions(state, "rockslide", "splash")
+            if damage_to_defender(b) >= hp
+        )
+        _report(
+            f"residual-mass-{label}",
+            abs(actual - expected) < 0.001,
+            f"tick={tick} max={max_regular}/{max_crit} rolls={n_regular}/{n_crit}: "
+            f"expected KO mass {expected:.4f}%, got {actual:.4f}%",
+        )
+
+    # Non-crit fan straddles the residual threshold (the split this patch adds).
+    compare("noncrit-split-toxic", 123, 238, "toxic", 0, "none")
+    compare("noncrit-split-sand", 130, 320, "none", None, "sand")
+    # Whole non-crit fan residual-lethal: no split, mass must not move.
+    compare("saturated-toxic", 123, 238, "toxic", 1, "none")
+    # NOT a Burn-tick assertion despite the status: at hp 130 the whole fan is
+    # lethal anyway, so this passes identically whether or not Burn is mirrored.
+    # It is a second saturated-fan case and is named for what it tests. The
+    # fixture that WOULD see the missing Burn tick is hp 170/320, where the
+    # truth is 70.7031% and the engine says 100.0000%; that is the open F2 gap,
+    # deliberately not asserted here because it would fail today.
+    compare("saturated-fan-second", 130, 320, "burn", None, "none")
+    # Only the CRIT fan straddles: hp 280, tick 40 -> threshold 240, inside
+    # (min_crit 207, max_crit 244], while the non-crit max of 122 cannot reach
+    # it. This is the crit-fan arm the sweep left unexercised.
+    compare("crit-fan-only", 280, 320, "poison", None, "none")
+    # Nothing pending: the partition must not fire at all.
+    compare("no-residual", 160, 320, "none", None, "none")
+    # Composition with the PRE-EXISTING crit-kill split, both firing in ONE
+    # call. hp 220 sits inside (min_crit 207, max_crit 244] so the crit-kill
+    # split fires, and Toxic at count 4 ticks 20*5 = 100, putting the residual
+    # threshold at 120 inside (min_regular 103, max_regular 122] so the non-crit
+    # residual split fires too. This is the one arrangement where a second
+    # in-place `update_percentage` would reintroduce the mass leak, so it must
+    # not be dropped -- and both thresholds must land strictly inside their fans
+    # or the case silently tests nothing.
+    compare("composes-with-crit-kill-split", 220, 320, "toxic", 4, "none")
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -279,6 +570,9 @@ def main() -> int:
     probe_protect_ladder()
     probe_stepwise_stab()
     probe_burned_struggle()
+    probe_contact_flags()
+    probe_residual_lethality_partition()
+    probe_residual_partition_masses()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")
