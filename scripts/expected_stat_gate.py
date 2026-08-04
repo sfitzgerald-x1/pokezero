@@ -106,15 +106,31 @@ def _true_variant_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     return {"moves": list(row.get("moves") or ()), "item": row.get("item")}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--games", type=int, default=200)
-    parser.add_argument("--seed", type=int, default=11)
-    parser.add_argument("--max-steps", type=int, default=400)
-    parser.add_argument("--move-bias", type=float, default=0.75)
-    parser.add_argument("--showdown-root", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args()
+def run_gate(
+    *,
+    showdown_root: Path,
+    games: int = 200,
+    seed: int = 11,
+    max_steps: int = 400,
+    move_bias: float = 0.75,
+) -> dict[str, Any]:
+    """Run the engine-anchored sweep and return its summary dict.
+
+    Split out from ``main`` so ``tests/test_expected_stat_differential.py`` can run a short sweep
+    in CI. Without that the ENGINE arm lived only in this script, leaving the always-on coverage
+    to the encoder-vs-core comparison -- which shares an implementation with the thing under test
+    and so cannot, alone, satisfy the plan's "compare against the engine or the sim" standard.
+    """
+
+    class _Args:
+        pass
+
+    args = _Args()
+    args.showdown_root = showdown_root
+    args.games = games
+    args.seed = seed
+    args.max_steps = max_steps
+    args.move_bias = move_bias
 
     dex = load_showdown_dex_cached(args.showdown_root)
     source = load_gen3_randbat_source_cached(args.showdown_root)
@@ -269,15 +285,43 @@ def main() -> int:
         "bound_violations": bound_violations[:50],
         "bound_violation_count": len(bound_violations),
     }
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--games", type=int, default=200)
+    parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--max-steps", type=int, default=400)
+    parser.add_argument("--move-bias", type=float, default=0.75)
+    parser.add_argument("--showdown-root", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+
+    summary = run_gate(
+        showdown_root=args.showdown_root,
+        games=args.games,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        move_bias=args.move_bias,
+    )
+    counts = summary["counts"]
+    verdict = summary["verdict"]
+    reached = summary["reached_comparisons"]
+    core_mismatches = summary["core_mismatches"]
+    pinned_mismatches = summary["pinned_mismatches"]
+    bound_violations = summary["bound_violations"]
+    species_seen = summary["distinct_species"]
+
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "expected-stat-gate.json").write_text(json.dumps(summary, indent=2) + "\n")
 
     print(
-        f"[expected-stat-gate] {verdict} games={counts['games']} mons={counts['mons']} "
-        f"species={len(species_seen)} "
-        f"core={counts['core_comparisons']}/{len(core_mismatches)}-mismatched "
-        f"pinned={counts['pinned_comparisons']}/{len(pinned_mismatches)}-mismatched "
-        f"bounds={counts['bound_comparisons']}/{len(bound_violations)}-violated "
+        f"[expected-stat-gate] {verdict} games={counts.get('games', 0)} mons={counts.get('mons', 0)} "
+        f"species={species_seen} "
+        f"core={counts.get('core_comparisons', 0)}/{summary['core_mismatch_count']}-mismatched "
+        f"pinned={counts.get('pinned_comparisons', 0)}/{summary['pinned_mismatch_count']}-mismatched "
+        f"bounds={counts.get('bound_comparisons', 0)}/{summary['bound_violation_count']}-violated "
         f"reached={reached}"
     )
     for label, rows in (

@@ -488,6 +488,90 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                         name,
                     )
 
+    def test_a_hidden_power_candidate_matches_on_the_four_non_hp_columns(self) -> None:
+        """EXPECTED_DEF/SPA/SPD/SPE parity when the candidate carries a Hidden Power IV override.
+
+        This is the case the rest of this file could not see. The corpus row's single opponent has
+        18 candidate variants, and at least one of them has no override on each of the four stats,
+        so ``max-over-candidates == flat iv=31`` and the shipped Rust encoder's flat value passed
+        parity by FIXTURE LUCK. Pinning the set to one overriding variant separates them: the
+        native side emitted 169 where Python emitted 168 (measured, before the port).
+
+        The reachability assertion is the point -- it fails if the fixture ever drifts back to a
+        shape where the two formulas agree, rather than letting the parity claim go quietly
+        vacuous again. That is the same "Rust spread fork" defect the plan lists: the native
+        encoder keeping an approximation after Python was fixed, invisible because the one parity
+        test that could have caught it had no overriding candidate.
+        """
+        header, inputs, metadata = self._fixture()
+        tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+        )
+        tables_json = json.dumps(
+            tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        columns = tables["layout"]["numeric_columns"]
+        four = [
+            columns[name]
+            for name in (
+                "NUMERIC_EXPECTED_DEF",
+                "NUMERIC_EXPECTED_SPA",
+                "NUMERIC_EXPECTED_SPD",
+                "NUMERIC_EXPECTED_SPE",
+            )
+        ]
+        rust = self.backends.RustBackend(tables_json=tables_json, header=header)
+
+        # Hidden Power FIGHTING overrides all four IVs to 30 (data/typechart.ts), so a pinned
+        # variant carrying it is strictly below the flat iv=31 value on every column here.
+        pinned = copy.deepcopy(inputs)
+        entries = pinned["observation_metadata"]["belief_view"]["opponent_pokemon"]
+        self.assertTrue(entries, "no opponent belief entries to pin")
+        for entry in entries:
+            entry["candidate_variants"] = [
+                {
+                    "variant_id": "pinned-hp-fighting",
+                    "level": 79,
+                    "moves": ["hiddenpowerfighting", "surf", "toxic", "protect"],
+                    "ability": "levitate",
+                    "item": "leftovers",
+                }
+            ]
+
+        baseline_arr = numpy.asarray(rust.encode(inputs)["numeric_features"])
+        pinned_arr = numpy.asarray(rust.encode(pinned)["numeric_features"])
+        self.assertTrue(
+            numpy.any(baseline_arr[:, four] != pinned_arr[:, four]),
+            "the pinned override candidate did not move any of the four columns, so this parity "
+            "assertion would pass on a flat iv=31 encoder just as the old fixture did",
+        )
+
+        spec, masks = self.backends.observation_contract_from_header(header)
+        reference = self.backends.PythonReferenceBackend(
+            showdown_root=_showdown_root(), header=header
+        )
+        state = self.backends.state_from_row_inputs(pinned)
+        self._publish_credit_values(pinned, state, reference._dex)
+        state = self.backends.state_from_row_inputs(pinned)
+        observation = observation_from_player_state(
+            state,
+            category_vocab=reference._vocab,
+            spec=spec,
+            dex=reference._dex,
+            feature_masks=masks,
+        )
+        want = self.backends.arrays_dict_from_observation_arrays(
+            self.backends.GoldenObservationArrays.from_observation(observation)
+        )
+        got = rust.encode(pinned)
+        for name in self.backends.ARRAY_NAMES:
+            self.assertEqual(
+                numpy.ascontiguousarray(got[name]).tobytes(),
+                numpy.ascontiguousarray(want[name]).tobytes(),
+                name,
+            )
+
     def test_a_non_list_moves_payload_abandons_the_band_on_both_sides(self) -> None:
         """The call-site guard for a malformed candidate variant, which the Rust unit tests
         cannot reach -- they drive the spread core directly, below the guard.

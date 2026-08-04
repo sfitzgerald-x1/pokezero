@@ -129,12 +129,24 @@ def _normalize(value: str) -> str:
 
 
 def hidden_power_type(moves: Sequence[str]) -> Optional[str]:
-    """The Hidden Power type carried by a normalized move list, or None."""
+    """The Hidden Power type carried by a move list, or None.
+
+    The LAST match wins, matching the generator: ``teams.ts`` loops every move with
+    ``hpType = move.substr(11)`` and no ``break``, so a set carrying two Hidden Powers takes the
+    later one. Returning the first was a latent divergence -- unreachable in the current pool (no
+    real candidate variant carries two distinct Hidden Powers) but wrong, and the kind of
+    silently-wrong derivation this generation has paid for repeatedly.
+
+    Callers must pass moves in their ORIGINAL ORDER. Passing a set made the result depend on
+    string-hash randomization, which is how the same measurement produced different numbers under
+    different ``PYTHONHASHSEED`` values.
+    """
+    found: Optional[str] = None
     for move in moves:
         normalized = _normalize(move)
         if normalized.startswith("hiddenpower") and len(normalized) > len("hiddenpower"):
-            return normalized[len("hiddenpower"):]
-    return None
+            found = normalized[len("hiddenpower"):]
+    return found
 
 
 @dataclass(frozen=True)
@@ -200,7 +212,11 @@ def randbats_spread_details(
     evs = {stat: 85 for stat in _STAT_KEYS}
     ivs = {stat: 31 for stat in _STAT_KEYS}
     normalized_moves = {_normalize(move) for move in moves}
-    hp_type = hidden_power_type(tuple(normalized_moves))
+    # ORDERED, not the set above: a set's iteration order depends on string-hash randomization,
+    # which made the chosen Hidden Power type (and every stat derived from it) vary run to run
+    # whenever a move list carried two. The set is still used for the membership tests below,
+    # where order is irrelevant.
+    hp_type = hidden_power_type(tuple(_normalize(move) for move in moves))
     if hp_type is not None:
         for stat, value in HIDDEN_POWER_IVS.get(hp_type, {}).items():
             ivs[stat] = value

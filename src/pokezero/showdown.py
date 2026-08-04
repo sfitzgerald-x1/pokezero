@@ -6654,10 +6654,13 @@ _LEGAL_HP_EVS = frozenset({85, 81, 77, 73, 69})
 _LEGAL_ATK_EVS = frozenset({85, 0})
 _LEGAL_HP_IVS = frozenset({31, 30})
 # Def/SpA/SpD/Spe IVs are 31, or 30 where the carried Hidden Power type's ``HPivs`` entry
-# lowers them (``data/typechart.ts``). Measured over every pool set x both physical-attack
-# arms x every listed item: exactly {30, 31}, no third value. Policed for the same reason as
-# the HP/Atk axes -- these four columns are now derived from the spread core, so a generator
-# drift that moved an IV would otherwise surface as a silently wrong stat.
+# lowers them (``data/typechart.ts``: every one of the 16 entries uses 30, so {30, 31} is a
+# property of that table rather than a survey result).
+#
+# So this guard cannot fire on any input the spread core can currently produce -- it is a DRIFT
+# TRIPWIRE, not a live check, and it is here because these four columns are now derived from the
+# core: if a future typechart or generator change introduced a third IV value, the failure mode
+# without it is a silently wrong stat, which is the expensive direction.
 _LEGAL_NON_HP_IVS = frozenset({31, 30})
 _NON_HP_SPREAD_STATS = ("def", "spa", "spd", "spe")
 
@@ -6735,11 +6738,12 @@ def _encode_expected_stats(
 
     Every stat is variant-conditioned, not just HP and Atk. Def/SpA/SpD/Spe were long documented
     here as "exact (the generator never varies them)"; that was FALSE -- Hidden Power sets carry
-    the HP type's ``HPivs`` override, which drops one or more of the four to IV 30 on 205 of 393
-    pool sets (see the block below). Under ``exact_spreads`` all four now come from the generator
-    core, maxed over the surviving candidates.
+    the HP type's ``HPivs`` override, which drops one or more of the four to IV 30 on **716 of the
+    1682 real candidate variants** (42.6%) -- see the block below. Under ``exact_spreads`` all four
+    now come from the generator core, maxed over the surviving candidates.
 
-    HP and Atk are variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high] bound pair over
+    HP and Atk are variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high]
+    bound pair over
     the candidate variants — Atk-zeroing (0 EV / 0 IV) on no-physical-attack variants, HP-EV trim
     (0 EV lower bound) on Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum variants. Without
     an attached set source the bounds collapse to the baseline.
@@ -6785,9 +6789,14 @@ def _encode_expected_stats(
     # spread-invariant, contrary to what this function claimed for three schema generations:
     # the generator overwrites IVs from the carried Hidden Power type's ``HPivs`` entry
     # (``data/random-battles/gen3/teams.ts``: ``for (iv in HPivs) ivs[iv] = HPivs[iv]``), which
-    # lowers one or more of these four to 30 on 205 of the 393 pool sets. Emitting the flat
-    # iv=31 value was wrong on 25%/29%/24%/9% of sets (def/spa/spd/spe) by one point each --
-    # the same fork-the-generator defect as C1, in the block C1's fix did not reach.
+    # lowers one or more of these four to 30 on 716 of the 1682 real candidate variants (42.6%).
+    # Emitting the flat iv=31 value was wrong, by one point, on 18.5%/24.8%/19.9%/8.6% of those
+    # variants (def/spa/spd/spe) -- the same fork-the-generator defect as C1, in the block C1's
+    # fix did not reach.
+    #
+    # Counted over the CANDIDATE VARIANTS the encoder actually sees, not over sets.json rows: a
+    # row's whole movepool is not a variant, and measuring on it both overstates the reach and
+    # made the figure depend on which Hidden Power a multi-HP movepool picked.
     #
     # MAX over the surviving candidates: exact whenever they agree on the stat (the common
     # case, and always once the set is pinned), and otherwise the iv=31 no-override value,
@@ -6832,11 +6841,6 @@ def _encode_expected_stats(
         atk_values: list[int] = []
         hp_values: list[int] = []
         for index, variant in enumerate(variants):
-            moves = {
-                _normalize_identifier(str(move)) for move in _as_sequence(variant.get("moves"))
-            }
-            item = _normalize_identifier(str(variant.get("item") or ""))
-            has_physical = any(_is_physical_attack(dex, move) for move in moves)
             if exact_spreads:
                 # Ask the GENERATOR's own spread core rather than re-deriving its rules. The
                 # approximations below are both wrong: the trimmed-HP bound jumps to ev=0 (a full
@@ -6872,6 +6876,15 @@ def _encode_expected_stats(
                 atk_values.append(spread["atk"])
                 hp_values.append(spread["hp"])
             else:
+                # Pre-v4 approximation only. Its inputs live here rather than above the branch
+                # because the v4 arm reads its spreads from the pre-pass and needs none of them --
+                # computing them for both arms was dead work on the live path.
+                moves = {
+                    _normalize_identifier(str(move))
+                    for move in _as_sequence(variant.get("moves"))
+                }
+                item = _normalize_identifier(str(variant.get("item") or ""))
+                has_physical = any(_is_physical_attack(dex, move) for move in moves)
                 atk_values.append(
                     atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
                 )

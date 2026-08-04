@@ -79,8 +79,20 @@ def _variant_from_set(row: Mapping[str, Any]) -> dict[str, Any]:
     return {"moves": list(row.get("movepool", [])), "item": items[0]}
 
 
-def _encode(dex, *, species: str, level: int, variants: tuple[Mapping[str, Any], ...]):
-    """Run the real encoder block and return its four emitted column values."""
+def _encode(
+    dex,
+    *,
+    species: str,
+    level: int,
+    variants: tuple[Mapping[str, Any], ...],
+    base_species: str | None = None,
+):
+    """Run the real encoder block and return its four emitted column values.
+
+    ``base_species`` defaults to ``species`` but is separable, because the forme arm needs
+    ``base_species != battle_species`` to construct the "fell back to the base species" scenario
+    at all. With them always equal that test could not fail no matter which map the encoder read.
+    """
     num_row = [0.0] * _V4_NUMERIC_FEATURE_COUNT
     belief = RevealedPokemonBelief(
         showdown_slot="p2a",
@@ -90,7 +102,7 @@ def _encode(dex, *, species: str, level: int, variants: tuple[Mapping[str, Any],
     _encode_expected_stats(
         num_row,
         dex,
-        base_species=species,
+        base_species=base_species or species,
         battle_species=species,
         details=f"{species}, L{level}",
         belief=belief,
@@ -171,6 +183,55 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             override_sets,
             150,
             "sweep reached almost no Hidden-Power-override sets; it would pass vacuously",
+        )
+
+    def test_every_real_candidate_variant_matches_the_generator_core(self) -> None:
+        """The production surface: the 1682 variants the encoder is actually handed.
+
+        The pool sweep above feeds a sets.json row's WHOLE MOVEPOOL as one variant's moves, which
+        is not a shape the generator can produce (it picks four). That arm is still worth having --
+        it sweeps every species and level cheaply -- but it validates spreads no real candidate
+        has, so the real candidate universe gets its own exhaustive arm here.
+        """
+        from pokezero.randbat import load_gen3_randbat_source_cached
+
+        source = load_gen3_randbat_source_cached(self.root)
+        checked = 0
+        override_variants = 0
+        for universe in source.universes.values():
+            info = self.dex.species_info(universe.species)
+            if info is None:
+                continue
+            for entry in universe.variants:
+                variant = {"moves": list(entry.moves), "item": entry.item}
+                truth = randbats_spread_details(
+                    info.base_stats,
+                    level=entry.level,
+                    moves=list(entry.moves),
+                    item=entry.item,
+                    has_physical_attack=True,
+                ).stats
+                num_row = _encode(
+                    self.dex,
+                    species=universe.species,
+                    level=entry.level,
+                    variants=(variant,),
+                )
+                hp_type = hidden_power_type(list(entry.moves))
+                if any(stat in HIDDEN_POWER_IVS.get(hp_type or "", {}) for stat, _ in COLUMNS):
+                    override_variants += 1
+                for stat, slot in COLUMNS:
+                    if not info.base_stats.get(stat):
+                        continue
+                    with self.subTest(variant=entry.variant_id, stat=stat):
+                        self.assertAlmostEqual(
+                            num_row[slot], _expected_column_value(truth[stat]), places=9
+                        )
+                    checked += 1
+        # Reachability, measured: 1682 variants, 716 of them carrying an override.
+        self.assertGreater(checked, 5000, "did not reach the real candidate universe")
+        self.assertGreater(
+            override_variants, 600, "too few overriding variants reached; arm would be weak"
         )
 
     def test_off_pool_level_sweep_matches_the_generator_core(self) -> None:
@@ -292,6 +353,48 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             seen += 1
         self.assertGreater(seen, 5, "forme arm reached too few formes to mean anything")
 
+    def test_a_forme_does_not_read_the_base_species_stat_block(self) -> None:
+        """The forme claim, actually constructed: ``base_species != battle_species``.
+
+        The sweep above always passes the same species as both, so it could not distinguish
+        "reads battle_species" from "reads base_species" -- mutating the encoder to read the base
+        species' stats left it green. Deoxys' formes differ enormously on these four, so encoding
+        Deoxys-Attack while naming plain Deoxys as the base species must still emit the ATTACK
+        forme's numbers (base_species feeds only the HP baseline).
+        """
+        attack = self.dex.species_info("deoxysattack")
+        base = self.dex.species_info("deoxys")
+        assert attack is not None and base is not None
+        differing = [
+            stat
+            for stat, _slot in COLUMNS
+            if attack.base_stats.get(stat) != base.base_stats.get(stat)
+        ]
+        self.assertTrue(
+            differing, "Deoxys-Attack and Deoxys agree on all four; pick another forme"
+        )
+        _species, _level, row = self.pool[0]
+        variants = (_variant_from_set(row),)
+        num_row = _encode(
+            self.dex,
+            species="deoxysattack",
+            level=100,
+            variants=variants,
+            base_species="deoxys",
+        )
+        for stat, slot in COLUMNS:
+            if stat not in differing:
+                continue
+            with self.subTest(stat=stat):
+                want = _gen3_stat(int(attack.base_stats[stat]), 100, ev=85, iv=31, hp=False)
+                wrong = _gen3_stat(int(base.base_stats[stat]), 100, ev=85, iv=31, hp=False)
+                self.assertNotAlmostEqual(
+                    num_row[slot], _expected_column_value(wrong), places=9
+                )
+                # The pool row's variant may carry a Hidden Power override, so assert the value is
+                # derived from the ATTACK forme rather than pinning one exact number.
+                self.assertLessEqual(num_row[slot], _expected_column_value(want) + 1e-12)
+
     def test_ambiguous_candidates_emit_the_upper_bound_never_a_midpoint(self) -> None:
         """With candidates that disagree, the column is the MAX -- a real bound, not a fiction.
 
@@ -339,12 +442,66 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             disagreeing, 0, "no disagreeing candidate sets reached; assertion was vacuous"
         )
 
+    def test_one_unevaluable_candidate_abandons_the_whole_set(self) -> None:
+        """A max over a STRICT SUBSET of the candidates can fall BELOW the true value.
+
+        That is unsound in exactly the direction this column claims to be safe in: the emitted
+        value is only an upper bound if it was taken over ALL candidates. So one unevaluable
+        candidate must abandon the set entirely and fall back to the flat iv=31 no-set-source
+        state -- not skip that candidate and bound over the rest.
+
+        Kill-confirmed guard: changing the encoder's ``break`` to ``continue`` passes every other
+        test in this file, which is why this one exists. The fixture is built so the subset max
+        and the flat value DIFFER, or the assertion could not tell them apart.
+        """
+        species = "meganium"
+        info = self.dex.species_info(species)
+        assert info is not None
+        level = 100
+        # Hidden Power Fighting overrides all four IVs to 30, so its spread is strictly below the
+        # flat iv=31 value on every column under test.
+        good = {"moves": ["hiddenpowerfighting", "gigadrain", "synthesis", "toxic"], "item": "leftovers"}
+        broken = {"moves": None, "item": "leftovers"}
+
+        flat = _encode(self.dex, species=species, level=level, variants=())
+        subset = _encode(self.dex, species=species, level=level, variants=(good,))
+        # Reachability: the two states must be distinguishable or this proves nothing.
+        differs = [
+            stat
+            for stat, slot in COLUMNS
+            if info.base_stats.get(stat) and flat[slot] != subset[slot]
+        ]
+        self.assertTrue(
+            differs,
+            "fixture does not separate the subset bound from the flat value; assertion vacuous",
+        )
+
+        abandoned = _encode(self.dex, species=species, level=level, variants=(good, broken))
+        for stat, slot in COLUMNS:
+            if not info.base_stats.get(stat):
+                continue
+            with self.subTest(stat=stat):
+                self.assertAlmostEqual(
+                    abandoned[slot],
+                    flat[slot],
+                    places=9,
+                    msg=(
+                        f"{stat}: one unevaluable candidate did not abandon the set -- the "
+                        "emitted value is a max over a strict subset, which is not a bound"
+                    ),
+                )
+
     def test_flat_iv31_encoder_is_killed(self) -> None:
         """Kill-confirmed mutation: the pre-fix encoder must FAIL this file's differential.
 
         The mutation is the exact code that shipped -- ``_gen3_stat(base, level, ev=85, iv=31)``
         with no Hidden Power override. If this test cannot tell the two apart, the differential
         above is not measuring anything.
+
+        This calls the REAL ENCODER for both arms. An earlier version recomputed the mutation
+        inline and compared it against the core, which proved the two formulas differ but never
+        ran the encoder at all -- it would have stayed green if the encoder stopped consuming
+        candidate variants entirely.
         """
         killed = 0
         checked = 0
@@ -356,14 +513,18 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             override = HIDDEN_POWER_IVS.get(hp_type or "", {})
             if not any(stat in override for stat, _ in COLUMNS):
                 continue
-            truth = self._truth(species, level, row)
-            for stat, _slot in COLUMNS:
-                base = info.base_stats.get(stat)
-                if not base:
+            variant = _variant_from_set(row)
+            # The fixed encoder, pinned to this variant...
+            fixed = _encode(self.dex, species=species, level=level, variants=(variant,))
+            # ...and the encoder in its no-set-source state, which emits exactly the flat iv=31
+            # value the pre-fix code emitted unconditionally. Same function, same inputs, so the
+            # only thing separating them is whether the override is honoured.
+            mutated = _encode(self.dex, species=species, level=level, variants=())
+            for stat, slot in COLUMNS:
+                if not info.base_stats.get(stat):
                     continue
                 checked += 1
-                mutated = _gen3_stat(int(base), level, ev=85, iv=31, hp=False)
-                if mutated != truth[stat]:
+                if fixed[slot] != mutated[slot]:
                     killed += 1
         self.assertGreater(checked, 0, "mutation arm reached no override sets")
         self.assertGreater(
@@ -371,6 +532,42 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             200,
             "the flat-iv31 mutation survived this differential -- the guard is not coverage",
         )
+
+
+@requires_showdown()
+class ExpectedStatEngineAnchorTest(unittest.TestCase):
+    """The ENGINE arm, in CI -- short sweep of the same gate the fleet runs.
+
+    Everything in ``ExpectedStatDifferentialTest`` compares the encoder against
+    ``randbats_spread_details``. That is Python-vs-Python, and the plan's first standard says such
+    a differential proves nothing on its own: both sides sharing the bug is how C1 survived. The
+    engine anchor existed only inside ``scripts/expected_stat_gate.py``, so nothing in CI held the
+    core to the engine. This closes that: server-computed stats from each seat's opening
+    ``|request|``, compared against the core, the pinned encoder, and bound soundness.
+
+    Deliberately few games -- it drives the real BattleStream. The 200-game run is the gate.
+    """
+
+    def test_short_engine_anchored_sweep_has_zero_mismatches(self) -> None:
+        import sys
+
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        if not (showdown_root() / "dist" / "sim" / "index.js").exists():
+            self.skipTest("needs a BUILT Showdown checkout (dist/sim/index.js) and node")
+        from expected_stat_gate import run_gate
+
+        summary = run_gate(showdown_root=showdown_root(), games=2, seed=5)
+        self.assertEqual(summary["core_mismatch_count"], 0, summary["core_mismatches"][:5])
+        self.assertEqual(summary["pinned_mismatch_count"], 0, summary["pinned_mismatches"][:5])
+        self.assertEqual(summary["bound_violation_count"], 0, summary["bound_violations"][:5])
+        # Reachability: a sweep that compared nothing must not read as a pass.
+        self.assertGreater(summary["counts"]["core_comparisons"], 0)
+        self.assertGreater(summary["counts"]["pinned_comparisons"], 0)
+        self.assertGreater(summary["counts"]["bound_comparisons"], 0)
+        self.assertTrue(summary["reached_comparisons"])
+        self.assertEqual(summary["verdict"], "PASS")
 
 
 if __name__ == "__main__":  # pragma: no cover
