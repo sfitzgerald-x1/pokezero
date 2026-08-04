@@ -1,0 +1,58 @@
+{
+ "SUPERSESSION_2026_08_04": "STRUCTURAL FINDING, VINDICATED. Its claim that the two families are one mechanism drove the residual-lethality partition (#1062), the ordered residual simulation (#1066) and the Case A three-way partition (#1069). C116 \u00a73 extends the same observation further: SIX instances of one defect, whose closed form is enumerate-then-merge rather than another hand-built partition. Retained and landed because reports/c110 on main cites it.",
+ "landed_because": "C116 Phase 0 item 1b: merged artifacts cite this file and the citations did not resolve -- scripts/engine_transition_differential.py:479 (shipped) and reports/c108 cite c103 and c107; reports/c110 cites c109. Under C116 M4 a report is not citable until merged.",
+ "schema": "c109-lethality-threshold-unification/2",
+ "headline": "LS_capped_lethal_shape (7 rows) and limit:roll_divergent_lethality (3 rows) are THE SAME MECHANISM. Ten of the thirteen remaining rows are one shape: a damage roll decides whether something is lethal, and the engine's COLLAPSED arm sits on the opposite side of the threshold from Showdown's realised roll.",
+ "status": "STRUCTURAL FINDING. Not implemented. It reframes the remaining queue from nine scattered fixes into one engine change.",
+ "era": {
+  "measured_on": "/tmp/sweep_c96al.json, residue 13, C96 + Air Lock guard applied"
+ },
+ "the_evidence": {
+  "19000029_51_LS": {
+   "observed": "p2 sandstorm=-16, move=-100 -- SURVIVES the sandstorm tick",
+   "engine_93pct": "p2 move=-107, capped_lethal=-11 -- the sandstorm KILLS, capped to the 11 that remained",
+   "read": "Showdown's roll 100 leaves enough to survive; the engine's collapsed 107 does not. RESIDUAL-lethality threshold."
+  },
+  "19000112_32_LS": {
+   "observed": "p1 move=-141 -- SURVIVES the hit",
+   "engine_84pct": "p1 capped_lethal=-188 -- DIES on the hit",
+   "read": "the engine's collapsed roll kills where Showdown's did not. HIT-lethality threshold."
+  },
+  "the_three_limit_rows": "19000147/125, 19000191/63 and 19000198/33, per reports/c105, are the identical shape with a psn or Leech Seed tick as the residual. I adjudicated those as genuine comparison limits BECAUSE the realised roll is absent from the collapsed support -- which is true, and is exactly what the LS rows also show."
+ },
+ "why_this_matters": {
+  "the_two_families_were_split_by_SYMPTOM_not_MECHANISM": "LS_capped_lethal_shape catches rows where a capped_lethal appears on one side and not the other. limit:roll_divergent_lethality catches rows where both sides carry capped_lethal but disagree. Those are two surface presentations of ONE cause -- the collapsed arm landing on the wrong side of a lethality threshold -- and the split is why the programme has been treating them as separate work.",
+  "and_it_reopens_the_limit_adjudication": "reports/c105 called three of them genuine limits on the grounds that no same-transition partition reaches the realised outcome. That reasoning is sound ONLY IF the partition does not exist. But reports/c97 already dispositioned this exact shape as an ENGINE SUPPORT GAP whose fix is to partition on the lethality threshold -- generalising the crit-kill-split that already ships. If that partition is implemented, the realised outcome becomes reachable and those rows stop being limits.",
+  "so_clause_2s_target_may_genuinely_be_1": "if one engine change closes all ten, the residue's genuine-limit content is limit:world_sample_drag_target alone. I have said the target was 8, then 1, then 3, then 4 -- each time from a different reading. This is the first time the number follows from a MECHANISM rather than from a class name."
+ },
+ "the_change_this_implies": {
+  "what_already_ships": "gen3/generate_instructions.rs partitions the CRIT fan on the HIT-lethality threshold (defender_active.hp) when the crit range straddles it -- the crit-kill-split. Case A does the same for the non-crit fan.",
+  "what_is_missing": "(a) the threshold is only `defender_active.hp`, i.e. lethality ON THE HIT. It needs `defender_active.hp - pending_residual` so a roll that leaves the defender inside the residual's reach is partitioned too. (b) whether both fans get it consistently.",
+  "the_hard_part": "pending_residual is computed later, in add_end_of_turn_instructions. A `pending_residual_damage(state, side)` helper is needed at damage-generation time. It is computable -- sandstorm is maxhp/16, poison maxhp/8, toxic a counter multiple, Leech Seed maxhp/8 -- but it is new plumbing, and it must agree with what the residual phase actually does or it will partition on a wrong threshold.",
+  "cost": "the largest change in the remaining queue and the only one that touches the engine rather than the harness. It also multiplies branch counts, so the #1038 counters and the tactics gate both matter.",
+  "expected_scope": "up to 10 rows. To be MEASURED, not assumed -- reports/c100 predicted 10 and measured -7."
+ },
+ "honest_limits_of_this_finding": "two of the seven LS rows were sampled, not all seven. The other five are 19000021/34 (the C90 contact-flag row, which is a DIFFERENT cause and should not be counted here), 19000052/36, 19000058/19, 19000074/27 and 19000125/226. reports/c89 and c97 already cause three of those as residual-decided lethality, which is consistent, but I have not replayed 19000125/226 and am not claiming it.",
+ "implementation_spec": {
+  "note": "read from the residual phase directly so the threshold agrees with it. A partition on a wrong threshold is worse than none -- it moves mass to the wrong arm silently.",
+  "the_helper": "pending_residual_damage(state, side_ref) -> i16, called at damage-generation time, returning what the END-OF-TURN phase will take off that side if it is still alive.",
+  "weather_arm_EXACT_as_the_engine_writes_it": {
+   "guard": "skip entirely if active.hp == 0, or the mon has_type GROUND, STEEL or ROCK, or ability == SANDVEIL",
+   "gate": "state.weather_is_active(&Weather::SAND) -- note this is the SAME weather_is_active that the renderer's effective_speed was missing, so Air Lock suppresses it here too",
+   "amount": "cmp::min(cmp::max(active.maxhp / 16, 1), active.hp) -- the min-1 clamp is deliberate and mirrors Showdown's onWeather",
+   "hail": "the branch immediately above sand uses the identical formula; both must be covered"
+  },
+  "status_arm": "POISON is maxhp/8; TOXIC scales with side_conditions.toxic_count and its counter is decremented in the same phase, so the helper must read the count BEFORE that decrement or it will be one stage low.",
+  "leech_seed_arm": "maxhp/8 to the seeded side, and it must respect LIQUID OOZE -- which reverses it -- per the renderer fix already merged.",
+  "the_threshold_change": "at the two partition sites the threshold is `defender_active.hp`. It becomes `defender_active.hp - pending_residual_damage(...)` for the RESIDUAL-lethality partition. The HIT-lethality partition keeps `defender_active.hp`. Both are needed: 19000112/32 is hit-lethality and 19000029/51 is residual-lethality, and they are different thresholds on the same fan.",
+  "ordering_trap": "residuals fire in a fixed order and each is clamped to the HP remaining at ITS point in the order. A single summed `pending_residual` is therefore an approximation -- it is correct for the common case of one active residual and wrong when two stack. Decide deliberately whether to sum or to partition on the FIRST residual only, and say which in the patch.",
+  "gates_required": [
+   "the depth-tactics suite -- its forcing proofs re-solve from scratch, which is what catches a branch-structure change, and this IS one",
+   "test_engine_search_no_panic -- widening the crit loop in #1028 surfaced a reachable PanicException",
+   "branch-count measurement: this multiplies arms on every boundary with an active residual, which is most of them in sand. Report elapsed and branch counts, not only divergence",
+   "the #1038 counters: matched, skip and lossy together"
+  ],
+  "expected_scope": "up to 10 rows. MEASURE it. reports/c100 predicted 10 and measured -7, and reports/c108 v1 misread a two-variable comparison as an interaction.",
+  "why_i_did_not_implement_it": "this is the largest change in the queue, it is the only remaining one that touches the engine rather than the harness, and it multiplies branch counts. Twice in this session I pushed past a sensible stopping point and produced errors that cost more than the work gained -- a file committed with conflict markers, and a two-variable sweep read as an interaction. The spec above is turn-key; attempting the partition on a spent budget is how it would land subtly wrong and pass a plausible-looking sweep."
+ }
+}

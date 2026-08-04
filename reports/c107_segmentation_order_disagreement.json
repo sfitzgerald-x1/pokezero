@@ -1,0 +1,42 @@
+{
+ "SUPERSESSION_2026_08_04": "CAUSE CONFIRMED, AND THE ROW WAS RESOLVED BY A DIFFERENT FIX THAN THIS ONE PROPOSES. 19000093/51 is absent from the current residue, but the resolution came from the Air Lock weather_is_active guard on the speed replica (reports/c108, shipped in #1059, rust/pokezero-search/src/events.rs:384-391 naming this row), not from this report's proposal to make move_order faithful to moves_first -- so the_correct_fix.implemented is still false inside this file and stays false. That same guard also closed 19000093/53, which this file's 19000093_53_is_NOT_this_cause claims 'remains the ONE uncaused row'; c108 measured +3 matched, -2 diverged and lossy_render 11 -> 0, refuting that clause. Landed because reports/c108 on main cites this file in a field literally named citations_that_do_not_resolve_yet.",
+ "landed_because": "C116 Phase 0 item 1b: merged artifacts cite this file and the citations did not resolve -- scripts/engine_transition_differential.py:479 (shipped) and reports/c108 cite c103 and c107; reports/c110 cites c109. Under C116 M4 a report is not citable until merged.",
+ "schema": "c107-segmentation-order-disagreement/2",
+ "headline": "CAUSE FOUND for 19000093/51, the last-but-one uncaused row: the renderer's `move_order` replica disagrees with the engine's actual move order, and `segment()` tries ONLY the order it computed. It regenerates the wrong side as phase 1, that side's instructions are never a prefix of the pair-generated list, and the whole branch is voided as segmentation_failed.",
+ "status": "CAUSE CONFIRMED BY INSTRUMENTATION. The obvious fix is MEASURED AND REJECTED. A correct fix is named.",
+ "closes_the_search": "five candidates were refuted across reports/c96, c98 and c106. This is the sixth and it is the answer.",
+ "the_evidence": {
+  "method": "one eprintln in segment()'s None arm, printing the computed order, a forced SideOne-first phase-1 regeneration, and the pair-generated list. Probe not shipped.",
+  "output": "order=SideTwo  p1_regen=[[], [Damage SideTwo: 94], [Damage SideTwo: 94, ApplyVolatileStatus...], [Damage SideTwo: 188], ...]  instrs=[Damage SideTwo: 94, DecrementPP SideTwo: M2 1, Damage SideOne: 63, ...]",
+  "why_it_is_decisive": "the computed order is SideTwo, but the list BEGINS with `Damage SideTwo: 94` -- SideTwo RECEIVING damage, so SideOne struck first. Forcing SideOne as phase 1 regenerates `[Damage SideTwo: 94]`, an exact prefix. The composition was reproducible all along; only the order guess was wrong.",
+  "and_it_refutes_candidate_5": "reports/c106 preferred 'the second mover contributes nothing on a flinch branch'. The probe showed p1_cands=0 -- ZERO phase-1 candidates matched -- so the failure is in PHASE 1, before the second mover is considered at all. Rock Slide's flinch is present in the branch set but is not the cause."
+ },
+ "the_obvious_fix_is_REFUTED_BY_MEASUREMENT": {
+  "what_i_tried": "try BOTH orders always, computed one first. segment() verifies by prefix match anyway, so the order was only an optimisation.",
+  "measured": "transition:matched 15208 -> 15204 (-4), transition:diverged 15 -> 20 (+5), strict:lossy_render 11 -> 0, skip:strict_all_branches_lossy 1 -> 0. Both sides reconcile to 15224, 0 engine errors.",
+  "it_did_work_on_the_target": "19000093/51 CLOSED, and lossy_render went to ZERO -- segmentation now always succeeds, which confirms the cause.",
+  "but_it_re_opened_six_rows": "exactly the six the faint-without-damage fix had closed: 19000024/61, 19000077/47, 19000089/53, 19000098/79, 19000152/53, 19000199/61.",
+  "why": "a WRONG order can still produce a valid PREFIX. Those six are Destiny Bond and Perish Song boundaries where BOTH mons faint, so attribution depends on which side acted first. Previously the wrong-order attempt failed, the branch went lossy and was excluded from comparison. Now the fallback order succeeds and yields a decomposition that prefix-matches but assigns the events to the wrong phases -- so the rendered protocol is wrong in a way the matcher then rejects.",
+  "the_lesson": "prefix-matching is NOT a sufficient verifier of an order guess. segment() was relying on the order being right and using the prefix test only to pick among that order's branches. Brute-forcing the order converts a loud failure (voided branch) into a quiet one (wrong attribution), which is the worse direction."
+ },
+ "the_correct_fix": {
+  "form": "make `move_order` faithful to the engine's `moves_first` rather than brute-forcing around it.",
+  "why": "the replica is the defect. `events.rs`'s `move_order` and `gen3/generate_instructions.rs`'s `moves_first` are the same computation written twice -- the same replica hazard as `end_of_turn_triggered`, which PR #1037 was closed for. Find the input on which they disagree for 19000093/51 (Rock Slide against Hydro Pump, both priority 0, so it is an effective-speed disagreement) and fix the replica.",
+  "secondary_option": "if both orders must be tried, the accepted decomposition needs a stronger check than 'is a prefix' -- e.g. that the first mover's own PP decrement or SetLastUsedMove appears in its phase. Weaker than fixing the replica and it does not remove the hazard.",
+  "gate": "a pin that fails when reverted, and a sweep reporting matched, skip and lossy together -- lossy_render is the counter that actually tracks this defect and it went 11 -> 0 under the wrong fix.",
+  "implemented": false
+ },
+ "what_this_leaves": "19000093/51 has a written cause. 19000093/53 is the same family and almost certainly the same cause, but I have NOT run the probe on it and am not claiming it. That is one command.",
+ "19000093_53_is_NOT_this_cause": {
+  "probed": "yes, same instrumented build.",
+  "result": "NO SEGFAIL at all. 19000093/53 segments successfully; its class is roll_scaled_component, not a void.",
+  "so_the_two_rows_are_different_mechanisms": "reports/c96 and c98 treated 19000093/51 and /53 as one shape because both were UNATTRIBUTED with a segmentation flavour. They are not. /51 is voided by the order disagreement above. /53 segments fine and mis-files Megahorn's damage into the end-of-turn slice, which reports/c96 already described and whose cause reports/c96 v2 marked OPEN after the marker hypothesis was refuted.",
+  "consequence_for_clause_1": "19000093/51 now has a cause. 19000093/53 remains the ONE uncaused row in the residue, and it needs its own probe -- a different one, since it never reaches the None arm."
+ },
+ "narrowing_the_replica_defect": {
+  "the_obvious_explanation_is_RULED_OUT": "I diffed the two speed functions' modifier lists. The renderer's `effective_speed` and the engine's `get_effective_speed` apply the SAME modifiers in the same order: Chlorophyll in sun, Swift Swim in rain, a 0.5 factor, and PARALYZE at 0.25. There is no missing ability or item on either side.",
+  "so_the_disagreement_is_in_the_INPUTS_not_the_formula": "which is a more interesting defect and a narrower search: either the two are called on different STATES, or a boost / status / weather field differs at call time. `move_order` runs at the top of segment() from the pre-decision state; `moves_first` runs inside the engine's own pair generation. Those should be the same state and apparently are not.",
+  "the_next_probe": "print s1 and s2 from the renderer's effective_speed alongside the engine's get_effective_speed for the same state on 19000093/51, plus the weather, both statuses and both speed boosts. That identifies the differing field in one run. I have NOT done this and am not guessing which field it is.",
+  "why_i_stopped_here": "naming a field without measuring it is how reports/c100 and c104 went wrong -- a plausible mechanism asserted as the cause. The order disagreement IS measured; its origin is not."
+ }
+}
