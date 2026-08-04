@@ -51,5 +51,23 @@
   "why_the_class_collects_them": "limit:roll_divergent_lethality matches on SHAPE -- a capped_lethal component whose counterpart is absent -- which is indistinguishable from a faint the observation never rendered as damage. The class name asserts a roll disagreement that neither row has. This is a self-attributing label doing work the evidence does not support, which is the thing the programme's rules were written against.",
   "implication": "if the remaining five are the same, the limit count drops from 8 to 1 -- leaving only limit:world_sample_drag_target, which IS registered and evidence-backed -- and clause 2's target becomes a single row. I am NOT claiming that. Five rows are unexamined: 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. Two of two is a pattern worth stating and not a result.",
   "one_fix_may_close_several": "C96's disposition -- a |faint| with no preceding |-damage| must reconcile against an engine capped_lethal equal to the victim's remaining HP -- would close 19000152/53, 19000024/61 and 19000077/47 together. That is three rows across three families for one change, and it is the cheapest remaining item in the queue."
- }
+ },
+ "implementing_c96s_disposition_is_not_a_one_liner": {
+  "where_the_rows_actually_fail": "not at the exact-component comparison. capped_lethal is in _ROLL_SCALED_SOURCES, so these rows are rejected inside roll_component_events_agree -- observed carries no component for the slot and the engine carries capped_lethal. That is why the divergence class comes out roll-flavoured.",
+  "the_two_facts_the_fix_needs_and_does_not_have": [
+   "that the OBSERVED protocol contains a |faint| for that side with NO preceding |-damage|. roll_component_events_agree receives component lists, not protocol lines.",
+   "the victim's REMAINING HP at that point, to check the engine's capped_lethal equals it rather than accepting any capped_lethal against an empty observation."
+  ],
+  "why_that_matters": "without the first fact the rule degenerates into 'accept an unmatched engine capped_lethal', which would accept a genuine engine over-kill and is exactly the widening the programme forbids. Without the second it would accept a wrong magnitude. So the fix is a THREADING change -- carry the faint-without-damage signal and the pre-state HP into the comparison -- not a predicate tweak.",
+  "cost_estimate": "modest but real: a new parameter through roll_component_events_agree's call sites, the signal derived where the protocol is parsed, a pin that fails when reverted, and a single-variable sweep. Larger than the movepainsplit change, smaller than the crit-tag work.",
+  "value": "three rows across three families (19000152/53 Perish Song, 19000024/61 Destiny Bond, 19000077/47 Perish Song) for one change, plus it removes a class the limit label has been silently absorbing.",
+  "status": "NOT ATTEMPTED. Recorded so the next attempt does not discover the threading requirement mid-implementation and mistake it for a one-line accept."
+ },
+ "next_actions_in_order": [
+  "replay the five unexamined limit rows: 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. Cheap, and it sizes everything else.",
+  "implement C96's disposition with the threading above -- 3 rows across 3 families.",
+  "reports/c102's callee double-mutation. Unexercised but its failure direction is a FALSE MATCH, which the divergence count cannot see.",
+  "LS_capped_lethal_shape's residual-lethality partition (C89/C97) -- the largest family at 7, engine fix.",
+  "cause 19000093/51 and /53 (segmentation; C98 has two live candidates) and 19000098/79."
+ ]
 }
