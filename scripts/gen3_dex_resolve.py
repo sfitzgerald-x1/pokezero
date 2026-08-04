@@ -50,11 +50,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_SHOWDOWN_ROOT = Path.home() / "workspace" / "pokerena" / "vendor" / "pokemon-showdown"
+# Deliberately NOT pokezero.local_showdown.default_showdown_root(): this script drives `node`
+# directly and imports no pokezero module, so reaching for the shared helper would add a hard
+# dependency to a standalone tool. It does honour POKEZERO_SHOWDOWN_ROOT, which is the axis
+# that actually drifts -- a de-personalized fallback that silently ignores the override is the
+# same bug in a quieter form.
+DEFAULT_SHOWDOWN_ROOT = Path(
+    os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+    or Path.home() / "workspace" / "pokerena" / "vendor" / "pokemon-showdown"
+)
 
 # Fields worth showing by default. Everything else is in --json.
 _MOVE_FIELDS = ("accuracy", "basePower", "type", "category", "pp", "priority", "target")

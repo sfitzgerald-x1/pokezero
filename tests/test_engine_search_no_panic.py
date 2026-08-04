@@ -48,7 +48,7 @@ import pathlib
 import subprocess
 import sys
 import unittest
-from _showdown_root import showdown_root, showdown_root_str
+from _showdown_root import showdown_root_str
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))

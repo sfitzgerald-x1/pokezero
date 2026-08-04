@@ -53,11 +53,28 @@ _FORBIDDEN_PATTERNS = [
         "maintainer home directory",
         # Any user's home, not one specific username: a default naming SOMEONE's home is
         # useless to everyone else, so this must fail for a new contributor's path too.
-        re.compile(r"/(?:Us" + r"ers|ho" + r"me)/[A-Za-z0-9._-]+/"),
+        #
+        # NO trailing slash requirement -- a bare reference with nothing after it is the most
+        # likely reintroduction form, and the first version of this rule missed it. Escaped
+        # (JSON `\/Users\/`) and Windows (`C:\Users\`) separators count as separators.
+        # IGNORECASE because macOS filesystems are case-insensitive, so `/users/` names the
+        # same directory and would otherwise be a trivial bypass.
+        re.compile(r"[/\\](?:Us" + r"ers|ho" + r"me)[/\\]+[A-Za-z0-9._-]+", re.IGNORECASE),
+    ),
+    (
+        "home directory flattened into a path segment",
+        # The shape a temp-dir namer produces: a home path with its separators turned into
+        # hyphens. It carries the username just as plainly but survives any rule looking for a
+        # real path prefix, and it was still sitting in two tracked files after the first
+        # scrub. (Not spelled out here -- this guard must not match itself.)
+        re.compile(r"-(?:Us" + r"ers|ho" + r"me)-[A-Za-z0-9._]+-", re.IGNORECASE),
     ),
 ]
 
-_ALLOWED_FILES = {
+# PER-RULE, deliberately: a blanket file allowlist would exempt the file from the
+# internal-cluster checks as well, silently weakening the older invariant to accommodate the
+# newer one. Keyed by rule label.
+_ALLOWED_FOR_RULE = {
     # Recorded provenance inside a TAMPER-EVIDENT golden corpus: every row carries a
     # `row_sha256` over its own payload, so the paths cannot be scrubbed in place without
     # forging those hashes -- which would defeat the guarantee the field exists to provide.
@@ -65,7 +82,7 @@ _ALLOWED_FILES = {
     # `sets_path`/`generator_path` values. Tracked as a follow-up; this entry should shrink to
     # nothing, and is here so the exception is a visible, reviewable line rather than a
     # weakened pattern.
-    "tests/data/golden_corpus_sample/rows.jsonl",
+    "maintainer home directory": {"tests/data/golden_corpus_sample/rows.jsonl"},
 }
 
 
@@ -86,8 +103,6 @@ class PublicInvariantTest(unittest.TestCase):
 
         violations: list[str] = []
         for rel in tracked:
-            if rel in _ALLOWED_FILES:
-                continue
             path = REPO_ROOT / rel
             try:
                 text = path.read_text(errors="ignore")
@@ -98,6 +113,8 @@ class PublicInvariantTest(unittest.TestCase):
                     line = text.count("\n", 0, match.start()) + 1
                     violations.append(f"{rel}:{line}: {label} ({needle!r})")
             for label, pattern in _FORBIDDEN_PATTERNS:
+                if rel in _ALLOWED_FOR_RULE.get(label, ()):
+                    continue
                 for match in pattern.finditer(text):
                     line = text.count("\n", 0, match.start()) + 1
                     violations.append(f"{rel}:{line}: {label} ({match.group(0)!r})")

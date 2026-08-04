@@ -13,6 +13,7 @@ import threading
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .belief import CandidateSetSummary
+from .paths import portable_path
 
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
@@ -259,9 +260,13 @@ class Gen3RandbatSource:
         metadata = RandbatSourceMetadata(
             format_id="gen3randombattle",
             generation=3,
-            showdown_root=str(root),
-            sets_path=str(sets_path),
-            generator_path=str(dist_generator_path),
+            # portable_path, not str(): these three fields are copied verbatim into golden
+            # corpus rows, which are TRACKED, so an absolute path here puts a username in a
+            # public repo. This is the writer behind the one file the public-invariant guard
+            # still has to allowlist.
+            showdown_root=portable_path(root),
+            sets_path=portable_path(sets_path),
+            generator_path=portable_path(dist_generator_path),
             source_hash=source_hash,
         )
         resolved_cache_dir = Path(cache_dir).expanduser() if cache_dir else Path.home() / ".cache" / "pokezero"

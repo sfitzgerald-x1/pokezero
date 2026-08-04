@@ -2383,7 +2383,7 @@ this program was trying to reach, just not yet at zero.
 | charge-fix A/B (60 games, seeds 1350000-1350059) | `<scratch>/reports/charge60.json` |
 
 `<scratch>` =
-`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+`/private/tmp/claude-501/-<home>-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
 
 ## J.7 Acceptance trail: the run that was NOT started
 
@@ -2634,7 +2634,7 @@ engine work is scoped from class names.
 | prior 22-patch run for comparison | `final300.json` |
 
 `<scratch>` =
-`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+`/private/tmp/claude-501/-<home>-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
 # Appendix M — payload-dump diagnosis of the 91-row Leftovers/psn block
 
 Diagnosis only, §K method: full payload + built world + instruction dump at each
@@ -3053,7 +3053,7 @@ final faint), or it is not reaching this path. Handed back to that lane with the
 
 Under `<scratch>/reports/`: `c3.json`, `c3.jsonl` (resumable), `c3.log`;
 `cyc300.json` (cycle 2) for the diff. `<scratch>` =
-`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+`/private/tmp/claude-501/-<home>-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
 
 ---
 

@@ -58,14 +58,3 @@ def requires_showdown(reason: str = "needs a pokemon-showdown checkout"):
         has_showdown(),
         f"{reason} (looked in {showdown_root()}; set POKEZERO_SHOWDOWN_ROOT to override)",
     )
-
-
-def showdown_env(**extra: str) -> "dict[str, str]":
-    """``os.environ`` plus an explicit ``POKEZERO_SHOWDOWN_ROOT``, for subprocess tests.
-
-    A subprocess inherits the variable only if the parent had it SET. When the root came from a
-    conventional-location fallback instead, the child would resolve it independently — usually
-    to the same place, but not if the child runs from a different working directory. Passing it
-    explicitly removes the ambiguity.
-    """
-    return {**os.environ, "POKEZERO_SHOWDOWN_ROOT": showdown_root_str(), **extra}

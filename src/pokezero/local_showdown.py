@@ -47,6 +47,7 @@ from .showdown import (
     showdown_choice_for_action,
 )
 from .investment import InvestmentLiveTracker
+from .paths import portable_path
 from .tier2 import Tier2LiveTracker, cb_whitelist_for_source, own_team_from_request
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -60,22 +61,6 @@ _SHOWDOWN_ROOT_CANDIDATES = (
     _REPO_ROOT / "vendor" / "pokemon-showdown",
     _REPO_ROOT.parent / "pokemon-showdown",
 )
-
-
-def portable_path(path: "Path | str") -> str:
-    """A path safe to record in a TRACKED artifact: home rewritten to ``~``.
-
-    Provenance blocks that record absolute module or checkout paths are how a username gets
-    into this public repo without anyone deciding to put it there -- the value is written by a
-    tool, committed as an audit artifact, and nobody reads it again. Twelve tracked artifacts
-    had to be scrubbed on 2026-08-03 for exactly this. Recording ``~/...`` keeps the provenance
-    (which is the point of the field) and drops the identifying part.
-    """
-    resolved = Path(path).resolve()
-    try:
-        return "~/" + str(resolved.relative_to(Path.home()))
-    except ValueError:
-        return str(resolved)
 
 
 def default_showdown_root() -> Path:

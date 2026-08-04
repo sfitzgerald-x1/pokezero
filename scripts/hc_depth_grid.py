@@ -133,7 +133,7 @@ def _provenance(args: argparse.Namespace) -> dict[str, Any]:
     import poke_engine
     import pokezero_search
     import pokezero
-    from pokezero.local_showdown import portable_path
+    from pokezero.paths import portable_path
 
     payload: dict[str, Any] = {
         "python": sys.version.split()[0],
