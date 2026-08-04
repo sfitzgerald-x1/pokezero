@@ -171,16 +171,19 @@ def _payload_seated_at_p2(dex: ShowdownDex, *, self_moves=None):
 
     Every other `selfPlayer` fixture in this repo is `"p1"` -- verified across
     test_engine_world.py, test_rest_sleep_provenance.py and the bridge tests -- so the
-    p2-self construction path had no coverage at all. That mattered because era 51/55/57
-    shard reports show `self_moveset_mismatch` firing 39,568 times under the p1 decider
-    and EXACTLY ZERO times under p2, and the leading explanation was that p2's own
-    request never reached the world builder, leaving `known_pp` empty and the guard
-    unable to fire. If that were true the p2 side would be built with FULL PP silently --
-    a fidelity bug strictly worse than the refusal, because it searches a state Showdown
+    p2-self construction path had no coverage at all -- which matters on its own, and
+    doubly so because `self_moveset_mismatch` is the largest class in the campaign's
+    construction channel and appears only under the p1 decider. One hypothesis for that
+    was a plumbing gap: p2's own request never reaching the world builder, leaving
+    `known_pp` empty and the guard unable to fire, in which case p2's side would be built
+    with FULL PP silently -- worse than the refusal, because it searches a state Showdown
     does not have instead of declining to search.
 
-    It is not true, and this fixture is what shows it: seated at p2 the guard fires
-    normally. Flipping `selfPlayer` alone is not enough to demonstrate that, which is
+    This fixture covers ENGINE_WORLD's half: seated at p2 the guard fires normally, so
+    engine_world consumes a p2 self side symmetrically. It does NOT reach the code that
+    POPULATES those rows, because it writes them by hand --
+    `test_foulplay_bridge.py::test_the_self_move_states_populate_for_a_P2_seated_decider`
+    covers that half. Flipping `selfPlayer` alone is not enough for either, which is
     why this helper exists rather than a one-line override -- the two sides carry
     DIFFERENT SHAPES. A self side has exact HP (`265/305`) and request-known `moves`
     with `pp`; an opponent side has a percentage (`73/100 par`) and no moves. Flipping
@@ -910,16 +913,22 @@ class TransformAndEncoreTests(unittest.TestCase):
     def test_self_moveset_mismatch_fails_closed_SEATED_AT_P2(self) -> None:
         """The same guard, with the engine seated at p2 instead of p1.
 
-        Era 51/55/57 shard reports show this class firing 39,568 times under the p1
-        decider and ZERO times under p2. The leading explanation was a plumbing gap --
-        p2's own request never reaching the world builder, so `known_pp` stays empty and
-        the guard cannot fire. That would mean p2's own team is built with FULL PP
-        silently, which is worse than the refusal.
+        `self_moveset_mismatch` is the largest class in the construction channel and the
+        cluster records it only under the p1 decider. One hypothesis was a plumbing gap:
+        `known_pp` empty for p2, so the guard cannot fire and p2's team is built with FULL
+        PP silently.
 
-        This test refutes that: seated at p2 the guard fires normally, so `known_pp` is
-        populated for p2 and the cluster's 39,568-vs-0 split is a property of the DATA,
-        not an asymmetry in the code. Where the data asymmetry comes from is a separate
-        question and belongs in the fallback ledger.
+        This test shows engine_world's half is symmetric -- given a populated p2 self side
+        the guard fires and names p2. It does NOT establish that anything populates that
+        side, because the fixture writes the rows itself; the builder half is
+        `test_foulplay_bridge.py::test_the_self_move_states_populate_for_a_P2_seated_decider`.
+
+        A note on the cluster numbers, because they are weaker than they look: the seat
+        split is NOT 39,568 independent trials. All three eras replay the SAME 64 seeds,
+        the p1 and p2 seed sets are identical, and every occurrence comes from 24 of those
+        seeds. Seed fixes the team pair, so seat is confounded with team draw and the
+        three eras are one observation, not three. Treat the split as suggestive, not as
+        statistically impossible.
         """
         payload = _payload_seated_at_p2(
             self.dex,
@@ -951,11 +960,12 @@ class TransformAndEncoreTests(unittest.TestCase):
         # side_two is the self side here, and it carries the request-known moves.
         by_id = {spec.id: spec for spec in world.spec.side_two.pokemon[0].moves}
         self.assertIn("bodyslam", by_id)
-        # ...and its PP came from the REQUEST, which is the whole point. `MoveSpec.pp`
-        # defaults to 32; if `known_pp` were empty for p2 this would be the default or
-        # the move table's maximum, not the request's 15. This assertion is what makes
-        # the pair a demonstration that p2's request data reaches the builder, rather
-        # than just a demonstration that something refused.
+        # ...and its PP came from the REQUEST. The counterfactual is the CATALOG maximum,
+        # not `MoveSpec.pp`'s 32 default: `_move_specs` always passes pp explicitly, and
+        # the no-request-row branch uses `info.max_pp`, which is `(pp * 8) // 5` -- 24 for
+        # Body Slam. So 15 distinguishes "read from the request" from "fell back to the
+        # catalog", which is what makes this pair more than a demonstration that
+        # something refused.
         self.assertEqual(by_id["bodyslam"].pp, 15)
 
     def test_self_encore_derives_lock_from_disabled_pattern(self) -> None:

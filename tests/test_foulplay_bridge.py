@@ -661,6 +661,74 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertNotIn("psychic", json.dumps(materialization.self_initial_request))
         self.assertEqual(materialization.replay.public_active["p2"].species, "Xatu")
 
+    def test_the_self_move_states_populate_for_a_P2_seated_decider(self) -> None:
+        """The BUILDER half of the p2 seat question, which engine_world tests cannot reach.
+
+        `known_pp` in `engine_world._move_specs` is built from
+        `payload["sides"][self]["pokemon"][i]["moves"]`, and those rows come from
+        `self_move_states` here. A test that hand-writes those rows proves engine_world
+        CONSUMES them symmetrically; only this one proves anything POPULATES them for p2.
+
+        It matters because if `self_move_states` were empty for a p2 decider, `known_pp`
+        would be empty, the self-moveset guard could not fire, and p2's own team would be
+        built with full PP silently -- searching a state Showdown does not have instead of
+        declining to search.
+
+        Both seats are asserted from the same battle, so a builder that populated neither
+        would fail rather than pass by symmetry.
+        """
+        def req(sid, species, move):
+            return "|request|" + json.dumps({
+                "active": [{"moves": [{"id": move, "pp": 16, "maxpp": 16}]}],
+                "side": {"id": sid, "pokemon": [{
+                    "ident": f"{sid}: {species}",
+                    "details": f"{species}, L80",
+                    "condition": "250/250",
+                    "active": True,
+                    "moves": [move],
+                }]},
+            })
+
+        p1_request, p2_request = req("p1", "Charizard", "flamethrower"), req("p2", "Xatu", "psychic")
+        state = _ControlledBattleState(
+            battle_id="battle-gen3randombattle-controlled-1",
+            seed=7,
+            format_id="gen3randombattle",
+            public_lines=[
+                "|player|p1|PokeZero p1|",
+                "|player|p2|FoulPlay|",
+                "|switch|p1a: Charizard|Charizard, L80|250/250",
+                "|switch|p2a: Xatu|Xatu, L80|220/220",
+            ],
+            request_lines={"p1": p1_request, "p2": p2_request},
+            request_history=[("p1", p1_request), ("p2", p2_request)],
+        )
+
+        for seat, expected_move in (("p1", "flamethrower"), ("p2", "psychic")):
+            materialization = _public_materialization_state(state, seat)
+            self.assertTrue(
+                materialization.self_move_states,
+                f"self_move_states is EMPTY for a {seat}-seated decider, so known_pp "
+                f"would be empty and the self-moveset guard could not fire: "
+                f"{materialization.self_move_states!r}",
+            )
+            retained = [
+                move["id"]
+                for moves in materialization.self_move_states.values()
+                for move in moves
+            ]
+            self.assertIn(expected_move, retained)
+            # ...and the PP came from the request, which is what `known_pp` reads.
+            pps = {
+                move["id"]: move.get("pp")
+                for moves in materialization.self_move_states.values()
+                for move in moves
+            }
+            self.assertEqual(pps[expected_move], 16)
+            # The OPPONENT's move must never appear on the self side.
+            other = "psychic" if seat == "p1" else "flamethrower"
+            self.assertNotIn(other, retained, f"{seat} self side leaked the opponent's move")
+
     def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
         spec = DEFAULT_REPLAY_OBSERVATION_SPEC
         observation = PokeZeroObservationV0(
