@@ -551,6 +551,118 @@ def probe_residual_partition_masses() -> None:
     compare("composes-with-crit-kill-split", 220, 320, "toxic", 4, "none")
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 8: the pending-residual read must see THIS call's own mutations.
+#
+# `pending_residual_damage` used to be bound at function level in
+# `generate_instructions_from_move`, ~70 lines before
+# `state.apply_instructions(&incoming_instructions.instruction_list)`. The second
+# mover's incoming instructions carry the FIRST mover's entire executed action,
+# so a function-level read observed the state as it was before that action --
+# including before a switch. Any boundary where the defender switched in, or
+# where the first mover set the weather, priced its residual threshold against a
+# stale reading. reports/c111 cause A3.
+#
+# Both cases below are reachable from this Python harness. An earlier claim that
+# they were not -- that a crate-level test using MoveChoice::Switch was required
+# -- was wrong: `generate_instructions` takes a switch by the incoming Pokemon's
+# ID ("fearow"), not "switch 1" / "switch fearow" / "1", which all raise
+# ValueError. Found in review of PR #1065.
+#
+# Each pin ships with a control differing in exactly ONE variable, so neither can
+# pass by accident:
+#   PIN 1  defender switches in already Toxic  vs  the same Toxic mon already active
+#   PIN 2  defender sets Sandstorm this turn   vs  Sandstorm already up (and vs none)
+# PIN 2 needs no switch at all, so it holds even if the switch spelling regresses.
+# ---------------------------------------------------------------------------
+def probe_pending_read_sees_this_calls_mutations() -> None:
+    def attacker() -> pe.Pokemon:
+        return pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=250,
+            moves=[pe.Move(id="rockslide", pp=16)],
+        )
+
+    def mon(pid, hp, maxhp, status, speed, move) -> pe.Pokemon:
+        return pe.Pokemon(
+            id=pid, level=81,
+            types=("normal", "typeless"), base_types=("normal", "typeless"),
+            hp=hp, maxhp=maxhp, ability="none", item="none",
+            attack=100, defense=145, special_attack=100,
+            special_defense=125, speed=speed, status=status,
+            moves=[pe.Move(id=move, pp=16)],
+        )
+
+    def branches(defender_party, defender_choice, weather):
+        state = pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker()] + [_dummy()] * 5),
+            side_two=pe.Side(
+                active_index="0",
+                pokemon=defender_party + [_dummy()] * (6 - len(defender_party)),
+                side_conditions=pe.SideConditions(toxic_count=0),
+            ),
+            weather=weather, terrain="none", trick_room=False,
+        )
+        return pe.generate_instructions(state, "rockslide", defender_choice)
+
+    # --- PIN 1: a Toxic mon switches IN, and is the one taking the hit. -----
+    # Fearow 123/238 Toxic: tick 14, threshold 109, inside (min 103, max 122].
+    # The control is ALSO a switch, differing only in the incoming mon's status,
+    # so flinch and speed interactions are held fixed and `status` is the single
+    # variable. (An earlier control let the defender use a move instead of
+    # switching, which changed the branch shape for reasons unrelated to the
+    # read and made the comparison meaningless.)
+    outgoing = mon("slugma", 179, 250, "none", 100, "splash")
+    toxic_in = branches([outgoing, mon("fearow", 123, 238, "toxic", 100, "splash")],
+                        "fearow", "none")
+    healthy_in = branches([outgoing, mon("fearow", 123, 238, "none", 100, "splash")],
+                          "fearow", "none")
+    toxic_masses = sorted(round(b.percentage, 4) for b in toxic_in)
+    healthy_masses = sorted(round(b.percentage, 4) for b in healthy_in)
+    _report(
+        "pending-read-switched-in-defender-splits",
+        len(toxic_in) == 4,
+        f"a Toxic defender switching in has tick 14 and threshold 109 inside "
+        f"(103, 122], so the fan must split: expected 4 branches, got "
+        f"{len(toxic_in)} with masses {toxic_masses}. 3 means the read saw the "
+        f"OUTGOING mon and returned 0.",
+    )
+    _report(
+        "pending-read-switch-control-is-live",
+        len(healthy_in) == 3 and toxic_masses != healthy_masses,
+        f"control: switching in the SAME mon unstatused leaves nothing pending, "
+        f"so it must NOT split -- expected 3 branches, got {len(healthy_in)} "
+        f"({healthy_masses}). If it equals the Toxic case ({toxic_masses}) the "
+        f"fixture is not measuring the residual read at all.",
+    )
+
+    # --- PIN 2: the FIRST mover sets the weather. No switch involved. -------
+    # Slugma 126/250 in sand: tick 15, threshold 111, inside (103, 122].
+    sand_setter = mon("slugma", 126, 250, "none", 300, "sandstorm")
+    splasher = mon("slugma", 126, 250, "none", 300, "splash")
+    sets_sand = sorted(round(b.percentage, 4) for b in branches([sand_setter], "sandstorm", "none"))
+    sand_up = sorted(round(b.percentage, 4) for b in branches([splasher], "splash", "sand"))
+    no_sand = sorted(round(b.percentage, 4) for b in branches([splasher], "splash", "none"))
+    _report(
+        "pending-read-weather-set-this-turn",
+        sets_sand == sand_up,
+        f"a defender that sets Sandstorm and outspeeds must be priced like one "
+        f"already in Sandstorm: sets-this-turn {sets_sand} vs already-up "
+        f"{sand_up}. Disagreement means the read predates the weather.",
+    )
+    _report(
+        "pending-read-weather-control-is-live",
+        sets_sand != no_sand,
+        f"control: with no Sandstorm the threshold is not straddled and the fan "
+        f"must NOT split ({no_sand}). If this equals the sand cases "
+        f"({sets_sand}) the fixture proves nothing.",
+    )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -573,6 +685,7 @@ def main() -> int:
     probe_contact_flags()
     probe_residual_lethality_partition()
     probe_residual_partition_masses()
+    probe_pending_read_sees_this_calls_mutations()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")
