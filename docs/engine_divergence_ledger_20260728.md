@@ -1583,9 +1583,28 @@ splits exactly uniformly, matching gen3:
 Sleep Talk + Solar Beam + Body Slam + Rest, 60 seeds, called `bodyslam` 62x and
 `rest` 58x — **Solar Beam never once**, exactly as `flags['charge']` prescribes.
 
-**But it is UNREACHABLE on the randbats distribution.** Across **1,682**
+**But the FLAG ARM is UNREACHABLE on the randbats distribution.** Across **1,682**
 gen3 randbats variants, **70** carry Sleep Talk and **0** pair it with a
 gen3-excluded move.
+
+> **Scope, added 2026-08-04.** That 0 covers the `charge`/`nosleeptalk` **flag**
+> arm and nothing else — it is a SET-COMPOSITION scan. Three further divergences
+> are STATE conditions no composition scan can see, and two of them are reachable
+> on this same variant set:
+>
+> * **0 PP.** gen3 emits `|cant|MON|nopp|MOVE` and does NOT resample; poke-engine
+>   has no PP test. Reachable from any of the 70 Sleep Talk variants once a slot
+>   empties.
+> * **choicelock / Encore.** gen3's `sleeptalk` inherits gen4's `onTryHit`
+>   (`!volatiles.choicelock && !volatiles.encore`), so it FAILS outright while
+>   Encored or Choice-locked. **95 of the 1,682 variants carry Encore.**
+>
+> Also note the exclusion sets are **gen3-resolved**, not base-table: a mod
+> entry's `flags` replaces its parent's wholesale, and gen4/gen5 strip
+> `nosleeptalk` from `fly`, `mimic`, `sketch`, `naturepower` and `struggle`. gen3
+> has **35** `nosleeptalk` moves in its Dex table, not the base table's 40.
+> Reading the base table reports Mimic and Sketch as gen3-excluded when they are
+> not (public #1056).
 
 ## E.3 Verdict
 
@@ -1593,7 +1612,9 @@ gen3-excluded move.
 | --- | --- |
 | Is the engine's Sleep Talk call fan-out wrong? | **Yes, in source** — it omits the `charge` and `nosleeptalk` exclusions and the 0-PP rule |
 | Do the branch weights diverge? | **No** — uniform 1/n is correct whenever the candidate sets agree |
-| Is it reachable in gen3 randbats? | **No** — 0 of 1,682 variants |
+| Is the FLAG arm reachable in gen3 randbats? | **No** — 0 of 1,682 variants |
+| Is the 0-PP arm reachable? | **Not measured** — a state condition, invisible to a set scan |
+| Is the choicelock/Encore arm reachable? | **Yes, unmeasured** — 95 of 1,682 variants carry Encore |
 | Does it explain the co-occurring residue rows? | **No** |
 
 So this is a **latent** engine divergence: real, source-confirmed, empirically
