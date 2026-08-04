@@ -1559,8 +1559,10 @@ gen3 overrides Sleep Talk (`data/mods/gen3/moves.ts` `sleeptalk.onHit`). Its
 candidate list keeps a slot when `moveid && !flags['nosleeptalk'] &&
 !flags['charge']`, then samples **uniformly**. Two gen3-specific details:
 
-* **`charge` (two-turn) moves are excluded** — Solar Beam, Fly, Dig, Sky Attack,
-  Razor Wind, Skull Bash;
+* **`charge` (two-turn) moves are excluded** — **17** moves carry the flag in the
+  gen3 Dex table, of which **8 are gen3-legal**: Solar Beam, Fly, Dig, **Dive**,
+  **Bounce**, Sky Attack, Razor Wind, Skull Bash. (An earlier version of this line
+  listed six and omitted Dive and Bounce, both of which are gen3-native.)
 * a sampled slot at **0 PP** emits `|cant|<mon>|nopp|<move>` and the turn does
   nothing — gen3 does **not** resample.
 
@@ -1587,24 +1589,37 @@ Sleep Talk + Solar Beam + Body Slam + Rest, 60 seeds, called `bodyslam` 62x and
 gen3 randbats variants, **70** carry Sleep Talk and **0** pair it with a
 gen3-excluded move.
 
-> **Scope, added 2026-08-04.** That 0 covers the `charge`/`nosleeptalk` **flag**
+> **Scope, added 2026-08-03.** That 0 covers the `charge`/`nosleeptalk` **flag**
 > arm and nothing else — it is a SET-COMPOSITION scan. Three further divergences
 > are STATE conditions no composition scan can see, and two of them are reachable
 > on this same variant set:
 >
 > * **0 PP.** gen3 emits `|cant|MON|nopp|MOVE` and does NOT resample; poke-engine
->   has no PP test. Reachable from any of the 70 Sleep Talk variants once a slot
->   empties.
-> * **choicelock / Encore.** gen3's `sleeptalk` inherits gen4's `onTryHit`
+>   has no PP test. NOT MEASURED — no set scan can see a PP state, and this probe
+>   ran no games, so "reachable" here is an argument from the mechanism, not an
+>   observation.
+> * **Encore.** gen3's `sleeptalk` inherits gen4's `onTryHit`
 >   (`!volatiles.choicelock && !volatiles.encore`), so it FAILS outright while
->   Encored or Choice-locked. **95 of the 1,682 variants carry Encore.**
+>   Encored. **95 of the 1,682 variants carry Encore — carried by the OPPONENT: 0
+>   variants carry both Encore and Sleep Talk**, which is what makes this a live
+>   pairing rather than a self-inflicted one. Reachable, unmeasured.
+> * **choicelock.** The other half of that same `onTryHit`, and by the section's
+>   own set logic it is NOT reachable: 160 variants carry Choice Band (the pool's
+>   only Choice item) and **0 of those carry Sleep Talk**. A mon can only be
+>   choice-locked by holding the item itself, so this needs an item-transfer path
+>   — `Trick`, 5 variants in the pool — which nothing here measures. Bundling it
+>   with Encore and answering "yes" on Encore's number would be the same
+>   conflation this note exists to remove.
 >
 > Also note the exclusion sets are **gen3-resolved**, not base-table: a mod
 > entry's `flags` replaces its parent's wholesale, and gen4/gen5 strip
 > `nosleeptalk` from `fly`, `mimic`, `sketch`, `naturepower` and `struggle`. gen3
 > has **35** `nosleeptalk` moves in its Dex table, not the base table's 40.
+> Precisely: `data/mods/gen5/moves.ts` strips **fly** (gen5 = 39) and
+> `data/mods/gen4/moves.ts` strips **mimic, sketch, naturepower, struggle**
+> (gen4 = 35 = gen3).
 > Reading the base table reports Mimic and Sketch as gen3-excluded when they are
-> not (public #1056).
+> not (#1056).
 
 ## E.3 Verdict
 
@@ -1617,16 +1632,21 @@ gen3-excluded move.
 | Is the choicelock/Encore arm reachable? | **Yes, unmeasured** — 95 of 1,682 variants carry Encore |
 | Does it explain the co-occurring residue rows? | **No** |
 
-So this is a **latent** engine divergence: real, source-confirmed, empirically
-demonstrated, and off-distribution. It belongs in the engine lane as low
-priority (it would matter for `gen3customgame` or a pool change), and it is
-**not** an acceptance blocker.
+So the **FLAG ARM** is a latent engine divergence: real, source-confirmed,
+empirically demonstrated, and off-distribution for that arm. It belongs in the
+engine lane as low priority (the flag arm would matter for `gen3customgame` or a
+pool change), and that arm is **not** an acceptance blocker.
+
+**This does not clear the state arms.** "Off-distribution" and "a pool change
+would matter" are set-composition framings; the Encore arm needs neither, since
+95 of 1,682 variants already carry Encore on the opposing side. Nothing in this
+appendix measures it.
 
 **Re-triage of the co-occurring rows.** 19 divergent rows in the 1350000-1350059
 census involve Sleep Talk: 14 `roll_scaled_component`, 5 other. Their shape is
 `observed=[('', -78)] engine=[]` — Showdown's call dealt damage and the engine's
-branch has none. Since the fan-out and weights are correct and the exclusion bug
-is unreachable, these are **not** a Sleep Talk defect; they are the called
+branch has none. Since the fan-out and weights are correct and the **flag-arm**
+exclusion bug is unreachable, these are **not** a Sleep Talk *flag-arm* defect; they are the called
 move's damage failing to match, which is the same "engine is missing damage"
 family as the confirmed variable-BP bug. They should be re-checked after the
 variable-BP fixes land rather than tracked as a Sleep Talk item.
@@ -1755,7 +1775,7 @@ rule stands and is now cheap to obey: `scripts/replay_residue.py`.
 
 ## F.2 What "variant" means (the 1,682 / 70 figures)
 
-Appendix E's reachability numbers are in **expanded variants**; a re-checker
+Appendix E's **flag-arm** pairing numbers are in **expanded variants**; a re-checker
 using the standard set denominator gets different totals and the *same zero*.
 All three units, computed from
 `Gen3RandbatSource.to_payload()["universes"]`:
@@ -1769,7 +1789,11 @@ All three units, computed from
 A *set* is one generator entry for a species (Showdown's own unit); a *variant*
 is one concrete 4-move realisation the belief layer expands that set into, so
 variants > sets. Appendix E quoted the variant row; the reviewer's independent
-44/393 is the set row. **Same conclusion at every denominator: unreachable.**
+44/393 is the set row. **Same FLAG-ARM zero at every denominator.**
+
+This table says nothing about the state arms (0 PP, Encore, choicelock): they are
+not measured by *any* denominator, because no set-composition unit can express a
+PP count or a volatile. See the scope note in §E.2.
 
 ## F.3 Builder note: the stamp step runs last
 
