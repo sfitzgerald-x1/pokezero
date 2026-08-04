@@ -1590,15 +1590,17 @@ gen3 randbats variants, **70** carry Sleep Talk and **0** pair it with a
 gen3-excluded move.
 
 > **Scope, added 2026-08-03.** That 0 covers the `charge`/`nosleeptalk` **flag**
-> arm and nothing else — it is a SET-COMPOSITION scan. Three further divergences
-> are STATE conditions no composition scan can see. NONE of them is measured
-> here, and only ONE — Encore — has its precondition present on this pool:
+> arm and nothing else — it is a SET-COMPOSITION scan.
 >
 > The flag-arm zero also survives runtime moveset mutation, which this ledger
 > records elsewhere (`self_moveset_mismatch` = 285): **0 of 1,682 variants carry
 > Mimic or Sketch**, and the 7 Transform variants copy another pool variant, which
 > is itself 0-pairing. So no mutation path can create a flag-arm pairing the static
 > scan missed.
+>
+> Three further divergences are STATE conditions no composition scan can see.
+> NONE of them is measured here, and only ONE — Encore — has its precondition
+> present on this pool:
 >
 > * **0 PP.** gen3 emits `|cant|MON|nopp|MOVE` and does NOT resample; poke-engine
 >   has no PP test. NOT MEASURED — no set scan can see a PP state, and this probe
@@ -1609,7 +1611,6 @@ gen3-excluded move.
 >   Encored. **95 of the 1,682 variants carry Encore — carried by the OPPONENT: 0
 >   variants carry both Encore and Sleep Talk**, which is what makes this a live
 >   pairing rather than a self-inflicted one. Reachable, unmeasured.
->
 > * **choicelock.** The other half of that same `onTryHit`, and by the section's
 >   own set logic it is NOT reachable: 160 variants carry Choice Band (the pool's
 >   only Choice item) and **0 of those carry Sleep Talk**. A mon can only be
@@ -1657,8 +1658,8 @@ census involve Sleep Talk: 14 `roll_scaled_component`, 5 other. Their shape is
 `observed=[('', -78)] engine=[]` — Showdown's call dealt damage and the engine's
 branch has none. Since the fan-out and weights are correct and the **flag-arm**
 exclusion bug is unreachable, these are not a Sleep Talk defect *on that arm*;
-they are the called
-move's damage failing to match, which is the same "engine is missing damage"
+they are the called move's damage failing to match, which is the same "engine
+is missing damage"
 family as the confirmed variable-BP bug. They should be re-checked after the
 variable-BP fixes land rather than tracked as a Sleep Talk item.
 
