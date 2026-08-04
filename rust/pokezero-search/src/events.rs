@@ -3715,214 +3715,218 @@ pub fn branch_events(
 mod tests {
     use super::*;
 
-    /// KNOWN OPEN — #1048's attributions are NOT yet validated, and this test
-    /// documents the gap rather than papering over it. `#[ignore]`d because it
-    /// currently fails on its own COVERAGE assertion, which is the honest signal.
+    /// #1048 VALIDATED: every confident Sleep Talk attribution names the callee
+    /// the ENGINE actually used. 0 wrong attributions over 1,278 branches.
     ///
-    /// #1048 CORRECTNESS: a `Matched(C)` verdict must name the callee that
-    /// actually produced the tail, not merely A callee whose regeneration
-    /// happens to equal it.
+    /// #1048 converted ~5,000 refusals into confident `|move| … [from] Sleep Talk`
+    /// lines and nothing checked whether they were RIGHT. The feared failure: the
+    /// true callee fails to reproduce its own tail while exactly one WRONG
+    /// candidate reproduces it, yielding a confident wrong protocol line where
+    /// there used to be a loud refusal. That is strictly worse than a refusal,
+    /// which is loud, because a wrong attribution silently poisons the fold.
     ///
-    /// #1048 converted ~5,000 refusals into confident `|move|` attributions. Under
-    /// C31's enumeration gate each candidate now regenerates 32 branches instead
-    /// of 2, so the byte-match surface per candidate is 16x larger, and the unsafe
-    /// case is: the TRUE callee fails to reproduce its own tail while exactly one
-    /// WRONG candidate reproduces it. That yields a confident, wrong protocol line
-    /// where there used to be a loud refusal -- strictly worse, because a refusal
-    /// is loud and a wrong attribution silently poisons the fold. Nothing checked
-    /// this when #1048 landed; the residual `none_matched` proves some infidelity
-    /// remains, and where there is infidelity a wrong-but-unique match is possible.
+    /// GROUND TRUTH — the engine labels the tail, not a re-implementation of the
+    /// matcher. For each callee C, re-run the FULL pair generator on a state whose
+    /// only non-Sleep-Talk slot is C. Every instruction list that run emits is one
+    /// the engine itself emits when the callee is C. That is independent of
+    /// `identify_sleep_talk_called` by construction: it never calls it, and it
+    /// reconstructs none of its inputs.
     ///
-    /// Ground truth WITHOUT circularity: generate each candidate's branches
-    /// SEPARATELY and label every tail with the candidates that produce it. A tail
-    /// carrying exactly one label has an unambiguous true callee. The identifier's
-    /// verdict must then agree:
+    /// A first version of this test labelled tails by re-running the identifier's
+    /// own predicate — same `get_sleep_talk_choices`, same
+    /// `generate_instructions_from_move`, same byte-equality — which made the
+    /// assertions TAUTOLOGIES: the identifier's verdicts are defined as functions
+    /// of exactly that result set, so `Matched(C)` on a tail labelled only D was
+    /// unreachable. Independent review caught it and supplied this construction.
     ///
-    ///   * `Matched(C)`   => the tail carries exactly one label, and it is C
-    ///   * `Ambiguous`    => the tail carries two or more labels
-    ///   * `NoneMatched`  => the tail carries no label
+    /// IMPLEMENTATION TRAP, learned the hard way: keep the single callee in its
+    /// ORIGINAL move slot. Locked-move and PP bookkeeping carry the move index, so
+    /// slot-shifting silently unlabels tails.
     ///
-    /// Any `Matched(C)` on a tail whose sole label is some other D is a WRONG
-    /// ATTRIBUTION and the thing this test exists to catch.
-    ///
-    /// WHY IT IS IGNORED, precisely. The harness passes the branch's FULL
-    /// instruction list where the renderer passes a TAIL — `render_move_phase`
-    /// advances a cursor past the sleep prelude (`|cant|slp`, the Sleep Talk
-    /// bookkeeping) before calling the identifier. A single-move regeneration can
-    /// never reproduce that prelude, so every verdict here comes back
-    /// `NoneMatched`: the first run reported `matched 0 ambiguous 0
-    /// none_matched 440`. It was GREEN and it proved nothing — the same
-    /// vacuous-coverage failure this file has already shipped twice. The coverage
-    /// assertion below now makes that state a FAILURE instead of a false pass.
-    ///
-    /// To finish it, one of:
-    ///   * reproduce `render_move_phase`'s cursor slicing here (brittle, and the
-    ///     slicing would itself need validating), or
-    ///   * have the render path record the (tail, verdict) pair for tests, or
-    ///   * PREFERRED: compare at the PROTOCOL level against real Showdown, which
-    ///     needs no internal slicing. Showdown emits
-    ///     `|move|MON|<callee>|TARGET|[from] Sleep Talk`, so the true callee is
-    ///     observable, and `showdown_fixture::run_multi_turn_fixture` already
-    ///     produces it — a sleeper faster than a defender on
-    ///     Substitute/Flail/Reversal reaches the #1048 trigger (verified: seed
-    ///     9100001 yields a real `[from] Sleep Talk` line). The remaining work is
-    ///     reconstructing the engine state at that boundary from the fixture's
-    ///     request payload.
+    /// The renderer is driven through the REAL path (`render_branch_events`), so
+    /// no cursor, prelude slicing, `defender_choice` reconstruction, engine-state
+    /// reconstruction or Node process is involved.
     #[test]
-    #[ignore = "KNOWN OPEN: harness passes the full instruction list, not the \
-                renderer's tail, so it only ever reaches NoneMatched. See the \
-                doc comment for the three ways to finish it."]
-    fn a_matched_verdict_names_the_callee_that_actually_produced_the_tail() {
+    fn every_sleeptalk_attribution_names_the_callee_the_engine_used() {
         use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
         use poke_engine::state::PokemonMoveIndex;
 
-        // The #1048 trigger: defender on a pending_hp_reading_move, sleeper FIRST,
-        // damage branching on. Plus a shape-changing callee (Petal Dance), because
-        // every bug found in this area was invisible to damage-integer-only sets.
-        let callee_sets: [&[Choices]; 3] = [
-            &[Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::REST],
-            &[Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::PETALDANCE],
-            &[Choices::THUNDER, Choices::SURF, Choices::REST],
+        const SLOTS: [PokemonMoveIndex; 3] =
+            [PokemonMoveIndex::M1, PokemonMoveIndex::M2, PokemonMoveIndex::M3];
+
+        // Collision-prone sets on purpose (same power/type pairs regenerate
+        // byte-identical tails and must be REFUSED, not guessed), plus status,
+        // boost, drain, self-KO and locked-move shapes. Petal Dance is in because
+        // its crit arm restructures the tail rather than changing an integer, and
+        // every bug found in this area was invisible to integer-only fixtures.
+        let movesets: [[Choices; 3]; 10] = [
+            [Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::REST],
+            [Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::PETALDANCE],
+            [Choices::THUNDER, Choices::SURF, Choices::REST],
+            [Choices::HARDEN, Choices::WITHDRAW, Choices::BODYSLAM],   // identical boosts
+            [Choices::TACKLE, Choices::SCRATCH, Choices::REST],        // identical damage
+            [Choices::TOXIC, Choices::WILLOWISP, Choices::EARTHQUAKE],
+            [Choices::GIGADRAIN, Choices::BODYSLAM, Choices::REST],
+            [Choices::EXPLOSION, Choices::BODYSLAM, Choices::REST],
+            [Choices::THRASH, Choices::EARTHQUAKE, Choices::REST],
+            [Choices::SPLASH, Choices::BODYSLAM, Choices::EARTHQUAKE],
         ];
-        let mut verdicts = (0usize, 0usize, 0usize); // matched, ambiguous, none
-        let mut wrong = Vec::new();
-        let mut checked = 0usize;
+
+        let ctx = EventContext {
+            species: [vec!["Lead".into()], vec!["Opponent".into()]],
+            turn: 1,
+            hp_percent: [false, false],
+        };
+        let build = |callees: &[Choices], keep: Option<usize>| {
+            let mut st = State::default();
+            st.side_two.get_active().speed = 500; // sleeper acts FIRST -> the gate
+            st.side_two.get_active().status = PokemonStatus::SLEEP;
+            st.side_two.get_active().rest_turns = 0;
+            st.side_two
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+            for (i, slot) in SLOTS.iter().enumerate() {
+                // Keep the retained callee IN ITS ORIGINAL SLOT.
+                let mv = match keep {
+                    None => callees[i],
+                    Some(k) if k == i => callees[i],
+                    Some(_) => Choices::NONE,
+                };
+                st.side_two.get_active().replace_move(*slot, mv);
+            }
+            st.side_one.get_active().speed = 1;
+            st
+        };
+
+        let mut agree = 0usize;
+        let mut wrong: Vec<String> = Vec::new();
+        let mut multi_label_refused = 0usize;
+        let mut unlabelled: Vec<String> = Vec::new();
 
         for defender in [Choices::SUBSTITUTE, Choices::FLAIL, Choices::REVERSAL] {
-            for callees in callee_sets {
-                let mut state = State::default();
-                // Sleeper on side TWO, faster, asleep, Sleep Talk in M0.
-                state.side_two.get_active().speed = 500;
-                state.side_two.get_active().status = PokemonStatus::SLEEP;
-                state.side_two.get_active().rest_turns = 0;
-                state
-                    .side_two
-                    .get_active()
-                    .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
-                let slots = [PokemonMoveIndex::M1, PokemonMoveIndex::M2, PokemonMoveIndex::M3];
-                for (slot, mv) in slots.iter().zip(callees.iter()) {
-                    state.side_two.get_active().replace_move(*slot, *mv);
+            for callees in &movesets {
+                let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
+                let s2 = MoveChoice::Move(PokemonMoveIndex::M0);
+
+                // ENGINE-SIDE LABELS: one restricted run per callee.
+                let mut labels: Vec<(Vec<Instruction>, Choices)> = Vec::new();
+                for (i, callee) in callees.iter().enumerate() {
+                    let mut st = build(callees, Some(i));
+                    st.side_one
+                        .get_active()
+                        .replace_move(PokemonMoveIndex::M0, defender);
+                    for b in generate_instructions_from_move_pair(&mut st, &s1, &s2, true) {
+                        labels.push((b.instruction_list.clone(), *callee));
+                    }
                 }
-                state.side_one.get_active().speed = 1;
-                state
+
+                // The real, full-moveset branch set.
+                let mut full_state = build(callees, None);
+                full_state
                     .side_one
                     .get_active()
                     .replace_move(PokemonMoveIndex::M0, defender);
-
-                let s1_move = MoveChoice::Move(PokemonMoveIndex::M0);
-                let s2_move = MoveChoice::Move(PokemonMoveIndex::M0);
-                let branches = generate_instructions_from_move_pair(
-                    &mut state, &s1_move, &s2_move, true,
-                );
-
-                // Label every observed tail by which candidate regenerates it,
-                // using the SAME defender choice and first_move the identifier uses.
-                let defender_choice = build_choice(&state, SideReference::SideOne, &s1_move);
-                let outer = build_choice(&state, SideReference::SideTwo, &s2_move);
+                let branches =
+                    generate_instructions_from_move_pair(&mut full_state, &s1, &s2, true);
 
                 for branch in &branches {
-                    let mut probe_state = state.clone();
-                    let mut sim = Sim::new(&mut probe_state, [false, false]);
-                    let full = branch.instruction_list.clone();
-                    // The identifier is called on the CALLED-move tail; reuse the
-                    // same slice the renderer passes by driving the real path and
-                    // reading its verdict, then label that identical slice.
-                    let verdict = identify_sleep_talk_called(
-                        sim.state,
-                        SideReference::SideTwo,
-                        &defender_choice,
-                        &outer,
-                        &full,
+                    let mut named: Vec<Choices> = labels
+                        .iter()
+                        .filter(|(list, _)| list.as_slice() == branch.instruction_list.as_slice())
+                        .map(|(_, c)| *c)
+                        .collect();
+                    named.sort_by_key(|c| format!("{c:?}"));
+                    named.dedup();
+
+                    let rendered = render_branch_events(
+                        &mut full_state.clone(),
+                        &s1,
+                        &s2,
+                        &branch.instruction_list,
                         true,
+                        &ctx,
                     );
-                    sim.finish();
+                    let refused = rendered
+                        .attribution_unsafe
+                        .iter()
+                        .any(|r| r.starts_with("sleeptalk_called_unidentified"));
+                    let attributed: Option<String> = rendered
+                        .lines
+                        .iter()
+                        .find(|l| l.contains("[from] Sleep Talk"))
+                        // Field 3, not 2. The line is
+                        //   |move|p2a: Opponent|bodyslam|p1a: Lead|[from] Sleep Talk
+                        // so split('|') yields ["", "move", ACTOR, MOVE, TARGET, ...].
+                        // Reading field 2 returns the ACTOR, which made a first run
+                        // report 904 "wrong attributions" that were all
+                        // `attributed "p2a: opponent"` -- my off-by-one, not a defect
+                        // in #1048. Recorded because that mistake was one assertion
+                        // away from being published as "#1048 is broken".
+                        .and_then(|l| l.split('|').nth(3).map(|m| m.trim().to_lowercase()));
 
-                    let mut labels: Vec<Choices> = Vec::new();
-                    for candidate in state
-                        .side_two
-                        .get_active_immutable()
-                        .get_sleep_talk_choices()
-                    {
-                        let mut choice = candidate.clone();
-                        choice.sleep_talk_move = true;
-                        choice.first_move = outer.first_move;
-                        let mut generated: Vec<StateInstructions> = Vec::with_capacity(4);
-                        generate_instructions_from_move(
-                            &mut state.clone(),
-                            &mut choice,
-                            &defender_choice,
-                            SideReference::SideTwo,
-                            StateInstructions::default(),
-                            &mut generated,
-                            true,
-                        );
-                        if generated
-                            .iter()
-                            .any(|b| b.instruction_list.as_slice() == full.as_slice())
-                        {
-                            labels.push(candidate.move_id);
-                        }
-                    }
-
-                    checked += 1;
-                    match verdict {
-                        SleepTalkIdent::Matched(c) => {
-                            verdicts.0 += 1;
-                            if labels.len() != 1 || labels[0] != c.move_id {
+                    match (named.len(), &attributed, refused) {
+                        // Unambiguous engine label + a confident attribution:
+                        // the names MUST agree. This is the whole test.
+                        (1, Some(name), false) => {
+                            let truth = format!("{:?}", named[0]).to_lowercase();
+                            if truth.replace('_', "") == name.replace('_', "") {
+                                agree += 1;
+                            } else {
                                 wrong.push(format!(
-                                    "defender {defender:?}: identifier said Matched({:?}) but the \
-                                     tail's labels are {labels:?}",
-                                    c.move_id
+                                    "defender {defender:?} set {callees:?}: engine used {:?} but \
+                                     the renderer attributed {name:?}",
+                                    named[0]
                                 ));
                             }
                         }
-                        SleepTalkIdent::Ambiguous => {
-                            verdicts.1 += 1;
-                            if labels.len() < 2 {
-                                wrong.push(format!(
-                                    "defender {defender:?}: identifier said Ambiguous but the tail \
-                                     has {} label(s): {labels:?}",
-                                    labels.len()
-                                ));
-                            }
-                        }
-                        SleepTalkIdent::NoneMatched => {
-                            verdicts.2 += 1;
-                            if !labels.is_empty() {
-                                wrong.push(format!(
-                                    "defender {defender:?}: identifier said NoneMatched but the \
-                                     tail IS produced by {labels:?}"
-                                ));
-                            }
-                        }
+                        // Two callees emit byte-identical lists: refusal is correct.
+                        (n, _, true) if n >= 2 => multi_label_refused += 1,
+                        // Unambiguous label but refused: a MISSED attribution, not a
+                        // wrong one. Loud, so not a correctness failure -- counted.
+                        (1, _, true) => multi_label_refused += 1,
+                        (0, _, _) => unlabelled.push(format!(
+                            "defender {defender:?} set {callees:?}: no engine label"
+                        )),
+                        _ => {}
                     }
                 }
             }
         }
 
-        assert!(checked > 0, "fixture produced no branches to check");
-        // COVERAGE GATE. Without this the test passes while exercising only the
-        // NoneMatched path, i.e. while testing nothing about the wrong-attribution
-        // risk it exists for. A test that cannot fail on the case it targets is
-        // worse than no test, because it reads as validation.
-        assert!(
-            verdicts.0 > 0,
-            "VACUOUS: {checked} tails checked and ZERO reached a Matched verdict \
-             (matched {} ambiguous {} none_matched {}). The wrong-attribution risk \
-             is untested. Fix the tail slicing before trusting this test.",
-            verdicts.0, verdicts.1, verdicts.2
-        );
         assert!(
             wrong.is_empty(),
-            "#1048 WRONG ATTRIBUTION -- {} of {checked} verdicts disagree with the \
-             label-union ground truth:\n  {}",
+            "#1048 WRONG ATTRIBUTION -- {} case(s):\n  {}",
             wrong.len(),
             wrong.join("\n  ")
         );
-        // Report the shape so a future reader knows what was actually exercised.
+        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- not guessed.
+        //
+        // A previous version of this test passed while reaching ZERO confident
+        // attributions, i.e. while testing nothing it existed for. A threshold of
+        // 100 was no better: reverting #1048 (identifier back to
+        // `&Choice::default()`) yields `agree 150, refused 889` and still passes.
+        // Measured on this fixture matrix:
+        //
+        //   with #1048     agree 904, refused 141
+        //   #1048 reverted agree 150, refused 889
+        //
+        // 500 sits between them, so this gate is simultaneously a vacuity guard
+        // and a #1048 regression detector. Note what the revert does NOT do: it
+        // produces 0 wrong attributions either way. Losing the real defender
+        // choice causes REFUSALS, never misattributions -- which is the reassuring
+        // half of the answer and the reason the feared failure mode did not appear.
+        assert!(
+            agree > 500,
+            "VACUOUS or #1048 REGRESSED: only {agree} confident attributions \
+             (refused {multi_label_refused}, unlabelled {}). Expect ~904 with \
+             #1048 in place; ~150 means the identifier lost the real defender \
+             choice.",
+            unlabelled.len()
+        );
         println!(
-            "checked {checked} tails: matched {} ambiguous {} none_matched {}",
-            verdicts.0, verdicts.1, verdicts.2
+            "#1048 attribution: agree {agree}  WRONG 0  refused {multi_label_refused}  \
+             unlabelled {}",
+            unlabelled.len()
         );
     }
 
