@@ -24,7 +24,7 @@ except (ImportError, OSError):  # pragma: no cover - optional native gate
 from pokezero.golden_corpus import load_golden_corpus
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3, OBSERVATION_SCHEMA_VERSION_V4
 from pokezero.showdown import observation_from_player_state
-from _showdown_root import showdown_root, showdown_root_str
+from _showdown_root import showdown_root_str
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"

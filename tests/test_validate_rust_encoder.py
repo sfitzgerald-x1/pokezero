@@ -24,7 +24,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
-from _showdown_root import showdown_root, showdown_root_str
+from _showdown_root import showdown_root_str
 
 try:
     import numpy

@@ -19,7 +19,6 @@ the test did not run, which the silent-skip behaviour this module replaces did n
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import unittest
 

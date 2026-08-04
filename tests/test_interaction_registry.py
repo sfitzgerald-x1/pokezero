@@ -27,7 +27,7 @@ from pokezero.golden_corpus_scenarios import (  # noqa: E402
     ScriptedPreferencePolicy,
     interaction_registry_specs,
 )
-from _showdown_root import showdown_root, showdown_root_str
+from _showdown_root import showdown_root_str
 
 
 def _showdown_root() -> str:

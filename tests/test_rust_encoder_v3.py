@@ -24,7 +24,7 @@ from pokezero.observation import (
 )
 from pokezero.showdown import TRANSITION_TOKEN_OFFSET, observation_from_player_state
 from pokezero.transitions_fold import FoldState
-from _showdown_root import showdown_root, showdown_root_str
+from _showdown_root import showdown_root_str
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
