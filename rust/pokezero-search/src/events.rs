@@ -382,10 +382,18 @@ fn effective_speed(state: &State, side: SideReference) -> i16 {
     };
     let active = side_ref.get_active_immutable();
     let mut speed = side_ref.calculate_boosted_stat(PokemonBoostableStat::Speed) as f32;
-    match state.weather.weather_type {
-        Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
-        Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
-        _ => {}
+    // GUARDED on weather_is_active, mirroring the engine's get_effective_speed.
+    // AIR LOCK and CLOUD NINE suppress weather entirely, so Swift Swim must not
+    // double a speed while either is on the field. Unguarded this flipped the
+    // computed move order on 19000093/51 (Rayquaza AIR LOCK vs Seaking SWIFT
+    // SWIM in RAIN), and since segment() tries only the order it computes, the
+    // whole branch was voided as segmentation_failed. reports/c108.
+    if state.weather_is_active(&state.weather.weather_type) {
+        match state.weather.weather_type {
+            Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
+            Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
+            _ => {}
+        }
     }
     if side_ref
         .volatile_statuses

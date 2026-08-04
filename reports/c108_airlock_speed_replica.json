@@ -1,0 +1,44 @@
+{
+ "schema": "c108-airlock-speed-replica/2",
+ "headline": "the renderer's `effective_speed` replica omits the engine's `weather_is_active` guard, so AIR LOCK and CLOUD NINE do not suppress weather for it. That flips the computed move order, and because `segment()` tries only the order it computes, the ENTIRE branch is voided as `segmentation_failed`.",
+ "status": "CAUSE CONFIRMED, FIX VERIFIED, AND SHIPPABLE. v1 claimed an interaction blocked it. That was my own two-variable comparison; there is no interaction.",
+ "this_causes_the_last_uncaused_rows": "19000093/51 AND 19000093/53. Both close under the fix. Clause 1's remaining gap is closed by this.",
+ "the_measurement_that_found_it": {
+  "probe": "printed the renderer's effective_speed for both sides plus every input field, at the segmentation_failed site.",
+  "output": "eff1=261 eff2=348 raw1=174 raw2=174 weather=RAIN st1=NONE st2=NONE boost1=1 boost2=0 ab1=AIRLOCK ab2=SWIFTSWIM",
+  "the_read": "Rayquaza (SideOne) has AIR LOCK; Seaking (SideTwo) has SWIFT SWIM; it is RAINING. The replica doubled Seaking to 348 against Rayquaza's 261 and declared SideTwo first. The engine suppressed the rain and moved SideOne first -- which the pair-generated list confirms, since it BEGINS with `Damage SideTwo`, i.e. SideTwo receiving.",
+  "the_source_difference": "engine `get_effective_speed` wraps its weather match in `if state.weather_is_active(&state.weather.weather_type)`. The renderer's replica has NO guard. Everything else about the two functions is identical -- I diffed the modifier lists in reports/c107 and they match, which is why the formula was ruled out and the inputs were the remaining place to look.",
+  "blast_radius_beyond_order": "any renderer consumer of effective_speed inherits it. Air Lock is a Rayquaza ability and Rayquaza is common in this pool."
+ },
+ "the_fix": {
+  "form": "wrap the weather match in `state.weather_is_active(...)`, mirroring the engine.",
+  "measured": "transition:matched 15208 -> 15205, transition:diverged 15 -> 19, strict:lossy_render 11 -> 0, skip:strict_all_branches_lossy 1 -> 0. Both sides reconcile to 15224, 0 engine errors, 94 lib tests pass.",
+  "closed": "19000093/51 and 19000093/53 -- BOTH segmentation rows, which is the whole remaining clause-1 gap.",
+  "lossy_render_to_zero": "the counter that actually tracks this defect went to ZERO. Segmentation now succeeds on every branch in the corpus."
+ },
+ "disposition": {
+  "class": "RENDERER FIX",
+  "implemented": true,
+  "shippable_alone": true,
+  "sequencing": "lands with or after C96; measured on top of it at -2 with nothing opened.",
+  "gate": "a pin on effective_speed under AIR LOCK + RAIN + SWIFT SWIM that fails when the guard is reverted."
+ },
+ "RETRACTION_of_v1s_interaction_claim": {
+  "what_v1_said": "that the fix re-opened the six rows the faint-without-damage fix had closed, net +4, because those boundaries had been voided by the segmentation failure and were now compared for the first time -- and that the C96 fix's -6 was 'partly an artifact of comparing against nothing'.",
+  "why_it_was_wrong": "I cut the Air Lock branch from origin/main, which does NOT contain the C96 faint synthesis -- that is still on an unmerged branch. Then I compared that sweep against the C96 sweep. TWO VARIABLES. The six 'reopened' rows were simply C96's six closures absent from the other arm. There was never an interaction.",
+  "the_check_that_caught_it": "replaying 19000024/61 on the Air Lock branch showed observed p1 with NO component at all. That is impossible if the C96 synthesis were present -- it exists precisely to put a capped_lethal there. One replay, and it falsified the whole section.",
+  "the_pattern": "fourth time today a plausible mechanism reached a report ahead of the check that would have killed it. I even wrote a candidate mechanism -- 'the parser synthesis fires on the engine's newly-rendered protocol' -- and labelled it unconfirmed, which was honest, but the section around it asserted the interaction as fact.",
+  "and_i_broke_my_own_rule": "the single-variable requirement is the one I have been enforcing on every other change in this session. I violated it by branching from the wrong base."
+ },
+ "the_measurement_single_variable": {
+  "arms": "C96 branch alone -> C96 branch + the Air Lock guard. One edit, same base, same build script.",
+  "transition_matched": "15208 -> 15211 (+3)",
+  "transition_diverged": "15 -> 13 (-2)",
+  "strict_lossy_render": "11 -> 0",
+  "skip_strict_all_branches_lossy": "1 -> 0",
+  "reconcile": "15224 both arms, 0 engine errors, 94 lib tests pass",
+  "closed": "19000093/51 and 19000093/53 -- both segmentation rows",
+  "newly_divergent": "ZERO",
+  "note": "lossy_render to zero means segmentation now succeeds on every branch in the corpus, and the skip bucket is empty."
+ }
+}
