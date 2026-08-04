@@ -2343,6 +2343,10 @@ fn render_move_phase(
     // Walk the effect tail. Faints are DEFERRED to the end of the phase
     // (real protocol: recoil/drain lines come before the |faint| lines).
     let mut defender_hits: i64 = 0;
+    // Named distinctly from the Sleep Talk walk's own `dragged` further up: two
+    // locals of the same name in one function is the trap the arm-order pin exists
+    // for. Review flagged it.
+    let mut dragged_this_phase = [false, false];
     let mut crit_emitted = false;
     let mut damage_lines_done = false;
     let mut roughskin_emitted = false;
@@ -2379,6 +2383,44 @@ fn render_move_phase(
                 ));
                 defender_hits += 1;
                 note_faint!(defender);
+            }
+            // Hazard chip on a side that has just been dragged in. This arm must
+            // precede the generic defender-damage arm below, which would otherwise
+            // render it as a bare `|-damage|` with no `[from]` -- and Showdown says
+            // `[from] Spikes`, so the differential filed the observation as an exact
+            // ("spikes", -n) component while the engine line went untagged into the
+            // roll-scaled bucket and the two never compared.
+            //
+            // Both other paths already get this right: the voluntary-switch arm
+            // (`switched && damage.side_ref == side`) and the Sleep Talk walk. The
+            // phazing path in render_move_phase was the one missed.
+            //
+            // gen3-only inference, same as the Sleep Talk walk states: Spikes is the
+            // sole entry hazard that deals damage in this generation, and the crate is
+            // built with features = ["gen3"]. A gen4+ build would need to distinguish
+            // Stealth Rock and Toxic Spikes.
+            //
+            // Worth being precise about what this does NOT fix: the classifier at
+            // engine_transition_differential.py:1761 still short-circuits to
+            // limit:world_sample_drag_target on the mere presence of a `|drag|` line,
+            // before any component test. That is the second half of B1 and is a
+            // separate commit, measured separately, per the program's rule against
+            // mixing a classifier change with a fidelity change.
+            // Guarded on the DEFENDER as well as the flag. Review proved the
+            // attacker-side path is dead code -- get_instructions_from_drag always
+            // switches `attacking_side.get_other_side()` and returns immediately, and
+            // the pivot path only toggles flags -- but narrowing costs nothing and
+            // closes it by construction rather than by argument.
+            Instruction::Damage(damage)
+                if dragged_this_phase[side_usize(damage.side_ref)]
+                    && damage.side_ref == defender =>
+            {
+                sim.apply(ins);
+                let ident = ctx.active_ident(sim.state, damage.side_ref);
+                let condition = sim.hp_condition(damage.side_ref);
+                out.lines
+                    .push(format!("|-damage|{ident}|{condition}|[from] Spikes"));
+                emit_faint_if_dead(sim, damage.side_ref, ctx, out);
             }
             Instruction::Damage(damage) if damage.side_ref == defender => {
                 sim.apply(ins);
@@ -2663,6 +2705,11 @@ fn render_move_phase(
                 let condition = sim.hp_condition(switch.side_ref);
                 out.lines
                     .push(format!("|drag|{ident}|{details}|{condition}"));
+                // Record it: HP the dragged side loses after this point is entry
+                // hazard chip, not move damage. Without this the chip fell through
+                // to the generic Damage arm below and rendered as a bare
+                // `|-damage|` with no `[from]`. reports/c117 cause B1.
+                dragged_this_phase[side_usize(switch.side_ref)] = true;
             }
             _ => sim.apply(ins),
         }

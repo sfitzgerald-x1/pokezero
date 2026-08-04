@@ -165,6 +165,62 @@ def _payload(dex: ShowdownDex, **overrides):
     return payload
 
 
+
+def _payload_seated_at_p2(dex: ShowdownDex, *, self_moves=None):
+    """A payload whose SELF side is p2, not p1.
+
+    Every other `selfPlayer` fixture in this repo is `"p1"` -- verified across
+    test_engine_world.py, test_rest_sleep_provenance.py and the bridge tests -- so the
+    p2-self construction path had no coverage at all. (Precisely: `test_local_showdown.py`
+    already builds a p2-seated payload, but only asserts on the OPPONENT side and never
+    constructs a world from it -- so no test had constructed an engine world from a
+    p2-seated payload, and none had asserted anything about a p2 SELF side.) That matters
+    on its own, and
+    doubly so because `self_moveset_mismatch` is the largest class in the campaign's
+    construction channel and appears only under the p1 decider. One hypothesis for that
+    was a plumbing gap: p2's own request never reaching the world builder, leaving
+    `known_pp` empty and the guard unable to fire, in which case p2's side would be built
+    with FULL PP silently -- worse than the refusal, because it searches a state Showdown
+    does not have instead of declining to search.
+
+    This fixture covers ENGINE_WORLD's half: seated at p2 the guard fires normally, so
+    engine_world consumes a p2 self side symmetrically. It does NOT reach the code that
+    POPULATES those rows, because it writes them by hand --
+    `test_foulplay_bridge.py::test_the_self_move_states_populate_for_a_P2_seated_decider`
+    covers that half. Flipping `selfPlayer` alone is not enough for either, which is
+    why this helper exists rather than a one-line override -- the two sides carry
+    DIFFERENT SHAPES. A self side has exact HP (`265/305`) and request-known `moves`
+    with `pp`; an opponent side has a percentage (`73/100 par`) and no moves. Flipping
+    `selfPlayer` to `"p2"` while leaving the sides alone makes `self_maxhp_mismatch`
+    fire first ("request max HP 100 != computed 387") and the moveset guard is never
+    reached -- which reads exactly like the guard not firing.
+    """
+
+    payload = _payload(dex)
+    snorlax_maxhp = _maxhp(_SNORLAX, dex)
+    payload["selfPlayer"] = "p2"
+    payload["selfTeamOrder"] = ["Snorlax", "Starmie"]
+    payload["sides"]["p2"]["pokemon"] = [
+        {
+            "species": "Snorlax",
+            "condition": f"{snorlax_maxhp - 40}/{snorlax_maxhp} par",
+            "active": True,
+            "moves": self_moves
+            if self_moves is not None
+            else [
+                {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+                {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
+            ],
+        },
+        {"species": "Starmie", "condition": f"{_maxhp(_STARMIE, dex)}/{_maxhp(_STARMIE, dex)}"},
+    ]
+    # ...and p1 becomes the OPPONENT side: percentage condition, no request moves.
+    payload["sides"]["p1"]["pokemon"] = [
+        {"species": "Swampert", "condition": "87/100", "active": True},
+        {"species": "Starmie", "condition": "100/100"},
+    ]
+    return payload
+
 def _override() -> BattleStartOverride:
     return BattleStartOverride(
         player_teams={
@@ -857,6 +913,64 @@ class TransformAndEncoreTests(unittest.TestCase):
             {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
         ]
         self._assert_reason(payload, "self_moveset_mismatch")
+
+    def test_self_moveset_mismatch_fails_closed_SEATED_AT_P2(self) -> None:
+        """The same guard, with the engine seated at p2 instead of p1.
+
+        `self_moveset_mismatch` is the largest class in the construction channel and the
+        cluster records it only under the p1 decider. One hypothesis was a plumbing gap:
+        `known_pp` empty for p2, so the guard cannot fire and p2's team is built with FULL
+        PP silently.
+
+        This test shows engine_world's half is symmetric -- given a populated p2 self side
+        the guard fires and names p2. It does NOT establish that anything populates that
+        side, because the fixture writes the rows itself; the builder half is
+        `test_foulplay_bridge.py::test_the_self_move_states_populate_for_a_P2_seated_decider`.
+
+        A note on the cluster numbers, because they are weaker than they look: the seat
+        split is NOT 39,568 independent trials. All three eras replay the SAME 64 seeds,
+        the p1 and p2 seed sets are identical, and every occurrence comes from 24 of those
+        seeds. Seed fixes the team pair, so seat is confounded with team draw and the
+        three eras are one observation, not three. Treat the split as suggestive, not as
+        statistically impossible.
+        """
+        payload = _payload_seated_at_p2(
+            self.dex,
+            self_moves=[
+                {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+                # thunderbolt is request-known but absent from Snorlax's sampled set
+                {"id": "thunderbolt", "pp": 15, "maxpp": 24, "disabled": False},
+            ],
+        )
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex)
+        message = str(caught.exception)
+        self.assertIn("self_moveset_mismatch", message)
+        # The SEAT must be p2. Asserting only the class would pass on a payload that
+        # silently fell back to p1 as the self side, which is the failure this covers.
+        self.assertIn("p2:", message)
+        self.assertIn("thunderbolt", message)
+
+    def test_a_p2_seated_self_side_constructs_when_its_moveset_agrees(self) -> None:
+        """The control, without which the test above proves nothing.
+
+        A guard that refused EVERY p2-seated payload would satisfy the assertion above
+        while telling us nothing about `known_pp`. So: the same fixture with a moveset
+        that agrees must construct, which is what makes the refusal above attributable
+        to the mismatch rather than to being seated at p2 at all.
+        """
+        payload = _payload_seated_at_p2(self.dex)
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        # side_two is the self side here, and it carries the request-known moves.
+        by_id = {spec.id: spec for spec in world.spec.side_two.pokemon[0].moves}
+        self.assertIn("bodyslam", by_id)
+        # ...and its PP came from the REQUEST. The counterfactual is the CATALOG maximum,
+        # not `MoveSpec.pp`'s 32 default: `_move_specs` always passes pp explicitly, and
+        # the no-request-row branch uses `info.max_pp`, which is `(pp * 8) // 5` -- 24 for
+        # Body Slam. So 15 distinguishes "read from the request" from "fell back to the
+        # catalog", which is what makes this pair more than a demonstration that
+        # something refused.
+        self.assertEqual(by_id["bodyslam"].pp, 15)
 
     def test_self_encore_derives_lock_from_disabled_pattern(self) -> None:
         payload = _payload(self.dex)

@@ -859,6 +859,20 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             )
             payload = _public_materialization_payload(materialization)
 
+        # The SELF side of a p2-seated payload must carry request-known moves.
+        # `_request_materialization_rows` keys `self_move_states` by
+        # `_request_pokemon_identity(raw_row)`, so an identity/key mismatch would leave
+        # these rows empty even with a fully populated `self_move_states` -- and empty
+        # rows mean `known_pp` is empty in `engine_world._move_specs`, which means p2's
+        # own team gets built with FULL PP silently. That is the one hop between the
+        # builder and the consumer that neither of this campaign's seat tests covered.
+        self_rows = payload["sides"]["p2"]["pokemon"]
+        self.assertTrue(self_rows, payload["sides"]["p2"])
+        self.assertTrue(
+            any(row.get("moves") for row in self_rows),
+            f"p2-seated payload carries NO request-known moves on its own side: {self_rows}",
+        )
+
         self.assertEqual(public_entei.condition.split()[-1], "slp")
         self.assertFalse(public_entei.active)
         row = next(
