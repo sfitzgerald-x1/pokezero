@@ -1525,6 +1525,20 @@ fn byte_identical_callees_with_a_renderable_tail_are_usable_not_refused() {
             "the usable arm must still carry the bare lossy tag: {:?}",
             r.lossy
         );
+        // ...and NOTHING sub-cased may join it. This is the arm the differential actually
+        // consumes, and it gates usability on exact set equality
+        // (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`). An extra entry makes every
+        // newly-usable branch UNUSABLE to the matcher -- silently deleting this change's
+        // entire benefit. The refusing arm already asserts this, but refused branches are
+        // discarded anyway, so the assertion was on the arm that does not matter.
+        assert!(
+            !r.lossy
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+            "a sub-cased lossy tag on the USABLE arm changes which branches the \
+             differential accepts: {:?}",
+            r.lossy
+        );
         // ...and neither candidate may be NAMED, or the render invents evidence.
         for callee in ["tackle", "scratch"] {
             assert!(

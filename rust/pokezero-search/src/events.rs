@@ -2835,7 +2835,22 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// ALLOWLIST, and fail-closed -- a new engine instruction refuses until someone decides
 /// it is renderable, which is the direction that cannot silently corrupt an observation.
 ///
-/// `Damage` is rendered as an HP decrease. `Switch` is rendered as a drag. The remaining
+/// `Damage` is admitted ONLY when `damage_amount >= 0`. It is a SIGNED instruction: the
+/// engine's own comment at `gen3/choice_effects.rs` records that "a negative
+/// `damage_amount` is the engine's existing spelling for a heal on this instruction", which
+/// is how Pain Split is expressed. The walk below emits on `active_hp < before` only, so a
+/// heal-direction `Damage` renders NOTHING -- and an earlier version of this predicate
+/// admitted it on the strength of the comment "Damage is rendered as an HP decrease", which
+/// was simply false. Review reproduced the consequence through the production render path:
+/// a tail of `[Damage -130, Damage +130]` came back USABLE with the sleeper's 40 -> 170 heal
+/// absent from the lines, leaving the fold's `hp_fraction` stale so a LATER, unrelated hit
+/// records as zero damage. That is the C52-mirror defect this whole predicate exists to
+/// prevent, admitted by the predicate itself.
+///
+/// The lesson generalises past this one variant: fail-closed against unknown INSTRUCTIONS
+/// is not the same as fail-closed against unknown USES of a known one.
+///
+/// `Switch` is rendered as a drag. The remaining
 /// members carry no protocol representation at all in Gen 3: they are the engine's own
 /// bookkeeping for Counter/Mirror Coat damage accounting and last-move tracking, and the
 /// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
@@ -2844,8 +2859,11 @@ fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
     tail.iter().all(|instruction| {
         matches!(
             instruction,
-            Instruction::Damage(_)
-                | Instruction::Switch(_)
+            // `damage_amount >= 0` is load-bearing, not defensive -- see the doc above.
+            Instruction::Damage(damage) if damage.damage_amount >= 0
+        ) || matches!(
+            instruction,
+            Instruction::Switch(_)
                 | Instruction::SetLastUsedMove(_)
                 | Instruction::ChangeDamageDealtDamage(_)
                 | Instruction::ChangeDamageDealtMoveCatagory(_)
@@ -4297,6 +4315,45 @@ mod tests {
             stat: PokemonBoostableStat::Defense,
             amount: 1,
         })];
+
+        // A HEAL-DIRECTION Damage must refuse. `Damage` is signed and the walk emits on
+        // decreases only, so admitting a negative amount renders nothing while the state
+        // moves -- review reproduced exactly that and it is the defect this predicate is
+        // for. Pinned here because no natural gen3 move pair produces such a tail, so no
+        // corpus test can reach it.
+        let heal_shaped = vec![Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: -130,
+        })];
+        assert!(
+            !ambiguous_tail_is_fully_renderable(&heal_shaped),
+            "a negative `damage_amount` is a HEAL and the walk drops it, so the tail is \
+             NOT fully renderable"
+        );
+        assert!(
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped),
+            "a heal-shaped ambiguous tail must REFUSE"
+        );
+        // Mixed sign refuses too: one dropped component is enough.
+        let mixed = vec![
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 130,
+            }),
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: -130,
+            }),
+        ];
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed));
+        // Zero is a no-op and stays admissible.
+        assert!(!sleeptalk_refusal_is_unsafe(
+            &SleepTalkIdent::Ambiguous,
+            &[Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 0,
+            })]
+        ));
 
         // Ambiguous: renderable is USABLE, unrenderable REFUSES.
         assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable));
