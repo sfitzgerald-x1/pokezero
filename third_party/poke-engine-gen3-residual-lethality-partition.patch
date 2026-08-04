@@ -105,3 +105,46 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
+@@ -3083,9 +3167,39 @@
+                     extra_branches.push((survive_ins, average_non_kill_crit_damage));
+                 }
+             } else {
+-                let mut branch_ins = incoming_instructions.clone();
+-                branch_ins.update_percentage(crit_rate);
+-                extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
++                // The CRIT fan gets the same residual treatment as the non-crit
++                // one above: it cannot kill on the hit here, but a residual still
++                // can, and collapsing to 0.925 * max_crit picks one side of that
++                // threshold. reports/c109.
++                let crit_residual_threshold = defender_active.hp - pending_at_end_of_turn;
++                let min_crit_roll = (max_crit_damage as f32 * 0.85) as i16;
++                if pending_at_end_of_turn > 0
++                    && crit_residual_threshold > 0
++                    && max_crit_damage >= crit_residual_threshold
++                    && min_crit_roll < crit_residual_threshold
++                {
++                    let (average_surviving_crit, num_crit_residual_kills) =
++                        compare_health_with_damage_multiples(
++                            max_crit_damage,
++                            crit_residual_threshold,
++                        );
++                    let crit_residual_kill = crit_rate * (num_crit_residual_kills as f32 / 16.0);
++                    let crit_survive = crit_rate - crit_residual_kill;
++                    if crit_residual_kill > 0.0 {
++                        let mut k = incoming_instructions.clone();
++                        k.update_percentage(crit_residual_kill);
++                        extra_branches.push((k, crit_residual_threshold));
++                    }
++                    if crit_survive > 0.0 {
++                        let mut sv = incoming_instructions.clone();
++                        sv.update_percentage(crit_survive);
++                        extra_branches.push((sv, average_surviving_crit));
++                    }
++                } else {
++                    let mut branch_ins = incoming_instructions.clone();
++                    branch_ins.update_percentage(crit_rate);
++                    extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
++                }
+             }
+             incoming_instructions.update_percentage(1.0 - crit_rate);
+         } else {
