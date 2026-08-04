@@ -1,6 +1,6 @@
 {
- "schema": "c101-i3-painsplit-tolerance-derivation/1",
- "status": "ANALYSIS with measured data. The fix is NOT implemented. This establishes what form it must take, because the obvious form is refuted by one of the three rows.",
+ "schema": "c101-i3-painsplit-tolerance-derivation/2",
+ "status": "RETRACTED IN ITS CENTRAL CLAIM. The fix this report called refuted WORKS, and is merged-pending as PR #1054: transition:matched 15188 -> 15192, transition:diverged 35 -> 31, closing all FOUR movepainsplit rows with zero newly divergent boundaries. What survives is the row-level data and the mechanism; the refutation does not.",
  "measured_from": "/tmp/sweep_now.json, main at e83ee94f era, diverged 35. Misses quoted verbatim, not paraphrased.",
  "the_three_rows": [
   {
@@ -48,8 +48,23 @@
  "branch_set_awareness_is_required": "19000198/22's deciding arm is the 6.25% CRIT arm, not the 93.75% majority. Its 93.75% arm is non-crit and legitimately differs (-120 against -91). So the tolerance must be applied per-arm across the whole branch set -- a rule that only inspects the majority arm closes neither this row nor the family. reports/c95 records this as the reason this row is the strongest evidence for the fix rather than the weakest.",
  "disposition": {
   "class": "MATCHER FIX",
-  "implemented": false,
-  "gate": "needs a pin that FAILS WHEN REVERTED, per the programme's rule for matcher fixes, plus a single-variable sweep reporting matched and skip alongside diverged.",
-  "expected_scope": "3 rows in this window. Should be measured, not assumed -- the last fix attempt (reports/c100) predicted 10 and measured -7."
- }
+  "implemented": true,
+  "pr": 1054,
+  "measured": "matched +4, diverged -4, skip and lossy unchanged, both reconciling to 15224, 0 errors, 0 newly divergent.",
+  "pin": "PainSplitIsRollAware -- 22 tests OK with the fix, 5 failures when reverted."
+ },
+ "RETRACTION": {
+  "the_false_claim": "that adding movepainsplit to _ROLL_SCALED_SOURCES would close only 2 of 3 rows because 1/5 = 20% exceeds the roll band, and that 19000016/2 'is the case that proves' a proportional tolerance insufficient.",
+  "why_it_was_false": "I read the band from the module docstring at engine_transition_differential.py:288, which states the ratio and OMITS the slack. The actual predicate at :963-964 is `low = abs(eng) * 0.92 - 1` and `high = abs(eng) * 1.09 + 1` -- one HP of ABSOLUTE flooring slack in both directions. For eng 4 the band is [2.68, 5.36] and the observed 5 is inside it. Every one of the four rows passes.",
+  "the_self_refutation_i_missed": "this report's own 'form_that_covers_all_three' -- 'an absolute bound of at least 1, OR the proportional band, whichever is larger' -- is a DESCRIPTION OF THE SHIPPED PREDICATE. I derived, as a novel result, the code that was already there.",
+  "and_it_was_short_a_row": "there are FOUR component_magnitude:movepainsplit rows, not three. 19000071/55 (majority arm 84.38%, painsplit 24 against 23) sits in LS_capped_lethal_shape and was never counted, so the I3 and LS family sizes were not independent. It closes under the same change. Its delta of 1 on a magnitude of 24 is additional evidence against the refutation this report made.",
+  "cost": "a report arguing a correct fix was impossible. It was caught by independent review, which read the predicate rather than the prose."
+ },
+ "what_survives": {
+  "the_row_level_data": "all three quoted misses are verbatim-accurate, and the relative deltas 20.0% / 1.9% / 2.2% are right.",
+  "the_mechanism": "Pain Split's magnitude inherits the damage roll, and the engine models it the same way. That is why the fix is a MATCHER fix and not an engine one.",
+  "branch_set_awareness": "still correct and still load-bearing: 19000198/22's deciding arm is the 6.25% crit arm while its 93.75% arm legitimately differs at -120 against -91. The shipped pin asserts that second arm STAYS rejected.",
+  "the_floor_argument": "directionally right -- a floor-divided quantity inherits a bounded rather than a scaled error -- which is exactly why the shipped band's +/-1 works. I used the argument to reject the fix instead of to explain why it succeeds."
+ },
+ "heal_to_full_was_also_mis_cited": "this report called heal_to_full the precedent for 'the same proportional roll band every other roll-scaled component gets'. heal_to_full is NOT in _ROLL_SCALED_SOURCES; it is routed by source.endswith('_to_full') at :574 into a dedicated branch that uses an absolute damage-difference bound, not the proportional window. And the cited 'abs(obs) <= abs(eng) + 1' form belongs to capped_lethal -- the comment at :885-890 records that applying it to capped heals was a DEFECT. I cited as precedent the form the code documents as wrong for the analogous class."
 }
