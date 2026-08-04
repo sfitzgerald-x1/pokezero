@@ -440,10 +440,15 @@ _REASON_DETAIL_LIMIT = 512
 # fixed taxonomy: crate reason keys interpolate operands (species in `'Pelipper' has
 # public Rest skippedTime`, and engine_world.py mints keys carrying turn numbers and
 # max-HP values), so the key space is bounded in LENGTH by _bounded_reason_detail but
-# never in COUNT. Era 57 observed 72 classes -- 12 shown + 60 further, per
-# era57-probe-analysis-20260804.txt:52-64 -- for ~216 small entries. The raw
-# uncollapsed count is unmeasured: that file records the analyzer's collapsed list and
-# the shard reports it came from died with their pods.
+# never in COUNT. Era 57 MEASURED 79 distinct raw keys (72 after the analyzer collapses
+# the `crate_search: ` prefix), so ~237 small entries. Both counts come from
+# analyze_probe.py over the era-57 shard reports, which survive on the shared PVC --
+# it is the fallback ADDRESSES that were lost with the pods, since those were only ever
+# written to pod stdout. An earlier version of this comment said the reports died too,
+# and called the raw count unmeasured on that basis; it took one query to disprove.
+#
+# 79 is comfortably under the ceiling below, but it is a MEASUREMENT of one campaign,
+# not a property of the key space, which is why the ceiling exists.
 _FALLBACK_SAMPLES_PER_CLASS = 3
 
 # Ceiling on distinct keys, so the report size is bounded UNCONDITIONALLY rather than
