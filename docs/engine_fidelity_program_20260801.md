@@ -158,7 +158,13 @@ fix, one (A2) by #1066, one is A7's open engine fix, and the eighth is the
 retracted. Established by the independent adjudication that closed that report
 (C116 Phase 0 item 1).
 
-**Eleven rows, eleven failures, zero survivors.** In every case the label came from a
+**Eight distinct rows, eight failures, zero survivors** — and C111 v1 re-adjudicated
+three of those eight (`19000008/54`, `19000191/63`, `19000198/33`) a *second* time and
+failed on them again. The two sets overlap: an earlier draft of this paragraph added
+their cardinalities and claimed eleven, which is the same
+transcription-instead-of-derivation error (M2) as the rule two paragraphs down
+forbids — committed inside the rule that forbids it, and caught by review rather
+than by me. In every case the label came from a
 **class name** rather than a demonstration, and in every case a measurement that
 nobody had run yet was sufficient to dissolve it. That is the empirical basis for the
 rule below: the burden is heavy because the historical false-positive rate is 100%.
