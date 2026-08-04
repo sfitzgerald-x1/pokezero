@@ -122,6 +122,7 @@ pub fn env_battle_over(state_str: &str) -> PyResult<f32> {
 /// `{"post_state", "events": [line...], "turn_completed": bool,
 ///   "lossy": [slug...], "attribution_unsafe": bool,
 ///   "attribution_unsafe_reasons": [slug...], "percentage": f32, "branch_index": i64,
+///   "lossy_subcases": [slug...]  -- counted, NOT refused,
 ///   "branch_count": usize, "battle_over": f32}`.
 ///
 /// `ctx_json` is the [`EventContext`] shape:
@@ -406,6 +407,76 @@ mod tests {
     fn malformed_state_is_a_value_error_not_a_panic() {
         assert!(env_options("definitely not a state", true).is_err());
         assert!(env_battle_over("definitely not a state").is_err());
+    }
+
+    /// A sleeper whose two Sleep Talk callees produce byte-identical DAMAGE-ONLY tails.
+    ///
+    /// Tackle and Scratch are both 40-power physical Normal, so `identify_sleep_talk_called`
+    /// returns `Ambiguous` and the tail contains nothing the unnamed-callee walk would drop.
+    fn renderable_ambiguous_sleeptalk_fixture() -> String {
+        use poke_engine::choices::Choices;
+        use poke_engine::state::{PokemonMoveIndex, PokemonStatus};
+
+        let mut state = parse_state(&fixture()).expect("fixture parses");
+        state.side_one.get_active().speed = 500;
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        state.side_two.get_active().speed = 1;
+        state.side_two.get_active().status = PokemonStatus::SLEEP;
+        state.side_two.get_active().rest_turns = 0;
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+        state.serialize()
+    }
+
+    /// THE SEAM THAT ACTUALLY CHANGED, pinned directly.
+    ///
+    /// Every other test for the ambiguity split goes through `branch_events`, which never
+    /// refuses anything -- so none of them observed the behaviour under test. The refusal
+    /// happens here, at `reject_attribution_unsafe(&rendered, "env_step")`, and before this
+    /// test the accepting direction was pinned only incidentally by an unrelated
+    /// anti-leakage test in the Python suite.
+    ///
+    /// A renderable ambiguous branch must step CLEANLY, and must still be counted.
+    #[test]
+    fn a_renderable_ambiguous_sleeptalk_branch_steps_without_refusing() {
+        Python::initialize();
+        let state = renderable_ambiguous_sleeptalk_fixture();
+        let mut saw_subcase = false;
+        for seed in 0..64u64 {
+            let report = env_step(&state, "splash", "sleeptalk", &ctx_json(), seed, false)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "a renderable ambiguous Sleep Talk branch must not be refused at \
+                         env_step (seed {seed}): {error}"
+                    )
+                });
+            if report.contains("sleeptalk_called_unidentified:ambiguous") {
+                saw_subcase = true;
+                // Counted on the lossy channel, and NOT on the refusing one.
+                assert!(
+                    report.contains("\"attribution_unsafe\":false"),
+                    "seed {seed}: ambiguous-and-renderable must not be attribution-unsafe: \
+                     {report}"
+                );
+            }
+        }
+        assert!(
+            saw_subcase,
+            "no seed produced a usable ambiguous branch, so this test pins nothing"
+        );
     }
 
     #[test]

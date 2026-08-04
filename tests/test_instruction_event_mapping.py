@@ -264,7 +264,7 @@ class BranchEventsTest(unittest.TestCase):
         )
         self.assertEqual(tackle["self_hp_cost"], 0.0)
 
-    def test_ambiguous_sleep_talk_call_is_rejected_before_fold(self) -> None:
+    def test_ambiguous_sleep_talk_call_is_flagged_but_NOT_rejected(self) -> None:
         # An asleep Sleep Talker whose callable moves ALL produce an empty
         # delta (splash, and roar against a reserve-less side): the called
         # move cannot be identified, and the invariant is flag-lossy, never
@@ -329,7 +329,7 @@ class BranchEventsTest(unittest.TestCase):
                 branch,
             )
 
-    def test_nonempty_ambiguous_sleep_talk_tail_keeps_post_state_out_of_fold(self) -> None:
+    def test_a_nonempty_ambiguous_sleep_talk_tail_is_usable_with_its_post_state(self) -> None:
         # Tackle and Scratch share the same non-empty Gen 3 damage tail here,
         # so the delta cannot prove which called move owned the public effects.
         state = _build_state(

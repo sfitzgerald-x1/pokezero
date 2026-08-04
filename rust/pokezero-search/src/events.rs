@@ -257,6 +257,24 @@ impl RenderedEvents {
         self.attribution_unsafe.push(reason.to_string());
     }
 
+    /// Record a DIAGNOSTIC sub-case WITHOUT refusing the branch.
+    ///
+    /// The lossy-only sibling of [`Self::mark_attribution_unsafe_subcase`], and the
+    /// distinction is the whole point. Use this when the transition is PROVEN and only
+    /// its label is unknown; use the refusing one when the renderer cannot reproduce
+    /// what the engine did, because then the description itself may be wrong.
+    ///
+    /// Same stable tag to `lossy`, so the differential's contract
+    /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) is unchanged.
+    fn mark_lossy_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
+        self.mark_lossy(lossy_tag);
+        self.lossy_subcases.push(subcase.to_string());
+    }
+
     /// Refuse with a DIAGNOSTIC sub-case while keeping the `lossy` tag stable.
     ///
     /// The two channels have different consumers and different contracts.
@@ -277,24 +295,6 @@ impl RenderedEvents {
     /// the `&str` siblings above: these are contract labels and must stay
     /// literals. Widening them would let a caller pass a formatted string and
     /// mint an unbounded set of `world_failure_reasons` keys.
-    /// Record a DIAGNOSTIC sub-case WITHOUT refusing the branch.
-    ///
-    /// The lossy-only sibling of [`Self::mark_attribution_unsafe_subcase`], and the
-    /// distinction is the whole point. Use this when the transition is PROVEN and only
-    /// its label is unknown; use the refusing one when the renderer cannot reproduce
-    /// what the engine did, because then the description itself may be wrong.
-    ///
-    /// Same stable tag to `lossy`, so the differential's contract
-    /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) is unchanged.
-    fn mark_lossy_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
-        assert!(
-            subcase.starts_with(lossy_tag),
-            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
-        );
-        self.mark_lossy(lossy_tag);
-        self.lossy_subcases.push(subcase.to_string());
-    }
-
     fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
         // The two arguments must name the SAME class, or this helper quietly
         // becomes the bug it exists to prevent: a branch whose contract tag and
@@ -3795,7 +3795,8 @@ fn legal_roll_state_before_direct_damage(
 /// Enumerate the engine's chance outcomes for a joint action and render each
 /// as protocol lines (the instruction→event mapping), returning JSON:
 /// `{"end_of_turn": bool, "branches": [{"percentage", "events", "turn_completed",
-///   "lossy", "attribution_unsafe", "attribution_unsafe_reasons", "post",
+///   "lossy", "attribution_unsafe", "attribution_unsafe_reasons",
+///   "lossy_subcases" (counted, not refused), "post",
 ///   "post_state", "legal_roll_state"}]}`.
 ///
 /// `ctx_json`: `{"p1": [display species...], "p2": [...], "turn": N}` with
