@@ -141,12 +141,27 @@ Both are adopted because the program violated them and measurement caught it.
 ### A `limit:` disposition requires a written demonstration
 
 "Comparison limit" is the one disposition that ends inquiry, so it carries the
-heaviest burden of proof. It was instead used as an exit, and it failed **three
-times out of three**: of the rows C111 v1 called genuine limits, one closed on an
-engine fix (`19000198/33`), one reduced to a known cause (`19000191/63` → A7), and
-one was never a divergence of the claimed kind at all (`19000008/54` — the engine
-dragged the *same* Pokémon; only a component tag differed). In every case the label
-came from a **class name** rather than a demonstration.
+heaviest burden of proof. It was instead used as an exit, and every time it has
+been checked against measurement it has failed.
+
+**C111 v1: 3 for 3.** One closed on an engine fix (`19000198/33`), one reduced to a
+known cause (`19000191/63` → A7), and one was never a divergence of the claimed kind
+at all (`19000008/54` — the engine dragged the *same* Pokémon; only a component tag
+differed).
+
+**C99: 8 for 8.** The earlier baseline filed eight rows under `limit:` with zero
+demonstration artifacts — seven as `LIMIT, UNEXAMINED AT THIS ERA` and one as
+`LIMIT, REGISTERED … Unretracted.` Cross-checked against merged history, all eight
+are now known non-limits: four closed by #1059's matcher fix, one by #1065's engine
+fix, one (A2) by #1066, one is A7's open engine fix, and the eighth is the
+`19000008/54` that was never a drag divergence — so its "Unretracted" is itself
+retracted. Established by the independent adjudication that closed that report
+(C116 Phase 0 item 1).
+
+**Eleven rows, eleven failures, zero survivors.** In every case the label came from a
+**class name** rather than a demonstration, and in every case a measurement that
+nobody had run yet was sufficient to dissolve it. That is the empirical basis for the
+rule below: the burden is heavy because the historical false-positive rate is 100%.
 
 A `limit:` disposition is therefore not accepted without a **demonstration
 artifact** stating:
