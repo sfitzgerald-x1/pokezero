@@ -672,10 +672,14 @@ class PublicBattleBeliefEngine:
                     self._leftovers_healed_this_turn.add(belief.key)
                 elif event_type == "-heal":
                     # A non-Leftovers heal that reaches FULL HP removes the Leftovers slot's
-                    # opportunity entirely. Wish is the common case and it is ENGINE-ORDERED
-                    # before Leftovers (`data/moves.ts` wish `onResidualOrder: 4` vs
-                    # `data/items.ts` leftovers `onResidualOrder: 5`), so a Wish that tops the mon
-                    # off resolves first and Leftovers then heals nothing and emits nothing.
+                    # opportunity entirely. Wish is the common case and it is ENGINE-ORDERED before
+                    # Leftovers, but the orders must be read from the GEN3-EFFECTIVE chain:
+                    # `data/mods/gen3/scripts.ts` is `inherit: 'gen4'`, and gen4 overrides BOTH --
+                    # wish `onResidualOrder: 7` (`data/mods/gen4/moves.ts`) and leftovers
+                    # `10 / subOrder 4` (`data/mods/gen4/items.ts`). The shared `data/moves.ts` and
+                    # `data/items.ts` say 4 and 5, which is gen5+ and NOT what gen3 runs; citing
+                    # them is the "generalized from the shared engine file" failure the Hidden Power
+                    # premise already made once.
                     if _hp_fraction_from_condition(_string_or_none(primary)) == 1.0:
                         self._healed_to_full_this_turn.add(belief.key)
                 if _is_action_phase_hp_change(raw_line):
@@ -873,6 +877,18 @@ class PublicBattleBeliefEngine:
             self._healed_to_full_this_turn = set()
             self._berry_ate_this_turn = set()
             self._shed_skin_activated_this_turn = set()
+            # The action-phase HP snapshot is PER-TURN evidence, like everything else cleared
+            # here. It was never cleared, so a mon damaged on an earlier turn that takes no
+            # action-phase hit on THIS one was still judged against the old value -- and
+            # ``_sweep_end_of_turn_non_procs``'s own comment already states the intended policy,
+            # "no snapshot => no evidence (conservative)". A stale snapshot is not no-snapshot.
+            #
+            # Live reproducer (Togetic, true item Leftovers): no action-phase HP change on the
+            # turn, snapshot stale at 135/264 from two turns earlier, toxic chip lands at residual
+            # 10/6 -- AFTER the Leftovers slot at 10/4 -- so the mon was at FULL HP when Leftovers
+            # ran and still got it ruled out. Clearing here is the root fix; the guards above are
+            # for heals that land inside the same turn.
+            self._hp_after_actions = {}
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
@@ -1535,9 +1551,11 @@ class PublicBattleBeliefEngine:
             hp_fraction = _hp_fraction_from_condition(belief.condition)
             if hp_fraction is None or hp_fraction <= 0.0:
                 continue
-            # Leftovers evidence keys off the PRE-RESIDUAL state: gen3 runs the Leftovers slot
-            # before status/Leech chip, so a mon damaged only by later residuals gave its
-            # Leftovers no chance to fire. No snapshot => no evidence (conservative).
+            # Leftovers evidence keys off the PRE-RESIDUAL state: in gen3 the Leftovers slot is
+            # residual 10/subOrder 4, ahead of Leech Seed (10/5) and brn/psn/tox (10/6), so a mon
+            # damaged only by those later residuals gave its Leftovers no chance to fire.
+            # No snapshot => no evidence (conservative) -- and the snapshot is now cleared per turn
+            # so "stale" cannot masquerade as "present".
             hp_pre_residual = self._hp_after_actions.get(belief.key)
             # ... and it also keys off the mon still HAVING room to heal when that slot runs. A mon
             # topped back off to full before the Leftovers slot gives Leftovers nothing to do, so
@@ -1554,18 +1572,15 @@ class PublicBattleBeliefEngine:
             # which is the unrecoverable direction. No opportunity means no evidence: decline
             # rather than eliminate.
             #
-            # The second guard, ``hp_fraction < 1.0``, closes the same hole reached by a different
-            # route: ``_hp_after_actions`` is NOT cleared per turn, so a mon damaged on an earlier
-            # turn that takes no action-phase hit on THIS one is still judged against that stale
-            # snapshot. Its own comment already states the intended policy -- "no snapshot => no
-            # evidence (conservative)" -- but a stale snapshot is not no-snapshot, and it silently
-            # acted as this turn's evidence. Requiring the mon to actually END the turn below full
-            # is sound on its own: if it ends full and Leftovers did not heal it, Leftovers either
-            # had no room or the heal came after its slot, and neither is evidence of absence.
+            # An earlier version of this fix also required the mon to END the turn below full.
+            # That proxy is UNSOUND and is gone: gen3's Leftovers slot is residual 10/4 while
+            # brn/psn/tox chip at 10/6, so a mon can be at full HP when Leftovers runs and end the
+            # turn below full from a later residual. It let the defect survive in live data (21
+            # violations / 400 games) on exactly that shape. The stale snapshot -- the real cause --
+            # is now cleared per turn at ``|upkeep``.
             if (
                 hp_pre_residual is not None
                 and hp_pre_residual < 1.0
-                and hp_fraction < 1.0
                 and belief.key not in self._leftovers_healed_this_turn
                 and belief.key not in self._healed_to_full_this_turn
             ):

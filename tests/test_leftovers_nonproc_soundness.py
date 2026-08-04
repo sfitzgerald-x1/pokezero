@@ -6,13 +6,16 @@ truth. Two ways that happened, both found by the V1 coherence sweep
 (`scripts/belief_coherence_gate.py`, 565 violations over 250 games):
 
 1. **A non-Leftovers heal reached full HP before the Leftovers slot.** Wish is the common case and
-   it is engine-ordered FIRST (`data/moves.ts` wish `onResidualOrder: 4` vs `data/items.ts`
-   leftovers `onResidualOrder: 5`), so a Wish that tops the mon off leaves Leftovers nothing to heal
-   and it emits no line. Reading that silence as proof of absence ruled out the real item.
-2. **A stale pre-residual snapshot.** `_hp_after_actions` is not cleared per turn, so a mon damaged
-   on an earlier turn that takes no action-phase hit on this one was still judged against the old
-   snapshot. The code's own comment states the policy as "no snapshot => no evidence
-   (conservative)", but a STALE snapshot is not no-snapshot.
+   it is engine-ordered first. Orders must be read from the GEN3-EFFECTIVE chain, since
+   `data/mods/gen3/scripts.ts` is `inherit: 'gen4'` and gen4 overrides both: wish
+   `onResidualOrder: 7` (`data/mods/gen4/moves.ts`), leftovers `10 / subOrder 4`
+   (`data/mods/gen4/items.ts`), Leech Seed `10/5`, brn/psn/tox `10/6`. The shared `data/moves.ts` /
+   `data/items.ts` values (4 and 5) are gen5+ and are NOT what gen3 runs.
+2. **A stale pre-residual snapshot -- the root cause.** `_hp_after_actions` was not cleared per
+   turn, so a mon damaged on an earlier turn that takes no action-phase hit on this one was still
+   judged against the old snapshot. The code's own comment states the policy as "no snapshot => no
+   evidence (conservative)", but a STALE snapshot is not no-snapshot. It is now cleared at
+   `|upkeep`.
 
 The consequence measured in live games: for a species whose every variant holds Leftovers
 (Octillery) the rule-out emptied the candidate set, forced the inconsistent fallback and pinned
@@ -91,40 +94,47 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         )
         self.assertNotIn("leftovers", _opponent(engine, "Porygon2").ruled_out_items)
 
-    def test_stale_pre_residual_snapshot_does_not_rule_out_leftovers(self) -> None:
-        """Isolates the END-OF-TURN guard: only it can block this case.
+    def test_a_stale_snapshot_from_an_earlier_turn_is_not_this_turns_evidence(self) -> None:
+        """Isolates the PER-TURN CLEAR of ``_hp_after_actions`` -- only it can block this.
 
-        Turn 1 damages the mon and Wish tops it off, which leaves a stale ``_hp_after_actions``
-        snapshot of 169/272 and — crucially — does NOT reveal the item, so the sweep still runs on
-        turn 2. Turn 2 has no HP lines at all, so the per-turn heal tracking is empty and the mon
-        ends at full HP. Without the ``hp_fraction < 1.0`` requirement, turn 1's snapshot silently
-        acts as turn-2 evidence and Leftovers is eliminated.
+        The live reproducer the first version of this fix missed (Togetic, true item Leftovers).
+        Turn 1 damages it and Wish tops it off, leaving a stale snapshot. On turn 2 it takes NO
+        action-phase HP change, is at full HP when the Leftovers slot runs (10/4), and only falls
+        below full afterwards from toxic (10/6). So the mon ends turn 2 damaged with no Leftovers
+        heal, and nothing healed it to full DURING turn 2 -- both of the other guards pass, and the
+        elimination is still wrong.
 
-        Written this way deliberately: the first draft of this test put a LEFTOVERS heal on turn 1,
-        which set ``revealed_item`` and made the sweep skip the mon entirely — the test passed
-        without ever reaching the path it claimed to cover, and both guard mutations survived it.
+        This is why "ends the turn below full" was an unsound proxy: it is not the same question as
+        "was below full when the Leftovers slot ran".
         """
         engine = _engine_from(
             [
-                "|switch|p1a: Stantler|Stantler, L88|300/300",
-                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|switch|p1a: Togetic|Togetic, L84, F|264/264",
+                "|switch|p2a: Rapidash|Rapidash, L82, M|244/244",
                 "|turn|1",
-                "|move|p1a: Stantler|Return|p2a: Octillery",
-                "|-damage|p2a: Octillery|169/272",
-                "|-heal|p2a: Octillery|272/272|[from] move: Wish|[wisher] Umbreon",
+                "|move|p2a: Rapidash|Return|p1a: Togetic",
+                "|-damage|p1a: Togetic|135/264",
+                "|-heal|p1a: Togetic|264/264|[from] move: Wish|[wisher] Blissey",
                 "|upkeep",
                 "|turn|2",
-                "|move|p2a: Octillery|Thunder Wave|p1a: Stantler",
+                "|move|p2a: Rapidash|Toxic|p1a: Togetic",
+                "|-status|p1a: Togetic|tox",
+                "|move|p1a: Togetic|Seismic Toss|p2a: Rapidash",
+                "|-damage|p2a: Rapidash|147/244",
+                "|-damage|p1a: Togetic|248/264 tox|[from] psn",
                 "|upkeep",
             ]
         )
-        octillery = _opponent(engine, "Octillery")
+        togetic = [b for b in engine.snapshot().sides["p1"] if b.species == "Togetic"][0]
         self.assertIsNone(
-            octillery.revealed_item,
-            "precondition: the item must NOT be revealed, or the sweep skips this mon and the "
-            "test proves nothing",
+            togetic.revealed_item,
+            "precondition: item must not be revealed, or the sweep skips this mon",
         )
-        self.assertNotIn("leftovers", octillery.ruled_out_items)
+        self.assertNotIn(
+            "leftovers",
+            togetic.ruled_out_items,
+            "a stale snapshot from turn 1 was used as turn 2's evidence",
+        )
 
     def test_reaching_full_then_being_chipped_does_not_rule_out_leftovers(self) -> None:
         """Isolates the HEAL-TO-FULL guard: only it can block this case.

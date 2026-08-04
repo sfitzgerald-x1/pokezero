@@ -35,14 +35,15 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from belief_coherence_gate import run_sweep
 
-        # Deliberately SMALL, and this is a known limitation rather than a choice: the Leftovers
-        # defect this harness found needs ~26-400 games to surface depending on seed, so a guard
-        # big enough to catch it would be red on this branch. It is raised in the PR that fixes
-        # that defect, where the tree is green. The fleet sweep is the real bar either way.
+        # 25 games at seed 4711, not 3 at seed 7. The Leftovers defect this harness found needed
+        # ~26 games at this seed (and 400 at others) to surface, so a 3-game guard was green on a
+        # red tree -- it could not have caught the very defect that motivated it. Seed chosen
+        # because it reaches the defect class fastest of those measured. The >=20k fleet sweep is
+        # still the real bar; this is the always-on regression floor.
         cls.summary = run_sweep(
             showdown_root=_integration_root(),
-            games=3,
-            seed=7,
+            games=25,
+            seed=4711,
             clone_equivalence_every=5,
         )
 
