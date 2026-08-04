@@ -425,10 +425,27 @@ def probe_residual_lethality_partition() -> None:
 #
 # NOTE on probe design: an HP-reading move (flail, bellydrum, painsplit) would
 # force the engine's own 16-roll fan and look like a cleaner oracle, but every
-# such move perturbs HP by construction -- flail can KO the attacker and
-# `stop_residuals_if_battle_ended` then cancels the defender's tick, and Belly
-# Drum's self-halving lands as damage on the defender's own side. Both inflate
-# the measured KO mass. Hence the reconstruction above.
+# such move perturbs HP by construction, and the two confounds push in OPPOSITE
+# directions:
+#   * Belly Drum's self-halving is emitted as damage on the defender's own side,
+#     so it INFLATES any metric summing damage to the defender.
+#   * a flail KO of the attacker ends the battle, so
+#     `stop_residuals_if_battle_ended` removes the defender's own tick from the
+#     instruction list -- the branch then scores as a survival and the metric
+#     DEFLATES.
+# An earlier version of this comment said both inflate; that was wrong for
+# flail, and the sign matters when reading such a probe's output.
+#
+# ALSO KNOWN, and not fixed here: `compare_health_with_damage_multiples`
+# accumulates its roll ladder in f32, so for 174 of the first 400 `max` values
+# the top rung lands one below `max`. Kill counts therefore differ from the true
+# `floor(max * r / 100)` fan for exactly the positions where
+# `threshold == max_damage`, where the ladder counts 0 kills and the truth counts
+# 1. Repro: hp 185/320 poisoned -> tick 40, threshold 145 == max 145; truth
+# 12.1094%, engine 6.2500% with no split at all. This predates the partition and
+# is inherited from an identity three pre-existing paths share (Case A has the
+# analogue at `threshold == hp == max_damage`), so it is registered rather than
+# fixed here. None of the cases below sits on that boundary.
 # ---------------------------------------------------------------------------
 def probe_residual_partition_masses() -> None:
     def build(hp, maxhp, status, toxic_count, weather, attacker_move):
@@ -467,11 +484,17 @@ def probe_residual_partition_masses() -> None:
     accuracy, crit_rate = 0.9, 1.0 / 16.0
 
     def compare(label, hp, maxhp, status, toxic_count, weather):
-        # True residual tick, measured with no attack in play.
+        # True residual tick, measured with no attack in play. Two limits on
+        # this oracle, both fine for the fixtures below and both worth knowing
+        # before adding another: it sums only damage, so a fixture carrying
+        # Leftovers or a threshold berry would net the heal against the tick and
+        # mis-measure it; and `expected` below assumes the miss branch is never
+        # itself a KO, which fails if hp <= tick.
         quiet = build(hp, maxhp, status, toxic_count, weather, "splash")
         tick = damage_to_defender(
             pe.generate_instructions(quiet, "splash", "splash")[0]
         )
+        assert tick < hp, "fixture invalid: the residual alone would KO"
         state = build(hp, maxhp, status, toxic_count, weather, "rockslide")
         max_regular = pe.calculate_damage(state, "rockslide", "splash", False)[0][0]
         max_crit = pe.calculate_damage(state, "rockslide", "splash", True)[0][1]
@@ -504,13 +527,28 @@ def probe_residual_partition_masses() -> None:
     compare("noncrit-split-sand", 130, 320, "none", None, "sand")
     # Whole non-crit fan residual-lethal: no split, mass must not move.
     compare("saturated-toxic", 123, 238, "toxic", 1, "none")
-    compare("saturated-burn", 130, 320, "burn", None, "none")
+    # NOT a Burn-tick assertion despite the status: at hp 130 the whole fan is
+    # lethal anyway, so this passes identically whether or not Burn is mirrored.
+    # It is a second saturated-fan case and is named for what it tests. The
+    # fixture that WOULD see the missing Burn tick is hp 170/320, where the
+    # truth is 70.7031% and the engine says 100.0000%; that is the open F2 gap,
+    # deliberately not asserted here because it would fail today.
+    compare("saturated-fan-second", 130, 320, "burn", None, "none")
     # Only the CRIT fan straddles: hp 280, tick 40 -> threshold 240, inside
     # (min_crit 207, max_crit 244], while the non-crit max of 122 cannot reach
     # it. This is the crit-fan arm the sweep left unexercised.
     compare("crit-fan-only", 280, 320, "poison", None, "none")
     # Nothing pending: the partition must not fire at all.
     compare("no-residual", 160, 320, "none", None, "none")
+    # Composition with the PRE-EXISTING crit-kill split, both firing in ONE
+    # call. hp 220 sits inside (min_crit 207, max_crit 244] so the crit-kill
+    # split fires, and Toxic at count 4 ticks 20*5 = 100, putting the residual
+    # threshold at 120 inside (min_regular 103, max_regular 122] so the non-crit
+    # residual split fires too. This is the one arrangement where a second
+    # in-place `update_percentage` would reintroduce the mass leak, so it must
+    # not be dropped -- and both thresholds must land strictly inside their fans
+    # or the case silently tests nothing.
+    compare("composes-with-crit-kill-split", 220, 320, "toxic", 4, "none")
 
 
 def _print_build_identity() -> None:
