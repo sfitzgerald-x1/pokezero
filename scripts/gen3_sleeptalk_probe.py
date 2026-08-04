@@ -13,9 +13,12 @@ GROUND TRUTH, read from the vendored simulator (gen3 inherits gen4, not gen5):
       moveid && !move.flags['nosleeptalk'] && !move.flags['charge']
 
   then samples it UNIFORMLY. Two gen3-specific details matter:
-    * `charge` (two-turn) moves are EXCLUDED. gen3 has 17 such moves, including
-      Solar Beam, Fly, Dig, Dive, Bounce, Sky Attack, Razor Wind and Skull Bash
-      (an earlier version of this line listed six and omitted Dive and Bounce);
+    * `charge` (two-turn) moves are EXCLUDED. 17 moves in the gen3 Dex table carry
+      the flag, of which 8 are gen3-LEGAL: Dig, Dive, Fly, Bounce, Skull Bash,
+      Razor Wind, Sky Attack, Solar Beam. The other 9 are `isNonstandard: Future`
+      entries the gen3 table retains; a gen3 set cannot contain them, and keeping
+      them in the membership test is the safer direction. (An earlier version of
+      this line listed six and omitted Dive and Bounce.);
     * if the sampled slot has 0 PP, gen3 emits `|cant|<mon>|nopp|<move>` and the
       turn does NOTHING. It does not resample.
 
@@ -82,8 +85,11 @@ from pokezero.showdown_fixture import FixturePokemon, run_multi_turn_fixture  # 
 # (`_AUDIT_ENGINE_RELATIVE_PATHS` lists `dist/sim`). Ask it.
 #
 # gen3 truth as of 2026-08-03, read from `Dex.forFormat("gen3randombattle")`:
-#   charge       17
-#   nosleeptalk  35
+#   charge       17 in the gen3 Dex table (8 of them gen3-legal)
+#   nosleeptalk  35 in the gen3 Dex table (14 of them gen3-legal)
+# The rest are `isNonstandard: Future` entries the gen3 table retains. A gen3 set
+# cannot contain them, so the unfiltered set is the safer membership test -- but
+# "gen3 has 35" would be the same species of overstatement this file is fixing.
 # The snapshots below are that output, used only when node/dist is unavailable.
 # When the Dex IS available its answer wins and any difference from the snapshot
 # is reported as drift rather than silently absorbed.
@@ -104,13 +110,28 @@ _GEN3_NOSLEEPTALK_SNAPSHOT = {
 
 _DEX_QUERY = """
 const {Dex} = require(process.argv[1]);
-const d = Dex.forFormat("gen3randombattle");
+const FORMAT = "gen3randombattle";
+// ASSERT what the resolver actually gave us. `Dex.forFormat` on an UNKNOWN format
+// does not raise: `this.formats.get(name)` returns a non-existent Format whose
+// `.mod` is the string "gen9", so `dexes[mod || BASE_MOD]` hands back the gen9
+// table -- 17 charge / 40 nosleeptalk, exactly the wrong answer this file exists
+// to stop reporting. A format rename upstream, a typo, or a stale
+// dist/config/formats.js would silently produce it. So verify the mapping exists
+// AND that the dex we got is gen3, and crash otherwise.
+if (!Dex.formats.get(FORMAT).exists) {
+  throw new Error(`format ${FORMAT} does not exist in this build; ` +
+                  `Dex.forFormat would silently fall back to the base (gen9) mod`);
+}
+const d = Dex.forFormat(FORMAT);
+if (d.gen !== 3 || d.currentMod !== "gen3") {
+  throw new Error(`resolver gave gen${d.gen}/${d.currentMod}, expected gen3/gen3`);
+}
 const charge = [], nost = [];
 for (const m of d.moves.all()) {
   if (m.flags && m.flags.charge) charge.push(m.id);
   if (m.flags && m.flags.nosleeptalk) nost.push(m.id);
 }
-process.stdout.write(JSON.stringify({charge, nosleeptalk: nost}));
+process.stdout.write(JSON.stringify({gen: d.gen, currentMod: d.currentMod, charge, nosleeptalk: nost}));
 """
 
 
@@ -127,11 +148,25 @@ def _move_flag_sets(showdown_root: str) -> tuple[set[str], set[str], str]:
         return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
                 f"SNAPSHOT (no {dex_js}; run `npx tsc` in the showdown checkout)")
     try:
+        # check=False on purpose: with check=True the CalledProcessError message
+        # embeds the whole query and says only "non-zero exit status 1", losing
+        # node's actual error -- the one useful part.
         proc = subprocess.run(
             ["node", "-e", _DEX_QUERY, str(dex_js)],
-            capture_output=True, text=True, timeout=120, check=True,
+            capture_output=True, text=True, timeout=120, check=False,
         )
+        if proc.returncode != 0:
+            detail = (proc.stderr or "").strip().splitlines()
+            why = detail[-1][:200] if detail else f"exit {proc.returncode}"
+            return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
+                    f"SNAPSHOT (Dex query failed: {why})")
         payload = json.loads(proc.stdout)
+        # Belt and braces: the JS asserts this, but the invariant belongs next to
+        # the code that consumes it too.
+        if payload.get("gen") != 3 or payload.get("currentMod") != "gen3":
+            return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
+                    f"SNAPSHOT (resolver reported gen{payload.get('gen')}/"
+                    f"{payload.get('currentMod')}, not gen3/gen3)")
         charge = {str(m) for m in payload["charge"]}
         nosleeptalk = {str(m) for m in payload["nosleeptalk"]}
     except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
@@ -142,12 +177,24 @@ def _move_flag_sets(showdown_root: str) -> tuple[set[str], set[str], str]:
     # case: it would be published with a resolver-backed provenance stamp while
     # most exclusions silently vanished -- the exact false negative this whole
     # file exists to prevent. Refuse to call that data-backed.
-    if len(charge) < len(_GEN3_CHARGE_SNAPSHOT) or len(nosleeptalk) < len(_GEN3_NOSLEEPTALK_SNAPSHOT):
+    # SUBSET, not cardinality. A same-size SUBSTITUTION -- e.g. `dive` replaced by
+    # a bogus id -- keeps the count at 35 while silently losing a real gen3
+    # exclusion, and a length check cannot see it. Growth is deliberately NOT
+    # gated: a legitimate upstream addition should be reported as drift with the
+    # resolver winning.
+    lost_charge = _GEN3_CHARGE_SNAPSHOT - charge
+    lost_nost = _GEN3_NOSLEEPTALK_SNAPSHOT - nosleeptalk
+    if lost_charge or lost_nost:
+        missing = []
+        if lost_charge:
+            missing.append(f"charge missing {sorted(lost_charge)}")
+        if lost_nost:
+            missing.append(f"nosleeptalk missing {sorted(lost_nost)}")
         return (charge | _GEN3_CHARGE_SNAPSHOT, nosleeptalk | _GEN3_NOSLEEPTALK_SNAPSHOT,
-                f"UNION of Dex and SNAPSHOT -- Dex returned fewer moves than the "
-                f"2026-08-03 snapshot (charge {len(charge)}<{len(_GEN3_CHARGE_SNAPSHOT)}, "
-                f"nosleeptalk {len(nosleeptalk)}<{len(_GEN3_NOSLEEPTALK_SNAPSHOT)}); "
-                f"treat as SUSPECT and re-derive")
+                f"UNION of Dex and SNAPSHOT -- the resolver LOST moves the "
+                f"2026-08-03 snapshot has ({'; '.join(missing)}); treat as SUSPECT "
+                f"and re-derive. Counts below are UNION sizes, so neither the "
+                f"resolver's answer nor the snapshot's")
     source = str(dex_js)
     drift = ((charge ^ _GEN3_CHARGE_SNAPSHOT) | (nosleeptalk ^ _GEN3_NOSLEEPTALK_SNAPSHOT))
     if drift:
@@ -171,7 +218,12 @@ def _emon(idn, moves, *, maxhp=300, hp=None, status="none"):
     )
 
 
-def reachability(showdown_root: str) -> dict:
+def reachability(
+    showdown_root: str,
+    charge: set[str],
+    nosleeptalk: set[str],
+    flag_source: str,
+) -> dict:
     """How many gen3 randbats sets pair Sleep Talk with a gen3-excluded move?
 
     SCOPE -- read this before quoting `reachable`. This measures SET COMPOSITION
@@ -188,7 +240,6 @@ def reachability(showdown_root: str) -> dict:
 
     from pokezero.randbat import Gen3RandbatSource
 
-    charge, nosleeptalk, flag_source = _move_flag_sets(showdown_root)
     excluded = charge | nosleeptalk
 
     # Real shape (read, not guessed): to_payload()["universes"][species]["variants"]
@@ -338,8 +389,11 @@ def main(argv=None) -> int:
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
 
-    # ONE Dex query, reused. Calling _move_flag_sets twice re-shells node and
-    # discarded the provenance for the fan-out rows.
+    # ONE Dex query, threaded into everything below. This genuinely is one query
+    # now: `reachability()` used to resolve again, so a `dist/` rebuild or a
+    # timeout between the two calls could produce one artifact whose top level
+    # said `dex.js` while its `reachability` block said `SNAPSHOT (failed...)`.
+    # This file's history is comments asserting things the code did not do.
     charge_moves, nosleeptalk_moves, flag_source = _move_flag_sets(args.showdown_root)
 
     report = {
@@ -355,7 +409,9 @@ def main(argv=None) -> int:
             "measures only the first two (see reachability.scope)."
         ),
         "flag_source": flag_source,
-        "reachability": reachability(args.showdown_root),
+        "reachability": reachability(
+            args.showdown_root, charge_moves, nosleeptalk_moves, flag_source
+        ),
         "engine_fanout": engine_fanout(charge_moves | nosleeptalk_moves),
         "showdown_calls": showdown_calls(args.showdown_root, args.seeds, args.seed_start),
     }
