@@ -26,7 +26,12 @@ What this probe reports:
 
   1. REACHABILITY — how many gen3 randbats sets pair Sleep Talk with a move gen3
      would exclude. A divergence nobody can reach is a footnote; one on the
-     randbats distribution is a bug.
+     randbats distribution is a bug. The `charge` / `nosleeptalk` sets are READ
+     from the vendored `data/moves.ts` flags (17 and 40 moves respectively), not
+     hardcoded; the report states which source was used. NOTE the scope limit:
+     this is SET COMPOSITION only and cannot see the 0-PP arm below, which is a
+     STATE condition. Do not quote `reachable: false` as "the divergence is
+     unreachable" -- it means "the FLAG arm is unreachable on this variant set".
   2. ENGINE FAN-OUT — the engine's branch count and weights for a curated set,
      against the count gen3's rule prescribes.
   3. SHOWDOWN DIFFERENTIAL — a scripted sleeping Sleep Talk user over N seeds:
@@ -55,13 +60,62 @@ import pokezero_search  # noqa: E402
 from pokezero.local_showdown import LocalShowdownConfig  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, run_multi_turn_fixture  # noqa: E402
 
-# gen3 two-turn (charge) moves — excluded by `flags['charge']`.
-GEN3_CHARGE_MOVES = {
+# The exclusion sets are READ FROM THE VENDORED SIMULATOR, not hardcoded.
+#
+# They used to be hardcoded while this file's docstring claimed the rule came from
+# `data/mods/gen3/moves.ts` flags. Independent review caught the drift: the
+# hardcoded `nosleeptalk` set held 5 moves where the data has 40, missing six
+# that a gen3 randbats set could plausibly carry -- `dive`, `bide`, `focuspunch`,
+# `uproar`, `mimic`, `sketch`. The recorded "unreachable" conclusion survives
+# recomputation with the corrected sets (still 0 affected variants), but the
+# false-negative mechanism was live, and a probe whose stated ground truth is a
+# file it does not read cannot be trusted the next time the format changes.
+#
+# Fallbacks are the old hardcoded sets, used only if the data cannot be read; the
+# probe reports which source it used so a fallback run is never mistaken for a
+# data-backed one.
+_FALLBACK_CHARGE = {
     "solarbeam", "fly", "dig", "skyattack", "razorwind", "skullbash", "bounce",
 }
-# gen3 moves carrying `nosleeptalk` that a randbats set could hold.
-GEN3_NOSLEEPTALK_MOVES = {"sleeptalk", "mirrormove", "assist", "metronome", "naturepower"}
-EXCLUDED = GEN3_CHARGE_MOVES | GEN3_NOSLEEPTALK_MOVES
+_FALLBACK_NOSLEEPTALK = {"sleeptalk", "mirrormove", "assist", "metronome", "naturepower"}
+
+
+def _move_flag_sets(showdown_root: str) -> tuple[set[str], set[str], str]:
+    """`(charge, nosleeptalk, source)` read from the vendored `data/moves.ts`.
+
+    gen3 inherits the base move table; `data/mods/gen3/moves.ts` overrides
+    individual entries but does not remove these two flags from the base ones, so
+    the base table is the right source for "which moves carry the flag at all".
+    """
+
+    import re
+    from pathlib import Path
+
+    path = Path(showdown_root) / "data" / "moves.ts"
+    try:
+        text = path.read_text()
+    except OSError:
+        return set(_FALLBACK_CHARGE), set(_FALLBACK_NOSLEEPTALK), f"FALLBACK (could not read {path})"
+
+    charge: set[str] = set()
+    nosleeptalk: set[str] = set()
+    # Top-level entries start at one tab of indentation: `\n\tmoveid: {`.
+    for entry in re.split(r"\n\t(?=[a-z0-9]+: \{)", text):
+        head = re.match(r"([a-z0-9]+): \{", entry)
+        if not head:
+            continue
+        flags_match = re.search(r"flags: \{([^}]*)\}", entry, re.S)
+        if not flags_match:
+            continue
+        flags = flags_match.group(1)
+        if re.search(r"\bcharge\s*:\s*1", flags):
+            charge.add(head.group(1))
+        if re.search(r"\bnosleeptalk\s*:\s*1", flags):
+            nosleeptalk.add(head.group(1))
+    if not charge or not nosleeptalk:
+        return (set(_FALLBACK_CHARGE), set(_FALLBACK_NOSLEEPTALK),
+                f"FALLBACK (parsed 0 flags from {path}; format may have changed)")
+    return charge, nosleeptalk, str(path)
 
 
 def _mon(species, moves, *, ability, item=None, level=80):
@@ -81,9 +135,24 @@ def _emon(idn, moves, *, maxhp=300, hp=None, status="none"):
 
 
 def reachability(showdown_root: str) -> dict:
-    """How many gen3 randbats sets pair Sleep Talk with a gen3-excluded move?"""
+    """How many gen3 randbats sets pair Sleep Talk with a gen3-excluded move?
+
+    SCOPE -- read this before quoting `reachable`. This measures SET COMPOSITION
+    only: does a rolled variant pair Sleep Talk with a move carrying `charge` or
+    `nosleeptalk`. The module docstring names a THIRD divergence, the 0-PP arm
+    (gen3 emits `|cant|MON|nopp|MOVE` and does not resample; poke-engine has no PP
+    test), and that one is a STATE condition -- reachable from any Sleep Talk
+    variant once a slot empties -- so no set-composition scan can see it. A
+    `reachable: false` here supports "the charge/nosleeptalk FLAG arm is
+    unreachable on this variant set", NOT "the get_sleep_talk_choices divergence
+    is unreachable". The returned dict says so in `scope` so a caller cannot quote
+    the narrow result as the broad one.
+    """
 
     from pokezero.randbat import Gen3RandbatSource
+
+    charge, nosleeptalk, flag_source = _move_flag_sets(showdown_root)
+    excluded = charge | nosleeptalk
 
     # Real shape (read, not guessed): to_payload()["universes"][species]["variants"]
     # is the list of concrete 4-move sets the generator can produce.
@@ -102,7 +171,7 @@ def reachability(showdown_root: str) -> dict:
             if "sleeptalk" not in pool:
                 continue
             with_sleeptalk += 1
-            for bad in sorted((pool & EXCLUDED) - {"sleeptalk"}):
+            for bad in sorted((pool & excluded) - {"sleeptalk"}):
                 conflicting[f"{species}:{bad}"] += 1
     return {
         "variants": variants,
@@ -110,10 +179,17 @@ def reachability(showdown_root: str) -> dict:
         "sleeptalk_plus_gen3_excluded_move": dict(conflicting),
         "affected_variant_count": sum(conflicting.values()),
         "reachable": bool(conflicting),
+        "scope": ("SET COMPOSITION ONLY. `reachable` covers the charge/nosleeptalk "
+                  "FLAG arm. The 0-PP arm is a STATE condition and is NOT measured "
+                  "here; do not read this as the whole get_sleep_talk_choices "
+                  "divergence being unreachable."),
+        "flag_source": flag_source,
+        "charge_move_count": len(charge),
+        "nosleeptalk_move_count": len(nosleeptalk),
     }
 
 
-def engine_fanout() -> list[dict]:
+def engine_fanout(excluded: set[str] | None = None) -> list[dict]:
     """Engine branch count vs the count gen3's exclusion rule prescribes."""
 
     cases = [
@@ -153,7 +229,7 @@ def engine_fanout() -> list[dict]:
                     called = line.split("|")[3].strip().lower().replace(" ", "")
                     break
             per_move[called or "(no call rendered)"] += pct
-        callable_gen3 = [m for m in moves if m not in EXCLUDED]
+        callable_gen3 = [m for m in moves if m not in (excluded or set())]
         rows.append({
             "case": name,
             "moveset": moves,
@@ -219,7 +295,9 @@ def main(argv=None) -> int:
             "SLEEPTALK and NONE. No nosleeptalk test, no charge test, no PP test."
         ),
         "reachability": reachability(args.showdown_root),
-        "engine_fanout": engine_fanout(),
+        "engine_fanout": engine_fanout(
+            set().union(*_move_flag_sets(args.showdown_root)[:2])
+        ),
         "showdown_calls": showdown_calls(args.showdown_root, args.seeds, args.seed_start),
     }
 
