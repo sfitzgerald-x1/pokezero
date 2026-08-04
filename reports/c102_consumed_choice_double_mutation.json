@@ -47,6 +47,14 @@
   "reachable_not_hypothetical": "a Sleep-Talk-called Fire or Ice move into a Thick Fat defender quarters base_power and roughly halves max_regular, so the reachability gate over-fires on non-crit rolls. Five Thick Fat holders appear among the divergent repros alone (Dewgong, Walrein, Grumpig, Hariyama, Miltank) and Sleep-Talk-with-Ice-Beam users (Articuno, Suicune) are common. Zero rows opened in this window, so it is unexercised here, not absent.",
   "the_dangerous_direction": "a false MATCH, not a divergence: Showdown crits, a non-crit arm is stamped |-crit|, and the boundary accepts on the wrong arm. The divergence count cannot see that, which is the failure class PR #1038 was written about.",
   "the_clean_fix": "identify_sleep_talk_called already holds the pristine candidate before cloning and mutating it. Returning it alongside SleepTalkIdent::Matched gives the callee path a genuinely pristine Choice and removes the fallback entirely. No new machinery.",
-  "status": "OPEN follow-up. Found by independent review of PR #1055 AFTER the wrong-slot fix landed -- i.e. the review found a second defect behind the first."
+  "status": "OPEN, with a written cause and an explicit disposition. Not implemented.",
+  "disposition": {
+   "class": "RENDERER FIX",
+   "why_that_class": "the engine is correct -- before_move applying once per call is the intended contract. The defect is that the renderer's expectation path invokes it a second time on a Choice that has already been through it. Nothing in gen3 changes.",
+   "the_fix": "thread the pristine candidate out of identify_sleep_talk_called, which already holds it before cloning and mutating it, and remove the choice.clone() fallback in render_move_phase entirely. No new machinery.",
+   "gate": "a pin that fails when reverted, plus a single-variable sweep. The pin matters MORE than usual: the failure direction is a FALSE MATCH, so the sweep cannot detect a regression on its own -- a wrongly-tagged non-crit arm makes a boundary ACCEPT, which LOWERS the divergence count while worsening fidelity. A test is the only instrument that sees it.",
+   "expected_scope": "0 rows in this window. It is unexercised here, not absent. Do not expect the count to move; the signal is the pin flipping, not the number.",
+   "implemented": false
+  }
  }
 }
