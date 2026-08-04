@@ -1,6 +1,6 @@
 {
- "schema": "c103-limit-roll-divergent-lethality-readjudication/3",
- "status": "5 of 7 re-adjudicated. NONE is roll-divergent lethality. The class is collecting at least TWO distinct defect classes.",
+ "schema": "c103-limit-roll-divergent-lethality-readjudication/4",
+ "status": "COMPLETE. 7 of 7 re-adjudicated. ZERO are comparison limits. The entire family is defects across two classes, both now caused.",
  "why_this_exists": "reports/c91 and reports/c89 each filed a replay-based re-adjudication of the 7 remaining limit:roll_divergent_lethality rows and NEITHER RAN. The only pass that ever examined them is reports/c92, retracted for method. So the 8-row limit count in reports/c99 rests on the divergence-class name, not on evidence.",
  "era": {
   "commit": "04e7784e",
@@ -64,12 +64,11 @@
   "status": "NOT ATTEMPTED. Recorded so the next attempt does not discover the threading requirement mid-implementation and mistake it for a one-line accept."
  },
  "next_actions_in_order": [
-  "replay 19000198/33 and 19000199/61 -- the last two. Two commands, and they settle the limit floor.",
-  "write the cause for the lethal-residual source-labelling class (19000147/125, 19000191/63). Nothing covers it yet.",
-  "implement C96's disposition with the threading recorded above -- now FOUR rows, not three (adds 19000089/53).",
+  "implement C96's disposition -- faint with no |-damage| reconciles against an engine capped_lethal equal to remaining HP. FIVE rows now. Needs the threading recorded in this report.",
+  "implement C104's fix -- preserve the source on a lethal residual, mirroring _to_full. THREE rows, routing mapped site-by-site in reports/c104.",
   "reports/c102's callee double-mutation -- failure direction is a false MATCH the divergence count cannot see.",
   "LS_capped_lethal_shape's residual-lethality partition (C89/C97), 7 rows, engine fix.",
-  "cause 19000093/51, /53 and 19000098/79."
+  "cause 19000093/51, /53 (C98 has two live candidates) and 19000098/79."
  ],
  "19000089_53": {
   "verdict": "NOT A LIMIT. Third member of the faint-without-a-damage-event class.",
@@ -119,5 +118,38 @@
   "the_headline": "FIVE of five examined are defects, not limits, across TWO distinct classes. The limit:roll_divergent_lethality label has been absorbing both because both produce a capped_lethal whose counterpart is absent or differently-sourced, which is the same SHAPE as a roll disagreement and none of them is one.",
   "what_this_does_to_the_count": "reports/c99 records 8 limit rows. At most 3 survive as candidates -- the 2 unexamined plus limit:world_sample_drag_target, which is the only one that is registered and evidence-backed. The fix queue grows by 5, and one of those 5 needs a cause written from scratch.",
   "and_it_reframes_clause_2": "if the two unexamined rows go the same way, the residue's genuine-limit content is ONE row. Clause 2 would then be satisfied only by implementing essentially every remaining fix -- which is a much more demanding target than an 8-row limit floor implied, and it is the honest one."
+ },
+ "19000198_33": {
+  "verdict": "NOT A LIMIT. reports/c104 class -- the parser overwrites a source Showdown supplied.",
+  "showdown_line": "|-damage|p1a: Hitmontop|0 fnt|[from] psn",
+  "observed": "p1 move=-91, capped_lethal=-25",
+  "engine_93pct": "p1 psn=-28, move=-84",
+  "the_cause": "Showdown SUPPLIES [from] psn and the parser replaces it with capped_lethal because the mon fainted. The engine keeps psn. The move roll also differs (91 against 84) but the roll bucket absorbs that; the attribution mismatch is what rejects."
+ },
+ "19000199_61": {
+  "verdict": "NOT A LIMIT. reports/c96 class -- faint with no damage event. FOURTH member.",
+  "boundary": "Banette uses Destiny Bond; Earthquake KOs it for 42; Destiny Bond kills Piloswine.",
+  "observed": "p1 (NOTHING) | p2 capped_lethal=-42",
+  "engine_100pct": "p1 capped_lethal=-316 | p2 capped_lethal=-42",
+  "the_cause": "the Destiny Bond faint carries |faint| with no |-damage|, so p1's observed set is empty while the engine correctly charges Piloswine's full 316 HP. p2 agrees EXACTLY at -42, so no roll is in dispute."
+ },
+ "FINAL_RESULT": {
+  "examined": 7,
+  "genuine_limits_found": 0,
+  "c96_class_faint_with_no_damage_event": [
+   "19000024/61",
+   "19000077/47",
+   "19000089/53",
+   "19000199/61"
+  ],
+  "c104_class_parser_overwrites_a_supplied_source": [
+   "19000147/125",
+   "19000191/63",
+   "19000198/33"
+  ],
+  "the_headline": "the ENTIRE limit:roll_divergent_lethality family is defects, in two classes, and both classes now have a written source-level cause. Not one of the seven has a roll in dispute -- in every case where both sides carry a comparable component they agree exactly (-27, -42, -88), and the rejection is always attribution: either an event Showdown never rendered as damage, or a source the harness erased.",
+  "why_the_label_survived_this_long": "it matches on SHAPE. A capped_lethal whose counterpart is absent or differently-sourced looks exactly like a roll disagreement. The label was reporting two unrelated defects -- one in the renderer's event vocabulary, one in the harness's own parser -- back as a property of the comparison. reports/c91 and reports/c89 each filed this re-adjudication and neither ran it, so the label went unchallenged for an era.",
+  "what_it_does_to_clause_2": "decisive, and it makes the goal harder. The residue's genuine-limit content is ONE row: limit:world_sample_drag_target, the only family that is registered and evidence-backed. So clause 2 -- 'remaining divergence consists only of comparison limits' -- is satisfied only when the residue reaches 1, not 8. Every other row in the residue is a fix.",
+  "what_it_does_to_the_queue": "+7 rows of fix work, and both causes are already written, so none of it needs investigation. C96's disposition now covers FOUR rows (19000152/53, 19000024/61, 19000077/47, 19000089/53, 19000199/61 -- five counting the original) and C104's covers three."
  }
 }
