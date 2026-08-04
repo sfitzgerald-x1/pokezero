@@ -1,6 +1,6 @@
 {
- "schema": "c103-limit-roll-divergent-lethality-readjudication/2",
- "status": "2 of 7 rows re-adjudicated. BOTH are the same already-caused defect class, not limits. A pattern is emerging and it is not favourable to the limit count.",
+ "schema": "c103-limit-roll-divergent-lethality-readjudication/3",
+ "status": "5 of 7 re-adjudicated. NONE is roll-divergent lethality. The class is collecting at least TWO distinct defect classes.",
  "why_this_exists": "reports/c91 and reports/c89 each filed a replay-based re-adjudication of the 7 remaining limit:roll_divergent_lethality rows and NEITHER RAN. The only pass that ever examined them is reports/c92, retracted for method. So the 8-row limit count in reports/c99 rests on the divergence-class name, not on evidence.",
  "era": {
   "commit": "04e7784e",
@@ -64,10 +64,60 @@
   "status": "NOT ATTEMPTED. Recorded so the next attempt does not discover the threading requirement mid-implementation and mistake it for a one-line accept."
  },
  "next_actions_in_order": [
-  "replay the five unexamined limit rows: 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. Cheap, and it sizes everything else.",
-  "implement C96's disposition with the threading above -- 3 rows across 3 families.",
-  "reports/c102's callee double-mutation. Unexercised but its failure direction is a FALSE MATCH, which the divergence count cannot see.",
-  "LS_capped_lethal_shape's residual-lethality partition (C89/C97) -- the largest family at 7, engine fix.",
-  "cause 19000093/51 and /53 (segmentation; C98 has two live candidates) and 19000098/79."
- ]
+  "replay 19000198/33 and 19000199/61 -- the last two. Two commands, and they settle the limit floor.",
+  "write the cause for the lethal-residual source-labelling class (19000147/125, 19000191/63). Nothing covers it yet.",
+  "implement C96's disposition with the threading recorded above -- now FOUR rows, not three (adds 19000089/53).",
+  "reports/c102's callee double-mutation -- failure direction is a false MATCH the divergence count cannot see.",
+  "LS_capped_lethal_shape's residual-lethality partition (C89/C97), 7 rows, engine fix.",
+  "cause 19000093/51, /53 and 19000098/79."
+ ],
+ "19000089_53": {
+  "verdict": "NOT A LIMIT. Third member of the faint-without-a-damage-event class.",
+  "boundary": "Banette uses Destiny Bond; Lanturn's Ice Beam KOs it for 27; Destiny Bond then kills Lanturn.",
+  "observed": "p1 capped_lethal=-27 | p2 (NOTHING)",
+  "engine_100pct": "p1 capped_lethal=-27 | p2 capped_lethal=-217",
+  "the_cause": "identical to 19000024/61 -- the Destiny Bond faint carries |faint| with no |-damage|, so p2's observed set is empty while the engine correctly charges Lanturn's full 217 HP. The p1 side agrees EXACTLY at -27, so no roll is in dispute here either.",
+  "disposition": {
+   "class": "MATCHER or RENDERER FIX, per reports/c96",
+   "implemented": false
+  }
+ },
+ "a_second_distinct_class": {
+  "rows": [
+   "19000147/125",
+   "19000191/63"
+  ],
+  "verdict": "NOT roll-divergent lethality either, but NOT the faint-without-damage class. A THIRD thing: source labelling on a LETHAL RESIDUAL.",
+  "19000147_125": {
+   "observed": "p2 psn=-54",
+   "engine_87pct": "p2 capped_lethal=-53",
+   "note": "Showdown labels the poison tick psn; the engine labels the same tick capped_lethal. Magnitudes 54 against 53. The SOURCE differs, and the source determines the bucket."
+  },
+  "19000191_63": {
+   "observed": "p1 itemleftovers=+14, move=-109, capped_lethal=-28",
+   "engine_79pct": "p1 itemleftovers=+14, leechseed=-29, move=-106",
+   "note": "the Leech Seed tick that KILLS Raichu. Showdown DOES emit a damage line here -- |-damage|p1a: Raichu|0 fnt|[from] Leech Seed -- but the harness records it as capped_lethal because the mon faints, while the engine records it as leechseed. So this is not a missing event; it is the same event labelled two ways."
+  },
+  "why_this_matters": "these two are NOT closed by C96's disposition. C96 handles a faint with NO damage line. Here the line exists and the disagreement is which SOURCE it is attributed to when the tick is lethal. That is a separate fix and it needs its own cause written -- neither report covers it."
+ },
+ "result_of_the_readjudication": {
+  "examined": 5,
+  "genuine_limits_found": 0,
+  "faint_without_damage_event": [
+   "19000024/61",
+   "19000077/47",
+   "19000089/53"
+  ],
+  "lethal_residual_source_labelling": [
+   "19000147/125",
+   "19000191/63"
+  ],
+  "still_unexamined": [
+   "19000198/33",
+   "19000199/61"
+  ],
+  "the_headline": "FIVE of five examined are defects, not limits, across TWO distinct classes. The limit:roll_divergent_lethality label has been absorbing both because both produce a capped_lethal whose counterpart is absent or differently-sourced, which is the same SHAPE as a roll disagreement and none of them is one.",
+  "what_this_does_to_the_count": "reports/c99 records 8 limit rows. At most 3 survive as candidates -- the 2 unexamined plus limit:world_sample_drag_target, which is the only one that is registered and evidence-backed. The fix queue grows by 5, and one of those 5 needs a cause written from scratch.",
+  "and_it_reframes_clause_2": "if the two unexamined rows go the same way, the residue's genuine-limit content is ONE row. Clause 2 would then be satisfied only by implementing essentially every remaining fix -- which is a much more demanding target than an 8-row limit floor implied, and it is the honest one."
+ }
 }
