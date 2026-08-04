@@ -2343,7 +2343,10 @@ fn render_move_phase(
     // Walk the effect tail. Faints are DEFERRED to the end of the phase
     // (real protocol: recoil/drain lines come before the |faint| lines).
     let mut defender_hits: i64 = 0;
-    let mut dragged = [false, false];
+    // Named distinctly from the Sleep Talk walk's own `dragged` further up: two
+    // locals of the same name in one function is the trap the arm-order pin exists
+    // for. Review flagged it.
+    let mut dragged_this_phase = [false, false];
     let mut crit_emitted = false;
     let mut damage_lines_done = false;
     let mut roughskin_emitted = false;
@@ -2403,7 +2406,15 @@ fn render_move_phase(
             // before any component test. That is the second half of B1 and is a
             // separate commit, measured separately, per the program's rule against
             // mixing a classifier change with a fidelity change.
-            Instruction::Damage(damage) if dragged[side_usize(damage.side_ref)] => {
+            // Guarded on the DEFENDER as well as the flag. Review proved the
+            // attacker-side path is dead code -- get_instructions_from_drag always
+            // switches `attacking_side.get_other_side()` and returns immediately, and
+            // the pivot path only toggles flags -- but narrowing costs nothing and
+            // closes it by construction rather than by argument.
+            Instruction::Damage(damage)
+                if dragged_this_phase[side_usize(damage.side_ref)]
+                    && damage.side_ref == defender =>
+            {
                 sim.apply(ins);
                 let ident = ctx.active_ident(sim.state, damage.side_ref);
                 let condition = sim.hp_condition(damage.side_ref);
@@ -2698,7 +2709,7 @@ fn render_move_phase(
                 // hazard chip, not move damage. Without this the chip fell through
                 // to the generic Damage arm below and rendered as a bare
                 // `|-damage|` with no `[from]`. reports/c117 cause B1.
-                dragged[side_usize(switch.side_ref)] = true;
+                dragged_this_phase[side_usize(switch.side_ref)] = true;
             }
             _ => sim.apply(ins),
         }
