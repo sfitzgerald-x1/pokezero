@@ -1,5 +1,5 @@
 {
- "schema": "c95-final-three-shapes/2",
+ "schema": "c95-final-three-shapes/3",
  "REVISION_NOTE": "v1 of this report was WRONG on I4's mechanism and wrong on two of I5's three rows, and it labelled percentages and cross-slot components as replay-derived when they were miss-derived. Rewritten after adversarial review. What v1 got right: the three row memberships, and that I3 is roll-inherited.",
  "era": {
   "engine_fingerprint_at_authoring": "d9cab2b1cf9fc011e410229b46e6aa7ec9c400231c5671d0979b1fcda2dfd260",
@@ -70,7 +70,10 @@
     "engine_extra": "psn -16 (Crawdaunt 257/16, toxic) -- NOT itemleftovers as v1 claimed",
     "divergence_class": "component_extra_in_engine:psn"
    },
-   "19000098/79": "{'shape': 'NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5.'} EVICTED WITH NO DESTINATION AND NO CAUSE. Candidate worth checking cheaply: with the I5 rule bypassed, cert_sweep_readout.py:363-364 ('roll-scaled' in majority and 'capped_lethal' in majority) would send it to LS_capped_lethal_shape, and its 75% majority miss matches both substrings. Not verified."
+   "19000098/79": {
+    "shape": "NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5.",
+    "eviction": "EVICTED WITH NO DESTINATION AND NO CAUSE. Candidate worth checking cheaply: with the I5 rule bypassed, cert_sweep_readout.py:363-364 ('roll-scaled' in majority and 'capped_lethal' in majority) would send it to LS_capped_lethal_shape, and its 75% majority miss matches both substrings. Not verified."
+   }
   },
   "v1_causal_claim_RETRACTED": "v1 said 'a forced-replacement boundary is not a full turn: Showdown runs no residual phase'. That is FALSE as a general gen3 rule and the repo already said so. gen3 sends the replacement out BEFORE the residual block (generate_instructions.rs:3222-3246, PR #876, verified against the real sim by scripts/gen3_switch_differential.py::faintresiduals), so residuals run and APPLY TO THE REPLACEMENT. tests/fixtures/showdown/explosion-seed148.log.gz turn 7 is exactly this shape and shows Showdown healing the incoming replacement and emitting |upkeep.",
   "the_actual_distinguisher": "whether the residual block ALREADY RAN, not the shape of the ply. An ACTION-phase faint defers residuals to the replacement ply, which then applies them to the replacements. A RESIDUAL-phase faint (both actives die inside the block) has already executed it, so the replacement ply is bare. Both remaining rows are the second kind. force_switch cannot distinguish them, and in this harness it is reconstructed from the self request only (src/pokezero/engine_world.py:411, :496), so it is true on side one for both.",
