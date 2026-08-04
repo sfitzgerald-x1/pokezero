@@ -382,10 +382,25 @@ fn effective_speed(state: &State, side: SideReference) -> i16 {
     };
     let active = side_ref.get_active_immutable();
     let mut speed = side_ref.calculate_boosted_stat(PokemonBoostableStat::Speed) as f32;
-    match state.weather.weather_type {
-        Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
-        Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
-        _ => {}
+    // GUARDED on weather_is_active, which the engine's get_effective_speed does
+    // and this replica did not. AIR LOCK and CLOUD NINE suppress weather
+    // entirely, so Swift Swim must not double a speed while either is on the
+    // field. Measured on 19000093/51: Rayquaza (AIR LOCK) against Seaking
+    // (SWIFT SWIM) in RAIN. Unguarded, this gave Seaking 348 against Rayquaza's
+    // 261 and the replica declared SideTwo first; the engine suppressed the rain
+    // and moved SideOne first. segment() tries only the order it computes, so it
+    // regenerated the wrong side as phase 1, no candidate was a prefix of the
+    // real instruction list, and the ENTIRE branch was voided as
+    // `segmentation_failed` -- taking ~85% of that boundary's mass with it.
+    //
+    // Third instance of the replica hazard, after `end_of_turn_triggered`
+    // (PR #1037) and `move_order` itself. reports/c107.
+    if state.weather_is_active(&state.weather.weather_type) {
+        match state.weather.weather_type {
+            Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
+            Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
+            _ => {}
+        }
     }
     if side_ref
         .volatile_statuses

@@ -1,0 +1,33 @@
+{
+ "schema": "c108-airlock-speed-replica/1",
+ "headline": "the renderer's `effective_speed` replica omits the engine's `weather_is_active` guard, so AIR LOCK and CLOUD NINE do not suppress weather for it. That flips the computed move order, and because `segment()` tries only the order it computes, the ENTIRE branch is voided as `segmentation_failed`.",
+ "status": "CAUSE CONFIRMED AND FIX VERIFIED CORRECT. Not shippable alone -- it exposes an interaction worth 6 rows. Both must land together.",
+ "this_causes_the_last_uncaused_rows": "19000093/51 AND 19000093/53. Both close under the fix. Clause 1's remaining gap is closed by this.",
+ "the_measurement_that_found_it": {
+  "probe": "printed the renderer's effective_speed for both sides plus every input field, at the segmentation_failed site.",
+  "output": "eff1=261 eff2=348 raw1=174 raw2=174 weather=RAIN st1=NONE st2=NONE boost1=1 boost2=0 ab1=AIRLOCK ab2=SWIFTSWIM",
+  "the_read": "Rayquaza (SideOne) has AIR LOCK; Seaking (SideTwo) has SWIFT SWIM; it is RAINING. The replica doubled Seaking to 348 against Rayquaza's 261 and declared SideTwo first. The engine suppressed the rain and moved SideOne first -- which the pair-generated list confirms, since it BEGINS with `Damage SideTwo`, i.e. SideTwo receiving.",
+  "the_source_difference": "engine `get_effective_speed` wraps its weather match in `if state.weather_is_active(&state.weather.weather_type)`. The renderer's replica has NO guard. Everything else about the two functions is identical -- I diffed the modifier lists in reports/c107 and they match, which is why the formula was ruled out and the inputs were the remaining place to look.",
+  "blast_radius_beyond_order": "any renderer consumer of effective_speed inherits it. Air Lock is a Rayquaza ability and Rayquaza is common in this pool."
+ },
+ "the_fix": {
+  "form": "wrap the weather match in `state.weather_is_active(...)`, mirroring the engine.",
+  "measured": "transition:matched 15208 -> 15205, transition:diverged 15 -> 19, strict:lossy_render 11 -> 0, skip:strict_all_branches_lossy 1 -> 0. Both sides reconcile to 15224, 0 engine errors, 94 lib tests pass.",
+  "closed": "19000093/51 and 19000093/53 -- BOTH segmentation rows, which is the whole remaining clause-1 gap.",
+  "lossy_render_to_zero": "the counter that actually tracks this defect went to ZERO. Segmentation now succeeds on every branch in the corpus."
+ },
+ "the_interaction_that_blocks_shipping": {
+  "what_happens": "the same six rows the faint-without-damage fix closed re-open: 19000024/61, 19000077/47, 19000089/53, 19000098/79, 19000152/53, 19000199/61. Net +4.",
+  "why_it_is_an_INTERACTION_and_not_a_regression": "those six boundaries were previously VOIDED by the very segmentation failure this fix repairs -- their branches were lossy and excluded from comparison. Now they render, so they are compared for the first time, and they diverge. The fix did not break them; it made them visible.",
+  "the_likely_mechanism_NOT_YET_CONFIRMED": "the faint synthesis added to the parser in the C96 fix runs on ANY protocol passed to `damage_components`, including the ENGINE's newly-rendered one. If the engine's rendered protocol carries both a `-damage ... 0 fnt` for its Damage instruction and a bare `|faint|`, the synthesis may add a phantom component on the engine side. I have NOT verified this and am not claiming it -- it is the first thing to check.",
+  "the_decisive_check": "replay one of the six with the Air Lock fix applied and compare the engine branch's component list against its rendered protocol. One run.",
+  "why_this_is_good_news_not_bad": "it means the six rows were never really closed -- they were closed against a voided engine branch. The C96 fix's measured -6 was partly an artifact of comparing against nothing. That is exactly the class of defect PR #1038 was written about, and it would have stayed hidden without this fix."
+ },
+ "disposition": {
+  "class": "RENDERER FIX",
+  "implemented": true,
+  "shippable_alone": false,
+  "sequencing": "land with the interaction resolved, and re-measure the combined effect. Do NOT ship the Air Lock guard alone at +4, and do NOT drop it -- it is correct and it is the only thing that closes the two segmentation rows.",
+  "gate": "a pin on effective_speed under AIR LOCK plus RAIN plus SWIFT SWIM that fails when the guard is reverted, and a sweep reporting matched, skip and lossy together."
+ }
+}
