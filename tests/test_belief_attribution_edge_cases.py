@@ -13,7 +13,6 @@ Charizard is the probe species throughout — 6 variants over 5 distinct items, 
 that is honoured for variant matching cuts the candidate set 6 -> 1, and one that is
 suppressed leaves it at 6. That makes "did this reveal narrow?" directly observable.
 """
-import os
 import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine

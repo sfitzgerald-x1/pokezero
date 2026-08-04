@@ -35,7 +35,6 @@ untyped reveal DEGRADES SAFELY: no narrowing, rather than excluding every typed 
 "tighter" matcher requiring an exact id would collapse all 130 Hidden-Power-carrying species to
 the inconsistent fallback, silently, on a channel the belief system feeds.
 """
-import os
 import pathlib
 import re
 import unittest

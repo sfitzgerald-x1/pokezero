@@ -14,7 +14,6 @@ live env (not a replay fixture) because the batch replay path does not reconstru
 beliefs, so it cannot exercise the belief slots this test exists to guard.
 """
 from __future__ import annotations
-import os
 import random
 from pathlib import Path
 import unittest

@@ -23,7 +23,6 @@ Probe species, all checked for reachability in the gen3 randbats pool:
     Dance, Rollout, Uproar, Fly, Dig and Razor Wind are all absent from gen3 randbats);
   * Snorlax — Rest + Sleep Talk, the pool's called-move surface.
 """
-import os
 import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine

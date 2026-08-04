@@ -8,7 +8,6 @@ Requires a built Gen 3 Showdown checkout (same skip gate as test_input_coverage)
 capture logs are controlled foul-play games committed under tests/fixtures.
 """
 
-import os
 import unittest
 from pathlib import Path
 from _showdown_root import showdown_root_str

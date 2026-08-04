@@ -11,7 +11,6 @@ round-trip coverage, with pre-v3 payload bytes unchanged for fail-free games.
 """
 
 import json
-import os
 import unittest
 from hashlib import sha256
 from dataclasses import replace

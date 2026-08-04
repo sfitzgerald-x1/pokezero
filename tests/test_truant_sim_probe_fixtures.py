@@ -11,7 +11,6 @@ Skipped when the Showdown checkout is unavailable.
 
 from __future__ import annotations
 
-import os
 import unittest
 from pathlib import Path
 from _showdown_root import showdown_root_str

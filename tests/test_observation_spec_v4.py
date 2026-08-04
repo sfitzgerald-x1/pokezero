@@ -11,7 +11,6 @@ absent — it is already in the observation and the plan's contribution was noti
 ``test_observation_spec_v3.py`` owns the v3 surface; this file only asserts v3 is unperturbed.
 """
 
-import os
 import unittest
 from dataclasses import replace
 from pathlib import Path
