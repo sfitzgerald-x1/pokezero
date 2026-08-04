@@ -38,7 +38,7 @@ only: no classifier change, no fidelity change.**
 | 19000112/32 | `component_missing_in_engine:itemleftovers` | **A6** White Herb absent from gen3 — *not* A1 | engine fix |
 | 19000125/226 | `component_missing_in_engine:psn` | **A5** contact-ability trigger precedes the same-turn wake | engine fix |
 | 19000147/125 | `limit:roll_divergent_lethality` | **A2** unmirrored residual **heal** | engine fix — misfiled as a limit |
-| 19000191/63 | `limit:roll_divergent_lethality` | **A2** unmirrored residual **heal** | engine fix — misfiled as a limit |
+| 19000191/63 | `component_magnitude:heal` | **A7** collapsed lethal arm discards the clamped sap | engine fix |
 | 19000198/33 | `limit:roll_divergent_lethality` | **A3** — same stale read | **CLOSED** by #1065 |
 
 **Six causes. Zero rows demonstrated to be genuine comparison limits.** All three
@@ -210,3 +210,56 @@ Queue, ordered by rows × search impact:
 
 Divergence count reported as an outcome: **9** after #1065, from 208 at the era
 baseline.
+
+
+---
+
+# Addendum 2 — A7, and a retraction of the phrase "roll granularity"
+
+`19000191/63` was described after the A2 work as a "roll-granularity defect".
+**That phrasing is wrong and is withdrawn.** It implies rounding or precision
+loss. There is none: gen3 damage rolls are exact integers and every clamp in the
+end-of-turn phase is integer arithmetic. Nothing is lost to precision anywhere in
+this row.
+
+## The actual mechanism
+
+A2 fixed this row's *threshold* — 108 is correct, and the engine's lethality
+verdict now agrees with Showdown, which is why the class moved off
+`limit:roll_divergent_lethality`. What survives is a different defect.
+
+The engine collapses the residual-lethal arm onto a single representative damage,
+its minimum (108), because for **lethality** all seven rolls in that arm are
+interchangeable — every one of them kills. That collapse is sound only if death is
+the sole observable consequence. It is not. Leech Seed's sap is
+`min(maxhp / 8, hp)`, clamped to the victim's HP *at step 10.5*, and that HP is
+roll-dependent:
+
+| roll | after move | +Leftovers (14) | sap `min(29, hp)` | heal delivered cross-side |
+|---|---|---|---|---|
+| 108 | 15 | 29 | 29 | **29** |
+| 109 | 14 | 28 | 28 | **28** |
+| 110 | 13 | 27 | 27 | **27** |
+
+All three die. But 10.5 heals the *other* side by the sapped amount, so the
+opponent's heal is 29 / 28 / 27. Showdown rolled 109 and emitted
+`|-heal|p2a: Tangela|229/277 par|[silent]` = **+28**; the collapsed arm offers only
+**+29**. Hence `component_magnitude:heal`.
+
+## Why this is the program's recurring shape, not a special case
+
+This is the same structural defect as the crit-kill split (C27) and the
+residual-lethality partition (C109/A2): **a collapsed arm whose members differ in
+an observable the collapse discarded.** Each of those fixes partitions one arm on
+one threshold because the collapse was hiding one distinction. Here the discarded
+distinction is the clamped sap.
+
+**Disposition: engine fix — an ENGINE SUPPORT GAP, not a limit and not a
+methodology artifact.** The clamp binds only when
+`hp_after_move + leftovers_heal < maxhp / 8`; above that boundary every roll saps
+the full `maxhp / 8` and the rolls genuinely are interchangeable. So the lethal arm
+needs partitioning at exactly that boundary, in the same shape as every prior
+partition in this stack.
+
+Filed as **A7** and queued alongside the Case A three-way partition, not off to one
+side as something the methodology cannot reach.
