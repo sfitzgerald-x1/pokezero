@@ -29,6 +29,12 @@ on:
       - "scripts/verify_poke_engine_source.py"
       - "third_party/poke-engine-base-source.json"
       - "tests/test_branch_mass_reconstruction.py"
+      # Without these the classifier half of B1 -- which edits the differential --
+      # triggers no workflow at all. Found by review of #1081.
+      - "scripts/engine_transition_differential.py"
+      - "src/pokezero/**"
+      - "tests/test_sleep_talk_phaze_drag.py"
+      - "tests/test_instruction_event_mapping.py"
       - "tests/test_poke_engine_patch_stack.py"
       - ".github/workflows/engine-fidelity-gates.yml"
 
@@ -73,6 +79,14 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_poke_engine_patch_stack -v 2>&1 | tee /tmp/patchstack.log
+          # A count assertion as well as a skip assertion. grep-for-'skipped'
+          # cannot notice a DELETED test: removing three of four leaves the step
+          # green, which is the "reads PASS while asserting less than intended"
+          # shape this workflow's header forbids. Found by review of #1081.
+          if ! grep -qE 'Ran 4 tests' /tmp/patchstack.log; then
+            echo "::error::expected 4 tests; the suite shrank or grew"
+            exit 1
+          fi
           if grep -q 'skipped' /tmp/patchstack.log; then
             echo "::error::a patch-stack test SKIPPED; the tamper guard did not run"
             exit 1
@@ -99,6 +113,14 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_branch_mass_reconstruction -v 2>&1 | tee /tmp/massgate.log
+          # A count assertion as well as a skip assertion. grep-for-'skipped'
+          # cannot notice a DELETED test: removing three of four leaves the step
+          # green, which is the "reads PASS while asserting less than intended"
+          # shape this workflow's header forbids. Found by review of #1081.
+          if ! grep -qE 'Ran 4 tests' /tmp/massgate.log; then
+            echo "::error::expected 4 tests; the suite shrank or grew"
+            exit 1
+          fi
           if grep -q 'skipped' /tmp/massgate.log; then
             echo "::error::the mass gate SKIPPED; it must never skip"
             exit 1
@@ -114,8 +136,34 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_crit_kill_split_patch -v 2>&1 | tee /tmp/searchgates.log
+          # A count assertion as well as a skip assertion. grep-for-'skipped'
+          # cannot notice a DELETED test: removing three of four leaves the step
+          # green, which is the "reads PASS while asserting less than intended"
+          # shape this workflow's header forbids. Found by review of #1081.
+          if ! grep -qE 'Ran 8 tests' /tmp/searchgates.log; then
+            echo "::error::expected 8 tests; the suite shrank or grew"
+            exit 1
+          fi
           if grep -q 'skipped' /tmp/searchgates.log; then
             echo "::error::a search-side gate SKIPPED"
+            exit 1
+          fi
+
+      # The crate is already built above, so this costs about a minute -- and it is
+      # what makes the renderer pins real. CI passed on #1081 while never running the
+      # four pins that cleared its BLOCK, because no workflow runs cargo test. A pin
+      # nothing executes is the #1080 lesson repeated one layer down.
+      - name: Crate suites, including the renderer pins
+        run: |
+          set -o pipefail
+          cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 | tee /tmp/cargo.log
+          suites=$(grep -cE '^test result: ok' /tmp/cargo.log)
+          if [ "$suites" -lt 32 ]; then
+            echo "::error::expected at least 32 passing crate suites, got $suites"
+            exit 1
+          fi
+          if grep -qE '^test result: FAILED' /tmp/cargo.log; then
+            echo "::error::a crate suite failed"
             exit 1
           fi
 
