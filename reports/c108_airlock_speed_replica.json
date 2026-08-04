@@ -12,16 +12,16 @@
  },
  "the_fix": {
   "form": "wrap the weather match in `state.weather_is_active(...)`, mirroring the engine.",
-  "measured": "transition:matched 15208 -> 15205, transition:diverged 15 -> 19, strict:lossy_render 11 -> 0, skip:strict_all_branches_lossy 1 -> 0. Both sides reconcile to 15224, 0 engine errors, 94 lib tests pass.",
+  "measured": "SINGLE VARIABLE, C96 branch -> C96 branch + this guard: transition:matched 15208 -> 15211 (+3), transition:diverged 15 -> 13 (-2), strict:lossy_render 11 -> 0, skip:strict_all_branches_lossy 1 -> 0. Both arms reconcile to 15224, 0 engine errors. TWO closed, ZERO newly divergent. (An earlier revision of THIS FIELD carried 15208 -> 15205 and 15 -> 19 -- the retracted two-variable numbers. Those are wrong and are superseded by the line above; see RETRACTION_of_v1s_interaction_claim.)",
   "closed": "19000093/51 and 19000093/53 -- BOTH segmentation rows, which is the whole remaining clause-1 gap.",
   "lossy_render_to_zero": "the counter that actually tracks this defect went to ZERO. Segmentation now succeeds on every branch in the corpus."
  },
  "disposition": {
   "class": "RENDERER FIX",
   "implemented": true,
-  "shippable_alone": true,
+  "shippable_alone": "UNMEASURED. The only single-variable arm is C96 -> C96+guard. The guard has NEVER been measured on main alone -- the one attempt to do so is the retracted v1, which was mis-based. Do not rely on this to split the PR; splitting would ship the guard on an unmeasured base.",
   "sequencing": "lands with or after C96; measured on top of it at -2 with nothing opened.",
-  "gate": "a pin on effective_speed under AIR LOCK + RAIN + SWIFT SWIM that fails when the guard is reverted."
+  "gate": "DELIVERED: air_lock_suppresses_swift_swim_in_the_speed_replica, verified to fail when the weather_is_active guard is reverted. An earlier revision of this field listed the pin as owed."
  },
  "RETRACTION_of_v1s_interaction_claim": {
   "what_v1_said": "that the fix re-opened the six rows the faint-without-damage fix had closed, net +4, because those boundaries had been voided by the segmentation failure and were now compared for the first time -- and that the C96 fix's -6 was 'partly an artifact of comparing against nothing'.",
@@ -40,5 +40,8 @@
   "closed": "19000093/51 and 19000093/53 -- both segmentation rows",
   "newly_divergent": "ZERO",
   "note": "lossy_render to zero means segmentation now succeeds on every branch in the corpus, and the skip bucket is empty."
- }
+ },
+ "citations_that_do_not_resolve_yet": "this file cites reports/c107 as the evidence that ruled out the speed FORMULA (the modifier lists match, so the disagreement had to be in the inputs). c103 through c107 exist only on unmerged branches, so those citations do not resolve on main. The exclusion is independently checkable by diffing effective_speed against get_effective_speed, and review confirmed it. Same applies to the reports/c103 citation in the parser comment and the faint pin.",
+ "the_replica_is_ELIMINABLE": "review found gen3's get_effective_speed is PUB, not private -- made public by third_party/poke-engine-gen3-residual-speed-order.patch -- and it lives in a module events.rs already imports from. So the doc comment 'Replica of the private get_effective_speed' is factually WRONG, and deleting the replica in favour of calling the engine's own function would retire this drift class permanently rather than patching one instance. moves_first and end_of_turn_triggered ARE private, so those replicas must stay. Not done here -- it is a behaviour change needing its own sweep -- and it is the better fix.",
+ "the_same_guard_is_missing_elsewhere": "residual_damage_cause matches weather for SAND/HAIL with no weather_is_active guard, and tests weather BEFORE partialtrap -- so under Air Lock a partial-trap tick renders [from] Sandstorm. Its sibling weather_chips IS guarded, so the two attribution paths disagree. Reachable via the H.1 fallback, and 2 component_missing_in_engine:sandstorm rows are open in all three arms. One-line follow-up, not done."
 }

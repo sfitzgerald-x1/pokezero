@@ -4367,13 +4367,19 @@ mod tests {
         state.side_two.get_active().ability = Abilities::SWIFTSWIM;
         let base = effective_speed(&state, SideReference::SideTwo);
 
-        // No suppressor on the field: Swift Swim doubles.
-        state.side_one.get_active().ability = Abilities::NONE;
-        let doubled = effective_speed(&state, SideReference::SideTwo);
+        // Anchor on the UN-doubled read. An earlier version of this test set
+        // side_one's ability to NONE and asserted the result equalled `base` --
+        // but NONE is already the fixture's ability, so it compared two
+        // identical pure computations over an unmutated state and could not
+        // fail. It never asserted that Swift Swim doubles anything.
+        let doubled = base;
+        state.side_two.get_active().ability = Abilities::NONE;
+        let undoubled = effective_speed(&state, SideReference::SideTwo);
+        state.side_two.get_active().ability = Abilities::SWIFTSWIM;
         assert_eq!(
             doubled,
-            base,
-            "control: with no suppressor the two reads must agree"
+            undoubled * 2,
+            "SWIFT SWIM must double in rain with no suppressor: {undoubled} -> {doubled}"
         );
 
         // AIR LOCK on the OPPONENT must suppress it.
