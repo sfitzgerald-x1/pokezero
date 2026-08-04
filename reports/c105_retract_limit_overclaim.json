@@ -1,0 +1,26 @@
+{
+ "schema": "c105-retraction-of-c103-and-c104/1",
+ "headline": "reports/c103 claimed 'the ENTIRE limit:roll_divergent_lethality family is defects, 7 of 7, ZERO limits'. That is FALSE. Two of the seven are GENUINE comparison limits, and reports/c104's cause for them is wrong. Both retracted here.",
+ "what_i_got_right": "five of the seven ARE defects and are now closed. The faint-without-a-damage-event fix landed and measured 21 -> 15, closing 19000024/61, 19000077/47, 19000089/53, 19000199/61 and 19000152/53 plus 19000098/79. That half of C103 holds and is verified by measurement.",
+ "what_i_got_wrong": {
+  "the_two_rows": [
+   "19000147/125",
+   "19000191/63"
+  ],
+  "c104_said": "the differential's parser overwrites the source of any lethal damage event, replacing psn / leechseed with the literal capped_lethal, so Showdown's attribution is discarded and the two sides cannot agree.",
+  "the_overwrite_is_real_but_is_not_the_cause": "the parser really does relabel -- that part of C104 is correct at source and remains a latent attribution defect worth fixing on its own merits. But it is NOT what makes these two rows diverge. I read the label mismatch and stopped there instead of doing the arithmetic.",
+  "the_actual_mechanism": "roll-divergent lethality -- exactly what the class name said all along.",
+  "19000147_125": "Bellossom pre 116, badly poisoned. SHOWDOWN: Ice Punch -78 leaves 38, Leftovers +18 leaves 56, the toxic tick -54 leaves 2 -- IT SURVIVES, so its component keeps the source psn. ENGINE: Ice Punch -81 leaves 35, Leftovers +18 leaves 53, the tick kills -- so its component is capped_lethal=-53. A THREE HP difference in the preceding roll decides survive-versus-die. The label mismatch is a CONSEQUENCE of the different outcome, not its cause.",
+  "19000191_63": "the same shape with Leech Seed and the sides reversed. SHOWDOWN: move -109, Leftovers +14, the seed tick KILLS -- capped_lethal=-28. ENGINE: move -106, Leftovers +14, leechseed -29 -- SURVIVES. Again three HP of roll decides it.",
+  "and_they_are_genuine_limits": "the engine's non-crit arms are collapsed to -81 and -106; Showdown's realised rolls were -78 and -109. Neither realised roll is in the branch support, so the realised OUTCOME is not reachable from the enumerated set. That is the branch-set-versus-single-realised-sample shape the programme reserves the label for. limit:roll_divergent_lethality was RIGHT for these two rows."
+ },
+ "how_the_error_happened": "I found three rows of a real defect class in a row, formed the generalisation 'this family is mislabelled', and then read the remaining rows THROUGH that generalisation. For these two I saw a source mismatch -- psn against capped_lethal -- which is what the first three looked like, and stopped. Doing the HP arithmetic takes one minute and shows the sources differ because the outcomes differ. A pattern that held 3-for-3 became a lens instead of a hypothesis.",
+ "the_corrected_tally": {
+  "family_size": 7,
+  "defects_now_closed": 5,
+  "genuine_comparison_limits": 2,
+  "limit_rows_in_the_residue": "3 -- these two plus limit:world_sample_drag_target",
+  "supersedes": "reports/c103 v4's FINAL_RESULT and reports/c104's stated cause. C104's observation about the parser overwrite stands as a separate latent defect and should be re-filed on its own, NOT as the cause of these rows."
+ },
+ "what_this_does_to_clause_2": "it moves the target back OUT. I had said the residue's genuine-limit content was ONE row, so clause 2 required the residue to reach 1. It is THREE, so clause 2 is satisfied at 3. That is easier than I last reported and harder than the original 8 -- and it is now derived from arithmetic on every row rather than from a class name or a generalisation."
+}
