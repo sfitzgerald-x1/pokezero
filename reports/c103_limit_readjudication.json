@@ -1,6 +1,6 @@
 {
- "schema": "c103-limit-roll-divergent-lethality-readjudication/1",
- "status": "STARTED. 1 of 7 rows re-adjudicated by replay. The first row is NOT a comparison limit -- it is a defect whose cause is already written.",
+ "schema": "c103-limit-roll-divergent-lethality-readjudication/2",
+ "status": "2 of 7 rows re-adjudicated. BOTH are the same already-caused defect class, not limits. A pattern is emerging and it is not favourable to the limit count.",
  "why_this_exists": "reports/c91 and reports/c89 each filed a replay-based re-adjudication of the 7 remaining limit:roll_divergent_lethality rows and NEITHER RAN. The only pass that ever examined them is reports/c92, retracted for method. So the 8-row limit count in reports/c99 rests on the divergence-class name, not on evidence.",
  "era": {
   "commit": "04e7784e",
@@ -31,7 +31,25 @@
    "note": "closing C96's Perish Song row and this one is likely one change, not two."
   }
  },
- "what_this_implies_for_the_count": "reports/c99 records 8 limit rows and calls this re-adjudication the biggest open question because it cuts both ways. It has now cut: one of the seven is a known defect class, so the honest limit count is at most 7 and the fix queue grows by one. Six rows remain unexamined -- 19000077/47, 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. A prior review noted 19000077/47 is a REST row whose observed outcome is absent from every arm, so it is worth doing next.",
+ "what_this_implies_for_the_count": "reports/c99 records 8 limit rows. Two are now shown to be a known defect class, so the honest limit count is at most 6 and the fix queue grows by two. The re-adjudication has cut in the direction that grows the work both times it has been run.",
  "method": "scripts/replay_residue.py --report /tmp/sweep_main_final.json --seed <s> --step <t>. Not branch_misses, per reports/c94.",
- "honest_scope": "one row of seven. I am not extrapolating from it -- the other six may well be genuine limits, and the point of the exercise is that nobody has looked."
+ "honest_scope": "one row of seven. I am not extrapolating from it -- the other six may well be genuine limits, and the point of the exercise is that nobody has looked.",
+ "19000077_47": {
+  "verdict": "NOT A COMPARISON LIMIT. Same class as 19000024/61 and as reports/c96's 19000152/53.",
+  "boundary": "Misdreavus uses Mean Look on Suicune; Suicune is asleep and cannot move; then |-start|p2a: Suicune|perish0, |upkeep|, |faint|p2a: Suicune. Perish Song reaches zero and kills it.",
+  "observed": "p1 (nothing) | p2 (NOTHING)",
+  "engine_100pct": "p1 (none) | p2 capped_lethal=-270",
+  "the_cause": "the engine is RIGHT -- Damage SideTwo: 270 is Suicune's full HP. Showdown kills it too, and |faint| is in the protocol, but a Perish Song faint is expressed as |-start| perish0 plus |faint| with NO |-damage| LINE. So the observed component set is empty and the engine carries a capped_lethal with no counterpart.",
+  "this_is_literally_c96s_row_mate": "reports/c96 caused 19000152/53 as exactly this: Perish Song, faint with no damage event, dispositioned MATCHER or RENDERER FIX and explicitly NOT a comparison limit. This row is the same move, the same mechanism, and was filed in a different family.",
+  "disposition": {
+   "class": "MATCHER or RENDERER FIX, per reports/c96",
+   "implemented": false
+  }
+ },
+ "the_pattern": {
+  "two_of_two": "both rows examined so far are faint-without-a-damage-event, and both were already caused -- Destiny Bond and Perish Song. Neither has a roll in dispute: in 19000024/61 the engine's 88 and the observed 88 agree exactly, and in 19000077/47 there is no damage roll anywhere in the boundary.",
+  "why_the_class_collects_them": "limit:roll_divergent_lethality matches on SHAPE -- a capped_lethal component whose counterpart is absent -- which is indistinguishable from a faint the observation never rendered as damage. The class name asserts a roll disagreement that neither row has. This is a self-attributing label doing work the evidence does not support, which is the thing the programme's rules were written against.",
+  "implication": "if the remaining five are the same, the limit count drops from 8 to 1 -- leaving only limit:world_sample_drag_target, which IS registered and evidence-backed -- and clause 2's target becomes a single row. I am NOT claiming that. Five rows are unexamined: 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. Two of two is a pattern worth stating and not a result.",
+  "one_fix_may_close_several": "C96's disposition -- a |faint| with no preceding |-damage| must reconcile against an engine capped_lethal equal to the victim's remaining HP -- would close 19000152/53, 19000024/61 and 19000077/47 together. That is three rows across three families for one change, and it is the cheapest remaining item in the queue."
+ }
 }
