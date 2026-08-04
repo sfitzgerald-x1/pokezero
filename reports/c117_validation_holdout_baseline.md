@@ -2,9 +2,23 @@
 
 C116 Phase 1 item 5. The first out-of-window measurement in this program's history.
 
-Era: `main` `89bbabe4`, engine fingerprint `8a00d812b41566a0`, 58 patches, mass gate
+Era: engine fingerprint `8a00d812b41566a0`, 58 patches, mass gate
 (`tests/test_branch_mass_reconstruction.py`) green at 4 tests. Artifacts
-`/tmp/sweep_holdout.json` (holdout) and `/tmp/sweep_ca.json` (dev window, same engine).
+`/tmp/sweep_holdout.json` (holdout, `source_commit 89bbabe4`) and `/tmp/sweep_ca.json`
+(dev window, `source_commit 6ba1145b`).
+
+**The two artifacts have different source commits and the same engine fingerprint.**
+That is what makes the comparison valid, and it should be stated rather than left to a
+reader: `git diff 6ba1145b 89bbabe4 -- scripts src rust third_party` shows
+`engine_transition_differential.py` and the entire search crate untouched; the only
+`src` changes are path-portability helpers in `local_showdown.py` / `randbat.py`. The
+fingerprint is a real engine stamp, not the C111 v1 mix-up: the differential nulls the
+venv stamp unless it equals `compute_fingerprint()` recomputed from tracked patch bytes
+at run time (`scripts/engine_transition_differential.py:2493-2500`).
+
+The holdout also carries `abort:max_steps: 1` — one of the 200 games was truncated
+(`measured_fraction_of_full_rounds` 0.9530 against the dev window's 0.9534). Recorded
+because "0 engine errors" alone reads as "nothing anomalous".
 
 ---
 
@@ -42,8 +56,10 @@ Two structural facts change the interpretation.
 
 **Game concentration.** Four games produce fourteen of the twenty-five rows:
 `19100122` alone produces **seven** (steps 13, 117, 147, 151, 164, 169, 181), plus
-`19100180` three, and `19100072` and `19100142` two each. Twenty-one of the 200 games
-produce no divergence at all. So this is not a uniformly worse window; it is a window
+`19100180` three, and `19100072` and `19100142` two each. The 25 rows fall in **15
+distinct seeds, so 185 of the 200 games produce no divergence at all** — confirmed by
+`divergent_transitions_per_game: 0.125` = 25/200. (An earlier revision said "twenty-one
+games", which was wrong and understated how clean the window is. Corrected by review.) So this is not a uniformly worse window; it is a window
 containing a few games that exercise a mechanism the dev window barely touches.
 
 ## 3. The eleven drag rows are B1, not comparison limits — one verified at source
@@ -69,12 +85,33 @@ which C111 v2 recorded from the dev window's `19000008/54`, where the same class
 was applied to a row in which "the engine dragged the *same* Pokémon and only a
 component tag differed".
 
-**Attribution status, stated precisely.** One of the eleven is verified at source. The
-other ten share the class and the window's phazing-heavy character, so B1 is the
-*hypothesis* for them, not an established fact. Ten replays are owed before this is a
-finding rather than a lead. Under the C116 M1 rule none of the eleven may be called a
-limit without a demonstration artifact, and the one row examined actively refutes the
-limit reading.
+**Attribution status: the hypothesis is now DISCHARGED, 11 of 11.** An earlier revision
+of this section recorded one verified row and ten owed replays. Review examined all
+eleven and every one carries the identical signature — observed has an exact `spikes`
+component for the dragged-in Pokémon, and some engine arm carries the same magnitude
+untagged, with the magnitude matching that specific Pokémon's `maxhp/8` (Shuckle 24,
+Donphan 35, Victreebel 45 at two layers, Medicham 28, Cloyster 27).
+
+**Two of them falsify the limit reading by arithmetic alone.** `19100122/169` and
+`/181` have `branch_count: 1` at 100% mass — there is no drag-target ambiguity for a
+limit to be *about*. So the "if B1 covers all eleven" line below is the actual reading,
+not the optimistic one.
+
+Two precision corrections to this section: the mis-tag is an *empty / unattributed*
+source (`source == ''`), not literally the string `move`; and the claim that the Shuckle
+arm carries `spikes=-29` is not shown by that arm's output — its miss line breaks at the
+roll check so its exact components were never printed. The `-29` is provable instead
+from the Ho-Oh arm, whose `observed_only` omits it. Ho-Oh is Flying and therefore Spikes-
+immune, which is also why only five arms carry chip.
+
+The renderer site is now pinned: `rust/pokezero-search/src/events.rs:2383` renders a
+defender `Damage` in the ordinary move path as a bare `|-damage|` with no `[from]`.
+Both other paths already special-case Spikes (`events.rs:1055`, and the Sleep Talk walk
+at `events.rs:1706-1741`); the phazing path was the one missed. And the classifier
+really does short-circuit: `scripts/engine_transition_differential.py:1761` returns
+`limit:world_sample_drag_target` on the mere presence of a `|drag|` line, before any
+component test — so that class name can never distinguish a target limit from anything
+merely co-occurring with a drag.
 
 If B1 accounts for all eleven, the holdout residue is **14** and the rate 0.0909% —
 still 1.98× the dev window, so the overfit finding survives the mitigation entirely.
@@ -87,18 +124,50 @@ by rows × search impact — the program's own ranking rule — it is now first,
 cheap: a renderer tag fix plus a classifier fix that stops applying the drag limit on
 the mere presence of `|drag|`, measured separately per the program's rule.
 
-**The remaining fourteen are mostly already-named causes.** `sandstorm` ×2 and
-`roll_divergent_lethality` ×2 are the A4/A7 residual-lethality family; the
-`itemleftovers` / `leechseed` / `psn` singletons are the A2 ordered-phase family; the
-`movewish` row touches Wish, which #1066 ordered at step 7 and C116 §4's
-pool-reachability check confirms is reachable (16 species). `roll_scaled_component` ×4
-is the one group with no obvious owner and should be replayed first among them.
+**The remaining fourteen, re-filed from replays rather than from class names.** An
+earlier revision assigned these families by reading the class strings, and review found
+four of the assignments wrong — which is exactly the failure mode
+`limit:world_sample_drag_target` has now caused twice.
 
-**This is evidence for the compression claim, not against it.** "36 rows was never 36
-investigations" predicted that out-of-window rows would attribute to existing causes
-rather than open new ones. On first inspection they do: no new mechanism has appeared,
-one known classifier defect dominates, and the rest fall into two already-named
-families. The count went up; the *number of causes* did not.
+| rows | class | actual cause |
+|---|---|---|
+| `19100002/53`, `19100154/75` | `missing:sandstorm` | **A1**, not A4/A7. `19100002/53` has `branch_count: 1` — there is no fan to partition. One side faints *to the sandstorm tick* and the engine omits the other side's tick. |
+| `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | **A2**, not A4/A7. Both are **burn**-residual kills, i.e. A2's explicitly named unmirrored-Burn case. |
+| `19100181/45` | `extra:itemleftovers,psn,sandstorm` | **A1**, not A2 — the engine ran a residual phase Showdown did not. |
+| `19100193/46`, `19100014/35` | `mismatch/missing: leechseed` | a **renderer tag** defect like B1, not A2. The engine tags an 18 HP heal `leechseed`, but `290/16 = 18` is Leftovers and Miltank's sap would be `273/8 = 34`. |
+| `19100148/76`, `19100179/21` | `roll_scaled_component` | **collapse tax** — Pain Split's amount is a function of the arm's representative roll, so a collapsed fan gives a 3 HP error. Absorbed by Phase 2 enumerate-then-merge. |
+| `19100072/17`, `/19` | `roll_scaled_component` | **NEW CAUSE** — Belly Drum at +6, below. |
+| `19100180/24` | `extra:spikes` | unowned. The engine applies `spikes -32` to p1 where Showdown applies none — a side-condition state divergence, not A2. |
+| `19100012/61`, `19100113/62`, `19100122/…`, `19100142/…`, `19100180/7,/40` | `limit:world_sample_drag_target` | **B1**, 11/11 (§3) |
+
+The `movewish` row is `19100181/45` above. Wish is reachable (16 species per C116 §4's
+pool check) and was ordered at step 7 by #1066.
+
+**A NEW CAUSE DID APPEAR, and an earlier revision of this section denied it.** That
+revision said "no new mechanism has appeared". It was refuted by two rows of this
+report's own artifact.
+
+`19100072/17` and `/19`, both `roll_scaled_component` — the group this report called
+unowned. Linoone at 131/261 uses Belly Drum; Showdown emits `|move|Belly Drum|[still]`
+followed by `|-fail|`, while the engine pays `('', -130)` = `maxhp/2`. HP is *above*
+half (131 > 130), so Showdown's failure cannot be the HP clause — it is the
+`boosts.atk >= 6` clause, and the engine state confirms `attack_boost = 6`.
+
+Verified at source: `third_party/poke-engine-src/src/gen3/choice_effects.rs:643-645`
+computes `let boost_amount = 6 - attacking_side.attack_boost;` and then guards only on
+`if attacker.hp > attacker.maxhp / 2`. There is **no** `attack_boost` guard, so at +6 the
+engine pays half its HP for a boost of zero. Two rows, 8% of this window, and
+search-relevant: the engine believes it loses 130 HP for nothing.
+
+Extra sting, and an M2 instance in landed code:
+`third_party/poke-engine-gen3-bellydrum-roll-gate.patch` quotes only *half* of
+Showdown's predicate (`target.hp <= target.maxhp / 2`) and on that basis calls the
+engine "faithful on both parities".
+
+**The compression claim survives, but weaker than stated.** Ten of eleven... rather:
+23 of 25 rows attribute to existing causes and 2 open a new one. So the count rose and
+the number of causes rose by one — not by twenty-five. That is still strong evidence
+for "36 rows was never 36 investigations", and it is no longer an unqualified claim.
 
 ## 5. What is owed
 
@@ -110,7 +179,9 @@ families. The count went up; the *number of causes* did not.
 
 ## 6. A note on what this measurement cost
 
-Nothing. It is 200 games, nine minutes, and it should have been run months ago —
+Nothing. It is 200 games and **13.6 minutes** (`elapsed_seconds: 817.91`; an earlier
+revision said nine, which was the dev window's 611.84 s misremembered), and it should
+have been run months ago —
 before the first fix, as a baseline. The reason it was not is that the dev window's
 counter was falling, and a falling number is a poor prompt to ask whether you are
 measuring the right thing. The plan was right to make this Phase 1 rather than Phase 4.
