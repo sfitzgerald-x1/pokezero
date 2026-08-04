@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import unittest
 
+from _showdown_root import showdown_root_str  # noqa: E402
+from pokezero.dex import load_showdown_dex
 from pokezero.engine_world import _apply_forecast_types, _apply_live_typechange, _apply_transform
 from pokezero.poke_engine_adapter import MoveSpec, PokemonSpec, SideSpec
 
@@ -142,7 +144,11 @@ class RetypePrecedenceTest(unittest.TestCase):
             "p1": SideSpec((_mon("kecleon", "colorchange", ("Normal",)),)),
             "p2": SideSpec((_mon("gengar", "levitate", ("Ghost", "Poison")),)),
         }
-        transformed = _apply_transform(sides, {"p1": "gengar"})
+        # `dex` became required when the copied moveset started taking its PP from the
+        # catalog; this call site predates that.
+        transformed = _apply_transform(
+            sides, {"p1": "gengar"}, dex=load_showdown_dex(showdown_root_str())
+        )
         self.assertEqual(transformed["p1"].pokemon[0].types, ("Ghost", "Poison"))
         after = _apply_live_typechange(transformed, _payload(p1="type:Water"))
         self.assertEqual(

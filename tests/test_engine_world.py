@@ -1022,7 +1022,12 @@ class DittoTransformLiveTests(unittest.TestCase):
         from pokezero.dex import load_showdown_dex
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        # `showdown_root_str()`, not a hardcoded path. The cherry-picked commit predates
+        # tests/_showdown_root.py, which exists precisely because ~23 files each wrote a
+        # maintainer home directory into this PUBLIC repo -- and
+        # test_public_invariant.py::test_no_internal_identifiers_in_tracked_files fails on
+        # exactly that, which is how this was caught.
+        root = showdown_root_str()
         dex = load_showdown_dex(root)
         ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
                                item="Quick Claw", level=100)
@@ -1696,6 +1701,11 @@ class BridgeBuiltTransformRevertsLiveTests(unittest.TestCase):
         sides = _apply_transform(
             {"p1": SideSpec(pokemon=(transformer, reserve)), "p2": SideSpec(pokemon=(donor,))},
             {"p1": "Gengar"},
+            # `dex` became required when the copied moveset started taking its PP from
+            # the catalog rather than the donor's remaining PP. These two tests landed on
+            # main after that change was written, so they are the only call sites that
+            # had not been updated.
+            dex=_dex(),
         )
         state = build_poke_engine_state(
             BattleSpec(side_one=sides["p1"], side_two=sides["p2"])
