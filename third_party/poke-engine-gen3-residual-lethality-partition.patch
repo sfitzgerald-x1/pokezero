@@ -60,21 +60,30 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
-@@ -2453,6 +2506,13 @@
-     mut final_instructions: &mut Vec<StateInstructions>,
-     branch_on_damage: bool,
- ) {
-+    // Bound at FUNCTION level, before anything borrows `state`. The
-+    // residual-lethality partition further down needs it, and every site there
-+    // already holds a borrow of `state` through `defender_active`. An earlier
-+    // placement next to `crit_chance` was in a SIBLING block whose scope closes
-+    // before the use. reports/c109.
+@@ -2989,6 +3042,22 @@
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         return;
+     }
++
++    // Read the defender's pending end-of-turn damage HERE, not at function
++    // level. At function entry this call's own earlier mutations have not been
++    // applied yet -- including a switch -- so a function-level read observes the
++    // OUTGOING Pokemon. Seed 19000058 step 19: the defender switched in already
++    // Toxic at 123/238, but the pre-switch active was a different, unstatused
++    // Pokemon on 179, so the mirror returned 0 and the partition never fired on
++    // a boundary where all of its conditions hold.
++    //
++    // The earlier comment here claimed the binding HAD to sit at function level
++    // because `defender_active` holds a mutable borrow. That is false and was
++    // disproved by compiling it at this position; the real earlier failure was a
++    // placement next to `crit_chance`, in a SIBLING block whose scope closed
++    // before the use. reports/c109, reports/c111 cause A3.
 +    let pending_at_end_of_turn =
 +        pending_residual_damage(state, &attacking_side.get_other_side());
-     if state.use_damage_dealt {
-         reset_damage_dealt(
-             state.get_side(&attacking_side),
-@@ -3056,6 +3116,50 @@
+ 
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     let defender_active = defender_side.get_active();
+@@ -3056,6 +3125,50 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
@@ -125,7 +134,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,11 +3187,44 @@
+@@ -3083,11 +3196,44 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {
