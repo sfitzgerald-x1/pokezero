@@ -38,5 +38,17 @@
   "implemented": false
  },
  "how_this_was_found": "reports/c103 re-adjudicated the limit:roll_divergent_lethality rows -- a re-adjudication filed by reports/c91 and reports/c89 and never run -- and found five of five were defects rather than limits, across two classes. Three were the already-caused faint-without-damage class. These two were the residue that nothing covered, and this is their cause. Neither would have been visible without running the re-adjudication.",
- "and_it_explains_the_label": "limit:roll_divergent_lethality has been absorbing these because the overwrite makes every lethal residual look like a roll-scaled component whose counterpart disagrees -- which is the exact shape of a roll dispute. The label was reporting the parser's own erasure back as a property of the comparison."
+ "and_it_explains_the_label": "limit:roll_divergent_lethality has been absorbing these because the overwrite makes every lethal residual look like a roll-scaled component whose counterpart disagrees -- which is the exact shape of a roll dispute. The label was reporting the parser's own erasure back as a property of the comparison.",
+ "implementation_map": {
+  "note": "I started the implementation and stopped when it turned out to touch four sites plus a delicate existing path. Recording the map so the next attempt is turn-key rather than exploratory.",
+  "the_assignment": "scripts/engine_transition_differential.py:517 -- `source = \"capped_lethal\"` becomes `source = f\"{source}_capped_lethal\"`.",
+  "the_three_routing_sites_that_mirror__to_full": [
+   ":601 -- `if source in _ROLL_SCALED_SOURCES or source.endswith(\"_to_full\")`. Must also accept `_capped_lethal` or the component leaves the roll bucket and the magnitude relaxation this branch exists for is lost.",
+   ":826-827 -- `capped = component.source.endswith(\"_to_full\")` and the base-stripping beneath it. Needs the same suffix handling so attribution compares on the BASE source (psn against psn) rather than on the decorated string.",
+   ":884-885 -- the capped-heal bound gate, `if not obs_source.endswith(\"_to_full\") and not _eng_source.endswith(\"_to_full\")`. Decide deliberately whether a capped LETHAL takes the same bound as a capped HEAL."
+  ],
+  "the_delicate_part_and_why_i_stopped": "the BARE `capped_lethal` source already has its own handling -- a one-sided `abs(obs) <= abs(eng) + 1` test, and the file's own comment at the capped-heal bound records that applying that one-sided form to capped heals WAS A DEFECT ('it rejected the motivating Rest case, 251 vs 247, while accepting a 24x-too-small 10 vs 247'). So the suffix change must not silently route lethal residuals into, or out of, that test by accident. Getting that wrong produces a plausible sweep number in either direction, which is the failure mode this programme keeps recording.",
+  "how_to_verify": "single-variable sweep against main at 04e7784e (diverged 21, matched 15202, skip 1, lossy 11), reporting matched and skip alongside diverged, plus the closed/opened row identities. A pin that fails when reverted. Do NOT assume the scope: LS_capped_lethal_shape is 7 rows and is named for this literal, but reports/c100 predicted 10 and measured -7.",
+  "status": "NOT IMPLEMENTED. The cause is established; the routing is mapped; the risk is concentrated in one adjacent path."
+ }
 }
