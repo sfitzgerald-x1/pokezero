@@ -3715,6 +3715,347 @@ pub fn branch_events(
 mod tests {
     use super::*;
 
+    /// #1048 VALIDATED: every confident Sleep Talk attribution names the callee
+    /// the ENGINE actually used. 0 wrong attributions over 1,271 branches.
+    ///
+    /// (An earlier version of this line said 1,278 -- a figure lifted from a
+    /// reviewer's independently-built matrix rather than derived from this one.
+    /// Recorded because carrying an unverified number is the failure mode this
+    /// whole test exists to guard against.)
+    ///
+    /// #1048 converted ~5,000 refusals into confident `|move| … [from] Sleep Talk`
+    /// lines and nothing checked whether they were RIGHT. The feared failure: the
+    /// true callee fails to reproduce its own tail while exactly one WRONG
+    /// candidate reproduces it, yielding a confident wrong protocol line where
+    /// there used to be a loud refusal. That is strictly worse than a refusal,
+    /// which is loud, because a wrong attribution silently poisons the fold.
+    ///
+    /// GROUND TRUTH — the engine labels the tail, not a re-implementation of the
+    /// matcher. For each callee C, re-run the FULL pair generator on a state whose
+    /// only non-Sleep-Talk slot is C. Every instruction list that run emits is one
+    /// the engine itself emits when the callee is C. That is independent of
+    /// `identify_sleep_talk_called` by construction: it never calls it, and it
+    /// reconstructs none of its inputs.
+    ///
+    /// A first version of this test labelled tails by re-running the identifier's
+    /// own predicate — same `get_sleep_talk_choices`, same
+    /// `generate_instructions_from_move`, same byte-equality — which made the
+    /// assertions TAUTOLOGIES: the identifier's verdicts are defined as functions
+    /// of exactly that result set, so `Matched(C)` on a tail labelled only D was
+    /// unreachable. Independent review caught it and supplied this construction.
+    ///
+    /// IMPLEMENTATION TRAP, learned the hard way: keep the single callee in its
+    /// ORIGINAL move slot. Locked-move and PP bookkeeping carry the move index, so
+    /// slot-shifting silently unlabels tails.
+    ///
+    /// The renderer is driven through the REAL path (`render_branch_events`), so
+    /// no cursor, prelude slicing, `defender_choice` reconstruction, engine-state
+    /// reconstruction or Node process is involved.
+    #[test]
+    fn every_sleeptalk_attribution_names_the_callee_the_engine_used() {
+        use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+        use poke_engine::state::PokemonMoveIndex;
+
+        const SLOTS: [PokemonMoveIndex; 3] =
+            [PokemonMoveIndex::M1, PokemonMoveIndex::M2, PokemonMoveIndex::M3];
+
+        // Collision-prone sets on purpose (same power/type pairs regenerate
+        // byte-identical tails and must be REFUSED, not guessed), plus status,
+        // boost, drain, self-KO and locked-move shapes. Petal Dance is in because
+        // its crit arm restructures the tail rather than changing an integer, and
+        // every bug found in this area was invisible to integer-only fixtures.
+        let movesets: [[Choices; 3]; 10] = [
+            [Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::REST],
+            [Choices::BODYSLAM, Choices::EARTHQUAKE, Choices::PETALDANCE],
+            [Choices::THUNDER, Choices::SURF, Choices::REST],
+            [Choices::HARDEN, Choices::WITHDRAW, Choices::BODYSLAM],   // identical boosts
+            [Choices::TACKLE, Choices::SCRATCH, Choices::REST],        // identical damage
+            [Choices::TOXIC, Choices::WILLOWISP, Choices::EARTHQUAKE],
+            [Choices::GIGADRAIN, Choices::BODYSLAM, Choices::REST],
+            [Choices::EXPLOSION, Choices::BODYSLAM, Choices::REST],
+            [Choices::THRASH, Choices::EARTHQUAKE, Choices::REST],
+            [Choices::SPLASH, Choices::BODYSLAM, Choices::EARTHQUAKE],
+        ];
+
+        let ctx = EventContext {
+            species: [vec!["Lead".into()], vec!["Opponent".into()]],
+            turn: 1,
+            hp_percent: [false, false],
+        };
+        let build = |callees: &[Choices], keep: Option<usize>, sleeper_first: bool| {
+            let mut st = State::default();
+            // BOTH move orders, and this DOES pin
+            // `choice.first_move = outer_choice.first_move` -- #1048's second half,
+            // which every earlier version of this test left green under revert.
+            //
+            // My recorded reason for that was WRONG. I claimed the engine's gate
+            // "does not fire either" when the sleeper moves second. It does:
+            // `pending_hp_reading_move` is pure data
+            // (`branch_on_damage && choice.first_move && pending_hp_reading_move(..)
+            // && fixed_damage.is_none()`) and consults nothing about whether the
+            // defender's move already resolved. Instrumented on the 639
+            // sleeper-second calls, reverting the line takes generated branches from
+            // 2-3 to 15-22, so the roll enumeration runs.
+            //
+            // The real reason the revert used to survive is a NUMERIC COINCIDENCE:
+            // the gate block ends `combine_duplicate_instructions(); return;`, so it
+            // REPLACES the average-collapse path, and at `State::default()`
+            // magnitudes `floor(0.925*M) == floor(M*92/100)` -- the average IS one of
+            // the sixteen rolls, so the byte-match survived either way. Found by
+            // independent review after I had recorded the wrong mechanism.
+            // HIGH-DAMAGE stats, deliberately. At `State::default()` magnitudes
+            // `floor(0.925*M) == floor(M*92/100)`, i.e. the average-collapse tail is
+            // byte-identical to roll 92, so a `first_move` revert still matched and
+            // the line looked unpinnable. Separating them needs ~0.01*M > 2, i.e.
+            // max damage above ~200, which default stats never reach.
+            st.side_two.get_active().attack = 318;
+            st.side_two.get_active().special_attack = 318;
+            st.side_one.get_active().defense = 96;
+            st.side_one.get_active().special_defense = 96;
+            st.side_one.get_active().maxhp = 404;
+            st.side_one.get_active().hp = 404;
+            st.side_two.get_active().maxhp = 404;
+            st.side_two.get_active().hp = 404;
+            st.side_two.get_active().speed = if sleeper_first { 500 } else { 1 };
+            st.side_two.get_active().status = PokemonStatus::SLEEP;
+            st.side_two.get_active().rest_turns = 0;
+            st.side_two
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+            for (i, slot) in SLOTS.iter().enumerate() {
+                // Keep the retained callee IN ITS ORIGINAL SLOT.
+                let mv = match keep {
+                    None => callees[i],
+                    Some(k) if k == i => callees[i],
+                    Some(_) => Choices::NONE,
+                };
+                st.side_two.get_active().replace_move(*slot, mv);
+            }
+            st.side_one.get_active().speed = if sleeper_first { 1 } else { 500 };
+            st
+        };
+
+        let mut agree = 0usize;
+        let mut wrong: Vec<String> = Vec::new();
+        let mut multi_label_refused = 0usize;
+        let mut single_label_refused = 0usize;
+        let mut unlabelled: Vec<String> = Vec::new();
+        let mut agree_by_defender: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut total_branches = 0usize;
+
+        for sleeper_first in [true, false] {
+        for defender in [Choices::SUBSTITUTE, Choices::FLAIL, Choices::REVERSAL] {
+            for callees in &movesets {
+                let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
+                let s2 = MoveChoice::Move(PokemonMoveIndex::M0);
+
+                // ENGINE-SIDE LABELS: one restricted run per callee.
+                let mut labels: Vec<(Vec<Instruction>, Choices)> = Vec::new();
+                for (i, callee) in callees.iter().enumerate() {
+                    let mut st = build(callees, Some(i), sleeper_first);
+                    st.side_one
+                        .get_active()
+                        .replace_move(PokemonMoveIndex::M0, defender);
+                    for b in generate_instructions_from_move_pair(&mut st, &s1, &s2, true) {
+                        labels.push((b.instruction_list.clone(), *callee));
+                    }
+                }
+
+                // The real, full-moveset branch set.
+                let mut full_state = build(callees, None, sleeper_first);
+                full_state
+                    .side_one
+                    .get_active()
+                    .replace_move(PokemonMoveIndex::M0, defender);
+                let branches =
+                    generate_instructions_from_move_pair(&mut full_state, &s1, &s2, true);
+
+                for branch in &branches {
+                    total_branches += 1;
+                    let mut named: Vec<Choices> = labels
+                        .iter()
+                        .filter(|(list, _)| list.as_slice() == branch.instruction_list.as_slice())
+                        .map(|(_, c)| *c)
+                        .collect();
+                    named.sort_by_key(|c| format!("{c:?}"));
+                    named.dedup();
+
+                    let rendered = render_branch_events(
+                        &mut full_state.clone(),
+                        &s1,
+                        &s2,
+                        &branch.instruction_list,
+                        true,
+                        &ctx,
+                    );
+                    let refused = rendered
+                        .attribution_unsafe
+                        .iter()
+                        .any(|r| r.starts_with("sleeptalk_called_unidentified"));
+                    let attributed: Option<String> = rendered
+                        .lines
+                        .iter()
+                        .find(|l| l.contains("[from] Sleep Talk"))
+                        // Field 3, not 2. The line is
+                        //   |move|p2a: Opponent|bodyslam|p1a: Lead|[from] Sleep Talk
+                        // so split('|') yields ["", "move", ACTOR, MOVE, TARGET, ...].
+                        // Reading field 2 returns the ACTOR, which made a first run
+                        // report 904 "wrong attributions" that were all
+                        // `attributed "p2a: opponent"` -- my off-by-one, not a defect
+                        // in #1048. Recorded because that mistake was one assertion
+                        // away from being published as "#1048 is broken".
+                        .and_then(|l| l.split('|').nth(3).map(|m| m.trim().to_lowercase()));
+
+                    // EVERY bucket is asserted or counted. A `_ => {}` catch-all
+                    // here previously swallowed two of them, and one is populated by
+                    // a #1048 revert: 6 cases where the engine's own labelling says
+                    // TWO callees produce the tail and the renderer named one anyway
+                    // -- a coin-flip attribution, and it named DIFFERENT callees on
+                    // identical-label tails, so they cannot all be right. The test
+                    // reported `WRONG 0` for that revert purely because the bucket
+                    // was unrouted, which made a claim of "never misattributions"
+                    // look established when it was not.
+                    match (named.len(), &attributed, refused) {
+                        // Unambiguous engine label + a confident attribution:
+                        // the names MUST agree. This is the core case.
+                        (1, Some(name), false) => {
+                            let truth = move_display(named[0]).to_lowercase().replace(' ', "");
+                            if truth == name.replace('_', "").replace(' ', "") {
+                                let key = format!(
+                                    "{defender:?}/{}",
+                                    if sleeper_first { "first" } else { "second" }
+                                );
+                                *agree_by_defender.entry(key).or_insert(0) += 1;
+                                agree += 1;
+                            } else {
+                                wrong.push(format!(
+                                    "defender {defender:?} set {callees:?}: engine used {:?} but \
+                                     the renderer attributed {name:?}",
+                                    named[0]
+                                ));
+                            }
+                        }
+                        // Engine says AMBIGUOUS, renderer named one anyway. The
+                        // oracle says the evidence cannot single out a callee, so a
+                        // confident name here is a guess and cannot be vindicated.
+                        (n, Some(name), false) if n >= 2 => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: engine labels are \
+                             {named:?} (AMBIGUOUS) but the renderer confidently \
+                             attributed {name:?}"
+                        )),
+                        // One label, no attribution AND no refusal marker: the
+                        // attribution was dropped with nothing loud attached.
+                        (1, None, false) => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: engine used {:?} but the \
+                             renderer emitted neither an attribution nor a refusal",
+                            named[0]
+                        )),
+                        // Two callees emit byte-identical lists: refusal is correct.
+                        (n, _, true) if n >= 2 => multi_label_refused += 1,
+                        // Unambiguous label but refused. LOUD, so not a correctness
+                        // failure -- but it is the none_matched/input-fidelity class,
+                        // which is the residual risk, so it gets its own counter
+                        // rather than being folded into genuine ambiguity.
+                        (1, _, true) => single_label_refused += 1,
+                        (0, _, _) => unlabelled.push(format!(
+                            "defender {defender:?} set {callees:?}: no engine label"
+                        )),
+                        // Catch-all that ASSERTS rather than passing. Guard arms do
+                        // not satisfy exhaustiveness, so without this the compiler
+                        // would demand a `_ => {}` -- reintroducing exactly the
+                        // silent bucket this rewrite removed.
+                        (n, attr, ref_) => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: unasserted shape \
+                             (labels {n} = {named:?}, attributed {attr:?}, refused {ref_}) \
+                             -- every combination must be a verdict, not a fall-through"
+                        )),
+                    }
+                }
+            }
+        }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "#1048 WRONG ATTRIBUTION -- {} case(s):\n  {}",
+            wrong.len(),
+            wrong.join("\n  ")
+        );
+        // The oracle's OWN validity check. If the restricted-moveset labelling
+        // stops reproducing the real branch set, tails go unlabelled, `agree`
+        // falls, and the coverage gate below fires with a message blaming the
+        // identifier -- misdiagnosing a broken oracle as a broken subject.
+        assert!(
+            unlabelled.is_empty(),
+            "ORACLE BROKEN: {} tail(s) carry no engine label, so the restricted-moveset \
+             labelling no longer reproduces the real branch set. Do NOT read the \
+             coverage gate below as a statement about the identifier.\n  {}",
+            unlabelled.len(),
+            unlabelled.join("\n  ")
+        );
+
+        // A single-label refusal means the engine produced this tail from callee C
+        // and the identifier could not reproduce it -- the INPUT-FIDELITY class, and
+        // the residual risk this whole area is about. It is 0 today, and it is the
+        // ONLY assertion that catches a `first_move` revert: with high-damage stats
+        // that revert drives it 0 -> 96 while the per-defender floor (932/932/417)
+        // and the ratio gate (87%) both still pass. That is what retires the
+        // "first_move is unpinned" note this test used to carry.
+        assert_eq!(
+            single_label_refused, 0,
+            "INPUT FIDELITY: {single_label_refused} tail(s) carry ONE unambiguous \
+             engine label and were still refused -- the identifier cannot reproduce \
+             a tail the engine demonstrably produced from that callee. Check the \
+             reconstructed inputs (defender_choice, first_move, branch_on_damage)."
+        );
+
+        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- and scoped to the
+        // SLEEPER-FIRST half, which is where that revert actually bites.
+        //
+        // `pending_hp_reading_move` is a 3-member set, so "one member dropped" is
+        // the likeliest real regression, and a bare aggregate threshold misses it.
+        // Measured on the sleeper-FIRST subset, with #1048 vs reverted:
+        //
+        //     SUBSTITUTE  234 / 37     FLAIL  363 / 60     REVERSAL  307 / 53
+        //
+        // A floor of 150 separates those with ~4x margin. Scoping matters: on the
+        // FULL matrix the revert leaves {FLAIL 142, REVERSAL 135, SUBSTITUTE 50},
+        // an 8-branch margin, and it degrades predictably -- sleeper-second agrees
+        // are INVARIANT under a `defender_choice` revert (the gate needs
+        // `first_move`, false there), so every moveset added to that half raises the
+        // without-#1048 floor while leaving the signal flat. Two or three more and
+        // the gate would silently stop separating: the same silent-vacuity family
+        // this test exists to prevent.
+        for defender in ["SUBSTITUTE", "FLAIL", "REVERSAL"] {
+            let key = format!("{defender}/first");
+            let n = agree_by_defender.get(&key).copied().unwrap_or(0);
+            assert!(
+                n >= 150,
+                "VACUOUS or #1048 REGRESSED for {key}: only {n} confident \
+                 attributions (need >= 150). A per-defender collapse means the \
+                 identifier lost the real defender choice for that move; the \
+                 aggregate can still look healthy. All: {:?}",
+                agree_by_defender
+            );
+        }
+        let pct = agree * 100 / total_branches.max(1);
+        assert!(
+            pct > 60,
+            "VACUOUS or #1048 REGRESSED: only {agree}/{total_branches} branches \
+             ({pct}%) produced a confident attribution (refused multi \
+             {multi_label_refused}, refused single {single_label_refused}). Expect \
+             ~86% with #1048 in place; ~14% means the identifier lost the real \
+             defender choice."
+        );
+
+        println!(
+            "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
+             refused-ambiguous {multi_label_refused}  refused-single {single_label_refused}  \
+             per-defender {agree_by_defender:?}"
+        );
+    }
+
     /// Pin WHICH cause maps to which label, without needing an engine state
     /// that reaches each variant.
     ///
