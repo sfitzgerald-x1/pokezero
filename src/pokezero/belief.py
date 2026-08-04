@@ -2037,6 +2037,25 @@ _RESIDUAL_HP_TAGS = (
     # value and MASK the action-phase non-proc, wrongly leaving the pinch variants un-pruned.
     # (Ingrain is deliberately NOT listed — 0 gen3-randbats pool carriers, unreachable.)
     "[from] move: Wish",
+    # Liquid Ooze turns a LEECH SEED drain into damage on the drainer
+    # (`data/mods/gen4/abilities.ts` liquidooze, `canOoze = ['drain', 'leechseed']`; gen3 inherits
+    # gen4), and Leech Seed is residual 10/subOrder 5 — AFTER the Leftovers slot at 10/4. Untagged,
+    # that damage overwrote the pre-residual snapshot and made a mon that was at FULL HP when
+    # Leftovers ran look like it "ended a damaged turn with no heal".
+    #
+    # Found by the V1 sweep at 400 games, and it broke CONTAINMENT rather than merely widening:
+    #   |switch|p2a: Flygon|Flygon, L78, F|253/253      <- full when Leftovers ran, so no heal line
+    #   |-damage|p1a: Swalot|0 fnt|[from] Leech Seed|[of] p2a: Flygon
+    #   |-damage|p2a: Flygon|220/253|[from] ability: Liquid Ooze|[of] p1a: Swalot
+    # Flygon's true item IS Leftovers; on a mixed-item species the rule-out dropped the true
+    # variant and left a confidently wrong single-candidate pin. Pool-reachable via Swalot and
+    # Tentacruel.
+    #
+    # Listed unconditionally even though Liquid Ooze also fires on ACTION-phase `drain` moves: the
+    # protocol line does not name the source effect, so the phase is not recoverable from it.
+    # Treating both as residual only ever DECLINES evidence, which is the safe direction the audit
+    # requires ("degrade to absent, never to plausible").
+    "[from] ability: Liquid Ooze",
 )
 
 

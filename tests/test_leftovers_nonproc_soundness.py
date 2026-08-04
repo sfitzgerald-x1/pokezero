@@ -185,6 +185,38 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         self.assertEqual(octillery.revealed_item, "Leftovers")
         self.assertNotIn("leftovers", octillery.ruled_out_items)
 
+    def test_liquid_ooze_leech_seed_damage_is_not_pre_residual_evidence(self) -> None:
+        """A residual-phase HP change misclassified as action-phase, found at 400 games.
+
+        Liquid Ooze turns a LEECH SEED drain into damage on the drainer
+        (``data/mods/gen4/abilities.ts``, ``canOoze = ['drain', 'leechseed']``; gen3 inherits gen4),
+        and Leech Seed is residual 10/subOrder 5 -- AFTER the Leftovers slot at 10/4. Untagged, that
+        damage overwrote the pre-residual snapshot, so a mon at FULL HP when Leftovers ran looked
+        like it ended a damaged turn with no heal.
+
+        This one broke CONTAINMENT rather than merely widening: Flygon is a mixed-item species, so
+        the rule-out dropped the true variant instead of emptying the set, leaving a confidently
+        wrong single-candidate pin.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Swalot|Swalot, L84, M|300/300",
+                "|switch|p2a: Flygon|Flygon, L78, F|253/253",
+                "|turn|1",
+                "|move|p2a: Flygon|Substitute|p2a: Flygon",
+                "|-damage|p1a: Swalot|10/300|[from] Leech Seed|[of] p2a: Flygon",
+                "|-damage|p2a: Flygon|220/253|[from] ability: Liquid Ooze|[of] p1a: Swalot",
+                "|upkeep",
+            ]
+        )
+        flygon = [b for b in engine.snapshot().sides["p2"] if b.species == "Flygon"][0]
+        self.assertNotIn(
+            "leftovers",
+            flygon.ruled_out_items,
+            "Liquid Ooze damage from a Leech Seed drain lands AFTER the Leftovers slot, so it is "
+            "not evidence about the pre-residual HP",
+        )
+
     def test_a_genuine_non_proc_still_rules_leftovers_out(self) -> None:
         """The true positive must survive, or the fix is just the pruning switched off.
 
