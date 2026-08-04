@@ -1,0 +1,33 @@
+{
+ "schema": "c100-i2-crit-tag-fix-refuted/1",
+ "status": "RETRACTED IN ITS CENTRAL CLAIM. The gate was NOT refuted: it SHIPPED in #1055 (main 04e7784e, rust/pokezero-search/src/events.rs:2398-2401, verbatim the implementation recorded below) and closed TEN rows with zero newly divergent. What failed here was the gate running against a doubly-mutated Choice, not the gate. DO repeat this attempt.",
+ "RETRACTION": {
+  "added": "2026-08-04, C116 Phase 0 item 1, on the recommendation of the independent adjudication of this PR.",
+  "why_it_had_to_land_rather_than_be_closed": "rust/pokezero-search/src/events.rs:2395 on main cites reports/c100, and reports/c102_*.json:21 cites \"c100_said\". Neither resolved: git ls-tree main reports/ matched 0 c100 files. Shipped source and a merged report pointed at a file that existed on no merged branch -- C116 M4 in its sharpest form. Closing would have left the dangling citations; merging uncorrected would have put a false report on main.",
+  "the_false_claim": "the_cause_of_the_failure said the raw maxima are only valid at the state where they were computed, i.e. that the gate was reading stale pre-move state and that Choice::default() for the absent opponent move was the mechanism.",
+  "why_it_is_false": "reports/c102 on main found the real cause from the 17/17 signature of the regressed rows: gen3/abilities.rs:793-799 halves attacker_choice.base_power IN PLACE for Thick Fat, and before_move is called at TWO sites (:2622 and :5119), so the halving is applied twice. 17 of 17 regressed rows were a Thick Fat switch-in, and 16 of those 17 had no opponent move at all -- so Choice::default(), the mechanism this report blamed, was CORRECT on them. Credit: the independent review of PR #1052.",
+  "also_withdrawn": "why_this_is_the_deeper_problem asserted that both tests fail for the same underlying reason. Contradicted by the gate subsequently closing 100% of its target population once the Choice was rebuilt pristine.",
+  "the_cost_was_misreported": "This report's framing implied a net. The actual result of the attempt was 10 rows CLOSED and 17 OPENED -- not a net 7. Reporting the net concealed that the change had two independent effects of opposite sign.",
+  "what_actually_shipped": "reports/c102's pristine build_choice rebuild in render_move_phase, with a move_id identity guard because Sleep Talk callees carry move_index M0. That is what made the reachability gate correct, and it landed as #1055.",
+  "what_remains_true_and_load_bearing": "the_attempt, why_it_looked_right, implementation and measured are UNCHANGED and accurate. The measurement (15188 -> 15181 matched, 35 -> 42 diverged, the whole delta inside roll_scaled_component 13 -> 20, both runs reconciling to 15224) is the real negative result and is why the double-application was findable at all."
+ },
+ "the_attempt": {
+  "idea": "replace the crit gate's exact-value test (damage == crit_collapsed) with a REACHABILITY test: a damage strictly greater than the maximum possible non-crit roll cannot have come from a non-crit, whatever representative the branch happens to carry. That would cover all three untagged paths in reports/c93 at once -- crit-kill (carries defender HP), crit-survive (carries average_non_kill_crit_damage), and the 16-roll enumeration (carries each roll) -- and would also fix the KO-capped crit the old `damage < pre_hp` guard suppressed, since Showdown does emit |-crit| on a killing crit.",
+  "why_it_looked_right": "expected_damage_values already computes the raw maxima and discards them for the x0.925 representatives, so the discriminator appeared to be sitting unused in the function. values[0] is max non-crit, values[1] is max crit.",
+  "implementation": "returned the raw maxima alongside the representatives and gated on max_crit > max_regular && damage > max_regular. Compiled clean; 93 lib tests passed."
+ },
+ "measured": {
+  "baseline": "main ca188b93 / e83ee94f era -- diverged 35, matched 15188, skip 1, lossy 11",
+  "with_the_change": "diverged 42, matched 15181, skip 1, lossy 11",
+  "delta": "matched -7, diverged +7, ALL of it in divergence_class:roll_scaled_component (13 -> 20)",
+  "both_reconcile": "15224 on both sides, 0 engine errors, so this is a real fidelity regression and not a denominator artifact",
+  "verdict": "the test tags as crits seven boundaries that Showdown does not tag. It is not conservative; it is wrong in the false-positive direction."
+ },
+ "the_cause_of_the_failure": {
+  "one_line": "the raw maxima are only valid at the state where they were computed, and that is not the state the damage is dealt in.",
+  "detail": "expected_damage_values is called ONCE at render start, from the pre-move state, and it passes Choice::default() for the OTHER side (see its calculate_both_damage_rolls call). The actual damage is dealt after the action phase has run -- after boosts, weather changes, item consumption and the opponent's own move. So max_regular can be lower than the true maximum non-crit damage at the moment of the hit, and any non-crit that exceeds the stale bound is then mislabelled a crit.",
+  "why_this_is_the_deeper_problem": "the exact-value test and the reachability test fail for the SAME underlying reason: both compare a branch's damage against a quantity computed at a different state. C93 diagnosed the symptom correctly -- the gate cannot see which arm it is looking at -- but the fix it proposed (carry the branch's own roll representative into crit_collapsed) is the only form that avoids this, because it makes the two sides comparable BY CONSTRUCTION rather than by recomputation. C77 recorded that form first and it remains the right one."
+ },
+ "what_this_costs_and_saves": "7 rows if shipped. Saved by measuring before merging, which is the check PR #1037 failed and PR #1038 made standing: report matched and skip alongside diverged, and require matched to hold or rise.",
+ "next": "implement C93's disposition as written -- carry the emitting branch's own damage roll into the comparison at the point the branch is rendered, rather than recomputing an expectation from a stale state. That likely means threading a per-branch crit flag or roll index out of generate_instructions rather than inferring crit-ness from values at all, which is what reports/c93 records as the implementable form (instruction.rs carries no crit flag today)."
+}
