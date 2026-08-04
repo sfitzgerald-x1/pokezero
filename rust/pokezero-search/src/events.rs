@@ -4347,6 +4347,49 @@ mod tests {
         );
     }
 
+    /// AIR LOCK suppresses weather, so SWIFT SWIM must not double a speed while
+    /// it is on the field.
+    ///
+    /// The engine's `get_effective_speed` wraps its weather match in
+    /// `state.weather_is_active(...)`; this replica did not. Unguarded, Rayquaza
+    /// (AIR LOCK) against Seaking (SWIFT SWIM) in RAIN gave Seaking 348 against
+    /// Rayquaza's 261 and flipped the computed move order. `segment()` tries only
+    /// the order it computes, so it regenerated the wrong side as phase 1,
+    /// nothing was a prefix of the real instruction list, and the whole branch
+    /// was voided as `segmentation_failed`. Two rows (reports/c108).
+    ///
+    /// Reverting the `weather_is_active` guard makes the rain assertion below
+    /// fail: Seaking comes back doubled.
+    #[test]
+    fn air_lock_suppresses_swift_swim_in_the_speed_replica() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::RAIN;
+        state.side_two.get_active().ability = Abilities::SWIFTSWIM;
+        let base = effective_speed(&state, SideReference::SideTwo);
+
+        // No suppressor on the field: Swift Swim doubles.
+        state.side_one.get_active().ability = Abilities::NONE;
+        let doubled = effective_speed(&state, SideReference::SideTwo);
+        assert_eq!(
+            doubled,
+            base,
+            "control: with no suppressor the two reads must agree"
+        );
+
+        // AIR LOCK on the OPPONENT must suppress it.
+        state.side_one.get_active().ability = Abilities::AIRLOCK;
+        let suppressed = effective_speed(&state, SideReference::SideTwo);
+        assert!(
+            suppressed < doubled,
+            "AIR LOCK must suppress the Swift Swim doubling: {suppressed} vs {doubled}"
+        );
+        assert_eq!(
+            suppressed * 2,
+            doubled,
+            "suppression must remove exactly the 2x, not some other factor"
+        );
+    }
+
     /// Same shape, but the SEEDED mon has Liquid Ooze, so there is no drain
     /// heal to be silent about — the engine emits the reversed drain as a
     /// negative Heal on the seeder instead
