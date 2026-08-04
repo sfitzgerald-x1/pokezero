@@ -35,6 +35,10 @@ on:
       - "src/pokezero/**"
       - "tests/test_sleep_talk_phaze_drag.py"
       - "tests/test_instruction_event_mapping.py"
+      # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
+      - "tests/test_crit_kill_split_patch.py"
+      # Imported by the differential (engine_transition_differential.py:105).
+      - "scripts/fidelity_gate_events.py"
       - "tests/test_poke_engine_patch_stack.py"
       - ".github/workflows/engine-fidelity-gates.yml"
 
@@ -117,8 +121,8 @@ jobs:
           # cannot notice a DELETED test: removing three of four leaves the step
           # green, which is the "reads PASS while asserting less than intended"
           # shape this workflow's header forbids. Found by review of #1081.
-          if ! grep -qE 'Ran 4 tests' /tmp/massgate.log; then
-            echo "::error::expected 4 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 5 tests' /tmp/massgate.log; then
+            echo "::error::expected 5 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/massgate.log; then
@@ -156,16 +160,42 @@ jobs:
       - name: Crate suites, including the renderer pins
         run: |
           set -o pipefail
-          cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 | tee /tmp/cargo.log
-          suites=$(grep -cE '^test result: ok' /tmp/cargo.log)
-          if [ "$suites" -lt 32 ]; then
-            echo "::error::expected at least 32 passing crate suites, got $suites"
-            exit 1
-          fi
+          # RUSTFLAGS is load-bearing. tree.rs:139 gates
+          # debug_assert_probability_conservation on cfg!(debug_assertions), and
+          # [profile.release] sets only lto/codegen-units -- so plain
+          # `cargo test --release` compiles OUT the crate's own probability-mass
+          # invariant plus six debug_assert!s in tree.rs. A mass-gate workflow running
+          # the crate in the one profile where its mass assertion does not exist is the
+          # defect this job is named after. Found by review of #1083.
+          RUSTFLAGS="-C debug-assertions=yes" \
+            cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/cargo.log
           if grep -qE '^test result: FAILED' /tmp/cargo.log; then
             echo "::error::a crate suite failed"
             exit 1
           fi
+          # Count TESTS, not suites. An earlier version counted `test result: ok` lines,
+          # i.e. test BINARIES -- so review deleted all four #1081 renderer pins and the
+          # step stayed GREEN at 32 suites while the test total fell 366 -> 362. The step
+          # whose stated purpose is "what makes the renderer pins real" was blind to
+          # their deletion: the Python steps got a test-count assertion and the crate got
+          # a file-count assertion. `#[ignore]` on a pin was equally invisible.
+          passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
+            | grep -oE '[0-9]+' | paste -sd+ - | bc)
+          if [ "${passed:-0}" -lt 366 ]; then
+            echo "::error::expected >= 366 crate tests, got ${passed:-0}"
+            exit 1
+          fi
+          # And name the pins: a total can be restored by unrelated tests.
+          for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
+                     two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
+                     with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
+                     the_dragged_arm_precedes_the_generic_defender_damage_arm; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
+              echo "::error::renderer pin $pin did not run"
+              exit 1
+            }
+          done
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check

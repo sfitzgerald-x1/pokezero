@@ -215,6 +215,16 @@ class BranchMassReconstruction(unittest.TestCase):
                          f"cannot see this class of disagreement."),
                 )
 
+    def test_the_fixture_matrix_is_the_expected_size(self):
+        """The count guards in CI count test METHODS, not fixtures. Six of the nine
+        CASES could be deleted with all four tests green, because the assertions run
+        under subTest inside two methods. Review of #1083 found the residual one level
+        down; this closes it."""
+        self.assertEqual(
+            len(self.CASES), 9,
+            "the fixture matrix changed size; CI's test-count guards cannot see this",
+        )
+
     def test_masses_sum_to_one(self):
         for label, hp, status, item, weather, tc in self.CASES:
             with self.subTest(case=label):
