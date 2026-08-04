@@ -1,5 +1,5 @@
 {
- "schema": "c110-residual-partition-patch-status/2",
+ "schema": "c110-residual-partition-patch-status/3",
  "purpose": "Exact state of the residual-lethality partition patch, so the next attempt does not repeat six rebuild cycles of mine.",
  "the_patch": "third_party/poke-engine-gen3-residual-lethality-partition.patch, committed on scott/c109-partition. Content is correct and reviewed against the residual phase. Applies-check FAILS.",
  "what_the_patch_does": "adds pending_residual_damage() mirroring the residual phase tick-for-tick with its guards, binds it before defender_active takes its mutable borrow, and partitions the non-crit fan on hp-minus-pending in the branch where the fan cannot kill on the hit.",
@@ -34,5 +34,13 @@
   "the tool. macOS ships BSD patch -- note it prints `patching file 'x'` WITH QUOTES, which GNU patch does not. The 56 stack patches apply under it, but they may all be single-hunk or lack a hunk whose context ends in a blank line immediately before additions. Test by splitting mine into three single-hunk patches and applying them individually: that isolates tool behaviour from patch content in one run.",
   "if a single-hunk version applies, the content is fine and the answer is to ship three patch files or regenerate with `git diff` from a real edited tree rather than hand-authoring the unified diff.",
   "generating the patch with `git diff` against an actually-edited copy of the replayed tree is the more robust route regardless -- it removes hand-authored headers from the equation entirely, and every hand-authored header in this session has been wrong at least once."
- ]
+ ],
+ "STATUS": "SUPERSEDED 2026-08-04. This file was a WIP snapshot taken while the patch would not apply. Both of its headline claims are now FALSE and are retracted here rather than left to mislead the next reader.",
+ "retractions": [
+  "'Applies-check FAILS' -- false since the patch was regenerated with `diff -u` from two replayed scratch trees. It applies at fuzz 0 via git-apply and the patch-stack test passes.",
+  "'Content is correct and reviewed against the residual phase' -- false. Two defects were found afterwards. (1) The Toxic tick was mirrored as max(count, 1) where the phase uses normalized_toxic_count + 1, so every rung above count 0 was understated by a full stage. (2) The non-crit residual split reduced incoming_instructions in place, silently scaling every crit arm that clones it and moving probability mass to the wrong arm; totals still summed to 100%, so no conservation check saw it. Found by independent adversarial review of PR #1062.",
+  "'mirroring the residual phase tick-for-tick with its guards' -- still false. Burn, partial trap, Future Sight, Wish, Rain Dish, Leftovers and threshold berries are not mirrored, and the phase heals (10.3, 10.4) before it damages (10.5, 10.6, 10.9), so a plain sum is not sound.",
+  "'binds it before defender_active takes its mutable borrow' -- the borrow constraint was verified not to exist: the binding compiles at the later, more faithful position."
+ ],
+ "what_is_still_true": "The 'ruled_out_by_direct_test' list below remains accurate as a record of what was eliminated while diagnosing the apply failure, and the lesson stands: generate the diff with `diff -u` from two replayed trees rather than hand-authoring unified-diff headers."
 }
