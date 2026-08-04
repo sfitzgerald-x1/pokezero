@@ -222,7 +222,30 @@ def _check_mon(
         )
     if true_item and true_item in {_norm(i) for i in belief.ruled_out_items or ()}:
         violations["ruled_out_item"].append(
-            Violation({**ctx, "detail": f"true item {true_item!r} was ruled out"})
+            Violation(
+                {
+                    **ctx,
+                    "detail": f"true item {true_item!r} was ruled out",
+                    # Enough context to adjudicate without re-running: which rule fired, what the
+                    # surviving candidates now claim, and whether the set fell back. A bare
+                    # "was ruled out" cannot distinguish a real soundness break from a
+                    # mis-specified assertion, and guessing between those is how a false defect
+                    # gets reported.
+                    "ruled_out_items": list(belief.ruled_out_items),
+                    "uncertainty": float(belief.uncertainty),
+                    "candidate_items": sorted(
+                        {str(v.get("item") or "") for v in candidates}
+                    ),
+                    "item_mutated": bool(belief.item_mutated),
+                    "revealed_item": belief.revealed_item,
+                    "current_public_item": getattr(belief, "current_public_item", None),
+                    "original_public_item": getattr(belief, "original_public_item", None),
+                    "condition": belief.condition,
+                    "rule_out_evidence": [
+                        e.detail for e in (belief.evidence or ()) if e.kind == "ruled-out-item"
+                    ],
+                }
+            )
         )
     if belief.ruled_out_abilities:
         counts["mons_with_ruled_out_abilities"] += 1
