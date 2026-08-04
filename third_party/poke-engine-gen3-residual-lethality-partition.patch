@@ -227,7 +227,58 @@
  
      let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
      let defender_active = defender_side.get_active();
-@@ -3056,6 +3269,49 @@
+@@ -3037,8 +3250,48 @@
+             branch_ins.update_percentage(branch_chance);
+             extra_branches.push((branch_ins, defender_active.hp));
+ 
+-            incoming_instructions.update_percentage(1.0 - branch_chance);
+-            regular_damage = average_non_kill_damage;
++            // THIRD ARM. The rolls that fail to kill on the hit are not
++            // interchangeable either: some of them leave the defender at or below
++            // its pending end-of-turn damage and it dies one phase later. Case A
++            // used to collapse that whole sub-fan to `average_non_kill_damage` and
++            // never consult the residual threshold at all, so when the average
++            // landed on the lethal side, NO branch survived the turn.
++            //
++            // Seed 19000052 step 36: Walrein 192/307, burned, holding Leftovers,
++            // with max_damage_dealt == 192 == hp. Ordered threshold is 173
++            // (Leftovers +19 at 10.4, burn -38 at 10.6). Six of the sixteen rolls
++            // survive the residual, and Showdown rolled the lowest of them, 163,
++            // finishing on 10 hp. The collapsed representative was 177, above 173,
++            // so the engine asserted a burn KO on every non-crit roll.
++            //
++            // `compare_health_with_damage_multiples` counts rolls AT OR ABOVE its
++            // threshold, and every hit-lethal roll is also at or above the residual
++            // threshold, so the residual-only population is the difference.
++            let mut survive_representative = average_non_kill_damage;
++            let mut residual_kill_chance = 0.0_f32;
++            if let Some(residual_threshold) = residual_threshold_opt {
++                if residual_threshold > 0
++                    && residual_threshold < defender_active.hp
++                    && min_damage_dealt < residual_threshold
++                {
++                    let (average_surviving_damage, num_at_or_above) =
++                        compare_health_with_damage_multiples(max_damage_dealt, residual_threshold);
++                    let num_residual_only = num_at_or_above - num_kill_rolls;
++                    if num_residual_only > 0 {
++                        residual_kill_chance =
++                            (1.0 - crit_rate) * (num_residual_only as f32 / 16.0);
++                        // Cloned from the UNREDUCED mass, like branch_ins above, so
++                        // the single reduction below is the only one applied.
++                        let mut residual_ins = incoming_instructions.clone();
++                        residual_ins.update_percentage(residual_kill_chance);
++                        extra_branches.push((residual_ins, residual_threshold));
++                        survive_representative = average_surviving_damage;
++                    }
++                }
++            }
++
++            incoming_instructions.update_percentage(1.0 - branch_chance - residual_kill_chance);
++            regular_damage = survive_representative;
+         } else if branch_on_damage
+             && fixed_damage.is_none()
+             && max_damage_dealt < defender_active.hp
+@@ -3056,6 +3309,49 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
@@ -277,7 +328,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,11 +3339,44 @@
+@@ -3083,11 +3379,44 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {
