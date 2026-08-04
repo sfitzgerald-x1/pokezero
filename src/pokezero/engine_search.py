@@ -537,10 +537,12 @@ class EngineMctsStats:
     # the same argument on the other axis (see _fallback). Bounded by
     # _FALLBACK_SAMPLES_PER_CLASS x distinct keys.
     fallback_samples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    # Addresses discarded because the key ceiling was hit. Non-zero means the sample
-    # is INCOMPLETE across classes, which a reader must be able to see rather than
-    # infer from a suspiciously round key count.
-    fallback_sample_keys_dropped: int = 0
+    # ADDRESSES discarded because the class ceiling was hit -- one per dropped
+    # occurrence, NOT one per lost class. Named for the unit it measures: it was
+    # `..._keys_dropped`, and it read 1,001 where 2 classes had been lost, which is the
+    # cite-a-number-for-a-different-quantity mistake this campaign keeps making.
+    # Non-zero means the sample is INCOMPLETE across classes.
+    fallback_sample_addresses_dropped: int = 0
     unmapped_choices: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
@@ -662,7 +664,9 @@ class EngineMctsStats:
             "world_failure_reasons": dict(self.world_failure_reasons),
             "fallback_reasons": dict(self.fallback_reasons),
             "fallback_samples": {k: list(v) for k, v in self.fallback_samples.items()},
-            "fallback_sample_keys_dropped": self.fallback_sample_keys_dropped,
+            "fallback_sample_addresses_dropped": (
+                self.fallback_sample_addresses_dropped
+            ),
             "unmapped_choices": dict(self.unmapped_choices),
             "model_evals": self.model_evals,
             "encode_wall_seconds": self.encode_wall_seconds,
@@ -2014,11 +2018,20 @@ class EngineMctsPolicy:
         # the rare reason ends up with no address at all. That is the exact era-57
         # failure mode this store exists to prevent, on the other axis. The reason
         # set is closed and small (7 literals), so this adds at most 7 keys.
-        for key in [*delta, f"fallback:{reason}"]:
+        # Reason key FIRST, and exempt from the ceiling. Both matter. The ceiling
+        # below exists to bound an unbounded CLASS space; applying it to reason keys
+        # reintroduced the very bug this loop was fixed for -- past 256 classes a rare
+        # reason lost its key and became unaddressable again, and because classes were
+        # served first they took the last slot and the reason key was what got dropped.
+        # Exactly backwards. The reason set is 7 closed literals and can never be the
+        # thing that blows up a report, so it never competes.
+        for key in [f"fallback:{reason}", *delta]:
             bucket = self.stats.fallback_samples.get(key)
             if bucket is None:
-                if len(self.stats.fallback_samples) >= _FALLBACK_SAMPLE_KEY_CEILING:
-                    self.stats.fallback_sample_keys_dropped += 1
+                if (not key.startswith("fallback:")
+                        and len(self.stats.fallback_samples)
+                        >= _FALLBACK_SAMPLE_KEY_CEILING):
+                    self.stats.fallback_sample_addresses_dropped += 1
                     continue
                 bucket = self.stats.fallback_samples[key] = []
             if len(bucket) >= _FALLBACK_SAMPLES_PER_CLASS:

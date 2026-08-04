@@ -2210,13 +2210,88 @@ class FallbackAddressTests(unittest.TestCase):
 
         stats = p.stats.to_dict()
         self.assertEqual(len(stats["fallback_samples"]), _FALLBACK_SAMPLE_KEY_CEILING)
-        self.assertGreater(stats["fallback_sample_keys_dropped"], 0)
+        self.assertGreater(stats["fallback_sample_addresses_dropped"], 0)
         # Entries stay bounded by ceiling x per-class cap, so the report cannot grow
         # without limit no matter how many classes the data mints.
         total = sum(len(v) for v in stats["fallback_samples"].values())
         self.assertLessEqual(
             total, _FALLBACK_SAMPLE_KEY_CEILING * _FALLBACK_SAMPLES_PER_CLASS
         )
+
+    def test_a_rare_reason_is_addressable_even_past_the_class_ceiling(self) -> None:
+        """The ceiling must not reintroduce the bug it was added beside.
+
+        The class ceiling exists to bound an unbounded class space. Applying it to
+        reason keys too meant that past 256 classes a rare reason lost its key and
+        became unaddressable -- and since classes were iterated first they claimed the
+        last slot, so the reason key was precisely what got dropped. `live_fold_broken`
+        is the worst case: it has no world failures, so the reason key is its ONLY key.
+        """
+        p = self._policy()
+        for i in range(_FALLBACK_SAMPLE_KEY_CEILING + 50):
+            self._fallback(p, battle=f"b-fill-{i}", classes=(f"filler_{i}",))
+        self.assertEqual(len(p.stats.fallback_samples),
+                         _FALLBACK_SAMPLE_KEY_CEILING)  # ceiling is really full
+
+        self._fallback(p, battle="b-rare", rnd=5, reason="choices_unmapped",
+                       classes=("filler_0",))
+        self._fallback(p, battle="b-fold", rnd=6, reason="live_fold_broken",
+                       classes=())
+
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("fallback:choices_unmapped", samples)
+        self.assertIn("fallback:live_fold_broken", samples)
+        # The invariant from the sibling test, re-asserted PAST the ceiling -- that is
+        # the only place it catches this.
+        self.assertEqual(
+            {k.split("fallback:")[-1] for k in samples if k.startswith("fallback:")},
+            set(p.stats.fallback_reasons),
+        )
+        self.assertEqual(samples["fallback:live_fold_broken"][0]["battle_id"], "b-fold")
+
+    def test_the_dropped_counter_counts_addresses_not_classes(self) -> None:
+        """Named for the unit it measures.
+
+        It increments per dropped OCCURRENCE. Read as a class count it says 1,001 where
+        two classes were lost, which is the cite-a-number-for-a-different-quantity
+        mistake this store's own comments were twice corrected for.
+        """
+        p = self._policy()
+        for i in range(_FALLBACK_SAMPLE_KEY_CEILING):
+            self._fallback(p, battle=f"b-fill-{i}", classes=(f"filler_{i}",))
+        for i in range(200):
+            self._fallback(p, battle=f"b-over-{i}", classes=("overflow_a", "overflow_b"))
+
+        lost = {c for c in p.stats.world_failure_reasons
+                if c not in p.stats.fallback_samples}
+        self.assertEqual(len(lost), 3)  # filler_255, overflow_a, overflow_b
+        # Measured 601 addresses against those 3 classes -- a 200x gap. Asserted as a
+        # ratio rather than the literal, because the literal depends on this helper's
+        # cumulative delta and the CLAIM is about the unit, not the arithmetic. My first
+        # draft asserted 400 from hand-arithmetic and was simply wrong.
+        self.assertGreater(p.stats.fallback_sample_addresses_dropped, 100 * len(lost))
+        self.assertNotIn("overflow_a", p.stats.fallback_samples)
+
+    def test_a_missing_round_index_is_null_not_a_question_mark(self) -> None:
+        """A replay harness doing int(entry["round"]) must get a null, not ValueError."""
+        import unittest.mock as mock
+
+        p = self._policy()
+        ctx = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                _candidates(),
+            ),
+            public_materialization_state=object(),
+            player_id="p1",
+            battle_id="b-noround",
+        )  # NO decision_round_index
+        p._world_failures_before = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p._fallback(ctx, random.Random(0), "crate_search_failed")
+        entry = p.stats.to_dict()["fallback_samples"]["fallback:crate_search_failed"][0]
+        self.assertIsNone(entry["round"])
 
     def test_a_rare_reason_survives_a_dominant_class_it_co_occurs_with(self) -> None:
         """The per-class cap protects rare CLASSES. Reasons are a separate axis.
