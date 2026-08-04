@@ -41,6 +41,10 @@ on:
       # Imported by the differential (engine_transition_differential.py:105).
       - "scripts/fidelity_gate_events.py"
       - "tests/test_poke_engine_patch_stack.py"
+      # A5 lives here. Without this entry the patch that fixes it triggers the
+      # workflow (via the .patch and patches.txt globs) but the suite holding its
+      # pins is not even a trigger, let alone a step.
+      - "tests/test_engine_gen3_abilities.py"
       - ".github/workflows/engine-fidelity-gates.yml"
 
 jobs:
@@ -128,6 +132,31 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/massgate.log; then
             echo "::error::the mass gate SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # A5: the contact secondary vs. the attacker's same-turn wake. These two pins
+      # were RED at 0 against 33.3333 / 8.3333 / 6.6667 before the patch. They are
+      # named individually rather than run as a module because AbilityCatalogTests
+      # in the same file needs a built Showdown checkout and legitimately SKIPS in
+      # CI -- a module-wide "must not skip" assertion would be a false gate, and a
+      # module-wide count would go green on a skip. Deleting either pin makes the
+      # unittest invocation itself fail to resolve, which is the point.
+      - name: Contact-ability wake-ordering pins
+        run: |
+          set -o pipefail
+          python -m unittest -v \
+            tests.test_engine_gen3_abilities.AbilityMechanicsTests.test_contact_secondary_sees_the_attacker_wake_on_the_same_turn \
+            tests.test_engine_gen3_abilities.AbilityMechanicsTests.test_a_status_that_survives_the_move_still_refuses_the_contact_secondary \
+            2>&1 | tee /tmp/a5pins.log
+          if ! grep -qE 'Ran 2 tests' /tmp/a5pins.log; then
+            echo "::error::expected 2 A5 pins; the set shrank or grew"
+            exit 1
+          fi
+          # Without this, "OK (skipped=2)" reads as a pass. It did, locally, against
+          # a venv with no wheel -- the pins asserted nothing and looked green.
+          if grep -q 'skipped' /tmp/a5pins.log; then
+            echo "::error::the A5 pins SKIPPED; they must never skip"
             exit 1
           fi
 
