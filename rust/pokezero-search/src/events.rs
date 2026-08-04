@@ -2832,8 +2832,19 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// impossible-component defect in mirror image.
 ///
 /// So: an ambiguous tail is usable ONLY if it contains nothing the walk would drop.
-/// ALLOWLIST, and fail-closed -- a new engine instruction refuses until someone decides
-/// it is renderable, which is the direction that cannot silently corrupt an observation.
+/// ALLOWLIST, and fail-closed against unknown INSTRUCTIONS -- a new variant refuses until
+/// someone decides it is renderable, which is the direction that cannot silently corrupt an
+/// observation. Note the limit of that guarantee, learned the hard way with `Damage` above:
+/// it is NOT fail-closed against a new USE of an already-admitted variant.
+///
+/// What the refused tails actually contain, measured over the oracle corpus rather than
+/// assumed: 10 are `[Boost]` (identical-boost pairs like Harden/Withdraw) and 6 are
+/// `[DamageSubstitute, RemoveVolatileStatus]` (a substitute break). The second group is
+/// worth naming because the obvious completeness plan -- emit `-boost`/`-status`/`-heal`/
+/// `-sidestart` -- does NOT cover it: a substitute break needs `-activate|...|Substitute`
+/// and `-end|...|Substitute`, so 6 of the 16 need a fifth family that plan omits.
+/// `DamageSubstitute` is correctly excluded here: substitute hits use that variant rather
+/// than `Damage`, and the walk renders neither.
 ///
 /// `Damage` is admitted ONLY when `damage_amount >= 0`. It is a SIGNED instruction: the
 /// engine's own comment at `gen3/choice_effects.rs` records that "a negative
