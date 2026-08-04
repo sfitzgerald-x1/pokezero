@@ -1757,9 +1757,6 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     # The engine lane verified these are determinization limits, not engine bugs
     # (feeding the exact repro state back produced correct fan-out including the
     # observed tick). Named so the residue table stops charging them to hazards.
-    if any(line.startswith("|drag|") for line in step_lines):
-        return "limit:world_sample_drag_target"
-
     if "boost deltas" in body:
         return "boost_delta_support"
     if "roll-scaled" in body:
@@ -1808,6 +1805,27 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     # misleading: it pointed the residue table at D2 for boundaries where
     # nothing faints in the move phase (#893). Prefixed so no reader mistakes
     # evidence for attribution.
+    # LAST RESORT for a component-level explanation: after every component test, and
+    # BEFORE the protocol-evidence fallbacks below.
+    #
+    # This used to short-circuit at the TOP of the function on the mere presence of a
+    # `|drag|` line, so it attached to every row that merely co-occurred with a phaze
+    # -- masking a renderer defect on eleven holdout rows and one dev row where the
+    # engine dragged the CORRECT Pokemon and only the Spikes chip's tag differed
+    # (#1081 fixed it; all twelve closed). The cost was not the label, it was that two
+    # reports concluded those rows were comparison limits -- and `limit:` is the one
+    # disposition that ends inquiry, which C116's M1 rule now forbids without a
+    # written demonstration.
+    #
+    # PLACEMENT IS LOAD-BEARING IN BOTH DIRECTIONS and my first attempt got the second
+    # wrong: below the `evidence:*` fallbacks the class became UNREACHABLE, because
+    # `evidence:spikes_in_step` matches any phaze-into-Spikes row first. A
+    # demoted-to-death class is no better than a short-circuited one. The control in
+    # tests/test_drag_limit_is_a_last_resort.py exists to catch exactly that, and it
+    # did. reports/c117, reports/c118.
+    if any(line.startswith("|drag|") for line in step_lines):
+        return "limit:world_sample_drag_target"
+
     fainted = any(line.startswith("|faint|") for line in step_lines)
     upkeep = any(line.strip() == "|upkeep" for line in step_lines)
     if fainted and not upkeep:
