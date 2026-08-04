@@ -1830,9 +1830,28 @@ fn render_move_phase(
     let expectation_choice = if rebuilt.move_id == choice.move_id {
         rebuilt
     } else {
-        // A callee. Its own Choice has been through `before_move` once, which is
-        // the same single application any other path gets, so use it as-is
-        // rather than a wrong slot.
+        // A callee. Use its own Choice rather than a wrong slot.
+        //
+        // NOT parity, and an earlier comment here wrongly claimed it was: the
+        // callee's Choice was already mutated inside
+        // `identify_sleep_talk_called`'s `generate_instructions_from_move`, and
+        // `expected_damage_values` applies `before_move` again — so this path
+        // totals TWO applications where every other path now totals one. The
+        // double-mutation defect part 1 exists to fix is still live here, scoped
+        // to Sleep Talk callees.
+        //
+        // Reachable, though unexercised in the 200-game window (0 rows opened):
+        // a Sleep-Talk-called Fire or Ice move into a Thick Fat defender gets
+        // `base_power` quartered, `max_regular` roughly halved, and the gate then
+        // over-fires on ordinary non-crit rolls. The dangerous direction is a
+        // false MATCH — Showdown crits, a non-crit arm is stamped `|-crit|`, and
+        // the boundary accepts on the wrong arm, which the divergence count
+        // cannot see.
+        //
+        // The clean fix needs no new machinery: `identify_sleep_talk_called`
+        // already holds the pristine `candidate` before cloning and mutating it,
+        // so returning it alongside the match would remove this fallback
+        // entirely. Follow-up, registered in `reports/c102`.
         choice.clone()
     };
     let (_regular_collapsed, _crit_collapsed, max_regular, max_crit) =
