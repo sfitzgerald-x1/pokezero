@@ -1591,8 +1591,14 @@ gen3-excluded move.
 
 > **Scope, added 2026-08-03.** That 0 covers the `charge`/`nosleeptalk` **flag**
 > arm and nothing else — it is a SET-COMPOSITION scan. Three further divergences
-> are STATE conditions no composition scan can see, and two of them are reachable
-> on this same variant set:
+> are STATE conditions no composition scan can see. NONE of them is measured
+> here, and only ONE — Encore — has its precondition present on this pool:
+>
+> The flag-arm zero also survives runtime moveset mutation, which this ledger
+> records elsewhere (`self_moveset_mismatch` = 285): **0 of 1,682 variants carry
+> Mimic or Sketch**, and the 7 Transform variants copy another pool variant, which
+> is itself 0-pairing. So no mutation path can create a flag-arm pairing the static
+> scan missed.
 >
 > * **0 PP.** gen3 emits `|cant|MON|nopp|MOVE` and does NOT resample; poke-engine
 >   has no PP test. NOT MEASURED — no set scan can see a PP state, and this probe
@@ -1603,11 +1609,6 @@ gen3-excluded move.
 >   Encored. **95 of the 1,682 variants carry Encore — carried by the OPPONENT: 0
 >   variants carry both Encore and Sleep Talk**, which is what makes this a live
 >   pairing rather than a self-inflicted one. Reachable, unmeasured.
-> The flag-arm zero also survives runtime moveset mutation, which this ledger
-> records elsewhere (`self_moveset_mismatch` = 285): **0 of 1,682 variants carry
-> Mimic or Sketch**, and the 7 Transform variants copy another pool variant, which
-> is itself 0-pairing. So no mutation path can create a flag-arm pairing the static
-> scan missed.
 >
 > * **choicelock.** The other half of that same `onTryHit`, and by the section's
 >   own set logic it is NOT reachable: 160 variants carry Choice Band (the pool's
@@ -1655,7 +1656,8 @@ appendix measures it.
 census involve Sleep Talk: 14 `roll_scaled_component`, 5 other. Their shape is
 `observed=[('', -78)] engine=[]` — Showdown's call dealt damage and the engine's
 branch has none. Since the fan-out and weights are correct and the **flag-arm**
-exclusion bug is unreachable, these are not a Sleep Talk defect *on that arm*; they are the called
+exclusion bug is unreachable, these are not a Sleep Talk defect *on that arm*;
+they are the called
 move's damage failing to match, which is the same "engine is missing damage"
 family as the confirmed variable-BP bug. They should be re-checked after the
 variable-BP fixes land rather than tracked as a Sleep Talk item.
@@ -1801,8 +1803,8 @@ variants > sets. Appendix E quoted the variant row; the reviewer's independent
 44/393 is the set row. **Same FLAG-ARM zero at every denominator.**
 
 This table says nothing about whether the state arms (0 PP, Encore, choicelock)
-FIRE. Their PRECONDITIONS are countable here -- that is where the 95 and the 160/0
-come from, and the 160/0 is what licenses calling choicelock unreachable -- but no
+FIRE. Their PRECONDITIONS are countable here — that is where the 95 and the 160/0
+come from, and the 160/0 is what licenses calling choicelock unreachable — but no
 set-composition unit can express a PP count or a volatile, so no denominator
 settles whether the arm is exercised. See the scope note in §E.2.
 
