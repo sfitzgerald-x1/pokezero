@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1379,7 +1379,53 @@
+@@ -1388,7 +1388,53 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
@@ -54,13 +54,13 @@
 +    cmp::min(total, active.hp)
 +}
 +
-@@ -2986,1 +3035,5 @@
+@@ -2930,1 +2976,5 @@
      let crit_chance = critical_hit_chance(&choice, defender_ability);
 +    // Bound HERE, before `defender_active` takes a mutable borrow of `state`.
 +    // The residual partition below cannot read `state` while that borrow lives.
 +    let pending_at_end_of_turn =
 +        pending_residual_damage(state, &attacking_side.get_other_side());
-@@ -3053,2 +3107,33 @@
+@@ -3057,2 +3107,33 @@
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
 +
