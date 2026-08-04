@@ -3784,16 +3784,38 @@ mod tests {
         };
         let build = |callees: &[Choices], keep: Option<usize>, sleeper_first: bool| {
             let mut st = State::default();
-            // BOTH move orders. The intent was to pin
+            // BOTH move orders, and this DOES pin
             // `choice.first_move = outer_choice.first_move` -- #1048's second half,
-            // which reverting alone leaves the suite green.
+            // which every earlier version of this test left green under revert.
             //
-            // HONEST RESULT: it does NOT pin it. Reverting that line still passes
-            // even with this axis, because when the sleeper moves SECOND the
-            // defender's HP-reading move has already resolved, so the engine's gate
-            // does not fire either and the two agree regardless. That line remains
-            // defensive and unpinned; the axis is kept because it broadens shape
-            // coverage, not because it closes that gap.
+            // My recorded reason for that was WRONG. I claimed the engine's gate
+            // "does not fire either" when the sleeper moves second. It does:
+            // `pending_hp_reading_move` is pure data
+            // (`branch_on_damage && choice.first_move && pending_hp_reading_move(..)
+            // && fixed_damage.is_none()`) and consults nothing about whether the
+            // defender's move already resolved. Instrumented on the 639
+            // sleeper-second calls, reverting the line takes generated branches from
+            // 2-3 to 15-22, so the roll enumeration runs.
+            //
+            // The real reason the revert used to survive is a NUMERIC COINCIDENCE:
+            // the gate block ends `combine_duplicate_instructions(); return;`, so it
+            // REPLACES the average-collapse path, and at `State::default()`
+            // magnitudes `floor(0.925*M) == floor(M*92/100)` -- the average IS one of
+            // the sixteen rolls, so the byte-match survived either way. Found by
+            // independent review after I had recorded the wrong mechanism.
+            // HIGH-DAMAGE stats, deliberately. At `State::default()` magnitudes
+            // `floor(0.925*M) == floor(M*92/100)`, i.e. the average-collapse tail is
+            // byte-identical to roll 92, so a `first_move` revert still matched and
+            // the line looked unpinnable. Separating them needs ~0.01*M > 2, i.e.
+            // max damage above ~200, which default stats never reach.
+            st.side_two.get_active().attack = 318;
+            st.side_two.get_active().special_attack = 318;
+            st.side_one.get_active().defense = 96;
+            st.side_one.get_active().special_defense = 96;
+            st.side_one.get_active().maxhp = 404;
+            st.side_one.get_active().hp = 404;
+            st.side_two.get_active().maxhp = 404;
+            st.side_two.get_active().hp = 404;
             st.side_two.get_active().speed = if sleeper_first { 500 } else { 1 };
             st.side_two.get_active().status = PokemonStatus::SLEEP;
             st.side_two.get_active().rest_turns = 0;
@@ -3900,7 +3922,11 @@ mod tests {
                         (1, Some(name), false) => {
                             let truth = move_display(named[0]).to_lowercase().replace(' ', "");
                             if truth == name.replace('_', "").replace(' ', "") {
-                                *agree_by_defender.entry(format!("{defender:?}")).or_insert(0) += 1;
+                                let key = format!(
+                                    "{defender:?}/{}",
+                                    if sleeper_first { "first" } else { "second" }
+                                );
+                                *agree_by_defender.entry(key).or_insert(0) += 1;
                                 agree += 1;
                             } else {
                                 wrong.push(format!(
@@ -3969,31 +3995,47 @@ mod tests {
             unlabelled.join("\n  ")
         );
 
-        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- and PER DEFENDER,
-        // because a single aggregate threshold has a concrete blind spot.
+        // A single-label refusal means the engine produced this tail from callee C
+        // and the identifier could not reproduce it -- the INPUT-FIDELITY class, and
+        // the residual risk this whole area is about. It is 0 today, and it is the
+        // ONLY assertion that catches a `first_move` revert: with high-damage stats
+        // that revert drives it 0 -> 96 while the per-defender floor (932/932/417)
+        // and the ratio gate (87%) both still pass. That is what retires the
+        // "first_move is unpinned" note this test used to carry.
+        assert_eq!(
+            single_label_refused, 0,
+            "INPUT FIDELITY: {single_label_refused} tail(s) carry ONE unambiguous \
+             engine label and were still refused -- the identifier cannot reproduce \
+             a tail the engine demonstrably produced from that callee. Check the \
+             reconstructed inputs (defender_choice, first_move, branch_on_damage)."
+        );
+
+        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- and scoped to the
+        // SLEEPER-FIRST half, which is where that revert actually bites.
         //
         // `pending_hp_reading_move` is a 3-member set, so "one member dropped" is
-        // the most likely real regression. Measured per defender with #1048 in
-        // place vs reverted (sleeper-first half of the matrix):
+        // the likeliest real regression, and a bare aggregate threshold misses it.
+        // Measured on the sleeper-FIRST subset, with #1048 vs reverted:
         //
-        //     SUBSTITUTE  234 / 37      FLAIL  363 / 60      REVERSAL  307 / 53
+        //     SUBSTITUTE  234 / 37     FLAIL  363 / 60     REVERSAL  307 / 53
         //
-        // Losing FLAIL alone leaves aggregate agree = 541; REVERSAL, 597;
-        // SUBSTITUTE, 670. ALL THREE clear a bare `agree > 500`, which is why that
-        // threshold was wrong. A per-defender floor of 150 separates cleanly
-        // (min-with 234 vs max-without 60) and catches exactly that case. The RATIO
-        // gate additionally survives fixture growth, which a bare absolute count
-        // does not: trimming a moveset or an engine patch that changes branch
-        // counts would otherwise trip a false failure whose message misdiagnoses
-        // the cause.
+        // A floor of 150 separates those with ~4x margin. Scoping matters: on the
+        // FULL matrix the revert leaves {FLAIL 142, REVERSAL 135, SUBSTITUTE 50},
+        // an 8-branch margin, and it degrades predictably -- sleeper-second agrees
+        // are INVARIANT under a `defender_choice` revert (the gate needs
+        // `first_move`, false there), so every moveset added to that half raises the
+        // without-#1048 floor while leaving the signal flat. Two or three more and
+        // the gate would silently stop separating: the same silent-vacuity family
+        // this test exists to prevent.
         for defender in ["SUBSTITUTE", "FLAIL", "REVERSAL"] {
-            let n = agree_by_defender.get(defender).copied().unwrap_or(0);
+            let key = format!("{defender}/first");
+            let n = agree_by_defender.get(&key).copied().unwrap_or(0);
             assert!(
                 n >= 150,
-                "VACUOUS or #1048 REGRESSED for {defender}: only {n} confident \
+                "VACUOUS or #1048 REGRESSED for {key}: only {n} confident \
                  attributions (need >= 150). A per-defender collapse means the \
                  identifier lost the real defender choice for that move; the \
-                 aggregate count can still look healthy. All defenders: {:?}",
+                 aggregate can still look healthy. All: {:?}",
                 agree_by_defender
             );
         }
