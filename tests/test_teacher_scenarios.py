@@ -16,6 +16,7 @@ from pokezero.teacher_scenarios import (
     teacher_scenario_ids,
     write_teacher_scenario_rollouts,
 )
+from _showdown_root import showdown_root_str
 
 
 class TeacherScenarioPreflightTest(unittest.TestCase):
@@ -33,10 +34,7 @@ class TeacherScenarioPreflightTest(unittest.TestCase):
 
     def test_default_scenarios_pass_against_real_showdown_dex_when_available(self) -> None:
         root = Path(
-            os.environ.get(
-                "POKEZERO_SHOWDOWN_ROOT",
-                "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
-            )
+            showdown_root_str()
         )
         if not (root / "dist" / "data" / "moves.js").exists():
             self.skipTest("built Pokemon Showdown dex not available")

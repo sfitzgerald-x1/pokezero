@@ -4,7 +4,7 @@ shared, fixed corpus of real decision states. Re-run on each new checkpoint; wat
   python scripts/checkpoint_factors.py \
       --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
       --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
-      --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
+      --showdown-root $POKEZERO_SHOWDOWN_ROOT \
       --num-games 60 --out runs/probes/factors-<date>.json
 
 Factors: switch_propensity, toxic_switch (counterfactual lift), setup_usage (Dragon Dance /

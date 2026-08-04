@@ -1,6 +1,6 @@
 {
  "schema": "c72-fresh-local-sweep/1",
- "why": "every measurement this session was a re-read of the single C32 corpus, captured on the old build. The fixes were derived from that corpus, so validating them against it is circular. Showdown turned out to be installed locally at /Users/scott/workspace/pokerena/vendor/pokemon-showdown, so a 200-game sweep on the CURRENT build at a non-colliding seed range was available -- and had been all along.",
+ "why": "every measurement this session was a re-read of the single C32 corpus, captured on the old build. The fixes were derived from that corpus, so validating them against it is circular. Showdown turned out to be installed locally at <workspace>/pokerena/vendor/pokemon-showdown, so a 200-game sweep on the CURRENT build at a non-colliding seed range was available -- and had been all along.",
  "run": {
   "games": 200,
   "seed_start": 19000000,

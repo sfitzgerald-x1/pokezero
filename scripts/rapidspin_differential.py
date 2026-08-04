@@ -31,7 +31,7 @@ setup actually landed and require at least one such seed.
 
 MUST run in the dedicated rapidspin venv (never the shared one):
     .venv-rapidspin/bin/python scripts/rapidspin_differential.py \
-        --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown
+        --showdown-root $POKEZERO_SHOWDOWN_ROOT
 """
 
 from __future__ import annotations

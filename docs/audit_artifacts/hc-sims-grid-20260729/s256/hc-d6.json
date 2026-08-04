@@ -142,11 +142,11 @@
         "poke-engine-gen3-upstream-fixture-refresh.patch"
       ]
     },
-    "poke_engine_module": "/Users/scott/workspace/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/poke_engine/__init__.py",
-    "pokezero_module": "/Users/scott/workspace/agents/pokezero-agent/pokezero-hceval/src/pokezero/__init__.py",
+    "poke_engine_module": "<workspace>/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/poke_engine/__init__.py",
+    "pokezero_module": "<workspace>/agents/pokezero-agent/pokezero-hceval/src/pokezero/__init__.py",
     "pokezero_search_engine_features": "gen3 (residual-order patched)",
     "pokezero_search_model_feature": false,
-    "pokezero_search_module": "/Users/scott/workspace/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/pokezero_search/__init__.py",
+    "pokezero_search_module": "<workspace>/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/pokezero_search/__init__.py",
     "python": "3.13.13"
   },
   "raw_spec": "neural:checkpoints/pz-v2-2-1m.pt?deterministic=true&device=cpu",

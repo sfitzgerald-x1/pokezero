@@ -21,9 +21,10 @@ import unittest
 
 from pokezero.local_showdown import LocalShowdownEnv, LocalShowdownConfig
 from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
+from _showdown_root import showdown_root_str
 
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 SEEDS = tuple(range(1, 13))  # fixed -> reproducible coverage
 

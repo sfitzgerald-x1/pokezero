@@ -43,10 +43,9 @@ import unittest
 from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.randbat import load_gen3_randbat_source_cached
 from pokezero.showdown import parse_showdown_replay
+from _showdown_root import showdown_root_str
 
-SHOWDOWN_ROOT = os.environ.get(
-    "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
-)
+SHOWDOWN_ROOT = showdown_root_str()
 CAPTURES = pathlib.Path(__file__).parent / "fixtures" / "showdown" / "capture"
 
 OPENING = [

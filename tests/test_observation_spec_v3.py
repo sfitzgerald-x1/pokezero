@@ -69,9 +69,10 @@ from pokezero.showdown import (
 from pokezero.showdown import _ReplayParser, _wish_pending, _wish_turns_remaining
 from pokezero.transitions import TOKEN_KIND_MOVE, extract_transition_tokens
 from pokezero.turn_merged import extract_turn_merged_tokens
+from _showdown_root import showdown_root_str
 
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 
 

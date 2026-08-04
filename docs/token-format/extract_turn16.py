@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 OUT = HERE / "turn16-token-dump.json"
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "$POKEZERO_SHOWDOWN_ROOT")
 )
 BOUNDARY_TURN = 16
 

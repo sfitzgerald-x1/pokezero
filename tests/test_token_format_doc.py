@@ -26,13 +26,14 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from _showdown_root import showdown_root_str
 
 REPO = Path(__file__).resolve().parents[1]
 DOC_DIR = REPO / "docs" / "token-format"
 DUMP_PATH = DOC_DIR / "turn16-token-dump.json"
 HTML_PATH = DOC_DIR / "token-format-v2_2.html"
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 
 

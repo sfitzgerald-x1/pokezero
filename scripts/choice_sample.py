@@ -9,7 +9,7 @@ policy assigns to each legal choice (labeled: move:Surf, switch:Blissey, ...).
   python scripts/choice_sample.py \
       --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
       --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
-      --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
+      --showdown-root $POKEZERO_SHOWDOWN_ROOT \
       --out evals/turn10_choice_sample.json
 """
 

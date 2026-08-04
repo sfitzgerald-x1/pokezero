@@ -11,9 +11,10 @@ capture logs are controlled foul-play games committed under tests/fixtures.
 import os
 import unittest
 from pathlib import Path
+from _showdown_root import showdown_root_str
 
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 CAPTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown" / "capture"
 

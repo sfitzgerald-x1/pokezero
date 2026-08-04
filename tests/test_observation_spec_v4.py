@@ -83,9 +83,10 @@ from pokezero.showdown import (
     v3_numeric_index,
     v4_numeric_index,
 )
+from _showdown_root import showdown_root_str
 
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 
 _LEADS = [
@@ -1307,9 +1308,7 @@ class V4ExactSpreadsTest(V4EncodeTestBase):
     ~6% off, which is the class a model cannot detect.
     """
 
-    SHOWDOWN_ROOT = os.environ.get(
-        "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
-    )
+    SHOWDOWN_ROOT = showdown_root_str()
 
     @classmethod
     def setUpClass(cls) -> None:

@@ -1,5 +1,11 @@
 """Public-repo invariant guard: no internal-environment identifiers in tracked files.
 
+Covers two classes. Fixed internal identifiers (cluster, registry, namespace) via _FORBIDDEN,
+and PERSONAL FILESYSTEM PATHS via _FORBIDDEN_PATTERNS. The second was added on 2026-08-03 after
+137 occurrences of a maintainer home directory were found across 48 tracked files -- 23 of them
+test files that hardcoded it as the default Showdown checkout root, which leaked a username and
+silently skipped for every other contributor.
+
 The internal cluster deployment must leave zero trace in this public repo —
 no private-repo names, cluster or node-pool identifiers, internal registry or
 storage paths, namespaces, or kube contexts. Docs that need to reference such
@@ -40,10 +46,26 @@ _FORBIDDEN = [
     ("kube context flag", "kubectl " + "--context"),
 ]
 
+# Regex rules, for classes of leak rather than fixed strings. Assembled from fragments for the
+# same reason as _FORBIDDEN: an unfragmented pattern would match this file.
+_FORBIDDEN_PATTERNS = [
+    (
+        "maintainer home directory",
+        # Any user's home, not one specific username: a default naming SOMEONE's home is
+        # useless to everyone else, so this must fail for a new contributor's path too.
+        re.compile(r"/(?:Us" + r"ers|ho" + r"me)/[A-Za-z0-9._-]+/"),
+    ),
+]
+
 _ALLOWED_FILES = {
-    # This guard assembles the patterns from fragments and never contains them,
-    # but keep an explicit empty allowlist here so any future exception is a
-    # visible, reviewable diff rather than a pattern tweak.
+    # Recorded provenance inside a TAMPER-EVIDENT golden corpus: every row carries a
+    # `row_sha256` over its own payload, so the paths cannot be scrubbed in place without
+    # forging those hashes -- which would defeat the guarantee the field exists to provide.
+    # The corpus must be REGENERATED instead, after `randbat.py` stops recording absolute
+    # `sets_path`/`generator_path` values. Tracked as a follow-up; this entry should shrink to
+    # nothing, and is here so the exception is a visible, reviewable line rather than a
+    # weakened pattern.
+    "tests/data/golden_corpus_sample/rows.jsonl",
 }
 
 
@@ -75,6 +97,10 @@ class PublicInvariantTest(unittest.TestCase):
                 for match in re.finditer(re.escape(needle), text, re.IGNORECASE):
                     line = text.count("\n", 0, match.start()) + 1
                     violations.append(f"{rel}:{line}: {label} ({needle!r})")
+            for label, pattern in _FORBIDDEN_PATTERNS:
+                for match in pattern.finditer(text):
+                    line = text.count("\n", 0, match.start()) + 1
+                    violations.append(f"{rel}:{line}: {label} ({match.group(0)!r})")
 
         self.assertEqual(
             violations,

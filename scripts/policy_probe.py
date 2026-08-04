@@ -23,7 +23,7 @@ Usage:
   python scripts/policy_probe.py \
       --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
       --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
-      --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
+      --showdown-root $POKEZERO_SHOWDOWN_ROOT \
       [--capture-seed 7] [--out runs/probes/toxic-<date>.json]
 """
 

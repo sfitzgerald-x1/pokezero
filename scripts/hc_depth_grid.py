@@ -133,14 +133,17 @@ def _provenance(args: argparse.Namespace) -> dict[str, Any]:
     import poke_engine
     import pokezero_search
     import pokezero
+    from pokezero.local_showdown import portable_path
 
     payload: dict[str, Any] = {
         "python": sys.version.split()[0],
-        "pokezero_module": str(Path(pokezero.__file__).resolve()),
-        "pokezero_search_module": str(Path(pokezero_search.__file__).resolve()),
+        # portable_path, not str(...resolve()): this payload is COMMITTED as an audit
+        # artifact, and an absolute module path puts a username in a public repo.
+        "pokezero_module": portable_path(pokezero.__file__),
+        "pokezero_search_module": portable_path(pokezero_search.__file__),
         "pokezero_search_engine_features": pokezero_search.ENGINE_FEATURES,
         "pokezero_search_model_feature": bool(pokezero_search.MODEL_FEATURE_ENABLED),
-        "poke_engine_module": str(Path(poke_engine.__file__).resolve()),
+        "poke_engine_module": portable_path(poke_engine.__file__),
     }
     fingerprint = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if fingerprint.is_file():

@@ -25,6 +25,7 @@ from pokezero.randbat import (
     Gen3RandbatVariant,
     RandbatSourceMetadata,
 )
+from _showdown_root import showdown_root_str
 
 
 _CLI_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "coverage_enumeration_audit.py"
@@ -623,7 +624,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
         )
 
 
-_DEFAULT_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+_DEFAULT_SHOWDOWN_ROOT = showdown_root_str()
 _SHOWDOWN_ROOT = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT", _DEFAULT_SHOWDOWN_ROOT))
 _HAS_SHOWDOWN = (_SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists() and (
     _SHOWDOWN_ROOT / "dist" / "data" / "random-battles" / "gen3" / "teams.js"

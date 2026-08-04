@@ -9,6 +9,7 @@ from pokezero.belief import (
     sample_opponent_determinizations,
 )
 from pokezero.showdown import parse_showdown_replay
+from _showdown_root import showdown_root_str
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown"
@@ -1609,7 +1610,7 @@ class AbsorbAbilityAttributionTest(unittest.TestCase):
         from pathlib import Path
         root = Path(
             os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+            or showdown_root_str()
         )
         if not (root / "data" / "random-battles" / "gen3" / "sets.json").exists():
             self.skipTest("requires a local Showdown checkout with gen3 randbats sets")
