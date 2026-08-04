@@ -20,8 +20,13 @@ engine:
 
   1. enumerate the sixteen gen3 rolls as ``floor(max * r / 100)`` for r in 85..=100,
      taking ``max`` from ``calculate_damage`` (a value, not a code path);
-  2. read the true residual tick from a turn where NEITHER side attacks, so the
-     phase reports its own magnitude rather than us predicting it;
+  2. read the residual NET (damage minus heals) from a turn where NEITHER side
+     attacks, so the phase reports its own magnitude rather than us predicting it.
+     NOTE two known imprecisions: it is read at PRE-move HP, while a Leftovers heal
+     is min(maxhp/16, maxhp - hp) at POST-move HP, so it understates the healing
+     available to a damaged defender -- the same trap the shipped mirror's own
+     comment flags. Harmless while maxhp - hp >= 84 in every fixture here, and a
+     real limit to remove if fixtures move closer to full HP;
   3. count the rolls that die, non-crit and crit separately;
   4. mass = accuracy * ((1 - crit_rate) * n_regular/16 + crit_rate * n_crit/16).
 
@@ -29,14 +34,26 @@ Nothing here calls ``compare_health_with_damage_multiples``, the residual mirror
 or the partition logic. If the engine and this disagree, one of them is wrong and
 the sweep cannot tell you which.
 
-It also asserts every fixture's masses sum to 100%, which is weaker but free.
+It also asserts every fixture's masses sum to 100%, which is weaker but free -- and
+which, per the withdrawal above, is what actually catches the #1062 leak.
+
+WHAT IT DOES NOT COVER, measured by mutation rather than guessed. Corrupting C27's
+crit-kill split and #1062's crit-fan residual split BOTH to crit_rate*0.5 left the
+original matrix entirely green: neither path was reached, because min_crit=207 and
+max_crit=244 while every fixture's hp sat outside (207, 244]. The crit-kill-straddle
+fixture below closes the first of those. Still uncovered: the crit-FAN residual split
+(needs max_crit < hp, i.e. a weaker attacker), fixed_damage, multi-hit moves, the
+Wish / Rain Dish / Leech Seed / partial-trap mirror steps, and the bail set. The bail
+set is unreachable BY THIS DESIGN -- a scalar quiet-turn tick cannot represent
+Sitrus's non-monotone threshold heal -- so covering it needs a different
+reconstruction, not another fixture.
 
 FIXTURE DESIGN, learned from six near-misses. A fixture that does not straddle a
 threshold asserts nothing, and reads PASS. Every case here therefore records the
 arm structure it is supposed to exercise, and ``test_matrix_is_not_vacuous``
-asserts that the matrix as a whole contains at least one genuine split, at least
-one no-split, and at least one case where only the crit fan splits. A branch COUNT
-is never used as a signal: Rock Slide flinches 30%, so every arm appears twice.
+asserts that the matrix as a whole contains at least one genuine split and at least
+one no-split. A branch COUNT is never used as a signal: Rock Slide flinches 30%, so
+every arm appears twice.
 """
 
 from __future__ import annotations
@@ -81,12 +98,27 @@ def _state(hp, status, item, weather, toxic_count, attacker_move, defender_speed
     )
 
 
-def _damage_to_defender(branch) -> int:
-    return sum(
-        int(str(i).split(": ")[1])
-        for i in branch.instruction_list
-        if str(i).startswith("Damage SideTwo")
-    )
+def _net_hp_lost_by_defender(branch) -> int:
+    """NET HP the defender loses across the branch: damage minus heals.
+
+    This was damage-only, and that was the gate's most serious defect. The same
+    helper feeds both the reconstruction's tick AND the engine's KO set, so a
+    residual expressed as a heal was dropped on both sides identically and the two
+    agreed on a fictitious threshold. Measured consequence: a residual mirror that
+    loses the 10.4 Leftovers heal -- the exact "damage-only SUM puts the threshold
+    too low" error the shipped patch comment warns about -- made the engine assert a
+    burn KO on 4 of 16 surviving rolls (true KO mass 68.91%, engine 90.00%, a
+    21.1-point error) and this file stayed GREEN on all nine fixtures. The gate was
+    blind to a live instance of its own target class. Found by review of #1074.
+    """
+    total = 0
+    for i in branch.instruction_list:
+        text = str(i)
+        if text.startswith("Damage SideTwo"):
+            total += int(text.split(": ")[1])
+        elif text.startswith("Heal SideTwo"):
+            total -= int(text.split(": ")[1])
+    return total
 
 
 class BranchMassReconstruction(unittest.TestCase):
@@ -97,8 +129,15 @@ class BranchMassReconstruction(unittest.TestCase):
         ("noncrit-straddles-sand",    130, "none",   "none",      "sand", None),
         ("noncrit-straddles-burn",    123, "burn",   "leftovers", "none", None),
         ("saturated-toxic-count-1",   123, "toxic",  "none",      "none", 1),
-        ("saturated-poison",          140, "poison", "none",      "none", None),
-        ("crit-fan-only",             280, "poison", "none",      "none", None),
+        ("straddle-poison",           140, "poison", "none",      "none", None),  # 10/16 dies -- NOT saturated
+        # Reaches the C27 crit-KILL split: min_crit 207 < hp <= max_crit 244, and no
+        # residual, so the crit-survive arm stays OUT of the KO set and the split's
+        # proportions become load-bearing. Replaces a "crit-fan-only" fixture that
+        # used hp=280 against MAXHP=244 -- an unreachable battle state, which is
+        # precisely why its threshold landed above max_crit and the crit fan never
+        # split. With C27's crit-kill split AND #1062's crit-fan split both corrupted
+        # to crit_rate*0.5, the previous matrix passed entirely.
+        ("crit-kill-straddle",        230, "none",   "none",      "none", None),
         ("case-a-three-way",          120, "burn",   "leftovers", "none", None),
         ("no-residual-at-all",        160, "none",   "none",      "none", None),
         ("inert-item-salac",          140, "burn",   "salacberry", "none", None),
@@ -107,10 +146,16 @@ class BranchMassReconstruction(unittest.TestCase):
     def _reconstruct_and_measure(self, hp, status, item, weather, toxic_count):
         # (2) the phase reports its own tick, with no attack in play.
         quiet = _state(hp, status, item, weather, toxic_count, "splash")
-        tick = _damage_to_defender(
+        tick = _net_hp_lost_by_defender(
             pe.generate_instructions(quiet, "splash", "splash")[0]
         )
         self.assertLess(tick, hp, "invalid fixture: the residual alone would KO")
+        self.assertLessEqual(
+            hp, MAXHP,
+            "invalid fixture: hp exceeds maxhp, an unreachable battle state. The "
+            "constructor accepts it silently and it shifts every threshold, which is "
+            "how a fixture came to assert 0.0 == 0.0 while reading PASS.",
+        )
 
         state = _state(hp, status, item, weather, toxic_count, "rockslide")
         max_regular = pe.calculate_damage(state, "rockslide", "splash", False)[0][0]
@@ -130,7 +175,7 @@ class BranchMassReconstruction(unittest.TestCase):
 
         branches = pe.generate_instructions(state, "rockslide", "splash")
         actual = sum(
-            b.percentage for b in branches if _damage_to_defender(b) >= hp
+            b.percentage for b in branches if _net_hp_lost_by_defender(b) >= hp
         )
         return expected, actual, branches, max_regular, tick
 
@@ -170,13 +215,24 @@ class BranchMassReconstruction(unittest.TestCase):
             state = _state(hp, status, item, weather, tc, "rockslide")
             values = set()
             for b in pe.generate_instructions(state, "rockslide", "splash"):
+                # A branch where the move MISSED has no move damage, and its first
+                # `Damage SideTwo` is the residual tick. Taking that as a roll made
+                # two fixtures look partitioned when their fans were collapsed
+                # (saturated-toxic-count-1 read [30, 112]; the old crit-fan-only read
+                # three values while partitioning nothing). Identify the move damage
+                # structurally: it must precede any residual, and a miss branch is
+                # recognised by carrying no damage before the phase begins.
+                move_damage = None
                 for i in b.instruction_list:
                     text = str(i)
-                    if text.startswith("Heal SideTwo"):
+                    if text.startswith(("Heal SideTwo", "ChangeSideCondition",
+                                        "ChangeStatus", "Boost")):
                         break
                     if text.startswith("Damage SideTwo"):
-                        values.add(int(text.split(": ")[1]))
+                        move_damage = int(text.split(": ")[1])
                         break
+                if move_damage is not None:
+                    values.add(move_damage)
             shapes[label] = sorted(v for v in values if v != hp)
 
         multi = [k for k, v in shapes.items() if len(v) >= 2]
@@ -190,6 +246,26 @@ class BranchMassReconstruction(unittest.TestCase):
         self.assertGreaterEqual(
             len(shapes["case-a-three-way"]), 2,
             f"case-a-three-way must show a partitioned fan, got {shapes}",
+        )
+
+    def test_named_constants_are_pinned_by_a_named_arm(self):
+        """ACCURACY and CRIT_RATE are literals, deliberately -- reading them from the
+        engine would destroy the only genuine independence left. But on a fixture whose
+        whole fan dies, `expected` collapses to ACCURACY*100 and CRIT_RATE cancels, so
+        the constants go unconstrained. These two checks make a constant change fail by
+        name rather than diffusely."""
+        state = _state(160, "none", "none", "none", None, "rockslide")
+        branches = pe.generate_instructions(state, "rockslide", "splash")
+        miss = [b for b in branches if _net_hp_lost_by_defender(b) == 0]
+        self.assertAlmostEqual(
+            sum(b.percentage for b in miss), 100.0 * (1.0 - ACCURACY), delta=0.001,
+            msg="miss-arm mass must equal 100*(1 - ACCURACY); ACCURACY may have drifted",
+        )
+        kills = [b for b in branches if _net_hp_lost_by_defender(b) >= 160]
+        self.assertAlmostEqual(
+            sum(b.percentage for b in kills), 100.0 * ACCURACY * CRIT_RATE, delta=0.001,
+            msg="with nothing pending, only a crit kills: mass must be "
+                "100*ACCURACY*CRIT_RATE; a constant may have drifted",
         )
 
 
