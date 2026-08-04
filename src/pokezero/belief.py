@@ -458,6 +458,10 @@ class PublicBattleBeliefEngine:
         # PRE-RESIDUAL damage state: gen3's Leftovers slot precedes status/Leech chip, so a mon
         # chipped only during residuals gives no Leftovers evidence (its slot ran at full HP).
         self._leftovers_healed_this_turn: set[str] = set()
+        # Keys healed back to FULL HP this turn by something other than Leftovers. Leftovers
+        # cannot heal a mon that is already full, so its silence in that case is not evidence of
+        # absence -- see _sweep_end_of_turn_non_procs.
+        self._healed_to_full_this_turn: set[str] = set()
         self._berry_ate_this_turn: set[str] = set()
         # Belief keys whose Shed Skin ``-activate`` fired this turn. A Shed Skin
         # carrier that Rests can proc its 33% cure on the first upkeep and wake in
@@ -666,6 +670,14 @@ class PublicBattleBeliefEngine:
             if belief is not None:
                 if event_type == "-heal" and raw_line and "[from] item: Leftovers" in raw_line:
                     self._leftovers_healed_this_turn.add(belief.key)
+                elif event_type == "-heal":
+                    # A non-Leftovers heal that reaches FULL HP removes the Leftovers slot's
+                    # opportunity entirely. Wish is the common case and it is ENGINE-ORDERED
+                    # before Leftovers (`data/moves.ts` wish `onResidualOrder: 4` vs
+                    # `data/items.ts` leftovers `onResidualOrder: 5`), so a Wish that tops the mon
+                    # off resolves first and Leftovers then heals nothing and emits nothing.
+                    if _hp_fraction_from_condition(_string_or_none(primary)) == 1.0:
+                        self._healed_to_full_this_turn.add(belief.key)
                 if _is_action_phase_hp_change(raw_line):
                     self._hp_after_actions[belief.key] = _hp_fraction_from_condition(_string_or_none(primary))
                 if (
@@ -858,6 +870,7 @@ class PublicBattleBeliefEngine:
                     self._replace_belief(belief, sleep_skipped_turns=0)
             self._sleep_cant_pending = set()
             self._leftovers_healed_this_turn = set()
+            self._healed_to_full_this_turn = set()
             self._berry_ate_this_turn = set()
             self._shed_skin_activated_this_turn = set()
             return
@@ -1222,6 +1235,7 @@ class PublicBattleBeliefEngine:
         twin._cure_all_count = dict(self._cure_all_count)
         twin._sleep_clause_holder = dict(self._sleep_clause_holder)
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
+        twin._healed_to_full_this_turn = set(self._healed_to_full_this_turn)
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._stay_locked_move = dict(self._stay_locked_move)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
@@ -1525,10 +1539,35 @@ class PublicBattleBeliefEngine:
             # before status/Leech chip, so a mon damaged only by later residuals gave its
             # Leftovers no chance to fire. No snapshot => no evidence (conservative).
             hp_pre_residual = self._hp_after_actions.get(belief.key)
+            # ... and it also keys off the mon still HAVING room to heal when that slot runs. A mon
+            # topped back off to full before the Leftovers slot gives Leftovers nothing to do, so
+            # it emits no line -- and reading that silence as proof of absence rules out the TRUE
+            # item. Found by the V1 coherence sweep (565 violations / 250 games); the reproducer:
+            #
+            #   |-damage|p2a: Octillery|169/272
+            #   |-heal|p2a: Octillery|272/272|[from] move: Wish|[wisher] Umbreon
+            #   |upkeep
+            #
+            # Octillery really does hold Leftovers. Because every Octillery variant holds it, the
+            # rule-out emptied the candidate set, forced the inconsistent fallback, and pinned
+            # uncertainty to 1.0; on a mixed-item species it would drop the true variant instead,
+            # which is the unrecoverable direction. No opportunity means no evidence: decline
+            # rather than eliminate.
+            #
+            # The second guard, ``hp_fraction < 1.0``, closes the same hole reached by a different
+            # route: ``_hp_after_actions`` is NOT cleared per turn, so a mon damaged on an earlier
+            # turn that takes no action-phase hit on THIS one is still judged against that stale
+            # snapshot. Its own comment already states the intended policy -- "no snapshot => no
+            # evidence (conservative)" -- but a stale snapshot is not no-snapshot, and it silently
+            # acted as this turn's evidence. Requiring the mon to actually END the turn below full
+            # is sound on its own: if it ends full and Leftovers did not heal it, Leftovers either
+            # had no room or the heal came after its slot, and neither is evidence of absence.
             if (
                 hp_pre_residual is not None
                 and hp_pre_residual < 1.0
+                and hp_fraction < 1.0
                 and belief.key not in self._leftovers_healed_this_turn
+                and belief.key not in self._healed_to_full_this_turn
             ):
                 belief = self._rule_out_items(
                     belief,
