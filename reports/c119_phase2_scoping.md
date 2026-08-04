@@ -27,16 +27,39 @@ marker, or a missing mechanic.
 | holdout rows | cause | absorbed by (a)? |
 |---|---|---|
 | 2 | Pain Split collapse tax — the amount is a function of the arm's representative roll | **yes** |
-| 2 | A8, the residual mirror reading status pre-move | **yes** — a per-roll evaluator runs the phase *after* the move, so the secondary is visible by construction |
-| 1 | A9, a planned Wish heal never rendered | **yes**, if the evaluator renders what it simulates |
+| 2 | A8, the residual mirror reading status pre-move | **unknown** — needs a design §3 does not specify, below |
+| 1 | A9, a planned Wish heal never rendered | **no** — a renderer omission, below |
+| 1 | A5, contact-ability trigger precedes the same-turn wake | no |
 | 11 | B1 — renderer tag | no *(already fixed, #1081/#1086)* |
 | 3 | A1 — faint/forced-switch residual **placement** | no — a harness pairing question |
 | 2 | A10 — Belly Drum pays `maxhp/2` at +6 | no — a move-legality predicate |
 | 2 | leechseed-for-Leftovers renderer mis-tag | no |
 | 1 | `19100180/24` unowned side-condition divergence | unknown |
 
-**5 of 25 absorbed, 20 untouched** — and of the 14 rows still divergent on the holdout,
-**5 absorbed / 9 untouched.** On the dev window's 6, by the same filings: the 2 A1 rows, A4,
+**2 of 25 firmly absorbed, 3 conditional, 20 untouched** — and of the 14 rows still divergent
+on the holdout, **2 firm / 3 conditional / 9 untouched.**
+
+An earlier revision said "5 absorbed, 20 untouched" above a table summing to **24** of the 25
+rows — missing `19100012/61` (A5), the row #1085 is confirming in the same batch. Same failure
+shape as #1079's "13 against a histogram of 11", in the document whose entire content is the
+row-by-row split, and inside the paragraph attesting the numbers came from the table rather than
+from a message. The attestation pointed at the thing that was wrong.
+
+### Why A8 and A9 are not "yes"
+
+**A8 needs a design §3 does not specify.** `residual_lethality_threshold` is called at
+`generate_instructions.rs:3204`; move secondaries are applied inside `run_move` at `:5198–5221`,
+i.e. **after**. Absorbing A8 therefore requires *relocating* the evaluation past secondary
+resolution, which §3 does not describe. And §3's mass model is `count/16` over rolls — a
+secondary is a probabilistic *branch* (Sacred Fire 50%, Fire Blast 10%), which `count/16` cannot
+express. C117 says a per-roll evaluator "would **settle** the open question"; I upgraded *settle*
+to *absorb*.
+
+**A9 is a renderer omission.** `events.rs:1727–1734` renders HP changes "DECREASES ONLY,
+deliberately", with its own comment that an unrendered rise leaves the row divergent.
+Enumeration changes arm construction, not the rendering walk — and §2's own preamble says the
+change cannot fix a renderer tag. My conditional was doing all the work and its antecedent is
+false today. On the dev window's 6, by the same filings: the 2 A1 rows, A4,
 A5, A7 and A6 — so **1 or 2 absorbed at most** (A4 and A7 are collapse-class; A1, A5, A6 are
 not).
 
@@ -62,7 +85,9 @@ sweep-invisible defect the enumeration deletes outright.
 
 **M5 is the strongest single argument and it is independent of row count.** The comparator
 mis-counts kill rolls for 195 `(max, threshold)` pairs in the audited range, 22 at interior
-thresholds, one-directional (always undercounting), across five call sites. Enumeration
+thresholds, one-directional (always undercounting), across five call sites — one more than C116 §M5's "four", measured at
+`generate_instructions.rs` 3232, 3278, 3340, 3368, 3394. This report corrects the plan upward
+rather than silently carrying a different number. Enumeration
 replaces it with exact integer counting. All three of the plan's outcomes are required to
 close M5, so that part is not a decision at all.
 
@@ -71,8 +96,10 @@ close M5, so that part is not a decision at all.
 Registered here so they are not rediscovered later:
 
 1. **If the partition stack is RETAINED for any consumer** (outcomes (b) or (c)), the
-   crit-fan residual split, `fixed_damage` and multi-hit get mass-gate fixtures before the
-   decision is recorded as closed. They are currently uncovered and were deferred *only*
+   crit-fan residual split, `fixed_damage`, multi-hit **and the Wish / Rain Dish / Leech Seed /
+   partial-trap mirror steps** get mass-gate fixtures before the decision is recorded as closed.
+   An earlier revision dropped the last four while filing A9 — whose mechanism *is* the Wish
+   mirror step — as absorbed: the same gap counted twice, in opposite directions. They are currently uncovered and were deferred *only*
    because outcome (a) deletes those paths. Deferring them under (b) or (c) is not defensible.
 2. **The bail set is unreachable by the current mass gate's design** — a scalar quiet-turn
    tick cannot represent Sitrus's non-monotone threshold heal. Covering it needs a different
@@ -85,8 +112,9 @@ Registered here so they are not rediscovered later:
 
 ## 5. Recommendation
 
-Write the spike, and pre-register the prediction as **5 of 25 holdout rows and 1–2 of 6 dev
-rows**, with M5 closed. If the spike closes materially more than that, the extra rows are
+Write the spike, and pre-register the prediction as **2 of 25 holdout rows firmly** — up to 5
+only if the spike also relocates the evaluation past move secondaries and renders what it
+simulates — **and 1–2 of 6 dev rows**, with M5 closed. If the spike closes materially more than that, the extra rows are
 evidence my filings are wrong somewhere and should be replayed rather than celebrated. If it
 closes fewer, the collapse-class attributions are wrong.
 
