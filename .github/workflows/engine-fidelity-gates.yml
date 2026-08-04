@@ -1,0 +1,78 @@
+name: Engine fidelity gates
+
+# C116 Phase 1 item 4, the wiring half. The mass gate and the behavioural probes are
+# the only instruments that can see defects the transition differential is structurally
+# blind to -- anything that moves probability mass between branches while leaving each
+# branch's damage components intact. Before this workflow existed, nothing ran them:
+# the two other workflows run six named modules between them and neither builds
+# poke_engine, so `tests/test_branch_mass_reconstruction.py` was a standing test that
+# nothing executed. Adversarial review had to substitute for it three times.
+#
+# THE IMPORTS ARE DELIBERATELY HARD. Do not "fix" a missing-wheel failure with
+# try/except ImportError + skipIf, the convention some other engine tests use. A gate
+# that skips when the wheel is absent is precisely how the previous era's fixtures read
+# PASS while asserting nothing -- six of them. If the wheel will not build, this job
+# must go red, not green-with-a-skip.
+
+on:
+  pull_request:
+    paths:
+      - "third_party/poke-engine-gen3-*.patch"
+      - "third_party/poke-engine-gen3-patches.txt"
+      - "rust/pokezero-search/**"
+      - "scripts/apply_poke_engine_patches.py"
+      - "scripts/build_search_crate_engine.sh"
+      - "scripts/setup_poke_engine.sh"
+      - "scripts/vendor_poke_engine_src.sh"
+      - "scripts/engine_behavioral_probes.py"
+      - "scripts/engine_build_fingerprint.py"
+      - "tests/test_branch_mass_reconstruction.py"
+      - "tests/test_poke_engine_patch_stack.py"
+      - ".github/workflows/engine-fidelity-gates.yml"
+
+jobs:
+  mass-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/pokezero-search
+
+      - name: Install build tooling
+        run: python -m pip install -e . maturin
+
+      # The patch stack must apply at fuzz 0 and hash to its pins before anything is
+      # built. This is also the tamper guard: PATCHED_TARGET_TREE_SHA256 rejects a
+      # zero-context hunk that applied in the wrong place.
+      - name: Patch stack integrity
+        run: python -m unittest tests.test_poke_engine_patch_stack -v
+
+      - name: Build and install the gen3 engine and the search crate
+        run: bash scripts/build_search_crate_engine.sh
+
+      # Behaviour is the only thing a stale .so cannot fake: --check validates the
+      # patch set against the stamp, but a restamp without a rebuild leaves a stale
+      # wheel that --check calls current. This has bitten twice.
+      - name: Behavioural probes
+        run: python scripts/engine_behavioral_probes.py
+
+      # The instrument this workflow exists for. Compares branch masses against an
+      # integer reconstruction that shares none of the partition logic.
+      - name: Mass gate
+        run: python -m unittest tests.test_branch_mass_reconstruction -v
+
+      - name: Search-side regression gates
+        run: python -m unittest tests.test_search_depth_tactics tests.test_crit_kill_split_patch -v
+
+      - name: Assert the engine build stamp is current
+        run: python scripts/engine_build_fingerprint.py --check
