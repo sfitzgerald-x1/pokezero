@@ -1431,9 +1431,18 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // table says is fixable ONLY by an engine change, so reading it
                 // as `none_matched` would send the next phase at the renderer
                 // and waste the cycle.
+                // Harden and Withdraw are both +1 Defense, so the tail carries a
+                // BOOST -- which the unnamed-callee walk cannot render (it emits HP
+                // decreases, drags and faints only). So this fixture is the
+                // UNRENDERABLE arm: it must still refuse, and it must say which arm.
+                //
+                // This assertion read `:ambiguous` before the three-way split, and
+                // that is now the arm that does NOT refuse -- so leaving it would have
+                // pinned the opposite of the intended behaviour.
                 assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous",
-                    "two byte-identical callees must report `ambiguous`: {:?}",
+                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                    "byte-identical callees whose tail carries an effect the walk \
+                     cannot render must refuse, and name that arm: {:?}",
                     r.attribution_unsafe
                 );
             }
@@ -1460,6 +1469,77 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         }
     }
     assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+}
+
+/// The OTHER arm: byte-identical callees whose tail the walk CAN render are USABLE.
+///
+/// Tackle and Scratch are both 40-power physical Normal, so their tails are
+/// byte-identical AND contain nothing but damage -- exactly the shape
+/// `ambiguous_tail_is_fully_renderable` admits. The transition is proven and the walk
+/// describes it completely, so refusing would discard a world for a missing label.
+///
+/// Without this test the fail-closed predicate could be `|_| false` and the suite would
+/// stay green on the sibling above, which is the whole reason the split needs two
+/// fixtures rather than one.
+#[test]
+fn byte_identical_callees_with_a_renderable_tail_are_usable_not_refused() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+
+    let branches = generate(&mut state);
+    let mut saw_usable = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        if !r
+            .lossy_subcases
+            .iter()
+            .any(|x| x == "sleeptalk_called_unidentified:ambiguous")
+        {
+            continue;
+        }
+        saw_usable = true;
+        // NOT refused: nothing sleep-talk-shaped may reach `attribution_unsafe`.
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a renderable ambiguous tail must not refuse: {:?}",
+            r.attribution_unsafe
+        );
+        // The differential's contract tag stays bare and present.
+        assert!(
+            r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
+            "the usable arm must still carry the bare lossy tag: {:?}",
+            r.lossy
+        );
+        // ...and neither candidate may be NAMED, or the render invents evidence.
+        for callee in ["tackle", "scratch"] {
+            assert!(
+                !r.lines
+                    .iter()
+                    .any(|line| line.starts_with("|move|p2a:") && line.contains(callee)),
+                "named {callee:?} despite ambiguity: {:?}",
+                r.lines
+            );
+        }
+    }
+    assert!(
+        saw_usable,
+        "fixture produced no USABLE ambiguous branch, so the renderable arm is untested"
+    );
 }
 
 /// REGRESSION: the defender's move must no longer break Sleep Talk attribution.

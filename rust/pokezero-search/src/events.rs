@@ -58,7 +58,10 @@ use poke_engine::engine::generate_instructions::{
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
-use poke_engine::instruction::{ChangeStatusInstruction, Instruction, StateInstructions};
+use poke_engine::instruction::{
+    BoostInstruction, ChangeStatusInstruction, DamageInstruction, Instruction,
+    StateInstructions,
+};
 use poke_engine::state::{
     PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
     PokemonType, SideReference, State,
@@ -1725,33 +1728,26 @@ fn render_move_phase(
                     // comment below this one has recorded that disagreement for two
                     // eras. Era 57 priced it: this class is 49.5% of all world failures
                     // and 86.4% of the abort channel, and aborts are ~76% of fallback.
-                    match ident {
-                        // Ambiguous AND every instruction renderable by the walk below:
-                        // the observation is complete, so counting beats refusing.
-                        SleepTalkIdent::Ambiguous
-                            if ambiguous_tail_is_fully_renderable(&called_tail) =>
-                        {
-                            out.mark_lossy_subcase(
-                                SLEEPTALK_LOSSY_TAG,
-                                sleeptalk_subcase_slug(&ident),
-                            )
-                        }
-                        // Ambiguous but the tail carries an effect the walk would DROP
-                        // (a boost, status, heal, side condition...). Refusing is correct:
-                        // the alternative is an observation that contradicts the state.
-                        // Distinct sub-case so the cost of the gap stays measurable.
-                        SleepTalkIdent::Ambiguous => out.mark_attribution_unsafe_subcase(
-                            SLEEPTALK_LOSSY_TAG,
-                            "sleeptalk_called_unidentified:ambiguous_unrenderable",
-                        ),
-                        SleepTalkIdent::NoneMatched => out.mark_attribution_unsafe_subcase(
+                    // ONE predicate decides refuse-vs-count, so the decision is testable
+                    // without reaching an arm the engine cannot currently produce.
+                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail) {
+                        out.mark_lossy_subcase(
                             SLEEPTALK_LOSSY_TAG,
                             sleeptalk_subcase_slug(&ident),
-                        ),
-                        SleepTalkIdent::Matched(_) => unreachable!(
-                            "Matched is handled by the arm above; this block is the \
-                             unidentified path only"
-                        ),
+                        );
+                    } else if matches!(ident, SleepTalkIdent::Ambiguous) {
+                        // Ambiguous but the tail carries an effect the walk would DROP
+                        // (a boost, status, heal, side condition...). Distinct sub-case so
+                        // the cost of the remaining gap stays measurable.
+                        out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                        );
+                    } else {
+                        out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            sleeptalk_subcase_slug(&ident),
+                        );
                     }
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
@@ -2797,6 +2793,27 @@ fn render_move_phase(
     // Deferred faints, in the order the KOs landed.
     for fainted in pending_faints {
         emit_faint_if_dead(sim, fainted, ctx, out);
+    }
+}
+
+/// Whether an unidentified-callee outcome must REFUSE the branch, or may merely be
+/// counted.
+///
+/// Extracted as a pure function ON PURPOSE. When this decision lived inline in
+/// `render_move_phase`, making `NoneMatched` lossy-only -- which would let a render the
+/// engine cannot reproduce reach the fold -- was INDISTINGUISHABLE from the correct code:
+/// `NoneMatched` is unreachable from any state the crate tests build, so nothing observed
+/// the routing. A synthesised test of the refusing SEAM did not help either, because the
+/// seam is downstream of the choice. A pure predicate is testable without reaching the arm.
+fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> bool {
+    match ident {
+        // Proven transition; unsafe only if the walk would silently drop part of it.
+        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail),
+        // The renderer could not reproduce the engine's tail at all, so any description
+        // built on it may be wrong. Always unsafe.
+        SleepTalkIdent::NoneMatched => true,
+        // Handled by the naming path; never reaches the refusal decision.
+        SleepTalkIdent::Matched(_) => false,
     }
 }
 
@@ -4260,6 +4277,96 @@ mod tests {
              ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
              {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
+        );
+    }
+
+    /// The ROUTING decision, tested directly for every variant.
+    ///
+    /// `NoneMatched` must be unsafe REGARDLESS of how renderable its tail is: the tail is
+    /// not the problem there, the renderer's inability to reproduce it is. Making it
+    /// lossy-only was indistinguishable from correct code until this existed.
+    #[test]
+    fn none_matched_is_always_unsafe_and_renderable_ambiguity_never_is() {
+        let renderable = vec![Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 10,
+        })];
+        let unrenderable = vec![Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        })];
+
+        // Ambiguous: renderable is USABLE, unrenderable REFUSES.
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable));
+
+        // NoneMatched: unsafe either way. A renderable tail must NOT rescue it.
+        assert!(
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &renderable),
+            "none_matched with a renderable tail must STILL refuse -- the tail is not the \
+             defect, the renderer's failure to reproduce it is"
+        );
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &unrenderable));
+
+        // An empty tail is renderable by construction, so it must not rescue it either.
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &[]));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[]));
+    }
+
+    /// The refusing seam must still refuse `none_matched`, and must NOT refuse
+    /// `ambiguous`. Synthesised, so it does not depend on reaching either arm.
+    ///
+    /// `none_matched` is genuinely hard to reach from a real state -- two crate tests
+    /// assert it stays at zero, and the identifier's own comment records the arm as
+    /// unreachable today -- so a test that waits for the engine to produce one pins
+    /// nothing. Review found the consequence: making `NoneMatched` lossy-only too, which
+    /// would let a divergent render reach the fold, was INDISTINGUISHABLE from the
+    /// correct code because the only witness was a test already red for another reason.
+    /// This closes that by constructing the two shapes directly.
+    #[test]
+    fn the_refusing_seam_separates_ambiguous_from_none_matched() {
+        // AMBIGUOUS: sub-case on the measurement channel, bare tag on the contract
+        // channel, nothing on the refusing channel.
+        let usable = RenderedEvents {
+            lines: Vec::new(),
+            turn_completed: false,
+            lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
+            attribution_unsafe: Vec::new(),
+            lossy_subcases: vec![sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous).to_string()],
+            active_status_transitions: Vec::new(),
+        };
+        assert!(
+            !usable.is_attribution_unsafe(),
+            "a renderable ambiguous branch must pass the refusing seam"
+        );
+        reject_attribution_unsafe(&usable, "test")
+            .expect("ambiguous-and-renderable must not be refused");
+
+        // NONE_MATCHED: the renderer could not reproduce the engine's tail, so the
+        // description may be wrong. This one MUST still refuse.
+        let unsafe_render = RenderedEvents {
+            lines: Vec::new(),
+            turn_completed: false,
+            lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
+            attribution_unsafe: vec![
+                sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched).to_string(),
+            ],
+            lossy_subcases: Vec::new(),
+            active_status_transitions: Vec::new(),
+        };
+        assert!(unsafe_render.is_attribution_unsafe());
+        let error = reject_attribution_unsafe(&unsafe_render, "test")
+            .expect_err("none_matched must not reach the fold");
+        assert!(
+            error.to_string().contains("sleeptalk_called_unidentified:none_matched"),
+            "the refusal must name the cause: {error}"
+        );
+
+        // And the two slugs must not be the same string, or the split is cosmetic.
+        assert_ne!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
+            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched)
         );
     }
 
