@@ -35,28 +35,17 @@ contact secondary. The contact secondary fires from `ability_after_damage_hit`. 
 written "at the pinned lines" would have reordered the attack-modifier hook, which cannot
 affect `contact_status_is_valid` at all.
 
-## Why this is a re-pin and not a re-diagnosis
+## Why the mechanism looked survivable — and then did not
 
-The *mechanism* C111 describes is still the best candidate: `contact_status_is_valid`
-refuses outright when the target already has a status, and in both rows the target of the
-secondary is the **attacker**, which had just woken (`-curestatus …|slp|[msg]` immediately
-before its move in each protocol). So a wake not yet applied when the secondary is
-evaluated would produce exactly the observed absence.
+**This section is superseded by the one below it, and is kept as the reasoning that was
+wrong.** On finding the wrong hook I concluded the *mechanism* still held: that
+`contact_status_is_valid` refuses when the target already has a status, that in both rows the
+secondary's target had just woken, and that a wake not yet applied would produce exactly the
+observed absence. I listed two things as unestablished — the runtime order of `:1881` against
+`:2832`, and whether the check reads applied state or the instruction list — and said they
+needed an instrumented run.
 
-What is **not** established, and must be before any code changes:
-
-1. **The runtime order of `:1881` against `:2832`.** They sit in different functions, so
-   source order proves nothing. `:2832` is in `generate_instructions_from_move`; `:1881` is
-   in the damage-application path it calls. If the wake is generated *before* `run_move`
-   is entered, the attacker is already `NONE` when the secondary is evaluated and this
-   mechanism is refuted — in which case the rows have a different cause.
-2. **Whether the engine reads the wake at all.** `contact_status_is_valid` reads
-   `target.status` from live state, not from the instruction list, so what matters is
-   whether the `ChangeStatus` has been *applied*, not whether it has been *generated*.
-
-Both are one instrumented run to settle. I did not run it, and I am recording the gap
-rather than reasoning across it, because reasoning across exactly this kind of gap is what
-produced C117's three misfiled A2 rows — a cause whose fix had already shipped.
+They needed no run. The replay had the answer already.
 
 ## The ordering question is settled, and it refutes the mechanism
 
