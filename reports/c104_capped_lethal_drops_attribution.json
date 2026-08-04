@@ -1,0 +1,56 @@
+{
+ "SUPERSESSION_2026_08_04": "CAUSE STILL STANDS; FIX STILL NOT IMPLEMENTED as of 2026-08-04. The parser overwrite it identifies -- the differential replacing a killing event's [from] source with the bare literal capped_lethal -- has not been repaired. It is adjacent to C111 cause A7 (a collapsed lethal arm discarding an observable) but is a separate harness-side defect: A7 loses the distinction in the ENGINE, this loses it in the PARSER. Carried forward as open.",
+ "landed_because": "C116 Phase 0 item 1b: merged artifacts cite this file and the citations did not resolve -- scripts/engine_transition_differential.py:479 (shipped) and reports/c108 cite c103 and c107; reports/c110 cites c109. Under C116 M4 a report is not citable until merged.",
+ "schema": "c104-capped-lethal-destroys-attribution/1",
+ "headline": "the differential's own parser OVERWRITES the source of any damage event that kills, replacing psn / leechseed / sandstorm with the bare literal 'capped_lethal'. Showdown's attribution is discarded, the engine's is kept, and the two then cannot agree. This is a harness defect, and the file already contains the correct pattern eight lines above it.",
+ "status": "CAUSE ESTABLISHED AT SOURCE. Fix NOT implemented. Closes the class reports/c103 found and could not attribute.",
+ "the_rows": [
+  "19000147/125",
+  "19000191/63"
+ ],
+ "era": {
+  "commit": "04e7784e",
+  "engine_fingerprint": "36e9b74e70bebe34",
+  "artifact": "/tmp/sweep_main_final.json"
+ },
+ "the_code": {
+  "where": "scripts/engine_transition_differential.py, the component parser",
+  "what_it_does": "`if fainted_here and tag == \"-damage\": source = \"capped_lethal\"` -- an unconditional assignment that DISCARDS whatever `[from]` source Showdown supplied.",
+  "the_correct_pattern_is_eight_lines_above": "the capped-HEAL branch does the same job without the damage: `source = f\"{source}_to_full\"`, and its own comment says why -- 'The tag is PRESERVED so attribution is still compared; only the magnitude is relaxed, and only in the capped direction.' The capped-lethal branch does the opposite of what its neighbour documents as correct.",
+  "consequence": "both branches exist to relax a MAGNITUDE that inherits an earlier roll. Only one of them keeps the attribution. So a lethal residual arrives with its source erased, the engine's renderer supplies the true source, and the comparison fails on attribution for a reason that has nothing to do with the roll it was relaxing."
+ },
+ "the_two_rows": {
+  "19000191_63": {
+   "observed": "p1 capped_lethal=-28",
+   "engine_79pct": "p1 leechseed=-29",
+   "showdown_line": "|-damage|p1a: Raichu|0 fnt|[from] Leech Seed|[of] p2a: Tangela",
+   "note": "Showdown SUPPLIES the attribution -- [from] Leech Seed is right there in the protocol -- and the parser throws it away because the mon fainted. The engine keeps it. 28 against 29 is a one-HP roll difference that the roll bucket would have absorbed."
+  },
+  "19000147_125": {
+   "observed": "p2 psn=-54",
+   "engine_87pct": "p2 capped_lethal=-53",
+   "note": "the MIRROR case, and it is the one that proves the defect is the overwrite rather than a mere disagreement. Here the OBSERVED side kept `psn` and the ENGINE side is the one reading `capped_lethal` -- because the engine's branch is where the faint happens. Same mechanism, opposite sides, and the two labels can never meet."
+  }
+ },
+ "the_fix": {
+  "form": "mirror the neighbour: `source = f\"{source}_capped_lethal\"`, and route the suffix the way `_to_full` is routed (`source.endswith(\"_to_full\")` has an existing branch), so the magnitude is relaxed while the attribution is still compared.",
+  "why_this_is_not_widening": "it does not add tolerance. The magnitude relaxation is already there and is already justified by the comment. This RESTORES a comparison the parser was silently skipping -- it makes the matcher stricter on attribution while leaving the roll relaxation untouched. Closing rows by preserving information is the opposite of closing them by widening a rule.",
+  "expected_scope": "2 rows measured here. Likely more: the overwrite fires on EVERY lethal residual, so any family containing one is affected -- reports/c99 records LS_capped_lethal_shape at 7 rows, whose name is this literal. That should be measured, not assumed; reports/c100 predicted 10 and measured -7.",
+  "gate": "needs a pin that fails when reverted, and a single-variable sweep reporting matched and skip alongside diverged.",
+  "implemented": false
+ },
+ "how_this_was_found": "reports/c103 re-adjudicated the limit:roll_divergent_lethality rows -- a re-adjudication filed by reports/c91 and reports/c89 and never run -- and found five of five were defects rather than limits, across two classes. Three were the already-caused faint-without-damage class. These two were the residue that nothing covered, and this is their cause. Neither would have been visible without running the re-adjudication.",
+ "and_it_explains_the_label": "limit:roll_divergent_lethality has been absorbing these because the overwrite makes every lethal residual look like a roll-scaled component whose counterpart disagrees -- which is the exact shape of a roll dispute. The label was reporting the parser's own erasure back as a property of the comparison.",
+ "implementation_map": {
+  "note": "I started the implementation and stopped when it turned out to touch four sites plus a delicate existing path. Recording the map so the next attempt is turn-key rather than exploratory.",
+  "the_assignment": "scripts/engine_transition_differential.py:517 -- `source = \"capped_lethal\"` becomes `source = f\"{source}_capped_lethal\"`.",
+  "the_three_routing_sites_that_mirror__to_full": [
+   ":601 -- `if source in _ROLL_SCALED_SOURCES or source.endswith(\"_to_full\")`. Must also accept `_capped_lethal` or the component leaves the roll bucket and the magnitude relaxation this branch exists for is lost.",
+   ":826-827 -- `capped = component.source.endswith(\"_to_full\")` and the base-stripping beneath it. Needs the same suffix handling so attribution compares on the BASE source (psn against psn) rather than on the decorated string.",
+   ":884-885 -- the capped-heal bound gate, `if not obs_source.endswith(\"_to_full\") and not _eng_source.endswith(\"_to_full\")`. Decide deliberately whether a capped LETHAL takes the same bound as a capped HEAL."
+  ],
+  "the_delicate_part_and_why_i_stopped": "the BARE `capped_lethal` source already has its own handling -- a one-sided `abs(obs) <= abs(eng) + 1` test, and the file's own comment at the capped-heal bound records that applying that one-sided form to capped heals WAS A DEFECT ('it rejected the motivating Rest case, 251 vs 247, while accepting a 24x-too-small 10 vs 247'). So the suffix change must not silently route lethal residuals into, or out of, that test by accident. Getting that wrong produces a plausible sweep number in either direction, which is the failure mode this programme keeps recording.",
+  "how_to_verify": "single-variable sweep against main at 04e7784e (diverged 21, matched 15202, skip 1, lossy 11), reporting matched and skip alongside diverged, plus the closed/opened row identities. A pin that fails when reverted. Do NOT assume the scope: LS_capped_lethal_shape is 7 rows and is named for this literal, but reports/c100 predicted 10 and measured -7.",
+  "status": "NOT IMPLEMENTED. The cause is established; the routing is mapped; the risk is concentrated in one adjacent path."
+ }
+}

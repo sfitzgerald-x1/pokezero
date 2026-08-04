@@ -1,0 +1,35 @@
+{
+ "SUPERSESSION_2026_08_04": "HISTORICAL. Its two target rows are no longer in the residue and its fifth candidate was resolved by reports/c107, which instrumented the actual disagreement. Retained because the four refuted candidates are the record of what NOT to re-try.",
+ "landed_because": "C116 Phase 0 item 1b: merged artifacts cite this file and the citations did not resolve -- scripts/engine_transition_differential.py:479 (shipped) and reports/c108 cite c103 and c107; reports/c110 cites c109. Under C116 M4 a report is not citable until merged.",
+ "schema": "c106-segmentation-candidates-round-2/1",
+ "status": "NARROWING. Two more candidates refuted at source. FOUR now refuted for these two rows. A fifth is named with a reason to prefer it.",
+ "rows": [
+  "19000093/51",
+  "19000093/53"
+ ],
+ "why_this_matters": "these are the last two rows in the residue with no written cause. Clause 1 turns on them.",
+ "candidate_3_REFUTED_shared_output_vector_and_dedup": {
+  "the_hypothesis": "reports/c98 named this as a real asymmetry: handle_both_moves pushes phase-2 results into the same vector it pops phase-1 branches from, and every generate_instructions_from_move ends with combine_duplicate_instructions which REMOVES elements. segment() uses a fresh vector and never dedups across the phase boundary.",
+  "refutation": "combine_duplicate_instructions (gen3/generate_instructions.rs:3138-3151) merges ONLY branches whose instruction_list compares EQUAL, and it merges them by SUMMING PERCENTAGES. The lists themselves are never altered. So dedup cannot make a pair-generated list unreproducible by composition -- whatever list survives the merge is a list one of the inputs already had.",
+  "so_the_asymmetry_is_real_and_inert": "segment() not deduping means it may hold duplicate branches. It never means it holds DIFFERENT ones."
+ },
+ "candidate_4_REFUTED_percentage_100": {
+  "the_hypothesis": "segment() feeds phase 2 `percentage: 100.0` instead of the phase-1 branch's real percentage, and branch emission is gated on `branch_ins.percentage != 0.0`, so the two can produce different branch SETS.",
+  "refutation": "the direction is wrong. With 100.0 nothing underflows to zero, so segment() gets a SUPERSET of the branches the real percentage would yield. A superset cannot cause a prefix match to FAIL -- if the pair's list is in the smaller set it is in the larger one too. This candidate could only explain segment() finding a match the pair generation did not, which is the opposite of the observed failure."
+ },
+ "candidate_5_the_one_the_evidence_points_at": {
+  "name": "the second mover contributes NOTHING on the branch, because the first mover's move prevented it.",
+  "why_prefer_it": "19000093/51 is Rock Slide against Hydro Pump. Rock Slide carries a 30% FLINCH chance in gen3, which is why that boundary has ELEVEN branches. On a flinch branch the second mover never acts, so the pair-generated `full` contains p1's phase and then goes straight to end-of-turn with no p2 action phase at all.",
+  "the_mechanism": "segment() requires a phase-2 continuation that is a prefix of `full` and at least as long as the phase-1 prefix. It regenerates p2's move from a state carrying p1's instructions -- including the FLINCH volatile -- so a correct regeneration should also produce nothing. Whether it does is the thing to check: if the regenerated phase-2 emits the move anyway, no candidate is a prefix and segment() returns None, which is exactly the observed failure and exactly on the branches carrying the majority mass (44%, 25%, 11%).",
+  "why_it_fits_the_observed_split": "the three voided branches hold ~85% of the mass while the three usable ones hold ~10%. A 30% flinch chance crossed with Hydro Pump's 80% accuracy produces exactly that kind of split, and the usable arms are the ones where both mons acted normally.",
+  "the_decisive_check": "replay 19000093/51 and print, per branch, whether the branch contains a p2 action phase at all. If the voided branches are the flinch branches, this is the cause. One instrumented run, no rebuild of the engine needed -- only the renderer's segment() needs a log line."
+ },
+ "what_is_now_refuted_for_these_rows": [
+  "missing first-mover DecrementPP (reports/c96 v1, refuted in c96 v2)",
+  "first_move diverging between pair and regeneration (reports/c98)",
+  "phase 2 regenerating against a state advanced by phase 1's generation (reports/c98, refuted by the symmetry argument)",
+  "shared output vector and cross-phase dedup (here)",
+  "percentage 100.0 producing a different branch SET (here)"
+ ],
+ "honest_status": "NOT A CAUSE. Four refutations and one preferred candidate with a named decisive check. The two rows remain uncaused, which is stated in reports/c99 and is clause 1's remaining gap."
+}
