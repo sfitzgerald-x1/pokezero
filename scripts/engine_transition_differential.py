@@ -307,8 +307,30 @@ def engine_choice_for_action(
 # step 72 — Showdown healed 251 from 2 HP, the engine healed 247 from 6 HP, same
 # mechanic, different Surf roll). A bare heal that does NOT reach full is a pure
 # fraction (Recover = maxhp/2) and stays EXACT.
+# ``movepainsplit`` is the same class as ``heal_to_full``. Pain Split sets BOTH
+# mons to ``floor((hp_a + hp_b) / 2)`` (engine: gen3/generate_instructions.rs,
+# ``defender.hp - (attacker.hp + defender.hp) / 2``), so the magnitude is a
+# function of the HP left after whatever damage landed earlier in the SAME turn --
+# it inherits that hit's roll exactly as a capped heal does. Demanding an exact
+# match was a matcher defect, not an engine bug: it produced the whole
+# I3_roll_inherited family (reports/c95, reports/c101).
+#
+# No new tolerance is introduced. The existing window already carries one HP of
+# absolute flooring slack in both directions (``abs(eng) * 0.92 - 1`` to
+# ``abs(eng) * 1.09 + 1``), which is what a floor-divided quantity needs: for
+# eng 4 the band is [2.68, 5.36], so a 5-against-4 disagreement on a magnitude of
+# five is inside it. This only moves a roll-dependent component out of the EXACT
+# bucket it never belonged in.
 _ROLL_SCALED_SOURCES = frozenset(
-    {"", "recoil", "drain", "confusion", "capped_lethal", "move_unknown_callee"}
+    {
+        "",
+        "recoil",
+        "drain",
+        "confusion",
+        "capped_lethal",
+        "move_unknown_callee",
+        "movepainsplit",
+    }
 )
 
 # The mapper cannot recover WHICH move Sleep Talk called from the instruction
