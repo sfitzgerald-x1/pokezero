@@ -1,0 +1,123 @@
+name: Engine fidelity gates
+
+# C116 Phase 1 item 4, the wiring half. The mass gate and the behavioural probes are
+# the only instruments that can see defects the transition differential is structurally
+# blind to -- anything that moves probability mass between branches while leaving each
+# branch's damage components intact. Before this workflow existed, nothing ran them:
+# the two other workflows run six named modules between them and neither builds
+# poke_engine, so `tests/test_branch_mass_reconstruction.py` was a standing test that
+# nothing executed. Adversarial review had to substitute for it three times.
+#
+# THE IMPORTS ARE DELIBERATELY HARD. Do not "fix" a missing-wheel failure with
+# try/except ImportError + skipIf, the convention some other engine tests use. A gate
+# that skips when the wheel is absent is precisely how the previous era's fixtures read
+# PASS while asserting nothing -- six of them. If the wheel will not build, this job
+# must go red, not green-with-a-skip.
+
+on:
+  pull_request:
+    paths:
+      - "third_party/poke-engine-gen3-*.patch"
+      - "third_party/poke-engine-gen3-patches.txt"
+      - "rust/pokezero-search/**"
+      - "scripts/apply_poke_engine_patches.py"
+      - "scripts/build_search_crate_engine.sh"
+      - "scripts/setup_poke_engine.sh"
+      - "scripts/vendor_poke_engine_src.sh"
+      - "scripts/engine_behavioral_probes.py"
+      - "scripts/engine_build_fingerprint.py"
+      - "scripts/verify_poke_engine_source.py"
+      - "third_party/poke-engine-base-source.json"
+      - "tests/test_branch_mass_reconstruction.py"
+      - "tests/test_poke_engine_patch_stack.py"
+      - ".github/workflows/engine-fidelity-gates.yml"
+
+jobs:
+  mass-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # uv is REQUIRED, not optional: scripts/vendor_poke_engine_src.sh and
+      # scripts/setup_poke_engine.sh call `uv run ... pip download` and `uv pip
+      # install` with no fallback, and uv is not on the ubuntu runner image. Without
+      # it the build dies at step [1/8] with exit 127 on every run -- and, worse, the
+      # patch-stack tamper guard SKIPS rather than fails (see below). Found by review
+      # of #1080.
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/pokezero-search
+
+      - name: Install build tooling
+        run: python -m pip install -e . maturin
+
+      # The patch stack must apply at fuzz 0 and hash to its pins before anything is
+      # built. This is also the tamper guard: PATCHED_TARGET_TREE_SHA256 rejects a
+      # zero-context hunk that applied in the wrong place.
+      # tests/test_poke_engine_patch_stack.py calls self.skipTest when `uv` is absent,
+      # and that skip covers EXPECTED_FINAL_SHA256 and PATCHED_TARGET_TREE_SHA256 --
+      # the tamper guard this step exists for. unittest then exits 0 and the step goes
+      # green having asserted nothing. The uv install above is what makes this real;
+      # the skip assertion below is what keeps it real.
+      - name: Patch stack integrity
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_poke_engine_patch_stack -v 2>&1 | tee /tmp/patchstack.log
+          if grep -q 'skipped' /tmp/patchstack.log; then
+            echo "::error::a patch-stack test SKIPPED; the tamper guard did not run"
+            exit 1
+          fi
+
+      - name: Build and install the gen3 engine and the search crate
+        run: bash scripts/build_search_crate_engine.sh
+
+      # Behaviour is the only thing a stale .so cannot fake: --check validates the
+      # patch set against the stamp, but a restamp without a rebuild leaves a stale
+      # wheel that --check calls current. This has bitten twice.
+      # Redundant with the build script, which runs the probes at [7/8] and the stamp
+      # at [6/8] -- so the build step fails on a probe failure BEFORE reaching here.
+      # Kept as named steps anyway: when the build fails, "Behavioural probes" in the
+      # step list tells the next reader which instrument objected. The PR body's claim
+      # that "each step can fail only for its own reason" was inaccurate and is
+      # withdrawn.
+      - name: Behavioural probes
+        run: python scripts/engine_behavioral_probes.py
+
+      # The instrument this workflow exists for. Compares branch masses against an
+      # integer reconstruction that shares none of the partition logic.
+      - name: Mass gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_branch_mass_reconstruction -v 2>&1 | tee /tmp/massgate.log
+          if grep -q 'skipped' /tmp/massgate.log; then
+            echo "::error::the mass gate SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # test_search_depth_tactics is deliberately NOT here. It is skipUnless a built
+      # Showdown checkout (dist/sim/index.js) is present, which CI does not have, so it
+      # skipped in its entirety and the step's only real assertion was the static
+      # patch-text one. Including a suite that cannot run is how a gate reads green
+      # while asserting nothing -- the defect this workflow's header forbids. Add it
+      # back only alongside a Showdown checkout and build.
+      - name: Search-side regression gates
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_crit_kill_split_patch -v 2>&1 | tee /tmp/searchgates.log
+          if grep -q 'skipped' /tmp/searchgates.log; then
+            echo "::error::a search-side gate SKIPPED"
+            exit 1
+          fi
+
+      - name: Assert the engine build stamp is current
+        run: python scripts/engine_build_fingerprint.py --check
