@@ -1603,11 +1603,19 @@ gen3-excluded move.
 >   Encored. **95 of the 1,682 variants carry Encore — carried by the OPPONENT: 0
 >   variants carry both Encore and Sleep Talk**, which is what makes this a live
 >   pairing rather than a self-inflicted one. Reachable, unmeasured.
+> The flag-arm zero also survives runtime moveset mutation, which this ledger
+> records elsewhere (`self_moveset_mismatch` = 285): **0 of 1,682 variants carry
+> Mimic or Sketch**, and the 7 Transform variants copy another pool variant, which
+> is itself 0-pairing. So no mutation path can create a flag-arm pairing the static
+> scan missed.
+>
 > * **choicelock.** The other half of that same `onTryHit`, and by the section's
 >   own set logic it is NOT reachable: 160 variants carry Choice Band (the pool's
 >   only Choice item) and **0 of those carry Sleep Talk**. A mon can only be
 >   choice-locked by holding the item itself, so this needs an item-transfer path
->   — `Trick`, 5 variants in the pool — which nothing here measures. Bundling it
+>   — `Trick`, 5 variants in the pool, **all 5 of which already hold the Choice
+>   Band themselves** (2 Furret, 3 Kecleon), so it is a one-move transfer rather
+>   than a Knock-Off-then-Trick chain — which nothing here measures. Bundling it
 >   with Encore and answering "yes" on Encore's number would be the same
 >   conflation this note exists to remove.
 >
@@ -1629,7 +1637,8 @@ gen3-excluded move.
 | Do the branch weights diverge? | **No** — uniform 1/n is correct whenever the candidate sets agree |
 | Is the FLAG arm reachable in gen3 randbats? | **No** — 0 of 1,682 variants |
 | Is the 0-PP arm reachable? | **Not measured** — a state condition, invisible to a set scan |
-| Is the choicelock/Encore arm reachable? | **Yes, unmeasured** — 95 of 1,682 variants carry Encore |
+| Is the Encore arm reachable? | **Yes, unmeasured** — 95 of 1,682 variants carry Encore, opponent-side (0 variants carry both) |
+| Is the choicelock arm reachable? | **No** by set logic — 0 of the 160 Choice Band variants carry Sleep Talk; needs Trick |
 | Does it explain the co-occurring residue rows? | **No** |
 
 So the **FLAG ARM** is a latent engine divergence: real, source-confirmed,
@@ -1646,7 +1655,7 @@ appendix measures it.
 census involve Sleep Talk: 14 `roll_scaled_component`, 5 other. Their shape is
 `observed=[('', -78)] engine=[]` — Showdown's call dealt damage and the engine's
 branch has none. Since the fan-out and weights are correct and the **flag-arm**
-exclusion bug is unreachable, these are **not** a Sleep Talk *flag-arm* defect; they are the called
+exclusion bug is unreachable, these are not a Sleep Talk defect *on that arm*; they are the called
 move's damage failing to match, which is the same "engine is missing damage"
 family as the confirmed variable-BP bug. They should be re-checked after the
 variable-BP fixes land rather than tracked as a Sleep Talk item.
@@ -1791,9 +1800,11 @@ is one concrete 4-move realisation the belief layer expands that set into, so
 variants > sets. Appendix E quoted the variant row; the reviewer's independent
 44/393 is the set row. **Same FLAG-ARM zero at every denominator.**
 
-This table says nothing about the state arms (0 PP, Encore, choicelock): they are
-not measured by *any* denominator, because no set-composition unit can express a
-PP count or a volatile. See the scope note in §E.2.
+This table says nothing about whether the state arms (0 PP, Encore, choicelock)
+FIRE. Their PRECONDITIONS are countable here -- that is where the 95 and the 160/0
+come from, and the 160/0 is what licenses calling choicelock unreachable -- but no
+set-composition unit can express a PP count or a volatile, so no denominator
+settles whether the arm is exercised. See the scope note in §E.2.
 
 ## F.3 Builder note: the stamp step runs last
 
