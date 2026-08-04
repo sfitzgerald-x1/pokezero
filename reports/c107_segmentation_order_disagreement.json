@@ -1,5 +1,5 @@
 {
- "schema": "c107-segmentation-order-disagreement/1",
+ "schema": "c107-segmentation-order-disagreement/2",
  "headline": "CAUSE FOUND for 19000093/51, the last-but-one uncaused row: the renderer's `move_order` replica disagrees with the engine's actual move order, and `segment()` tries ONLY the order it computed. It regenerates the wrong side as phase 1, that side's instructions are never a prefix of the pair-generated list, and the whole branch is voided as segmentation_failed.",
  "status": "CAUSE CONFIRMED BY INSTRUMENTATION. The obvious fix is MEASURED AND REJECTED. A correct fix is named.",
  "closes_the_search": "five candidates were refuted across reports/c96, c98 and c106. This is the sixth and it is the answer.",
@@ -24,5 +24,17 @@
   "gate": "a pin that fails when reverted, and a sweep reporting matched, skip and lossy together -- lossy_render is the counter that actually tracks this defect and it went 11 -> 0 under the wrong fix.",
   "implemented": false
  },
- "what_this_leaves": "19000093/51 has a written cause. 19000093/53 is the same family and almost certainly the same cause, but I have NOT run the probe on it and am not claiming it. That is one command."
+ "what_this_leaves": "19000093/51 has a written cause. 19000093/53 is the same family and almost certainly the same cause, but I have NOT run the probe on it and am not claiming it. That is one command.",
+ "19000093_53_is_NOT_this_cause": {
+  "probed": "yes, same instrumented build.",
+  "result": "NO SEGFAIL at all. 19000093/53 segments successfully; its class is roll_scaled_component, not a void.",
+  "so_the_two_rows_are_different_mechanisms": "reports/c96 and c98 treated 19000093/51 and /53 as one shape because both were UNATTRIBUTED with a segmentation flavour. They are not. /51 is voided by the order disagreement above. /53 segments fine and mis-files Megahorn's damage into the end-of-turn slice, which reports/c96 already described and whose cause reports/c96 v2 marked OPEN after the marker hypothesis was refuted.",
+  "consequence_for_clause_1": "19000093/51 now has a cause. 19000093/53 remains the ONE uncaused row in the residue, and it needs its own probe -- a different one, since it never reaches the None arm."
+ },
+ "narrowing_the_replica_defect": {
+  "the_obvious_explanation_is_RULED_OUT": "I diffed the two speed functions' modifier lists. The renderer's `effective_speed` and the engine's `get_effective_speed` apply the SAME modifiers in the same order: Chlorophyll in sun, Swift Swim in rain, a 0.5 factor, and PARALYZE at 0.25. There is no missing ability or item on either side.",
+  "so_the_disagreement_is_in_the_INPUTS_not_the_formula": "which is a more interesting defect and a narrower search: either the two are called on different STATES, or a boost / status / weather field differs at call time. `move_order` runs at the top of segment() from the pre-decision state; `moves_first` runs inside the engine's own pair generation. Those should be the same state and apparently are not.",
+  "the_next_probe": "print s1 and s2 from the renderer's effective_speed alongside the engine's get_effective_speed for the same state on 19000093/51, plus the weather, both statuses and both speed boosts. That identifies the differing field in one run. I have NOT done this and am not guessing which field it is.",
+  "why_i_stopped_here": "naming a field without measuring it is how reports/c100 and c104 went wrong -- a plausible mechanism asserted as the cause. The order disagreement IS measured; its origin is not."
+ }
 }
