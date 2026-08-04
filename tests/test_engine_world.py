@@ -171,7 +171,11 @@ def _payload_seated_at_p2(dex: ShowdownDex, *, self_moves=None):
 
     Every other `selfPlayer` fixture in this repo is `"p1"` -- verified across
     test_engine_world.py, test_rest_sleep_provenance.py and the bridge tests -- so the
-    p2-self construction path had no coverage at all -- which matters on its own, and
+    p2-self construction path had no coverage at all. (Precisely: `test_local_showdown.py`
+    already builds a p2-seated payload, but only asserts on the OPPONENT side and never
+    constructs a world from it -- so no test had constructed an engine world from a
+    p2-seated payload, and none had asserted anything about a p2 SELF side.) That matters
+    on its own, and
     doubly so because `self_moveset_mismatch` is the largest class in the campaign's
     construction channel and appears only under the p1 decider. One hypothesis for that
     was a plumbing gap: p2's own request never reaching the world builder, leaving

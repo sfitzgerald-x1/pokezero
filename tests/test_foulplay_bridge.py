@@ -679,7 +679,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         """
         def req(sid, species, move):
             return "|request|" + json.dumps({
-                "active": [{"moves": [{"id": move, "pp": 16, "maxpp": 16}]}],
+                # pp != maxpp DELIBERATELY. With both at 16 the pp assertion below cannot
+                # tell `"pp": pp` from `"pp": maxpp`, and that mutant reproduces the exact
+                # silent-full-PP outcome this test exists to exclude.
+                "active": [{"moves": [{"id": move, "pp": 16, "maxpp": 24}]}],
                 "side": {"id": sid, "pokemon": [{
                     "ident": f"{sid}: {species}",
                     "details": f"{species}, L80",
@@ -718,7 +721,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 for move in moves
             ]
             self.assertIn(expected_move, retained)
-            # ...and the PP came from the request, which is what `known_pp` reads.
+            # ...and the PP is the REMAINING pp (16), not the maximum (24), which is what
+            # `known_pp` reads and what distinguishes a real request read from full PP.
             pps = {
                 move["id"]: move.get("pp")
                 for moves in materialization.self_move_states.values()
