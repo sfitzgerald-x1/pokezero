@@ -37,6 +37,7 @@ on:
       - "tests/test_instruction_event_mapping.py"
       # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
       - "tests/test_crit_kill_split_patch.py"
+      - "tests/test_drag_limit_is_a_last_resort.py"
       # Imported by the differential (engine_transition_differential.py:105).
       - "scripts/fidelity_gate_events.py"
       - "tests/test_poke_engine_patch_stack.py"
@@ -157,6 +158,22 @@ jobs:
       # what makes the renderer pins real. CI passed on #1081 while never running the
       # four pins that cleared its BLOCK, because no workflow runs cargo test. A pin
       # nothing executes is the #1080 lesson repeated one layer down.
+      # The classifier's own pin. Without this step the drag-limit reordering ships a
+      # pin nothing executes -- the exact shape the crate step's comment condemns, one
+      # layer down. Found by review of #1086.
+      - name: Classifier pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_drag_limit_is_a_last_resort -v 2>&1 | tee /tmp/dragpin.log
+          if ! grep -qE 'Ran 3 tests' /tmp/dragpin.log; then
+            echo "::error::expected 3 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/dragpin.log; then
+            echo "::error::a classifier pin SKIPPED"
+            exit 1
+          fi
+
       - name: Crate suites, including the renderer pins
         run: |
           set -o pipefail

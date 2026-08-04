@@ -1822,7 +1822,7 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     # `evidence:spikes_in_step` matches any phaze-into-Spikes row first. A
     # demoted-to-death class is no better than a short-circuited one. The control in
     # tests/test_drag_limit_is_a_last_resort.py exists to catch exactly that, and it
-    # did. reports/c117, reports/c118.
+    # did. reports/c117 (unmerged at time of writing; see #1079).
     if any(line.startswith("|drag|") for line in step_lines):
         return "limit:world_sample_drag_target"
 

@@ -11,7 +11,7 @@ The cost of the short-circuit was not the label; it was that two reports conclud
 those rows were comparison limits. `limit:` is the one disposition that ends
 inquiry, and the C116 M1 rule now requires a written demonstration before it can be
 used. A classifier that hands the label out on a protocol keyword cannot satisfy
-that rule. reports/c117, reports/c118.
+that rule. reports/c117 (unmerged at time of writing; see #1079).
 
 The class is still legitimate in its honest form — a phaze genuinely can put the
 engine's branch set against Showdown's single realised sample — so it is kept, and
