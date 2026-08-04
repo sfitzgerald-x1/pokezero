@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1385,6 +1385,180 @@
+@@ -1385,6 +1385,187 @@
  /// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
  /// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
  /// fires, while the representative 135 leaves 126 and it correctly declines).
@@ -51,14 +51,21 @@
 +    // that the bisection depends on (a lower start can finish higher). Lum and
 +    // Chesto cure status and so delete the 10.6 tick outright. Shell Bell and the
 +    // stat berries are bailed for completeness rather than demonstrated need.
++    // Deny only what can change HP at end of turn, or delete a tick:
++    //   Sitrus heals on a THRESHOLD, which breaks the monotonicity in starting HP
++    //     that the bisection depends on -- a lower start can finish higher.
++    //   Lum and Chesto cure status and so delete the 10.6 tick outright.
++    //   Shell Bell heals.
++    // Liechi, Petaya and SALAC are NOT denied: they boost a stat at low HP and
++    // never touch HP, so they cannot make the predicate non-monotonic. An earlier
++    // version denied them "for completeness rather than demonstrated need" and
++    // that cost 19000029/51 -- Blaziken holds a Salac Berry, the mirror declined,
++    // and the unpartitioned collapsed roll asserted a sandstorm KO that Showdown's
++    // roll did not score. Breadth in a bail set is not free.
 +    match active.item {
-+        Items::SITRUSBERRY
-+        | Items::LIECHIBERRY
-+        | Items::PETAYABERRY
-+        | Items::SALACBERRY
-+        | Items::SHELLBELL
-+        | Items::LUMBERRY
-+        | Items::CHESTOBERRY => return None,
++        Items::SITRUSBERRY | Items::LUMBERRY | Items::CHESTOBERRY | Items::SHELLBELL => {
++            return None
++        }
 +        _ => {}
 +    }
 +    let mut hp = start_hp;
@@ -181,7 +188,7 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
-@@ -2989,6 +3163,22 @@
+@@ -2989,6 +3170,22 @@
          state.reverse_instructions(&incoming_instructions.instruction_list);
          return;
      }
@@ -204,7 +211,7 @@
  
      let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
      let defender_active = defender_side.get_active();
-@@ -3056,6 +3246,49 @@
+@@ -3056,6 +3253,49 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
@@ -254,7 +261,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,11 +3316,44 @@
+@@ -3083,11 +3323,44 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {
