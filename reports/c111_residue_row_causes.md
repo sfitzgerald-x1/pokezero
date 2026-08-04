@@ -41,6 +41,13 @@ only: no classifier change, no fidelity change.**
 | 19000191/63 | `component_magnitude:heal` ¹ | **A7** collapsed lethal arm discards the clamped sap | engine fix |
 | 19000198/33 | `limit:roll_divergent_lethality` | **A3** — same stale read | **CLOSED** by #1065 |
 
+¹ **Era note.** Every other class in this table is read at the era stamped
+above (`main` 9acc9d30, artifact `/tmp/sweep_f1.json`, 11 divergent). This row's
+class is re-read **post-#1066**, because A2 moved it off
+`limit:roll_divergent_lethality`. Verified against the live classifier at that
+later era, but its provenance differs from the other ten rows and must not be read
+as contemporaneous with them.
+
 **Six causes. Zero rows demonstrated to be genuine comparison limits.** All three
 rows v1 called limits are accounted for: one closed on an engine fix, one reduces
 under A2, and one was never a drag divergence at all.

@@ -69,7 +69,7 @@ identity `matched + diverged == boundaries_measured`. A fidelity claim requires
 | Toxic stage `count + 1` (in #1062) | 10 → 11 *(deliberate, see §4)* |
 | Pending read after this call's mutations (#1065) | 11 → 9 |
 | Ordered residual simulation (#1066) | 9 → 8 |
-| Case A three-way partition (open PR) | 8 → 7 |
+| Case A three-way partition (#1069) | 8 → 7 |
 
 ---
 
@@ -92,7 +92,7 @@ discarded distinction:
   *later*. The arm that cannot kill on the hit still collapses to `0.925 × max`,
   which picks one side of the *residual* threshold and drops the other.
 - **Crit-fan extension (#1062)** — the same defect on the crit fan.
-- **Case A three-way (open PR)** — the arm that *can* kill on the hit collapses
+- **Case A three-way (#1069)** — the arm that *can* kill on the hit collapses
   its surviving sub-fan without consulting the residual threshold. When that
   representative lands on the lethal side, **no branch survives the turn at all**.
 - **A7 (open, `19000191/63`)** — the residual-lethal arm collapses onto its
@@ -202,7 +202,13 @@ comparison limit.**
   `threshold == max_damage`". That was **false**, and it was false in the worst
   direction: it would have sent the next reader looking only at the boundary case.
   I had transcribed it from a review note instead of deriving it. Pre-existing and
-  now shared by **four** paths (Case A gained one); registered, not changed.
+  now reached from **five call sites** (four before #1069): Case A hp, Case A
+  residual, Case B non-crit residual, the crit-kill split, and Case B's crit fan.
+  Registered, not changed.
+  One mitigating fact, measured: the drift is **one-directional** — the engine
+  undercounts in all 195 cases and never overcounts — so the defect itself always
+  under-partitions, which is the safe direction. It was the sentence that was
+  dangerous, not the arithmetic.
 
 ### Open PRs
 
@@ -210,8 +216,12 @@ comparison limit.**
   the A2 spec had been committed and pushed but left on branches with no PR, so
   `main` served a superseded account. Replaces #1067, which was **closed** because a
   live engine patch had been committed onto the same branch by mistake.
-- **`scott/a8-case-a-three-way`** — the Case A three-way partition, 8 → 7, measured
-  and pinned, awaiting review.
+- **#1069 — MERGED** (`795a1f90`). The Case A three-way partition, 8 → 7, measured
+  and pinned. Review noted that its new arm emits `residual_threshold`, a value no
+  legal roll produces, extending A7 exposure into Case A; the arm's lethality
+  verdict is always correct by construction and only the magnitude is approximated,
+  so this is registered as A7 scope rather than treated as a regression. The A7
+  partition removes it from Case A and Case B in one change.
 
 ---
 
