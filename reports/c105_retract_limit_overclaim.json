@@ -1,5 +1,5 @@
 {
- "schema": "c105-retraction-of-c103-and-c104/1",
+ "schema": "c105-retraction-of-c103-and-c104/2",
  "headline": "reports/c103 claimed 'the ENTIRE limit:roll_divergent_lethality family is defects, 7 of 7, ZERO limits'. That is FALSE. Two of the seven are GENUINE comparison limits, and reports/c104's cause for them is wrong. Both retracted here.",
  "what_i_got_right": "five of the seven ARE defects and are now closed. The faint-without-a-damage-event fix landed and measured 21 -> 15, closing 19000024/61, 19000077/47, 19000089/53, 19000199/61 and 19000152/53 plus 19000098/79. That half of C103 holds and is verified by measurement.",
  "what_i_got_wrong": {
@@ -17,10 +17,18 @@
  "how_the_error_happened": "I found three rows of a real defect class in a row, formed the generalisation 'this family is mislabelled', and then read the remaining rows THROUGH that generalisation. For these two I saw a source mismatch -- psn against capped_lethal -- which is what the first three looked like, and stopped. Doing the HP arithmetic takes one minute and shows the sources differ because the outcomes differ. A pattern that held 3-for-3 became a lens instead of a hypothesis.",
  "the_corrected_tally": {
   "family_size": 7,
-  "defects_now_closed": 5,
-  "genuine_comparison_limits": 2,
-  "limit_rows_in_the_residue": "3 -- these two plus limit:world_sample_drag_target",
-  "supersedes": "reports/c103 v4's FINAL_RESULT and reports/c104's stated cause. C104's observation about the parser overwrite stands as a separate latent defect and should be re-filed on its own, NOT as the cause of these rows."
+  "defects_now_closed": 4,
+  "genuine_comparison_limits": 3,
+  "note": "v1 said 5 closed and 2 limits. Measured: the faint-without-damage fix closed FOUR of this family (19000024/61, 19000077/47, 19000089/53, 19000199/61) plus two rows from other families (19000152/53, 19000098/79) for six total. Three of the family remain, all genuine limits.",
+  "limit_rows_in_the_residue": 4,
+  "supersedes": "reports/c103 v4's FINAL_RESULT and reports/c104's stated cause for all three rows."
  },
- "what_this_does_to_clause_2": "it moves the target back OUT. I had said the residue's genuine-limit content was ONE row, so clause 2 required the residue to reach 1. It is THREE, so clause 2 is satisfied at 3. That is easier than I last reported and harder than the original 8 -- and it is now derived from arithmetic on every row rather than from a class name or a generalisation."
+ "what_this_does_to_clause_2": "clause 2 is satisfied when the residue reaches FOUR -- the three roll-divergent lethality rows plus limit:world_sample_drag_target. Residue is 15. So eleven rows of fix work remain, all with written causes except the two UNATTRIBUTED segmentation rows.",
+ "a_third_row_is_also_a_genuine_limit": {
+  "row": "19000198/33",
+  "correction": "v1 of this retraction said the residue holds THREE limit rows. Measured with classify_row it is FOUR. 19000198/33 remains classified limit:roll_divergent_lethality and it is the same mechanism as the other two -- I had assigned it to C104's parser-overwrite class in reports/c103 v4 and that assignment falls with the rest of C104's cause.",
+  "the_arithmetic": "Hitmontop 226, poisoned. SHOWDOWN: Surf -91 leaves 25, the psn tick KILLS -- capped_lethal=-25. ENGINE: Surf -84 leaves about 32, psn -28 -- SURVIVES. Seven HP of roll decides survive-versus-die, and the engine's collapsed arm does not contain the realised 91.",
+  "so_three_of_the_seven_are_limits": "19000147/125, 19000191/63 and 19000198/33. Four limit rows in the residue counting limit:world_sample_drag_target.",
+  "note_on_my_own_correction": "v1 of this file corrected an over-claim and introduced a smaller one in the same breath, by carrying '3' from prose instead of running classify_row. The count is now measured."
+ }
 }
