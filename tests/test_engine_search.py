@@ -23,6 +23,8 @@ from pokezero.engine_search import (  # noqa: E402
     EngineMctsPolicy,
     EngineMctsStats,
     EngineSearchFallbackError,
+    _FALLBACK_SAMPLE_KEY_CEILING,
+    _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
     _bounded_reason_detail,
     _latch_encoder_tables_to_model_config,
@@ -2080,6 +2082,280 @@ class WorldAbortRateTests(unittest.TestCase):
         stats = policy.stats.to_dict()
         self.assertEqual(stats["worlds_searched"], 2)
         self.assertEqual(stats["world_search_abort_rate"], 0.0)
+
+
+class FallbackAddressTests(unittest.TestCase):
+    """A fallback must be REPLAYABLE, not just counted.
+
+    Era 57 recorded 7,498 fallbacks and left no way to reproduce a single one: the
+    addresses existed only in pod logs, and deleting the Jobs deleted them.
+    `battle_id` carries the seed, so (battle_id, round, seat) is a complete address
+    for one turn.
+    """
+
+    def _policy(self, **cfg):
+        import unittest.mock as mock
+
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=mock.Mock(),
+            config=EngineMctsConfig(**cfg),
+        )
+        return policy
+
+    def _fallback(self, policy, *, battle="b-8220001", rnd=7, seat="p1",
+                  reason="crate_search_failed", classes=()):
+        ctx = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                _candidates(),
+            ),
+            public_materialization_state=object(),
+            player_id=seat,
+            battle_id=battle,
+            decision_round_index=rnd,
+        )
+        policy._world_failures_before = {}
+        for cls in classes:
+            policy.stats.world_failure_reasons[cls] += 1
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            policy._fallback(ctx, random.Random(0), reason)
+
+    def test_the_address_identifies_one_turn(self) -> None:
+        p = self._policy()
+        self._fallback(p, battle="battle-gen3randombattle-controlled-8220024",
+                       rnd=8, seat="p1", classes=("crate_search: sleeptalk",))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("crate_search: sleeptalk", samples)
+        entry = samples["crate_search: sleeptalk"][0]
+        # The seed is IN the battle id, which is what makes this replayable.
+        self.assertIn("8220024", entry["battle_id"])
+        self.assertEqual(entry["round"], 8)
+        self.assertEqual(entry["seat"], "p1")
+        self.assertEqual(entry["reason"], "crate_search_failed")
+
+    def test_a_rare_class_still_gets_an_address_under_a_dominant_one(self) -> None:
+        """The reason the cap is PER CLASS.
+
+        Era 57 was 49.5% one reason. A global cap fills with that class and the
+        rare classes -- the ones you actually need an address for -- get none.
+        """
+        p = self._policy()
+        for i in range(500):
+            self._fallback(p, battle=f"b-{i}", rnd=i, classes=("dominant",))
+        self._fallback(p, battle="b-rare", rnd=99, classes=("rare_class",))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("rare_class", samples)
+        self.assertEqual(samples["rare_class"][0]["battle_id"], "b-rare")
+
+    def test_the_sample_is_bounded_per_class(self) -> None:
+        p = self._policy()
+        for i in range(50):
+            self._fallback(p, battle=f"b-{i}", rnd=i, classes=("one",))
+        self.assertEqual(len(p.stats.to_dict()["fallback_samples"]["one"]), 3)
+
+    def test_a_decision_failing_on_several_classes_is_addressable_under_each(self) -> None:
+        p = self._policy()
+        self._fallback(p, classes=("class_a", "class_b"))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("class_a", samples)
+        self.assertIn("class_b", samples)
+
+    def test_a_fallback_with_no_world_failures_is_still_addressable(self) -> None:
+        """no_public_state / live_fold_broken produce no world-failure classes.
+
+        Keying only by world-failure class would leave them unaddressable.
+        """
+        p = self._policy()
+        self._fallback(p, reason="no_public_state", classes=())
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("fallback:no_public_state", samples)
+        self.assertEqual(samples["fallback:no_public_state"][0]["reason"],
+                         "no_public_state")
+
+    def test_no_fallbacks_means_no_samples_not_a_stub(self) -> None:
+        self.assertEqual(EngineMctsStats().to_dict()["fallback_samples"], {})
+
+    def test_the_addresses_for_a_class_come_from_different_battles(self) -> None:
+        """Three views of one incident cannot tell you whether a class generalises.
+
+        A refusal cause typically closes worlds for the rest of the battle it appears
+        in, so first-3 retention hands back rounds N, N+1, N+2 of a single battle.
+        """
+        p = self._policy()
+        for rnd in range(30):
+            self._fallback(p, battle="b-one", rnd=rnd, classes=("sticky",))
+        for rnd in range(30):
+            self._fallback(p, battle="b-two", rnd=rnd, classes=("sticky",))
+
+        bucket = p.stats.to_dict()["fallback_samples"]["sticky"]
+        self.assertEqual([e["battle_id"] for e in bucket], ["b-one", "b-two"])
+        # A class confined to one battle still keeps an address -- replay needs one.
+        q = self._policy()
+        self._fallback(q, battle="b-solo", classes=("lonely",))
+        self._fallback(q, battle="b-solo", rnd=99, classes=("lonely",))
+        self.assertEqual(len(q.stats.fallback_samples["lonely"]), 1)
+
+    def test_the_key_ceiling_is_enforced_and_announces_what_it_dropped(self) -> None:
+        """An incomplete sample that looks complete is how a coverage claim goes wrong.
+
+        Reason keys interpolate operands (species, turn numbers, HP values), so the key
+        space is data-dependent. The ceiling makes the report size unconditional; the
+        counter makes the truncation visible.
+        """
+        p = self._policy()
+        for i in range(_FALLBACK_SAMPLE_KEY_CEILING + 25):
+            self._fallback(p, battle=f"b-{i}", classes=(f"minted_class_{i}",))
+
+        stats = p.stats.to_dict()
+        self.assertEqual(len(stats["fallback_samples"]), _FALLBACK_SAMPLE_KEY_CEILING)
+        self.assertGreater(stats["fallback_sample_addresses_dropped"], 0)
+        # Entries stay bounded by ceiling x per-class cap, so the report cannot grow
+        # without limit no matter how many classes the data mints.
+        total = sum(len(v) for v in stats["fallback_samples"].values())
+        self.assertLessEqual(
+            total, _FALLBACK_SAMPLE_KEY_CEILING * _FALLBACK_SAMPLES_PER_CLASS
+        )
+
+    def test_a_rare_reason_is_addressable_even_past_the_class_ceiling(self) -> None:
+        """The ceiling must not reintroduce the bug it was added beside.
+
+        The class ceiling exists to bound an unbounded class space. Applying it to
+        reason keys too meant that past 256 classes a rare reason lost its key and
+        became unaddressable -- and since classes were iterated first they claimed the
+        last slot, so the reason key was precisely what got dropped. `live_fold_broken`
+        is the worst case: it has no world failures, so the reason key is its ONLY key.
+        """
+        p = self._policy()
+        for i in range(_FALLBACK_SAMPLE_KEY_CEILING + 50):
+            self._fallback(p, battle=f"b-fill-{i}", classes=(f"filler_{i}",))
+        self.assertEqual(len(p.stats.fallback_samples),
+                         _FALLBACK_SAMPLE_KEY_CEILING)  # ceiling is really full
+
+        self._fallback(p, battle="b-rare", rnd=5, reason="choices_unmapped",
+                       classes=("filler_0",))
+        self._fallback(p, battle="b-fold", rnd=6, reason="live_fold_broken",
+                       classes=())
+
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("fallback:choices_unmapped", samples)
+        self.assertIn("fallback:live_fold_broken", samples)
+        # The invariant from the sibling test, re-asserted PAST the ceiling -- that is
+        # the only place it catches this.
+        self.assertEqual(
+            {k.split("fallback:")[-1] for k in samples if k.startswith("fallback:")},
+            set(p.stats.fallback_reasons),
+        )
+        self.assertEqual(samples["fallback:live_fold_broken"][0]["battle_id"], "b-fold")
+
+    def test_the_dropped_counter_counts_addresses_not_classes(self) -> None:
+        """Named for the unit it measures.
+
+        It increments per dropped OCCURRENCE. Read as a class count it says 1,001 where
+        two classes were lost, which is the cite-a-number-for-a-different-quantity
+        mistake this store's own comments were twice corrected for.
+        """
+        p = self._policy()
+        for i in range(_FALLBACK_SAMPLE_KEY_CEILING):
+            self._fallback(p, battle=f"b-fill-{i}", classes=(f"filler_{i}",))
+        for i in range(200):
+            self._fallback(p, battle=f"b-over-{i}", classes=("overflow_a", "overflow_b"))
+
+        lost = {c for c in p.stats.world_failure_reasons
+                if c not in p.stats.fallback_samples}
+        self.assertEqual(len(lost), 3)  # filler_255, overflow_a, overflow_b
+        # Measured 601 addresses against those 3 classes -- a 200x gap. Asserted as a
+        # ratio rather than the literal, because the literal depends on this helper's
+        # cumulative delta and the CLAIM is about the unit, not the arithmetic. My first
+        # draft asserted 400 from hand-arithmetic and was simply wrong.
+        self.assertGreater(p.stats.fallback_sample_addresses_dropped, 100 * len(lost))
+        self.assertNotIn("overflow_a", p.stats.fallback_samples)
+
+    def test_a_missing_round_index_is_null_not_a_question_mark(self) -> None:
+        """A replay harness doing int(entry["round"]) must get a null, not ValueError."""
+        import unittest.mock as mock
+
+        p = self._policy()
+        ctx = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                _candidates(),
+            ),
+            public_materialization_state=object(),
+            player_id="p1",
+            battle_id="b-noround",
+        )  # NO decision_round_index
+        p._world_failures_before = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p._fallback(ctx, random.Random(0), "crate_search_failed")
+        entry = p.stats.to_dict()["fallback_samples"]["fallback:crate_search_failed"][0]
+        self.assertIsNone(entry["round"])
+
+    def test_a_rare_reason_survives_a_dominant_class_it_co_occurs_with(self) -> None:
+        """The per-class cap protects rare CLASSES. Reasons are a separate axis.
+
+        `choices_unmapped` co-occurs with world failures, so keying only off the
+        per-decision delta files its single address under a class whose three slots
+        the dominant reason already filled -- and the rare reason gets no address at
+        all. That is era 57's failure mode on the other axis, so the reason key is
+        minted unconditionally rather than only when the delta is empty.
+        """
+        p = self._policy()
+        for i in range(50):
+            self._fallback(p, battle=f"b-{i}", rnd=i,
+                           reason="crate_search_failed", classes=("dominant",))
+        self.assertEqual(len(p.stats.fallback_samples["dominant"]),
+                         _FALLBACK_SAMPLES_PER_CLASS)  # slots are genuinely full
+        self._fallback(p, battle="b-9999001", rnd=41, seat="p2",
+                       reason="choices_unmapped", classes=("dominant",))
+
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("fallback:choices_unmapped", samples)
+        entry = samples["fallback:choices_unmapped"][0]
+        self.assertEqual(
+            (entry["battle_id"], entry["round"], entry["seat"]),
+            ("b-9999001", 41, "p2"),
+        )
+        # Every reason the counter saw must be addressable, or the store is
+        # reporting a count it cannot reproduce.
+        self.assertEqual(
+            {k.split("fallback:")[-1] for k in samples if k.startswith("fallback:")},
+            set(p.stats.fallback_reasons),
+        )
+
+    def test_the_address_is_the_failing_decision_not_every_class_seen_so_far(self) -> None:
+        """Pins the per-decision delta through the REAL seam, not a hand-set dict.
+
+        The other tests set `_world_failures_before` themselves, so they pass just as
+        well if the delta becomes cumulative. Cumulative would file each fallback
+        under every class seen so far in the shard, consuming the three slots with
+        addresses that did not fail on that class -- silently WRONG addresses, worse
+        than none. So drive `select_action_with_context` twice and require the second
+        fallback not to be filed under the first decision's class.
+        """
+        import unittest.mock as mock
+
+        p = self._policy()
+        ctx = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                _candidates(),
+            ),
+            public_materialization_state=None,  # forces reason=no_public_state
+            player_id="p1",
+            battle_id="b-8220002",
+            decision_round_index=3,
+        )
+        p.stats.world_failure_reasons["stale_earlier_decision_class"] += 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p.select_action_with_context(ctx, rng=random.Random(0))
+
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertNotIn("stale_earlier_decision_class", samples)
+        self.assertIn("fallback:no_public_state", samples)
 
 
 if __name__ == "__main__":
