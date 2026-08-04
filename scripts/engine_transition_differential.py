@@ -307,8 +307,30 @@ def engine_choice_for_action(
 # step 72 — Showdown healed 251 from 2 HP, the engine healed 247 from 6 HP, same
 # mechanic, different Surf roll). A bare heal that does NOT reach full is a pure
 # fraction (Recover = maxhp/2) and stays EXACT.
+# ``movepainsplit`` is the same class as ``heal_to_full``. Pain Split sets BOTH
+# mons to ``floor((hp_a + hp_b) / 2)`` (engine: gen3/generate_instructions.rs,
+# ``defender.hp - (attacker.hp + defender.hp) / 2``), so the magnitude is a
+# function of the HP left after whatever damage landed earlier in the SAME turn --
+# it inherits that hit's roll exactly as a capped heal does. Demanding an exact
+# match was a matcher defect, not an engine bug: it produced the whole
+# I3_roll_inherited family (reports/c95, reports/c101).
+#
+# No new tolerance is introduced. The existing window already carries one HP of
+# absolute flooring slack in both directions (``abs(eng) * 0.92 - 1`` to
+# ``abs(eng) * 1.09 + 1``), which is what a floor-divided quantity needs: for
+# eng 4 the band is [2.68, 5.36], so a 5-against-4 disagreement on a magnitude of
+# five is inside it. This only moves a roll-dependent component out of the EXACT
+# bucket it never belonged in.
 _ROLL_SCALED_SOURCES = frozenset(
-    {"", "recoil", "drain", "confusion", "capped_lethal", "move_unknown_callee"}
+    {
+        "",
+        "recoil",
+        "drain",
+        "confusion",
+        "capped_lethal",
+        "move_unknown_callee",
+        "movepainsplit",
+    }
 )
 
 # The mapper cannot recover WHICH move Sleep Talk called from the instruction
@@ -439,6 +461,30 @@ def damage_component_events(
             slot = parts[2].split(":", 1)[0].strip()[:2]
             running[slot] = _hp_of(parts[4])
             continue
+        if tag == "faint":
+            # A faint with NO preceding `-damage` on this slot. Destiny Bond and
+            # Perish Song kill by setting HP to zero and announce it with
+            # `|-activate|` / `|-start| perish0` plus `|faint|` — never a
+            # `-damage` line. The engine models the same state change as a
+            # Damage instruction for the victim's whole remaining HP, so the
+            # observation carried NOTHING for that slot while the engine carried
+            # a `capped_lethal`, and the comparison had no counterpart to match.
+            #
+            # Synthesise the component the protocol declines to render. If a
+            # `-damage ... 0 fnt` already fired, `running[slot]` is 0 and this is
+            # a no-op, so ordinary faints are untouched.
+            #
+            # This ADDS information rather than relaxing a comparison: the
+            # synthesised magnitude is exact (the tracked HP) and is still
+            # compared. reports/c96, reports/c103.
+            slot = parts[2].split(":", 1)[0].strip()[:2]
+            remaining = running.get(slot)
+            if slot in out and remaining:
+                out[slot].append(
+                    DamageComponent("capped_lethal", -remaining, event_index, None)
+                )
+                running[slot] = 0
+            continue
         if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
             continue
         slot = parts[2].split(":", 1)[0].strip()[:2]
@@ -467,10 +513,15 @@ def damage_component_events(
             source = "heal"
         if not source and tag == "-sethp":
             # Defensive: every `-sethp` Showdown emits carries `[from] move:
-            # Pain Split`, but an untagged one must NOT fall through as "" —
-            # that is the roll-scaled bucket, and Pain Split is deterministic
-            # (floor((targetHP + userHP) / 2)), so its magnitude must be
-            # compared exactly.
+            # Pain Split`, so an untagged one is an unknown mechanic and must NOT
+            # fall through as "" — that is the DIRECT-damage bucket, and an
+            # unidentified `-sethp` is not a direct hit.
+            #
+            # Note this is NOT "because Pain Split is deterministic". It is not:
+            # `floor((targetHP + userHP) / 2)` is a function of post-damage HP, so
+            # it inherits the preceding hit's roll, which is why the TAGGED source
+            # `movepainsplit` is in `_ROLL_SCALED_SOURCES`. An earlier version of
+            # this comment asserted the opposite and contradicted that entry.
             source = "sethp"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
             # ANY heal that tops the mon out is roll-scaled, whatever its tag:
