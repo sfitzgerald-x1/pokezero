@@ -64,9 +64,10 @@ from pokezero.turn_merged import (
     SUB_BLOCK_NEGATED,
     annotate_turn_merged_tokens,
 )
+from _showdown_root import showdown_root_str
 
 SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    showdown_root_str()
 )
 
 

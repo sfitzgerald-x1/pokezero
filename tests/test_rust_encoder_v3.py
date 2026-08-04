@@ -24,12 +24,13 @@ from pokezero.observation import (
 )
 from pokezero.showdown import TRANSITION_TOKEN_OFFSET, observation_from_player_state
 from pokezero.transitions_fold import FoldState
+from _showdown_root import showdown_root_str
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
-DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
 
 def _showdown_root() -> Path:

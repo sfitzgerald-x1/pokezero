@@ -24,7 +24,7 @@ neither side faints and there are no force-switch boundaries) as the observable
 
 MUST run in the dedicated attract venv (never the shared one):
     .venv-attract/bin/python scripts/attract_differential.py \
-        --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown
+        --showdown-root $POKEZERO_SHOWDOWN_ROOT
 """
 
 from __future__ import annotations

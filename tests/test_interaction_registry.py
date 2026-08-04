@@ -27,10 +27,11 @@ from pokezero.golden_corpus_scenarios import (  # noqa: E402
     ScriptedPreferencePolicy,
     interaction_registry_specs,
 )
+from _showdown_root import showdown_root_str
 
 
 def _showdown_root() -> str:
-    return os.environ.get("POKEZERO_SHOWDOWN_ROOT") or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+    return os.environ.get("POKEZERO_SHOWDOWN_ROOT") or showdown_root_str()
 
 
 def _live_showdown_available() -> bool:

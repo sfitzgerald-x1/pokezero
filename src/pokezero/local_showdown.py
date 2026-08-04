@@ -47,9 +47,44 @@ from .showdown import (
     showdown_choice_for_action,
 )
 from .investment import InvestmentLiveTracker
+from .paths import portable_path
 from .tier2 import Tier2LiveTracker, cb_whitelist_for_source, own_team_from_request
 
-DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Conventional locations for a pokemon-showdown checkout, tried in order. NONE of these may
+# name a user: this is a public repo, and a maintainer's home directory in a tracked default
+# leaks a username and a local filesystem layout, and makes the value useless to everyone else.
+# `Path.home()` expresses the same location portably.
+_SHOWDOWN_ROOT_CANDIDATES = (
+    Path.home() / "workspace" / "pokerena" / "vendor" / "pokemon-showdown",
+    _REPO_ROOT / "vendor" / "pokemon-showdown",
+    _REPO_ROOT.parent / "pokemon-showdown",
+)
+
+
+def default_showdown_root() -> Path:
+    """The Showdown checkout to use when a caller does not name one.
+
+    ``POKEZERO_SHOWDOWN_ROOT`` wins outright. Otherwise the first candidate that looks like a
+    real checkout (it has a ``data`` directory) is chosen, and failing that the first candidate
+    is returned unchanged so callers report a stable, comprehensible path rather than None.
+
+    Resolved on CALL, not at import: tests and tools set the environment variable around a
+    subprocess or a fixture, and an import-time constant would silently ignore them.
+    """
+    override = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+    if override:
+        return Path(override)
+    for candidate in _SHOWDOWN_ROOT_CANDIDATES:
+        if (candidate / "data").is_dir():
+            return candidate
+    return _SHOWDOWN_ROOT_CANDIDATES[0]
+
+
+# Back-compat alias for the ~40 call sites that read the module constant. Kept as a constant
+# rather than removed, but note it freezes the value at import time; prefer the function.
+DEFAULT_SHOWDOWN_ROOT = default_showdown_root()
 BRIDGE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "battle_bridge.mjs"
 PLAYER_IDS: tuple[PlayerId, PlayerId] = ("p1", "p2")
 _DEFAULT_PLAYER_NAMES: Mapping[PlayerId, str] = {"p1": "PokeZero p1", "p2": "PokeZero p2"}

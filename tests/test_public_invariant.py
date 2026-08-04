@@ -1,5 +1,11 @@
 """Public-repo invariant guard: no internal-environment identifiers in tracked files.
 
+Covers two classes. Fixed internal identifiers (cluster, registry, namespace) via _FORBIDDEN,
+and PERSONAL FILESYSTEM PATHS via _FORBIDDEN_PATTERNS. The second was added on 2026-08-03 after
+137 occurrences of a maintainer home directory were found across 48 tracked files -- 23 of them
+test files that hardcoded it as the default Showdown checkout root, which leaked a username and
+silently skipped for every other contributor.
+
 The internal cluster deployment must leave zero trace in this public repo —
 no private-repo names, cluster or node-pool identifiers, internal registry or
 storage paths, namespaces, or kube contexts. Docs that need to reference such
@@ -40,10 +46,43 @@ _FORBIDDEN = [
     ("kube context flag", "kubectl " + "--context"),
 ]
 
-_ALLOWED_FILES = {
-    # This guard assembles the patterns from fragments and never contains them,
-    # but keep an explicit empty allowlist here so any future exception is a
-    # visible, reviewable diff rather than a pattern tweak.
+# Regex rules, for classes of leak rather than fixed strings. Assembled from fragments for the
+# same reason as _FORBIDDEN: an unfragmented pattern would match this file.
+_FORBIDDEN_PATTERNS = [
+    (
+        "maintainer home directory",
+        # Any user's home, not one specific username: a default naming SOMEONE's home is
+        # useless to everyone else, so this must fail for a new contributor's path too.
+        #
+        # NO trailing slash requirement -- a bare reference with nothing after it is the most
+        # likely reintroduction form, and the first version of this rule missed it. Escaped
+        # (JSON `\/Users\/`) and Windows (`C:\Users\`) separators count as separators.
+        # IGNORECASE because macOS filesystems are case-insensitive, so `/users/` names the
+        # same directory and would otherwise be a trivial bypass.
+        re.compile(r"[/\\](?:Us" + r"ers|ho" + r"me)[/\\]+[A-Za-z0-9._-]+", re.IGNORECASE),
+    ),
+    (
+        "home directory flattened into a path segment",
+        # The shape a temp-dir namer produces: a home path with its separators turned into
+        # hyphens. It carries the username just as plainly but survives any rule looking for a
+        # real path prefix, and it was still sitting in two tracked files after the first
+        # scrub. (Not spelled out here -- this guard must not match itself.)
+        re.compile(r"-(?:Us" + r"ers|ho" + r"me)-[A-Za-z0-9._]+-", re.IGNORECASE),
+    ),
+]
+
+# PER-RULE, deliberately: a blanket file allowlist would exempt the file from the
+# internal-cluster checks as well, silently weakening the older invariant to accommodate the
+# newer one. Keyed by rule label.
+_ALLOWED_FOR_RULE = {
+    # Recorded provenance inside a TAMPER-EVIDENT golden corpus: every row carries a
+    # `row_sha256` over its own payload, so the paths cannot be scrubbed in place without
+    # forging those hashes -- which would defeat the guarantee the field exists to provide.
+    # The corpus must be REGENERATED instead, after `randbat.py` stops recording absolute
+    # `sets_path`/`generator_path` values. Tracked as a follow-up; this entry should shrink to
+    # nothing, and is here so the exception is a visible, reviewable line rather than a
+    # weakened pattern.
+    "maintainer home directory": {"tests/data/golden_corpus_sample/rows.jsonl"},
 }
 
 
@@ -64,8 +103,6 @@ class PublicInvariantTest(unittest.TestCase):
 
         violations: list[str] = []
         for rel in tracked:
-            if rel in _ALLOWED_FILES:
-                continue
             path = REPO_ROOT / rel
             try:
                 text = path.read_text(errors="ignore")
@@ -75,6 +112,12 @@ class PublicInvariantTest(unittest.TestCase):
                 for match in re.finditer(re.escape(needle), text, re.IGNORECASE):
                     line = text.count("\n", 0, match.start()) + 1
                     violations.append(f"{rel}:{line}: {label} ({needle!r})")
+            for label, pattern in _FORBIDDEN_PATTERNS:
+                if rel in _ALLOWED_FOR_RULE.get(label, ()):
+                    continue
+                for match in pattern.finditer(text):
+                    line = text.count("\n", 0, match.start()) + 1
+                    violations.append(f"{rel}:{line}: {label} ({match.group(0)!r})")
 
         self.assertEqual(
             violations,

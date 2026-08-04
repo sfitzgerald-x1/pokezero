@@ -199,7 +199,7 @@ boundary error into a skip rather than a crash). Everything else is deterministi
 
 Usage:
     .venv/bin/python scripts/gen3_switch_differential.py \
-        --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown
+        --showdown-root $POKEZERO_SHOWDOWN_ROOT
 """
 
 from __future__ import annotations

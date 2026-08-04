@@ -17,10 +17,11 @@ from pokezero.golden_corpus_scenarios import (  # noqa: E402
     ScriptedPreferencePolicy,
     scenario_specs,
 )
+from _showdown_root import showdown_root_str
 
 
 def _live_showdown_available() -> bool:
-    root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+    root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or showdown_root_str())
     return (root / "dist" / "sim" / "index.js").exists() and shutil.which("node") is not None
 
 
@@ -64,7 +65,7 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         ]
         report = run_scenario_fallback_sweep(
             showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+            or showdown_root_str(),
             specs=chosen,
         )
         for name, stats in report.items():
@@ -116,7 +117,7 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         chosen = [specs["trick_swap_exchange"], specs["trick_berry_pinch"], specs["berry_eat_chesto"]]
         report = run_scenario_fallback_sweep(
             showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+            or showdown_root_str(),
             specs=chosen,
         )
         for name, stats in report.items():
@@ -143,7 +144,7 @@ class ScenarioSweepLiveTests(unittest.TestCase):
             manifest = generate_scenario_corpus(
                 out_dir=out,
                 showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-                or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+                or showdown_root_str(),
             )
             self.assertTrue((out / "manifest.json").exists())
             verification = verify_golden_corpus(out)

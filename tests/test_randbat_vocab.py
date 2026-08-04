@@ -12,8 +12,9 @@ from pokezero.randbat_vocab import (
     gen3_randbat_vocabulary_breakdown,
 )
 from pokezero.showdown import stable_category_id
+from _showdown_root import showdown_root_str
 
-_DEFAULT_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+_DEFAULT_SHOWDOWN_ROOT = showdown_root_str()
 SHOWDOWN_ROOT = os.environ.get("POKEZERO_SHOWDOWN_ROOT", _DEFAULT_SHOWDOWN_ROOT)
 _HAS_GEN3_SETS = (Path(SHOWDOWN_ROOT) / "data" / "random-battles" / "gen3" / "sets.json").exists()
 

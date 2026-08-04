@@ -254,7 +254,7 @@ the full stack, 208/16 on main — see the banner. Anyone planning engine work o
 corpus residue is planning off a biased
 population.
 
-A local Showdown install at `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`
+A local Showdown install at `$POKEZERO_SHOWDOWN_ROOT`
 makes fresh sweeps available without cluster time. This was true for the whole
 session and was not checked until the end. Certification scale still needs the
 cluster; validation does not.

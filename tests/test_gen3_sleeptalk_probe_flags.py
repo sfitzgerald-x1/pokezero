@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from _showdown_root import showdown_root_str
 
 REPO = Path(__file__).resolve().parent.parent
 PROBE = REPO / "scripts" / "gen3_sleeptalk_probe.py"
@@ -37,11 +37,14 @@ def _load():
 
 
 def _showdown_root() -> str | None:
-    for candidate in (
-        os.environ.get("POKEZERO_SHOWDOWN_ROOT"),
-        "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
-        str(REPO / "third_party" / "pokemon-showdown"),
-    ):
+    """A BUILT checkout, or None.
+
+    Resolution comes from the shared helper rather than a local candidate list -- a private list
+    is how a personal path gets reintroduced, and this file had one. The existence check stays
+    local and stricter than the helper's: this probe runs `dist/sim/dex.js`, so a source-only
+    checkout that satisfies has_showdown() is not enough here.
+    """
+    for candidate in (showdown_root_str(), str(REPO / "third_party" / "pokemon-showdown")):
         if candidate and (Path(candidate) / "dist" / "sim" / "dex.js").is_file():
             return candidate
     return None

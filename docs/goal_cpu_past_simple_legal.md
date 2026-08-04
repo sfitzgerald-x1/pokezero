@@ -46,11 +46,11 @@ clear the bar on CPU, or to reporting a clear, evidence-backed blocker.
 
 ## Operating Environment
 
-- **Executor working directory:** `/Users/scott/workspace/agents/pokezero-agent` (isolated
+- **Executor working directory:** `<agent-workspace>` (isolated
   git worktree). Branch from `origin/main` with `scott/` names. Do not touch the primary
-  checkout at `/Users/scott/workspace/pokezero` or other in-progress branches/worktrees.
+  checkout at `<primary-checkout>` or other in-progress branches/worktrees.
 - **Python env:** `uv sync` in the executor worktree.
-- **Showdown checkout:** `/Users/scott/workspace/pokerena/vendor/pokemon-showdown` (pass as
+- **Showdown checkout:** `$POKEZERO_SHOWDOWN_ROOT` (pass as
   `--showdown-root`).
 - **Reference checkpoints (local, not in git):** under the primary checkout's `runs/`, e.g.
   `runs/cpu-comparison-local-20260623-warning-audit/teacher-bootstrap/promoted-checkpoints/000001-expanded-teacher-bootstrap-linear-iter-0001.json`

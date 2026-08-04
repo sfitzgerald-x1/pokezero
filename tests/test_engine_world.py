@@ -33,6 +33,7 @@ from pokezero.poke_engine_adapter import (  # noqa: E402
     SideSpec,
 )
 from pokezero.showdown_fixture import FixturePokemon, pack_pokemon, pack_team  # noqa: E402
+from _showdown_root import showdown_root, showdown_root_str
 
 
 @contextlib.contextmanager
@@ -894,7 +895,7 @@ class TransformAndEncoreTests(unittest.TestCase):
 
 
 @unittest.skipIf(
-    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    not (showdown_root() / "dist/sim/index.js").exists(),
     "requires a built local Showdown checkout",
 )
 class DittoTransformLiveTests(unittest.TestCase):
@@ -911,7 +912,7 @@ class DittoTransformLiveTests(unittest.TestCase):
         from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex(root)
         ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
                                item="Quick Claw", level=100)
@@ -1014,7 +1015,7 @@ class DittoTransformLiveTests(unittest.TestCase):
         from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex(root)
         ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
                                item="Quick Claw", level=100)
@@ -1060,7 +1061,7 @@ class DittoTransformLiveTests(unittest.TestCase):
 
 
 @unittest.skipIf(
-    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    not (showdown_root() / "dist/sim/index.js").exists(),
     "requires a built local Showdown checkout",
 )
 class KnockOffRemovalLiveTests(unittest.TestCase):
@@ -1072,7 +1073,7 @@ class KnockOffRemovalLiveTests(unittest.TestCase):
         from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex(root)
         ttar = FixturePokemon(species="Tyranitar", moves=("Knock Off", "Rock Slide"),
                               ability="Sand Stream", item="Leftovers", level=74,
@@ -1133,7 +1134,7 @@ class KnockOffRemovalLiveTests(unittest.TestCase):
 
 
 @unittest.skipIf(
-    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    not (showdown_root() / "dist/sim/index.js").exists(),
     "requires a built local Showdown checkout",
 )
 class TrickSwapOverrideLiveTests(unittest.TestCase):
@@ -1146,7 +1147,7 @@ class TrickSwapOverrideLiveTests(unittest.TestCase):
         from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex(root)
         zam = FixturePokemon(species="Alakazam", moves=("Trick", "Psychic"),
                              ability="Synchronize", item="Petaya Berry", level=80,

@@ -18,8 +18,8 @@ The loop uses two different models in fixed roles so review is genuinely indepen
 Operating environment:
 
 - The executor works out of an **isolated git worktree** at
-  `/Users/scott/workspace/agents/pokezero-agent`, not the primary checkout at
-  `/Users/scott/workspace/pokezero`. This prevents working-tree collisions with any other
+  `<agent-workspace>`, not the primary checkout at
+  `<primary-checkout>`. This prevents working-tree collisions with any other
   process that shares the primary checkout.
 - Each task branches from `origin/main` with a `scott/` branch name. Do not use `codex/`
   branch names, and do not check out, edit, or delete branches or worktrees owned by other
@@ -125,7 +125,7 @@ it is not on the executor's PATH):
 # General read-only form (also verified working) when reviewing by explicit context/diff:
 /Applications/Codex.app/Contents/Resources/codex exec \
   -m gpt-5.5 -c 'model_reasoning_effort="xhigh"' \
-  -C /Users/scott/workspace/agents/pokezero-agent --sandbox read-only \
+  -C <agent-workspace> --sandbox read-only \
   "$(cat review-prompt.txt)"
 ```
 

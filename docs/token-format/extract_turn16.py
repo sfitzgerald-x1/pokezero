@@ -28,9 +28,6 @@ os.environ.setdefault("POKEZERO_BELIEF_SET_SOURCE", "1")
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 OUT = HERE / "turn16-token-dump.json"
-SHOWDOWN_ROOT = Path(
-    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
-)
 BOUNDARY_TURN = 16
 
 if str(REPO / "src") not in sys.path:
@@ -42,6 +39,13 @@ from test_explosion_fixture import MANIFEST, load_explosion_fixture_lines  # noq
 
 import pokezero.showdown as sd  # noqa: E402
 from pokezero.belief import PublicBattleBeliefEngine  # noqa: E402
+from pokezero.local_showdown import default_showdown_root  # noqa: E402
+
+# Assigned AFTER the sys.path setup above, so it can use the library resolver. It previously
+# held a shell-example placeholder, which in executable Python is a RELATIVE path that resolves
+# silently under the CWD rather than failing -- the placeholder belongs in the docstring shell
+# examples in scripts/, not here.
+SHOWDOWN_ROOT = default_showdown_root()
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     ACTION_CANDIDATE_TOKEN_COUNT,

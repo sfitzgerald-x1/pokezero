@@ -70,6 +70,7 @@ from pokezero.showdown import (
     showdown_choice_for_action,
     showdown_submission_for_action,
 )
+from _showdown_root import showdown_root, showdown_root_str
 
 FIELD_TOKEN_OFFSET = 0
 
@@ -668,7 +669,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(_self_move_mechanics_id({"move": "Earthquake", "id": "earthquake"}, "earthquake"), "earthquake")
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_self_hidden_power_and_return_action_tokens_encode_true_mechanics(self) -> None:
@@ -683,7 +684,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.randbat_vocab import gen3_category_vocabulary
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
         vocab = gen3_category_vocabulary(root)
         request = json.dumps(
@@ -750,7 +751,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertAlmostEqual(ret_num[NUMERIC_BASE_POWER], 102.0 / 200.0, places=6)
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex",
     )
     def test_struggle_action_token_encodes_typeless(self) -> None:
@@ -768,7 +769,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             _V2_1_NUMERIC_FEATURE_COUNT,
         )
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
 
         def encode(move_name: str) -> tuple[str, str, float]:
@@ -789,7 +790,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(encode("curse")[0], "type:???")
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_transformed_ditto_encodes_target_stats_but_original_hp(self) -> None:
@@ -799,7 +800,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         from pokezero.randbat_vocab import gen3_category_vocabulary
         from pokezero.showdown import NUMERIC_ACTIVE
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
         vocab = gen3_category_vocabulary(root)
         lines = [
@@ -828,7 +829,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertAlmostEqual(ditto[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP (NOT copied)
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_ditto_transform_lifecycle_encoding_coverage(self) -> None:
@@ -839,7 +840,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         from pokezero.randbat_vocab import gen3_category_vocabulary
         from pokezero.showdown import CATEGORY_PRIMARY, NUMERIC_ACTIVE
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
         vocab = gen3_category_vocabulary(root)
         base = [
@@ -892,7 +893,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_self_ditto_transform_surfaces_target_identity(self) -> None:
@@ -908,7 +909,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             CATEGORY_PRIMARY, CATEGORY_TYPE_1, CATEGORY_TYPE_2, NUMERIC_ACTIVE,
         )
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
         vocab = gen3_category_vocabulary(root)
 
@@ -991,7 +992,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(opp_cat[opp_idx][CATEGORY_TYPE_1], vocab.encode("type:Fire"))
 
     @unittest.skipUnless(
-        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        (showdown_root() / "data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_self_ditto_retransform_after_switch(self) -> None:
@@ -1002,7 +1003,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         from pokezero.randbat_vocab import gen3_category_vocabulary
         from pokezero.showdown import CATEGORY_PRIMARY, CATEGORY_TYPE_1, NUMERIC_ACTIVE
 
-        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        root = showdown_root_str()
         dex = load_showdown_dex_cached(root)
         vocab = gen3_category_vocabulary(root)
 
@@ -2657,7 +2658,7 @@ class PlayerActualStatsTest(unittest.TestCase):
         self.assertEqual(observation.numeric_features[opp_active][NUMERIC_ACTUAL_HP], 0.0)
 
 
-_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+_SHOWDOWN_ROOT = showdown_root_str()
 _HAS_SHOWDOWN_CHECKOUT = Path(
     _SHOWDOWN_ROOT + "/data/random-battles/gen3/sets.json"
 ).exists()

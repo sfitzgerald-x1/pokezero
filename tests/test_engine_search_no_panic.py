@@ -48,11 +48,12 @@ import pathlib
 import subprocess
 import sys
 import unittest
+from _showdown_root import showdown_root_str
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-DEFAULT_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+DEFAULT_SHOWDOWN_ROOT = showdown_root_str()
 GAMES = 15
 SEED_START = 7000
 

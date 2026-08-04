@@ -110,7 +110,7 @@ active) including the pinned reductions, plus serialization round-trips
 mid-game (resume-from-payload must converge identically).
 
 RESULTS (2026-07-18, this machine, vendored Showdown at
-`/Users/scott/workspace/pokerena/vendor/pokemon-showdown`):
+`$POKEZERO_SHOWDOWN_ROOT`):
 
 - Random games (seeds 9001-9010): 10 games, 881 decision boundaries ×
   2 perspectives = **1,762 differential checks — all products equal**, with a

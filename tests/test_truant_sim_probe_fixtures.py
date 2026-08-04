@@ -11,11 +11,11 @@ Skipped when the Showdown checkout is unavailable.
 
 from __future__ import annotations
 
-import os
 import unittest
 from pathlib import Path
+from _showdown_root import showdown_root_str
 
-SHOWDOWN = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+SHOWDOWN = Path(showdown_root_str())
 
 
 def _tags(step) -> list[str]:

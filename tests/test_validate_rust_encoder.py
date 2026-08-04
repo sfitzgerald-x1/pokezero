@@ -24,6 +24,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from _showdown_root import showdown_root_str
 
 try:
     import numpy
@@ -33,7 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment guard
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
-DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
 # History-derived numeric columns (not reconstructable from the stored per-row
 # surface; see docs/golden_corpus_notes.md + the track B phase 1 finding).

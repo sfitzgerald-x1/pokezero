@@ -13,16 +13,14 @@ Charizard is the probe species throughout — 6 variants over 5 distinct items, 
 that is honoured for variant matching cuts the candidate set 6 -> 1, and one that is
 suppressed leaves it at 6. That makes "did this reveal narrow?" directly observable.
 """
-import os
 import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.randbat import load_gen3_randbat_source_cached
 from pokezero.showdown import parse_showdown_replay
+from _showdown_root import showdown_root_str
 
-SHOWDOWN_ROOT = os.environ.get(
-    "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
-)
+SHOWDOWN_ROOT = showdown_root_str()
 
 try:
     _SOURCE = load_gen3_randbat_source_cached(SHOWDOWN_ROOT)

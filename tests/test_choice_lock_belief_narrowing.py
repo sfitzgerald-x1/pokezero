@@ -23,16 +23,14 @@ Probe species, all checked for reachability in the gen3 randbats pool:
     Dance, Rollout, Uproar, Fly, Dig and Razor Wind are all absent from gen3 randbats);
   * Snorlax — Rest + Sleep Talk, the pool's called-move surface.
 """
-import os
 import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.randbat import load_gen3_randbat_source_cached
 from pokezero.showdown import parse_showdown_replay
+from _showdown_root import showdown_root_str
 
-SHOWDOWN_ROOT = os.environ.get(
-    "POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
-)
+SHOWDOWN_ROOT = showdown_root_str()
 
 try:
     _SOURCE = load_gen3_randbat_source_cached(SHOWDOWN_ROOT)

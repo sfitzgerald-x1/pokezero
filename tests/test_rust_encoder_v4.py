@@ -24,11 +24,12 @@ except (ImportError, OSError):  # pragma: no cover - optional native gate
 from pokezero.golden_corpus import load_golden_corpus
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3, OBSERVATION_SCHEMA_VERSION_V4
 from pokezero.showdown import observation_from_player_state
+from _showdown_root import showdown_root_str
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
-DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
 
 def _showdown_root() -> Path:
