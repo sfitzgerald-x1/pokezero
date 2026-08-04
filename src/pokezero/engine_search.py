@@ -573,6 +573,12 @@ class EngineMctsStats:
     products_wall_seconds: float = 0.0
     row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
+    # Sub-cases that were COUNTED rather than refused, keyed like world_failure_reasons.
+    # A class that stops refusing must not stop being visible: `sleeptalk_...:ambiguous`
+    # used to appear in `world_failure_reasons` precisely BECAUSE it aborted the world, so
+    # making it usable would have deleted the only number that tracked it. Two eras were
+    # spent unable to say what had changed in a class; that is the cost this avoids.
+    lossy_subcase_renders: Counter = field(default_factory=Counter)
     attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -687,6 +693,7 @@ class EngineMctsStats:
             "products_wall_seconds": self.products_wall_seconds,
             "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
+            "lossy_subcase_renders": dict(self.lossy_subcase_renders),
             "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -1405,6 +1412,20 @@ class EngineMctsPolicy:
                 f"checkpoint budget {config.transition_token_budget}."
             )
 
+    def _absorb_lossy_subcases(self, report: Mapping[str, Any]) -> None:
+        """Count renders that were kept-but-lossy, per sub-case.
+
+        Extracted so the seam is testable. `_search_model` needs a live native module and
+        a real state to reach, so a counter absorbed inline there is pinned by nothing --
+        and this particular counter exists BECAUSE an unpinned class went invisible for
+        two eras. The key name must match what the crate emits (`model.rs`, `lossy_subcases`
+        in the search report); a rename on either side silently zeroes the class, which is
+        the failure mode, so both sides are asserted together by the test.
+        """
+
+        for subcase, count in (report.get("lossy_subcases") or {}).items():
+            self.stats.lossy_subcase_renders[str(subcase)] += int(count)
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -1529,6 +1550,7 @@ class EngineMctsPolicy:
             self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
             self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self._absorb_lossy_subcases(report)
             self.stats.attribution_unsafe_renders += int(
                 report.get("attribution_unsafe_renders") or 0
             )

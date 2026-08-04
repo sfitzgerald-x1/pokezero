@@ -58,7 +58,10 @@ use poke_engine::engine::generate_instructions::{
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
-use poke_engine::instruction::{ChangeStatusInstruction, Instruction, StateInstructions};
+use poke_engine::instruction::{
+    BoostInstruction, ChangeStatusInstruction, DamageInstruction, Instruction,
+    StateInstructions,
+};
 use poke_engine::state::{
     PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
     PokemonType, SideReference, State,
@@ -207,6 +210,10 @@ pub struct RenderedEvents {
     /// reject these branches before fold/encoder advancement instead of
     /// silently inventing action evidence or dropping chance mass.
     pub attribution_unsafe: Vec<String>,
+    /// Sub-cases of [`Self::lossy`] that do NOT refuse the branch. Measurement
+    /// only: no consumer keys behaviour off this, which is exactly the point --
+    /// a class can be counted without being refused.
+    pub lossy_subcases: Vec<String>,
     /// Internal status transitions for the leaf's line-driven ledgers. These
     /// deliberately do not add protocol text for fold-ignored cure events.
     pub(crate) active_status_transitions: Vec<ActiveStatusTransition>,
@@ -248,6 +255,24 @@ impl RenderedEvents {
     fn mark_attribution_unsafe(&mut self, reason: &str) {
         self.mark_lossy(reason);
         self.attribution_unsafe.push(reason.to_string());
+    }
+
+    /// Record a DIAGNOSTIC sub-case WITHOUT refusing the branch.
+    ///
+    /// The lossy-only sibling of [`Self::mark_attribution_unsafe_subcase`], and the
+    /// distinction is the whole point. Use this when the transition is PROVEN and only
+    /// its label is unknown; use the refusing one when the renderer cannot reproduce
+    /// what the engine did, because then the description itself may be wrong.
+    ///
+    /// Same stable tag to `lossy`, so the differential's contract
+    /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) is unchanged.
+    fn mark_lossy_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
+        self.mark_lossy(lossy_tag);
+        self.lossy_subcases.push(subcase.to_string());
     }
 
     /// Refuse with a DIAGNOSTIC sub-case while keeping the `lossy` tag stable.
@@ -1679,10 +1704,51 @@ fn render_move_phase(
                     // replay diverges from what the engine did and may be fixable
                     // in the renderer. Splitting them is what decides that, and
                     // this class is 48.9% of all world failures.
-                    out.mark_attribution_unsafe_subcase(
-                        SLEEPTALK_LOSSY_TAG,
-                        sleeptalk_subcase_slug(&ident),
-                    );
+                    // AMBIGUOUS and NONE_MATCHED are not the same defect, and only
+                    // one of them justifies throwing the world away.
+                    //
+                    // Ambiguous means two or more candidate callees each regenerated a
+                    // branch whose instruction list equals `tail` EXACTLY. So the state
+                    // transition is proven -- it is `tail`, whichever candidate is
+                    // named -- and the only thing not known is the callee's NAME. The
+                    // block below already renders that honestly: no `|move|` line, the
+                    // damage carried on the generic tag the differential retags as
+                    // move_unknown_callee. Nothing is invented, so nothing is unsafe.
+                    //
+                    // None-matched means NO candidate reproduced the tail: the
+                    // renderer's model of the engine diverges, and a description built
+                    // on that divergence may be wrong. That is unsafe and still refuses.
+                    //
+                    // The differential already agreed with this split and the renderer
+                    // did not. `engine_transition_differential.py` lists
+                    // `sleeptalk_called_unidentified` in `_TELEMETRY_ONLY_LOSSY_MARKERS`
+                    // -- "its damage is real, only its attribution is unknown" -- so it
+                    // accepts these branches for matching while the renderer marked them
+                    // attribution-unsafe and search discarded the whole world. The
+                    // comment below this one has recorded that disagreement for two
+                    // eras. Era 57 priced it: this class is 49.5% of all world failures
+                    // and 86.4% of the abort channel, and aborts are ~76% of fallback.
+                    // ONE predicate decides refuse-vs-count, so the decision is testable
+                    // without reaching an arm the engine cannot currently produce.
+                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail) {
+                        out.mark_lossy_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            sleeptalk_subcase_slug(&ident),
+                        );
+                    } else if matches!(ident, SleepTalkIdent::Ambiguous) {
+                        // Ambiguous but the tail carries an effect the walk would DROP
+                        // (a boost, status, heal, side condition...). Distinct sub-case so
+                        // the cost of the remaining gap stays measurable.
+                        out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                        );
+                    } else {
+                        out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            sleeptalk_subcase_slug(&ident),
+                        );
+                    }
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
                     // whatever HP movement follows. The previous version applied
@@ -2730,6 +2796,104 @@ fn render_move_phase(
     }
 }
 
+/// Whether an unidentified-callee outcome must REFUSE the branch, or may merely be
+/// counted.
+///
+/// Extracted as a pure function ON PURPOSE. When this decision lived inline in
+/// `render_move_phase`, making `NoneMatched` lossy-only -- which would let a render the
+/// engine cannot reproduce reach the fold -- was INDISTINGUISHABLE from the correct code:
+/// `NoneMatched` is unreachable from any state the crate tests build, so nothing observed
+/// the routing. A synthesised test of the refusing SEAM did not help either, because the
+/// seam is downstream of the choice. A pure predicate is testable without reaching the arm.
+fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> bool {
+    match ident {
+        // Proven transition; unsafe only if the walk would silently drop part of it.
+        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail),
+        // The renderer could not reproduce the engine's tail at all, so any description
+        // built on it may be wrong. Always unsafe.
+        SleepTalkIdent::NoneMatched => true,
+        // Handled by the naming path; never reaches the refusal decision.
+        SleepTalkIdent::Matched(_) => false,
+    }
+}
+
+/// Whether the UNNAMED-callee walk can express this tail completely.
+///
+/// This is the acceptance test for Sleep Talk ambiguity, and it is derived from what
+/// the walk actually emits rather than from what the engine proved. Independent review
+/// rejected the first version of that split for exactly this gap: `Ambiguous` proves the
+/// engine TRANSITION -- every matching candidate regenerated this tail -- but the walk
+/// below emits only HP DECREASES, drags and faints. It emits no `-boost`, `-status`,
+/// `-heal`, `-sidestart` or `-start`. So a Harden/Withdraw ambiguity left the engine
+/// state holding `def +1` while the rendered observation said nothing happened, and once
+/// the branch stopped being refused that mismatch reached `fold.advance_in_place` and
+/// `encode_leaf`. Reproduced downstream: an unrendered heal leaves the fold's
+/// `hp_fraction` stale, so a LATER, unrelated move's damage records as zero -- the C52
+/// impossible-component defect in mirror image.
+///
+/// So: an ambiguous tail is usable ONLY if it contains nothing the walk would drop.
+/// ALLOWLIST, and fail-closed against unknown INSTRUCTIONS -- a new variant refuses until
+/// someone decides it is renderable, which is the direction that cannot silently corrupt an
+/// observation. Note the limit of that guarantee, learned the hard way with `Damage` above:
+/// it is NOT fail-closed against a new USE of an already-admitted variant.
+///
+/// What the refused tails actually contain, measured over the oracle corpus rather than
+/// assumed: 10 are `[Boost]` (identical-boost pairs like Harden/Withdraw) and 6 are
+/// `[DamageSubstitute, RemoveVolatileStatus]` (a substitute break). The second group is
+/// worth naming because the obvious completeness plan -- emit `-boost`/`-status`/`-heal`/
+/// `-sidestart` -- does NOT cover it: a substitute break needs `-activate|...|Substitute`
+/// and `-end|...|Substitute`, so 6 of the 16 need a fifth family that plan omits.
+/// `DamageSubstitute` is correctly excluded here: substitute hits use that variant rather
+/// than `Damage`, and the walk renders neither.
+///
+/// COVERAGE, stated because five of these six entries have none. The corpus exercises
+/// `Damage` and the empty tail only; `Switch`, `SetLastUsedMove` and the three
+/// `ChangeDamageDealt*` variants are admitted on a structural argument with no fixture.
+/// Review checked all five by hand and they hold today: `Switch` renders as a complete,
+/// correctly-tagged drag (probed: `|drag|` followed by `|-damage|...|[from] Spikes`), and
+/// the other four carry no protocol line on any path and are read by neither the fold nor
+/// the native encoder -- the v4 `last_used_move` and damage-dealt features are written only
+/// from the Python world-state path. Engine-side Counter/Mirror Coat state stays correct
+/// because `sim.apply` runs every instruction regardless of what is rendered. A structural
+/// argument is weaker than a fixture, so anyone extending this list should add one.
+///
+/// `Damage` is admitted ONLY when `damage_amount >= 0`. It is a SIGNED instruction: the
+/// engine's own comment at `gen3/choice_effects.rs` records that "a negative
+/// `damage_amount` is the engine's existing spelling for a heal on this instruction", which
+/// is how Pain Split is expressed. The walk below emits on `active_hp < before` only, so a
+/// heal-direction `Damage` renders NOTHING -- and an earlier version of this predicate
+/// admitted it on the strength of the comment "Damage is rendered as an HP decrease", which
+/// was simply false. Review reproduced the consequence through the production render path:
+/// a tail of `[Damage -130, Damage +130]` came back USABLE with the sleeper's 40 -> 170 heal
+/// absent from the lines, leaving the fold's `hp_fraction` stale so a LATER, unrelated hit
+/// records as zero damage. That is the C52-mirror defect this whole predicate exists to
+/// prevent, admitted by the predicate itself.
+///
+/// The lesson generalises past this one variant: fail-closed against unknown INSTRUCTIONS
+/// is not the same as fail-closed against unknown USES of a known one.
+///
+/// `Switch` is rendered as a drag. The remaining
+/// members carry no protocol representation at all in Gen 3: they are the engine's own
+/// bookkeeping for Counter/Mirror Coat damage accounting and last-move tracking, and the
+/// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
+/// loses nothing that the named path would have shown.
+fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
+    tail.iter().all(|instruction| {
+        matches!(
+            instruction,
+            // `damage_amount >= 0` is load-bearing, not defensive -- see the doc above.
+            Instruction::Damage(damage) if damage.damage_amount >= 0
+        ) || matches!(
+            instruction,
+            Instruction::Switch(_)
+                | Instruction::SetLastUsedMove(_)
+                | Instruction::ChangeDamageDealtDamage(_)
+                | Instruction::ChangeDamageDealtMoveCatagory(_)
+                | Instruction::ToggleDamageDealtHitSubstitute(_)
+        )
+    })
+}
+
 /// Why `identify_sleep_talk_called` could not name the called move.
 ///
 /// The two causes need OPPOSITE fixes and the single `None` hid which one was
@@ -3671,7 +3835,8 @@ fn legal_roll_state_before_direct_damage(
 /// Enumerate the engine's chance outcomes for a joint action and render each
 /// as protocol lines (the instruction→event mapping), returning JSON:
 /// `{"end_of_turn": bool, "branches": [{"percentage", "events", "turn_completed",
-///   "lossy", "attribution_unsafe", "attribution_unsafe_reasons", "post",
+///   "lossy", "attribution_unsafe", "attribution_unsafe_reasons",
+///   "lossy_subcases" (counted, not refused), "post",
 ///   "post_state", "legal_roll_state"}]}`.
 ///
 /// `ctx_json`: `{"p1": [display species...], "p2": [...], "turn": N}` with
@@ -3701,6 +3866,7 @@ pub fn branch_events(
             "lossy": ["empty_instruction_list"],
             "attribution_unsafe": false,
             "attribution_unsafe_reasons": [],
+            "lossy_subcases": [],
             "post": post_state_summary(&state),
         }));
     }
@@ -3740,6 +3906,7 @@ pub fn branch_events(
             "lossy": rendered.lossy,
             "attribution_unsafe": attribution_unsafe,
             "attribution_unsafe_reasons": rendered.attribution_unsafe,
+            "lossy_subcases": rendered.lossy_subcases,
             "post": post,
         });
         if let Some(post_state) = post_state {
@@ -3885,6 +4052,7 @@ mod tests {
         let mut agree = 0usize;
         let mut wrong: Vec<String> = Vec::new();
         let mut multi_label_refused = 0usize;
+        let mut multi_label_unattributed = 0usize;
         let mut single_label_refused = 0usize;
         let mut unlabelled: Vec<String> = Vec::new();
         let mut agree_by_defender: std::collections::BTreeMap<String, usize> =
@@ -3998,7 +4166,17 @@ mod tests {
                              renderer emitted neither an attribution nor a refusal",
                             named[0]
                         )),
-                        // Two callees emit byte-identical lists: refusal is correct.
+                        // Two callees emit byte-identical lists and the renderer names
+                        // NOBODY and does NOT refuse. This is the correct outcome and the
+                        // one the ambiguity split exists to produce: the oracle says the
+                        // evidence cannot single out a callee, so naming one would be a
+                        // guess (the arm above catches that) -- but the transition is
+                        // proven, since every matching candidate regenerated exactly this
+                        // tail, so there is nothing unsafe to refuse.
+                        (n, None, false) if n >= 2 => multi_label_unattributed += 1,
+                        // Two callees emit byte-identical lists and the branch was
+                        // REFUSED. Correct before the split; now it means something
+                        // reached the refusing path that should not have.
                         (n, _, true) if n >= 2 => multi_label_refused += 1,
                         // Unambiguous label but refused. LOUD, so not a correctness
                         // failure -- but it is the none_matched/input-fidelity class,
@@ -4096,10 +4274,179 @@ mod tests {
              defender choice."
         );
 
+        // THE FIX, pinned. Genuine ambiguity -- two callees whose branches are
+        // byte-identical -- must no longer refuse. The transition is proven (both
+        // regenerated exactly this tail) and the renderer names nobody, so there is
+        // nothing unsafe to reject. Refusing it discarded the whole world, and on the
+        // cluster that class was 49.5% of all world failures.
+        //
+        // Reverting the split in `render_move_phase` sends these back down the
+        // refusing arm and fires this assertion.
+        // Ambiguity splits THREE ways now, and both halves of the split are pinned.
+        //
+        // A renderable tail must be USABLE: refusing it discards a proven transition the
+        // walk can express completely. An unrenderable tail must still REFUSE: the walk
+        // drops boosts, statuses, heals and side conditions, so accepting one would hand
+        // the fold an observation that contradicts the state. Review rejected the first
+        // version of this change for exactly that, and these two assertions are what
+        // stop either half drifting.
+        assert!(
+            multi_label_unattributed > 0,
+            "VACUOUS: no ambiguous branch reached the usable arm, so this test cannot \
+             show the split works at all."
+        );
+        // The fail-closed arm must also be EXERCISED, or the predicate is untested and
+        // could be `|_| true` without anything noticing.
+        assert!(
+            multi_label_refused > 0,
+            "VACUOUS THE OTHER WAY: no ambiguous branch was refused, so nothing here \
+             exercises `ambiguous_tail_is_fully_renderable`. The Harden/Withdraw fixture \
+             carries an unrendered Boost and MUST refuse; a predicate that accepted \
+             everything would pass this test without it."
+        );
+        // ...and the two must partition the ambiguous population exactly.
+        assert_eq!(
+            multi_label_unattributed + multi_label_refused,
+            total_branches - agree,
+            "ambiguous branches lost: {multi_label_unattributed} usable + \
+             {multi_label_refused} refused != {} unattributed",
+            total_branches - agree
+        );
+
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
-             refused-ambiguous {multi_label_refused}  refused-single {single_label_refused}  \
+             ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
+             {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
+        );
+    }
+
+    /// The ROUTING decision, tested directly for every variant.
+    ///
+    /// `NoneMatched` must be unsafe REGARDLESS of how renderable its tail is: the tail is
+    /// not the problem there, the renderer's inability to reproduce it is. Making it
+    /// lossy-only was indistinguishable from correct code until this existed.
+    #[test]
+    fn none_matched_is_always_unsafe_and_renderable_ambiguity_never_is() {
+        let renderable = vec![Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 10,
+        })];
+        let unrenderable = vec![Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        })];
+
+        // A HEAL-DIRECTION Damage must refuse. `Damage` is signed and the walk emits on
+        // decreases only, so admitting a negative amount renders nothing while the state
+        // moves -- review reproduced exactly that and it is the defect this predicate is
+        // for. Pinned here because no natural gen3 move pair produces such a tail, so no
+        // corpus test can reach it.
+        let heal_shaped = vec![Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: -130,
+        })];
+        assert!(
+            !ambiguous_tail_is_fully_renderable(&heal_shaped),
+            "a negative `damage_amount` is a HEAL and the walk drops it, so the tail is \
+             NOT fully renderable"
+        );
+        assert!(
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped),
+            "a heal-shaped ambiguous tail must REFUSE"
+        );
+        // Mixed sign refuses too: one dropped component is enough.
+        let mixed = vec![
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 130,
+            }),
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: -130,
+            }),
+        ];
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed));
+        // Zero is a no-op and stays admissible.
+        assert!(!sleeptalk_refusal_is_unsafe(
+            &SleepTalkIdent::Ambiguous,
+            &[Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 0,
+            })]
+        ));
+
+        // Ambiguous: renderable is USABLE, unrenderable REFUSES.
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable));
+
+        // NoneMatched: unsafe either way. A renderable tail must NOT rescue it.
+        assert!(
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &renderable),
+            "none_matched with a renderable tail must STILL refuse -- the tail is not the \
+             defect, the renderer's failure to reproduce it is"
+        );
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &unrenderable));
+
+        // An empty tail is renderable by construction, so it must not rescue it either.
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &[]));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[]));
+    }
+
+    /// The refusing seam must still refuse `none_matched`, and must NOT refuse
+    /// `ambiguous`. Synthesised, so it does not depend on reaching either arm.
+    ///
+    /// `none_matched` is genuinely hard to reach from a real state -- two crate tests
+    /// assert it stays at zero, and the identifier's own comment records the arm as
+    /// unreachable today -- so a test that waits for the engine to produce one pins
+    /// nothing. Review found the consequence: making `NoneMatched` lossy-only too, which
+    /// would let a divergent render reach the fold, was INDISTINGUISHABLE from the
+    /// correct code because the only witness was a test already red for another reason.
+    /// This closes that by constructing the two shapes directly.
+    #[test]
+    fn the_refusing_seam_separates_ambiguous_from_none_matched() {
+        // AMBIGUOUS: sub-case on the measurement channel, bare tag on the contract
+        // channel, nothing on the refusing channel.
+        let usable = RenderedEvents {
+            lines: Vec::new(),
+            turn_completed: false,
+            lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
+            attribution_unsafe: Vec::new(),
+            lossy_subcases: vec![sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous).to_string()],
+            active_status_transitions: Vec::new(),
+        };
+        assert!(
+            !usable.is_attribution_unsafe(),
+            "a renderable ambiguous branch must pass the refusing seam"
+        );
+        reject_attribution_unsafe(&usable, "test")
+            .expect("ambiguous-and-renderable must not be refused");
+
+        // NONE_MATCHED: the renderer could not reproduce the engine's tail, so the
+        // description may be wrong. This one MUST still refuse.
+        let unsafe_render = RenderedEvents {
+            lines: Vec::new(),
+            turn_completed: false,
+            lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
+            attribution_unsafe: vec![
+                sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched).to_string(),
+            ],
+            lossy_subcases: Vec::new(),
+            active_status_transitions: Vec::new(),
+        };
+        assert!(unsafe_render.is_attribution_unsafe());
+        let error = reject_attribution_unsafe(&unsafe_render, "test")
+            .expect_err("none_matched must not reach the fold");
+        assert!(
+            error.to_string().contains("sleeptalk_called_unidentified:none_matched"),
+            "the refusal must name the cause: {error}"
+        );
+
+        // And the two slugs must not be the same string, or the split is cosmetic.
+        assert_ne!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
+            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched)
         );
     }
 
