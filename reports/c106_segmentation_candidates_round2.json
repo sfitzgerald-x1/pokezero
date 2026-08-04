@@ -1,5 +1,5 @@
 {
- "SUPERSESSION_2026_08_04": "HISTORICAL. Its two target rows are no longer in the residue and its fifth candidate was resolved by reports/c107, which instrumented the actual disagreement. Retained because the four refuted candidates are the record of what NOT to re-try.",
+ "SUPERSESSION_2026_08_04": "HISTORICAL. Its two target rows are absent from the current residue. Its fifth candidate -- the one it named as preferred -- was REFUTED by reports/c107 (p1_cands=0; the failure is in phase 1), not confirmed; an earlier draft of this stamp said 'resolved by c107', which reads as confirmation and was wrong. Retained because the four refuted candidates are the record of what NOT to re-try, which is this file's durable value.",
  "landed_because": "C116 Phase 0 item 1b: merged artifacts cite this file and the citations did not resolve -- scripts/engine_transition_differential.py:479 (shipped) and reports/c108 cite c103 and c107; reports/c110 cites c109. Under C116 M4 a report is not citable until merged.",
  "schema": "c106-segmentation-candidates-round-2/1",
  "status": "NARROWING. Two more candidates refuted at source. FOUR now refuted for these two rows. A fifth is named with a reason to prefer it.",
