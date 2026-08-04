@@ -30,7 +30,9 @@ what encloses it.
 
 C111 v2 also does not pin an `abilities.rs` arm at all. It pins the two **call sites**:
 `before_move → ability_modify_attack_against` against the wake. Those are `:2819` and
-`:2832` today — the same 13-line gap C111 recorded at `:2682`/`:2694`. **The pin was right;
+`:2832` today — the **12**-line gap C111 recorded at `:2682`/`:2694`, now 13
+because `if !choice.sleep_talk_move {` was added at `:2831` to wrap the call — so it is neither
+13 *nor* the same, and an earlier revision said both. **The pin was right;
 only the line numbers moved**, which v1 itself called "expected and not the finding" before
 proceeding to make it the finding.
 
@@ -58,8 +60,11 @@ Single-variable A/B on the recorded states — `SLEEP,1` → `NONE,0`, nothing e
 branches, versus 2 of 4 when already awake"). The same-turn wake is the sole cause.
 
 **A5's mechanism is confirmed on both rows**, and C117 §4's signature-based filing of
-`19100012/61` is correct. `19100012/61` is the cleaner witness: p2 switches, so Poison Point
-is the *only* poison source and there is no Sludge Bomb secondary to confound it.
+`19100012/61` is correct. `19100012/61` is the cleaner witness, **and it carries the argument
+alone.** For `19000125/226`, "already asleep" is a *sufficient* cause independent of ordering —
+gen3 admits no second non-volatile status — so that row's A/B cannot separate the two
+explanations. Only `19100012/61` can: p2 switches, so Poison Point is the sole poison source
+with no Sludge Bomb secondary to confound it, and its awake mass is exactly `0.85 × 1/3`.
 
 v1's "6.25% unaccounted for" was also wrong: the branch listing has **six** arms, not three
 — `14.06 + 74.71 + 4.98 + 0.94 + 4.98 + 0.33 = 100.00` — and the remainder is the Sludge
