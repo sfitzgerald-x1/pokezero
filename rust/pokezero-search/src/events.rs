@@ -1726,13 +1726,31 @@ fn render_move_phase(
                     // eras. Era 57 priced it: this class is 49.5% of all world failures
                     // and 86.4% of the abort channel, and aborts are ~76% of fallback.
                     match ident {
-                        SleepTalkIdent::Ambiguous => out.mark_lossy_subcase(
+                        // Ambiguous AND every instruction renderable by the walk below:
+                        // the observation is complete, so counting beats refusing.
+                        SleepTalkIdent::Ambiguous
+                            if ambiguous_tail_is_fully_renderable(&called_tail) =>
+                        {
+                            out.mark_lossy_subcase(
+                                SLEEPTALK_LOSSY_TAG,
+                                sleeptalk_subcase_slug(&ident),
+                            )
+                        }
+                        // Ambiguous but the tail carries an effect the walk would DROP
+                        // (a boost, status, heal, side condition...). Refusing is correct:
+                        // the alternative is an observation that contradicts the state.
+                        // Distinct sub-case so the cost of the gap stays measurable.
+                        SleepTalkIdent::Ambiguous => out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                        ),
+                        SleepTalkIdent::NoneMatched => out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
                             sleeptalk_subcase_slug(&ident),
                         ),
-                        _ => out.mark_attribution_unsafe_subcase(
-                            SLEEPTALK_LOSSY_TAG,
-                            sleeptalk_subcase_slug(&ident),
+                        SleepTalkIdent::Matched(_) => unreachable!(
+                            "Matched is handled by the arm above; this block is the \
+                             unidentified path only"
                         ),
                     }
                     // Walk the tail IN ORDER, rendering a drag at the moment
@@ -2780,6 +2798,43 @@ fn render_move_phase(
     for fainted in pending_faints {
         emit_faint_if_dead(sim, fainted, ctx, out);
     }
+}
+
+/// Whether the UNNAMED-callee walk can express this tail completely.
+///
+/// This is the acceptance test for Sleep Talk ambiguity, and it is derived from what
+/// the walk actually emits rather than from what the engine proved. Independent review
+/// rejected the first version of that split for exactly this gap: `Ambiguous` proves the
+/// engine TRANSITION -- every matching candidate regenerated this tail -- but the walk
+/// below emits only HP DECREASES, drags and faints. It emits no `-boost`, `-status`,
+/// `-heal`, `-sidestart` or `-start`. So a Harden/Withdraw ambiguity left the engine
+/// state holding `def +1` while the rendered observation said nothing happened, and once
+/// the branch stopped being refused that mismatch reached `fold.advance_in_place` and
+/// `encode_leaf`. Reproduced downstream: an unrendered heal leaves the fold's
+/// `hp_fraction` stale, so a LATER, unrelated move's damage records as zero -- the C52
+/// impossible-component defect in mirror image.
+///
+/// So: an ambiguous tail is usable ONLY if it contains nothing the walk would drop.
+/// ALLOWLIST, and fail-closed -- a new engine instruction refuses until someone decides
+/// it is renderable, which is the direction that cannot silently corrupt an observation.
+///
+/// `Damage` is rendered as an HP decrease. `Switch` is rendered as a drag. The remaining
+/// members carry no protocol representation at all in Gen 3: they are the engine's own
+/// bookkeeping for Counter/Mirror Coat damage accounting and last-move tracking, and the
+/// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
+/// loses nothing that the named path would have shown.
+fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
+    tail.iter().all(|instruction| {
+        matches!(
+            instruction,
+            Instruction::Damage(_)
+                | Instruction::Switch(_)
+                | Instruction::SetLastUsedMove(_)
+                | Instruction::ChangeDamageDealtDamage(_)
+                | Instruction::ChangeDamageDealtMoveCatagory(_)
+                | Instruction::ToggleDamageDealtHitSubstitute(_)
+        )
+    })
 }
 
 /// Why `identify_sleep_talk_called` could not name the called move.
@@ -4169,24 +4224,40 @@ mod tests {
         //
         // Reverting the split in `render_move_phase` sends these back down the
         // refusing arm and fires this assertion.
-        assert_eq!(
-            multi_label_refused, 0,
-            "AMBIGUITY IS REFUSING AGAIN: {multi_label_refused} branch(es) whose engine \
-             labels are ambiguous were marked attribution-unsafe. Every matching \
-             candidate regenerated exactly the observed tail, so the transition is \
-             proven and only the callee's NAME is unknown -- which the renderer already \
-             leaves unnamed. Refusing throws the world away for a missing label."
-        );
+        // Ambiguity splits THREE ways now, and both halves of the split are pinned.
+        //
+        // A renderable tail must be USABLE: refusing it discards a proven transition the
+        // walk can express completely. An unrenderable tail must still REFUSE: the walk
+        // drops boosts, statuses, heals and side conditions, so accepting one would hand
+        // the fold an observation that contradicts the state. Review rejected the first
+        // version of this change for exactly that, and these two assertions are what
+        // stop either half drifting.
         assert!(
             multi_label_unattributed > 0,
-            "VACUOUS: no ambiguous branch reached the unattributed arm, so this test \
-             cannot show the split works. Expect ~{} here.",
+            "VACUOUS: no ambiguous branch reached the usable arm, so this test cannot \
+             show the split works at all."
+        );
+        // The fail-closed arm must also be EXERCISED, or the predicate is untested and
+        // could be `|_| true` without anything noticing.
+        assert!(
+            multi_label_refused > 0,
+            "VACUOUS THE OTHER WAY: no ambiguous branch was refused, so nothing here \
+             exercises `ambiguous_tail_is_fully_renderable`. The Harden/Withdraw fixture \
+             carries an unrendered Boost and MUST refuse; a predicate that accepted \
+             everything would pass this test without it."
+        );
+        // ...and the two must partition the ambiguous population exactly.
+        assert_eq!(
+            multi_label_unattributed + multi_label_refused,
+            total_branches - agree,
+            "ambiguous branches lost: {multi_label_unattributed} usable + \
+             {multi_label_refused} refused != {} unattributed",
             total_branches - agree
         );
 
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
-             ambiguous-USABLE {multi_label_unattributed}  refused-ambiguous \
+             ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
              {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
         );
