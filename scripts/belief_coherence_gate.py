@@ -60,6 +60,9 @@ from pokezero.randbat import (  # noqa: E402
     canonical_gen3_randbat_species_id,
     load_gen3_randbat_source_cached,
 )
+from dataclasses import replace  # noqa: E402
+
+from pokezero.observation import DEFAULT_OBSERVATION_FEATURE_MASKS  # noqa: E402
 from pokezero.showdown import MOVE_ACTION_COUNT, _variant_spread_stats  # noqa: E402
 from pokezero.tier2 import variant_has_physical_attack  # noqa: E402
 from tier2_gate import _first_requests, _team_truth  # noqa: E402
@@ -129,6 +132,7 @@ def _true_variant_for(
         # record that the match was ambiguous rather than pretending it was exact.
         first = dict(exact[0])
         first["_ambiguous_match"] = len(exact)
+        first["_ambiguous_variant_ids"] = [str(v.get("variant_id")) for v in exact]
         return first
     return None
 
@@ -146,6 +150,7 @@ def _check_mon(
     seen_counts: dict[tuple[str, str], int],
     counts: Counter,
     violations: dict[str, list[Violation]],
+    fallbacks: list[dict[str, Any]],
 ) -> None:
     key = (perspective, belief.key if hasattr(belief, "key") else belief.species)
     candidates = tuple(belief.candidate_variants or ())
@@ -167,7 +172,13 @@ def _check_mon(
 
     # (1) containment, by variant_id, cross-checked on variant_identity.
     ids = {str(v.get("variant_id")) for v in candidates}
-    contained_by_id = str(true_variant.get("variant_id")) in ids
+    # ANY of the indistinguishable truth candidates counts. All 34 ambiguous groups in the pool
+    # share one `variant_identity` (they differ only in role/source_set_id), so no filter can
+    # separate them -- but relying on that unasserted invariant would make `exact[0]` a latent
+    # false-violation generator once narrowing is on.
+    truth_ids = {str(vid) for vid in (true_variant.get("_ambiguous_variant_ids") or ())}
+    truth_ids.add(str(true_variant.get("variant_id")))
+    contained_by_id = bool(truth_ids & ids)
     identities = {variant_identity(v) for v in candidates}
     contained_by_identity = variant_identity(true_variant) in identities
     if not contained_by_id:
@@ -196,6 +207,11 @@ def _check_mon(
         )
         if looks_like_fallback:
             counts["inconsistent_fallbacks"] += 1
+            # ATTRIBUTED, not just counted: the plan requires every fallback tied to a cause, and
+            # a bare integer cannot be checked against that by a reader.
+            fallbacks.append(
+                {**ctx, "previous": previous, "pool_size": pool_size, "cause": "full-pool widening"}
+            )
         else:
             violations["monotonicity"].append(
                 Violation(
@@ -285,6 +301,8 @@ def run_sweep(
     max_steps: int = 400,
     move_bias: float = 0.75,
     clone_equivalence_every: int = 10,
+    investment_belief_narrowing: bool = False,
+    item_belief_narrowing: bool = False,
 ) -> dict[str, Any]:
     """Run the coherence sweep and return its summary dict.
 
@@ -312,14 +330,36 @@ def run_sweep(
     # candidate set" violations from three games -- not a defect, just every candidate set switched
     # off. A belief-containment sweep with no candidate sets is the vacuous pass this file exists to
     # refuse, so the flag is pinned here and re-asserted as a precondition below.
+    # Narrowing flags are plumbed so V7 step 2 ("re-run V1 with both narrowing flags on") is
+    # runnable from this harness. With them OFF, family 4 cannot fire at all -- see the verdict.
+    # The narrowing switches live on the FEATURE MASKS, not on the config directly, and the
+    # investment arm additionally requires the tier2 channel (`investment_belief_narrowing_active`
+    # is `tier2_residuals_active() and ...`). Enabling them by hand rather than through this is
+    # how a "narrowing on" run silently stays off.
+    masks = DEFAULT_OBSERVATION_FEATURE_MASKS
+    if investment_belief_narrowing or item_belief_narrowing:
+        masks = replace(
+            masks,
+            tier2_residuals=masks.tier2_residuals or investment_belief_narrowing,
+            investment_belief_narrowing=investment_belief_narrowing,
+            item_belief_narrowing=item_belief_narrowing,
+        )
     env = LocalShowdownEnv(
-        LocalShowdownConfig(showdown_root=str(args.showdown_root), set_belief_source=True)
+        LocalShowdownConfig(
+            showdown_root=str(args.showdown_root),
+            set_belief_source=True,
+            feature_masks=masks,
+        )
     )
     if not env.config.belief_set_source_enabled():
         env.close()
         raise RuntimeError(
             "candidate-set belief source is disabled; the sweep would be vacuous"
         )
+    env_narrowing_flags = {
+        "investment": bool(env.investment_belief_narrowing_active()),
+        "item": bool(env.item_belief_narrowing_active()),
+    }
 
     # Seeded at zero so the artifact distinguishes "measured, never happened" from "never
     # measured". A Counter only carries keys it incremented, which makes a missing
@@ -342,6 +382,8 @@ def run_sweep(
             "ambiguous_true_variant_matches": 0,
             "mons_without_resolvable_true_variant": 0,
             "belief_mons_without_truth": 0,
+            "truncated_games": 0,
+            "games_without_both_requests": 0,
         }
     )
     violations: dict[str, list[Violation]] = {
@@ -359,9 +401,14 @@ def run_sweep(
         )
     }
     species_seen: set[str] = set()
+    fallbacks: list[dict[str, Any]] = []
 
     try:
         for game in range(args.games):
+            # Per-GAME rng: a single shared Random() made game N depend on every prior game's
+            # action draws, so a violation could not be replayed in isolation -- diagnosing the
+            # Leftovers defect needed a separate probe purely because of this.
+            rng = random.Random(args.seed * 1_000_003 + game)
             env.reset(seed=args.seed + game)
             first = _first_requests(env.protocol_lines)
             if "p1" not in first or "p2" not in first:
@@ -418,6 +465,7 @@ def run_sweep(
                             seen_counts=seen_counts,
                             counts=counts,
                             violations=violations,
+                            fallbacks=fallbacks,
                         )
 
                 # (4) zero pin conflicts with narrowing off.
@@ -442,6 +490,28 @@ def run_sweep(
                 # divergence here means the model's search prior disagrees with its own encode.
                 if args.clone_equivalence_every and turn % args.clone_equivalence_every == 0:
                     twin = env._belief_engine.clone()
+                    # Compare the ENGINE's own state, not two player views.
+                    #
+                    # The first version of this check compared
+                    # `engine.resolved_player_view(p)` against `twin.resolved_player_view(p)` --
+                    # but `resolved_player_view` CALLS clone() itself, so both sides went through
+                    # the same copy and suffered any state loss identically. It could not fail:
+                    # deleting `_variant_pins`, `_hp_after_actions` or `_healed_to_full_this_turn`
+                    # from clone() each left the sweep PASSing with the full count of checks. A
+                    # guard with no possible kill is not coverage (plan §3).
+                    mismatches = _engine_state_mismatches(env._belief_engine, twin)
+                    if mismatches:
+                        violations["clone_equivalence"].append(
+                            Violation(
+                                {
+                                    "game": game,
+                                    "turn": turn,
+                                    "detail": "clone() did not reproduce the parent's state",
+                                    "fields": mismatches,
+                                }
+                            )
+                        )
+                    # ...and the projected views too, which is what search actually consumes.
                     for perspective in PLAYERS:
                         parent = env._belief_engine.resolved_player_view(perspective)
                         child = twin.resolved_player_view(perspective)
@@ -463,6 +533,7 @@ def run_sweep(
                     mask = env.observe(player).legal_action_mask
                     legal = [index for index, allowed in enumerate(mask) if allowed]
                     if not legal:
+                        counts["truncated_games"] += 1
                         break
                     moves = [index for index in legal if index < MOVE_ACTION_COUNT]
                     if moves and rng.random() < args.move_bias:
@@ -470,6 +541,7 @@ def run_sweep(
                     else:
                         actions[player] = rng.choice(legal)
                 if len(actions) != len(requested):
+                    counts["truncated_games"] += 1
                     break
                 env.step(actions)
                 steps += 1
@@ -485,17 +557,42 @@ def run_sweep(
         "narrowing_steps": counts["narrowing_steps"],
         "pinned_and_correct": counts["pinned_and_correct"],
         "stat_legality_checks": counts["stat_legality_checks"],
-        "pin_conflict_checks": counts["pin_conflict_checks"],
         "clone_equivalence_checks": counts["clone_equivalence_checks"],
     }
     reached = all(value > 0 for value in reachability.values())
-    verdict = "PASS" if (total_violations == 0 and reached) else "FAIL"
+
+    # Family 4 (pin conflicts) is NOT in the reachability set above, because with narrowing off it
+    # is structurally unfailable: `_variant_pin_conflicts` is only written from
+    # `narrow_candidate_variants`/`_apply_variant_pin`, both of which require a non-empty
+    # `_variant_pins`, and only the tier2/investment producers write those. Counting loop
+    # iterations as "reached" reported a property as exercised when it could not fire.
+    # It is reported as n/a instead, and the verdict says so.
+    narrowing_on = env_narrowing_flags["investment"] or env_narrowing_flags["item"]
+    pin_conflict_status = "exercised" if narrowing_on else "n/a (narrowing off)"
+
+    # Mons the sweep SKIPPED must fail the run, not vanish into a counter. A regression in truth
+    # resolution would otherwise drop most of the population and still print PASS: mutating
+    # `_true_variant_for` to fail for half the species silently skipped 1106 of 2551 observations
+    # -- including the very mon whose defect motivated this harness -- and the verdict stayed
+    # green. Both counters are 0 on every clean run, so requiring 0 costs nothing and binds.
+    skipped = {
+        "mons_without_resolvable_true_variant": counts["mons_without_resolvable_true_variant"],
+        "belief_mons_without_truth": counts["belief_mons_without_truth"],
+        "truncated_games": counts["truncated_games"],
+    }
+    no_silent_skips = all(value == 0 for value in skipped.values())
+
+    verdict = "PASS" if (total_violations == 0 and reached and no_silent_skips) else "FAIL"
 
     summary = {
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "verdict": verdict,
         "reached": reached,
         "reachability": reachability,
+        "pin_conflict_family": pin_conflict_status,
+        "skipped": skipped,
+        "inconsistent_fallback_details": fallbacks[:50],
+        "no_silent_skips": no_silent_skips,
         "args": {
             "games": args.games,
             "seed": args.seed,
@@ -520,6 +617,8 @@ def main() -> int:
     parser.add_argument("--move-bias", type=float, default=0.75)
     parser.add_argument("--showdown-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--investment-belief-narrowing", action="store_true")
+    parser.add_argument("--item-belief-narrowing", action="store_true")
     parser.add_argument(
         "--clone-equivalence-every",
         type=int,
@@ -535,6 +634,8 @@ def main() -> int:
         max_steps=args.max_steps,
         move_bias=args.move_bias,
         clone_equivalence_every=args.clone_equivalence_every,
+        investment_belief_narrowing=args.investment_belief_narrowing,
+        item_belief_narrowing=args.item_belief_narrowing,
     )
     counts = summary["counts"]
     violations = summary.get("violations", {})
@@ -553,12 +654,49 @@ def main() -> int:
         f"narrowings={counts.get('narrowing_steps', 0)} fallbacks={counts.get('inconsistent_fallbacks', 0)} "
         f"stat_checks={counts.get('stat_legality_checks', 0)} "
         f"clone_checks={counts.get('clone_equivalence_checks', 0)} "
-        f"violations={total_violations} reached={reached}"
+        f"violations={total_violations} reached={reached} "
+        f"skips={sum(summary['skipped'].values())} pin_conflicts={summary['pin_conflict_family']}"
     )
     for name, rows in violations.items():
         if rows:
             print(f"  [{name}] {len(rows)} violation(s); first: {rows[0]}")
     return 0 if verdict == "PASS" else 1
+
+
+_CLONE_EXEMPT_FIELDS = ("set_source", "format_id", "item_belief_narrowing")
+
+
+def _engine_state_mismatches(parent, twin) -> list[str]:
+    """Field names where ``clone()`` failed to reproduce the parent's state.
+
+    Enumerated from ``vars()`` rather than a hand-written list, so a per-turn attribute added to
+    the engine LATER without a matching line in ``clone()`` is caught by this check rather than
+    silently escaping it -- the failure shape is a sampled search world that has forgotten
+    evidence the live game holds.
+
+    ``set_source`` is excluded because clone() shares it deliberately (it is large and immutable);
+    identity is asserted instead. The narrowing flags are constructor arguments, not state.
+
+    Kill-confirmed by dropping ``twin._hp_after_actions`` from ``clone()``: 20 violations naming
+    that field. Stated precisely, because the bound matters: this detects a dropped copy only for
+    state that is actually POPULATED in the run. ``_variant_pins`` is empty with narrowing off, so
+    dropping its copy is undetectable here -- not a hole in the check, but a reason the
+    narrowing-on rerun is where that particular copy gets its coverage.
+    """
+    mismatches: list[str] = []
+    parent_state = vars(parent)
+    twin_state = vars(twin)
+    for name in sorted(set(parent_state) | set(twin_state)):
+        if name in _CLONE_EXEMPT_FIELDS:
+            continue
+        if name not in twin_state:
+            mismatches.append(f"{name}: missing on the clone")
+            continue
+        if repr(parent_state[name]) != repr(twin_state[name]):
+            mismatches.append(name)
+    if parent.set_source is not twin.set_source:
+        mismatches.append("set_source: clone must SHARE the source, not copy it")
+    return mismatches
 
 
 def _view_fingerprint(view) -> tuple:

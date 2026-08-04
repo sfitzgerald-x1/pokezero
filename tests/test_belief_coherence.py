@@ -35,6 +35,10 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from belief_coherence_gate import run_sweep
 
+        # Deliberately SMALL, and this is a known limitation rather than a choice: the Leftovers
+        # defect this harness found needs ~26-400 games to surface depending on seed, so a guard
+        # big enough to catch it would be red on this branch. It is raised in the PR that fixes
+        # that defect, where the tree is green. The fleet sweep is the real bar either way.
         cls.summary = run_sweep(
             showdown_root=_integration_root(),
             games=3,
@@ -51,6 +55,32 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
         )
         self.assertEqual(self.summary["verdict"], "PASS")
 
+    def test_no_mon_was_silently_skipped(self) -> None:
+        """A skipped mon must fail the run, not vanish into a counter.
+
+        Truth resolution returning None skips the mon. Before this was gated, mutating
+        ``_true_variant_for`` to fail for half the species silently dropped 1106 of 2551
+        observations -- including the very mon whose defect motivated this harness -- and the
+        verdict stayed PASS. Kill-confirmed: that mutation now yields FAIL with skips=644.
+        """
+        self.assertEqual(
+            self.summary["skipped"],
+            {name: 0 for name in self.summary["skipped"]},
+            "the sweep skipped mons or truncated games; its coverage is not what it reports",
+        )
+        self.assertTrue(self.summary["no_silent_skips"])
+
+    def test_pin_conflict_family_is_reported_as_inapplicable_when_narrowing_is_off(self) -> None:
+        """Family 4 cannot fire with narrowing off, and must say so rather than claim coverage.
+
+        ``variant_pin_conflicts`` is only written from the tier2/investment producers, which are
+        gated off in this configuration -- measured directly: over 397 decision points
+        ``_variant_pins`` was non-empty 0 times. Counting loop iterations as "reached" reported the
+        property as exercised when it could not fire, which is the laundering the plan forbids.
+        """
+        self.assertEqual(self.summary["pin_conflict_family"], "n/a (narrowing off)")
+        self.assertNotIn("pin_conflict_checks", self.summary["reachability"])
+
     def test_sweep_actually_reached_the_properties_it_asserts(self) -> None:
         """The vacuous-pass guard.
 
@@ -65,7 +95,6 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
         self.assertGreater(reach["narrowing_steps"], 0, "no set ever narrowed; containment is idle")
         self.assertGreater(reach["pinned_and_correct"], 0, "no set was ever pinned to one variant")
         self.assertGreater(reach["stat_legality_checks"], 0, "assertion 6 never ran")
-        self.assertGreater(reach["pin_conflict_checks"], 0, "assertion 4 never ran")
         self.assertGreater(reach["clone_equivalence_checks"], 0, "assertion 7 never ran")
         self.assertTrue(self.summary["reached"])
 
