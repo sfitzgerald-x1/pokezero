@@ -171,7 +171,7 @@ four of the assignments wrong — which is exactly the failure mode
 kills, A2's explicitly named unmirrored-Burn case". **That is false, and the error is worse
 than a misfiling: A2's mechanism no longer exists.** #1066 replaced
 `pending_residual_damage` with `residual_phase_final_hp`, which *does* mirror the 10.6
-status tick — `generate_instructions.rs:1521-1523`,
+status tick — `generate_instructions.rs:1524`,
 `PokemonStatus::BURN | PokemonStatus::POISON => hp -= cmp::max(maxhp / 8, 1)` — and Burn is
 not among the gaps its own doc comment enumerates. So filing these to A2 pointed at a cause
 whose fix had already shipped, which would let a reader conclude the rows were covered by
@@ -203,9 +203,15 @@ the miss is `observed_only = [('itemleftovers', 15), ('movewish', 126)]` with
 `engine_only = []` — the engine emitted **no** p1 end-of-turn heal, while the pre-state is
 Registeel 253/253 with `side.wish == (1, 126)`. The engine *knows* about the Wish and does
 not render its resolution. The renderer does plan both heals (`events.rs:3277`, `:3292`),
-and the drag walk this report cites at `events.rs:1706-1741` is documented "DECREASES
-ONLY, deliberately … an unrendered rise leaves the row divergent" — which is the first
-place to look.
+so the first place to look is that plan and its
+reconcile (`events.rs:3277`, `:3292`, and the side-unusable reconcile at `:3294-3300`).
+
+**Not** the drag walk at `events.rs:1706-1741`, which an earlier revision pointed at: that
+`emit_residuals!` walk lives entirely inside the Sleep Talk `NoneMatched | Ambiguous` sub-case
+(1658–1771, returning at 1772) and cannot be on this row's path — `19100113/62` has
+`choices: {p1: seismictoss, p2: bonemerang}` and `|cant|p1a: Registeel|slp`, so there is no
+Sleep Talk and no drag. That range is the Sleep Talk walk, as §3 correctly calls it; §4 called
+it "the drag walk", which is the same range under two different names.
 
 **A correction to this table, which an earlier revision of it got wrong.** That revision
 filed `19100012/61` and `19100113/62` into the B1 row, which made the table's drag count
@@ -274,8 +280,9 @@ divergent on either, `limit:world_sample_drag_target` → 0 on both. So the 25 i
 baseline as measured on 89bbabe4**, not `main`'s residue. The 3.53× overfit ratio is
 unaffected — one engine, two windows — and the like-for-like post-fix ratio is 2.31×.
 
-#1081 shipped only B1's **renderer** half; the classifier fix this report asks for is still
-owed.
+#1081 shipped B1's **renderer** half, and **#1086 has since landed the classifier half** — the
+drag limit is now the residue after every component test declines, with a red-run pin
+(`tests/test_drag_limit_is_a_last_resort.py`) gated in CI. **Both halves of B1 are closed.**
 
 ## 5. What is owed
 
@@ -283,9 +290,9 @@ owed.
    #1081 has since closed all eleven.
 2. ~~Replay the four `roll_scaled_component` rows~~ — **done**: 2 are the Belly Drum cause,
    2 are Pain Split collapse tax (§4). The only unowned row is `19100180/24`.
-3. **B1's renderer half shipped in #1081** (dev 7→6, holdout 25→14). The **classifier**
-   half is still owed: `engine_transition_differential.py:1761` short-circuits on the mere
-   presence of `|drag|`, so the class can still mask a future defect the same way.
+3. ~~B1's renderer half, then the classifier half~~ — **both done**: #1081 (renderer,
+   dev 7→6, holdout 25→14) and **#1086** (classifier — the drag label demoted below every
+   component test, with a red-run pin gated in CI).
 4. Investigate **A8** (is a correct threshold computable before the move's secondary is
    decided?) and **A9** (why the planned Wish heal is not rendered).
 5. Leave `19,200,000+` untouched. Per the §J.7 amendment it must appear in **exactly
