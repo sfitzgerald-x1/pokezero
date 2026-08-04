@@ -1,100 +1,100 @@
-# C118 — A5's site was wrong AND its mechanism is refuted; the rows are unattributed
+# C118 v2 — A5 is CONFIRMED, and both of v1's findings were inverted
 
-C116 Phase 3 item 8 begins "reorder contact-ability trigger vs. same-turn wake **at the
-pinned lines**". This is that re-pinning, and it changes the diagnosis. Nothing is fixed
-here, deliberately.
+> **v1 of this report claimed A5's hook was mis-pinned and its mechanism refuted. Both
+> claims were wrong, in the same direction, and A5 is confirmed by measurement on both its
+> rows. v1 should not be cited.** The retraction is the content of this document.
 
-Era: `main` `012d8451`, engine fingerprint from the build stamp (58 patches).
+C116 Phase 3 item 8 opens "reorder contact-ability trigger vs. same-turn wake **at the
+pinned lines**". Doing that re-pin produced two false findings before producing the right
+answer.
 
-## What C111 recorded
+Era: `main` `012d8451`, engine fingerprint `4098f204…`, 58 patches.
 
-> **A5** — contact-ability trigger precedes the same-turn wake:
-> `ability_modify_attack_against` at `:2682` runs before the wake `ChangeStatus` at
-> `:2694`, so `contact_status_is_valid` sees SLEEP.
+## 1. What v1 claimed, and why both halves were wrong
 
-Two rows depend on it: `19000125/226` (dev) and `19100012/61` (holdout, filed A5 in C117
-§4 on the Wrap + Poison Point signature).
+**v1 finding (a): "C111 pinned the wrong hook."** Inverted. Function extents in
+`third_party/poke-engine-src/src/gen3/abilities.rs`, re-derived by walking `^pub fn`/`^fn`/`^}`:
 
-## What the source says now
+| function | extent | ability arms it contains |
+|---|---|---|
+| `contact_status_is_valid` | 22–52 | — |
+| `ability_after_damage_hit` | **174–207** | `COLORCHANGE`, `ROUGHSKIN` — **and nothing else** |
+| `ability_modify_attack_against` | **648–925** | `POISONPOINT` :672, `EFFECTSPORE` :693, `CUTECHARM` :721, `FLAMEBODY` :745, `STATIC` :779, `THICKFAT` :793 |
 
-The line numbers moved, which is expected and not the finding. The **hook** is different,
-which is:
+So **every contact secondary lives inside `ability_modify_attack_against`** — exactly the
+hook C111 pinned. v1's table asserted they were in `ability_after_damage_hit`, and its gloss
+("an attack *modifier*, this is the Thick Fat hook, **not** the contact-secondary hook") was
+false: it is *both*. I cited real line numbers, verified they existed, and then described
+the wrong containing function — a check that confirms a line exists proves nothing about
+what encloses it.
 
-| thing | where it actually is |
-|---|---|
-| `contact_status_is_valid` | `gen3/abilities.rs:22`, refuses when `target.status != PokemonStatus::NONE` (`:29-33`) |
-| Poison Point's arm | `gen3/abilities.rs:672-678`, inside **`ability_after_damage_hit`** (`:174`) |
-| Effect Spore / Flame Body / Static arms | `abilities.rs:710`, `:750`, `:784` — same function |
-| `ability_after_damage_hit` call site | `gen3/generate_instructions.rs:1881` |
-| `ability_modify_attack_against` | called from `before_move` at `:2103` — an attack **modifier** (this is the Thick Fat hook), not the contact-secondary hook |
-| the wake `ChangeStatus` | generated in `generate_instructions_from_existing_status_conditions` (`:2155`), called at `:2832` |
+C111 v2 also does not pin an `abilities.rs` arm at all. It pins the two **call sites**:
+`before_move → ability_modify_attack_against` against the wake. Those are `:2819` and
+`:2832` today — the same 13-line gap C111 recorded at `:2682`/`:2694`. **The pin was right;
+only the line numbers moved**, which v1 itself called "expected and not the finding" before
+proceeding to make it the finding.
 
-**So C111 pinned the wrong hook.** `ability_modify_attack_against` is where Thick Fat
-halves `base_power` — the C100/C102 defect — and it has nothing to do with applying a
-contact secondary. The contact secondary fires from `ability_after_damage_hit`. A fix
-written "at the pinned lines" would have reordered the attack-modifier hook, which cannot
-affect `contact_status_is_valid` at all.
+**v1 finding (b): "the mechanism is refuted."** A non sequitur. The Poison Point secondary
+is decided during **choice modification** at `:2103`, reached from `before_move` at `:2819`
+— *before any of the instructions v1 quoted exist*. The applied instruction order (wake
+before the Wrap damage) is fully **consistent** with `contact_status_is_valid` seeing
+`SLEEP`, and is silent on the question. I read an instruction listing and drew a conclusion
+about a decision taken earlier in a different phase.
 
-## Why the mechanism looked survivable — and then did not
+## 2. The measurement that settles it
 
-**This section is superseded by the one below it, and is kept as the reasoning that was
-wrong.** On finding the wrong hook I concluded the *mechanism* still held: that
-`contact_status_is_valid` refuses when the target already has a status, that in both rows the
-secondary's target had just woken, and that a wake not yet applied would produce exactly the
-observed absence. I listed two things as unestablished — the runtime order of `:1881` against
-`:2832`, and whether the check reads applied state or the instruction list — and said they
-needed an instrumented run.
+Single-variable A/B on the recorded states — `SLEEP,1` → `NONE,0`, nothing else changed:
 
-They needed no run. The replay had the answer already.
+| row | state | branches | poison mass |
+|---|---|---|---|
+| `19000125/226` | asleep (as recorded) | 6 | **0.0000 %** |
+| `19000125/226` | awake | 16 | 49.8333 % |
+| `19000125/226` | awake, Poison Point removed | 12 | 30.0000 % (Sludge Bomb's own secondary) |
+| `19100012/61` | asleep | 3 | **0.0000 %** |
+| `19100012/61` | awake | 5 | **28.3333 %** |
 
-## The ordering question is settled, and it refutes the mechanism
+`28.3333 % = 0.85 × 1/3` — Wrap's accuracy times Poison Point's activation, which is
+**exactly the "1/3 of hit mass" C111 v2 had already measured** ("0 of 2 wake-and-hit
+branches, versus 2 of 4 when already awake"). The same-turn wake is the sole cause.
 
-The two open questions needed no instrumentation. The replay prints instructions in
-**applied** order, which is exactly what `contact_status_is_valid` reads. Seed 19000125
-step 226, highest-probability branch:
+**A5's mechanism is confirmed on both rows**, and C117 §4's signature-based filing of
+`19100012/61` is correct. `19100012/61` is the cleaner witness: p2 switches, so Poison Point
+is the *only* poison source and there is no Sludge Bomb secondary to confound it.
 
-```
-Damage SideTwo: 16                        <- p1 Nidoqueen's Sludge Bomb hits Shuckle
-ChangeStatus SideTwo-P0: SLEEP -> NONE    <- Shuckle WAKES, here
-DecrementRestTurns SideTwo
-SetLastUsedMove SideTwo: Move(M0) -> Move(M2)
-Damage SideOne: 5                         <- Shuckle's Wrap contacts Nidoqueen
-ApplyVolatileStatus SideOne: PARTIALLYTRAPPED
-```
+v1's "6.25% unaccounted for" was also wrong: the branch listing has **six** arms, not three
+— `14.06 + 74.71 + 4.98 + 0.94 + 4.98 + 0.33 = 100.00` — and the remainder is the Sludge
+Bomb crit fan. **No arm carries `psn`.** So the row is not a mass-enumeration issue either;
+the poison is absent everywhere, because the check refuses.
 
-**The wake precedes the Wrap.** When `ability_after_damage_hit` evaluates Poison Point on
-that contact, the secondary's target (Shuckle) already has `status == NONE`, so
-`contact_status_is_valid` returns **true**, not false.
+v1's "untested candidates" (Poison Point's activation probability; whether Wrap's contact
+flag reaches the hook) were **already settled in C111 v2**. I proposed re-testing things the
+ledger had measured.
 
-**C111's A5 mechanism is refuted.** The engine does not fail to poison because it thinks the
-attacker is asleep. It simply does not poison: no `ChangeStatus … -> POISON` appears in the
-branch, and the three arms C111 recorded (14.06 / 74.71 / 4.98 = 93.75%) carry no `psn` on
-either side, with 6.25% of mass unaccounted for in that listing.
+## 3. Disposition
 
-Untested candidates, recorded so the next attempt does not restart from zero: Poison Point's
-activation probability and how its arms are enumerated; whether Wrap's contact flag reaches
-this hook at all (Wrap is `contact: true` in gen3, verified during the c103–c109 landing, so
-this is plumbing rather than data); and whether a partial-trap move's **first** turn routes
-through `ability_after_damage_hit`.
+**A5 stands. Both rows stay attributed. Nothing is withdrawn, and C117 needs no amendment.**
+v1's accounting changes are void: C117's "15 of 25 on C111's six causes" is correct as
+written, and A5 has two rows, not zero.
 
-## Disposition
+Phase 3 item 8 is re-pointed at its correct site: **`generate_instructions.rs:2819`**
+(`before_move`, which reaches `ability_modify_attack_against` at `:2103`) runs before
+**`:2832`** (`generate_instructions_from_existing_status_conditions`, which generates the
+wake). The fix is an ordering change and its blast radius is that second function — wide
+enough to deserve a dedicated PR with its own pin, generalising across Poison Point, Effect
+Spore, Flame Body, Static and Cute Charm × wake and thaw.
 
-**A5 is withdrawn as a cause. `19000125/226` and `19100012/61` are UNATTRIBUTED** and return
-to the queue as such. C111's A5 entry and C117 §4's A5 filing both need amending, in separate
-PRs — C111 owns the cause namespace, C117 owns the holdout row table.
+## 4. What went wrong here, twice, in the same direction
 
-Accounting consequences, stated because they move against the program's headline: the dev
-window's 6 rows now carry **five** named causes and one unattributed; C117's "15 of 25 on
-C111's six causes" becomes **14 of 25**; and A5 has **zero** rows in either window. C117's
-"the number of causes rose by three" survives, because A5 was an existing cause being reused
-rather than a new one.
+Both v1 findings came from **reading source structure instead of measuring behaviour**, and
+both survived a check that looked rigorous:
 
-**Do not write a fix for A5.** There is currently no mechanism to fix.
+- I verified every cited line **exists**. None of those greps could detect that a line sat
+  inside a different function than I claimed. Verifying a citation resolves is not verifying
+  it says what you think.
+- I then read an *instruction listing* — real, correctly transcribed — and concluded
+  something about a decision made in an earlier phase that emits no instruction at all.
 
-## A note on how this was found
-
-Phase 3 item 8 looked like the cheapest remaining item — two rows, "site pinned to two
-lines". It was cheap only because the pin was wrong, and the pin was wrong because C111
-recorded a hook name from a plausible reading rather than from following the call. That is
-the same failure mode as filing rows by class name, one layer down: filing a *cause* by
-function name.
+The A/B that settles it takes two state edits and two `generate_instructions` calls. It was
+available before v1 was written, and C111 v2 had already run its equivalent. The cheapest
+correct move was to re-run the ledger's own measurement rather than re-derive its
+conclusion from source.
