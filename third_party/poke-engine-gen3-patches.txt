@@ -1245,3 +1245,7 @@ poke-engine-gen3-sleeptalk-crit-arm.patch
 # themselves are faithful, the SUPPORT was incomplete.
 # Registered in reports/c96_unattributed_source_level_causes.json.
 poke-engine-gen3-bellydrum-roll-gate.patch
+
+# Partition a damage fan on RESIDUAL lethality, not only lethality on the hit.
+# reports/c109.
+poke-engine-gen3-residual-lethality-partition.patch
