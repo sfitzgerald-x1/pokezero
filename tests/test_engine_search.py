@@ -2082,5 +2082,99 @@ class WorldAbortRateTests(unittest.TestCase):
         self.assertEqual(stats["world_search_abort_rate"], 0.0)
 
 
+class FallbackAddressTests(unittest.TestCase):
+    """A fallback must be REPLAYABLE, not just counted.
+
+    Era 57 recorded 7,498 fallbacks across 93 aggregate keys and left no way to
+    reproduce a single one: the addresses existed only in pod logs, and deleting
+    the Jobs deleted them. `battle_id` carries the seed, so (battle_id, round,
+    seat) is a complete address for one turn.
+    """
+
+    def _policy(self, **cfg):
+        import unittest.mock as mock
+
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=mock.Mock(),
+            config=EngineMctsConfig(**cfg),
+        )
+        return policy
+
+    def _fallback(self, policy, *, battle="b-8220001", rnd=7, seat="p1",
+                  reason="crate_search_failed", classes=()):
+        ctx = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                _candidates(),
+            ),
+            public_materialization_state=object(),
+            player_id=seat,
+            battle_id=battle,
+            decision_round_index=rnd,
+        )
+        policy._world_failures_before = {}
+        for cls in classes:
+            policy.stats.world_failure_reasons[cls] += 1
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            policy._fallback(ctx, random.Random(0), reason)
+
+    def test_the_address_identifies_one_turn(self) -> None:
+        p = self._policy()
+        self._fallback(p, battle="battle-gen3randombattle-controlled-8220024",
+                       rnd=8, seat="p1", classes=("crate_search: sleeptalk",))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("crate_search: sleeptalk", samples)
+        entry = samples["crate_search: sleeptalk"][0]
+        # The seed is IN the battle id, which is what makes this replayable.
+        self.assertIn("8220024", entry["battle_id"])
+        self.assertEqual(entry["round"], 8)
+        self.assertEqual(entry["seat"], "p1")
+        self.assertEqual(entry["reason"], "crate_search_failed")
+
+    def test_a_rare_class_still_gets_an_address_under_a_dominant_one(self) -> None:
+        """The reason the cap is PER CLASS.
+
+        Era 57 was 49.5% one reason. A global cap fills with that class and the
+        rare classes -- the ones you actually need an address for -- get none.
+        """
+        p = self._policy()
+        for i in range(500):
+            self._fallback(p, battle=f"b-{i}", rnd=i, classes=("dominant",))
+        self._fallback(p, battle="b-rare", rnd=99, classes=("rare_class",))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("rare_class", samples)
+        self.assertEqual(samples["rare_class"][0]["battle_id"], "b-rare")
+
+    def test_the_sample_is_bounded_per_class(self) -> None:
+        p = self._policy()
+        for i in range(50):
+            self._fallback(p, battle=f"b-{i}", rnd=i, classes=("one",))
+        self.assertEqual(len(p.stats.to_dict()["fallback_samples"]["one"]), 3)
+
+    def test_a_decision_failing_on_several_classes_is_addressable_under_each(self) -> None:
+        p = self._policy()
+        self._fallback(p, classes=("class_a", "class_b"))
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("class_a", samples)
+        self.assertIn("class_b", samples)
+
+    def test_a_fallback_with_no_world_failures_is_still_addressable(self) -> None:
+        """no_public_state / live_fold_broken produce no world-failure classes.
+
+        Keying only by world-failure class would leave them unaddressable.
+        """
+        p = self._policy()
+        self._fallback(p, reason="no_public_state", classes=())
+        samples = p.stats.to_dict()["fallback_samples"]
+        self.assertIn("fallback:no_public_state", samples)
+        self.assertEqual(samples["fallback:no_public_state"][0]["reason"],
+                         "no_public_state")
+
+    def test_no_fallbacks_means_no_samples_not_a_stub(self) -> None:
+        self.assertEqual(EngineMctsStats().to_dict()["fallback_samples"], {})
+
+
 if __name__ == "__main__":
     unittest.main()

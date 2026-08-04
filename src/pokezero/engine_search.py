@@ -433,6 +433,11 @@ def _blocker_bucket(token: str) -> str:
 # sides refusing with DIFFERENT slug sets is routine and blew straight past 160.
 _REASON_DETAIL_LIMIT = 512
 
+# Addresses retained per fallback CLASS. Three is enough to replay one, confirm it
+# reproduces, and check a second instance is the same shape -- while bounding the
+# report at 3 x distinct classes (~70 in era 57, so ~210 small entries).
+_FALLBACK_SAMPLES_PER_CLASS = 3
+
 
 def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
     """Bound a telemetry reason so overflow is VISIBLE, never silently aliasing.
@@ -499,6 +504,18 @@ class EngineMctsStats:
     decision_wall_seconds: float = 0.0
     world_failure_reasons: Counter = field(default_factory=Counter)
     fallback_reasons: Counter = field(default_factory=Counter)
+    # ADDRESSES, not just counts. A fallback is fully identified by
+    # (battle_id, round, seat) -- the battle id carries the seed, so any entry
+    # here replays as a single turn. Until this existed the addresses lived only
+    # in pod logs, and deleting a Job deleted them: the era-57 probe left 93
+    # aggregate keys and zero way to reproduce any of the 7,498 fallbacks it
+    # recorded, so no refusal class could be debugged from a campaign run.
+    #
+    # Keyed BY CLASS and capped per class rather than globally. A global cap fills
+    # with the dominant class -- era 57 was 49.5% one reason -- and the classes you
+    # most need an address for are the rare ones. Bounded by
+    # _FALLBACK_SAMPLES_PER_CLASS x distinct classes.
+    fallback_samples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     unmapped_choices: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
@@ -619,6 +636,7 @@ class EngineMctsStats:
             "decision_wall_seconds": self.decision_wall_seconds,
             "world_failure_reasons": dict(self.world_failure_reasons),
             "fallback_reasons": dict(self.fallback_reasons),
+            "fallback_samples": {k: list(v) for k, v in self.fallback_samples.items()},
             "unmapped_choices": dict(self.unmapped_choices),
             "model_evals": self.model_evals,
             "encode_wall_seconds": self.encode_wall_seconds,
@@ -1960,6 +1978,18 @@ class EngineMctsPolicy:
             for key, count in self.stats.world_failure_reasons.items()
             if count - self._world_failures_before.get(key, 0) > 0
         }
+        # Retain the address under EVERY class this decision failed on, plus the
+        # fallback reason itself so decisions with no world failures at all
+        # (no_public_state, live_fold_broken) are still addressable.
+        for key in list(delta) or [f"fallback:{reason}"]:
+            bucket = self.stats.fallback_samples.setdefault(key, [])
+            if len(bucket) < _FALLBACK_SAMPLES_PER_CLASS:
+                bucket.append({
+                    "battle_id": str(battle_id),
+                    "round": round_index,
+                    "seat": str(player),
+                    "reason": reason,
+                })
         message = (
             f"engine-search FALLBACK: battle={battle_id} round={round_index} seat={player} "
             f"reason={reason} world_failures={delta or '{}'}"
