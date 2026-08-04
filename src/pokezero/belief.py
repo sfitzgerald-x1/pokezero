@@ -101,8 +101,11 @@ class RevealedPokemonBelief:
     sleep_skipped_turns: int = 0
     # Turns this mon has been active in its current stint (reset on entry).
     turns_active: int = 0
-    # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries). Frozen once the
-    # held item is mutated (Trick / Knock Off): pruning applies to the original assignment only.
+    # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries / Choice Band).
+    # The first three are end-of-turn NON-PROCS — an opportunity the item had and did not take;
+    # Choice Band is the same shape read off the move stream instead, since two different moves
+    # in one stay are an opportunity the ``choicelock`` volatile would have denied. Frozen once
+    # the held item is mutated (Trick / Knock Off): pruning applies to the original assignment.
     ruled_out_items: tuple[str, ...] = ()
     item_mutated: bool = False
     # Removal vs swap, the distinction ``item_mutated`` alone cannot carry: True while the
@@ -123,6 +126,24 @@ class RevealedPokemonBelief:
     # NOTE: do not read ``revealed_item`` for this purpose — its post-mutation semantics
     # are surface-dependent (a Knock Off ``-enditem`` leaves it naming the REMOVED item).
     current_public_item: Optional[str] = None
+    # The mon's ORIGINAL held item — the randbats generator's own assignment — once the protocol
+    # has named it with CERTAINTY, even though the mon no longer holds it. This is the fact
+    # ``item_mutated`` alone cannot carry: "what it holds NOW is not the assignment" and "what it
+    # WAS holding is now known" are different statements, and only the first suppresses variant
+    # matching. ``revealed_item`` cannot express the second either, because its post-mutation
+    # meaning is surface-dependent (Knock Off leaves it naming the removed ORIGINAL, Trick's
+    # ``-item`` leaves it naming the RECEIVED item, which is somebody else's assignment).
+    #
+    # Two audited surfaces, both verified against the vendored engine:
+    #   * ``|-enditem|SLOT|ITEM|[from] move: Knock Off|[of] ATTACKER`` (``data/moves.ts``
+    #     knockoff.onAfterHit) and Trick's silent ``|-enditem|SLOT|ITEM|[silent]|[from] move:
+    #     Trick`` — the subject's OWN item;
+    #   * Trick's ``|-item|SLOT|ITEM|[from] move: Trick``, which is CROSS-ATTRIBUTED: trick.onHit
+    #     gives the SOURCE's item to the TARGET and the TARGET's to the SOURCE, so the item named
+    #     on each of the two lines is the PARTNER's assignment (see ``_PendingTrick``).
+    # Written only while the mon's held item was still its own assignment (a mon already carrying
+    # a Tricked item names that item, not the generator's), and never overwritten once set.
+    original_public_item: Optional[str] = None
     # Natural Cure detection: status carried out on switch + the side's cure-all (Heal Bell /
     # Aromatherapy) counter at exit; a clean re-entry with an unchanged counter confirms.
     status_on_exit: Optional[str] = None
@@ -163,6 +184,7 @@ class RevealedPokemonBelief:
             "item_mutated": self.item_mutated,
             "item_removed": self.item_removed,
             "current_public_item": self.current_public_item,
+            "original_public_item": self.original_public_item,
         }
 
 
@@ -338,15 +360,91 @@ class BattleBeliefSnapshot:
         }
 
 
+def variant_identity(variant: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Stable identity of one candidate-variant mapping.
+
+    Used to intersect an evidence producer's SURVIVOR list against the engine's own
+    candidate list (:meth:`PublicBattleBeliefEngine.narrow_candidate_variants`). Both
+    sides read the SAME mappings out of the same ``CandidateSetSummary``, so the fields
+    are taken RAW: normalizing here would add a divergence risk (two normalizers drifting
+    apart silently drops every pin) without adding any discrimination between variants
+    that the generator already emits distinctly.
+    """
+
+    raw_moves = variant.get("moves")
+    moves = tuple(str(move) for move in raw_moves) if isinstance(raw_moves, (list, tuple)) else ()
+    level = variant.get("level")
+    return (
+        int(level) if isinstance(level, int) and level > 0 else 0,
+        moves,
+        str(variant.get("item") or ""),
+        str(variant.get("ability") or ""),
+    )
+
+
+def _variant_field_values(
+    variants: Sequence[Mapping[str, Any]], field_name: str, *, plural: bool
+) -> set[str]:
+    values: set[str] = set()
+    for variant in variants:
+        raw = variant.get(field_name)
+        if plural:
+            if isinstance(raw, (list, tuple)):
+                values.update(str(item) for item in raw)
+        elif raw:
+            values.add(str(raw))
+    return values
+
+
+def _narrowed_possible_values(
+    values: tuple[str, ...],
+    variants: Sequence[Mapping[str, Any]],
+    kept: Sequence[Mapping[str, Any]],
+    field_name: str,
+    *,
+    plural: bool,
+) -> tuple[str, ...]:
+    """Drop ``possible_*`` entries no SURVIVING variant carries. Filter, never recompute.
+
+    The randbats source builds ``possible_moves``/``_items``/``_abilities`` as exactly this
+    projection over the surviving variant list (``_stable_unique`` over the same fields
+    ``Gen3RandbatVariant.to_summary`` writes into ``candidate_variants``), so filtering the
+    already-emitted tuple reproduces what the source itself would have emitted for the
+    narrowed set — while preserving ITS ordering and ITS string forms. Recomputing here
+    would introduce a second normalizer that could silently drift.
+
+    Guarded for sources that build these surfaces some other way: if any emitted value is
+    absent from the projection over ALL variants, the two are not the same vocabulary, and
+    the surface is returned untouched rather than filtered down to something wrong. A filter
+    that would empty the surface is also declined — same refusal asymmetry as the pin itself.
+    """
+
+    if not values:
+        return values
+    if not set(values) <= _variant_field_values(variants, field_name, plural=plural):
+        return values
+    survivors = _variant_field_values(kept, field_name, plural=plural)
+    narrowed = tuple(value for value in values if value in survivors)
+    return narrowed or values
+
+
 class PublicBattleBeliefEngine:
     def __init__(
         self,
         *,
         format_id: Optional[str] = None,
         set_source: PokemonSetSource | None = None,
+        item_belief_narrowing: bool = False,
     ) -> None:
         self.format_id = format_id
         self.set_source = set_source
+        # ObservationFeatureMasks.item_belief_narrowing, carried down by the env. When True the
+        # protocol-CERTAIN item facts this engine records are allowed to narrow candidate sets:
+        # the ORIGINAL assignment named by a Knock Off / Trick (``original_public_item``) becomes
+        # a variant-matching key. Default False because narrowing moves NUMERIC_CANDIDATE_SET_COUNT
+        # and NUMERIC_UNCERTAINTY, which exist in EVERY schema — turning it on shifts the input
+        # distribution of every checkpoint ever trained, so it must be opted into by a fresh arm.
+        self.item_belief_narrowing = bool(item_belief_narrowing)
         self._event_count = 0
         self._sides: dict[str, list[RevealedPokemonBelief]] = {"p1": [], "p2": []}
         self._pending_switches: list[_PendingSwitch] = []
@@ -372,8 +470,31 @@ class PublicBattleBeliefEngine:
         # Any key still unresolved at ``|upkeep`` was a plain sleep turn, which resets skip to 0.
         self._sleep_cant_pending: set[str] = set()
         self._hp_after_actions: dict[str, Optional[float]] = {}
+        # Choice-lock bookkeeping: belief key -> the FIRST freely selected move of the mon's
+        # current stay on the field, which is the move a Choice Band would have locked it into.
+        # Cleared on switch-in. See ``_note_choice_lock_selection``.
+        self._stay_locked_move: dict[str, str] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
         self._pending_mudshot: Optional[dict[str, Any]] = None
+        # The Trick pairing published by the ``-activate`` line, consumed by the two ``-item``
+        # lines that follow it in the same protocol chunk (see ``_PendingTrick``). Cleared by the
+        # first event that is neither ``-item`` nor ``-enditem``, so it can never span two Tricks.
+        self._pending_trick: Optional[_PendingTrick] = None
+        # Variant narrowing from EXTERNAL damage-evidence producers (defender-side investment
+        # inference, pokezero.investment). Belief key -> the identities still viable. Monotone:
+        # each call intersects, never widens, so a narrowing can only be undone by rebuilding
+        # the engine. Kept as identities rather than mappings so the filter survives the
+        # set source re-summarizing on every reveal.
+        #
+        # This module stays a stdlib LEAF: computing which variants survive needs the dex and
+        # the gen3 spread/damage core, so the producer computes survivors and hands them in
+        # rather than belief.py importing that stack.
+        self._variant_pins: dict[str, frozenset[tuple[Any, ...]]] = {}
+        # Diagnostic only: keys where an incoming survivor list contradicted the standing pin
+        # (empty intersection). The pin is LEFT INTACT and the contradiction counted — a false
+        # narrowing that eliminates the true variant is unrecoverable and corrupts every
+        # downstream derived feature and search world, so the conflict path never widens.
+        self._variant_pin_conflicts: dict[str, int] = {}
 
     @classmethod
     def from_events(
@@ -382,8 +503,13 @@ class PublicBattleBeliefEngine:
         *,
         format_id: Optional[str] = None,
         set_source: PokemonSetSource | None = None,
+        item_belief_narrowing: bool = False,
     ) -> "PublicBattleBeliefEngine":
-        engine = cls(format_id=format_id, set_source=set_source)
+        engine = cls(
+            format_id=format_id,
+            set_source=set_source,
+            item_belief_narrowing=item_belief_narrowing,
+        )
         for event in events:
             engine.ingest_event(event)
         return engine
@@ -398,6 +524,7 @@ class PublicBattleBeliefEngine:
         secondary = _event_value(event, "secondary")
         raw_line = _event_value(event, "raw_line")
         self._event_count += 1
+        self._track_trick_pairing(event_type, raw_line)
 
         if event_type not in {"switch", "drag", "replace"}:
             self._resolve_pending_switches_for_event(event)
@@ -506,6 +633,11 @@ class PublicBattleBeliefEngine:
                     # max-entropy fallback (full pool, uncertainty 1.0) and wiping a hard-won endgame
                     # read for the rest of the game. It spends none of the mon's own PP either.
                     return
+                # Everything that reaches here without ``sleep_talk_called`` is a move the
+                # PLAYER chose: called moves, locked continuations and Struggle have all
+                # returned above. That is exactly the set the Choice lock constrains.
+                if not sleep_talk_called:
+                    belief = self._note_choice_lock_selection(belief, move_id)
                 # A Sleep-Talk-called move spends none of the callee's PP (the Sleep Talk |move| line
                 # already charged the caller); everything else that reaches here charges normally.
                 if not sleep_talk_called:
@@ -731,6 +863,24 @@ class PublicBattleBeliefEngine:
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
+            # Trace names the TRACED mon's ability on the TRACER's line; redirect to the
+            # ``[of]`` mon, and record nothing at all when it is absent. See _trace_copy_source.
+            is_trace, traced_ident = _trace_copy_source(raw_line)
+            if is_trace:
+                traced_slot = _slot_from_ident(traced_ident) if traced_ident else None
+                if not traced_slot:
+                    return
+                target_slot, target_ident = traced_slot, traced_ident
+                traced_belief = self._target_belief(target_slot, target_ident)
+                # Trace copies whatever the target is CURRENTLY running, which for a transformed
+                # mon is its copy target's ability, not its own. Recording it as a certain reveal
+                # writes a fact the mon cannot have -- a Ditto transformed into Claydol yields
+                # `revealed_ability=Levitate` on Ditto, whose only pool ability is Limber, and the
+                # set collapses to the inconsistent fallback. It widens rather than dropping the
+                # true variant, so it is safe, but it is a wrong and sticky fact. The engine
+                # already tracks the flag, so simply decline the reveal.
+                if traced_belief is not None and traced_belief.transformed:
+                    return
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
                 self._replace_belief(
@@ -761,7 +911,8 @@ class PublicBattleBeliefEngine:
                         ),
                     ),
                 }
-                if raw_line and "[from] move: Trick" in raw_line:
+                tricked = bool(raw_line) and "[from] move: Trick" in raw_line
+                if tricked:
                     changes["item_mutated"] = True
                     # The mon RECEIVED an item: whatever its removal history, it
                     # now publicly holds one that is not the sampled assignment.
@@ -781,6 +932,83 @@ class PublicBattleBeliefEngine:
                     changes["item_removed"] = False
                     changes["current_public_item"] = None
                 self._replace_belief(belief, **changes)
+                if tricked:
+                    # ... and the item it names is the PARTNER's original assignment.
+                    self._record_tricked_partner_original_item(
+                        subject_slot=target_slot, item=str(primary), raw_line=raw_line
+                    )
+
+    def _track_trick_pairing(self, event_type: Optional[str], raw_line: Optional[str]) -> None:
+        """Latch ``|-activate|<source>|move: Trick|[of] <target>`` for the ``-item`` lines it precedes.
+
+        trick.onHit emits the ``-activate`` first and then, contiguously, one ``-item`` or
+        ``-enditem`` line per participant, so the pairing is cleared by the first event that is
+        neither. Nothing else can consume a stale pairing, and a Trick whose ``-activate`` never
+        arrived leaves ``_pending_trick`` None — the redirect then records nothing.
+        """
+
+        if event_type not in {"-item", "-enditem"}:
+            self._pending_trick = None
+        if event_type != "-activate" or not raw_line:
+            return
+        if not _TRICK_EFFECT.search(raw_line):
+            return
+        fields = raw_line.split("|")
+        source_ident = fields[2].strip() if len(fields) > 2 else ""
+        of_match = re.search(r"\[of\] ([^|\]]+)", raw_line)
+        target_ident = of_match.group(1).strip() if of_match else ""
+        source_slot = _slot_from_ident(source_ident)
+        target_slot = _slot_from_ident(target_ident)
+        if not source_slot or not target_slot or source_slot == target_slot:
+            return
+        self._pending_trick = _PendingTrick(
+            source_slot=source_slot,
+            source_ident=source_ident,
+            source_original_known=self._holds_own_assigned_item(source_slot),
+            target_slot=target_slot,
+            target_ident=target_ident,
+            target_original_known=self._holds_own_assigned_item(target_slot),
+        )
+
+    def _holds_own_assigned_item(self, showdown_slot: str) -> bool:
+        belief = self._active_belief(showdown_slot)
+        return belief is not None and not belief.item_mutated
+
+    def _record_tricked_partner_original_item(
+        self, *, subject_slot: str, item: str, raw_line: Optional[str]
+    ) -> None:
+        """Attribute a Trick ``-item`` line's item to the PARTNER, whose assignment it is.
+
+        See ``_PendingTrick``: the subject is who holds the item now, the partner is who was
+        given it by the generator. With no pairing available, or with a partner that was already
+        carrying somebody else's item, this records nothing — crediting the subject would be the
+        cross-attribution bug rather than a conservative fallback.
+        """
+
+        pending = self._pending_trick
+        if pending is None:
+            return
+        partner_slot, partner_ident, partner_original_known = pending.partner_of(subject_slot)
+        if not partner_slot or not partner_original_known:
+            return
+        partner = self._target_belief(partner_slot, partner_ident)
+        if partner is None or partner.original_public_item:
+            return
+        self._replace_belief(
+            partner,
+            original_public_item=item,
+            evidence=_append_evidence(
+                partner.evidence,
+                BeliefEvidence(
+                    kind="original-item",
+                    detail=(
+                        f"Trick handed {item} to the other side: it is this mon's own "
+                        "assigned item, whatever it holds now."
+                    ),
+                    source_line=raw_line,
+                ),
+            ),
+        )
 
     def _record_item_reveal(self, event: Any) -> None:
         """Record an item reveal that the explicit ``-item`` branch misses.
@@ -824,9 +1052,19 @@ class PublicBattleBeliefEngine:
                 # removal, or a Trick that took the item and returned none — probed:
                 # ``|-enditem|SLOT|ITEM|[silent]|[from] move: Trick``) — a public item
                 # state determinized worlds can express, unlike a live swap.
-                belief = self._replace_belief(
-                    belief, item_mutated=True, item_removed=True, current_public_item=None
-                )
+                mutation: dict[str, Any] = {
+                    "item_mutated": True,
+                    "item_removed": True,
+                    "current_public_item": None,
+                }
+                # Both of these ``-enditem`` surfaces name the SUBJECT's own item (unlike
+                # Trick's ``-item`` lines, which are cross-attributed), so if the mon was
+                # still holding its own assignment the removal states that assignment with
+                # certainty. Recording it keeps the fact that ``item_mutated`` would
+                # otherwise discard: the item is gone, but it is now KNOWN.
+                if not belief.item_mutated and not belief.original_public_item:
+                    mutation["original_public_item"] = item
+                belief = self._replace_belief(belief, **mutation)
             elif "[from] move:" in raw_line:
                 # Hardening (PR #741 review): an -enditem from an UNAUDITED move source
                 # (a pool change to Thief/Covet, ...) is not extended removal semantics —
@@ -878,10 +1116,105 @@ class PublicBattleBeliefEngine:
         twin.resolve_pending_switches_at_boundary()
         return twin.snapshot().for_player(showdown_slot)
 
+    def narrow_candidate_variants(
+        self,
+        key: str,
+        survivors: Sequence[Mapping[str, Any]],
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Restrict ``key``'s candidate variants to ``survivors``. Monotone.
+
+        The narrowing is stored by identity and re-applied every time the set source
+        re-summarizes, so it persists for the rest of the battle. Returns True when the
+        standing pin actually changed.
+
+        Refuses two ways, both of which LEAVE THE STANDING PIN INTACT rather than widening:
+        an empty ``survivors`` (no evidence is not evidence for nothing), and a survivor list
+        disjoint from the standing pin (counted in ``variant_pin_conflicts``). The asymmetry is
+        deliberate: dropping a true variant is unrecoverable, while declining a narrowing only
+        costs precision.
+        """
+
+        del reason  # accepted for call-site readability; conflicts are counted, not attributed
+        incoming = frozenset(variant_identity(variant) for variant in survivors)
+        if not incoming:
+            return False
+        standing = self._variant_pins.get(key)
+        if standing is None:
+            self._variant_pins[key] = incoming
+            return True
+        merged = standing & incoming
+        if not merged:
+            self._variant_pin_conflicts[key] = self._variant_pin_conflicts.get(key, 0) + 1
+            return False
+        if merged == standing:
+            return False
+        self._variant_pins[key] = merged
+        return True
+
+    @property
+    def variant_pin_conflicts(self) -> Mapping[str, int]:
+        """Per-key count of contradicted narrowings — a precision alarm for the producer."""
+
+        return dict(self._variant_pin_conflicts)
+
+    def _apply_variant_pin(
+        self, key: str, summary_fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Filter a summary's variants through ``key``'s standing pin, in place.
+
+        ``uncertainty`` is ``count / species_pool_total`` (see the randbats source), so scaling
+        it by the surviving fraction keeps that denominator implicit and correct. An
+        ``inconsistent`` summary is left alone: its variants are the unconstrained fallback pool
+        with uncertainty forced to 1.0, and narrowing a fallback would manufacture confidence
+        the reveals do not support.
+
+        The ``possible_*`` surfaces are narrowed too, so the snapshot cannot end up internally
+        inconsistent (one surviving variant, five "possible" moves). They are FILTERED, never
+        recomputed: see :func:`_narrowed_possible_values`.
+        """
+
+        pin = self._variant_pins.get(key)
+        variants = summary_fields.get("candidate_variants") or ()
+        if not pin or not variants or summary_fields.get("_inconsistent"):
+            return summary_fields
+        kept = tuple(v for v in variants if variant_identity(v) in pin)
+        if not kept or len(kept) == len(variants):
+            # Empty means the pin and this summary disagree entirely (the producer pinned
+            # against a stale variant list). Keep the unfiltered set: see the refusal
+            # asymmetry in narrow_candidate_variants.
+            if not kept:
+                self._variant_pin_conflicts[key] = self._variant_pin_conflicts.get(key, 0) + 1
+            return summary_fields
+        previous = len(variants)
+        summary_fields["candidate_variants"] = kept
+        summary_fields["candidate_set_count"] = len(kept)
+        prior_uncertainty = summary_fields.get("uncertainty")
+        if isinstance(prior_uncertainty, (int, float)):
+            summary_fields["uncertainty"] = float(prior_uncertainty) * (len(kept) / previous)
+        for field_name, variant_field, plural in (
+            ("possible_abilities", "ability", False),
+            ("possible_items", "item", False),
+            ("possible_moves", "moves", True),
+        ):
+            summary_fields[field_name] = _narrowed_possible_values(
+                summary_fields.get(field_name) or (),
+                variants,
+                kept,
+                variant_field,
+                plural=plural,
+            )
+        return summary_fields
+
     def clone(self) -> "PublicBattleBeliefEngine":
         """Copy only the public-evidence state needed to continue a sampled world."""
 
-        twin = PublicBattleBeliefEngine(format_id=self.format_id, set_source=self.set_source)
+        twin = PublicBattleBeliefEngine(
+            format_id=self.format_id,
+            set_source=self.set_source,
+            item_belief_narrowing=self.item_belief_narrowing,
+        )
         twin._event_count = self._event_count
         twin._sides = copy.deepcopy(self._sides)
         twin._pending_switches = copy.deepcopy(self._pending_switches)
@@ -890,10 +1223,16 @@ class PublicBattleBeliefEngine:
         twin._sleep_clause_holder = dict(self._sleep_clause_holder)
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
         twin._hp_after_actions = dict(self._hp_after_actions)
+        twin._stay_locked_move = dict(self._stay_locked_move)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
         twin._shed_skin_activated_this_turn = set(self._shed_skin_activated_this_turn)
         twin._sleep_cant_pending = set(self._sleep_cant_pending)
         twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
+        twin._pending_trick = self._pending_trick
+        # Narrowings are public evidence like any other reveal: a sampled world that forgot
+        # them would re-admit variants the strikes already excluded.
+        twin._variant_pins = dict(self._variant_pins)
+        twin._variant_pin_conflicts = dict(self._variant_pin_conflicts)
         return twin
 
     def snapshot(self) -> BattleBeliefSnapshot:
@@ -1050,6 +1389,9 @@ class PublicBattleBeliefEngine:
     ) -> RevealedPokemonBelief:
         changes: dict[str, Any] = {"turns_active": 0}
         self._hp_after_actions[belief.key] = _hp_fraction_from_condition(condition)
+        # ``choiceband.onStart`` removes the ``choicelock`` volatile, so entering the field
+        # clears the lock and the next move selected becomes the new locked one.
+        self._stay_locked_move.pop(belief.key, None)
         condition_status = _status_token_from_condition(condition)
         if belief.status_on_exit and condition_status is None:
             # Natural Cure elimination: carried a status out, returned clean, and no public
@@ -1121,6 +1463,54 @@ class PublicBattleBeliefEngine:
                 belief.evidence,
                 BeliefEvidence(kind="ruled-out-item", detail=detail, source_line=None),
             ),
+        )
+
+    def _note_choice_lock_selection(
+        self, belief: RevealedPokemonBelief, move_id: str
+    ) -> RevealedPokemonBelief:
+        """Two different FREELY SELECTED moves in one stay rule Choice Band out.
+
+        ``data/conditions.ts`` choicelock (gen3 inherits it — ``data/mods/gen3`` overrides
+        neither the volatile nor the item) records ``activeMove.id`` in ``onStart`` and fails
+        any later move whose id differs in ``onBeforeMove``. ``choiceband.onModifyMove`` adds
+        the volatile on the holder's first move and ``choiceband.onStart`` removes it on
+        switch-in, so the lock spans exactly one stay on the field. A mon seen selecting two
+        different moves without leaving therefore cannot have been holding one.
+
+        The negative direction only, and the same evidence class as the Leftovers / Lum /
+        pinch-berry non-proc pruning it joins: certain, free, and derived from public
+        ``|move|`` lines with no damage analysis and so no precision gate. Choice Band is the
+        pool's second most common item (160 variants, behind Leftovers' 1371), so this is the
+        only non-proc rule that moves a large share of the pool.
+
+        "Freely selected" is what the caller has already established: called moves, locked
+        continuations (Solar Beam's release — the pool's only two-turn move), Struggle and
+        moves used while transformed have all returned before this point, and Sleep Talk's
+        callee is excluded by the caller because Sleep Talk chose it, not the player. The one
+        remaining way a differing move could reach the protocol under an active lock is
+        choicelock's own failure line (``|move|<mon>|<other>|[still]`` + ``|-fail|``), and it
+        is unreachable here: ``onDisableMove`` removes the other moves from the request, so
+        neither a bot nor a ladder client can select one.
+
+        The bookkeeping runs in every switch state; only the CONCLUSION is gated, so a
+        switch-off engine is byte-identical. Frozen once the held item is mutated, exactly
+        like the rest of the family: after a Trick the mon is locked (or not) by somebody
+        else's item, which says nothing about its own assignment.
+        """
+
+        locked = self._stay_locked_move.get(belief.key)
+        if locked is None:
+            self._stay_locked_move[belief.key] = move_id
+            return belief
+        if locked == move_id or not self.item_belief_narrowing:
+            return belief
+        if belief.item_mutated or belief.revealed_item:
+            return belief
+        return self._rule_out_items(
+            belief,
+            ("choiceband",),
+            "Selected two different moves in one stay on the field; the Choice Band lock "
+            "forbids that, so Choice Band variants were removed.",
         )
 
     def _sweep_end_of_turn_non_procs(self) -> None:
@@ -1200,6 +1590,29 @@ class PublicBattleBeliefEngine:
             )
             return
 
+    def _variant_matching_item(self, belief: RevealedPokemonBelief) -> Optional[str]:
+        """The item key variant matching may use: the GENERATOR's assignment, never a swapped one.
+
+        Un-mutated, ``revealed_item`` IS that assignment (a consumed berry still identifies it).
+        Post-mutation (Trick / Knock Off) the current item is somebody else's, so the channel is
+        suppressed — that part is unconditional and unchanged. What the mutation does NOT
+        justify discarding is the ORIGINAL assignment when the same protocol line named it, and
+        ``original_public_item`` is exactly that fact.
+
+        Gated on ``item_belief_narrowing`` because honouring it narrows candidate sets that
+        previously stayed wide: 36% of gen3 item reveals pin a single variant outright, which
+        moves NUMERIC_CANDIDATE_SET_COUNT / NUMERIC_UNCERTAINTY on every schema. Note the
+        RECEIVED item is never a key in either state — a Choice Band Tricked onto a mon that
+        could legitimately carry one must not narrow it — because it lands in ``revealed_item``
+        while ``original_public_item`` stays with the mon the generator gave it to.
+        """
+
+        if not belief.item_mutated:
+            return belief.revealed_item
+        if self.item_belief_narrowing:
+            return belief.original_public_item
+        return None
+
     def _with_set_summary(self, belief: RevealedPokemonBelief) -> RevealedPokemonBelief:
         if self.set_source is None:
             return belief
@@ -1209,10 +1622,7 @@ class PublicBattleBeliefEngine:
                 species=belief.species,
                 revealed_moves=belief.revealed_moves,
                 revealed_ability=belief.revealed_ability,
-                # Post-mutation (Trick/Knock Off) the CURRENT item is not the generator's
-                # assignment: exclude it from variant matching but keep the frozen pre-swap
-                # rule-outs, which still constrain the original set (correction #15).
-                revealed_item=None if belief.item_mutated else belief.revealed_item,
+                revealed_item=self._variant_matching_item(belief),
                 ruled_out_abilities=belief.ruled_out_abilities,
                 ruled_out_items=belief.ruled_out_items,
             )
@@ -1234,15 +1644,23 @@ class PublicBattleBeliefEngine:
                 )
         if summary is None:
             return belief
+        fields: dict[str, Any] = {
+            "candidate_set_count": summary.candidate_count,
+            "uncertainty": summary.uncertainty,
+            "candidate_variants": summary.candidate_variants,
+            "possible_abilities": summary.possible_abilities,
+            "possible_items": summary.possible_items,
+            "possible_moves": summary.possible_moves,
+            "_inconsistent": summary.inconsistent,
+        }
+        # Re-applied on EVERY summarize (each reveal re-derives the set), which is what makes a
+        # narrowing persist for the rest of the battle rather than being undone by the next reveal.
+        fields = self._apply_variant_pin(belief_key(belief.showdown_slot, belief.species), fields)
+        fields.pop("_inconsistent", None)
         return replace(
             belief,
-            candidate_set_count=summary.candidate_count,
-            uncertainty=summary.uncertainty,
-            possible_abilities=summary.possible_abilities,
-            possible_items=summary.possible_items,
-            possible_moves=summary.possible_moves,
-            candidate_variants=summary.candidate_variants,
             source_metadata=summary.source_metadata,
+            **fields,
         )
 
     def _record_raw_ability_reveal(self, event: Any) -> None:
@@ -1398,6 +1816,45 @@ class _PendingSwitch:
     species: str
 
 
+@dataclass(frozen=True)
+class _PendingTrick:
+    """The Trick pairing published by ``|-activate|<source>|move: Trick|[of] <target>``.
+
+    ``data/moves.ts`` trick.onHit takes ``yourItem`` from the target and ``myItem`` from the
+    source, then announces the SWAP::
+
+        |-item|<target>|<myItem>|[from] move: Trick      <- the SOURCE's original assignment
+        |-item|<source>|<yourItem>|[from] move: Trick    <- the TARGET's original assignment
+
+    Both lines are therefore cross-attributed with respect to the ORIGINAL item, exactly like
+    the Trace ``-ability`` line (see ``_trace_copy_source``): the subject is who holds it NOW,
+    the mon it identifies is the partner. Unlike Trace the ``-item`` lines carry no ``[of]``
+    tag of their own, so the pairing has to come from the ``-activate`` line that always
+    precedes them; with no pairing in hand the redirect records nothing rather than crediting
+    the subject, which is precisely the bug the redirect exists to avoid.
+
+    ``*_original_known`` snapshots, at ``-activate`` time, whether that participant's held item
+    was still its own generator assignment. A mon carrying an item from an EARLIER Trick names
+    that item on the swap line, not the generator's, so its partner learns nothing.
+    """
+
+    source_slot: str
+    source_ident: Optional[str]
+    source_original_known: bool
+    target_slot: str
+    target_ident: Optional[str]
+    target_original_known: bool
+
+    def partner_of(self, subject_slot: str) -> tuple[Optional[str], Optional[str], bool]:
+        """``(slot, ident, original_known)`` of the mon whose item a line ON ``subject_slot`` names."""
+
+        if subject_slot == self.source_slot:
+            return self.target_slot, self.target_ident, self.target_original_known
+        if subject_slot == self.target_slot:
+            return self.source_slot, self.source_ident, self.source_original_known
+        return None, None, False
+
+
 def belief_key(showdown_slot: str, species: str) -> str:
     return f"{showdown_slot}:{_normalize_species(species)}"
 
@@ -1500,6 +1957,10 @@ _CALLER_MOVES = frozenset(
 # gen3 ``move.sleepUsable`` — the only moves a sleeping mon may execute (its ``|cant|…|slp`` still
 # fires first). Selecting one accrues ``skippedTime`` (see ``sleep_skipped_turns``).
 _SLEEP_USABLE_MOVES = frozenset({"sleeptalk", "snore"})
+
+# ``move: Trick`` on an ``-activate`` line, refusing the later-gen ``Trick-or-Treat`` and
+# ``Trick Room`` prefixes that a plain substring test would swallow.
+_TRICK_EFFECT = re.compile(r"move: Trick(?![\w-])")
 
 
 _RESIDUAL_HP_TAGS = (
@@ -1627,6 +2088,34 @@ def _append_evidence(
     return (*values, evidence)
 
 
+def _trace_copy_source(raw_line: str) -> tuple[bool, Optional[str]]:
+    """``(is_a_Trace_copy, ident of the mon COPIED FROM)`` for an ``-ability`` line.
+
+    ``sim/pokemon.ts setAbility`` emits
+    ``|-ability|<tracer>|<COPIED>|<tracer's own ability>|[from] ability: Trace|[of] <traced>``,
+    so the line's SUBJECT is the tracer while the ability named belongs to the TRACED mon.
+    Attributing it to the subject is wrong in both directions at once: it corrupts the tracer's
+    candidate set with an ability it cannot have, and it throws away a CERTAIN reveal that
+    would narrow the traced mon.
+
+    The corruption is sticky. Trace re-fires on every switch-in and the conflicting-evidence
+    guard keeps the FIRST claim, so one early copy persists for the rest of the battle — the
+    live case being a Gardevoir left holding ``levitate`` and silently granted Spikes immunity.
+
+    ``(True, None)`` means a Trace line whose ``[of]`` is absent: the copy cannot be attributed
+    to anyone, and falling back to the subject is precisely the bug, so callers record nothing.
+
+    Reachability: Trace is live in the gen3 randbats pool (Gardevoir, Porygon2). Both carry
+    Trace on every variant, so the tracer's OWN ability — the third field on the line — is
+    deliberately not recorded anywhere: it could never narrow their candidate sets.
+    """
+
+    if not re.search(r"\[from\] ability: Trace\b", raw_line or ""):
+        return False, None
+    traced = re.search(r"\[of\] ([^|\]]+)", raw_line or "")
+    return True, traced.group(1).strip() if traced else None
+
+
 def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[str]]:
     event_type = _event_value(event, "event_type")
     actor_ident = _event_value(event, "actor_ident")
@@ -1634,6 +2123,9 @@ def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[s
     primary = _event_value(event, "primary")
     raw_line = _event_value(event, "raw_line") or ""
     if event_type in {"-ability", "ability"} and primary:
+        is_trace, traced_ident = _trace_copy_source(raw_line)
+        if is_trace:
+            return traced_ident, (primary if traced_ident else None)
         return target_ident, primary
     if event_type == "-start" and primary and primary.strip().lower().startswith("ability:"):
         # ``|-start|<holder>|ability: X`` (Flash Fire activation): the holder

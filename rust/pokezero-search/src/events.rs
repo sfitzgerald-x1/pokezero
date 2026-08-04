@@ -232,18 +232,101 @@ fn active_status_transition(
 }
 
 impl RenderedEvents {
-    fn mark_lossy(&mut self, reason: &'static str) {
+    // `&str`, not `&'static str`. Both of these immediately `.to_string()`, so
+    // the 'static bound was incidental rather than a deliberate guard against
+    // unbounded reason cardinality -- and nothing downstream is a metrics sink:
+    // every aggregator over `world_failure_reasons` is a plain Counter/dict
+    // merge with no top-N, no label cap and no Prometheus/wandb export. Widened
+    // so the attract refusal can name the JOINT set of live predicates, which a
+    // fixed table of 31 boolean combinations could not do readably.
+    fn mark_lossy(&mut self, reason: &str) {
         self.lossy.push(reason.to_string());
     }
 
-    fn mark_attribution_unsafe(&mut self, reason: &'static str) {
+    fn mark_attribution_unsafe(&mut self, reason: &str) {
         self.mark_lossy(reason);
         self.attribution_unsafe.push(reason.to_string());
+    }
+
+    /// Refuse with a DIAGNOSTIC sub-case while keeping the `lossy` tag stable.
+    ///
+    /// The two channels have different consumers and different contracts.
+    /// `attribution_unsafe` is what `reject_attribution_unsafe` joins into the
+    /// error the Python seam keys `world_failure_reasons` by -- the probe's
+    /// measurement channel, where splitting a class costs nothing.
+    ///
+    /// `lossy` is a CONTRACT. `scripts/engine_transition_differential.py` matches
+    /// it exactly (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide whether a
+    /// branch is still usable, and `tests/test_matcher_tolerance_promotion.py`
+    /// pins that. Splitting the lossy tag would silently change which branches
+    /// the differential accepts -- and that file's bytes are pinned by the
+    /// certification lifecycle, so it cannot be edited to follow along without
+    /// its own attestation.
+    ///
+    /// So: sub-case to the measurement channel, stable tag to the contract.
+    /// `&'static str` on BOTH arguments is deliberate, not an oversight beside
+    /// the `&str` siblings above: these are contract labels and must stay
+    /// literals. Widening them would let a caller pass a formatted string and
+    /// mint an unbounded set of `world_failure_reasons` keys.
+    fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        // The two arguments must name the SAME class, or this helper quietly
+        // becomes the bug it exists to prevent: a branch whose contract tag and
+        // measurement reason disagree changes which branches the differential
+        // accepts, with nothing to notice. Nothing else relates them.
+        //
+        // A plain `assert!`, NOT `debug_assert!`: the campaign wheels are built
+        // `maturin build --release` (scripts/build_search_crate_engine.sh,
+        // build_search_crate_model.sh), where debug assertions compile out --
+        // so a debug_assert would guard only `cargo test`, which is the one
+        // place the single call site is already correct by construction. The
+        // refusal path is rare, so one `starts_with` costs nothing on the
+        // artifact we actually ship.
+        assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
+        self.mark_lossy(lossy_tag);
+        self.attribution_unsafe.push(subcase.to_string());
     }
 
     pub fn is_attribution_unsafe(&self) -> bool {
         !self.attribution_unsafe.is_empty()
     }
+}
+
+/// Canonical `world_failure_reasons` label for a refused event stream.
+///
+/// This is a MEASUREMENT KEY, not prose: the Python seam counts it verbatim
+/// into `world_failure_reasons`, so two refusals with the same content must
+/// produce the same bytes. Two rules earn that:
+///
+/// **Dedupe** — both sides refusing for the SAME reason is the common case, and
+/// the duplicate copy is pure length with no information in it.
+///
+/// **Sort** — push order here is RENDER order, which is SPEED order. Without a
+/// sort the identical pair `{miss, cannot_act}` keys as `...:miss,...:cannot_act`
+/// or `...:cannot_act,...:miss` depending only on who moved first, splitting one
+/// measurement across two buckets and halving each count. The order WITHIN a
+/// slug was already fixed for exactly this reason (see the attract sub-case
+/// emitter below); the order BETWEEN slugs was not, which left the bug
+/// half-fixed — found by independent review on #1030.
+///
+/// Length is bounded at the seam rather than here, by `_bounded_reason_detail`
+/// in `src/pokezero/engine_search.py`. That truncation is non-aliasing, so a
+/// slug set that does overflow can never masquerade as a different one.
+///
+/// Split out of [`reject_attribution_unsafe`] so it is testable without a
+/// Python interpreter: the label is the thing under test, the `PyErr` wrapper
+/// is not.
+pub fn attribution_unsafe_label(rendered: &RenderedEvents) -> String {
+    let mut reasons: Vec<&str> = Vec::with_capacity(rendered.attribution_unsafe.len());
+    for reason in &rendered.attribution_unsafe {
+        if !reasons.contains(&reason.as_str()) {
+            reasons.push(reason);
+        }
+    }
+    reasons.sort_unstable();
+    reasons.join(",")
 }
 
 /// Refuse an event stream whose action attribution is not observable from the
@@ -255,7 +338,7 @@ pub fn reject_attribution_unsafe(rendered: &RenderedEvents, lane: &str) -> PyRes
     if rendered.is_attribution_unsafe() {
         return Err(PyValueError::new_err(format!(
             "attribution-unsafe renderer branch rejected before {lane}: {}",
-            rendered.attribution_unsafe.join(",")
+            attribution_unsafe_label(rendered)
         )));
     }
     Ok(())
@@ -792,6 +875,9 @@ pub fn render_branch_events(
         seg.first,
         first_mc,
         &seg.first_choice,
+        // The DEFENDER's mutated choice. Sleep Talk's identifier needs it: the
+        // engine gates its 32-roll damage enumeration on the defender's move.
+        &seg.second_choice,
         &instructions[..seg.p1_end],
         branch_on_damage,
         ctx,
@@ -802,6 +888,7 @@ pub fn render_branch_events(
         second_ref,
         second_mc,
         &seg.second_choice,
+        &seg.first_choice,
         &instructions[seg.p1_end..seg.p2_end],
         branch_on_damage,
         ctx,
@@ -903,6 +990,7 @@ fn render_action_phase(
     side: SideReference,
     mc: &MoveChoice,
     mutated_choice: &Choice,
+    defender_choice: &Choice,
     segment: &[Instruction],
     branch_on_damage: bool,
     ctx: &EventContext,
@@ -915,6 +1003,7 @@ fn render_action_phase(
             sim,
             side,
             mutated_choice,
+            defender_choice,
             segment,
             branch_on_damage,
             ctx,
@@ -1448,6 +1537,11 @@ fn render_move_phase(
     sim: &mut Sim<'_>,
     side: SideReference,
     choice: &Choice,
+    // The DEFENDER's mutated choice for this ply. Only Sleep Talk's identifier
+    // consumes it today, but it is threaded generically because the engine's
+    // damage enumeration is a function of BOTH choices, so any future
+    // regeneration needs it for the same reason.
+    defender_choice: &Choice,
     segment: &[Instruction],
     branch_on_damage: bool,
     ctx: &EventContext,
@@ -1527,12 +1621,23 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            match identify_sleep_talk_called(sim.state, side, &called_tail, branch_on_damage) {
-                Some(called_choice) => {
+            let ident = identify_sleep_talk_called(
+                sim.state,
+                side,
+                defender_choice,
+                choice,
+                &called_tail,
+                branch_on_damage,
+            );
+            match ident {
+                SleepTalkIdent::Matched(called_choice) => {
                     render_move_phase(
                         sim,
                         side,
                         &called_choice,
+                        // Same defender for the callee's ply -- it is the same
+                        // ply, one level down.
+                        defender_choice,
                         &called_tail,
                         branch_on_damage,
                         ctx,
@@ -1540,7 +1645,7 @@ fn render_move_phase(
                         Some("Sleep Talk"),
                     );
                 }
-                None => {
+                SleepTalkIdent::NoneMatched | SleepTalkIdent::Ambiguous => {
                     // The called move is not provable from this delta, so its
                     // HP change gets no public action owner. It must still be
                     // DESCRIBED. Emitting nothing left the consumer's running
@@ -1559,7 +1664,15 @@ fn render_move_phase(
                     // consumer's half by emitting the generic tag it already
                     // knows how to read
                     // (reports/c54_sleeptalk_render_contract_mismatch.json).
-                    out.mark_attribution_unsafe("sleeptalk_called_unidentified");
+                    // Name WHICH cause. `ambiguous` can only be fixed by the
+                    // engine recording the called move; `none_matched` means the
+                    // replay diverges from what the engine did and may be fixable
+                    // in the renderer. Splitting them is what decides that, and
+                    // this class is 48.9% of all world failures.
+                    out.mark_attribution_unsafe_subcase(
+                        SLEEPTALK_LOSSY_TAG,
+                        sleeptalk_subcase_slug(&ident),
+                    );
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
                     // whatever HP movement follows. The previous version applied
@@ -1874,7 +1987,68 @@ fn render_move_phase(
             || attacker_paralyzed
             || !move_could_act
         {
-            out.mark_attribution_unsafe("attract_empty_tail_ambiguous");
+            // Name WHICH ambiguity refused, not just that one did. The five
+            // predicates are function-local and were discarded at the refusal, so
+            // no artifact recorded the split and no script could recover it --
+            // which left the only available plan "patch the engine and hope".
+            //
+            // The split decides the fix, and the two answers are far apart. If
+            // `paralyzed` dominates, this is downgradeable to lossy in a few
+            // lines: both outcomes are "no move used, no reveal, no PP", Attract
+            // dominates 4:1 (50% vs 12.5%), and that is a WIDER margin than the
+            // par-over-miss guess this renderer already ships. If the noop/miss
+            // arms dominate it is not downgradeable at any price -- those erase a
+            // `|move|` reveal, and the miss arm also suppresses a PP decrement the
+            // fold tracks -- and only then is an engine marker instruction worth
+            // its patch-stack and digest cost.
+            //
+            // Emit EVERY live predicate, not the first match. They are not
+            // mutually exclusive, and a first-match bucket answers the wrong
+            // question in the expensive direction: `attacker_paralyzed` is a
+            // property of the ATTACKER while `miss`/`noop` are properties of the
+            // MOVE, so they co-occur freely, and testing paralysis first hides
+            // the non-downgradeable arms inside the one bucket that looks safe
+            // to downgrade.
+            //
+            // Measured on the fork masses (`ATTRACT_IMMOBILIZE_CHANCE` 1/2, then
+            // the 0.25 paralysis roll on the surviving half):
+            //   clean paralyzed-only      attract .500 / par .125          -> 80/20
+            //   paralyzed + Thunder       + miss .1125                     -> 15.3% miss
+            //   paralyzed + immune target + noop .375                      -> 37.5% noop
+            // The contamination is unrecoverable once collapsed, so a
+            // `paralyzed`-dominant read would say "ship the lossy downgrade"
+            // while a third of that mass is the case that erases a `|move|`
+            // reveal. Emitting the joint set keeps the probe able to answer its
+            // own question, and the realized cardinality is small (~8).
+            //
+            // Order within the slug is FIXED, not predicate-evaluation order, so
+            // the key is stable across runs and aggregators can sum it.
+            let mut parts: Vec<&str> = Vec::new();
+            if attacker_paralyzed {
+                parts.push("paralyzed");
+            }
+            if empty_tail_can_be_accuracy_miss {
+                parts.push("miss");
+            }
+            if deterministic_noop {
+                parts.push("noop");
+            }
+            if volatile_empty_tail_ambiguous {
+                parts.push("volatile");
+            }
+            if !move_could_act {
+                parts.push("cannot_act");
+            }
+            // Unreachable: the enclosing `if` fired, so at least one predicate is
+            // live. Named rather than silently empty so a future edit that breaks
+            // that correspondence is visible in the measurement.
+            if parts.is_empty() {
+                parts.push("unclassified");
+            }
+            out.mark_attribution_unsafe(&format!(
+                "attract_empty_tail_ambiguous:{}",
+                parts.join("+")
+            ));
             return;
         }
         // The action is uniquely immobilized, but the engine does not retain
@@ -2443,17 +2617,74 @@ fn render_move_phase(
     }
 }
 
+/// Why `identify_sleep_talk_called` could not name the called move.
+///
+/// The two causes need OPPOSITE fixes and the single `None` hid which one was
+/// happening. `Ambiguous` means two candidates regenerate byte-identical tails,
+/// which no amount of renderer cleverness can separate -- only the engine
+/// recording which move it actually called can. `NoneMatched` means the
+/// regeneration reproduced NO candidate's tail, which is a different defect: the
+/// replay diverges from what the engine really did, and it is potentially fixable
+/// without touching the engine.
+///
+/// `sleeptalk_called_unidentified` is 48.9% of world failures on the era-55
+/// probe -- larger than every other class combined -- so which of these two it
+/// actually is decides the whole next phase of work.
+enum SleepTalkIdent {
+    Matched(Box<Choice>),
+    /// No candidate regenerated the observed tail.
+    NoneMatched,
+    /// Two or more candidates regenerate the SAME tail.
+    Ambiguous,
+}
+
+/// The CONTRACT tag. `engine_transition_differential.py` matches this exactly
+/// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, so it
+/// must never carry a sub-case suffix. Named once so the two call sites cannot
+/// drift apart.
+const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
+
+/// Measurement label for a failed Sleep Talk identification.
+///
+/// Split out of the render path so the ident-to-label mapping is testable
+/// WITHOUT needing an engine state that reaches each variant. That matters:
+/// independent review showed the previous end-to-end `none_matched` fixture only
+/// reached that arm on a STALE vendored engine missing patch C87
+/// (`poke-engine-gen3-sleeptalk-crit-arm.patch`), and on a faithful build the
+/// arm is not reachable at all on the gen3 randbats set pool. Pinning the
+/// mapping here keeps the label honest even for a variant production may never
+/// produce -- an unreachable arm must still be labelled correctly if the engine
+/// ever regresses into producing it.
+fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
+    match ident {
+        SleepTalkIdent::Ambiguous => "sleeptalk_called_unidentified:ambiguous",
+        SleepTalkIdent::NoneMatched => "sleeptalk_called_unidentified:none_matched",
+        // Exhaustive on purpose. A `_` arm would send a future variant into
+        // `none_matched` with no compiler error -- a silent MIS-DIAGNOSIS of the
+        // largest failure class rather than a crash. `Matched` cannot reach here:
+        // the caller destructures it in the success arm.
+        SleepTalkIdent::Matched(_) => {
+            unreachable!("Matched is handled by the identifying arm above")
+        }
+    }
+}
+
 /// Identify which move Sleep Talk called by re-generating each sleep-talk
 /// candidate's instructions from the current (prelude-applied) state and
-/// matching the branch tail exactly. Returns the MUTATED candidate choice
-/// (the engine's own modification pass applied) or None when zero or
-/// multiple candidates match (ambiguous delta — documented insufficiency).
+/// matching the branch tail exactly.
+///
+/// Returns [`SleepTalkIdent::Matched`] with the MUTATED candidate choice (the
+/// engine's own modification pass applied), or one of the two failure variants.
+/// Those two used to be a single `None`, which conflated causes that need
+/// opposite fixes -- see [`SleepTalkIdent`].
 fn identify_sleep_talk_called(
     state: &mut State,
     side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
     tail: &[Instruction],
     branch_on_damage: bool,
-) -> Option<Choice> {
+) -> SleepTalkIdent {
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -2465,11 +2696,43 @@ fn identify_sleep_talk_called(
     for candidate in candidates {
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
+        // Inherit the OUTER Sleep Talk choice's move order, exactly as the engine
+        // does for the callee (`generate_instructions.rs`:
+        // `new_choice.first_move = choice.first_move`). The move table's default
+        // is `true` (`choices.rs`), so a second-moving Sleep Talk regenerated its
+        // callee as if it had moved first.
+        //
+        // NOT pinned by a test -- reverting this line alone leaves the suite
+        // green -- but it is NOT a no-op and NOT an accident, and the reason is
+        // worth keeping so nobody deletes it as dead weight.
+        //
+        // It does flip the value: the candidate's move-table default is `true`,
+        // and `outer_choice.first_move` is `false` whenever Sleep Talk moves
+        // second, which four crate tests reach. It changes no observable outcome
+        // for a STRUCTURAL reason: C31's enumeration exists to preserve rolls
+        // because a PENDING HP-reading move will read HP later in the turn. When
+        // the sleeper moves second the defender's Substitute/Flail/Reversal has
+        // already resolved, so nothing is pending, the gate's purpose is moot,
+        // and its preconditions cannot produce a differing tail.
+        //
+        // Keep it anyway: it mirrors the engine one-for-one, and the two other
+        // `!choice.first_move` sites it makes reachable inside the probe (drag
+        // and force-switch early returns) are blocked only because they stop the
+        // attacker's move executing, leaving no callee tail to identify. That is
+        // a structural argument about today's engine, not an invariant.
+        choice.first_move = outer_choice.first_move;
         let mut generated: Vec<StateInstructions> = Vec::with_capacity(4);
         generate_instructions_from_move(
             state,
             &mut choice,
-            &Choice::default(),
+            // The REAL defender choice, not `Choice::default()`. The engine gates
+            // its 32-roll damage enumeration on
+            // `pending_hp_reading_move(defender_choice)` -- {SUBSTITUTE, FLAIL,
+            // REVERSAL} -- so regenerating against a `NONE` move produced the
+            // ordinary 2-branch max/crit collapse while the engine had emitted one
+            // of 32 rolls. Nothing matched, the callee was unidentifiable, and the
+            // whole world was refused as `sleeptalk_called_unidentified:none_matched`.
+            defender_choice,
             side,
             StateInstructions::default(),
             &mut generated,
@@ -2480,12 +2743,15 @@ fn identify_sleep_talk_called(
             .any(|branch| branch.instruction_list.as_slice() == tail)
         {
             if matched.is_some() {
-                return None; // ambiguous
+                return SleepTalkIdent::Ambiguous;
             }
             matched = Some(choice);
         }
     }
-    matched
+    match matched {
+        Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
+        None => SleepTalkIdent::NoneMatched,
+    }
 }
 
 /// Expected collapsed damage values (regular, crit) for the attacking side's
@@ -2803,8 +3069,31 @@ fn render_residual_instruction(
 /// side is the k-th firing damage phase for that side. The plan below predicts
 /// which phases fire using PRESENCE predicates only — never damage formulas —
 /// and is used ONLY when its predicted counts match the counts actually emitted.
-/// On any mismatch the side falls back to the generic `residual` tag, which is
-/// loud (it diverges) rather than confidently wrong.
+/// On any mismatch the side falls back to the per-instruction cause helpers,
+/// and BOTH of them guess from fixed-priority state rather than from position.
+/// That guessing is the H.1 mechanism, and it bites on both sides: of the 30
+/// H.1 rows in `docs/engine_divergence_ledger_20260728.md`, 21 are damage-side
+/// (`sandstorm|psn`, `partialtrap|sandstorm`, `leechseed|psn`, `sandstorm|brn`)
+/// and 9 are heal-side.
+///
+/// The two helpers share no predicate — damage goes own-status, own-LeechSeed,
+/// weather, partialtrap; heal goes Wish-by-instruction-lookahead,
+/// OPPONENT-LeechSeed, own Leftovers, and only the heal side looks ahead at
+/// all. The difference that matters FOR THIS HAZARD is the last resort, and
+/// only when no predicate matches: `residual_damage_cause` ends in a generic
+/// `residual` at its terminal that diverges loudly, while `residual_heal_cause`
+/// terminates in a specific `item: Leftovers` and so is confidently wrong even
+/// in the fall-through case. A narrow extra hazard on the heal side, not the
+/// whole mechanism.
+///
+/// The predicates below must therefore mirror the engine's gates AS THEY WILL
+/// EVALUATE WHEN THE TICK FIRES — which is NOT the same as transcribing them.
+/// This plan is built on the PRE-RESIDUAL state, while the engine's gates run
+/// after earlier phases have already moved HP. For an HP-dependent gate the two
+/// disagree, and copying it across is a measured 5-row regression: see the NOTE
+/// on the Leftovers slot below. A slot booked that the engine never fills is
+/// not a harmless over-count — it silently corrupts the tag on a sibling
+/// heal — but the cure is to model the phase order, not to copy the gate.
 ///
 /// TWO of those entries are cross-side, which is why this plan has to know the
 /// engine's speed order and is not simply a per-side constant:
@@ -2910,6 +3199,17 @@ impl ResidualPlan {
             if s.wish.0 == 1 {
                 plan.heal[i].push("move: Wish".to_string());
             }
+            // NOTE: it is tempting to add `&& active.hp < active.maxhp` here,
+            // mirroring the engine's gate at `gen3/items.rs:352`. Do not. The
+            // plan is built on the PRE-RESIDUAL state, and Leftovers fires at
+            // phase 10.4 — after weather chip at phase 8 — so a mon at full HP
+            // when the plan is built is routinely below max by the time the
+            // tick actually fires, and the engine does emit it. Measured: that
+            // guard alone costs 5 rows on seeds 19000000-19000199: matched
+            // 15187 -> 15182 AND diverged 36 -> 41 (component_missing_in_engine
+            // :psn 2 -> 7). The rows became divergences, not skips. Same trap as the drain slot documented in
+            // `a_near_full_hp_seeder_still_over_books_the_drain_slot`: these
+            // predicates cannot use HP without modelling the phase order.
             if active.item == Items::LEFTOVERS {
                 plan.heal[i].push("item: Leftovers".to_string());
             }
@@ -3088,9 +3388,16 @@ fn residual_heal_cause(
         SideReference::SideOne => &state.side_two,
         SideReference::SideTwo => &state.side_one,
     };
+    // Liquid Ooze reverses the drain, so a seeded opponent carrying it produces
+    // no drain heal on this side at all — any positive heal here is something
+    // else. The plan handles this shape now, but this fallback is still reached
+    // whenever the plan fails reconciliation for an unrelated reason, and
+    // without the guard it re-arms exactly the H.1 mislabel the plan exists to
+    // prevent.
     if opponent
         .volatile_statuses
         .contains(&PokemonVolatileStatus::LEECHSEED)
+        && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
     {
         return "Leech Seed".to_string();
     }
@@ -3329,6 +3636,53 @@ pub fn branch_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin WHICH cause maps to which label, without needing an engine state
+    /// that reaches each variant.
+    ///
+    /// Independent review found this mapping was completely unpinned: swapping
+    /// the two literals left the entire crate suite green. The obvious fix --
+    /// an end-to-end fixture per arm -- turned out to be impossible for
+    /// `none_matched`: the fixture that appeared to reach it only did so on a
+    /// STALE vendored engine missing `poke-engine-gen3-sleeptalk-crit-arm.patch`
+    /// (C87). On a faithful build that patch makes the callee's regenerated tail
+    /// match, so the arm is not reachable at all on the gen3 randbats set pool
+    /// (measured: 7,560 state combinations across all 70 Sleep Talk variants,
+    /// zero `none_matched`).
+    ///
+    /// An unreachable arm still has to be labelled correctly if the engine ever
+    /// regresses into producing it -- and mislabelling is expensive in a
+    /// specific direction, because `ambiguous` is the arm fixable ONLY by an
+    /// engine change. So pin the mapping directly rather than pinning nothing.
+    #[test]
+    fn sleeptalk_subcases_map_to_their_own_labels() {
+        assert_eq!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
+            "sleeptalk_called_unidentified:ambiguous"
+        );
+        assert_eq!(
+            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched),
+            "sleeptalk_called_unidentified:none_matched"
+        );
+    }
+
+    /// Both labels must stay inside the contract tag's namespace, or
+    /// `mark_attribution_unsafe_subcase`'s assertion trips in production and the
+    /// differential starts seeing a tag it does not recognise.
+    #[test]
+    fn every_sleeptalk_subcase_belongs_to_the_lossy_contract_tag() {
+        for ident in [SleepTalkIdent::Ambiguous, SleepTalkIdent::NoneMatched] {
+            let slug = sleeptalk_subcase_slug(&ident);
+            assert!(
+                slug.starts_with(SLEEPTALK_LOSSY_TAG),
+                "{slug} escapes the contract tag {SLEEPTALK_LOSSY_TAG}"
+            );
+            assert_ne!(
+                slug, SLEEPTALK_LOSSY_TAG,
+                "the bare tag carries no cause and cannot be measured"
+            );
+        }
+    }
 
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
 
@@ -3828,6 +4182,55 @@ mod tests {
             residual_tags(&mut state, &segment, "p1a"),
             vec!["item: Leftovers".to_string()],
             "only the Leftovers tick carries a tag; the drain is silent"
+        );
+    }
+
+    /// KNOWN OPEN — documents a defect that is still live. `#[ignore]`d rather
+    /// than deleted so it is not rediscovered from scratch.
+    ///
+    /// The seeder is at 307/312 with Leftovers. Heals resolve in phase order,
+    /// Leftovers (10.4) before the drain (10.5), so the +5 tick fills it to 312
+    /// and the drain then recovers nothing: the engine emits one heal, the plan
+    /// books two, the reconcile disables the side, and the tick renders
+    /// `Leech Seed`.
+    ///
+    /// An `active.hp < active.maxhp` guard does NOT close this, which is why
+    /// this PR does not add one (see the NOTE on the Leftovers slot above, and
+    /// the 5-row cost measured there). Evaluated on the pre-residual state,
+    /// 307 < 312 holds and the drain slot would still be booked. Closing it needs the drain predicate to know the
+    /// seeder's HP AFTER its own earlier heal phases, which this plan
+    /// deliberately avoids — it is documented as using presence predicates
+    /// only, never HP formulas. Doing it properly means modelling the heal
+    /// phases cumulatively, and deciding what to do about Wish; that is a
+    /// larger change than this one and is not attempted here.
+    ///
+    /// Zero occurrences in seeds 19000000-19000199, reachable in ordinary gen3
+    /// stall play, and present identically before this change.
+    #[test]
+    #[ignore = "known open: drain slot booked from pre-residual HP; see doc comment"]
+    fn a_near_full_hp_seeder_still_over_books_the_drain_slot() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let seeder = state.side_one.get_active();
+            seeder.maxhp = 312;
+            seeder.hp = 307;
+            seeder.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let segment = vec![
+            heal_one(5),
+            Instruction::Damage(poke_engine::instruction::DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 12,
+            }),
+        ];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "the +5 is the Leftovers tick; the drain recovered nothing"
         );
     }
 

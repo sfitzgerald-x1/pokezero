@@ -48,6 +48,7 @@ def _patch_stack():
 PATCH_LIST = ROOT / "third_party" / "poke-engine-gen3-patches.txt"
 KILL_SPLIT_PATCH = ROOT / "third_party" / "poke-engine-gen3-crit-kill-split.patch"
 SUBSTITUTE_PATCH = ROOT / "third_party" / "poke-engine-gen3-substitute-hp-gate.patch"
+BELLYDRUM_PATCH = ROOT / "third_party" / "poke-engine-gen3-bellydrum-roll-gate.patch"
 
 ROLLS = range(85, 101)
 
@@ -135,6 +136,26 @@ class PatchStackPinTests(unittest.TestCase):
         self.assertIn("pending_hp_reading_move", patch)
         # It must EXTEND the Flail/Reversal predicate, not stand beside it.
         self.assertIn("Choices::FLAIL | Choices::REVERSAL", patch)
+
+    def test_bellydrum_patch_extends_the_same_predicate(self) -> None:
+        """Belly Drum is the Substitute case at maxhp/2 instead of maxhp/4.
+
+        Pinned for the same reason the Substitute arm is: the allowlist is an
+        enumeration, and it has now been found short twice. A new arm must
+        EXTEND `pending_hp_reading_move` rather than fork a second predicate,
+        because the 16-roll preservation it gates is keyed on that one call.
+        """
+        patch = BELLYDRUM_PATCH.read_text(encoding="utf-8")
+        self.assertIn("Choices::BELLYDRUM", patch)
+        self.assertIn("pending_hp_reading_move", patch)
+        # Extends, not replaces: all three prior arms must survive.
+        self.assertIn(
+            "Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE | Choices::BELLYDRUM",
+            patch,
+        )
+        # The gate is maxhp/2, and the patch must say so rather than leaving the
+        # reader to infer it from Substitute's maxhp/4.
+        self.assertIn("maxhp / 2", patch)
 
 
 if __name__ == "__main__":

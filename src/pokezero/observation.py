@@ -48,10 +48,21 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # (docs/k0-feature-pack-plan.md Parts A and B). The motivating question is whether a pure-Markov
 # k0 policy (transition_token_budget=0) can match a k1 one once the facts k1's single history row
 # was carrying are named as current state.
-# NEW CONTRACT, NEW ARMS: v4 SHRINKS BOTH public censuses — numeric 134 vs v3's 155, categorical
-# 41 vs 51 — because dropping the transition-history region removes more slots (34 numeric, 12
-# categorical) than the feature pack adds (13 numeric, 2 categorical). The private WRITER surface
-# grows; the public census does not, and the census is what every check below compares. So a v4
+# V4 also RETIRES the two live PINNED TIER-2 current-state columns: NUMERIC_TIER2_CB_PINNED
+# (writer 138) and NUMERIC_TIER2_INVESTMENT_PINNED (writer 139). Both conclusions now narrow the
+# belief candidate set instead (ObservationFeatureMasks.investment_belief_narrowing) — the
+# attacker-side Choice Band conclusion to that mon's Choice Band variants, the defender-side
+# investment pin to the variants matching its stat lattice — which moves the candidate-set-count
+# and uncertainty columns present in every schema plus the possible_items/moves/abilities
+# surfaces. That is a strictly richer surface than 139's lossy +/-1 / +/-0.5 class projection or
+# 138's single bit, both of which discard which SETS remain and hence what else the mon has.
+# v2.1/v2.2/v3 keep both columns: their checkpoints have them in their input layout. Retiring
+# them at v4 is a clean census edit while v4 is unlaunched, and a loud schema break afterwards.
+# NEW CONTRACT, NEW ARMS: v4 SHRINKS BOTH public censuses — numeric 132 vs v3's 155, categorical
+# 41 vs 51 — because dropping the transition-history region and columns 138/139 removes more
+# slots (34 + 2 numeric, 12 categorical) than the feature pack adds (13 numeric, 2 categorical).
+# The private WRITER surface grows; the public census does not, and the census is what every
+# check below compares. So a v4
 # checkpoint can never share a cache, an env, or a run with a v3 one. That is enforced at every
 # layer (schema validation, an encode-time census EXACT match at v4 — a floor cannot catch a
 # census that shrinks, and BOTH v4 censuses shrink, so both exact matches are load-bearing,
@@ -194,6 +205,45 @@ class ObservationFeatureMasks:
       only difference is this column, so the read attributes whatever moves to A2 rather than
       to "the pack" as a bundle. Inert under every schema below v4, where the column does not
       exist — so toggling it can never perturb a v2.x/v3 encode.
+    - ``investment_belief_narrowing``: whether a defender-side investment CONCLUSION also
+      narrows that mon's belief candidate variants (``pokezero.investment`` calling
+      ``PublicBattleBeliefEngine.narrow_candidate_variants``). Default False.
+
+      NOT the same axis as ``tier2_investment``, which governs a COLUMN. This switch changes
+      BELIEF STATE, and the belief state feeds columns that exist in EVERY schema —
+      ``NUMERIC_CANDIDATE_SET_COUNT`` (5) and ``NUMERIC_UNCERTAINTY`` (6) on every
+      opponent-mon token, plus the possible-items/moves/abilities counts and every sampled
+      search world. So unlike every other mask here, turning this on is not an ablation of
+      something already written: it perturbs encodes that v2/v2.1/v2.2/v3/v4 checkpoints were
+      all trained against. Default OFF keeps them byte-identical; an arm that wants the
+      richer belief opts in explicitly and trains fresh.
+
+      Narrowing needs the investment inference to be RUNNING, so it is gated on
+      ``tier2_residuals`` and the candidate-set source exactly as the tracker is; it does
+      NOT require ``tier2_investment``, because the column and the belief write are
+      independent consumers of the same conclusion.
+    - ``item_belief_narrowing``: whether PROTOCOL-CERTAIN item facts narrow that mon's belief
+      candidate variants. Two members so far, both inside ``pokezero.belief``: the ORIGINAL
+      held item named by a Knock Off / Trick stays a variant-matching key after the mutation
+      (``RevealedPokemonBelief.original_public_item``), and a mon that selects two different
+      moves in one stay on the field has Choice Band ruled out (the ``choicelock`` volatile
+      forbids it). Default False.
+
+      A SIBLING of ``investment_belief_narrowing``, not a reuse of it, for three reasons.
+      The evidence class differs: those are precision-gated statistical inferences over
+      damage rolls with a real false-pin risk, these are certainties read straight off the
+      protocol with no gate to design. The dependencies differ: the investment switch is
+      correctly gated on ``tier2_residuals`` because without the inference running there is
+      nothing to narrow with, while these need only the candidate-set source — riding the
+      tier2 channel would make them silently inert on a k0 arm for no mechanical reason.
+      And arm attribution needs them separable: bundled, a run that moved could not say
+      which channel moved it.
+
+      What it shares with ``investment_belief_narrowing`` is the reason for the default.
+      Belief state feeds ``NUMERIC_CANDIDATE_SET_COUNT`` (5) and ``NUMERIC_UNCERTAINTY`` (6),
+      frozen legacy positions present in EVERY schema, plus the possible-items/moves/abilities
+      counts and every sampled search world. Turning this on is not an ablation of something
+      already written — it perturbs encodes that every existing checkpoint trained against.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -202,6 +252,8 @@ class ObservationFeatureMasks:
     tier2_residuals: bool = True
     tier2_investment: bool = False
     feature_pack_last_move: bool = True
+    investment_belief_narrowing: bool = False
+    item_belief_narrowing: bool = False
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked

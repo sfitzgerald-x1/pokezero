@@ -41,9 +41,10 @@ Evidence discipline (same as base Tier 2's CB bit):
   (belief-elimination alone never fires the bit — mirrors ``cb-pinned-by-elimination``);
 - an observation consistent with NO candidate variant is off-model and yields no
   evidence in either direction (the precision guard);
-- monotone accrual with a TWO-STRIKE rule: the same value must pin on two independent
-  clean strikes; any conflicting pin or margin-rejection of a previously pinned value
-  before conclusion permanently blocks that axis for the mon.
+- monotone accrual; ``required_pin_strikes`` (default 2, opt-in 1
+  — see the config field for the deductive rationale and the k=1/k=2 measurement); any
+  conflicting pin or margin-rejection of a previously pinned value before conclusion
+  permanently blocks that axis for the mon.
 """
 
 from __future__ import annotations
@@ -114,8 +115,41 @@ class InvestmentConfig:
     # by at least this many HP points beyond the tolerance window; the in-between band
     # is treated as ambiguous and yields no pin from the strike.
     rejection_margin_hp: float = 0.25
-    # Two-strike rule (mirrors Tier2Config.required_cb_strikes): one lattice edge case
-    # cannot conclude an axis.
+    # Corroborating clean strikes required before an axis concludes. ONE, unlike
+    # Tier2Config.required_cb_strikes, because the two inferences are not the same KIND of
+    # inference: the CB bit is a magnitude-exceedance judgement (an unusually hard hit is
+    # EVIDENCE FOR a Choice Band, and a second one makes it likelier), whereas this module's
+    # lattice test is DEDUCTIVE. A candidate variant admits exactly 16 legal per-hit values;
+    # an observed damage that misses all of them by more than the rejection margin makes that
+    # variant IMPOSSIBLE, not merely unlikely, so corroboration cannot make the exclusion more
+    # sound. A second strike only DELAYS freezing the conclusion — the sole thing it buys is a
+    # window in which a later contradicting strike can still block the axis, and the axis
+    # ledger already blocks on contradiction whenever it arrives before the freeze.
+    #
+    # Measured (runs/investment-gate-strikes-20260802/, seed 11, 120 games, source hash
+    # f9e35e1f, k=1 vs k=2 on the same replays): precision 1.000 on every conclusion type
+    # under BOTH settings — 54/54 hp_value, 52/52 hp_class, 40/40 defense at k=1 against
+    # 10/10, 10/10, 6/6 at k=2 — with zero blocked mons either way. k=2 bought no precision
+    # and cost 5.4x HP / 6.7x defense coverage (31.4% vs 5.8% of mixed-family HP mons).
+    #
+    # DEFAULT STAYS 2. The k=1 evidence above is sound, but flipping the default is an UNGATED
+    # encode change on a LIVE channel: `tier2_investment` is enabled on running lineages, and a
+    # differential over 136k numeric rows showed 89 rows moving 0.0 -> 0.5 in columns 139 and 152.
+    # Every other behaviour change in this work sits behind a default-False switch; this one had
+    # no gate and no cache provenance bit, so a k=1 cache and a k=2 cache carried IDENTICAL mask
+    # metadata and would have been mixed in one training run with no error.
+    #
+    # So k=1 stays available but is NOT reachable from the live encode path today. This comment
+    # previously claimed two mechanisms that do not exist -- a `--investment-pin-strikes` flag and
+    # a cache-metadata record of the value. Neither was written. What exists:
+    # `scripts/investment_gate.py --required-pin-strikes` for the OFFLINE gate, and this field for
+    # direct construction. LocalShowdownEnv builds the tracker with no `config=`, so the live path
+    # is k=2 with no way to change it.
+    #
+    # That makes the cache-mixing hazard UNREACHABLE rather than guarded, which is a different
+    # claim and worth stating plainly. Before k=1 is ever wired to the live path it needs a
+    # provenance discriminator: cache metadata records `feature_masks` only, so a k=1 cache and a
+    # k=2 cache are indistinguishable and would be averaged together silently.
     required_pin_strikes: int = 2
     # Passed through to the shared damage core (our own pinch abilities / Flail
     # breakpoints; own-side fractions are exact but the band costs nothing).
@@ -558,6 +592,57 @@ def _defense_class(
     return None
 
 
+# --- Belief narrowing (the conclusion's richer consumer). ---
+
+
+def _surviving_variant_payloads(
+    *,
+    conclusion: InvestmentConclusion,
+    candidate_variants: Sequence[Mapping[str, Any]],
+    species_key: str,
+    dex: ShowdownDex,
+    spread_cache: dict[tuple, RandbatsSpread],
+) -> tuple[Mapping[str, Any], ...]:
+    """Candidate variants still consistent with every CONCLUDED axis for one defender.
+
+    Returns the RAW payload mappings (not :class:`CandidateVariant`) because the belief
+    engine matches on ``belief.variant_identity`` of the mappings it handed out — the same
+    objects on both sides, so no normalizer can drift between them.
+
+    Reuses :func:`_variant_spread`, i.e. the shared gen3 spread core the strike assessment
+    already ran these variants through. Forking that computation here would let the pin and
+    the narrowing disagree about which variant has which stat, which is the one way a sound
+    exclusion turns into a wrong one.
+
+    Returns ``()`` when nothing is concluded, when a variant is unevaluable (an unevaluable
+    candidate could be the true one, so no exclusion is safe), or when the intersection is
+    empty. The caller passes ``()`` straight through: the engine treats an empty survivor
+    list as "no evidence", never as "eliminate everything".
+    """
+
+    hp_value = conclusion.hp_value
+    defense_values = {
+        stat: value
+        for stat, value in conclusion.defense_values.items()
+        if stat in {"def", "spd"}
+    }
+    if hp_value is None and not defense_values:
+        return ()
+    survivors: list[Mapping[str, Any]] = []
+    for payload in candidate_variants:
+        spread = _variant_spread(
+            CandidateVariant.from_mapping(payload), species_key, dex, spread_cache
+        )
+        if spread is None:
+            return ()
+        if hp_value is not None and int(spread.stats.get("hp", 0)) != hp_value:
+            continue
+        if any(int(spread.stats.get(stat, -1)) != value for stat, value in defense_values.items()):
+            continue
+        survivors.append(payload)
+    return tuple(survivors)
+
+
 @dataclass
 class _InferenceState:
     """Shared accrual state between the batch entry point and the live tracker."""
@@ -740,6 +825,14 @@ class InvestmentLiveTracker:
     caller's belief engine, folds each protocol line once, and assesses each of OUR
     move tokens once at the first ``observe`` call that sees it. ``token_codes`` maps
     token indices to the reserved investment-column code as of that strike (monotone).
+
+    With ``narrow_belief_candidates`` the conclusions ALSO feed
+    :meth:`PublicBattleBeliefEngine.narrow_candidate_variants`, which is the strictly
+    richer consumer: a narrowing moves the candidate-set count, the uncertainty, and the
+    possible items/moves/abilities on every opponent-mon token, and sharpens every sampled
+    search world — instead of projecting the same evidence onto one +/-1 scalar column.
+    Default OFF: narrowing perturbs belief-derived columns under EVERY schema, so a
+    pipeline that has not opted in must stay byte-identical.
     """
 
     def __init__(
@@ -749,6 +842,7 @@ class InvestmentLiveTracker:
         own_team: Sequence[OwnMon],
         dex: ShowdownDex,
         config: InvestmentConfig | None = None,
+        narrow_belief_candidates: bool = False,
     ) -> None:
         if perspective_slot not in {"p1", "p2"}:
             raise ValueError(f"perspective_slot must be 'p1' or 'p2', got {perspective_slot!r}.")
@@ -757,11 +851,17 @@ class InvestmentLiveTracker:
         self._own_by_species = {_species_key(mon.species): mon for mon in own_team}
         self._dex = dex
         self._config = config or InvestmentConfig()
+        self._narrow_belief_candidates = bool(narrow_belief_candidates)
         self._fold = _IncrementalContextFold()
         self._spread_cache: dict[tuple, RandbatsSpread] = {}
         self._state = _InferenceState()
         self._defender_levels: dict[str, int] = {}
         self._assessed_until = 0
+        # Monotone count of narrowings that actually CHANGED the shared belief engine.
+        # Diagnostic only. An earlier caller watched this to re-derive a belief view it
+        # believed stale; that block was dead -- pins are applied only from the belief
+        # engine's own summarize path -- and has been removed.
+        self._belief_narrowings = 0
 
     def clone(self) -> "InvestmentLiveTracker":
         """Clone accumulated public evidence for one independent search branch."""
@@ -772,12 +872,24 @@ class InvestmentLiveTracker:
         cloned._own_by_species = self._own_by_species
         cloned._dex = self._dex
         cloned._config = self._config
+        cloned._narrow_belief_candidates = self._narrow_belief_candidates
         cloned._fold = self._fold.clone()
         cloned._spread_cache = dict(self._spread_cache)
         cloned._state = self._state.clone()
         cloned._defender_levels = dict(self._defender_levels)
         cloned._assessed_until = self._assessed_until
+        cloned._belief_narrowings = self._belief_narrowings
         return cloned
+
+    @property
+    def narrow_belief_candidates(self) -> bool:
+        return self._narrow_belief_candidates
+
+    @property
+    def belief_narrowing_count(self) -> int:
+        """How many narrowings have actually changed the shared engine's candidate sets."""
+
+        return self._belief_narrowings
 
     @property
     def token_codes(self) -> dict[int, float]:
@@ -833,5 +945,54 @@ class InvestmentLiveTracker:
             self._state.apply(
                 assessment, dex=self._dex, defender_level=defender_level, config=self._config
             )
+            if self._narrow_belief_candidates:
+                self._narrow(belief_engine, assessment.defender_key, context.defender_species)
         self._assessed_until = len(tokens)
         return dict(self._state.token_codes)
+
+    def _narrow(
+        self,
+        belief_engine: PublicBattleBeliefEngine,
+        defender_key: str,
+        defender_species: str,
+    ) -> None:
+        """Push this defender's standing conclusions into the belief candidate set.
+
+        Called after every assessed strike of the defender rather than only at the moment
+        an axis freezes, which makes it IDEMPOTENT and self-healing: re-deriving survivors
+        from an already-narrowed set yields the same set, and
+        ``narrow_candidate_variants`` returns False without touching the pin. That matters
+        under search cloning — a branch whose engine somehow lacked the pin re-acquires it
+        from the ledger it cloned, and a branch whose engine already has it does nothing.
+        """
+
+        ledger = self._state.ledgers.get(defender_key)
+        if ledger is None:
+            return
+        conclusion = ledger.conclusion(defender_key)
+        if conclusion.hp_value is None and not conclusion.defense_values:
+            return
+        species_key = _species_key(defender_species)
+        belief = next(
+            (
+                mon
+                for mon in belief_engine.snapshot().side(self._opponent)
+                if _species_key(mon.species) == species_key
+            ),
+            None,
+        )
+        if belief is None:
+            return
+        survivors = _surviving_variant_payloads(
+            conclusion=conclusion,
+            candidate_variants=belief.candidate_variants,
+            species_key=species_key,
+            dex=self._dex,
+            spread_cache=self._spread_cache,
+        )
+        # An empty survivor list is passed through unchanged: the engine's refusal
+        # asymmetry treats it as "no evidence", never as "eliminate every variant".
+        if belief_engine.narrow_candidate_variants(
+            defender_key, survivors, reason="investment-lattice"
+        ):
+            self._belief_narrowings += 1
