@@ -1,67 +1,49 @@
 {
- "schema": "c99-measured-residue-baseline/1",
- "why": "every prior statement of the residue's composition in this programme was quoted from an earlier message or artifact rather than re-derived. This is a measurement, run on main at e83ee94f, with the classifier applied to the retained repros of that same sweep. Numbers here are checkable; nothing is carried forward.",
+ "schema": "c99-measured-residue-baseline/2",
+ "why": "a MEASUREMENT, not a quotation. Built and swept on main at 04e7784e, with classify_row applied to that same sweep's retained repros. Supersedes v1, which described the 35-row state and contained a self-contradiction the review caught.",
  "measured": {
-  "commit": "e83ee94f",
-  "engine_fingerprint": "8b54e9a49b7ca937",
-  "artifact": "/tmp/sweep_now.json (uncommitted)",
+  "commit": "04e7784e",
+  "engine_fingerprint": "36e9b74e70bebe34",
   "window": "200 games, seeds 19000000-19000199",
-  "transitions_diverged": 35,
-  "transition_matched": 15188,
+  "artifact": "/tmp/sweep_main_final.json (uncommitted, unhashed -- a real weakness)",
+  "transitions_diverged": 21,
+  "transition_matched": 15202,
   "skip_strict_all_branches_lossy": 1,
   "strict_lossy_render": 11,
   "boundaries_measured": 15224,
   "engine_errors": 0,
-  "reconciles": "15188 + 35 + 1 == 15224"
+  "reconciles": "15202 + 21 + 1 == 15224"
  },
+ "era_trajectory": "208 at the era baseline -> 39 at the start of this session -> 21. Four fidelity fixes, each measured single-variable with matched RISING and nothing displaced into the skip bucket.",
  "families": {
-  "I2_matcher_accounting": {
-   "rows": 10,
-   "kind": "FIX",
-   "cause": "reports/c93 -- crit arm present, renderer fails to tag |-crit|",
-   "identities": [
-    "19000018/126",
-    "19000033/23",
-    "19000041/16",
-    "19000091/40",
-    "19000092/15",
-    "19000105/25",
-    "19000125/29",
-    "19000135/31",
-    "19000175/13",
-    "19000188/14"
-   ],
-   "note": "largest family. An earlier summary called this I6_sleeptalk_callee_union, which was a name carried from a review message and is wrong -- classify_row returns I2_matcher_accounting."
-  },
   "LS_capped_lethal_shape": {
-   "rows": 8,
-   "kind": "FIX",
+   "rows": 7,
+   "kind": "FIX, unimplemented",
    "identities": [
     "19000021/34",
     "19000029/51",
     "19000052/36",
     "19000058/19",
-    "19000071/55",
     "19000074/27",
     "19000112/32",
     "19000125/226"
    ],
-   "note": "contains C89's residual-decided-lethality family (19000029/51, 19000052/36, 19000058/19) plus 19000074/27, which reports/c97 returned to it. Also 19000021/34, the C90 contact-flag row."
+   "note": "was 8. 19000071/55 closed under the Pain Split change, which confirms the review's finding that the I3 and LS counts were never independent. Contains C89's residual-decided-lethality family (19000029/51, 19000052/36, 19000058/19) plus 19000074/27 which reports/c97 returned to it, plus 19000021/34 the C90 contact-flag row. NOW THE LARGEST REMAINING FAMILY.",
+   "disposition": "C89/C97 -- partition the crit-survive arm on the residual-lethality threshold the way the crit-kill split already partitions on hit-lethality. Engine fix, larger than an allowlist arm."
   },
   "limit:roll_divergent_lethality": {
    "rows": 7,
    "kind": "LIMIT, UNEXAMINED AT THIS ERA",
-   "note": "the only pass that examined these is reports/c92, retracted. reports/c91 and reports/c89 each filed a replay-based re-adjudication; neither ran."
-  },
-  "I3_roll_inherited": {
-   "rows": 3,
-   "kind": "MATCHER FIX",
-   "cause": "reports/c95 -- Pain Split magnitude inherits the damage roll but movepainsplit is in the EXACT bucket",
    "identities": [
-    "19000016/2",
-    "19000016/49",
-    "19000198/22"
-   ]
+    "19000024/61",
+    "19000077/47",
+    "19000089/53",
+    "19000147/125",
+    "19000191/63",
+    "19000198/33",
+    "19000199/61"
+   ],
+   "note": "the single biggest open question in the residue. The only pass that examined these is reports/c92, retracted for method. reports/c91 and reports/c89 each filed a replay-based re-adjudication; NEITHER RAN. It cuts both ways: if they are not really limits, the fix queue grows and clause 2's target shrinks."
   },
   "I5_boundary_truncation": {
    "rows": 3,
@@ -71,16 +53,17 @@
     "19000059/27",
     "19000098/79"
    ],
-   "note": "reports/c95 v2: two are residual-phase double-faint replacements, 19000098/79 is a Destiny Bond move ply and was evicted with its cause open."
+   "note": "reports/c95 v2 -- two are residual-phase double-faint replacements; 19000098/79 is a Destiny Bond move ply, evicted with its cause OPEN."
   },
   "UNATTRIBUTED": {
    "rows": 3,
+   "kind": "1 caused, 2 UNCAUSED",
    "identities": [
     "19000093/51",
     "19000093/53",
     "19000152/53"
    ],
-   "note": "19000152/53 IS caused (reports/c96, Perish Song faint with no damage event). 19000093/51 and /53 are the two rows with no written cause -- see reports/c98 for two refuted candidates and two live ones."
+   "note": "19000152/53 IS caused (reports/c96, Perish Song faint with no damage event). 19000093/51 and /53 have a mechanism and no cause -- reports/c98 has two candidates refuted at source and two live ones."
   },
   "limit:world_sample_drag_target": {
    "rows": 1,
@@ -88,23 +71,28 @@
    "identities": [
     "19000008/54"
    ],
-   "note": "scripts/family_bucket_audit.py buckets this comparison-limit, 'Documented, not inferred'. Unretracted."
+   "note": "family_bucket_audit.py buckets this comparison-limit, 'Documented, not inferred'. Unretracted."
   }
+ },
+ "eliminated_this_session": {
+  "I2_matcher_accounting": "10 rows, all closed (crit-tag + pristine Choice)",
+  "I3_roll_inherited": "3 rows, all closed (Pain Split roll-awareness)",
+  "I4_attribution_tie": "3 rows, all closed (Liquid Ooze renderer)"
  },
  "split": {
   "limit_rows": 8,
-  "non_limit_rows": 27
+  "non_limit_rows": 13
  },
- "what_the_stop_condition_needs": {
-  "clause_1_every_shape_caused": "TWO ROWS SHORT -- 19000093/51 and 19000093/53. Everything else has a written cause.",
-  "clause_2_only_limits_remain": "REACHABLE, and the path is implementation rather than investigation. It does NOT require rows to BE limits; it requires that once the fixable rows are closed, only limits remain. All 27 non-limit rows already have a cause and a named fix. An earlier summary called this clause unreachable and cited the existence of a genuine registered limit as evidence -- which supports the clause rather than undermining it. That claim is withdrawn.",
-  "sized_queue_by_rows": [
-   "I2 crit-tag renderer fix: 10",
-   "LS_capped_lethal_shape: 8 (includes C89's 4-row residual-lethality partition and C90's contact flags)",
-   "limit:roll_divergent_lethality re-adjudication: 7",
-   "I3 Pain Split roll-awareness: 3",
-   "I5: 2 implementable + 1 open",
-   "UNATTRIBUTED: 1 caused (Perish Song) + 2 uncaused"
-  ]
- }
+ "stop_condition": {
+  "clause_1_every_shape_caused": "THREE ROWS SHORT: 19000093/51 and 19000093/53 (mechanism established, cause not) and 19000098/79 (evicted, cause open). v1 of this report said 'two rows short' and, three lines later, that all non-limit rows had a cause -- a self-contradiction the review caught. Corrected.",
+  "clause_2_only_limits_remain": "NOT MET, and REACHABLE. It does not require rows to BE limits; it requires that once the fixable rows are closed, only limits remain. 13 non-limit rows remain. An earlier revision called this clause unreachable and cited the existence of a registered limit as evidence, which supports the clause rather than undermining it; withdrawn.",
+  "not_purely_implementation": "v1 said 'the path is implementation rather than investigation'. That was wrong for 10 of the rows and is still wrong for 10 of 21: three rows need a CAUSE, and the seven limit rows need re-adjudication. Both are investigation."
+ },
+ "queue_largest_first": [
+  "LS_capped_lethal_shape 7 -- engine fix, residual-lethality partition",
+  "limit:roll_divergent_lethality 7 -- re-adjudicate by replay; filed twice, never run",
+  "I5 3 -- 2 implementable, 1 uncaused",
+  "UNATTRIBUTED 3 -- 1 caused, 2 uncaused"
+ ],
+ "open_defect_not_in_the_count": "reports/c102 -- the Sleep Talk callee still gets TWO before_move applications where every other path gets one. Unexercised in this window (0 rows), but its failure direction is a FALSE MATCH: a non-crit arm stamped |-crit| and accepted on the wrong arm, which the divergence count cannot see. It is the one thing landed this session that could make 21 look better than the fidelity is."
 }
