@@ -434,9 +434,24 @@ def _blocker_bucket(token: str) -> str:
 _REASON_DETAIL_LIMIT = 512
 
 # Addresses retained per fallback CLASS. Three is enough to replay one, confirm it
-# reproduces, and check a second instance is the same shape -- while bounding the
-# report at 3 x distinct classes (~70 in era 57, so ~210 small entries).
+# reproduces, and see whether a second instance is the same shape.
+#
+# Bounds the report at 3 x distinct keys. That multiplicand is DATA-DEPENDENT, not a
+# fixed taxonomy: crate reason keys interpolate operands (species in `'Pelipper' has
+# public Rest skippedTime`, and engine_world.py mints keys carrying turn numbers and
+# max-HP values), so the key space is bounded in LENGTH by _bounded_reason_detail but
+# never in COUNT. Era 57 observed 72 classes -- 12 shown + 60 further, per
+# era57-probe-analysis-20260804.txt:52-64 -- for ~216 small entries. The raw
+# uncollapsed count is unmeasured: that file records the analyzer's collapsed list and
+# the shard reports it came from died with their pods.
 _FALLBACK_SAMPLES_PER_CLASS = 3
+
+# Ceiling on distinct keys, so the report size is bounded UNCONDITIONALLY rather than
+# by however many classes the data happens to mint. 256 is ~3x era 57's observed 72
+# classes plus the 7 reasons; worst case ~768 entries. Overflow is COUNTED and emitted,
+# never silently dropped -- a truncated sample that looks complete is how a coverage
+# claim goes wrong.
+_FALLBACK_SAMPLE_KEY_CEILING = 256
 
 
 def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
@@ -507,15 +522,20 @@ class EngineMctsStats:
     # ADDRESSES, not just counts. A fallback is fully identified by
     # (battle_id, round, seat) -- the battle id carries the seed, so any entry
     # here replays as a single turn. Until this existed the addresses lived only
-    # in pod logs, and deleting a Job deleted them: the era-57 probe left 93
-    # aggregate keys and zero way to reproduce any of the 7,498 fallbacks it
-    # recorded, so no refusal class could be debugged from a campaign run.
+    # in pod logs, and deleting a Job deleted them: the era-57 probe left aggregate
+    # counts and zero way to reproduce any of the 7,498 fallbacks it recorded, so no
+    # refusal class could be debugged from a campaign run.
     #
     # Keyed BY CLASS and capped per class rather than globally. A global cap fills
     # with the dominant class -- era 57 was 49.5% one reason -- and the classes you
-    # most need an address for are the rare ones. Bounded by
-    # _FALLBACK_SAMPLES_PER_CLASS x distinct classes.
+    # most need an address for are the rare ones. Keyed by fallback REASON too, for
+    # the same argument on the other axis (see _fallback). Bounded by
+    # _FALLBACK_SAMPLES_PER_CLASS x distinct keys.
     fallback_samples: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Addresses discarded because the key ceiling was hit. Non-zero means the sample
+    # is INCOMPLETE across classes, which a reader must be able to see rather than
+    # infer from a suspiciously round key count.
+    fallback_sample_keys_dropped: int = 0
     unmapped_choices: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
@@ -637,6 +657,7 @@ class EngineMctsStats:
             "world_failure_reasons": dict(self.world_failure_reasons),
             "fallback_reasons": dict(self.fallback_reasons),
             "fallback_samples": {k: list(v) for k, v in self.fallback_samples.items()},
+            "fallback_sample_keys_dropped": self.fallback_sample_keys_dropped,
             "unmapped_choices": dict(self.unmapped_choices),
             "model_evals": self.model_evals,
             "encode_wall_seconds": self.encode_wall_seconds,
@@ -1969,7 +1990,7 @@ class EngineMctsPolicy:
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
         battle_id = getattr(context, "battle_id", "?")
-        round_index = getattr(context, "decision_round_index", "?")
+        round_index = getattr(context, "decision_round_index", None)
         player = getattr(context, "player_id", "?")
         # Per-decision world-failure context: the cumulative counters minus
         # the snapshot taken at the top of _search.
@@ -1978,18 +1999,39 @@ class EngineMctsPolicy:
             for key, count in self.stats.world_failure_reasons.items()
             if count - self._world_failures_before.get(key, 0) > 0
         }
-        # Retain the address under EVERY class this decision failed on, plus the
-        # fallback reason itself so decisions with no world failures at all
-        # (no_public_state, live_fold_broken) are still addressable.
-        for key in list(delta) or [f"fallback:{reason}"]:
-            bucket = self.stats.fallback_samples.setdefault(key, [])
-            if len(bucket) < _FALLBACK_SAMPLES_PER_CLASS:
-                bucket.append({
-                    "battle_id": str(battle_id),
-                    "round": round_index,
-                    "seat": str(player),
-                    "reason": reason,
-                })
+        # Retain the address under EVERY class this decision failed on AND under the
+        # fallback reason -- always, not only when there are no world failures.
+        #
+        # Keying on the reason unconditionally is what makes a rare REASON
+        # addressable. Reasons and classes are separate axes: `choices_unmapped`
+        # co-occurs with world failures, so a delta-only key files its one address
+        # under a class whose three slots the dominant reason has already taken, and
+        # the rare reason ends up with no address at all. That is the exact era-57
+        # failure mode this store exists to prevent, on the other axis. The reason
+        # set is closed and small (7 literals), so this adds at most 7 keys.
+        for key in [*delta, f"fallback:{reason}"]:
+            bucket = self.stats.fallback_samples.get(key)
+            if bucket is None:
+                if len(self.stats.fallback_samples) >= _FALLBACK_SAMPLE_KEY_CEILING:
+                    self.stats.fallback_sample_keys_dropped += 1
+                    continue
+                bucket = self.stats.fallback_samples[key] = []
+            if len(bucket) >= _FALLBACK_SAMPLES_PER_CLASS:
+                continue
+            # One address per BATTLE. A refusal cause typically closes worlds for the
+            # rest of the battle it appears in, so first-3 retention would hand back
+            # rounds N, N+1 and N+2 of a single battle -- three views of one incident,
+            # which cannot tell you whether the class generalises. Three DIFFERENT
+            # battles can. A class confined to one battle keeps one address, which is
+            # all replay needs, and the count still lives in world_failure_reasons.
+            if any(entry["battle_id"] == str(battle_id) for entry in bucket):
+                continue
+            bucket.append({
+                "battle_id": str(battle_id),
+                "round": round_index,
+                "seat": str(player),
+                "reason": reason,
+            })
         message = (
             f"engine-search FALLBACK: battle={battle_id} round={round_index} seat={player} "
             f"reason={reason} world_failures={delta or '{}'}"
