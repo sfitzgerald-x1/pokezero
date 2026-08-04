@@ -1,0 +1,21 @@
+{
+ "schema": "c109-lethality-threshold-unification/3",
+ "patch_written_not_compiling": {
+  "file": "third_party/poke-engine-gen3-residual-lethality-partition.patch, on branch scott/c109-residual-lethality-partition",
+  "state": "applies cleanly at fuzz 0 and is ~90% done. ONE compile error remains, identified below. Not merged, not measured.",
+  "what_it_contains": [
+   "pending_residual_damage(state, side_ref) -> i16. Mirrors the residual phase tick for tick WITH its guards: hail skips ICE; sand skips GROUND/STEEL/ROCK and SANDVEIL; both gate on weather_is_active so AIR LOCK suppresses them; both use the min-1 clamp. POISON is maxhp/8; TOXIC is maxhp/16 times the counter AS IT STANDS before the phase decrements it. Leech Seed is maxhp/8 off the SEEDED side, read from side.volatile_statuses. Result clamped to current hp.",
+   "the partition, inserted in the branch where max_damage_dealt < defender_active.hp -- i.e. where the fan CANNOT kill on the hit, which is exactly where a residual still can. It uses compare_health_with_damage_multiples against `hp - pending` and pushes one extra arm, reusing the identity Case A and the crit-kill split already use rather than introducing a second one."
+  ],
+  "why_summing_is_sound_for_this_question": "each tick is clamped to the HP remaining at its own point in the order, so total damage dealt is min(hp, sum) and the defender dies iff hp <= sum. The ordering trap recorded in v2 therefore does NOT apply to the LETHALITY question, only to the exact damage. That is worth keeping: it means a summed pending_residual is correct here and would be wrong if the threshold were ever used for a magnitude.",
+  "the_one_remaining_error": {
+   "message": "error[E0502]: cannot borrow `*state` as immutable because it is also borrowed as mutable",
+   "cause": "`defender_active` holds a mutable borrow of `state` across the insertion point, so `pending_residual_damage(state, ...)` cannot take an immutable borrow there.",
+   "the_fix": "hoist the call above the `defender_active` binding -- near where `crit_chance` is computed at generate_instructions.rs:2986, which is before the mutable borrow -- bind it as `let pending = ...;` and use the pre-computed i16 inside the branch. No logic change; purely moving one line earlier.",
+   "two_earlier_errors_already_fixed": "`defending_side_ref` did not exist (it is `attacking_side.get_other_side()`), and `volatile_statuses` is on the SIDE not the Pokemon."
+  },
+  "digest_note": "adding this patch moves PATCHED_TARGET_TREE_SHA256 twice while iterating -- once per source change. The final value must be re-pinned once the patch is final, and tests/test_poke_engine_patch_stack.py needs its tail pin and the generate_instructions.rs per-file digest updated, exactly as the Belly Drum patch did.",
+  "gates_still_required": "depth-tactics (this IS a branch-structure change), no-panic, branch-count measurement, and the #1038 counters. Expected scope up to 10 rows, to be MEASURED.",
+  "why_i_stopped": "each compile iteration costs a full two-consumer rebuild, and I was down to guessing at bindings rather than reading them. Three times today pushing past that point produced errors that cost more than the work gained. The remaining issue is a one-line hoist, named precisely, on a patch that already applies."
+ }
+}

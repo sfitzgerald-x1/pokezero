@@ -1,0 +1,103 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1379,4 +1379,60 @@
+     )
+ }
+ 
++/// What the END-OF-TURN phase will take off `side_ref` if it is still alive.
++///
++/// Used to partition a damage fan on RESIDUAL lethality, not just lethality on
++/// the hit. Summing is sound for the lethality question specifically: each tick
++/// is clamped to the HP remaining at its own point in the order, so total damage
++/// dealt is `min(hp, sum)` and the defender dies iff `hp <= sum`.
++///
++/// Mirrors add_end_of_turn_instructions tick for tick, including its guards. A
++/// threshold computed from a DIFFERENT formula than the phase actually applies
++/// would move probability mass to the wrong arm silently, which is worse than not
++/// partitioning at all. Registered in reports/c109.
++fn pending_residual_damage(state: &State, side_ref: &SideReference) -> i16 {
++    let side = state.get_side_immutable(side_ref);
++    let active = side.get_active_immutable();
++    if active.hp <= 0 {
++        return 0;
++    }
++    let mut total: i16 = 0;
++
++    // Weather. Same weather_is_active gate and same min-1 clamp as the phase.
++    if state.weather_is_active(&Weather::HAIL) {
++        if !active.has_type(&PokemonType::ICE) {
++            total += cmp::max(active.maxhp / 16, 1);
++        }
++    } else if state.weather_is_active(&Weather::SAND)
++        && !active.has_type(&PokemonType::GROUND)
++        && !active.has_type(&PokemonType::STEEL)
++        && !active.has_type(&PokemonType::ROCK)
++        && active.ability != Abilities::SANDVEIL
++    {
++        total += cmp::max(active.maxhp / 16, 1);
++    }
++
++    // Status. TOXIC scales with the counter as it stands BEFORE the phase
++    // decrements it, which is the value visible here.
++    match active.status {
++        PokemonStatus::POISON => total += cmp::max(active.maxhp / 8, 1),
++        PokemonStatus::TOXIC => {
++            let stage = cmp::max(side.side_conditions.toxic_count, 1) as i16;
++            total += cmp::max(active.maxhp / 16, 1) * stage;
++        }
++        _ => {}
++    }
++
++    // Leech Seed drains the seeded side. Liquid Ooze reverses it, so it costs the
++    // SEEDER instead and must not be counted against the seeded mon here.
++    if side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::LEECHSEED)
++    {
++        total += cmp::max(active.maxhp / 8, 1);
++    }
++
++    cmp::min(total, active.hp)
++}
++
+ fn critical_hit_chance(choice: &Choice, defender_ability: Abilities) -> f32 {
+@@ -3053,3 +3102,39 @@
+             // The non-crit roll can never kill here, so it keeps its average.
+             regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
++
++            // ...but a residual still can. The fan cannot kill ON THE HIT, which
++            // is why this arm exists -- yet a roll that leaves the defender at or
++            // below its pending end-of-turn damage kills all the same, one phase
++            // later. Collapsing to 0.925 * max picks one side of THAT threshold
++            // and drops the other from the support, so the engine asserts a
++            // residual KO that a legal roll would not have scored, or the reverse.
++            //
++            // Measured instance: seed 19000029 step 51. Showdown's roll left the
++            // defender above the sandstorm tick and it survived; the collapsed
++            // representative left it below and the tick killed. Same shape as the
++            // KO straddle, one threshold lower.
++            //
++            // Partitioned with the identity Case A and the crit split already
++            // use; no second identity is introduced. reports/c109.
++            let pending = pending_residual_damage(state, &attacking_side.get_other_side());
++            if pending > 0 {
++                let residual_threshold = defender_active.hp - pending;
++                let min_damage_dealt = (max_damage_dealt as f32 * 0.85) as i16;
++                if residual_threshold > 0
++                    && max_damage_dealt >= residual_threshold
++                    && min_damage_dealt < residual_threshold
++                {
++                    let (average_surviving_damage, num_residual_kill_rolls) =
++                        compare_health_with_damage_multiples(max_damage_dealt, residual_threshold);
++                    let residual_kill_chance =
++                        (1.0 - crit_rate) * (num_residual_kill_rolls as f32 / 16.0);
++                    if residual_kill_chance > 0.0 {
++                        let mut kill_ins = incoming_instructions.clone();
++                        kill_ins.update_percentage(residual_kill_chance);
++                        extra_branches.push((kill_ins, residual_threshold));
++                        incoming_instructions.update_percentage(1.0 - residual_kill_chance);
++                        regular_damage = average_surviving_damage;
++                    }
++                }
++            }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
