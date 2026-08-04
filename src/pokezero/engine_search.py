@@ -1675,7 +1675,12 @@ class EngineMctsPolicy:
         return PolicyDecision(
             action_index=rng.choice(legal),
             policy_id=self.policy_id,
-            metadata={"engine_mcts": {"fallback": reason}},
+            # The per-decision world-failure delta rides along, not just the
+            # decision-level reason. "no_worlds_constructed" says every world
+            # failed; only these say WHY, and without them a consumer sees a
+            # fallback rate with no attributable cause -- which is exactly the
+            # state the FoulPlay summary was in.
+            metadata={"engine_mcts": {"fallback": reason, "world_failures": dict(delta)}},
         )
 
 

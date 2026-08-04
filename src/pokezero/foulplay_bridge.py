@@ -365,6 +365,7 @@ class ControlledFoulPlayGameResult:
     engine_mcts_decisions: int = 0
     engine_mcts_fallbacks: int = 0
     engine_mcts_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
+    engine_mcts_world_failures: Mapping[str, int] = field(default_factory=dict)
     # Actual planner identities emitted by executed Root-PUCT decisions. This
     # is evidence for the primary hidden-information capstone contract.
     root_puct_opponent_action_policies: Mapping[str, int] = field(default_factory=dict)
@@ -612,9 +613,12 @@ class ControlledFoulPlayBenchmarkResult:
         engine_decisions = sum(game.engine_mcts_decisions for game in self.games)
         engine_fallbacks = sum(game.engine_mcts_fallbacks for game in self.games)
         engine_fallback_reasons: dict[str, int] = {}
+        engine_world_failures: dict[str, int] = {}
         for game in self.games:
             for reason, count in (game.engine_mcts_fallback_reasons or {}).items():
                 engine_fallback_reasons[reason] = engine_fallback_reasons.get(reason, 0) + count
+            for reason, count in (game.engine_mcts_world_failures or {}).items():
+                engine_world_failures[reason] = engine_world_failures.get(reason, 0) + count
         root_total_visits = sum(game.root_puct_total_visits for game in self.games)
         root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
@@ -747,6 +751,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "fallback_decisions": engine_fallbacks,
                 "fallback_rate": (engine_fallbacks / engine_decisions) if engine_decisions else None,
                 "fallback_reasons": dict(sorted(engine_fallback_reasons.items())),
+                "world_failure_reasons": dict(sorted(engine_world_failures.items())),
                 "depth": self.config.engine_depth,
                 "sims": self.config.engine_sims,
                 "batch": self.config.engine_batch,
@@ -2770,11 +2775,14 @@ async def _run_single_game(
         1 for decision in state.decisions if "engine_mcts" in (decision.metadata or {})
     )
     engine_fallback_reasons: dict[str, int] = {}
+    engine_world_failures: dict[str, int] = {}
     for decision in state.decisions:
         block = (decision.metadata or {}).get("engine_mcts") or {}
         reason = block.get("fallback") if isinstance(block, Mapping) else None
         if reason:
             engine_fallback_reasons[str(reason)] = engine_fallback_reasons.get(str(reason), 0) + 1
+            for key, count in (block.get("world_failures") or {}).items():
+                engine_world_failures[str(key)] = engine_world_failures.get(str(key), 0) + int(count)
     engine_fallbacks = sum(engine_fallback_reasons.values())
     root_fallback_reasons: dict[str, int] = {}
     root_fallback_categories: dict[str, int] = {}
@@ -2988,6 +2996,7 @@ async def _run_single_game(
         engine_mcts_decisions=engine_decisions,
         engine_mcts_fallbacks=engine_fallbacks,
         engine_mcts_fallback_reasons=dict(engine_fallback_reasons),
+        engine_mcts_world_failures=dict(engine_world_failures),
         root_puct_opponent_action_policies=root_opponent_action_policies,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
