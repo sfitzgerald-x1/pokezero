@@ -53,18 +53,21 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
-@@ -2928,6 +2974,10 @@
-                 .get_active_immutable()
-                 .ability;
-             let crit_chance = critical_hit_chance(&choice, defender_ability);
-+    // Bound HERE, before `defender_active` takes a mutable borrow of `state`.
-+    // The residual partition below cannot read `state` while that borrow lives.
+@@ -2453,6 +2499,13 @@
+     mut final_instructions: &mut Vec<StateInstructions>,
+     branch_on_damage: bool,
+ ) {
++    // Bound at FUNCTION level, before anything borrows `state`. The
++    // residual-lethality partition further down needs it, and every site there
++    // already holds a borrow of `state` through `defender_active`. An earlier
++    // placement next to `crit_chance` was in a SIBLING block whose scope closes
++    // before the use. reports/c109.
 +    let pending_at_end_of_turn =
 +        pending_residual_damage(state, &attacking_side.get_other_side());
-             // run_move reverses everything it applies -- the extra_branches
-             // loop below re-applies for exactly this reason and says so. This
-             // loop did not, so 31 spurious reversals of a DecrementRestTurns
-@@ -3056,6 +3106,37 @@
+     if state.use_damage_dealt {
+         reset_damage_dealt(
+             state.get_side(&attacking_side),
+@@ -3056,6 +3109,37 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
