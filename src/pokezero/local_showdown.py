@@ -420,7 +420,11 @@ class LocalShowdownEnv:
             else None
         )
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._observation_format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id,
+            set_source=self._belief_set_source,
+            # Unlike the tier2 producers, this narrowing lives INSIDE the engine (the facts are
+            # protocol lines, not inferences), so the mask has to reach the constructor.
+            item_belief_narrowing=self.item_belief_narrowing_active(),
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -522,7 +526,9 @@ class LocalShowdownEnv:
             hp_visibility={"p1": "exact", "p2": "exact"},
         )
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._observation_format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id,
+            set_source=self._belief_set_source,
+            item_belief_narrowing=self.item_belief_narrowing_active(),
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -1611,25 +1617,30 @@ class LocalShowdownEnv:
             self.config.observation_spec.schema_version
             in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         )
-        normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
-        try:
-            state = normalize_for_player(
-                replay,
-                player_id=player,
-                configured_showdown_slot=player,
-                format_id=self._observation_format_id,
-                belief_engine=self._belief_engine,
-                include_turn_merged=turn_merged,
-            )
-        finally:
-            if normalize_started_at is not None:
-                self._root_puct_branch_observation_player_state_normalization_seconds += max(
-                    0.0, time.perf_counter() - normalize_started_at
+        def _normalize() -> PlayerRelativeBattleState:
+            normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
+            try:
+                return normalize_for_player(
+                    replay,
+                    player_id=player,
+                    configured_showdown_slot=player,
+                    format_id=self._observation_format_id,
+                    belief_engine=self._belief_engine,
+                    include_turn_merged=turn_merged,
                 )
-                self._root_puct_branch_observation_player_state_normalization_count += 1
+            finally:
+                if normalize_started_at is not None:
+                    self._root_puct_branch_observation_player_state_normalization_seconds += max(
+                        0.0, time.perf_counter() - normalize_started_at
+                    )
+                    self._root_puct_branch_observation_player_state_normalization_count += 1
+
+        state = _normalize()
         annotation_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
             tracker = self._tier2_tracker_for(player)
+            investment_tracker = self._investment_tracker_for(player)
+
             if tracker is not None:
                 state = replace(
                     state,
@@ -1637,7 +1648,6 @@ class LocalShowdownEnv:
                         replay, state.transition_tokens, self._belief_engine
                     ),
                 )
-            investment_tracker = self._investment_tracker_for(player)
             if investment_tracker is not None:
                 codes = investment_tracker.observe(
                     replay, state.transition_tokens, self._belief_engine
@@ -1650,6 +1660,19 @@ class LocalShowdownEnv:
                             for index, token in enumerate(state.transition_tokens)
                         ),
                     )
+            # NO REFRESH HERE, deliberately. An earlier version re-derived the player view
+            # whenever a producer narrowed, on the reasoning that the view snapshotted a few
+            # lines above was now stale and a root and its leaves would otherwise disagree.
+            # That reasoning was wrong and the block was dead: deleting it produced BIT-IDENTICAL
+            # encodes across 136k numeric rows with each switch on and off. `resolved_player_view`
+            # does not re-summarize, and `_apply_variant_pin` runs only from the belief engine's
+            # own `_upsert`/`_replace_belief` paths -- so pins are never re-applied at snapshot
+            # time, which is what actually makes the observation independent of call count.
+            #
+            # The real consequence, which belongs in the limitations rather than being papered
+            # over by a no-op: a narrowing does not reach the ENCODE until the next event that
+            # re-summarizes that mon. The pin is recorded immediately and is monotone, so nothing
+            # is lost -- it lands one reveal later than the conclusion.
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
             # the annotation substrate and the per-mon pinned-surface derivation source.
@@ -1699,6 +1722,12 @@ class LocalShowdownEnv:
             own_team=own_team,
             dex=dex,
             whitelist=cb_whitelist_for_source(self._belief_set_source, dex),
+            # The CB conclusion rides the SAME belief-narrowing switch as the investment
+            # one rather than getting a third mask. Both are "a tier2 conclusion mutates
+            # the Tier-1 candidate set", both perturb the same frozen legacy belief columns
+            # in every schema, and a cache whose metadata says narrowing was off must mean
+            # neither producer ran — one provenance bit for one class of distribution shift.
+            narrow_belief_candidates=self.investment_belief_narrowing_active(),
         )
         self._tier2_trackers[player] = tracker
         return tracker
@@ -1712,8 +1741,46 @@ class LocalShowdownEnv:
         """
         return self.tier2_residuals_active() and bool(self.config.feature_masks.tier2_investment)
 
+    def investment_belief_narrowing_active(self) -> bool:
+        """Whether TIER-2 CONCLUSIONS narrow the shared belief candidate sets.
+
+        A THIRD switch, deliberately independent of ``tier2_investment``: that one governs
+        the reserved investment COLUMN, this one governs BELIEF STATE. Narrowing moves the
+        candidate-set count and uncertainty columns, which exist in every schema, so it must
+        never ride on the column's switch. It still needs the tier2 channel + the
+        candidate-set source, because without candidate variants there is nothing to narrow
+        and no strike is assessable at all.
+
+        Named for the investment inference that introduced it, but it now gates BOTH
+        producers — the defender-side investment pin (``InvestmentLiveTracker``) and the
+        attacker-side Choice Band conclusion (``Tier2LiveTracker``). They share one bit on
+        purpose: the provenance question a cache's metadata has to answer is "did any tier2
+        conclusion touch the Tier-1 candidate sets", and that is a single class of input
+        distribution shift, not two.
+        """
+        return self.tier2_residuals_active() and bool(
+            self.config.feature_masks.investment_belief_narrowing
+        )
+
+    def item_belief_narrowing_active(self) -> bool:
+        """Whether PROTOCOL-CERTAIN item facts narrow the shared belief candidate sets.
+
+        A FOURTH switch, and deliberately not gated on the tier2 channel the way
+        ``investment_belief_narrowing`` is. That gate is right for the investment pins, which
+        cannot exist without the damage inference running; these narrowings are read straight
+        off ``|-enditem|``/``|-item|``/``|move|`` lines by the belief engine itself, so riding
+        tier2 would make them silently inert on a k0 arm for no mechanical reason. The
+        candidate-set source IS required: with no variants there is nothing to narrow.
+        """
+        return self.config.belief_set_source_enabled() and bool(
+            self.config.feature_masks.item_belief_narrowing
+        )
+
     def _investment_tracker_for(self, player: PlayerId) -> InvestmentLiveTracker | None:
-        if not self.investment_active():
+        # The tracker exists when EITHER consumer of its conclusions is on: the reserved
+        # column (tier2_investment) or the belief narrowing. With both off no tracker is
+        # built and the env is byte-identical to a pre-investment pipeline.
+        if not self.investment_active() and not self.investment_belief_narrowing_active():
             return None
         tracker = self._investment_trackers.get(player)
         if tracker is not None:
@@ -1729,6 +1796,7 @@ class LocalShowdownEnv:
             perspective_slot=player,
             own_team=own_team,
             dex=dex,
+            narrow_belief_candidates=self.investment_belief_narrowing_active(),
         )
         self._investment_trackers[player] = tracker
         return tracker

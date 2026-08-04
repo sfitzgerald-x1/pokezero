@@ -56,6 +56,11 @@ def populated_stats() -> EngineMctsStats:
     stats.searched_decisions = 38
     stats.fallback_decisions = 2
     stats.worlds_attempted = 160
+    # A real shard populates this too. Leaving it 0 while `worlds_searched` is
+    # 152 makes the derived rates incoherent (100% construction failure next to
+    # 152 searched worlds) -- exactly the broken-instrument state the abort-rate
+    # work exists to make visible, so the fixture must not model it by accident.
+    stats.worlds_constructed = 156
     stats.worlds_searched = 152
     stats.total_iterations = 38 * 1024
     stats.search_wall_seconds = 152.0

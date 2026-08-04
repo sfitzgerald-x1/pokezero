@@ -1,0 +1,97 @@
+{
+ "schema": "c97-last-uncaused-row/2",
+ "purpose": "19000074/27 was the last OPEN row of C89's four-row residual-decided-lethality family. reports/c89 lists four identities, confirms three, and files this one 'reclassified out ... and open'. This is its cause.",
+ "method": "scripts/replay_residue.py --report /tmp/sweep_bd.json --seed 19000074 --step 27 (the 35-row post-#1042 sweep).",
+ "era": {
+  "engine_fingerprint": "135c67f0d8a4b8862348c90d51efa78952c868745efec86def522098c4b916ea",
+  "source_commit": "bc0f2082478706da27f9f32d3fc12c3a58445990",
+  "artifact": "/tmp/sweep_bd.json -- uncommitted and unhashed, the same weakness C96 flagged.",
+  "IMPORTANT_the_sweep_tree_is_not_this_branch": "the sweep was taken on a tree carrying PR #1042 (Belly Drum), which is OPEN and is NOT in origin/main and NOT in this branch. This PR sits directly on c4a4eac3. The artifact is consistent with #1042 -- 19000073/1 is absent from the 35 rows -- but the measurement tree and the landing tree differ and that must be stated, not glossed.",
+  "line_citations": "crit-kill split generate_instructions.rs:3060-3086; average_non_kill_crit_damage :3071; compare_health_with_damage_multiples :1053-1079; sandstorm tick :3550-3572; deferral :3250. third_party/poke-engine-src is gitignored, so these are valid at this fingerprint only."
+ },
+ "boundary": {
+  "class": "component_missing_in_engine:sandstorm",
+  "showdown": "Rapidash switches in at 244/244. Furret's Return CRITS for 241, leaving it at 3/244. Sandstorm upkeep then deals its tick: Rapidash 3 -> 0 fnt, Furret -18. Rapidash faints, and Furret's Liechi Berry activates.",
+  "observed": "p1 sandstorm=-18 | p2 move=-241, capped_lethal=-3",
+  "engine_arms": [
+   {
+    "pct": 93.75,
+    "p2": "itemleftovers=+15, sandstorm=-15, move=-116",
+    "reading": "the NON-crit arm. Rapidash survives at 128, takes the sandstorm tick and its Leftovers."
+   },
+   {
+    "pct": 4.69,
+    "p2": "itemleftovers=+15, sandstorm=-15, move=-227",
+    "reading": "crit-SURVIVE. At 227 the survivor sits at 17, sandstorm 15 leaves it at 2 -- ALIVE."
+   },
+   {
+    "pct": 1.56,
+    "p2": "capped_lethal=-244",
+    "reading": "crit-KILL. The crit is lethal on the hit itself."
+   }
+  ]
+ },
+ "the_cause": {
+  "one_line": "RESIDUAL-DECIDED LETHALITY. Whether Rapidash survives the turn is decided by the crit roll, because the sandstorm tick is lethal only for high crit rolls -- and the engine collapses the crit-survive fan to a single representative that lands on the wrong side of that threshold.",
+  "the_threshold": "Rapidash maxhp 244, sandstorm tick 244/16 = 15. A crit leaving it at 15 or less dies to the residual; a crit leaving it at 16 or more survives. Showdown's realised crit of 241 leaves 3 -- dead. The engine's crit-survive representative, average_non_kill_crit_damage = 227, leaves 17 -- alive, by two HP.",
+  "why_no_arm_reproduces_it": "the crit-kill-split partitions the crit into exactly two arms: crit-KILL at defender_active.hp, and crit-SURVIVE at ONE averaged representative. 'Survived the hit and then died to the residual' is a third outcome that neither arm can express, and it is reachable on SIX of the sixteen crit rolls (229, 231, 234, 236, 239, 241). See quantification.",
+  "the_net_coincidence_that_hid_it": "CORRECTED. An earlier draft said C89 reclassified this row out by reading the net as the outcome, and called that the same conflation C94 retracted a method for. THAT MISATTRIBUTES TO C89 AN ARGUMENT C89 MADE ITSELF. C89's key 19000074_27_precision says, verbatim: 'its p2 NET is reachable via the 1.56% crit-kill arm, but the COMPONENTS are not ... Only the net coincides. Given C94 retracted a whole method for conflating a net with a component set, this distinction is load-bearing.' Same numbers, same C94 citation. C89 explicitly REFUSED the conflation. C89's actual ground for moving the row out was the p1 slot -- that the crit-kill arm carries no p1 components -- which it filed as an explicit hypothesis and flagged as one. The rejoin to the family is defensible on mechanism; the account of why it left was not, and is withdrawn.",
+  "corroborating_detail": "the engine's surviving arms carry itemleftovers=+15 on p2 and the observation does not. That is consistent, not a second defect: in Showdown Rapidash faints to the sandstorm tick and never reaches its Leftovers, while in those arms it survives and does."
+ },
+ "reclassification": {
+  "rejoins": "reports/c89_residual_decided_lethality.json",
+  "effect": "that family is 4 rows, not 3. 19000029/51, 19000052/36, 19000058/19 and this one.",
+  "supersedes": "C89's 'reclassified out' entry for this row. C89's p1-slot HYPOTHESIS is addressed separately below -- it is half right, and the wrong half is load-bearing.",
+  "family_shape_needs_widening_not_just_recounting": "C89's shape string says the collapse 'erases a SURVIVING outcome'. This row erases a DYING one, and C89's stated fix targets the non-crit representative while this row needs the same partition at a second site (generate_instructions.rs:3080-3083). '4 rows, not 3' is right, but the family's shape and fix text need widening too."
+ },
+ "disposition": {
+  "class": "ENGINE SUPPORT GAP -- not a comparison limit",
+  "reasoning": "by the charter's definitions, exactly as reports/c96 argues for Belly Drum: a comparison limit is one no same-transition partition can reach. A partition DOES reach this -- enumerating the crit fan rather than averaging it would produce an arm at 241 that dies to sandstorm. The realised roll is legal and absent from the support. The per-roll simulation is correct; the SUPPORT is incomplete.",
+  "the_shape_of_the_fix": "the crit-survive arm needs to split on the residual-lethality threshold the same way the crit-kill split already splits on the hit-lethality threshold -- i.e. partition the non-kill crit rolls into those that die to the pending residual and those that do not. That is a strictly larger change than adding an enum arm to an allowlist, and it is the same family of change as the crit-kill split itself.",
+  "implemented": false,
+  "gate": "needs a tactics-suite and no-panic gate plus a single-variable re-sweep reporting matched and skip alongside diverged, per PR #1038.",
+  "expected_scope": "4 rows in this window, all four of C89's family."
+ },
+ "what_this_completes": "C89's four-row residual-decided-lethality family. It does not complete the residue: two rows (19000093/51 and /53) are explicitly OPEN in reports/c96, and 8 rows remain classified as comparison limits of which at least one (world_sample_drag_target) is registered and evidence-backed. Re-adjudicating the 7 roll_divergent_lethality rows by replay is the outstanding follow-up C91 and C89 both filed and neither ran.",
+ "scope_of_this_claim": {
+  "CORRECTION": "this report has now made THREE false scope claims and withdrawn all of them. (1) 'the last uncaused row in the residue' -- false, two rows remain open. (2) 'zero rows survive as comparison limits' -- false, 8 are so classified and at least one is registered and evidence-backed. (3) 'the last row in the UNATTRIBUTED set' -- ALSO FALSE, and contradicted three keys below in this same file. The claim is now the narrow true one: the last open row of C89's family.",
+  "still_uncaused_in_the_35_row_residue": [
+   {
+    "rows": [
+     "19000093/51"
+    ],
+    "status": "reports/c96: 'UNDETERMINED -- renderer or engine composition. The void mechanism is established; the cause of the segmentation failure is not.'"
+   },
+   {
+    "rows": [
+     "19000093/53"
+    ],
+    "status": "reports/c96: 'BUCKET CLAIM CONFIRMED, CAUSE REFUTED' / 'OPEN -- bucket effect understood, cause not'."
+   }
+  ],
+  "registered_comparison_limits_still_standing": {
+   "count": 8,
+   "breakdown": "limit:roll_divergent_lethality x7, limit:world_sample_drag_target x1 (19000008/54)",
+   "world_sample_drag_target": "a REGISTERED, EVIDENCE-BACKED comparison limit and unretracted. scripts/family_bucket_audit.py:105-116 buckets it 'comparison-limit', 'Documented, not inferred', reasoning 'The harness samples one target; no same-transition enumeration changes which one Showdown picked.' That is verbatim the charter test this report applies elsewhere. At least one row in this residue IS a genuine comparison limit.",
+   "roll_divergent_lethality": "the 7 remaining rows have NOT been cleared. The only pass that examined them is reports/c92, retracted by C94 with 'Do not cite this file' -- and even that retracted pass called 19000198/33 a GENUINE LIMIT. reports/c91 closes 'Every remaining limit adjudication should be re-tested' and reports/c89 files an open follow-up to replay all 24 and name them. Never done.",
+   "the_readout_agrees": "scripts/cert_sweep_readout.py:1568-1571 emits every limit:-prefixed counter under the key comparison_limit_counters. The programme's own instrument calls these comparison limits.",
+   "the_wider_measurement_disagrees_too": "scripts/family_bucket_audit.py:63-79 measures the remainder of this family as 1,009 rows 'undiscriminated by this measurement, not resolved by it' -- the direct opposite of 'every one examined has resolved to a defect'."
+  },
+  "19000074_27_is_not_unattributed": "running cert_sweep_readout.classify_row over all 35 rows puts it in LS_capped_lethal_shape, via the route at cert_sweep_readout.py:363-364 (the majority miss contains both 'roll-scaled' and 'capped_lethal'). The UNATTRIBUTED set is 3 rows -- 19000093/51, 19000093/53, 19000152/53 -- and this row was never among them. C96 enumerated the then-4 as 19000073/1, 19000093/51, 19000093/53, 19000152/53; #1042 closed the first. Full attribution of the 35: I6_sleeptalk_callee_union 10, LS_capped_lethal_shape 8, limit:roll_divergent_lethality 7, I3_roll_inherited 3, I5_boundary_truncation 3, UNATTRIBUTED 3, limit:world_sample_drag_target 1.",
+  "the_sharper_true_point": "the family this row actually lands in, LS_capped_lethal_shape, carries the basis string 'faint-divergent roll shape (documented X-walk COMPARISON-LIMIT family)' at cert_sweep_readout.py:364. So a row this report proves is an ENGINE SUPPORT GAP is currently attributed to a family that self-describes as a comparison limit. Stated precisely: LS_capped_lethal_shape is NOT in the limit: namespace and is NOT in family_bucket_audit.py's ESTABLISHED dict, so this is a basis-string characterisation, not a registered bucket -- it does not add to the 8-row limit count. It is the same thread as the rest of this report: limit labels doing work the evidence does not support."
+ },
+ "the_c89_hypothesis_addressed_properly": {
+  "conclusion_1": "the row REJOINS C89's family, making it 4 rows, not 3.",
+  "conclusion_2": "the engine's deferral of the other side's residual on a faint is FAITHFUL gen3 BEHAVIOUR, not a defect. poke-engine-gen3-residual-defer-on-faint.patch documents scripts/gen3_switch_differential.py::faintresiduals showing the faint ply ending at |faint| with the incoming mon's [from] Sandstorm landing in the NEXT protocol block after |switch|. Showdown defers too.",
+  "c89s_hypothesis_is_HALF_RIGHT_and_the_wrong_half_is_load_bearing": "verbatim, C89 says 'the engine's crit-kill arm defers the OTHER side's end-of-turn residual on a faint, WHERE SHOWDOWN STILL APPLIES IT'. The first half is correct and C89 read it straight off the classifier's own pct=1.56 miss -- end_of_turn_is_deferred (generate_instructions.rs:3250) returns early when either active is at 0 HP. THE TRAILING CLAUSE IS FLATLY FALSE, and conclusion_2 above refutes it. That is precisely why the deferral is not a defect. An earlier revision of this report said the hypothesis was 'not simply wrong', which is vaguer than the evidence supports and drops a refutation this report had earned.",
+  "why_it_is_still_not_this_row_s_cause": "because the deferral is faithful, and because Showdown's crit did not KO on the hit, so the crit-kill arm is not the arm this boundary needed."
+ },
+ "quantification": "the crit roll set is floor(252*R/100) for R in 85..100 = {214,216,219,221,224,226,229,231,234,236,239,241,244,246,249,252}. 241 is R=96. Four rolls kill on the hit; SIX (229,231,234,236,239,241) survive the hit and die to sandstorm -- 2.34% absolute mass, not the 15 values an earlier 'every roll from 229 to 243' invited. The sharper statement: the 4.69% crit-survive arm covers 12 rolls and MIS-PRICES HALF OF ITS OWN MASS.",
+ "prior_art_supporting_this_disposition": "scripts/family_bucket_audit.py:57-83 ALREADY buckets limit:roll_divergent_lethality as 'engine-gap (partially resolved)' and names this exact fix as registered next work: 'extend the threshold partition to residual lethality, the third threshold after KO (C27) and Substitute viability (C31)'. This report should have cited it.",
+ "outstanding": {
+  "amend_c89_on_main": "OWED. reports/c89 on main still reads rows: 3, reclassified_out: ['19000074/27'] and the retired p1-slot hypothesis, with no forward pointer to this report. Deferred to its own PR under the repo's keep-pointer-changes-dedicated discipline, but it is owed, not optional.",
+  "re_adjudicate_the_seven_limit_rows": "OWED, and filed twice already -- reports/c91 ('Every remaining limit adjudication should be re-tested') and reports/c89 ('open a follow-up to replay all 24 and name them'). Neither ran. Until it does, the 7 limit:roll_divergent_lethality rows are unexamined at the current era, not cleared.",
+  "two_open_rows": "19000093/51 and 19000093/53 remain OPEN per reports/c96 and are not addressed by this report."
+ },
+ "COMMIT_SUBJECT_ON_MAIN_IS_INACCURATE": "the squash commit that landed this report reads 'reports: C97 -- cause for 19000074/27, the last uncaused row (#1043)'. THAT SUBJECT IS FALSE and is claim #1 from scope_of_this_claim. I corrected the report body and the PR description and never the PR TITLE, which is what becomes the squash subject -- so the withdrawn claim reached the permanent history on the one surface I did not check. Published history is not rewritten; this key is the correction. The accurate subject would have been 'cause for the last open row of C89's family'."
+}
