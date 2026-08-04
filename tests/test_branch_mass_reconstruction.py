@@ -1,59 +1,82 @@
-#!/usr/bin/env python
 """Standing mass gate — C116 Phase 1 item 4.
 
 WHY THIS EXISTS. The engine transition differential compares roll-scaled damage
 *components*; it never compares branch *probability masses*. So an entire class of
 defect is invisible to it: anything that moves mass between arms while leaving each
-arm's components intact. That is not hypothetical. On PR #1062 the non-crit
-residual split called ``update_percentage`` in place, silently scaling every crit
-arm cloned from that value afterwards; the totals still summed to 100%, so no
-conservation check fired, and the fix measured NEUTRAL on a 200-game sweep. It was
-caught by adversarial review, and review has had to substitute for this instrument
-three separate times (the mass leak, the cross-gen ``cfg!`` edit, and a rewrite of
-the whole threshold model that no test distinguished).
+arm's components intact. On PR #1062 the non-crit residual split called
+``update_percentage`` in place, silently scaling every crit arm cloned from that value
+afterwards, and the fix measured NEUTRAL on a 200-game sweep. Adversarial review has
+had to substitute for this instrument three separate times (that mass leak, a
+cross-gen ``cfg!`` edit, and a rewrite of the whole threshold model that no test
+distinguished). Review is not an instrument. This is the instrument.
 
-Review is not an instrument. This is the instrument.
+A CLAIM WITHDRAWN, because it was this file's original stated reason to exist and it
+was false. The docstring used to say the #1062 leak left totals summing to 100% so no
+conservation check would fire. Review measured totals of 95.78–97.89 on the affected
+fixtures: ANY in-place early reduction loses ``crit_rate * n/16``, so that leak is
+caught by the free ``test_masses_sum_to_one`` and never motivated this gate. What
+motivates it is MASS-CONSERVING error — a threshold off by one, or a residual mirror
+that misplaces the threshold — which holds the total at 100% while putting the wrong
+rolls in the wrong arms. This PR's red run is such a mutant, deliberately.
 
 WHAT IT ASSERTS. For each fixture, the engine's total "defender dies this turn"
-probability mass must equal a reconstruction that shares *no arithmetic* with the
-engine:
+probability mass must equal a reconstruction that is INDEPENDENT IN THE PARTS THAT
+MATTER. Be precise, because "shares no arithmetic" was claimed here and was false: the
+damage formula comes from ``calculate_damage`` and the residual magnitude from the
+phase itself, so those ARE shared. What is independent is the roll enumeration, the
+per-roll classification, and the mass formula — everything the partition logic does.
+This gate cannot catch a wrong damage formula; it catches wrong ARM ASSIGNMENT and
+wrong MASSES.
 
   1. enumerate the sixteen gen3 rolls as ``floor(max * r / 100)`` for r in 85..=100,
      taking ``max`` from ``calculate_damage`` (a value, not a code path);
   2. read the residual NET (damage minus heals) from a turn where NEITHER side
      attacks, so the phase reports its own magnitude rather than us predicting it.
-     NOTE two known imprecisions: it is read at PRE-move HP, while a Leftovers heal
-     is min(maxhp/16, maxhp - hp) at POST-move HP, so it understates the healing
-     available to a damaged defender -- the same trap the shipped mirror's own
-     comment flags. Harmless while maxhp - hp >= 84 in every fixture here, and a
-     real limit to remove if fixtures move closer to full HP;
+     Two known imprecisions, recorded rather than fixed: it is read at PRE-move HP
+     while a Leftovers heal is ``min(maxhp/16, maxhp - hp)`` at POST-move HP, so it
+     understates the healing available to a damaged defender — the same trap the
+     shipped mirror's own comment flags — and it is a scalar, so it cannot represent a
+     non-monotone threshold heal. Harmless while ``maxhp - hp >= 84`` in every fixture
+     here; a real limit if fixtures move closer to full HP;
   3. count the rolls that die, non-crit and crit separately;
   4. mass = accuracy * ((1 - crit_rate) * n_regular/16 + crit_rate * n_crit/16).
 
-Nothing here calls ``compare_health_with_damage_multiples``, the residual mirror,
-or the partition logic. If the engine and this disagree, one of them is wrong and
-the sweep cannot tell you which.
-
-It also asserts every fixture's masses sum to 100%, which is weaker but free -- and
-which, per the withdrawal above, is what actually catches the #1062 leak.
+Nothing here calls ``compare_health_with_damage_multiples``, the residual mirror, or
+the partition logic. It also asserts every fixture's masses sum to 100%, which is
+weaker but free — and which, per the withdrawal above, is what actually catches the
+#1062 leak.
 
 WHAT IT DOES NOT COVER, measured by mutation rather than guessed. Corrupting C27's
-crit-kill split and #1062's crit-fan residual split BOTH to crit_rate*0.5 left the
-original matrix entirely green: neither path was reached, because min_crit=207 and
-max_crit=244 while every fixture's hp sat outside (207, 244]. The crit-kill-straddle
-fixture below closes the first of those. Still uncovered: the crit-FAN residual split
-(needs max_crit < hp, i.e. a weaker attacker), fixed_damage, multi-hit moves, the
+crit-kill split and #1062's crit-fan residual split BOTH to ``crit_rate*0.5`` left an
+earlier version of this matrix entirely green: neither path was reached, because
+``min_crit=207`` and ``max_crit=244`` while every fixture's hp sat outside
+``(207, 244]``. ``crit-kill-straddle`` closes the first — measured by review of #1074
+(mutation: ``crit_kill_chance`` and ``crit_residual_kill`` both set to
+``crit_rate*0.5``), re-derived at 7b70d8a7, that fixture goes red at 2.8125% against a
+reconstruction of 2.1094%. Attributed rather than restated, per the M2 rule: I did not
+take that measurement.
+
+Still uncovered: the crit-FAN residual split (needs ``max_crit < hp``, a second
+attacker profile rather than another hp value), ``fixed_damage``, multi-hit moves, the
 Wish / Rain Dish / Leech Seed / partial-trap mirror steps, and the bail set. The bail
-set is unreachable BY THIS DESIGN -- a scalar quiet-turn tick cannot represent
-Sitrus's non-monotone threshold heal -- so covering it needs a different
-reconstruction, not another fixture.
+set is unreachable BY THIS DESIGN — a scalar quiet-turn tick cannot represent Sitrus's
+non-monotone threshold heal — so covering it needs a different reconstruction, not
+another fixture. These are an obligation on the Phase 2 decision record: if the
+partition stack is RETAINED for any consumer (plan outcomes (b) or (c)), they get
+fixtures before that decision is recorded as closed.
+
+CI-GATING IS NOT DELIVERED. Nothing runs ``tests/`` wholesale — two workflows run six
+named modules between them and neither builds ``poke_engine``. Plan item 4 asks for
+CI-gating; this file is the standing half, and the wiring is a following PR. When it is
+wired, the module-level ``import poke_engine`` must stay HARD: a gate that skips when
+the wheel is missing is how the previous era's fixtures read PASS while asserting
+nothing.
 
 FIXTURE DESIGN, learned from six near-misses. A fixture that does not straddle a
-threshold asserts nothing, and reads PASS. Every case here therefore records the
-arm structure it is supposed to exercise, and ``test_matrix_is_not_vacuous``
-asserts that the matrix as a whole contains at least one genuine split and at least
-one no-split. A branch COUNT is never used as a signal: Rock Slide flinches 30%, so
-every arm appears twice.
+threshold asserts nothing and reads PASS. ``test_matrix_is_not_vacuous`` asserts the
+matrix contains a genuine split and a collapsed fan, and that ``case-a-three-way``
+partitions. A branch COUNT is never used as a signal: Rock Slide flinches 30%, so every
+arm appears twice and a count moves with an unrelated secondary.
 """
 
 from __future__ import annotations
@@ -212,27 +235,31 @@ class BranchMassReconstruction(unittest.TestCase):
         """
         shapes = {}
         for label, hp, status, item, weather, tc in self.CASES:
+            quiet = _state(hp, status, item, weather, tc, "splash")
+            tick = _net_hp_lost_by_defender(
+                pe.generate_instructions(quiet, "splash", "splash")[0]
+            )
             state = _state(hp, status, item, weather, tc, "rockslide")
             values = set()
             for b in pe.generate_instructions(state, "rockslide", "splash"):
-                # A branch where the move MISSED has no move damage, and its first
-                # `Damage SideTwo` is the residual tick. Taking that as a roll made
-                # two fixtures look partitioned when their fans were collapsed
-                # (saturated-toxic-count-1 read [30, 112]; the old crit-fan-only read
-                # three values while partitioning nothing). Identify the move damage
-                # structurally: it must precede any residual, and a miss branch is
-                # recognised by carrying no damage before the phase begins.
-                move_damage = None
+                # A MISS branch loses exactly the residual tick and nothing else;
+                # any hit adds move damage on top, so comparing the NET against the
+                # tick identifies it exactly.
+                #
+                # My first attempt broke on a marker instruction instead, and review
+                # MEASURED that it did not work: for every fixture without Leftovers
+                # the miss branch's FIRST instruction IS the bare residual
+                # `Damage SideTwo`, so there was nothing to break on.
+                # saturated-toxic-count-1 still read [30, 112], still misreporting a
+                # collapsed fan as partitioned, while the comment claimed otherwise.
+                # It now reads [112] and is the negative control it was designed to be.
+                if _net_hp_lost_by_defender(b) == tick:
+                    continue
                 for i in b.instruction_list:
                     text = str(i)
-                    if text.startswith(("Heal SideTwo", "ChangeSideCondition",
-                                        "ChangeStatus", "Boost")):
-                        break
                     if text.startswith("Damage SideTwo"):
-                        move_damage = int(text.split(": ")[1])
+                        values.add(int(text.split(": ")[1]))
                         break
-                if move_damage is not None:
-                    values.add(move_damage)
             shapes[label] = sorted(v for v in values if v != hp)
 
         multi = [k for k, v in shapes.items() if len(v) >= 2]
