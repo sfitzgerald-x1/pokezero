@@ -382,10 +382,18 @@ fn effective_speed(state: &State, side: SideReference) -> i16 {
     };
     let active = side_ref.get_active_immutable();
     let mut speed = side_ref.calculate_boosted_stat(PokemonBoostableStat::Speed) as f32;
-    match state.weather.weather_type {
-        Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
-        Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
-        _ => {}
+    // GUARDED on weather_is_active, mirroring the engine's get_effective_speed.
+    // AIR LOCK and CLOUD NINE suppress weather entirely, so Swift Swim must not
+    // double a speed while either is on the field. Unguarded this flipped the
+    // computed move order on 19000093/51 (Rayquaza AIR LOCK vs Seaking SWIFT
+    // SWIM in RAIN), and since segment() tries only the order it computes, the
+    // whole branch was voided as segmentation_failed. reports/c108.
+    if state.weather_is_active(&state.weather.weather_type) {
+        match state.weather.weather_type {
+            Weather::SUN if active.ability == Abilities::CHLOROPHYLL => speed *= 2.0,
+            Weather::RAIN if active.ability == Abilities::SWIFTSWIM => speed *= 2.0,
+            _ => {}
+        }
     }
     if side_ref
         .volatile_statuses
@@ -4336,6 +4344,55 @@ mod tests {
             residual_tags(&mut state, &segment, "p1a"),
             vec!["item: Leftovers".to_string()],
             "the +5 is the Leftovers tick; the drain recovered nothing"
+        );
+    }
+
+    /// AIR LOCK suppresses weather, so SWIFT SWIM must not double a speed while
+    /// it is on the field.
+    ///
+    /// The engine's `get_effective_speed` wraps its weather match in
+    /// `state.weather_is_active(...)`; this replica did not. Unguarded, Rayquaza
+    /// (AIR LOCK) against Seaking (SWIFT SWIM) in RAIN gave Seaking 348 against
+    /// Rayquaza's 261 and flipped the computed move order. `segment()` tries only
+    /// the order it computes, so it regenerated the wrong side as phase 1,
+    /// nothing was a prefix of the real instruction list, and the whole branch
+    /// was voided as `segmentation_failed`. Two rows (reports/c108).
+    ///
+    /// Reverting the `weather_is_active` guard makes the rain assertion below
+    /// fail: Seaking comes back doubled.
+    #[test]
+    fn air_lock_suppresses_swift_swim_in_the_speed_replica() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::RAIN;
+        state.side_two.get_active().ability = Abilities::SWIFTSWIM;
+        let base = effective_speed(&state, SideReference::SideTwo);
+
+        // Anchor on the UN-doubled read. An earlier version of this test set
+        // side_one's ability to NONE and asserted the result equalled `base` --
+        // but NONE is already the fixture's ability, so it compared two
+        // identical pure computations over an unmutated state and could not
+        // fail. It never asserted that Swift Swim doubles anything.
+        let doubled = base;
+        state.side_two.get_active().ability = Abilities::NONE;
+        let undoubled = effective_speed(&state, SideReference::SideTwo);
+        state.side_two.get_active().ability = Abilities::SWIFTSWIM;
+        assert_eq!(
+            doubled,
+            undoubled * 2,
+            "SWIFT SWIM must double in rain with no suppressor: {undoubled} -> {doubled}"
+        );
+
+        // AIR LOCK on the OPPONENT must suppress it.
+        state.side_one.get_active().ability = Abilities::AIRLOCK;
+        let suppressed = effective_speed(&state, SideReference::SideTwo);
+        assert!(
+            suppressed < doubled,
+            "AIR LOCK must suppress the Swift Swim doubling: {suppressed} vs {doubled}"
+        );
+        assert_eq!(
+            suppressed * 2,
+            doubled,
+            "suppression must remove exactly the 2x, not some other factor"
         );
     }
 

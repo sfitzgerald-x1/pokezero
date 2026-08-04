@@ -461,6 +461,30 @@ def damage_component_events(
             slot = parts[2].split(":", 1)[0].strip()[:2]
             running[slot] = _hp_of(parts[4])
             continue
+        if tag == "faint":
+            # A faint with NO preceding `-damage` on this slot. Destiny Bond and
+            # Perish Song kill by setting HP to zero and announce it with
+            # `|-activate|` / `|-start| perish0` plus `|faint|` — never a
+            # `-damage` line. The engine models the same state change as a
+            # Damage instruction for the victim's whole remaining HP, so the
+            # observation carried NOTHING for that slot while the engine carried
+            # a `capped_lethal`, and the comparison had no counterpart to match.
+            #
+            # Synthesise the component the protocol declines to render. If a
+            # `-damage ... 0 fnt` already fired, `running[slot]` is 0 and this is
+            # a no-op, so ordinary faints are untouched.
+            #
+            # This ADDS information rather than relaxing a comparison: the
+            # synthesised magnitude is exact (the tracked HP) and is still
+            # compared. reports/c96, reports/c103.
+            slot = parts[2].split(":", 1)[0].strip()[:2]
+            remaining = running.get(slot)
+            if slot in out and remaining:
+                out[slot].append(
+                    DamageComponent("capped_lethal", -remaining, event_index, None)
+                )
+                running[slot] = 0
+            continue
         if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
             continue
         slot = parts[2].split(":", 1)[0].strip()[:2]

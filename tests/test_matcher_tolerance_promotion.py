@@ -27,6 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 from engine_transition_differential import (  # noqa: E402
+    damage_components,
     _ROLL_SCALED_SOURCES,
     DamageComponent,
     branch_render_is_usable,
@@ -367,6 +368,70 @@ class PainSplitIsRollAware(unittest.TestCase):
                 [("movepainsplit", -91)], [("movepainsplit", -120)], None
             )
         )
+
+
+
+class FaintWithoutADamageEventIsSynthesised(unittest.TestCase):
+    """Destiny Bond and Perish Song kill without emitting a `-damage` line.
+
+    Showdown announces them with `|-activate|` or `|-start| perish0` plus
+    `|faint|`. The engine models the same state change as a Damage instruction
+    for the victim's whole remaining HP, so before this the observation carried
+    NOTHING for that slot while the engine carried a `capped_lethal`, and the
+    comparison had no counterpart. Six rows (reports/c96, c103).
+
+    Reverting the `tag == "faint"` arm in the parser makes the first two cases
+    return empty lists, which is the defect.
+    """
+
+    def test_destiny_bond_faint_is_synthesised(self) -> None:
+        got = damage_components(
+            [
+                "|move|p2a: Qwilfish|Destiny Bond|p2a: Qwilfish",
+                "|move|p1a: Clefable|Return|p2a: Qwilfish",
+                "|-damage|p2a: Qwilfish|0 fnt",
+                "|faint|p2a: Qwilfish",
+                "|-activate|p2a: Qwilfish|move: Destiny Bond",
+                "|faint|p1a: Clefable",
+            ],
+            {"p1": 95, "p2": 88},
+        )
+        # p1 has no -damage line at all; its faint must still be a component.
+        self.assertEqual(got["p1"], [("capped_lethal", -95)])
+        self.assertEqual(got["p2"], [("capped_lethal", -88)])
+
+    def test_perish_song_faint_is_synthesised(self) -> None:
+        got = damage_components(
+            [
+                "|move|p1a: Misdreavus|Mean Look|p2a: Suicune",
+                "|cant|p2a: Suicune|slp",
+                "|-start|p2a: Suicune|perish0",
+                "|upkeep",
+                "|faint|p2a: Suicune",
+            ],
+            {"p1": 241, "p2": 270},
+        )
+        self.assertEqual(got["p2"], [("capped_lethal", -270)])
+        self.assertEqual(got["p1"], [])
+
+    def test_an_ordinary_faint_is_not_double_counted(self) -> None:
+        """The load-bearing control.
+
+        A normal KO already emits `-damage ... 0 fnt`, so `running[slot]` is
+        zero by the time `|faint|` arrives and the synthesis must be a no-op.
+        Without that guard every KO in the corpus would gain a phantom second
+        component.
+        """
+        got = damage_components(
+            ["|move|p1a: A|Tackle|p2a: B", "|-damage|p2a: B|0 fnt", "|faint|p2a: B"],
+            {"p1": 100, "p2": 50},
+        )
+        self.assertEqual(got["p2"], [("capped_lethal", -50)])
+
+    def test_a_faint_on_an_untracked_slot_is_ignored(self) -> None:
+        """No initial HP for the slot means nothing to synthesise from."""
+        got = damage_components(["|faint|p2a: B"], {"p1": 100})
+        self.assertEqual(got["p2"], [])
 
 
 if __name__ == "__main__":
