@@ -3716,7 +3716,12 @@ mod tests {
     use super::*;
 
     /// #1048 VALIDATED: every confident Sleep Talk attribution names the callee
-    /// the ENGINE actually used. 0 wrong attributions over 1,278 branches.
+    /// the ENGINE actually used. 0 wrong attributions over 1,271 branches.
+    ///
+    /// (An earlier version of this line said 1,278 -- a figure lifted from a
+    /// reviewer's independently-built matrix rather than derived from this one.
+    /// Recorded because carrying an unverified number is the failure mode this
+    /// whole test exists to guard against.)
     ///
     /// #1048 converted ~5,000 refusals into confident `|move| … [from] Sleep Talk`
     /// lines and nothing checked whether they were RIGHT. The feared failure: the
@@ -3777,9 +3782,19 @@ mod tests {
             turn: 1,
             hp_percent: [false, false],
         };
-        let build = |callees: &[Choices], keep: Option<usize>| {
+        let build = |callees: &[Choices], keep: Option<usize>, sleeper_first: bool| {
             let mut st = State::default();
-            st.side_two.get_active().speed = 500; // sleeper acts FIRST -> the gate
+            // BOTH move orders. The intent was to pin
+            // `choice.first_move = outer_choice.first_move` -- #1048's second half,
+            // which reverting alone leaves the suite green.
+            //
+            // HONEST RESULT: it does NOT pin it. Reverting that line still passes
+            // even with this axis, because when the sleeper moves SECOND the
+            // defender's HP-reading move has already resolved, so the engine's gate
+            // does not fire either and the two agree regardless. That line remains
+            // defensive and unpinned; the axis is kept because it broadens shape
+            // coverage, not because it closes that gap.
+            st.side_two.get_active().speed = if sleeper_first { 500 } else { 1 };
             st.side_two.get_active().status = PokemonStatus::SLEEP;
             st.side_two.get_active().rest_turns = 0;
             st.side_two
@@ -3794,15 +3809,20 @@ mod tests {
                 };
                 st.side_two.get_active().replace_move(*slot, mv);
             }
-            st.side_one.get_active().speed = 1;
+            st.side_one.get_active().speed = if sleeper_first { 1 } else { 500 };
             st
         };
 
         let mut agree = 0usize;
         let mut wrong: Vec<String> = Vec::new();
         let mut multi_label_refused = 0usize;
+        let mut single_label_refused = 0usize;
         let mut unlabelled: Vec<String> = Vec::new();
+        let mut agree_by_defender: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut total_branches = 0usize;
 
+        for sleeper_first in [true, false] {
         for defender in [Choices::SUBSTITUTE, Choices::FLAIL, Choices::REVERSAL] {
             for callees in &movesets {
                 let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
@@ -3811,7 +3831,7 @@ mod tests {
                 // ENGINE-SIDE LABELS: one restricted run per callee.
                 let mut labels: Vec<(Vec<Instruction>, Choices)> = Vec::new();
                 for (i, callee) in callees.iter().enumerate() {
-                    let mut st = build(callees, Some(i));
+                    let mut st = build(callees, Some(i), sleeper_first);
                     st.side_one
                         .get_active()
                         .replace_move(PokemonMoveIndex::M0, defender);
@@ -3821,7 +3841,7 @@ mod tests {
                 }
 
                 // The real, full-moveset branch set.
-                let mut full_state = build(callees, None);
+                let mut full_state = build(callees, None, sleeper_first);
                 full_state
                     .side_one
                     .get_active()
@@ -3830,6 +3850,7 @@ mod tests {
                     generate_instructions_from_move_pair(&mut full_state, &s1, &s2, true);
 
                 for branch in &branches {
+                    total_branches += 1;
                     let mut named: Vec<Choices> = labels
                         .iter()
                         .filter(|(list, _)| list.as_slice() == branch.instruction_list.as_slice())
@@ -3864,12 +3885,22 @@ mod tests {
                         // away from being published as "#1048 is broken".
                         .and_then(|l| l.split('|').nth(3).map(|m| m.trim().to_lowercase()));
 
+                    // EVERY bucket is asserted or counted. A `_ => {}` catch-all
+                    // here previously swallowed two of them, and one is populated by
+                    // a #1048 revert: 6 cases where the engine's own labelling says
+                    // TWO callees produce the tail and the renderer named one anyway
+                    // -- a coin-flip attribution, and it named DIFFERENT callees on
+                    // identical-label tails, so they cannot all be right. The test
+                    // reported `WRONG 0` for that revert purely because the bucket
+                    // was unrouted, which made a claim of "never misattributions"
+                    // look established when it was not.
                     match (named.len(), &attributed, refused) {
                         // Unambiguous engine label + a confident attribution:
-                        // the names MUST agree. This is the whole test.
+                        // the names MUST agree. This is the core case.
                         (1, Some(name), false) => {
-                            let truth = format!("{:?}", named[0]).to_lowercase();
-                            if truth.replace('_', "") == name.replace('_', "") {
+                            let truth = move_display(named[0]).to_lowercase().replace(' ', "");
+                            if truth == name.replace('_', "").replace(' ', "") {
+                                *agree_by_defender.entry(format!("{defender:?}")).or_insert(0) += 1;
                                 agree += 1;
                             } else {
                                 wrong.push(format!(
@@ -3879,18 +3910,44 @@ mod tests {
                                 ));
                             }
                         }
+                        // Engine says AMBIGUOUS, renderer named one anyway. The
+                        // oracle says the evidence cannot single out a callee, so a
+                        // confident name here is a guess and cannot be vindicated.
+                        (n, Some(name), false) if n >= 2 => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: engine labels are \
+                             {named:?} (AMBIGUOUS) but the renderer confidently \
+                             attributed {name:?}"
+                        )),
+                        // One label, no attribution AND no refusal marker: the
+                        // attribution was dropped with nothing loud attached.
+                        (1, None, false) => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: engine used {:?} but the \
+                             renderer emitted neither an attribution nor a refusal",
+                            named[0]
+                        )),
                         // Two callees emit byte-identical lists: refusal is correct.
                         (n, _, true) if n >= 2 => multi_label_refused += 1,
-                        // Unambiguous label but refused: a MISSED attribution, not a
-                        // wrong one. Loud, so not a correctness failure -- counted.
-                        (1, _, true) => multi_label_refused += 1,
+                        // Unambiguous label but refused. LOUD, so not a correctness
+                        // failure -- but it is the none_matched/input-fidelity class,
+                        // which is the residual risk, so it gets its own counter
+                        // rather than being folded into genuine ambiguity.
+                        (1, _, true) => single_label_refused += 1,
                         (0, _, _) => unlabelled.push(format!(
                             "defender {defender:?} set {callees:?}: no engine label"
                         )),
-                        _ => {}
+                        // Catch-all that ASSERTS rather than passing. Guard arms do
+                        // not satisfy exhaustiveness, so without this the compiler
+                        // would demand a `_ => {}` -- reintroducing exactly the
+                        // silent bucket this rewrite removed.
+                        (n, attr, ref_) => wrong.push(format!(
+                            "defender {defender:?} set {callees:?}: unasserted shape \
+                             (labels {n} = {named:?}, attributed {attr:?}, refused {ref_}) \
+                             -- every combination must be a verdict, not a fall-through"
+                        )),
                     }
                 }
             }
+        }
         }
 
         assert!(
@@ -3899,34 +3956,61 @@ mod tests {
             wrong.len(),
             wrong.join("\n  ")
         );
-        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- not guessed.
-        //
-        // A previous version of this test passed while reaching ZERO confident
-        // attributions, i.e. while testing nothing it existed for. A threshold of
-        // 100 was no better: reverting #1048 (identifier back to
-        // `&Choice::default()`) yields `agree 150, refused 889` and still passes.
-        // Measured on this fixture matrix:
-        //
-        //   with #1048     agree 904, refused 141
-        //   #1048 reverted agree 150, refused 889
-        //
-        // 500 sits between them, so this gate is simultaneously a vacuity guard
-        // and a #1048 regression detector. Note what the revert does NOT do: it
-        // produces 0 wrong attributions either way. Losing the real defender
-        // choice causes REFUSALS, never misattributions -- which is the reassuring
-        // half of the answer and the reason the feared failure mode did not appear.
+        // The oracle's OWN validity check. If the restricted-moveset labelling
+        // stops reproducing the real branch set, tails go unlabelled, `agree`
+        // falls, and the coverage gate below fires with a message blaming the
+        // identifier -- misdiagnosing a broken oracle as a broken subject.
         assert!(
-            agree > 500,
-            "VACUOUS or #1048 REGRESSED: only {agree} confident attributions \
-             (refused {multi_label_refused}, unlabelled {}). Expect ~904 with \
-             #1048 in place; ~150 means the identifier lost the real defender \
-             choice.",
-            unlabelled.len()
+            unlabelled.is_empty(),
+            "ORACLE BROKEN: {} tail(s) carry no engine label, so the restricted-moveset \
+             labelling no longer reproduces the real branch set. Do NOT read the \
+             coverage gate below as a statement about the identifier.\n  {}",
+            unlabelled.len(),
+            unlabelled.join("\n  ")
         );
+
+        // COVERAGE GATE, CALIBRATED AGAINST A #1048 REVERT -- and PER DEFENDER,
+        // because a single aggregate threshold has a concrete blind spot.
+        //
+        // `pending_hp_reading_move` is a 3-member set, so "one member dropped" is
+        // the most likely real regression. Measured per defender with #1048 in
+        // place vs reverted (sleeper-first half of the matrix):
+        //
+        //     SUBSTITUTE  234 / 37      FLAIL  363 / 60      REVERSAL  307 / 53
+        //
+        // Losing FLAIL alone leaves aggregate agree = 541; REVERSAL, 597;
+        // SUBSTITUTE, 670. ALL THREE clear a bare `agree > 500`, which is why that
+        // threshold was wrong. A per-defender floor of 150 separates cleanly
+        // (min-with 234 vs max-without 60) and catches exactly that case. The RATIO
+        // gate additionally survives fixture growth, which a bare absolute count
+        // does not: trimming a moveset or an engine patch that changes branch
+        // counts would otherwise trip a false failure whose message misdiagnoses
+        // the cause.
+        for defender in ["SUBSTITUTE", "FLAIL", "REVERSAL"] {
+            let n = agree_by_defender.get(defender).copied().unwrap_or(0);
+            assert!(
+                n >= 150,
+                "VACUOUS or #1048 REGRESSED for {defender}: only {n} confident \
+                 attributions (need >= 150). A per-defender collapse means the \
+                 identifier lost the real defender choice for that move; the \
+                 aggregate count can still look healthy. All defenders: {:?}",
+                agree_by_defender
+            );
+        }
+        let pct = agree * 100 / total_branches.max(1);
+        assert!(
+            pct > 60,
+            "VACUOUS or #1048 REGRESSED: only {agree}/{total_branches} branches \
+             ({pct}%) produced a confident attribution (refused multi \
+             {multi_label_refused}, refused single {single_label_refused}). Expect \
+             ~86% with #1048 in place; ~14% means the identifier lost the real \
+             defender choice."
+        );
+
         println!(
-            "#1048 attribution: agree {agree}  WRONG 0  refused {multi_label_refused}  \
-             unlabelled {}",
-            unlabelled.len()
+            "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
+             refused-ambiguous {multi_label_refused}  refused-single {single_label_refused}  \
+             per-defender {agree_by_defender:?}"
         );
     }
 
