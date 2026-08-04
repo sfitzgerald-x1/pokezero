@@ -1,3 +1,89 @@
+# C120 v2 — A1 is two shapes, not one, and v1's keying fact was false
+
+> **v1 claimed Showdown runs its residual block on the faint boundary and the engine on the
+> replacement, so a "residuals already ran" marker could key on that. The fixture v1 itself
+> cites says the opposite. And v1's "all five rows have this property" is false for two of
+> five. Both corrections below; v1 should not be cited.**
+
+## 0. The two corrections, measured
+
+**(a) Showdown defers too.** `scripts/gen3_switch_differential.py` is the repo's Showdown
+ground-truth gate, and its `faintresiduals` scenario is measured *on the faint ply* with
+`expect={"residual_block_ran": False, "survivor_healed": False}` — the comment explains that
+`runAction` sees the pending switch flag, issues a switch request, and returns with the queued
+residual action untouched, so the protocol block ends at `|faint|`. Its sibling
+`faintresidualsdeferred` is measured on the *replacement* ply with
+`residual_block_ran: True`, `replacement_took_sandstorm: True`, `switch_precedes_residuals: True`.
+
+**So Showdown defers exactly like the engine.** v1's §1 — "Showdown does not [run a phase
+here], because it already ran one at the *faint* boundary" — is false, and v1 leaned on this
+same fixture for its *engine* half while contradicting its *Showdown* half. A marker keying on
+"Showdown's tick landed on the preceding boundary" would key on an observable that is not
+there. v1's §4 conclusion — "this is a harness fix, not an engine fix; A1 must not become an
+engine change" — inherits the same assumption and must be re-argued, not restated: with both
+sides deferring, an engine- or renderer-side cause for the dev pair is not excluded.
+
+**(b) A1 is two shapes.** Deserialising each row's recorded `engine_state`:
+
+| row | `s1.force_switch` | active changed | observed `fainted` | class sign |
+|---|---|---|---|---|
+| `19000020/50` | **True** | both | `[]` | **extra** in engine |
+| `19000059/27` | **True** | both | `[]` | **extra** |
+| `19100181/45` | **True** | both | `[]` | **extra** |
+| `19100002/53` | False | neither | `['p1']` | **missing** |
+| `19100154/75` | False | neither | `['p2']` | **missing** |
+
+The last two carry **no forced-switch marker**, nobody has switched, and a side is fainted in
+the observed post-state: they **are** the faint boundary, not the replacement. Their class sign
+is **opposite** — the engine is *missing* a tick Showdown has. A marker of the form "do not
+expect residuals here" cannot address a missing component.
+
+So v1's "all five rows carry a forced-switch marker" is wrong (3 of 5), and its "in every case
+the boundary carrying Showdown's tick is, by construction, one that compared clean" is refuted
+for those two — Showdown's tick is at the divergent boundary itself and **is** in the artifact.
+The design covers at most **3** rows, which is why plan item 9 says "2 rows".
+
+**(c) v1's cost ordering was wrong.** v1 listed a re-sweep with adjacent-boundary retention as
+the cheapest route. It is third-cheapest: `python scripts/gen3_switch_differential.py --only
+faintresiduals faintresidualsdeferred faintresidualscontrol` drives the real Node sim and
+measures which ply carries the block, and the fixture's recorded `expect` answers it at **zero**
+cost. v1's framing — "not a gap in what is knowable, a gap in what is *retained*" — is wrong
+about this fact: it was neither missing nor unretained, it was already in the tree with the
+opposite answer.
+
+## 1. What survives from v1, verified
+
+- **The sweep-retention claim is correct.** `engine_transition_differential.py:2264` appends to
+  `repros` only when `verdict == "diverged"`, so matched boundaries retain nothing but
+  histogram counters, and `replay_residue.py` cannot reach a non-retained step. That is true —
+  it is just not the binding constraint, because the fact in question lives in a fixture.
+- `19100002/53` has `branch_count: 1`, which is what ruled out A4/A7 for it.
+- v1's §3 self-critique — that writing the marker from an assumption would let two rows close
+  without establishing the assumption — was right, and is exactly what caught this. It just did
+  not go far enough: I applied it to the marker and not to my own §1.
+
+## 2. Disposition
+
+**A1 splits.** Three rows (`19000020/50`, `19000059/27`, `19100181/45`) are replacement
+boundaries carrying an *extra* engine component, and are the marker's scope. Two
+(`19100002/53`, `19100154/75`) are faint boundaries *missing* a component Showdown has, need a
+different cause, and should not be filed A1.
+
+**Next action:** run the three-scenario command against the live sim to confirm the fixture's
+recorded ply placement still holds, then scope the marker to the three-row group and re-argue
+whether it is a harness or engine fix on the measured placement rather than the assumed one.
+
+## 3. Why v1 was wrong
+
+v1 cited a fixture for the half that suited its argument and did not read the half that
+refuted it. The fixture is 13 lines and names both plies explicitly. This is the same failure as
+C118 v1 — verifying that a citation resolves rather than that it says what you need — and it is
+now the second time in this program that a report has been corrected for exactly it.
+
+---
+
+*v1 follows, retained because the corrections above are only legible against it.*
+
 # C120 — what A1's "residuals already ran" marker needs, and why the residue artifacts cannot supply it
 
 C116 Phase 3 item 9 is "the A1 harness marker, 2 rows, with a revert-failing pin". Before
