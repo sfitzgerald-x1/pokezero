@@ -90,7 +90,9 @@ of this section recorded one verified row and ten owed replays. Review examined 
 eleven and every one carries the identical signature — observed has an exact `spikes`
 component for the dragged-in Pokémon, and some engine arm carries the same magnitude
 untagged, with the magnitude matching that specific Pokémon's `maxhp/8` (Shuckle 24,
-Donphan 35, Victreebel 45 at two layers, Medicham 28, Cloyster 27).
+Donphan 285/8 = 35, Medicham 230/8 = 28, Cloyster 216/8 = 27, and Victreebel
+275/6 = 45 at **two** layers — the two-layer divisor is 6, not 8, which an earlier
+revision's blanket "maxhp/8" got wrong).
 
 **Two of them falsify the limit reading by arithmetic alone.** `19100122/169` and
 `/181` have `branch_count: 1` at 100% mass — there is no drag-target ambiguity for a
@@ -114,7 +116,10 @@ component test — so that class name can never distinguish a target limit from 
 merely co-occurring with a drag.
 
 If B1 accounts for all eleven, the holdout residue is **14** and the rate 0.0909% —
-still 1.98× the dev window, so the overfit finding survives the mitigation entirely.
+still **2.31×** the dev window like-for-like, so the overfit finding survives the
+mitigation entirely. (An earlier revision said 1.98×, comparing the post-B1 holdout against
+the **pre**-B1 dev window. #1081 has since measured both — dev 7→6, holdout 25→14 — so the
+honest ratio is 14/15396 ÷ 6/15224 = 2.31×. The error understated this report's own thesis.)
 
 ## 4. What this changes about the plan
 
@@ -135,7 +140,8 @@ four of the assignments wrong — which is exactly the failure mode
 | `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | **A8 — NEW CAUSE: the residual mirror reads status PRE-move.** Not A2. |
 | `19100181/45` | `extra:itemleftovers,psn,sandstorm` | **A1**, not A2 — the engine ran a residual phase Showdown did not. |
 | `19100193/46`, `19100014/35` | `mismatch/missing: leechseed` | a **renderer tag** defect like B1, not A2. The engine tags an 18 HP heal `leechseed`, but `290/16 = 18` is Leftovers and Miltank's sap would be `273/8 = 34`. |
-| `19100148/76`, `19100179/21` | `roll_scaled_component` | **collapse tax** — Pain Split's amount is a function of the arm's representative roll, so a collapsed fan gives a 3 HP error. Absorbed by Phase 2 enumerate-then-merge. |
+| `19100148/76`, `19100179/21` | `roll_scaled_component` | **collapse tax** — Pain Split's amount is a function of the arm's representative roll, so a collapsed fan mis-prices it: 3 HP on `19100148/76` (−20 vs −23) and 5 HP on
+`19100179/21` (−41 vs −36) — an earlier revision quoted the 3 for both. Absorbed by Phase 2 enumerate-then-merge. |
 | `19100072/17`, `/19` | `roll_scaled_component` | **NEW CAUSE** — Belly Drum at +6, below. |
 | `19100180/24` | `extra:spikes` | unowned. The engine applies `spikes -32` to p1 where Showdown applies none — a side-condition state divergence, not A2. |
 | `19100113/62` | `missing:itemleftovers,movewish` | **A9 — NEW CAUSE: a planned Wish heal is never emitted.** Not A2. |
@@ -236,6 +242,16 @@ plus three new ones**, where the dev window's 7 resolved into six. That is still
 from "25 investigations" — the compression is real — but "the number of causes rose by
 one" was reached by filing three rows to a cause whose fix had already shipped.
 
+## 4b. Era note — this baseline is no longer the current state
+
+**#1081 has since closed all eleven B1 rows**: dev 7 → 6, holdout 25 → 14, zero newly
+divergent on either, `limit:world_sample_drag_target` → 0 on both. So the 25 in §1 is **the
+baseline as measured on 89bbabe4**, not `main`'s residue. The 3.53× overfit ratio is
+unaffected — one engine, two windows — and the like-for-like post-fix ratio is 2.31×.
+
+#1081 shipped only B1's **renderer** half; the classifier fix this report asks for is still
+owed.
+
 ## 5. What is owed
 
 1. ~~Replay the remaining ten drag rows~~ — **done**: B1 discharged 11 of 11 (§3), and
@@ -253,7 +269,8 @@ one" was reached by filing three rows to a cause whose fix had already shipped.
 ## 6. A note on what this measurement cost
 
 Nothing. It is 200 games and **13.6 minutes** (`elapsed_seconds: 817.91`; an earlier
-revision said nine, which was the dev window's 611.84 s misremembered), and it should
+revision said nine, which was the dev window's 611.84 s — itself 10.2 minutes, so "nine"
+was not even the number being misremembered), and it should
 have been run months ago —
 before the first fix, as a baseline. The reason it was not is that the dev window's
 counter was falling, and a falling number is a poor prompt to ask whether you are
