@@ -34,8 +34,10 @@
 //! (`combine_duplicate_instructions`):
 //! - full-paralysis vs. miss (both: empty delta) — rendered as `|cant|..|par`
 //!   (the usually-larger probability mass), documented ambiguity;
-//! - the KO-straddle branch conflates "high roll" and "crit" — no `|-crit|`
-//!   is emitted for it;
+//! - the KO-straddle branch conflates "high roll" and "crit" at the level of
+//!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
+//!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
+//!   what remains conflated is the probability, not the tag;
 //! - Sleep Talk's called move id is not in the delta — an unidentified call is
 //!   attribution-unsafe rather than assigned to an invented action window.
 //!
@@ -1812,9 +1814,29 @@ fn render_move_phase(
     // quartered and the expectations come back at roughly half their true value.
     // Rebuild a pristine Choice from the move index, which survives the
     // mutation. See reports/c102.
-    let pristine = build_choice(sim.state, side, &MoveChoice::Move(choice.move_index));
+    // GUARDED on identity. `render_move_phase` is also called recursively for a
+    // Sleep Talk callee, and a callee's Choice comes from
+    // `get_sleep_talk_choices`, which clones raw move-table Choices — those
+    // carry `move_index: M0` and nothing ever sets it. So rebuilding from
+    // `choice.move_index` would silently return move slot 0 for every callee:
+    // Sleep Talk itself (Status, so no maxima at all, and no `|-crit|` could
+    // ever be emitted) or an unrelated move (wrong, too-low maxima, so the gate
+    // fires on non-crits). Both failure modes were measured — one row each.
+    //
+    // `move_id` is the discriminator: it survives the `before_move` mutation and
+    // is re-resolved by `change_move_id` for Transform, so it agrees on every
+    // non-callee path and disagrees on exactly the callee path.
+    let rebuilt = build_choice(sim.state, side, &MoveChoice::Move(choice.move_index));
+    let expectation_choice = if rebuilt.move_id == choice.move_id {
+        rebuilt
+    } else {
+        // A callee. Its own Choice has been through `before_move` once, which is
+        // the same single application any other path gets, so use it as-is
+        // rather than a wrong slot.
+        choice.clone()
+    };
     let (_regular_collapsed, _crit_collapsed, max_regular, max_crit) =
-        expected_damage_values(sim.state, side, &pristine, branch_on_damage);
+        expected_damage_values(sim.state, side, &expectation_choice, branch_on_damage);
 
     // Classify the remaining tail.
     let deals_damage_to_defender = tail.iter().any(|ins| match ins {
@@ -4212,6 +4234,41 @@ mod tests {
             vec!["item: Leftovers".to_string()],
             "only the Leftovers tick carries a tag; the drain is silent"
         );
+    }
+
+    /// Sleep Talk callees carry `move_index: M0`, which is why the pristine
+    /// rebuild in `render_move_phase` must be guarded on `move_id`.
+    ///
+    /// `get_sleep_talk_choices` clones raw move-table `Choice`s, and those carry
+    /// the `Choice::default()` `move_index` — `M0` — which nothing ever sets.
+    /// Rebuilding damage expectations from `choice.move_index` therefore returns
+    /// move SLOT 0 for every callee, not the callee. Measured cost when that
+    /// guard was absent: two boundaries, one per failure mode — slot 0 being
+    /// Sleep Talk itself (Status, so no maxima at all and `|-crit|` becomes
+    /// unemittable) and slot 0 being an unrelated weaker move (maxima too low, so
+    /// the crit gate fires on a non-crit).
+    ///
+    /// This pins the upstream invariant rather than the guard, deliberately: if a
+    /// future engine version starts setting `move_index` on these clones the
+    /// assert below fails, which is the signal that the guard is no longer
+    /// load-bearing. See `reports/c102`.
+    #[test]
+    fn sleep_talk_callee_choices_carry_slot_zero_move_index() {
+        let state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let callees = state.side_one.get_active_immutable().get_sleep_talk_choices();
+        assert!(
+            !callees.is_empty(),
+            "fixture must expose at least one Sleep Talk callee"
+        );
+        for callee in &callees {
+            assert_eq!(
+                callee.move_index,
+                poke_engine::state::PokemonMoveIndex::M0,
+                "callee {:?} carries a real move_index — the pristine-rebuild \
+                 guard in render_move_phase may no longer be needed",
+                callee.move_id
+            );
+        }
     }
 
     /// KNOWN OPEN — documents a defect that is still live. `#[ignore]`d rather

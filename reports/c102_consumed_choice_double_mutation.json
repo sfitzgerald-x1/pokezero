@@ -1,0 +1,44 @@
+{
+ "schema": "c102-consumed-choice-double-mutation/1",
+ "headline": "expected_damage_values is handed an ALREADY-MUTATED Choice and then re-runs the mutation, so its damage expectations are wrong by one application of every before_move modifier. This is a live defect on main, it silently degrades the crit gate today, and it is what actually broke reports/c100's fix.",
+ "credit": "found by the independent review of PR #1052, from the 17/17 signature of the rows that regressed. I had diagnosed it as stale state, which was wrong.",
+ "status": "CAUSE VERIFIED AT SOURCE AND CONFIRMED BY MEASUREMENT. Fix shipped in the same PR as this report.",
+ "the_chain": [
+  "gen3/abilities.rs:793-799 -- Abilities::THICKFAT mutates the attacker's Choice IN PLACE: attacker_choice.base_power = (attacker_choice.base_power / 2.0).floor(), for FIRE or ICE.",
+  "gen3/generate_instructions.rs:1883 before_move applies that family of modifiers (item_before_move :1900, choice_before_move :1901, and the ability hooks).",
+  "before_move has TWO call sites: :2622 inside generate_instructions_from_move, and :5119 in the damage-roll path.",
+  "generate_instructions_from_move takes choice: &mut Choice, so the :2622 mutation ESCAPES to the caller.",
+  "events.rs segment() passes &mut first_choice / &mut second_mut into generate_instructions_from_move and then STORES those same mutated choices in Segmentation.first_choice / .second_choice.",
+  "those stored choices reach render_action_phase -- whose parameter is literally named mutated_choice -- and render_move_phase passes one into expected_damage_values.",
+  "expected_damage_values -> calculate_both_damage_rolls -> calculate_damage_rolls (:5055, `mut choice: Choice`, taken by value from an already-halved Choice) -> before_move at :5119, applying the halving A SECOND TIME."
+ ],
+ "consequence": {
+  "on_main_today": "the crit gate's exact-value test compares against crit_collapsed computed from a doubly-mutated Choice. With Thick Fat the base power is quartered rather than halved, so crit_collapsed is roughly half its true value. The equality test misses by a wide margin and simply fails to tag -- silently, and indistinguishably from the other reasons it fails to tag. It has been doing this all along.",
+  "why_it_was_invisible": "both halvings floor, and an equality test that is already failing for several other reasons gives no signal about WHY. The defect only becomes visible when the test is changed to an INEQUALITY, because then a too-low bound starts firing on ordinary non-crit rolls.",
+  "on_reports_c100": "this is what broke that fix. The reachability test closed all TEN of its target I2 rows and opened SEVENTEEN new ones. Review found all 17 share one signature: a Pokemon switches in and is hit by an Ice or Fire move, and in 17/17 the switched-in Pokemon has THICK FAT. Sixteen of the seventeen have no opponent move at all, so Choice::default() for the other side -- the mechanism c100 blamed -- is exactly correct on those boundaries."
+ },
+ "corrects_reports_c100": {
+  "c100_said": "expected_damage_values runs from a stale pre-move state, before boosts, weather, item consumption and the opponent's move.",
+  "why_that_is_wrong": "events.rs threads ONE &mut sim through both action phases in move order, and render_move_phase runs per phase, so by the second mover's phase the state already contains the first mover's entire phase including their move. For the first mover the opponent's move has not happened yet either. The only staleness the code admits is intra-phase, and none of boosts / weather / item consumption appears in the regressed population.",
+  "and_c100_understated_the_result": "it reported the cost as '7 rows', which is the NET. The change closed 10 and opened 17. It also never noticed that the reachability test succeeded on 100% of its target population, which is the most decision-relevant fact in the measurement -- and which the 'both tests fail for the same reason' claim contradicts, since a test failing for the same reason could not have closed every row the other failed on."
+ },
+ "the_fix_to_try_first": "rebuild the Choice with build_choice immediately before calling expected_damage_values, so it receives a pristine Choice rather than a consumed one. That is a far smaller experiment than c100's stated next step of threading a per-branch crit flag out of generate_instructions, and it must be run first: if the maxima are correct once the Choice is pristine, the reachability test may need no redesign at all.",
+ "the_second_experiment": "only if the first fails -- carry the branch's own roll representative, per reports/c77 and reports/c93.",
+ "what_is_measured_vs_inferred": {
+  "measured": "matched 15188 -> 15181, diverged 35 -> 42, all in roll_scaled_component 13 -> 20, both reconciling to 15224 with 0 errors. 10 rows closed, 17 opened, identities enumerated in the review of PR #1052.",
+  "verified_at_source": "every link in the_chain above, read on main at this era.",
+  "inferred": "nothing material remains inferred. The 17/17 removal on the pristine rebuild, and the 2/2 removal on the move_id guard, are both measured. An earlier revision of this report listed the causal link to those 17 rows as inferred; it is now measured."
+ },
+ "disposition": {
+  "class": "ENGINE or RENDERER FIX -- a consumed Choice reaching a function that re-consumes it",
+  "implemented": false,
+  "scope": "wider than the crit gate. Any consumer of expected_damage_values inherits the error, and any before_move modifier is affected, not only Thick Fat -- Thick Fat is merely the one with a large enough effect and a common enough trigger to show up as 17 rows in a 200-game window."
+ },
+ "measured_confirmation": {
+  "the_prediction": "if the double mutation is the cause, rebuilding a pristine Choice should remove the 17 regressions the reachability gate opened on its own.",
+  "the_result": "it removed all 17. With the pristine rebuild plus the gate: matched 15188 -> 15196, diverged 35 -> 27, and the 17 were gone. But TWO NEW rows appeared -- 19000038/66 and 19000113/107 -- which were NOT among the 17.",
+  "the_second_defect_that_found": "my rebuild used build_choice(state, side, MoveChoice::Move(choice.move_index)). Sleep Talk callees come from get_sleep_talk_choices, which clones raw move-table Choices carrying move_index M0 (nothing ever sets it), so the rebuild silently returned move SLOT 0 for every callee. Two failure modes, one row each: on 19000038/66 slot 0 IS Sleep Talk, so category == Status returned no maxima and |-crit| became unemittable; on 19000113/107 slot 0 is Hidden Power Fire, giving max_regular ~22 against an Ice Beam non-crit of 41, so the gate fired on a non-crit. Found by the independent review of PR #1055, quantitatively, from the artifacts.",
+  "after_guarding_on_move_id": "matched 15188 -> 15198 (+10), diverged 35 -> 25 (-10), skip and lossy unchanged, strict:sleeptalk_union_branch back to 106 from 110, both reconciling to 15224, 0 engine errors, TEN closed and ZERO newly divergent."
+ },
+ "corrects_my_own_account_of_c100": "I wrote in PR #1055 that part 1 removed '15 of the 17' and that 'the remaining 2 are not explained'. That was wrong and it mattered: part 1 removed 17 OF 17, and the 2 new rows were introduced by part 1's own slot-0 defect. I framed a fixable bug of mine as an inherent cost of the approach. My own next sentence -- that 19000038/66 is the C87 shape rather than this one -- was the tell I did not follow."
+}
