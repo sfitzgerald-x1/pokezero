@@ -1,0 +1,97 @@
+{
+ "schema": "c95-final-three-shapes/3",
+ "REVISION_NOTE": "v1 of this report was WRONG on I4's mechanism and wrong on two of I5's three rows, and it labelled percentages and cross-slot components as replay-derived when they were miss-derived. Rewritten after adversarial review. What v1 got right: the three row memberships, and that I3 is roll-inherited.",
+ "era": {
+  "engine_fingerprint_at_authoring": "d9cab2b1cf9fc011e410229b46e6aa7ec9c400231c5671d0979b1fcda2dfd260",
+  "note": "third_party/poke-engine-src is gitignored; engine line citations are valid at this fingerprint only."
+ },
+ "provenance": {
+  "replayed": "one row per family was replayed with scripts/replay_residue.py. Those rows are named per family below.",
+  "miss_derived": "the remaining rows' percentages and component lists in v1 came from branch_misses, NOT replay, and were presented as though they were replayed. Per reports/c94 that field reports one slot per branch and is a roll-scaled, truncated subset even of that. All such figures are removed from this revision rather than relabelled.",
+  "artifact": "/tmp/sweep_exact.json, the 39-row current-era sweep. Uncommitted and unhashed -- a real weakness of this report."
+ },
+ "I4_attribution_tie": {
+  "rows": 3,
+  "identities": [
+   "19000180/54",
+   "19000180/57",
+   "19000180/60"
+  ],
+  "STATUS": "CAUSED AND FIXED. Merged as PR #1039.",
+  "v1_was_wrong": "v1 said the engine emits a leechseed heal alongside the liquidooze damage, double-counting the mechanism, and that the +19 'coincidentally' equalled Leftovers. BOTH HALVES ARE FALSE. The engine already suppresses the drain under Liquid Ooze unconditionally -- gen3/generate_instructions.rs:3624-3647 is a hard if/else and no path emits both. And it was not a coincidence.",
+  "the_real_cause": "a renderer predicate. events.rs drains_opponent keyed only on the opponent being seeded and both mons alive, so it planned a drain-heal slot the engine never emits. The reversed drain is a NEGATIVE Heal and emitted_heal counts only heal_amount > 0, so plan.heal ran one longer than emitted_heal, the reconcile marked the side unusable, and the seeder's Leftovers tick fell through to the [from] Leech Seed fallback. Ledger H.1.",
+  "the_identification": "three-for-three, at three different max HPs: the mislabelled heal is always exactly the SEEDER'S OWN maxhp/16 -- Shiftry 312->19, Magmar 246->15, Meganium 275->17. It was not a coincidence that the value matched Leftovers. It WAS Leftovers.",
+  "disposition": {
+   "class": "RENDERER FIX",
+   "implemented": true,
+   "pr": 1039,
+   "measured": "transition:matched 15184 -> 15187 (+3), transition:diverged 39 -> 36 (-3), skip and lossy unchanged, both sides reconciling to 15224, 0 engine errors.",
+   "pin": "liquid_ooze_leaves_the_seeders_leftovers_tick_correctly_tagged, verified in both directions."
+  }
+ },
+ "I3_roll_inherited": {
+  "rows": 3,
+  "identities": [
+   "19000016/2",
+   "19000016/49",
+   "19000198/22"
+  ],
+  "STATUS": "CAUSED for two rows. The third is a different shape and is reassigned.",
+  "replayed": "19000016/2",
+  "the_cause": "Pain Split averages the two mons' CURRENT HP, so its magnitude is a function of the HP left after the damage roll: a different legal roll gives a different Pain Split. movepainsplit is in the EXACT bucket (_ROLL_SCALED_SOURCES, engine_transition_differential.py:310-312, which does not contain 'residual' or 'movepainsplit'), so a 1 HP difference is compared for equality and rejected.",
+  "worked_19000016_2": "Jirachi 266/266, Swalot 316 -> 276 after move=-40. floor((266+276)/2) = 271, so Swalot 276->271 = -5, and Jirachi's half is capped at 266 and silent. The engine arm at movepainsplit=-4 needs floor((266+s)/2) = s-4, i.e. s in {273,274}, i.e. a roll of 42 or 43 -- both legal. Verified independently by review.",
+  "scope_correction": "v1 described 'Jirachi Ice Punches, Swalot Pain Splits' and 'the Pain Split differs by 1' for all three rows. That describes 19000016/2 only. 19000016/49 is Psychic, not Ice Punch.",
+  "disposition": {
+   "class": "MATCHER FIX",
+   "implemented": false,
+   "detail": "movepainsplit must be roll-aware -- either roll-scaled, or cascade-handled with a bound derived from the roll gap, as the capped-heal work does. The heal_to_full precedent at engine_transition_differential.py:301-310 is a genuine analogue. Requires a pin that fails when reverted."
+  },
+  "19000198_22": "RESTORED to I3 after review. An earlier v2 draft moved it to C93's crit-tag shape on the grounds that its MAJORITY arm is non-crit -- true and irrelevant, because the matcher accepts a boundary if ANY branch matches, so the row turns on the 6.25% crit arm. Both misses read 'attributed components differ', the EXACT-component path; a crit-tag rejection would surface as 'roll-scaled components differ'. So on p1 the crit arm CLEARED the roll check and the crit cross-check (engine_transition_differential.py:1342) and its direct hit agreed -- the symmetric difference contains only movepainsplit, -91 observed against -89, a 2 HP difference from a different legal crit roll. That is I3's mechanism unmixed, and the I3 fix closes it: 2/89 = 2.2%, inside the +/-9% band.",
+  "why_this_row_matters_most": "it is the strongest argument for the I3 fix, not the weakest. It shows the exact-bucket rejection biting a MINORITY arm that has already passed the roll and crit gates -- so a roll-aware movepainsplit has to be branch-set-aware, not just tolerant on the majority arm. The other two rows both happen to differ by 1 and do not force that.",
+  "classifier_agrees": "cert_sweep_readout.attribute_row puts 19000198/22 in I3_roll_inherited. The earlier draft's prose contradicted the binding instrument silently."
+ },
+ "I5_boundary_truncation": {
+  "rows": 3,
+  "identities": [
+   "19000020/50",
+   "19000059/27",
+   "19000098/79"
+  ],
+  "STATUS": "NOT A SINGLE SHAPE. v1 gave one boundary and one component set for all three; two of the three were wrong.",
+  "replayed": "19000020/50",
+  "per_row": {
+   "19000020/50": {
+    "shape": "double-faint replacement",
+    "engine_extra": "itemleftovers +18 on both sides",
+    "pre_state_hp": "p1 0, p2 0"
+   },
+   "19000059/27": {
+    "shape": "double-faint replacement",
+    "engine_extra": "psn -16 (Crawdaunt 257/16, toxic) -- NOT itemleftovers as v1 claimed",
+    "divergence_class": "component_extra_in_engine:psn"
+   },
+   "19000098/79": {
+    "shape": "NOT A DOUBLE SWITCH AT ALL. Choices are p1 hiddenpowerghost70 / p2 mirrorcoat, no |switch| and no |turn|. It is a Destiny Bond double faint on a MOVE ply. Its dominant complaint is a 75% roll-scaled capped_lethal mismatch; the leftovers arm is 25%, not 100%. Different mechanism; reassigned out of I5.",
+    "eviction": "EVICTED WITH NO DESTINATION AND NO CAUSE. Candidate worth checking cheaply: with the I5 rule bypassed, cert_sweep_readout.py:363-364 ('roll-scaled' in majority and 'capped_lethal' in majority) would send it to LS_capped_lethal_shape, and its 75% majority miss matches both substrings. Not verified."
+   }
+  },
+  "v1_causal_claim_RETRACTED": "v1 said 'a forced-replacement boundary is not a full turn: Showdown runs no residual phase'. That is FALSE as a general gen3 rule and the repo already said so. gen3 sends the replacement out BEFORE the residual block (generate_instructions.rs:3222-3246, PR #876, verified against the real sim by scripts/gen3_switch_differential.py::faintresiduals), so residuals run and APPLY TO THE REPLACEMENT. tests/fixtures/showdown/explosion-seed148.log.gz turn 7 is exactly this shape and shows Showdown healing the incoming replacement and emitting |upkeep.",
+  "the_actual_distinguisher": "whether the residual block ALREADY RAN, not the shape of the ply. An ACTION-phase faint defers residuals to the replacement ply, which then applies them to the replacements. A RESIDUAL-phase faint (both actives die inside the block) has already executed it, so the replacement ply is bare. Both remaining rows are the second kind. force_switch cannot distinguish them, and in this harness it is reconstructed from the self request only (src/pokezero/engine_world.py:411, :496), so it is true on side one for both.",
+  "disposition": {
+   "class": "UNDETERMINED pending a segmentation check",
+   "implemented": false,
+   "downgraded_from": "v1 said 'ENGINE or HARNESS FIX' and asserted 'the engine is answering for a turn that did not happen'. Neither is supported.",
+   "why_not_simply_a_fix": "a correct fix needs a 'residuals already ran this turn' state marker that survives the world reconstruction, landed in the ENGINE's end_of_turn_triggered with the renderer replica following. A shape predicate cannot express it -- PR #1037 tried exactly that and was closed as a regression: it pushed 39 boundaries into skip:strict_all_branches_lossy, 37 of which previously MATCHED.",
+   "note": "whether this is ultimately a fix or a comparison limit turns on that check, which has not been run.",
+   "the_limit_side": "stated symmetrically so the label does not lean. At this boundary Showdown's protocol is BARE -- no |upkeep|, no components -- and per the_actual_distinguisher the discriminating fact (whether the residual block already ran) is a property of the PREVIOUS ply. Nothing observable at the boundary the differential is asked to evaluate separates the two cases, and engine_world.py:411/:496 reconstructs from the self request only. If the segmentation cannot be made to carry cross-step state, this is not settleable by this comparison -- which is exactly what the program reserves 'comparison limit' for. It stays UNDETERMINED because the harness DOES hold the prior step's protocol in the same game, so a look-back is possible."
+  },
+  "both_rows_are_residual_phase_faints": "DERIVED, not measured: bare replacement ply plus #876 implies the block was already consumed. The retained repros contain no prior-ply protocol."
+ },
+ "tally": {
+  "caused_and_fixed": 3,
+  "caused_not_implemented": 3,
+  "undetermined": 2,
+  "evicted_cause_open": 1,
+  "note": "19000198/22 is restored to I3, so I3 is 3 rows and 'reassigned_to_other_shapes' is retired -- it laundered one unexplained row into 'belongs elsewhere'. 19000098/79 is evicted with its cause open and no verified destination."
+ }
+}
