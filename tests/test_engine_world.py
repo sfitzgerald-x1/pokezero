@@ -165,6 +165,55 @@ def _payload(dex: ShowdownDex, **overrides):
     return payload
 
 
+
+def _payload_seated_at_p2(dex: ShowdownDex, *, self_moves=None):
+    """A payload whose SELF side is p2, not p1.
+
+    Every other `selfPlayer` fixture in this repo is `"p1"` -- verified across
+    test_engine_world.py, test_rest_sleep_provenance.py and the bridge tests -- so the
+    p2-self construction path had no coverage at all. That mattered because era 51/55/57
+    shard reports show `self_moveset_mismatch` firing 39,568 times under the p1 decider
+    and EXACTLY ZERO times under p2, and the leading explanation was that p2's own
+    request never reached the world builder, leaving `known_pp` empty and the guard
+    unable to fire. If that were true the p2 side would be built with FULL PP silently --
+    a fidelity bug strictly worse than the refusal, because it searches a state Showdown
+    does not have instead of declining to search.
+
+    It is not true, and this fixture is what shows it: seated at p2 the guard fires
+    normally. Flipping `selfPlayer` alone is not enough to demonstrate that, which is
+    why this helper exists rather than a one-line override -- the two sides carry
+    DIFFERENT SHAPES. A self side has exact HP (`265/305`) and request-known `moves`
+    with `pp`; an opponent side has a percentage (`73/100 par`) and no moves. Flipping
+    `selfPlayer` to `"p2"` while leaving the sides alone makes `self_maxhp_mismatch`
+    fire first ("request max HP 100 != computed 387") and the moveset guard is never
+    reached -- which reads exactly like the guard not firing.
+    """
+
+    payload = _payload(dex)
+    snorlax_maxhp = _maxhp(_SNORLAX, dex)
+    payload["selfPlayer"] = "p2"
+    payload["selfTeamOrder"] = ["Snorlax", "Starmie"]
+    payload["sides"]["p2"]["pokemon"] = [
+        {
+            "species": "Snorlax",
+            "condition": f"{snorlax_maxhp - 40}/{snorlax_maxhp} par",
+            "active": True,
+            "moves": self_moves
+            if self_moves is not None
+            else [
+                {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+                {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
+            ],
+        },
+        {"species": "Starmie", "condition": f"{_maxhp(_STARMIE, dex)}/{_maxhp(_STARMIE, dex)}"},
+    ]
+    # ...and p1 becomes the OPPONENT side: percentage condition, no request moves.
+    payload["sides"]["p1"]["pokemon"] = [
+        {"species": "Swampert", "condition": "87/100", "active": True},
+        {"species": "Starmie", "condition": "100/100"},
+    ]
+    return payload
+
 def _override() -> BattleStartOverride:
     return BattleStartOverride(
         player_teams={
@@ -857,6 +906,57 @@ class TransformAndEncoreTests(unittest.TestCase):
             {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
         ]
         self._assert_reason(payload, "self_moveset_mismatch")
+
+    def test_self_moveset_mismatch_fails_closed_SEATED_AT_P2(self) -> None:
+        """The same guard, with the engine seated at p2 instead of p1.
+
+        Era 51/55/57 shard reports show this class firing 39,568 times under the p1
+        decider and ZERO times under p2. The leading explanation was a plumbing gap --
+        p2's own request never reaching the world builder, so `known_pp` stays empty and
+        the guard cannot fire. That would mean p2's own team is built with FULL PP
+        silently, which is worse than the refusal.
+
+        This test refutes that: seated at p2 the guard fires normally, so `known_pp` is
+        populated for p2 and the cluster's 39,568-vs-0 split is a property of the DATA,
+        not an asymmetry in the code. Where the data asymmetry comes from is a separate
+        question and belongs in the fallback ledger.
+        """
+        payload = _payload_seated_at_p2(
+            self.dex,
+            self_moves=[
+                {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+                # thunderbolt is request-known but absent from Snorlax's sampled set
+                {"id": "thunderbolt", "pp": 15, "maxpp": 24, "disabled": False},
+            ],
+        )
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex)
+        message = str(caught.exception)
+        self.assertIn("self_moveset_mismatch", message)
+        # The SEAT must be p2. Asserting only the class would pass on a payload that
+        # silently fell back to p1 as the self side, which is the failure this covers.
+        self.assertIn("p2:", message)
+        self.assertIn("thunderbolt", message)
+
+    def test_a_p2_seated_self_side_constructs_when_its_moveset_agrees(self) -> None:
+        """The control, without which the test above proves nothing.
+
+        A guard that refused EVERY p2-seated payload would satisfy the assertion above
+        while telling us nothing about `known_pp`. So: the same fixture with a moveset
+        that agrees must construct, which is what makes the refusal above attributable
+        to the mismatch rather than to being seated at p2 at all.
+        """
+        payload = _payload_seated_at_p2(self.dex)
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        # side_two is the self side here, and it carries the request-known moves.
+        by_id = {spec.id: spec for spec in world.spec.side_two.pokemon[0].moves}
+        self.assertIn("bodyslam", by_id)
+        # ...and its PP came from the REQUEST, which is the whole point. `MoveSpec.pp`
+        # defaults to 32; if `known_pp` were empty for p2 this would be the default or
+        # the move table's maximum, not the request's 15. This assertion is what makes
+        # the pair a demonstration that p2's request data reaches the builder, rather
+        # than just a demonstration that something refused.
+        self.assertEqual(by_id["bodyslam"].pp, 15)
 
     def test_self_encore_derives_lock_from_disabled_pattern(self) -> None:
         payload = _payload(self.dex)
