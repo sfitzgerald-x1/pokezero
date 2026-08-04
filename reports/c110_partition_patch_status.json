@@ -1,5 +1,5 @@
 {
- "schema": "c110-residual-partition-patch-status/1",
+ "schema": "c110-residual-partition-patch-status/2",
  "purpose": "Exact state of the residual-lethality partition patch, so the next attempt does not repeat six rebuild cycles of mine.",
  "the_patch": "third_party/poke-engine-gen3-residual-lethality-partition.patch, committed on scott/c109-partition. Content is correct and reviewed against the residual phase. Applies-check FAILS.",
  "what_the_patch_does": "adds pending_residual_damage() mirroring the residual phase tick-for-tick with its guards, binds it before defender_active takes its mutable borrow, and partitions the non-crit fan on hp-minus-pending in the branch where the fan cannot kill on the hit.",
@@ -9,10 +9,30 @@
   "context bytes: all seven of hunk 1's context lines compared character-by-character against the vendored file -- all match",
   "blank context lines: space-prefixed, which they must be in unified diff",
   "file format: byte-compared against poke-engine-gen3-substitute-hp-gate.patch, a patch that applies cleanly. Same header shape, trailing newline present, no CRLF",
-  "my own earlier git-apply invocation: I ran it from inside the sdist root so git resolved paths against the repo root and prefixed the cwd. Its output, including an apparent double-blank-line search, is an ARTIFACT of that and should be ignored"],
+  "my own earlier git-apply invocation: I ran it from inside the sdist root so git resolved paths against the repo root and prefixed the cwd. Its output, including an apparent double-blank-line search, is an ARTIFACT of that and should be ignored"
+ ],
  "the_real_symptom": "patch(1) -p1 --dry-run --fuzz=0 from the sdist root reports ALL THREE hunks failing. Three of three is systematic, not per-hunk arithmetic -- which is what I spent four cycles adjusting.",
  "the_hypothesis_i_did_not_get_to_test": "the build re-extracts the pristine sdist and replays the manifest, so the tree my anchors were read from is a DIFFERENT object from the tree the applicator patches. Note the substitute-hp-gate patch anchors its function at 1326 while that same function sits at 1388 in the fully-patched vendored tree -- a +62 shift. If patches anchor against positions earlier in the replay than the final state, anchors read from the vendored tree are wrong by the cumulative shift of every patch after that point.",
  "the_one_command_that_settles_it": "extract the pristine sdist to a scratch dir, replay the manifest in order stopping BEFORE this patch, then grep that tree for the three anchor lines. Those are the correct numbers. Do NOT read them from third_party/poke-engine-src.",
- "cost_of_my_approach": "six full two-consumer rebuild cycles, and the patch was destroyed once by a git checkout before being committed. The systematic signal -- three of three hunks failing -- was visible in the first patch(1) run and I kept treating it as an arithmetic problem.",
- "everything_else_about_the_change_is_ready": "the summing argument is sound for lethality (each tick clamps to the HP left at its point, so death iff hp <= sum); the guards mirror the phase; the borrow issue is fixed; the gates required are recorded in reports/c109."
+ "cost_of_my_approach": "eight rebuild-or-replay cycles. Two hypotheses formed and both refuted by test -- which is the process working, but slowly. The lesson worth keeping is the last bullet above: I hand-authored a unified diff and spent the session's remaining budget on its arithmetic, when generating it with git diff from an edited tree would have removed that entire failure class.",
+ "everything_else_about_the_change_is_ready": "the summing argument is sound for lethality (each tick clamps to the HP left at its point, so death iff hp <= sum); the guards mirror the phase; the borrow issue is fixed; the gates required are recorded in reports/c109.",
+ "the_hypothesis_is_REFUTED": {
+  "what_i_predicted": "that the applicator's tree differs from third_party/poke-engine-src, so anchors read from the vendored tree were wrong by the cumulative shift of later patches. I cited substitute-hp-gate anchoring at 1326 while the same function sits at 1388 in the vendored tree as evidence.",
+  "the_test": "extracted the pristine sdist to a scratch dir and replayed all 56 manifest patches in order, excluding mine. All 56 applied cleanly.",
+  "the_result": "TRUE anchors are 1388, 2930, 3057 -- IDENTICAL to the vendored tree. The two trees agree exactly. My hypothesis was wrong, and the +62 shift I pointed at is just where that function moved during the replay, which is the expected behaviour of an ordered patch stack, not evidence of divergence.",
+  "so_the_fault_is_in_the_patch_or_the_tool_not_the_anchors": "which is where I started four cycles ago, now with the anchors positively excluded rather than assumed."
+ },
+ "everything_verified_clean_and_it_still_fails": {
+  "against_the_replayed_tree": "patch -p1 --fuzz=0 reports 3 of 3 hunks failing, hunk 1 at 1388 -- the correct line.",
+  "hunk_1_old_side": "reconstructed from the patch and compared line by line against the replayed tree at 1388: SEVEN lines, ALL IDENTICAL, including the trailing blank.",
+  "all_three_headers": "validated programmatically against their bodies -- old counts non-'+' lines, new counts non-'-' lines. -1388,7 +1388,53 / -2930,1 +2976,5 / -3057,2 +3107,33. All three agree with their bodies.",
+  "malformed_lines": "zero. Every body line begins with space, plus or minus.",
+  "file_format": "byte-compared against substitute-hp-gate.patch, which applies: same header shape, trailing newline, no CRLF.",
+  "conclusion": "every property I know how to check is correct, and it still fails. My model of the failure is wrong somewhere I cannot see."
+ },
+ "what_i_would_try_next_with_a_fresh_budget": [
+  "the tool. macOS ships BSD patch -- note it prints `patching file 'x'` WITH QUOTES, which GNU patch does not. The 56 stack patches apply under it, but they may all be single-hunk or lack a hunk whose context ends in a blank line immediately before additions. Test by splitting mine into three single-hunk patches and applying them individually: that isolates tool behaviour from patch content in one run.",
+  "if a single-hunk version applies, the content is fine and the answer is to ship three patch files or regenerate with `git diff` from a real edited tree rather than hand-authoring the unified diff.",
+  "generating the patch with `git diff` against an actually-edited copy of the replayed tree is the more robust route regardless -- it removes hand-authored headers from the equation entirely, and every hand-authored header in this session has been wrong at least once."
+ ]
 }
