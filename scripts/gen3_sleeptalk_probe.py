@@ -156,13 +156,25 @@ def _move_flag_sets(showdown_root: str) -> tuple[set[str], set[str], str]:
             capture_output=True, text=True, timeout=120, check=False,
         )
         if proc.returncode != 0:
-            detail = (proc.stderr or "").strip().splitlines()
-            why = detail[-1][:200] if detail else f"exit {proc.returncode}"
+            # Pick the DIAGNOSIS line, not the last line. For an uncaught throw
+            # under `node -e`, stderr ends with the version banner ("Node.js
+            # v22.x"), so `[-1]` reported that and nothing else -- collapsing the
+            # two guards' distinct messages ("format ... does not exist" vs
+            # "resolver gave genN/mod") into a version string and leaving a
+            # fallback run undiagnosable.
+            lines = (proc.stderr or "").strip().splitlines()
+            why = (
+                next((ln.strip() for ln in lines if "Error: " in ln), None)
+                or " | ".join(ln.strip() for ln in lines[-3:])
+                or f"exit {proc.returncode}"
+            )
             return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
-                    f"SNAPSHOT (Dex query failed: {why})")
+                    f"SNAPSHOT (Dex query failed: {why[:200]})")
         payload = json.loads(proc.stdout)
-        # Belt and braces: the JS asserts this, but the invariant belongs next to
-        # the code that consumes it too.
+        # DELIBERATELY REDUNDANT with the JS assertions, and unreachable while they
+        # stand: this only fires if a future edit removes or weakens them. Review
+        # confirmed by mutation that it does catch that case, so it is not dead
+        # code -- but do not read its presence as coverage of the JS guards.
         if payload.get("gen") != 3 or payload.get("currentMod") != "gen3":
             return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
                     f"SNAPSHOT (resolver reported gen{payload.get('gen')}/"

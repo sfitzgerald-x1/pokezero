@@ -107,8 +107,48 @@ class Gen3FlagSetTest(unittest.TestCase):
         )
         charge, nosleeptalk, source = self.mod._move_flag_sets(str(tmp))
         self.assertIn("SNAPSHOT", source, f"a format miss must not be data-backed: {source}")
+        # Pin THIS guard, not merely the end-to-end outcome. Review showed that
+        # asserting only "SNAPSHOT in source" gates the CONJUNCTION of three
+        # mutually redundant guards -- remove any two and the test stays green.
+        self.assertIn(
+            "does not exist in this build", source,
+            f"must fall back via the `exists` guard specifically: {source}",
+        )
         # And the answer must be gen3's, not the gen9 table it was handed.
         self.assertEqual(nosleeptalk, self.mod._GEN3_NOSLEEPTALK_SNAPSHOT)
+
+    def test_an_existing_format_that_resolves_to_the_wrong_gen_is_refused(self) -> None:
+        """The other half of the blocker, previously untested.
+
+        The committed format-miss stub sets `exists: false`, so the JS throws
+        before `forFormat` is ever called -- the `dexes[mod || BASE_MOD]` fallback
+        the docstring describes was never exercised. This stub reports the format
+        as EXISTING and then hands back gen9's dex, which is what a stale
+        `formats.js` mapping would do, and pins the gen/currentMod guard.
+        """
+        root = _showdown_root()
+        if root is None or shutil.which("node") is None:
+            self.skipTest("needs node + a built showdown dist/sim/dex.js")
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "dist" / "sim").mkdir(parents=True)
+        real = Path(root) / "dist" / "sim" / "dex.js"
+        (tmp / "dist" / "sim" / "dex.js").write_text(
+            f"const real = require({str(real)!r});\n"
+            "exports.Dex = {\n"
+            "  formats: {get: () => ({exists: true, mod: 'gen3'})},\n"
+            "  forFormat: () => real.Dex.forFormat('gen9randombattle'),\n"
+            "};\n",
+            encoding="utf-8",
+        )
+        charge, nosleeptalk, source = self.mod._move_flag_sets(str(tmp))
+        self.assertIn("SNAPSHOT", source, source)
+        self.assertIn(
+            "expected gen3/gen3", source,
+            f"must fall back via the gen/currentMod guard specifically: {source}",
+        )
+        # 40 would be the gen9 answer leaking through.
+        self.assertEqual(len(nosleeptalk), 35, source)
 
     def test_a_missing_dist_reports_snapshot_not_a_file_path(self) -> None:
         tmp = Path(tempfile.mkdtemp())
