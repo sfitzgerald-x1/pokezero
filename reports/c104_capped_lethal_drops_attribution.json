@@ -1,0 +1,42 @@
+{
+ "schema": "c104-capped-lethal-destroys-attribution/1",
+ "headline": "the differential's own parser OVERWRITES the source of any damage event that kills, replacing psn / leechseed / sandstorm with the bare literal 'capped_lethal'. Showdown's attribution is discarded, the engine's is kept, and the two then cannot agree. This is a harness defect, and the file already contains the correct pattern eight lines above it.",
+ "status": "CAUSE ESTABLISHED AT SOURCE. Fix NOT implemented. Closes the class reports/c103 found and could not attribute.",
+ "the_rows": [
+  "19000147/125",
+  "19000191/63"
+ ],
+ "era": {
+  "commit": "04e7784e",
+  "engine_fingerprint": "36e9b74e70bebe34",
+  "artifact": "/tmp/sweep_main_final.json"
+ },
+ "the_code": {
+  "where": "scripts/engine_transition_differential.py, the component parser",
+  "what_it_does": "`if fainted_here and tag == \"-damage\": source = \"capped_lethal\"` -- an unconditional assignment that DISCARDS whatever `[from]` source Showdown supplied.",
+  "the_correct_pattern_is_eight_lines_above": "the capped-HEAL branch does the same job without the damage: `source = f\"{source}_to_full\"`, and its own comment says why -- 'The tag is PRESERVED so attribution is still compared; only the magnitude is relaxed, and only in the capped direction.' The capped-lethal branch does the opposite of what its neighbour documents as correct.",
+  "consequence": "both branches exist to relax a MAGNITUDE that inherits an earlier roll. Only one of them keeps the attribution. So a lethal residual arrives with its source erased, the engine's renderer supplies the true source, and the comparison fails on attribution for a reason that has nothing to do with the roll it was relaxing."
+ },
+ "the_two_rows": {
+  "19000191_63": {
+   "observed": "p1 capped_lethal=-28",
+   "engine_79pct": "p1 leechseed=-29",
+   "showdown_line": "|-damage|p1a: Raichu|0 fnt|[from] Leech Seed|[of] p2a: Tangela",
+   "note": "Showdown SUPPLIES the attribution -- [from] Leech Seed is right there in the protocol -- and the parser throws it away because the mon fainted. The engine keeps it. 28 against 29 is a one-HP roll difference that the roll bucket would have absorbed."
+  },
+  "19000147_125": {
+   "observed": "p2 psn=-54",
+   "engine_87pct": "p2 capped_lethal=-53",
+   "note": "the MIRROR case, and it is the one that proves the defect is the overwrite rather than a mere disagreement. Here the OBSERVED side kept `psn` and the ENGINE side is the one reading `capped_lethal` -- because the engine's branch is where the faint happens. Same mechanism, opposite sides, and the two labels can never meet."
+  }
+ },
+ "the_fix": {
+  "form": "mirror the neighbour: `source = f\"{source}_capped_lethal\"`, and route the suffix the way `_to_full` is routed (`source.endswith(\"_to_full\")` has an existing branch), so the magnitude is relaxed while the attribution is still compared.",
+  "why_this_is_not_widening": "it does not add tolerance. The magnitude relaxation is already there and is already justified by the comment. This RESTORES a comparison the parser was silently skipping -- it makes the matcher stricter on attribution while leaving the roll relaxation untouched. Closing rows by preserving information is the opposite of closing them by widening a rule.",
+  "expected_scope": "2 rows measured here. Likely more: the overwrite fires on EVERY lethal residual, so any family containing one is affected -- reports/c99 records LS_capped_lethal_shape at 7 rows, whose name is this literal. That should be measured, not assumed; reports/c100 predicted 10 and measured -7.",
+  "gate": "needs a pin that fails when reverted, and a single-variable sweep reporting matched and skip alongside diverged.",
+  "implemented": false
+ },
+ "how_this_was_found": "reports/c103 re-adjudicated the limit:roll_divergent_lethality rows -- a re-adjudication filed by reports/c91 and reports/c89 and never run -- and found five of five were defects rather than limits, across two classes. Three were the already-caused faint-without-damage class. These two were the residue that nothing covered, and this is their cause. Neither would have been visible without running the re-adjudication.",
+ "and_it_explains_the_label": "limit:roll_divergent_lethality has been absorbing these because the overwrite makes every lethal residual look like a roll-scaled component whose counterpart disagrees -- which is the exact shape of a roll dispute. The label was reporting the parser's own erasure back as a property of the comparison."
+}
