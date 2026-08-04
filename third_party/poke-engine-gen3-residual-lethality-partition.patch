@@ -1,19 +1,15 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1388,7 +1388,53 @@
- fn pending_hp_reading_move(choice: &Choice) -> bool {
-     matches!(
-         choice.move_id,
-         Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE | Choices::BELLYDRUM
-     )
- }
- 
+@@ -1385,6 +1385,52 @@
+ /// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
+ /// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
+ /// fires, while the representative 135 leaves 126 and it correctly declines).
 +/// What the END-OF-TURN phase will take off `side_ref` if it is still alive.
 +///
 +/// Summing is sound for the LETHALITY question specifically: every tick clamps to
 +/// the HP remaining at its own point in the order, so total damage dealt is
 +/// `min(hp, sum)` and the defender dies iff `hp <= sum`. It would NOT be sound if
-+/// this were used for a magnitude. reports/c109.
++/// this were used for a magnitude. Registered in reports/c109.
 +///
 +/// Mirrors add_end_of_turn_instructions tick for tick INCLUDING its guards. A
 +/// threshold from a different formula than the phase applies would move
@@ -54,23 +50,32 @@
 +    cmp::min(total, active.hp)
 +}
 +
-@@ -2930,1 +2976,5 @@
-     let crit_chance = critical_hit_chance(&choice, defender_ability);
+ fn pending_hp_reading_move(choice: &Choice) -> bool {
+     matches!(
+         choice.move_id,
+@@ -2928,6 +2974,10 @@
+                 .get_active_immutable()
+                 .ability;
+             let crit_chance = critical_hit_chance(&choice, defender_ability);
 +    // Bound HERE, before `defender_active` takes a mutable borrow of `state`.
 +    // The residual partition below cannot read `state` while that borrow lives.
 +    let pending_at_end_of_turn =
 +        pending_residual_damage(state, &attacking_side.get_other_side());
-@@ -3057,2 +3107,33 @@
+             // run_move reverses everything it applies -- the extra_branches
+             // loop below re-applies for exactly this reason and says so. This
+             // loop did not, so 31 spurious reversals of a DecrementRestTurns
+@@ -3056,6 +3106,37 @@
+             };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
 +
 +            // ...but a residual still can. This arm exists BECAUSE the fan cannot
 +            // kill on the hit -- yet a roll leaving the defender at or below its
 +            // pending end-of-turn damage kills one phase later. Collapsing to
-+            // 0.925 * max picks one side of THAT threshold and drops the other,
-+            // so the engine asserts a residual KO a legal roll would not have
-+            // scored, or the reverse. Seed 19000029 step 51: Showdown's roll left
-+            // the defender above the sandstorm tick and it lived; the collapsed
++            // 0.925 * max picks one side of THAT threshold and drops the other, so
++            // the engine asserts a residual KO a legal roll would not have scored,
++            // or the reverse. Seed 19000029 step 51: Showdown's roll left the
++            // defender above the sandstorm tick and it lived; the collapsed
 +            // representative left it below and the tick killed.
 +            //
 +            // Same identity Case A and the crit split already use; no second one.
@@ -94,3 +99,6 @@
 +                    }
 +                }
 +            }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
+             if crit_rate > 0.0
+                 && max_crit_damage >= defender_active.hp
