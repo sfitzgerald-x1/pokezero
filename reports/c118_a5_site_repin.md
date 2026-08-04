@@ -1,4 +1,4 @@
-# C118 — A5's site is not where C111 pinned it, and the fix must not be written yet
+# C118 — A5's site was wrong AND its mechanism is refuted; the rows are unattributed
 
 C116 Phase 3 item 8 begins "reorder contact-ability trigger vs. same-turn wake **at the
 pinned lines**". This is that re-pinning, and it changes the diagnosis. Nothing is fixed
@@ -58,19 +58,49 @@ Both are one instrumented run to settle. I did not run it, and I am recording th
 rather than reasoning across it, because reasoning across exactly this kind of gap is what
 produced C117's three misfiled A2 rows — a cause whose fix had already shipped.
 
+## The ordering question is settled, and it refutes the mechanism
+
+The two open questions needed no instrumentation. The replay prints instructions in
+**applied** order, which is exactly what `contact_status_is_valid` reads. Seed 19000125
+step 226, highest-probability branch:
+
+```
+Damage SideTwo: 16                        <- p1 Nidoqueen's Sludge Bomb hits Shuckle
+ChangeStatus SideTwo-P0: SLEEP -> NONE    <- Shuckle WAKES, here
+DecrementRestTurns SideTwo
+SetLastUsedMove SideTwo: Move(M0) -> Move(M2)
+Damage SideOne: 5                         <- Shuckle's Wrap contacts Nidoqueen
+ApplyVolatileStatus SideOne: PARTIALLYTRAPPED
+```
+
+**The wake precedes the Wrap.** When `ability_after_damage_hit` evaluates Poison Point on
+that contact, the secondary's target (Shuckle) already has `status == NONE`, so
+`contact_status_is_valid` returns **true**, not false.
+
+**C111's A5 mechanism is refuted.** The engine does not fail to poison because it thinks the
+attacker is asleep. It simply does not poison: no `ChangeStatus … -> POISON` appears in the
+branch, and the three arms C111 recorded (14.06 / 74.71 / 4.98 = 93.75%) carry no `psn` on
+either side, with 6.25% of mass unaccounted for in that listing.
+
+Untested candidates, recorded so the next attempt does not restart from zero: Poison Point's
+activation probability and how its arms are enumerated; whether Wrap's contact flag reaches
+this hook at all (Wrap is `contact: true` in gen3, verified during the c103–c109 landing, so
+this is plumbing rather than data); and whether a partial-trap move's **first** turn routes
+through `ability_after_damage_hit`.
+
 ## Disposition
 
-**A5 stays open, with its site corrected and its mechanism downgraded from established to
-candidate.** The next action is instrumentation, not a patch:
+**A5 is withdrawn as a cause. `19000125/226` and `19100012/61` are UNATTRIBUTED** and return
+to the queue as such. C111's A5 entry and C117 §4's A5 filing both need amending, in separate
+PRs — C111 owns the cause namespace, C117 owns the holdout row table.
 
-- print the applied-state `status` of the secondary's target at the moment
-  `contact_status_is_valid` is called, on seed 19000125 step 226;
-- if it reads SLEEP, the mechanism is confirmed and the fix is an ordering change whose
-  blast radius is `generate_instructions_from_existing_status_conditions` — wide, and worth
-  a dedicated PR;
-- if it reads NONE, A5 is refuted for these rows and both need re-attribution.
+Accounting consequences, stated because they move against the program's headline: the dev
+window's 6 rows now carry **five** named causes and one unattributed; C117's "15 of 25 on
+C111's six causes" becomes **14 of 25**; and A5 has **zero** rows in either window. C117's
+"the number of causes rose by three" survives, because A5 was an existing cause being reused
+rather than a new one.
 
-**Do not write the fix from this report.** It names where to look, not what to change.
+**Do not write a fix for A5.** There is currently no mechanism to fix.
 
 ## A note on how this was found
 
