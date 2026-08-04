@@ -138,10 +138,21 @@ four of the assignments wrong — which is exactly the failure mode
 | `19100148/76`, `19100179/21` | `roll_scaled_component` | **collapse tax** — Pain Split's amount is a function of the arm's representative roll, so a collapsed fan gives a 3 HP error. Absorbed by Phase 2 enumerate-then-merge. |
 | `19100072/17`, `/19` | `roll_scaled_component` | **NEW CAUSE** — Belly Drum at +6, below. |
 | `19100180/24` | `extra:spikes` | unowned. The engine applies `spikes -32` to p1 where Showdown applies none — a side-condition state divergence, not A2. |
-| `19100012/61`, `19100113/62`, `19100122/…`, `19100142/…`, `19100180/7,/40` | `limit:world_sample_drag_target` | **B1**, 11/11 (§3) |
+| `19100113/62` | `missing:itemleftovers,movewish` | **A2** — unmirrored **Wish**. Wish is reachable (16 species per C116 §4's pool check) and #1066 ordered it at step 7. |
+| `19100012/61` | `missing:psn` | **A5** — contact-ability trigger precedes the same-turn wake. Protocol carries `[from] ability: Poison Point` with `[from] move: Wrap`, the same signature as C111's `19000125/226`. |
+| `19100122/13,117,147,151,164,169,181`, `19100142/21,/22`, `19100180/7,/40` | `limit:world_sample_drag_target` | **B1**, 11/11 (§3) |
 
-The `movewish` row is `19100181/45` above. Wish is reachable (16 species per C116 §4's
-pool check) and was ordered at step 7 by #1066.
+**A correction to this table, which an earlier revision of it got wrong.** That revision
+filed `19100012/61` and `19100113/62` into the B1 row, which made the table's drag count
+read **13** against §2's histogram of **11** — a contradiction inside the document that
+is meant to be the authoritative record. Neither row carries a `|drag|` line, and that
+is provable from the classifier rather than from a reading: `engine_transition_differential.py:1761`
+short-circuits to `limit:world_sample_drag_target` on the *mere presence* of `|drag|`,
+so any row with a different class cannot contain one. The same revision also said "the
+`movewish` row is `19100181/45`", which was wrong — exactly one row carries `movewish`
+and it is `19100113/62`. Both errors were introduced while fixing the previous round's
+errors, which is its own lesson: a correction pass needs the same derivation discipline
+as the original.
 
 **A NEW CAUSE DID APPEAR, and an earlier revision of this section denied it.** That
 revision said "no new mechanism has appeared". It was refuted by two rows of this
@@ -164,10 +175,20 @@ Extra sting, and an M2 instance in landed code:
 Showdown's predicate (`target.hp <= target.maxhp / 2`) and on that basis calls the
 engine "faithful on both parities".
 
-**The compression claim survives, but weaker than stated.** Ten of eleven... rather:
-23 of 25 rows attribute to existing causes and 2 open a new one. So the count rose and
-the number of causes rose by one — not by twenty-five. That is still strong evidence
-for "36 rows was never 36 investigations", and it is no longer an unqualified claim.
+**The compression claim survives, and here is the honest count.** An earlier revision
+said "23 of 25 attribute to existing causes", which the table directly above it
+contradicted — the same optimistic-subtraction shape that produced "no new mechanism":
+I subtracted only the two Belly Drum rows and ignored the five other rows the table
+marks as unnamed or unowned.
+
+Derived from the corrected filings: **18 of 25 rows land on the six causes named in
+C111** — 11 B1, 3 A1, 3 A2, 1 A5 — and **7 do not**: 2 the new Belly Drum cause, 2 an
+unnamed renderer mis-tag (leechseed-for-Leftovers), 2 Pain Split collapse tax, and 1
+unowned (`19100180/24`, a side-condition state divergence).
+
+So the count rose from 7 to 25 while the number of *causes* rose by one. That is the
+evidence for "36 rows was never 36 investigations", stated at its true strength rather
+than its most flattering one.
 
 ## 5. What is owed
 
