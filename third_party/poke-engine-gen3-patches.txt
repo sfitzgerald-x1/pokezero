@@ -1249,3 +1249,4 @@ poke-engine-gen3-bellydrum-roll-gate.patch
 # Partition a damage fan on RESIDUAL lethality, not only lethality on the hit.
 # reports/c109.
 poke-engine-gen3-residual-lethality-partition.patch
+poke-engine-gen3-contact-flags.patch

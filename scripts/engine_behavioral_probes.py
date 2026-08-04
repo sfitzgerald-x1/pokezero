@@ -260,6 +260,54 @@ def probe_burned_struggle() -> None:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 5: Gen 3 contact flags (patch 58).
+# Gen 3 assigns contact differently from Gen 4+: Overheat and Ancient Power
+# make contact, while Covet, Fake Out and Feint Attack do not. Upstream
+# poke-engine carries the Gen 4+ flags. Rough Skin is the observable: it only
+# retaliates on contact, so the flag shows up as a recoil Damage instruction
+# against the attacker.
+# ---------------------------------------------------------------------------
+def probe_contact_flags() -> None:
+    def attacker_takes_rough_skin(move: str) -> bool:
+        attacker = pe.Pokemon(
+            id="attacker", level=100,
+            types=("normal", "typeless"), base_types=("normal", "typeless"),
+            hp=320, maxhp=320, ability="none", item="none",
+            attack=200, defense=180, special_attack=200,
+            special_defense=170, speed=200,
+            moves=[pe.Move(id=move, pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="defender", level=100,
+            types=("water", "typeless"), base_types=("water", "typeless"),
+            hp=320, maxhp=320, ability="roughskin", item="none",
+            attack=180, defense=180, special_attack=170,
+            special_defense=170, speed=100,
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        state = _mk_state(attacker, defender)
+        branches = pe.generate_instructions(state, move, "splash")
+        lines = [str(i) for b in branches for i in b.instruction_list]
+        # Rough Skin costs the attacker maxhp/16 == 20.
+        return any(l == "Damage SideOne: 20" for l in lines)
+
+    for move, want_contact in (
+        ("overheat", True),
+        ("ancientpower", True),
+        ("covet", False),
+        ("fakeout", False),
+        ("feintattack", False),
+    ):
+        got = attacker_takes_rough_skin(move)
+        _report(
+            f"gen3-contact-{move}",
+            got == want_contact,
+            f"expected contact={want_contact} (rough skin recoil), got {got}",
+        )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -279,6 +327,7 @@ def main() -> int:
     probe_protect_ladder()
     probe_stepwise_stab()
     probe_burned_struggle()
+    probe_contact_flags()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")

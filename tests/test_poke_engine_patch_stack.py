@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 57-patch stack. Only generate_instructions.rs
+# Post-patch content pins for the 58-patch stack. Only generate_instructions.rs
 # moved: crit-kill-split, substitute-hp-gate and bellydrum-roll-gate all touch it. choice_effects.rs
 # and abilities.rs are BOTH byte-identical to the 52-patch pins -- the dropped
 # trick-attacker-item patch was the only thing that would have moved
@@ -118,9 +118,9 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 [entry.name for entry in applied[-3:]],
                 [
-                    "poke-engine-gen3-sleeptalk-crit-arm.patch",
                     "poke-engine-gen3-bellydrum-roll-gate.patch",
                     "poke-engine-gen3-residual-lethality-partition.patch",
+                    "poke-engine-gen3-contact-flags.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
