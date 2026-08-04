@@ -2846,6 +2846,17 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// `DamageSubstitute` is correctly excluded here: substitute hits use that variant rather
 /// than `Damage`, and the walk renders neither.
 ///
+/// COVERAGE, stated because five of these six entries have none. The corpus exercises
+/// `Damage` and the empty tail only; `Switch`, `SetLastUsedMove` and the three
+/// `ChangeDamageDealt*` variants are admitted on a structural argument with no fixture.
+/// Review checked all five by hand and they hold today: `Switch` renders as a complete,
+/// correctly-tagged drag (probed: `|drag|` followed by `|-damage|...|[from] Spikes`), and
+/// the other four carry no protocol line on any path and are read by neither the fold nor
+/// the native encoder -- the v4 `last_used_move` and damage-dealt features are written only
+/// from the Python world-state path. Engine-side Counter/Mirror Coat state stays correct
+/// because `sim.apply` runs every instruction regardless of what is rendered. A structural
+/// argument is weaker than a fixture, so anyone extending this list should add one.
+///
 /// `Damage` is admitted ONLY when `damage_amount >= 0`. It is a SIGNED instruction: the
 /// engine's own comment at `gen3/choice_effects.rs` records that "a negative
 /// `damage_amount` is the engine's existing spelling for a heal on this instruction", which
