@@ -74,10 +74,20 @@
      if state.use_damage_dealt {
          reset_damage_dealt(
              state.get_side(&attacking_side),
-@@ -3056,6 +3116,37 @@
+@@ -3056,6 +3116,50 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
++
++            // The residual split below must NOT scale `incoming_instructions`
++            // in place: every crit arm further down clones it, and the design
++            // has those clones carry the FULL pre-crit mass, with the single
++            // `1.0 - crit_rate` reduction applied once at the end. Reducing it
++            // early silently multiplies the crit arms by the non-crit residual
++            // factor and parks the stolen mass on the non-crit survive arm.
++            // The total still sums to 1.0, so no conservation check can see it.
++            // Carry the factor and fold it into that one reduction instead.
++            let mut residual_survive_factor = 1.0_f32;
 +
 +            // ...but a residual still can. This arm exists BECAUSE the fan cannot
 +            // kill on the hit -- yet a roll leaving the defender at or below its
@@ -101,10 +111,13 @@
 +                    let residual_kill_chance =
 +                        (1.0 - crit_rate) * (num_residual_kill_rolls as f32 / 16.0);
 +                    if residual_kill_chance > 0.0 {
++                        // Cloned from the UNREDUCED mass, so this arm is
++                        // (1 - crit_rate) * n/16 as intended.
 +                        let mut kill_ins = incoming_instructions.clone();
 +                        kill_ins.update_percentage(residual_kill_chance);
 +                        extra_branches.push((kill_ins, residual_threshold));
-+                        incoming_instructions.update_percentage(1.0 - residual_kill_chance);
++                        residual_survive_factor =
++                            1.0 - (num_residual_kill_rolls as f32 / 16.0);
 +                        regular_damage = average_surviving_damage;
 +                    }
 +                }
@@ -112,7 +125,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,9 +3174,39 @@
+@@ -3083,11 +3187,44 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {
@@ -153,5 +166,11 @@
 +                    extra_branches.push((branch_ins, (max_crit_damage as f32 * 0.925) as i16));
 +                }
              }
-             incoming_instructions.update_percentage(1.0 - crit_rate);
+-            incoming_instructions.update_percentage(1.0 - crit_rate);
++            // One reduction, applied after every crit arm has been cloned:
++            // (1 - crit_rate) * (1 - n/16). Masses then sum to exactly 1.0 as
++            // (1-cr)*n/16 + (1-cr)*(1-n/16) + cr.
++            incoming_instructions.update_percentage((1.0 - crit_rate) * residual_survive_factor);
          } else {
+             regular_damage = avg_damage_dealt;
+         }
