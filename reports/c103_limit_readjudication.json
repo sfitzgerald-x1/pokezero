@@ -1,0 +1,37 @@
+{
+ "schema": "c103-limit-roll-divergent-lethality-readjudication/1",
+ "status": "STARTED. 1 of 7 rows re-adjudicated by replay. The first row is NOT a comparison limit -- it is a defect whose cause is already written.",
+ "why_this_exists": "reports/c91 and reports/c89 each filed a replay-based re-adjudication of the 7 remaining limit:roll_divergent_lethality rows and NEITHER RAN. The only pass that ever examined them is reports/c92, retracted for method. So the 8-row limit count in reports/c99 rests on the divergence-class name, not on evidence.",
+ "era": {
+  "commit": "04e7784e",
+  "engine_fingerprint": "36e9b74e70bebe34",
+  "artifact": "/tmp/sweep_main_final.json (uncommitted)",
+  "residue": 21
+ },
+ "the_seven_rows": [
+  "19000024/61",
+  "19000077/47",
+  "19000089/53",
+  "19000147/125",
+  "19000191/63",
+  "19000198/33",
+  "19000199/61"
+ ],
+ "19000024_61": {
+  "verdict": "NOT A COMPARISON LIMIT. Reclassify.",
+  "boundary": "Qwilfish uses Destiny Bond; Clefable's Return KOs it for 88; Destiny Bond activates and Clefable faints too. Showdown: |-singlemove| Destiny Bond, |-damage|p2a: Qwilfish|0 fnt, |faint|, |-activate|move: Destiny Bond, |faint|p1a: Clefable, |win|.",
+  "observed": "p1 (NOTHING) | p2 capped_lethal=-88",
+  "engine_100pct": "p1 capped_lethal=-95 | p2 capped_lethal=-88",
+  "the_cause": "the engine is RIGHT. It models Destiny Bond killing Clefable as Damage SideOne: 95, its full HP. Showdown kills Clefable too -- |faint|p1a: Clefable is right there -- but expresses a Destiny Bond faint as |-activate| plus |faint| with NO |-damage| LINE. So the observed component set is empty for p1 while the engine carries capped_lethal=-95, and the matcher counts an extra engine component with no observed counterpart.",
+  "this_cause_is_ALREADY_WRITTEN": "it is the same mechanism reports/c96 recorded for 19000152/53, Perish Song: a faint with no damage event. C96's disposition applies verbatim -- 'a |faint| with no preceding |-damage| must reconcile against an engine capped_lethal equal to the victim's remaining HP'. Destiny Bond is a second member of that class, and C96 explicitly said it is NOT a comparison limit because both sides are fully determined from source.",
+  "why_it_was_filed_a_limit": "the divergence class is self-attributing. Both slots carry capped_lethal, so the roll-divergent-lethality rule matched on shape without anyone checking whether a roll was actually in dispute. No roll is in dispute here: the engine's 88 and the observed 88 agree exactly, and the p1 disagreement is a missing EVENT, not a differing roll.",
+  "disposition": {
+   "class": "MATCHER or RENDERER FIX, per reports/c96",
+   "implemented": false,
+   "note": "closing C96's Perish Song row and this one is likely one change, not two."
+  }
+ },
+ "what_this_implies_for_the_count": "reports/c99 records 8 limit rows and calls this re-adjudication the biggest open question because it cuts both ways. It has now cut: one of the seven is a known defect class, so the honest limit count is at most 7 and the fix queue grows by one. Six rows remain unexamined -- 19000077/47, 19000089/53, 19000147/125, 19000191/63, 19000198/33, 19000199/61. A prior review noted 19000077/47 is a REST row whose observed outcome is absent from every arm, so it is worth doing next.",
+ "method": "scripts/replay_residue.py --report /tmp/sweep_main_final.json --seed <s> --step <t>. Not branch_misses, per reports/c94.",
+ "honest_scope": "one row of seven. I am not extrapolating from it -- the other six may well be genuine limits, and the point of the exercise is that nobody has looked."
+}
