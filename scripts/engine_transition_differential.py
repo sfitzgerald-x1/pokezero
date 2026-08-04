@@ -489,10 +489,15 @@ def damage_component_events(
             source = "heal"
         if not source and tag == "-sethp":
             # Defensive: every `-sethp` Showdown emits carries `[from] move:
-            # Pain Split`, but an untagged one must NOT fall through as "" —
-            # that is the roll-scaled bucket, and Pain Split is deterministic
-            # (floor((targetHP + userHP) / 2)), so its magnitude must be
-            # compared exactly.
+            # Pain Split`, so an untagged one is an unknown mechanic and must NOT
+            # fall through as "" — that is the DIRECT-damage bucket, and an
+            # unidentified `-sethp` is not a direct hit.
+            #
+            # Note this is NOT "because Pain Split is deterministic". It is not:
+            # `floor((targetHP + userHP) / 2)` is a function of post-damage HP, so
+            # it inherits the preceding hit's roll, which is why the TAGGED source
+            # `movepainsplit` is in `_ROLL_SCALED_SOURCES`. An earlier version of
+            # this comment asserted the opposite and contradicted that entry.
             source = "sethp"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
             # ANY heal that tops the mon out is roll-scaled, whatever its tag:
