@@ -6653,6 +6653,21 @@ def _gen3_stat(base: int, level: int, *, ev: int, iv: int, hp: bool) -> int:
 _LEGAL_HP_EVS = frozenset({85, 81, 77, 73, 69})
 _LEGAL_ATK_EVS = frozenset({85, 0})
 _LEGAL_HP_IVS = frozenset({31, 30})
+# Def/SpA/SpD/Spe IVs are 31, or 30 where the carried Hidden Power type's ``HPivs`` entry
+# lowers them (``data/typechart.ts``). Measured over every pool set x both physical-attack
+# arms x every listed item: exactly {30, 31}, no third value. Policed for the same reason as
+# the HP/Atk axes -- these four columns are now derived from the spread core, so a generator
+# drift that moved an IV would otherwise surface as a silently wrong stat.
+_LEGAL_NON_HP_IVS = frozenset({31, 30})
+_NON_HP_SPREAD_STATS = ("def", "spa", "spd", "spe")
+
+
+def _variant_has_physical_attack(dex: "ShowdownDex", variant: "Mapping[str, Any]") -> bool:
+    """The generator's ``counter.get('Physical')`` truthiness for one candidate variant."""
+    return any(
+        _is_physical_attack(dex, _normalize_identifier(str(move)))
+        for move in _as_sequence(variant.get("moves"))
+    )
 
 
 def _variant_spread_stats(
@@ -6690,7 +6705,18 @@ def _variant_spread_stats(
             f"(hp_ev={hp_ev}, atk_ev={atk_ev}, hp_iv={hp_iv}); the generator has drifted or the "
             "spread core was mis-called -- refusing to emit a plausible-but-wrong stat"
         )
-    return {"hp": int(spread.stats["hp"]), "atk": int(spread.stats["atk"])}
+    for stat_key in _NON_HP_SPREAD_STATS:
+        stat_iv = int(spread.ivs.get(stat_key, 31))
+        stat_ev = int(spread.evs.get(stat_key, 85))
+        if stat_iv not in _LEGAL_NON_HP_IVS or stat_ev != 85:
+            raise ValueError(
+                "randbats spread outside the generator's legal set "
+                f"({stat_key}_iv={stat_iv}, {stat_key}_ev={stat_ev}); the generator has drifted "
+                "or the spread core was mis-called -- refusing to emit a plausible-but-wrong stat"
+            )
+    stats = {"hp": int(spread.stats["hp"]), "atk": int(spread.stats["atk"])}
+    stats.update({stat_key: int(spread.stats[stat_key]) for stat_key in _NON_HP_SPREAD_STATS})
+    return stats
 
 
 def _encode_expected_stats(
@@ -6705,10 +6731,15 @@ def _encode_expected_stats(
     transform_target: ShowdownPokemon | None = None,
     exact_spreads: bool = False,
 ) -> None:
-    """Deterministic opponent stat block from species + level + the fixed 85/31/neutral spread.
+    """Deterministic opponent stat block from species + level + the generator's spread family.
 
-    Def/SpA/SpD/Spe are exact (the generator never varies them). HP and Atk are
-    variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high] bound pair over
+    Every stat is variant-conditioned, not just HP and Atk. Def/SpA/SpD/Spe were long documented
+    here as "exact (the generator never varies them)"; that was FALSE -- Hidden Power sets carry
+    the HP type's ``HPivs`` override, which drops one or more of the four to IV 30 on 205 of 393
+    pool sets (see the block below). Under ``exact_spreads`` all four now come from the generator
+    core, maxed over the surviving candidates.
+
+    HP and Atk are variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high] bound pair over
     the candidate variants — Atk-zeroing (0 EV / 0 IV) on no-physical-attack variants, HP-EV trim
     (0 EV lower bound) on Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum variants. Without
     an attached set source the bounds collapse to the baseline.
@@ -6749,6 +6780,33 @@ def _encode_expected_stats(
         return
     base = battle_info.base_stats
     hp_base = hp_info.base_stats.get("hp")
+    variants = belief.candidate_variants if belief is not None else ()
+    # Def/SpA/SpD/Spe under the generator core, when it is available (v4). These four are NOT
+    # spread-invariant, contrary to what this function claimed for three schema generations:
+    # the generator overwrites IVs from the carried Hidden Power type's ``HPivs`` entry
+    # (``data/random-battles/gen3/teams.ts``: ``for (iv in HPivs) ivs[iv] = HPivs[iv]``), which
+    # lowers one or more of these four to 30 on 205 of the 393 pool sets. Emitting the flat
+    # iv=31 value was wrong on 25%/29%/24%/9% of sets (def/spa/spd/spe) by one point each --
+    # the same fork-the-generator defect as C1, in the block C1's fix did not reach.
+    #
+    # MAX over the surviving candidates: exact whenever they agree on the stat (the common
+    # case, and always once the set is pinned), and otherwise the iv=31 no-override value,
+    # which is a true upper bound over the candidates rather than a fabricated midpoint. The
+    # column stays single-valued -- adding a [low, high] band here would add v4 inputs, which
+    # is an owner call, and the residual spread is one point.
+    exact_variant_spreads: list[dict[str, int]] = []
+    if exact_spreads and variants:
+        for variant in variants:
+            spread = _variant_spread_stats(
+                base, level, variant, _variant_has_physical_attack(dex, variant)
+            )
+            if spread is None:
+                # One unevaluable candidate makes the whole set unusable, for the same reason
+                # the HP/Atk band abandons narrowing below: a max taken over a partial set
+                # would report a bound derived from candidates that are not all of them.
+                exact_variant_spreads = []
+                break
+            exact_variant_spreads.append(spread)
     for stat_key, slot in (
         ("def", NUMERIC_EXPECTED_DEF),
         ("spa", NUMERIC_EXPECTED_SPA),
@@ -6756,10 +6814,13 @@ def _encode_expected_stats(
         ("spe", NUMERIC_EXPECTED_SPE),
     ):
         value = base.get(stat_key)
-        if value:
-            _set_numeric(
-                num_row, slot, min(1.0, _gen3_stat(value, level, ev=85, iv=31, hp=False) / _ACTUAL_STAT_DIVISOR)
-            )
+        if not value:
+            continue
+        if exact_variant_spreads:
+            emitted = max(spread[stat_key] for spread in exact_variant_spreads)
+        else:
+            emitted = _gen3_stat(value, level, ev=85, iv=31, hp=False)
+        _set_numeric(num_row, slot, min(1.0, emitted / _ACTUAL_STAT_DIVISOR))
     atk_base = base.get("atk")
     if not atk_base or not hp_base:
         return
@@ -6767,11 +6828,10 @@ def _encode_expected_stats(
     hp_baseline = _gen3_stat(hp_base, level, ev=85, iv=31, hp=True)
     atk_low = atk_high = atk_baseline
     hp_low = hp_high = hp_baseline
-    variants = belief.candidate_variants if belief is not None else ()
     if variants:
         atk_values: list[int] = []
         hp_values: list[int] = []
-        for variant in variants:
+        for index, variant in enumerate(variants):
             moves = {
                 _normalize_identifier(str(move)) for move in _as_sequence(variant.get("moves"))
             }
@@ -6790,8 +6850,13 @@ def _encode_expected_stats(
                 # PINNED set still reported the wrong HP. randbats_spread_details is the same core
                 # the investment inference uses and is cross-checked against server-computed stats
                 # by its gate harness, so this stops the encoder being a fork of it.
-                spread = _variant_spread_stats(
-                    battle_info.base_stats, level, variant, has_physical
+                # Already computed above for the Def/SpA/SpD/Spe block, which needs the same
+                # per-candidate spreads; an empty list there means some candidate was
+                # unevaluable, which lands on the identical fallback either way.
+                spread = (
+                    exact_variant_spreads[index]
+                    if index < len(exact_variant_spreads)
+                    else None
                 )
                 if spread is None:
                     # An unevaluable candidate makes the whole BAND unsound, and substituting
