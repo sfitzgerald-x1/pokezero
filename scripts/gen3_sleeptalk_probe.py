@@ -13,8 +13,9 @@ GROUND TRUTH, read from the vendored simulator (gen3 inherits gen4, not gen5):
       moveid && !move.flags['nosleeptalk'] && !move.flags['charge']
 
   then samples it UNIFORMLY. Two gen3-specific details matter:
-    * `charge` (two-turn) moves are EXCLUDED — Solar Beam, Fly, Dig, Sky Attack,
-      Razor Wind, Skull Bash;
+    * `charge` (two-turn) moves are EXCLUDED. gen3 has 17 such moves, including
+      Solar Beam, Fly, Dig, Dive, Bounce, Sky Attack, Razor Wind and Skull Bash
+      (an earlier version of this line listed six and omitted Dive and Bounce);
     * if the sampled slot has 0 PP, gen3 emits `|cant|<mon>|nopp|<move>` and the
       turn does NOTHING. It does not resample.
 
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -60,62 +62,97 @@ import pokezero_search  # noqa: E402
 from pokezero.local_showdown import LocalShowdownConfig  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, run_multi_turn_fixture  # noqa: E402
 
-# The exclusion sets are READ FROM THE VENDORED SIMULATOR, not hardcoded.
+# The exclusion sets come from the SIMULATOR'S OWN RESOLVER, for gen3.
 #
-# They used to be hardcoded while this file's docstring claimed the rule came from
-# `data/mods/gen3/moves.ts` flags. Independent review caught the drift: the
-# hardcoded `nosleeptalk` set held 5 moves where the data has 40, missing six
-# that a gen3 randbats set could plausibly carry -- `dive`, `bide`, `focuspunch`,
-# `uproar`, `mimic`, `sketch`. The recorded "unreachable" conclusion survives
-# recomputation with the corrected sets (still 0 affected variants), but the
-# false-negative mechanism was live, and a probe whose stated ground truth is a
-# file it does not read cannot be trusted the next time the format changes.
+# Two wrong answers preceded this one, both found by independent review:
 #
-# Fallbacks are the old hardcoded sets, used only if the data cannot be read; the
-# probe reports which source it used so a fallback run is never mistaken for a
-# data-backed one.
-_FALLBACK_CHARGE = {
-    "solarbeam", "fly", "dig", "skyattack", "razorwind", "skullbash", "bounce",
+#  1. Originally hardcoded, while the docstring claimed the flags came from
+#     `data/mods/gen3/moves.ts`. The hardcoded `nosleeptalk` set held 5 where
+#     gen3 has 35, and it wrongly INCLUDED `naturepower`.
+#  2. Then parsed out of base `data/moves.ts`, which gives 40 -- the gen9 answer,
+#     not gen3's. A mod entry's `flags: {...}` REPLACES the parent's wholesale,
+#     and gen3 inherits through gen4-gen8: `data/mods/gen5/moves.ts` drops
+#     `nosleeptalk` from `fly`, and `data/mods/gen4/moves.ts` drops it from
+#     `mimic`, `sketch`, `naturepower` and `struggle`. So base-table parsing
+#     reports Mimic and Sketch as gen3-excluded when they are not.
+#
+# gen3's `sleeptalk.onHit` reads `this.dex.moves.get(moveid).flags` -- GEN3-resolved
+# flags. The only thing that gets that right without reimplementing the mod chain
+# is the simulator's own `Dex`, which `randbat.py` already requires to be built
+# (`_AUDIT_ENGINE_RELATIVE_PATHS` lists `dist/sim`). Ask it.
+#
+# gen3 truth as of 2026-08-03, read from `Dex.forFormat("gen3randombattle")`:
+#   charge       17
+#   nosleeptalk  35
+# The snapshots below are that output, used only when node/dist is unavailable.
+# When the Dex IS available its answer wins and any difference from the snapshot
+# is reported as drift rather than silently absorbed.
+_GEN3_CHARGE_SNAPSHOT = {
+    "bounce", "dig", "dive", "electroshot", "fly", "freezeshock", "geomancy",
+    "iceburn", "meteorbeam", "phantomforce", "razorwind", "shadowforce",
+    "skullbash", "skyattack", "skydrop", "solarbeam", "solarblade",
 }
-_FALLBACK_NOSLEEPTALK = {"sleeptalk", "mirrormove", "assist", "metronome", "naturepower"}
+_GEN3_NOSLEEPTALK_SNAPSHOT = {
+    "assist", "beakblast", "belch", "bide", "blazingtorque", "bounce", "celebrate",
+    "chatter", "combattorque", "copycat", "dig", "dive", "dynamaxcannon",
+    "focuspunch", "freezeshock", "geomancy", "holdhands", "iceburn",
+    "magicaltorque", "mefirst", "metronome", "mirrormove", "noxioustorque",
+    "phantomforce", "razorwind", "shadowforce", "shelltrap", "skullbash",
+    "skyattack", "skydrop", "sleeptalk", "solarbeam", "solarblade", "uproar",
+    "wickedtorque",
+}
+
+_DEX_QUERY = """
+const {Dex} = require(process.argv[1]);
+const d = Dex.forFormat("gen3randombattle");
+const charge = [], nost = [];
+for (const m of d.moves.all()) {
+  if (m.flags && m.flags.charge) charge.push(m.id);
+  if (m.flags && m.flags.nosleeptalk) nost.push(m.id);
+}
+process.stdout.write(JSON.stringify({charge, nosleeptalk: nost}));
+"""
 
 
 def _move_flag_sets(showdown_root: str) -> tuple[set[str], set[str], str]:
-    """`(charge, nosleeptalk, source)` read from the vendored `data/moves.ts`.
+    """`(charge, nosleeptalk, source)` for GEN3, from the simulator's `Dex`.
 
-    gen3 inherits the base move table; `data/mods/gen3/moves.ts` overrides
-    individual entries but does not remove these two flags from the base ones, so
-    the base table is the right source for "which moves carry the flag at all".
+    Falls back to the dated snapshots above only when node or `dist/sim/dex.js`
+    is unavailable, and says so in `source` so a fallback run is never mistaken
+    for a resolver-backed one.
     """
 
-    import re
-    from pathlib import Path
-
-    path = Path(showdown_root) / "data" / "moves.ts"
+    dex_js = Path(showdown_root) / "dist" / "sim" / "dex.js"
+    if not dex_js.is_file():
+        return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
+                f"SNAPSHOT (no {dex_js}; run `npx tsc` in the showdown checkout)")
     try:
-        text = path.read_text()
-    except OSError:
-        return set(_FALLBACK_CHARGE), set(_FALLBACK_NOSLEEPTALK), f"FALLBACK (could not read {path})"
+        proc = subprocess.run(
+            ["node", "-e", _DEX_QUERY, str(dex_js)],
+            capture_output=True, text=True, timeout=120, check=True,
+        )
+        payload = json.loads(proc.stdout)
+        charge = {str(m) for m in payload["charge"]}
+        nosleeptalk = {str(m) for m in payload["nosleeptalk"]}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+        return (set(_GEN3_CHARGE_SNAPSHOT), set(_GEN3_NOSLEEPTALK_SNAPSHOT),
+                f"SNAPSHOT (Dex query failed: {type(exc).__name__}: {exc})")
 
-    charge: set[str] = set()
-    nosleeptalk: set[str] = set()
-    # Top-level entries start at one tab of indentation: `\n\tmoveid: {`.
-    for entry in re.split(r"\n\t(?=[a-z0-9]+: \{)", text):
-        head = re.match(r"([a-z0-9]+): \{", entry)
-        if not head:
-            continue
-        flags_match = re.search(r"flags: \{([^}]*)\}", entry, re.S)
-        if not flags_match:
-            continue
-        flags = flags_match.group(1)
-        if re.search(r"\bcharge\s*:\s*1", flags):
-            charge.add(head.group(1))
-        if re.search(r"\bnosleeptalk\s*:\s*1", flags):
-            nosleeptalk.add(head.group(1))
-    if not charge or not nosleeptalk:
-        return (set(_FALLBACK_CHARGE), set(_FALLBACK_NOSLEEPTALK),
-                f"FALLBACK (parsed 0 flags from {path}; format may have changed)")
-    return charge, nosleeptalk, str(path)
+    # A resolver that answers with an implausibly small set is the dangerous
+    # case: it would be published with a resolver-backed provenance stamp while
+    # most exclusions silently vanished -- the exact false negative this whole
+    # file exists to prevent. Refuse to call that data-backed.
+    if len(charge) < len(_GEN3_CHARGE_SNAPSHOT) or len(nosleeptalk) < len(_GEN3_NOSLEEPTALK_SNAPSHOT):
+        return (charge | _GEN3_CHARGE_SNAPSHOT, nosleeptalk | _GEN3_NOSLEEPTALK_SNAPSHOT,
+                f"UNION of Dex and SNAPSHOT -- Dex returned fewer moves than the "
+                f"2026-08-03 snapshot (charge {len(charge)}<{len(_GEN3_CHARGE_SNAPSHOT)}, "
+                f"nosleeptalk {len(nosleeptalk)}<{len(_GEN3_NOSLEEPTALK_SNAPSHOT)}); "
+                f"treat as SUSPECT and re-derive")
+    source = str(dex_js)
+    drift = ((charge ^ _GEN3_CHARGE_SNAPSHOT) | (nosleeptalk ^ _GEN3_NOSLEEPTALK_SNAPSHOT))
+    if drift:
+        source += f" (DRIFT vs 2026-08-03 snapshot: {sorted(drift)} -- Dex wins; update the snapshot)"
+    return charge, nosleeptalk, source
 
 
 def _mon(species, moves, *, ability, item=None, level=80):
@@ -160,6 +197,7 @@ def reachability(showdown_root: str) -> dict:
     universes = source.to_payload().get("universes", {})
     variants = 0
     with_sleeptalk = 0
+    affected_variants = 0
     conflicting: Counter = Counter()
     for species, entry in universes.items():
         for variant in entry.get("variants", []) or []:
@@ -171,25 +209,41 @@ def reachability(showdown_root: str) -> dict:
             if "sleeptalk" not in pool:
                 continue
             with_sleeptalk += 1
-            for bad in sorted((pool & excluded) - {"sleeptalk"}):
+            bad_here = sorted((pool & excluded) - {"sleeptalk"})
+            if bad_here:
+                affected_variants += 1
+            for bad in bad_here:
                 conflicting[f"{species}:{bad}"] += 1
     return {
         "variants": variants,
         "variants_with_sleeptalk": with_sleeptalk,
         "sleeptalk_plus_gen3_excluded_move": dict(conflicting),
-        "affected_variant_count": sum(conflicting.values()),
+        # DISTINCT variants. This used to be sum(conflicting.values()), which
+        # counts (species, move) PAIRINGS -- a variant pairing Sleep Talk with two
+        # excluded moves was counted twice and the field overstated variants.
+        "affected_variant_count": affected_variants,
+        "affected_pairing_count": sum(conflicting.values()),
         "reachable": bool(conflicting),
-        "scope": ("SET COMPOSITION ONLY. `reachable` covers the charge/nosleeptalk "
-                  "FLAG arm. The 0-PP arm is a STATE condition and is NOT measured "
-                  "here; do not read this as the whole get_sleep_talk_choices "
-                  "divergence being unreachable."),
+        "scope": (
+            "SET COMPOSITION ONLY. `reachable` covers the charge/nosleeptalk FLAG "
+            "arm and nothing else. TWO further divergences are STATE conditions "
+            "that no composition scan can see, and both are reachable on this "
+            "variant set: (1) 0 PP -- gen3 emits |cant|MON|nopp|MOVE and does NOT "
+            "resample, poke-engine has no PP test, reachable from any of the 70 "
+            "Sleep Talk variants once a slot empties; (2) the choicelock/Encore "
+            "gate -- gen3's sleeptalk inherits gen4's onTryHit, "
+            "`!volatiles.choicelock && !volatiles.encore`, so Sleep Talk FAILS "
+            "outright while Encored or Choice-locked, and 95 of 1682 variants "
+            "carry Encore. Do NOT read `reachable: false` as the whole "
+            "get_sleep_talk_choices divergence being unreachable."
+        ),
         "flag_source": flag_source,
         "charge_move_count": len(charge),
         "nosleeptalk_move_count": len(nosleeptalk),
     }
 
 
-def engine_fanout(excluded: set[str] | None = None) -> list[dict]:
+def engine_fanout(excluded: set[str]) -> list[dict]:
     """Engine branch count vs the count gen3's exclusion rule prescribes."""
 
     cases = [
@@ -229,7 +283,7 @@ def engine_fanout(excluded: set[str] | None = None) -> list[dict]:
                     called = line.split("|")[3].strip().lower().replace(" ", "")
                     break
             per_move[called or "(no call rendered)"] += pct
-        callable_gen3 = [m for m in moves if m not in (excluded or set())]
+        callable_gen3 = [m for m in moves if m not in excluded]
         rows.append({
             "case": name,
             "moveset": moves,
@@ -284,6 +338,10 @@ def main(argv=None) -> int:
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
 
+    # ONE Dex query, reused. Calling _move_flag_sets twice re-shells node and
+    # discarded the provenance for the fan-out rows.
+    charge_moves, nosleeptalk_moves, flag_source = _move_flag_sets(args.showdown_root)
+
     report = {
         "gen3_rule": (
             "data/mods/gen3/moves.ts sleeptalk.onHit: candidates = own move slots with "
@@ -292,12 +350,13 @@ def main(argv=None) -> int:
         ),
         "engine_rule": (
             "State::get_sleep_talk_choices (src/state.rs:1014): every slot except "
-            "SLEEPTALK and NONE. No nosleeptalk test, no charge test, no PP test."
+            "SLEEPTALK and NONE. No nosleeptalk test, no charge test, no PP test, "
+            "and no choicelock/Encore gate -- FOUR divergences, of which this probe "
+            "measures only the first two (see reachability.scope)."
         ),
+        "flag_source": flag_source,
         "reachability": reachability(args.showdown_root),
-        "engine_fanout": engine_fanout(
-            set().union(*_move_flag_sets(args.showdown_root)[:2])
-        ),
+        "engine_fanout": engine_fanout(charge_moves | nosleeptalk_moves),
         "showdown_calls": showdown_calls(args.showdown_root, args.seeds, args.seed_start),
     }
 
