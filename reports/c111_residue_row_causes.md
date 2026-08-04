@@ -38,7 +38,7 @@ only: no classifier change, no fidelity change.**
 | 19000112/32 | `component_missing_in_engine:itemleftovers` | **A6** White Herb absent from gen3 — *not* A1 | engine fix |
 | 19000125/226 | `component_missing_in_engine:psn` | **A5** contact-ability trigger precedes the same-turn wake | engine fix |
 | 19000147/125 | `limit:roll_divergent_lethality` | **A2** unmirrored residual **heal** | engine fix — misfiled as a limit |
-| 19000191/63 | `component_magnitude:heal` | **A7** collapsed lethal arm discards the clamped sap | engine fix |
+| 19000191/63 | `component_magnitude:heal` ¹ | **A7** collapsed lethal arm discards the clamped sap | engine fix |
 | 19000198/33 | `limit:roll_divergent_lethality` | **A3** — same stale read | **CLOSED** by #1065 |
 
 **Six causes. Zero rows demonstrated to be genuine comparison limits.** All three

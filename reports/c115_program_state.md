@@ -48,6 +48,10 @@ third kind. The divergence count is an outcome, not a target.
 **208 → 7** divergent boundaries on the window, with `boundaries_measured` held at
 15,224 throughout and `engine_errors` at 0.
 
+The table below reconstructs only the **39 → 7** span, which is the part worked in
+this era; the 208 → 39 reduction predates it and is not itemised here. §3's
+"eight of ten" therefore describes the 39 → 7 changes.
+
 That the denominator held is not incidental. A divergence count can fall because
 boundaries left the measured pool rather than because anything was fixed, so every
 measurement below reports `boundaries_measured`, `transitions_matched`, and the
@@ -136,8 +140,11 @@ turn — the only direction that can make the engine *worse* than not partitioni
 **The Toxic fix cost a row and landed anyway.** Correcting the stage to `count + 1`
 moved the residue 10 → 11. `19000147/125` had been matching *by accident*: the old
 mirror understated the tick by exactly one stage (18) and Leftovers heals exactly
-18, so two errors cancelled. Keeping the bug to hold the counter down would have
-meant closing a boundary with a magnitude the engine source contradicts.
+18, so two errors cancelled. **"Accident" understates it**: the understated stage is
+`maxhp/16` and Leftovers is also `maxhp/16`, so the cancellation is *structural* and
+holds for every Toxic + Leftovers defender at every `maxhp` — not a coincidence of
+one fixture. Keeping the bug to hold the counter down would have meant closing a
+boundary with a magnitude the engine source contradicts.
 
 **A mass leak was invisible to the sweep.** In review of #1062, the non-crit
 residual split was found to call `update_percentage` *in place*, silently scaling
@@ -180,15 +187,29 @@ comparison limit.**
   `LIQUIDOOZE` it damages instead. Only the defender's own seed is modelled.
 - **Dry Skin** heals `maxhp/8` in rain at 10.3. Dead code for gen3 randbats, but it
   falsifies "Rain Dish is the only HP-changing ability".
-- **`compare_health_with_damage_multiples` accumulates in f32**, so for 174 of the
-  first 400 `max` values the top rung lands one below `max`. Kill counts diverge
-  from the true fan exactly where `threshold == max_damage`. Pre-existing and
-  shared by three paths; registered, not changed.
+- **`compare_health_with_damage_multiples` accumulates in f32**, so its rungs can
+  fall below the true `floor(max · r / 100)`. Re-derived against the shipped
+  expression rather than transcribed: the **top** rung lands one below `max` for
+  **173** of the first 400 `max` values, and over all `(max, threshold)` pairs in
+  that range there are **195** kill-count mismatches, of which **22 are at
+  interior thresholds** — the drift also hits rung `r=90` (14 values) and `r=95`
+  (8 values), not only the top.
+  So the defect is **not** confined to `threshold == max_damage`. Concretely, at
+  `max_damage = 120`: threshold 108 counts 10 kill rolls against a true 11, and
+  threshold 114 counts 5 against 6 — neither equals `max_damage`. That is 1/16 of
+  non-crit mass on the wrong arm at an interior threshold.
+  An earlier revision of this document said the divergence occurred "exactly where
+  `threshold == max_damage`". That was **false**, and it was false in the worst
+  direction: it would have sent the next reader looking only at the boundary case.
+  I had transcribed it from a review note instead of deriving it. Pre-existing and
+  now shared by **four** paths (Case A gained one); registered, not changed.
 
 ### Open PRs
 
-- **#1067** — ledger consolidation. A7 and the A2 spec were committed and pushed
-  but left on branches with no PR, so `main` served a superseded account.
+- **#1068** — ledger consolidation (this document plus the A7 correction). A7 and
+  the A2 spec had been committed and pushed but left on branches with no PR, so
+  `main` served a superseded account. Replaces #1067, which was **closed** because a
+  live engine patch had been committed onto the same branch by mistake.
 - **`scott/a8-case-a-three-way`** — the Case A three-way partition, 8 → 7, measured
   and pinned, awaiting review.
 
