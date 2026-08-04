@@ -588,9 +588,15 @@ def probe_pending_read_sees_this_calls_mutations() -> None:
         )
 
     def mon(pid, hp, maxhp, status, speed, move) -> pe.Pokemon:
+        # FLYING matters: it makes Rock Slide 2x, which puts the NON-CRIT fan at
+        # [103, 122] so the thresholds below straddle the non-crit arm -- the arm
+        # that actually closed 19000058/19 and 19000198/33. With ("normal",
+        # "typeless") the non-crit fan is only [51, 61], the split moves entirely
+        # into the 5.625% crit arm, and a regression that reintroduced a stale
+        # read at just the non-crit site would pass. Caught in review of #1065.
         return pe.Pokemon(
             id=pid, level=81,
-            types=("normal", "typeless"), base_types=("normal", "typeless"),
+            types=("normal", "flying"), base_types=("normal", "flying"),
             hp=hp, maxhp=maxhp, ability="none", item="none",
             attack=100, defense=145, special_attack=100,
             special_defense=125, speed=speed, status=status,
@@ -610,7 +616,12 @@ def probe_pending_read_sees_this_calls_mutations() -> None:
         return pe.generate_instructions(state, "rockslide", defender_choice)
 
     # --- PIN 1: a Toxic mon switches IN, and is the one taking the hit. -----
-    # Fearow 123/238 Toxic: tick 14, threshold 109, inside (min 103, max 122].
+    # Fearow 123/238 Toxic: tick 14, threshold 109, inside the non-crit fan
+    # [103, 122]. NOTE the fixture depends on max_crit (122) < hp (123) by ONE
+    # point: if crit damage rises, max_crit >= hp routes to the crit-KILL split,
+    # which emits two crit arms whatever `pending` is. The control catches that
+    # (it would go to 4 and fail red rather than pass green), but the margin is
+    # thin and deliberate. PIN 2 below has 4 HP of margin and no switch at all.
     # The control is ALSO a switch, differing only in the incoming mon's status,
     # so flinch and speed interactions are held fixed and `status` is the single
     # variable. (An earlier control let the defender use a move instead of
@@ -626,8 +637,8 @@ def probe_pending_read_sees_this_calls_mutations() -> None:
     _report(
         "pending-read-switched-in-defender-splits",
         len(toxic_in) == 4,
-        f"a Toxic defender switching in has tick 14 and threshold 109 inside "
-        f"(103, 122], so the fan must split: expected 4 branches, got "
+        f"a Toxic defender switching in has tick 14 and threshold 109 inside the "
+        f"NON-CRIT fan [103, 122], so it must split: expected 4 branches, got "
         f"{len(toxic_in)} with masses {toxic_masses}. 3 means the read saw the "
         f"OUTGOING mon and returned 0.",
     )
