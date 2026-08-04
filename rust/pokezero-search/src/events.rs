@@ -207,6 +207,10 @@ pub struct RenderedEvents {
     /// reject these branches before fold/encoder advancement instead of
     /// silently inventing action evidence or dropping chance mass.
     pub attribution_unsafe: Vec<String>,
+    /// Sub-cases of [`Self::lossy`] that do NOT refuse the branch. Measurement
+    /// only: no consumer keys behaviour off this, which is exactly the point --
+    /// a class can be counted without being refused.
+    pub lossy_subcases: Vec<String>,
     /// Internal status transitions for the leaf's line-driven ledgers. These
     /// deliberately do not add protocol text for fold-ignored cure events.
     pub(crate) active_status_transitions: Vec<ActiveStatusTransition>,
@@ -270,6 +274,24 @@ impl RenderedEvents {
     /// the `&str` siblings above: these are contract labels and must stay
     /// literals. Widening them would let a caller pass a formatted string and
     /// mint an unbounded set of `world_failure_reasons` keys.
+    /// Record a DIAGNOSTIC sub-case WITHOUT refusing the branch.
+    ///
+    /// The lossy-only sibling of [`Self::mark_attribution_unsafe_subcase`], and the
+    /// distinction is the whole point. Use this when the transition is PROVEN and only
+    /// its label is unknown; use the refusing one when the renderer cannot reproduce
+    /// what the engine did, because then the description itself may be wrong.
+    ///
+    /// Same stable tag to `lossy`, so the differential's contract
+    /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) is unchanged.
+    fn mark_lossy_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+        assert!(
+            subcase.starts_with(lossy_tag),
+            "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
+        );
+        self.mark_lossy(lossy_tag);
+        self.lossy_subcases.push(subcase.to_string());
+    }
+
     fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
         // The two arguments must name the SAME class, or this helper quietly
         // becomes the bug it exists to prevent: a branch whose contract tag and
@@ -1679,10 +1701,40 @@ fn render_move_phase(
                     // replay diverges from what the engine did and may be fixable
                     // in the renderer. Splitting them is what decides that, and
                     // this class is 48.9% of all world failures.
-                    out.mark_attribution_unsafe_subcase(
-                        SLEEPTALK_LOSSY_TAG,
-                        sleeptalk_subcase_slug(&ident),
-                    );
+                    // AMBIGUOUS and NONE_MATCHED are not the same defect, and only
+                    // one of them justifies throwing the world away.
+                    //
+                    // Ambiguous means two or more candidate callees each regenerated a
+                    // branch whose instruction list equals `tail` EXACTLY. So the state
+                    // transition is proven -- it is `tail`, whichever candidate is
+                    // named -- and the only thing not known is the callee's NAME. The
+                    // block below already renders that honestly: no `|move|` line, the
+                    // damage carried on the generic tag the differential retags as
+                    // move_unknown_callee. Nothing is invented, so nothing is unsafe.
+                    //
+                    // None-matched means NO candidate reproduced the tail: the
+                    // renderer's model of the engine diverges, and a description built
+                    // on that divergence may be wrong. That is unsafe and still refuses.
+                    //
+                    // The differential already agreed with this split and the renderer
+                    // did not. `engine_transition_differential.py` lists
+                    // `sleeptalk_called_unidentified` in `_TELEMETRY_ONLY_LOSSY_MARKERS`
+                    // -- "its damage is real, only its attribution is unknown" -- so it
+                    // accepts these branches for matching while the renderer marked them
+                    // attribution-unsafe and search discarded the whole world. The
+                    // comment below this one has recorded that disagreement for two
+                    // eras. Era 57 priced it: this class is 49.5% of all world failures
+                    // and 86.4% of the abort channel, and aborts are ~76% of fallback.
+                    match ident {
+                        SleepTalkIdent::Ambiguous => out.mark_lossy_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            sleeptalk_subcase_slug(&ident),
+                        ),
+                        _ => out.mark_attribution_unsafe_subcase(
+                            SLEEPTALK_LOSSY_TAG,
+                            sleeptalk_subcase_slug(&ident),
+                        ),
+                    }
                     // Walk the tail IN ORDER, rendering a drag at the moment
                     // it happens and re-baselining that side, then describing
                     // whatever HP movement follows. The previous version applied
@@ -3701,6 +3753,7 @@ pub fn branch_events(
             "lossy": ["empty_instruction_list"],
             "attribution_unsafe": false,
             "attribution_unsafe_reasons": [],
+            "lossy_subcases": [],
             "post": post_state_summary(&state),
         }));
     }
@@ -3740,6 +3793,7 @@ pub fn branch_events(
             "lossy": rendered.lossy,
             "attribution_unsafe": attribution_unsafe,
             "attribution_unsafe_reasons": rendered.attribution_unsafe,
+            "lossy_subcases": rendered.lossy_subcases,
             "post": post,
         });
         if let Some(post_state) = post_state {
@@ -3885,6 +3939,7 @@ mod tests {
         let mut agree = 0usize;
         let mut wrong: Vec<String> = Vec::new();
         let mut multi_label_refused = 0usize;
+        let mut multi_label_unattributed = 0usize;
         let mut single_label_refused = 0usize;
         let mut unlabelled: Vec<String> = Vec::new();
         let mut agree_by_defender: std::collections::BTreeMap<String, usize> =
@@ -3998,7 +4053,17 @@ mod tests {
                              renderer emitted neither an attribution nor a refusal",
                             named[0]
                         )),
-                        // Two callees emit byte-identical lists: refusal is correct.
+                        // Two callees emit byte-identical lists and the renderer names
+                        // NOBODY and does NOT refuse. This is the correct outcome and the
+                        // one the ambiguity split exists to produce: the oracle says the
+                        // evidence cannot single out a callee, so naming one would be a
+                        // guess (the arm above catches that) -- but the transition is
+                        // proven, since every matching candidate regenerated exactly this
+                        // tail, so there is nothing unsafe to refuse.
+                        (n, None, false) if n >= 2 => multi_label_unattributed += 1,
+                        // Two callees emit byte-identical lists and the branch was
+                        // REFUSED. Correct before the split; now it means something
+                        // reached the refusing path that should not have.
                         (n, _, true) if n >= 2 => multi_label_refused += 1,
                         // Unambiguous label but refused. LOUD, so not a correctness
                         // failure -- but it is the none_matched/input-fidelity class,
@@ -4096,9 +4161,33 @@ mod tests {
              defender choice."
         );
 
+        // THE FIX, pinned. Genuine ambiguity -- two callees whose branches are
+        // byte-identical -- must no longer refuse. The transition is proven (both
+        // regenerated exactly this tail) and the renderer names nobody, so there is
+        // nothing unsafe to reject. Refusing it discarded the whole world, and on the
+        // cluster that class was 49.5% of all world failures.
+        //
+        // Reverting the split in `render_move_phase` sends these back down the
+        // refusing arm and fires this assertion.
+        assert_eq!(
+            multi_label_refused, 0,
+            "AMBIGUITY IS REFUSING AGAIN: {multi_label_refused} branch(es) whose engine \
+             labels are ambiguous were marked attribution-unsafe. Every matching \
+             candidate regenerated exactly the observed tail, so the transition is \
+             proven and only the callee's NAME is unknown -- which the renderer already \
+             leaves unnamed. Refusing throws the world away for a missing label."
+        );
+        assert!(
+            multi_label_unattributed > 0,
+            "VACUOUS: no ambiguous branch reached the unattributed arm, so this test \
+             cannot show the split works. Expect ~{} here.",
+            total_branches - agree
+        );
+
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
-             refused-ambiguous {multi_label_refused}  refused-single {single_label_refused}  \
+             ambiguous-USABLE {multi_label_unattributed}  refused-ambiguous \
+             {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
         );
     }

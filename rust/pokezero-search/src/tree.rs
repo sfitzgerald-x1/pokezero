@@ -933,6 +933,7 @@ mod tests {
             turn_completed: false,
             lossy: vec!["synthetic_test_ambiguity".to_string()],
             attribution_unsafe: vec!["synthetic_test_ambiguity".to_string()],
+            lossy_subcases: Vec::new(),
             active_status_transitions: Vec::new(),
         };
         let error = seam

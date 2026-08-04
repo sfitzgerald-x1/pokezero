@@ -285,25 +285,41 @@ class BranchEventsTest(unittest.TestCase):
         ]
         self.assertTrue(flagged, report["branches"])
         for branch in flagged:
-            self.assertTrue(branch["attribution_unsafe"], branch)
-            # PREFIX match: the reason carries a `:<subcase>` suffix now, while
-            # the `lossy` tag above stays bare (that one is the differential's
-            # contract). Exact-matching here is what broke when the split landed.
-            self.assertTrue(
-                any(
-                    reason.startswith("sleeptalk_called_unidentified")
-                    for reason in branch["attribution_unsafe_reasons"]
-                ),
-                branch,
-            )
-            # ...and the sub-case is the whole point, so pin WHICH one. Two
-            # candidates regenerate identical tails here, so it must be
-            # `ambiguous`; reading it as `none_matched` would send the fix at
-            # the renderer instead of at the engine.
+            # AMBIGUOUS IS FLAGGED BUT NOT REFUSED. The invariant this test was
+            # written for is "flag-lossy, never silently drop" (PR #727 LOW-2), and
+            # that is preserved: the bare tag is still on `lossy`, the sub-case is
+            # still recorded. What changed is that it no longer refuses.
+            #
+            # Splash and Roar-with-no-reserves both regenerate the SAME empty tail,
+            # so the transition is proven -- it is that tail either way -- and the
+            # only unknown is the callee's name, which the renderer leaves unnamed
+            # below. Refusing discarded the whole world for a missing label, and on
+            # the cluster that was 49.5% of all world failures.
+            self.assertFalse(branch["attribution_unsafe"], branch)
+            self.assertFalse(branch["attribution_unsafe_reasons"], branch)
+            # Still counted, on the measurement-only channel.
             self.assertIn(
                 "sleeptalk_called_unidentified:ambiguous",
-                branch["attribution_unsafe_reasons"],
+                branch["lossy_subcases"],
                 branch,
+            )
+            # The bare tag stays on `lossy`: that one is the differential's
+            # contract (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`).
+            self.assertIn("sleeptalk_called_unidentified", branch["lossy"], branch)
+            # THE SAFETY PROPERTY, and the reason not refusing is honest: neither
+            # candidate may be named. A guess here would invent evidence.
+            # Scoped to the SLEEPER's own lines. `|move|p2a: ...|splash|` is the
+            # opponent's legitimate move and matching it was a bug in this
+            # assertion, not in the renderer.
+            sleeper_moves = [
+                line
+                for line in branch["events"]
+                if line.startswith("|move|p1a:")
+            ]
+            self.assertEqual(
+                sleeper_moves,
+                ["|move|p1a: Rattata|sleeptalk|p1a: Rattata"],
+                f"the callee must stay unnamed: {branch}",
             )
             self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertIn("|-activate|p1a: Rattata|confusion", branch["events"])
@@ -325,25 +341,34 @@ class BranchEventsTest(unittest.TestCase):
         report = json.loads(
             pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, True)
         )
-        unsafe = [
+        ambiguous = [
             branch
             for branch in report["branches"]
-            # PREFIX match: the reason now carries a `:<subcase>` suffix.
-            if any(
-                reason.startswith("sleeptalk_called_unidentified")
-                for reason in branch["attribution_unsafe_reasons"]
-            )
+            if "sleeptalk_called_unidentified:ambiguous" in branch["lossy_subcases"]
         ]
-        self.assertTrue(unsafe, report["branches"])
-        for branch in unsafe:
-            self.assertTrue(branch["attribution_unsafe"], branch)
-            # Tackle and Scratch share a tail, so this is the `ambiguous` cause.
-            self.assertIn(
-                "sleeptalk_called_unidentified:ambiguous",
-                branch["attribution_unsafe_reasons"],
-                branch,
-            )
+        self.assertTrue(ambiguous, report["branches"])
+        for branch in ambiguous:
+            # A NON-EMPTY tail is the harder case, and it is still usable. Tackle and
+            # Scratch produce byte-identical damage here, so the post state is the
+            # same whichever is named -- the damage is REAL and provable, only its
+            # owner's name is not. The old contract refused it and kept the post
+            # state out of the fold; that threw away a proven transition.
+            self.assertFalse(branch["attribution_unsafe"], branch)
+            self.assertFalse(branch["attribution_unsafe_reasons"], branch)
+            self.assertIn("sleeptalk_called_unidentified", branch["lossy"], branch)
+            # The damage is real and still present in the post state.
             self.assertLess(branch["post"]["p2"]["active_hp"], 100, branch)
+            # ...and neither candidate is named, so nothing is invented.
+            # Scoped to the SLEEPER's own lines: only Sleep Talk itself is named,
+            # never the callee.
+            for callee in ("tackle", "scratch"):
+                self.assertFalse(
+                    any(
+                        line.startswith("|move|p1a:") and callee in line.lower()
+                        for line in branch["events"]
+                    ),
+                    f"named {callee!r} despite ambiguity: {branch}",
+                )
             self.assertEqual(branch["post"]["p1"]["active_status"], "sleep", branch)
             self.assertIn("|cant|p1a: Rattata|slp", branch["events"])
             self.assertIn("|move|p1a: Rattata|sleeptalk|p1a: Rattata", branch["events"])
