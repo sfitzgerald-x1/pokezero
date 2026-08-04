@@ -1,0 +1,137 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -23,11 +23,51 @@
+     state: &State,
+     target_side_ref: &SideReference,
+     status: &PokemonStatus,
++    target_moves_while_asleep: bool,
+ ) -> bool {
+     let target_side = state.get_side_immutable(target_side_ref);
+     let target = target_side.get_active_immutable();
++
++    // pokezero gen3 fidelity fix (A5, contact secondary vs. same-turn wake):
++    // `target` here is the ATTACKER -- the mon that made contact and is about to
++    // receive Poison Point / Effect Spore / Flame Body / Static. This predicate is
++    // reached from `ability_modify_attack_against`, which
++    // `gen3/generate_instructions.rs` calls from `before_move` -- ONE call before
++    // `generate_instructions_from_existing_status_conditions` resolves that same
++    // mon's own sleep or freeze. So a Pokemon that wakes up (or thaws) and attacks
++    // on the same turn is still carrying SLEEP/FREEZE when we get here, and the
++    // bare `status != NONE` test refused the secondary outright. Showdown decides
++    // these in `onDamagingHit`, long after `slp.onBeforeMove` has cleared the
++    // status, so its attacker is plainly statusless. Measured on `19100012/61`:
++    // 0.0000% poison mass asleep versus 28.3333% (= 0.85 x 1/3) awake.
++    //
++    // Reordering the two calls is the other repair, and it is far wider: it moves
++    // every `item_before_move`/`choice_before_move` instruction relative to every
++    // sleep, freeze and paralysis branch in the game. Ignoring an
++    // about-to-be-cured status here is exact instead, because EVERY branch that
++    // keeps the status is a branch on which the move never lands:
++    //   - natural sleep and freeze push their "no move" arms to
++    //     `final_instructions` as terminal clones and continue as the woke/thawed
++    //     branch, where the status is already NONE;
++    //   - the Rest arms that fall through still asleep are caught by the
++    //     `attacker_status == PokemonStatus::SLEEP` gate in
++    //     `generate_instructions.rs`, which reverses the instructions and returns;
++    //   - at `chance_to_wake == 0.0` the continuing branch is left at 0% mass.
++    // The exception is a move that runs WHILE asleep -- Sleep Talk itself, and the
++    // move Sleep Talk calls, both of which that gate lets past. Those keep
++    // refusing, which is also what Showdown does: their user really is asleep at
++    // `onDamagingHit`, so it already has a status.
++    //
++    // PARALYZE, BURN, POISON and TOXIC are untouched: nothing cures them between
++    // here and the hit, so `status != NONE` stays correct for them.
++    let status_is_cured_before_contact = !target_moves_while_asleep
++        && matches!(
++            target.status,
++            PokemonStatus::SLEEP | PokemonStatus::FREEZE
++        );
++
+     if target.hp <= 0
+-        || target.status != PokemonStatus::NONE
++        || (target.status != PokemonStatus::NONE && !status_is_cured_before_contact)
+         || target_side.side_conditions.safeguard > 0
+     {
+         return false;
+@@ -44,6 +84,13 @@
+         }
+         PokemonStatus::PARALYZE => target.ability != Abilities::LIMBER,
+         PokemonStatus::SLEEP => {
++            // Known residual, deliberately left: when the waking attacker is
++            // itself the side's only sleeper, `has_alive_non_rested_sleeping_pkmn`
++            // still reads its pre-wake SLEEP and refuses, so Effect Spore's SLEEP
++            // third stays blocked where Showdown's sleep clause would allow it.
++            // That is a side-level helper with its own callers; widening it is a
++            // separate change. Effect Spore's POISON and PARALYZE thirds, and all
++            // of Poison Point, Flame Body and Static, are fixed above.
+             ![Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&target.ability)
+                 && !target_side.has_alive_non_rested_sleeping_pkmn()
+         }
+@@ -661,6 +708,11 @@
+     if attacker_choice.target != MoveTarget::Opponent {
+         return;
+     }
++
++    // See `contact_status_is_valid`: Sleep Talk and the move it calls are the only
++    // gen3 actions that land a hit while their user is still asleep.
++    let attacker_moves_while_asleep =
++        attacker_choice.move_id == Choices::SLEEPTALK || attacker_choice.sleep_talk_move;
+ 
+     match target_pkmn.ability {
+         Abilities::SOUNDPROOF => {
+@@ -674,7 +726,12 @@
+                 && !defending_side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::SUBSTITUTE)
+-                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::POISON)
++                && contact_status_is_valid(
++                    state,
++                    attacking_side_ref,
++                    &PokemonStatus::POISON,
++                    attacker_moves_while_asleep,
++                )
+             {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+                     chance: 100.0 / 3.0,
+@@ -707,7 +764,12 @@
+                     PokemonStatus::PARALYZE,
+                     PokemonStatus::SLEEP,
+                 ] {
+-                    if contact_status_is_valid(state, attacking_side_ref, &status) {
++                    if contact_status_is_valid(
++                        state,
++                        attacking_side_ref,
++                        &status,
++                        attacker_moves_while_asleep,
++                    ) {
+                         attacker_choice.add_or_create_secondaries(Secondary {
+                             chance: 100.0 / remaining,
+                             target: MoveTarget::User,
+@@ -747,7 +809,12 @@
+                 && !defending_side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::SUBSTITUTE)
+-                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::BURN)
++                && contact_status_is_valid(
++                    state,
++                    attacking_side_ref,
++                    &PokemonStatus::BURN,
++                    attacker_moves_while_asleep,
++                )
+             {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+                     chance: 100.0 / 3.0,
+@@ -781,7 +848,12 @@
+                 && !defending_side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::SUBSTITUTE)
+-                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::PARALYZE)
++                && contact_status_is_valid(
++                    state,
++                    attacking_side_ref,
++                    &PokemonStatus::PARALYZE,
++                    attacker_moves_while_asleep,
++                )
+             {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+                     chance: 100.0 / 3.0,

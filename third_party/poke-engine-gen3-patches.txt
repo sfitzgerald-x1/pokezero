@@ -1250,3 +1250,14 @@ poke-engine-gen3-bellydrum-roll-gate.patch
 # reports/c109.
 poke-engine-gen3-residual-lethality-partition.patch
 poke-engine-gen3-contact-flags.patch
+
+# Let a contact secondary see the attacker WAKE (or thaw) on the same turn.
+# `ability_modify_attack_against` runs from `before_move`, one call before
+# `generate_instructions_from_existing_status_conditions` resolves the attacker's
+# own sleep/freeze, so `contact_status_is_valid` read a status that was about to
+# be cured and refused Poison Point, Effect Spore, Flame Body and Static outright.
+# Showdown decides these in `onDamagingHit`, after `slp.onBeforeMove` cleared it.
+# Ignoring an about-to-be-cured status is exact rather than approximate: every
+# branch that keeps the status is one where the move never lands. Sleep Talk and
+# the move it calls are the exception and keep refusing. reports/c118.
+poke-engine-gen3-a5-wake-before-contact.patch

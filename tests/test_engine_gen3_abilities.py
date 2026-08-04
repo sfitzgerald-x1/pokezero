@@ -461,6 +461,78 @@ class AbilityMechanicsTests(unittest.TestCase):
                     any("ChangeStatus SideOne" in self._text(branch) for branch in branches)
                 )
 
+    def test_contact_secondary_sees_the_attacker_wake_on_the_same_turn(self) -> None:
+        # A5. `ability_modify_attack_against` decides the contact secondary from
+        # `before_move`, one call before the attacker's own sleep/freeze is
+        # resolved, so a mon that wakes and attacks on the same turn used to be
+        # read as still-statused and the secondary was refused outright. Showdown
+        # decides these in `onDamagingHit`, well after `slp.onBeforeMove` cleared
+        # the status. gen3 MAX_SLEEP_TURNS is 4, so `chance_to_wake_up` is
+        # 1/(1+4-turns): certain at 4 turns, 1/4 at 1 turn. Freeze thaws at 20%.
+        third = 100.0 / 3.0
+        cases = (
+            ("certain wake", {"status": "sleep", "sleep_turns": 4}, third),
+            ("forked wake", {"status": "sleep", "sleep_turns": 1}, third / 4.0),
+            ("thaw", {"status": "freeze"}, third / 5.0),
+        )
+        defender = self._mon("nidoqueen", "poisonpoint", "splash")
+        for label, mon_kwargs, expected in cases:
+            with self.subTest(case=label):
+                attacker = self._mon(
+                    "tauros", "intimidate", "tackle", speed=200, **mon_kwargs
+                )
+                branches = poke_engine.generate_instructions(
+                    self._state(attacker, defender), "tackle", "splash"
+                )
+                self.assertAlmostEqual(
+                    self._mass(branches, "-> POISON"), expected, places=4
+                )
+
+    def test_a_status_that_survives_the_move_still_refuses_the_contact_secondary(
+        self,
+    ) -> None:
+        # The controls for the fix above, and the reason it is a predicate change
+        # rather than an unconditional one. Sleep Talk and the move it calls are
+        # gen3's only actions that land a hit while their user is still asleep, so
+        # their user really does hold a status at `onDamagingHit`. Paralysis is
+        # never cured by moving at all.
+        defender = self._mon("nidoqueen", "poisonpoint", "splash")
+        sleep_talker = self._mon(
+            "tauros",
+            "intimidate",
+            ("sleeptalk", "tackle"),
+            speed=200,
+            status="sleep",
+            sleep_turns=1,
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(sleep_talker, defender), "sleeptalk", "splash"
+        )
+        # Anti-vacuity: 25% wakes and does nothing, 75% stays asleep (sleep turns
+        # 1 -> 2) and lands Tackle. Without this the POISON assertion below would
+        # also pass on a state where no contact ever happened.
+        self.assertAlmostEqual(
+            self._mass(branches, "Damage SideTwo"),
+            75.0,
+            places=4,
+            msg="Sleep Talk must land its contact move while asleep, or this control proves nothing",
+        )
+        self.assertAlmostEqual(self._mass(branches, "-> POISON"), 0.0, places=4)
+
+        paralyzed = self._mon(
+            "tauros", "intimidate", "tackle", speed=200, status="paralyze"
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(paralyzed, defender), "tackle", "splash"
+        )
+        self.assertAlmostEqual(
+            self._mass(branches, "Damage SideTwo"),
+            75.0,
+            places=4,
+            msg="a paralyzed Tauros must still land Tackle 75% of the time",
+        )
+        self.assertAlmostEqual(self._mass(branches, "-> POISON"), 0.0, places=4)
+
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")
         poison_attacker = self._mon(
