@@ -20,10 +20,12 @@ def portable_path(path: "Path | str") -> str:
     tracked artifacts had to be scrubbed on 2026-08-03 for exactly this, and a thirteenth could
     not be, because its rows are hash-sealed.
 
-    Also collapses a home directory FLATTENED into a single path segment, e.g. a scratch
-    directory named ``-Users-someone-workspace-...``. That form carries the username just as
-    plainly but survives any rule that looks for a real ``/Users/<name>/`` prefix, and it is the
-    shape that was still sitting in two tracked files after the first scrub.
+    Also collapses a home directory FLATTENED into a single path segment -- a scratch directory
+    whose name is the home path with its separators turned into hyphens. That form carries the
+    username just as plainly but survives any rule that looks for a real ``/Users/<name>/``
+    prefix, and it is the shape that was still sitting in two tracked files after the first
+    scrub. (Spelled with a placeholder rather than a literal: the public-invariant guard scans
+    this file too, and it is right to.)
 
     Returns the path unchanged when it is neither under home nor carries a flattened home: a
     system path like ``/usr/lib`` identifies nobody and is more useful recorded in full.
@@ -36,7 +38,7 @@ def portable_path(path: "Path | str") -> str:
         pass
     home_parts = Path.home().parts
     if len(home_parts) >= 3:
-        # "/Users/name" -> "-Users-name", the shape a temp-dir namer produces.
+        # e.g. ``/Users/<name>`` -> ``-Users-<name>``, the shape a temp-dir namer produces.
         flattened = "-".join(part for part in home_parts if part != "/")
         if flattened and flattened in text:
             return text.replace(flattened, "<home>")
