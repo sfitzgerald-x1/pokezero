@@ -808,6 +808,91 @@ def probe_residual_ordered_walk() -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 10: Case A must partition THREE ways, not two.
+#
+# When the fan straddles the hit-KO threshold, the engine splits kill / non-kill
+# and collapses the non-kill side to `average_non_kill_damage`. That sub-fan can
+# ALSO straddle the residual threshold, and Case A used never to consult it -- so
+# when the collapsed representative landed on the lethal side of the residual,
+# NO branch survived the turn at all.
+#
+# Seed 19000052 step 36: Walrein 192/307 burned holding Leftovers, with
+# max_damage_dealt == 192 == hp. Ordered threshold 173 (Leftovers +19 at 10.4,
+# burn -38 at 10.6). Six of sixteen rolls survive the residual and Showdown rolled
+# the lowest of them, 163, finishing on 10 hp -- but the representative was 177,
+# above 173, so the engine asserted a burn KO on every non-crit roll.
+#
+# Fixture: Fearow 120/244 burned + Leftovers, non-crit fan [103, 122].
+#   103 < 120 <= 122          -> Case A
+#   burn -30, Leftovers +15   -> h* = 16, residual threshold 105
+#   103 < 105 < 120           -> the surviving sub-fan straddles it too
+# So three distinct non-crit damages must appear: 103 (survives both), 105 (the
+# residual threshold) and 120 (the hit KO). Two means Case A collapsed.
+# ---------------------------------------------------------------------------
+def probe_case_a_three_way() -> None:
+    def damages(hp, status, item):
+        attacker = pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=250,
+            moves=[pe.Move(id="rockslide", pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="fearow", level=81,
+            types=("normal", "flying"), base_types=("normal", "flying"),
+            hp=hp, maxhp=244, ability="none", item=item,
+            attack=170, defense=145, special_attack=110,
+            special_defense=125, speed=100, status=status,
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        state = pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+            side_two=pe.Side(active_index="0", pokemon=[defender] + [_dummy()] * 5),
+            weather="none", terrain="none", trick_room=False,
+        )
+        # Identify the MOVE damage structurally: it is the damage that lands
+        # before any heal. Filtering the miss arm by percentage does not work --
+        # its mass is not exactly 10% here, and its first `Damage SideTwo` is the
+        # burn tick (30), which then reads as a fourth "roll". Rock Slide also
+        # flinches 30%, duplicating every arm, so a branch COUNT is unusable too.
+        seen = set()
+        for b in pe.generate_instructions(state, "rockslide", "splash"):
+            for i in b.instruction_list:
+                text = str(i)
+                if text.startswith("Heal SideTwo"):
+                    break  # residual phase reached without the move connecting
+                if text.startswith("Damage SideTwo"):
+                    seen.add(int(text.split(": ")[1]))
+                    break
+        return sorted(seen)
+
+    three_way = damages(120, "burn", "leftovers")
+    _report(
+        "case-a-partitions-three-ways",
+        three_way == [103, 105, 120],
+        f"the surviving sub-fan straddles the residual threshold 105, so Case A "
+        f"must emit survives-both (103), residual-lethal (105) and hit-lethal "
+        f"(120): got {three_way}. Two values means the non-kill side was "
+        f"collapsed without consulting the residual threshold.",
+    )
+
+    # Control: same fixture with nothing pending. Case A must still split kill /
+    # non-kill, but there is no third arm -- so exactly two values. This is what
+    # isolates the residual partition as the variable rather than Case A itself.
+    two_way = damages(120, "none", "none")
+    _report(
+        "case-a-control-has-no-third-arm",
+        len(two_way) == 2 and two_way[-1] == 120,
+        f"with no residual pending, Case A must split only kill / non-kill: "
+        f"expected two damages ending in 120, got {two_way}. If this has three "
+        f"the fixture is not isolating the residual arm.",
+    )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -832,6 +917,7 @@ def main() -> int:
     probe_residual_partition_masses()
     probe_pending_read_sees_this_calls_mutations()
     probe_residual_ordered_walk()
+    probe_case_a_three_way()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")
