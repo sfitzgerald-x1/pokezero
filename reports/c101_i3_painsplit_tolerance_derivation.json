@@ -1,0 +1,55 @@
+{
+ "schema": "c101-i3-painsplit-tolerance-derivation/1",
+ "status": "ANALYSIS with measured data. The fix is NOT implemented. This establishes what form it must take, because the obvious form is refuted by one of the three rows.",
+ "measured_from": "/tmp/sweep_now.json, main at e83ee94f era, diverged 35. Misses quoted verbatim, not paraphrased.",
+ "the_three_rows": [
+  {
+   "row": "19000016/2",
+   "class": "component_magnitude:movepainsplit",
+   "majority_arm": "pct=75.00",
+   "observed": -5,
+   "engine": -4,
+   "abs_delta": 1,
+   "relative_delta": "1/5 = 20.0%",
+   "inside_9pct_band": false
+  },
+  {
+   "row": "19000016/49",
+   "class": "component_magnitude:movepainsplit",
+   "majority_arm": "pct=75.00",
+   "observed": 53,
+   "engine": 52,
+   "abs_delta": 1,
+   "relative_delta": "1/53 = 1.9%",
+   "inside_9pct_band": true
+  },
+  {
+   "row": "19000198/22",
+   "class": "component_magnitude:movepainsplit",
+   "deciding_arm": "pct=6.25 (the crit arm; the 93.75% arm is non-crit and legitimately differs)",
+   "observed": -91,
+   "engine": -89,
+   "abs_delta": 2,
+   "relative_delta": "2/91 = 2.2%",
+   "inside_9pct_band": true
+  }
+ ],
+ "the_obvious_fix_is_REFUTED": {
+  "what_it_would_be": "add movepainsplit to _ROLL_SCALED_SOURCES (engine_transition_differential.py:310-312), giving it the same proportional roll band every other roll-scaled component gets.",
+  "why_it_fails": "19000016/2 has a magnitude of FIVE. One HP of difference is 20% of it, far outside the band. A proportional tolerance cannot cover a component whose absolute value is small, and Pain Split's magnitude is small exactly when the two mons' HP are close -- which is the situation Pain Split is used in.",
+  "so_it_would_close_2_of_3": "19000016/49 and 19000198/22 only. That is the shape of a tuned rule that half-works, which is what the programme forbids."
+ },
+ "the_derived_bound": {
+  "the_mechanism": "Pain Split sets both mons to floor((hp_a + hp_b) / 2). The component recorded is that target minus the mon's own pre-move HP, so its magnitude is a function of BOTH HP values -- and each of those is a function of whatever damage landed earlier in the same turn. It inherits that hit's roll, exactly like heal_to_full (engine_transition_differential.py:301-309, ledger B.4).",
+  "why_the_bound_is_absolute_and_not_proportional": "because of the floor. d/dx floor((a+x)/2) is 1/2, so a ONE HP difference in either input moves the result by at most one. The tolerance that follows from the mechanism is therefore |delta| <= ceil(roll_gap / 2) -- an ABSOLUTE bound derived from the roll gap, not a percentage of the component. 19000016/2 is the case that proves it: delta 1 on a magnitude of 5.",
+  "form_that_covers_all_three": "an absolute bound of at least 1, OR the proportional band, whichever is larger. delta 1 on magnitude 5 passes on the absolute leg; delta 2 on magnitude 91 passes on either. This is the same structure the capped-heal work used (abs(obs) <= abs(eng) + 1) and for the same reason -- a floor-divided quantity inherits a bounded, not a scaled, error.",
+  "still_to_derive": "the exact bound should come from the roll gap between the observed and engine damage on the SAME boundary, not from a constant. A constant +/-1 would close these three rows but is a tuned rule; deriving ceil(gap/2) from the two arms' direct-damage difference is a rule with a cause. That derivation is what the implementation needs and this report does not do it."
+ },
+ "branch_set_awareness_is_required": "19000198/22's deciding arm is the 6.25% CRIT arm, not the 93.75% majority. Its 93.75% arm is non-crit and legitimately differs (-120 against -91). So the tolerance must be applied per-arm across the whole branch set -- a rule that only inspects the majority arm closes neither this row nor the family. reports/c95 records this as the reason this row is the strongest evidence for the fix rather than the weakest.",
+ "disposition": {
+  "class": "MATCHER FIX",
+  "implemented": false,
+  "gate": "needs a pin that FAILS WHEN REVERTED, per the programme's rule for matcher fixes, plus a single-variable sweep reporting matched and skip alongside diverged.",
+  "expected_scope": "3 rows in this window. Should be measured, not assumed -- the last fix attempt (reports/c100) predicted 10 and measured -7."
+ }
+}
