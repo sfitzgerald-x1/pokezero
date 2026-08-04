@@ -30,11 +30,31 @@ what encloses it.
 
 C111 v2 also does not pin an `abilities.rs` arm at all. It pins the two **call sites**:
 `before_move → ability_modify_attack_against` against the wake. Those are `:2819` and
-`:2832` today — the **12**-line gap C111 recorded at `:2682`/`:2694`, now 13
-because `if !choice.sleep_talk_move {` was added at `:2831` to wrap the call — so it is neither
-13 *nor* the same, and an earlier revision said both. **The pin was right;
-only the line numbers moved**, which v1 itself called "expected and not the finding" before
-proceeding to make it the finding.
+`:2832` today, against the `:2682`/`:2694` C111 recorded.
+
+> **Correction (review of #1089).** A previous revision of this paragraph explained the
+> 12-versus-13 discrepancy by saying `if !choice.sleep_talk_move {` "was added at `:2831` to
+> wrap the call". **That insertion never happened and I did not check.** The guard is upstream
+> `poke-engine` 0.0.47 code — pristine sdist `src/gen3/generate_instructions.rs:1652`, wrapping
+> that same call — and no patch in the stack adds it. (`poke-engine-gen3-pp-ordering.patch`
+> does add a line reading `if !choice.sleep_talk_move {`, but it wraps the **PP decrement**
+> block several hundred lines away, which is how a grep for the text misleads.)
+>
+> What actually moved: the whole region shifted a **uniform +137 lines**
+> (2682 + 137 = 2819, 2694 + 137 = 2831, 2695 + 137 = 2832) as
+> `residual-lethality-partition.patch` grew from +53 to +197 inserted lines across
+> #1065/#1066/#1069. Nothing was inserted *between* the two call sites.
+>
+> And the discrepancy is an off-by-one in what is being pinned, not a change in the code:
+> C111 pinned the **guard** (`:2694`, now `:2831`); this report pins the **call the guard
+> wraps** (`:2695`, now `:2832`). Like for like the gap is **12 in both eras** —
+> `2694 − 2682` and `2831 − 2819`. So the "same" half of the sentence this note was retracting
+> was right, and only the "13" half was wrong; the retraction was itself made on a false
+> premise. Fabricating a structural cause, in a report whose whole subject is fabricated
+> structural causes, is the same error one level up.
+
+**The pin was right; only the line numbers moved**, which v1 itself called "expected and not
+the finding" before proceeding to make it the finding.
 
 **v1 finding (b): "the mechanism is refuted."** A non sequitur. The Poison Point secondary
 is decided during **choice modification** at `:2103`, reached from `before_move` at `:2819`
@@ -60,11 +80,27 @@ Single-variable A/B on the recorded states — `SLEEP,1` → `NONE,0`, nothing e
 branches, versus 2 of 4 when already awake"). The same-turn wake is the sole cause.
 
 **A5's mechanism is confirmed on both rows**, and C117 §4's signature-based filing of
-`19100012/61` is correct. `19100012/61` is the cleaner witness, **and it carries the argument
-alone.** For `19000125/226`, "already asleep" is a *sufficient* cause independent of ordering —
-gen3 admits no second non-volatile status — so that row's A/B cannot separate the two
-explanations. Only `19100012/61` can: p2 switches, so Poison Point is the sole poison source
-with no Sludge Bomb secondary to confound it, and its awake mass is exactly `0.85 × 1/3`.
+`19100012/61` is correct. `19100012/61` is the cleaner witness: p2 switches, so Poison Point is
+the sole poison source with no Sludge Bomb secondary to confound it, and its awake mass is
+exactly `0.85 × 1/3`.
+
+> **Retraction (review of #1089).** A previous revision added that `19100012/61` "carries the
+> argument **alone**", on the reasoning that for `19000125/226` "already asleep" is a sufficient
+> cause independent of ordering. That note was wrong twice over, and the sentence above it —
+> which the note contradicted without amending — was right.
+>
+> It was wrong on its own terms: the attacker on `19100012/61` is *also* asleep, so the premise
+> voids both rows equally and cannot be what separates them.
+>
+> And it is now settled by measurement rather than argument. The A5 fix (#1090) changes exactly
+> one predicate and nothing else, and on a single-variable 200-game sweep of each window it
+> closed **`19000125/226` on dev and `19100012/61` on the validation holdout, with nothing
+> opened in either window** — matched 15,218 → 15,219 and 15,382 → 15,383, boundaries
+> unchanged. Two rows filed to A5, both closed by A5's fix. They are two witnesses.
+>
+> This is the third time in this document's history that a structural argument was overturned
+> by a measurement that was cheap and available. The pattern is not that the reasoning is
+> careless; it is that I keep reaching for it when a two-line experiment would settle it.
 
 v1's "6.25% unaccounted for" was also wrong: the branch listing has **six** arms, not three
 — `14.06 + 74.71 + 4.98 + 0.94 + 4.98 + 0.33 = 100.00` — and the remainder is the Sludge
@@ -80,6 +116,16 @@ ledger had measured.
 **A5 stands. Both rows stay attributed. Nothing is withdrawn, and C117 needs no amendment.**
 v1's accounting changes are void: C117's "15 of 25 on C111's six causes" is correct as
 written, and A5 has two rows, not zero.
+
+**Update: A5 is closed.** The fix landed as #1090 — `contact_status_is_valid` now ignores a
+SLEEP or FREEZE that is cured before contact, which is exact rather than approximate because
+every branch that keeps the status is one on which the move never lands. See
+`reports/c121_a5_wake_before_contact.md`. Two corrections this report owed and #1090 records:
+**Cute Charm is not affected** (it gates on the ATTRACT volatile via
+`volatile_status_can_be_applied`, not on `contact_status_is_valid`), so the fix generalises
+across **four** abilities and not the five listed below; and Effect Spore's SLEEP third stays
+refused for a waking attacker, because the sleep clause reads the same pre-wake status through
+a side-level helper.
 
 Phase 3 item 8 is re-pointed at its correct site: **`generate_instructions.rs:2819`**
 (`before_move`, which reaches `ability_modify_attack_against` at `:2103`) runs before
