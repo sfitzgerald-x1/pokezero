@@ -445,10 +445,15 @@ fn the_dragged_arm_precedes_the_generic_defender_damage_arm() {
     let dragged_arm = source
         .find("if dragged_this_phase[side_usize(damage.side_ref)]")
         .expect("the dragged-chip arm must exist");
-    let generic_arm = source[dragged_arm..]
+    // Searched from the START of the file, not from `dragged_arm`. Searching the
+    // suffix made the assertion below DEAD -- adding `dragged_arm` back guarantees
+    // `generic_arm >= dragged_arm`, so only the `.expect` could ever fire. An
+    // assertion that cannot fail inside an M3 pin is the wrong shape. Both search
+    // strings are unique in events.rs, so two independent finds make the compare
+    // load-bearing. Found by review of #1081.
+    let generic_arm = source
         .find("Instruction::Damage(damage) if damage.side_ref == defender")
-        .map(|offset| dragged_arm + offset)
-        .expect("the generic defender-damage arm must follow it");
+        .expect("the generic defender-damage arm must exist");
     assert!(
         dragged_arm < generic_arm,
         "the dragged-chip arm must come FIRST or the generic arm shadows it and \
