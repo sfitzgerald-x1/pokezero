@@ -34,8 +34,10 @@
 //! (`combine_duplicate_instructions`):
 //! - full-paralysis vs. miss (both: empty delta) — rendered as `|cant|..|par`
 //!   (the usually-larger probability mass), documented ambiguity;
-//! - the KO-straddle branch conflates "high roll" and "crit" — no `|-crit|`
-//!   is emitted for it;
+//! - the KO-straddle branch conflates "high roll" and "crit" at the level of
+//!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
+//!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
+//!   what remains conflated is the probability, not the tag;
 //! - Sleep Talk's called move id is not in the delta — an unidentified call is
 //!   attribution-unsafe rather than assigned to an invented action window.
 //!
@@ -1804,8 +1806,56 @@ fn render_move_phase(
     let ability_immune = ability_immunity(defender_ability, choice, effectiveness);
 
     // Expected collapsed damage values for crit labeling.
-    let (regular_collapsed, crit_collapsed) =
-        expected_damage_values(sim.state, side, choice, branch_on_damage);
+    // `choice` here is the MUTATED choice: `before_move` has already run on it
+    // inside `generate_instructions_from_move`, and `segment()` stored the
+    // result. Handing it to `expected_damage_values` makes the damage-roll path
+    // apply every `before_move` modifier a SECOND time -- for Thick Fat,
+    // `abilities.rs` halves `base_power` in place, so the base power ends up
+    // quartered and the expectations come back at roughly half their true value.
+    // Rebuild a pristine Choice from the move index, which survives the
+    // mutation. See reports/c102.
+    // GUARDED on identity. `render_move_phase` is also called recursively for a
+    // Sleep Talk callee, and a callee's Choice comes from
+    // `get_sleep_talk_choices`, which clones raw move-table Choices — those
+    // carry `move_index: M0` and nothing ever sets it. So rebuilding from
+    // `choice.move_index` would silently return move slot 0 for every callee:
+    // Sleep Talk itself (Status, so no maxima at all, and no `|-crit|` could
+    // ever be emitted) or an unrelated move (wrong, too-low maxima, so the gate
+    // fires on non-crits). Both failure modes were measured — one row each.
+    //
+    // `move_id` is the discriminator: it survives the `before_move` mutation and
+    // is re-resolved by `change_move_id` for Transform, so it agrees on every
+    // non-callee path and disagrees on exactly the callee path.
+    let rebuilt = build_choice(sim.state, side, &MoveChoice::Move(choice.move_index));
+    let expectation_choice = if rebuilt.move_id == choice.move_id {
+        rebuilt
+    } else {
+        // A callee. Use its own Choice rather than a wrong slot.
+        //
+        // NOT parity, and an earlier comment here wrongly claimed it was: the
+        // callee's Choice was already mutated inside
+        // `identify_sleep_talk_called`'s `generate_instructions_from_move`, and
+        // `expected_damage_values` applies `before_move` again — so this path
+        // totals TWO applications where every other path now totals one. The
+        // double-mutation defect part 1 exists to fix is still live here, scoped
+        // to Sleep Talk callees.
+        //
+        // Reachable, though unexercised in the 200-game window (0 rows opened):
+        // a Sleep-Talk-called Fire or Ice move into a Thick Fat defender gets
+        // `base_power` quartered, `max_regular` roughly halved, and the gate then
+        // over-fires on ordinary non-crit rolls. The dangerous direction is a
+        // false MATCH — Showdown crits, a non-crit arm is stamped `|-crit|`, and
+        // the boundary accepts on the wrong arm, which the divergence count
+        // cannot see.
+        //
+        // The clean fix needs no new machinery: `identify_sleep_talk_called`
+        // already holds the pristine `candidate` before cloning and mutating it,
+        // so returning it alongside the match would remove this fallback
+        // entirely. Follow-up, registered in `reports/c102`.
+        choice.clone()
+    };
+    let (_regular_collapsed, _crit_collapsed, max_regular, max_crit) =
+        expected_damage_values(sim.state, side, &expectation_choice, branch_on_damage);
 
     // Classify the remaining tail.
     let deals_damage_to_defender = tail.iter().any(|ins| match ins {
@@ -2323,16 +2373,24 @@ fn render_move_phase(
                 note_faint!(defender);
             }
             Instruction::Damage(damage) if damage.side_ref == defender => {
-                let (pre_hp, _max) = sim.active_hp(defender);
                 sim.apply(ins);
-                // Crit labeling: exact-value match against the engine's own
-                // collapsed crit damage, never on KO-capped values.
+                // Crit labeling by REACHABILITY. A damage strictly above the
+                // maximum possible non-crit roll cannot have come from a
+                // non-crit, whichever representative the branch carries -- which
+                // covers the crit-kill arm (defender HP), the crit-survive arm
+                // (average non-kill crit damage) and the 16-roll enumeration
+                // alike. The old exact-value test against a single collapsed
+                // value missed all three (reports/c93).
+                //
+                // This is only sound because `max_regular` now comes from a
+                // pristine Choice; against the doubly-mutated value it fired on
+                // ordinary non-crit rolls (reports/c100, reports/c102).
                 if !crit_emitted
                     && !damage_lines_done
-                    && crit_collapsed.is_some()
-                    && Some(damage.damage_amount) == crit_collapsed
-                    && crit_collapsed != regular_collapsed
-                    && damage.damage_amount < pre_hp
+                    && max_regular.is_some()
+                    && max_crit.is_some()
+                    && max_crit > max_regular
+                    && damage.damage_amount > max_regular.unwrap()
                 {
                     out.lines.push(format!("|-crit|{defender_ident}"));
                     crit_emitted = true;
@@ -2757,14 +2815,19 @@ fn identify_sleep_talk_called(
 /// Expected collapsed damage values (regular, crit) for the attacking side's
 /// move, used ONLY to label `|-crit|` branches. Mirrors the engine's own
 /// collapsing (0.925 * max roll).
+/// Returns `(regular_collapsed, crit_collapsed, max_regular, max_crit)`.
+///
+/// The caller MUST pass a pristine Choice. This function's damage-roll path runs
+/// `before_move`, so a Choice that has already been through it gets every
+/// modifier applied twice (reports/c102).
 fn expected_damage_values(
     state: &State,
     side: SideReference,
     choice: &Choice,
     _branch_on_damage: bool,
-) -> (Option<i16>, Option<i16>) {
+) -> (Option<i16>, Option<i16>, Option<i16>, Option<i16>) {
     if choice.category == MoveCategory::Status {
-        return (None, None);
+        return (None, None, None, None);
     }
     let s1_first = match side {
         SideReference::SideOne => true,
@@ -2792,9 +2855,16 @@ fn expected_damage_values(
         Some(values) if values.len() >= 2 => (
             Some((values[0] as f32 * 0.925) as i16),
             Some((values[1] as f32 * 0.925) as i16),
+            Some(values[0]),
+            Some(values[1]),
         ),
-        Some(values) if values.len() == 1 => (Some((values[0] as f32 * 0.925) as i16), None),
-        _ => (None, None),
+        Some(values) if values.len() == 1 => (
+            Some((values[0] as f32 * 0.925) as i16),
+            None,
+            Some(values[0]),
+            None,
+        ),
+        _ => (None, None, None, None),
     }
 }
 
@@ -4183,6 +4253,41 @@ mod tests {
             vec!["item: Leftovers".to_string()],
             "only the Leftovers tick carries a tag; the drain is silent"
         );
+    }
+
+    /// Sleep Talk callees carry `move_index: M0`, which is why the pristine
+    /// rebuild in `render_move_phase` must be guarded on `move_id`.
+    ///
+    /// `get_sleep_talk_choices` clones raw move-table `Choice`s, and those carry
+    /// the `Choice::default()` `move_index` — `M0` — which nothing ever sets.
+    /// Rebuilding damage expectations from `choice.move_index` therefore returns
+    /// move SLOT 0 for every callee, not the callee. Measured cost when that
+    /// guard was absent: two boundaries, one per failure mode — slot 0 being
+    /// Sleep Talk itself (Status, so no maxima at all and `|-crit|` becomes
+    /// unemittable) and slot 0 being an unrelated weaker move (maxima too low, so
+    /// the crit gate fires on a non-crit).
+    ///
+    /// This pins the upstream invariant rather than the guard, deliberately: if a
+    /// future engine version starts setting `move_index` on these clones the
+    /// assert below fails, which is the signal that the guard is no longer
+    /// load-bearing. See `reports/c102`.
+    #[test]
+    fn sleep_talk_callee_choices_carry_slot_zero_move_index() {
+        let state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let callees = state.side_one.get_active_immutable().get_sleep_talk_choices();
+        assert!(
+            !callees.is_empty(),
+            "fixture must expose at least one Sleep Talk callee"
+        );
+        for callee in &callees {
+            assert_eq!(
+                callee.move_index,
+                poke_engine::state::PokemonMoveIndex::M0,
+                "callee {:?} carries a real move_index — the pristine-rebuild \
+                 guard in render_move_phase may no longer be needed",
+                callee.move_id
+            );
+        }
     }
 
     /// KNOWN OPEN — documents a defect that is still live. `#[ignore]`d rather
