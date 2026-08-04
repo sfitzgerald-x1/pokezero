@@ -35,7 +35,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # one changed digest is what makes the update a measurement rather than a paste:
 # drift in the vendored source would have moved all three.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "5687ad7df96525a3415f0f909a27e3b99ae4602013f1015edc36c0ad0faac321",
+    "src/gen3/generate_instructions.rs": "5fd94bf40cc97f8ce897d83c56b3291742a54ef915286e14859c444ff408128b",
     "src/gen3/abilities.rs": "5bd46cc2517588fa380182e3e0c0d42676a596a90160735050beb3e5ab382294",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }

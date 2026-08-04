@@ -308,6 +308,102 @@ def probe_contact_flags() -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 6: residual-lethality partition, incl. the Toxic ladder (patch 57).
+# A damage roll can decide lethality one phase later. The branch that cannot
+# kill on the hit must still split on `hp - pending_residual_damage`.
+#
+# The Toxic rung is the sharp case: add_end_of_turn_instructions computes
+# `stage = normalized_toxic_count + 1`, so a counter of 1 ticks maxhp/8, not
+# maxhp/16. Mirroring it as `max(count, 1)` coincides only at count 0 and
+# puts the threshold a full stage too high for every rung above it, handing
+# the surviving arm rolls that in fact die.
+#
+# Fixture: 123/238 defender, max non-crit roll 122 (so the fan cannot kill on
+# the hit), Rock Slide at 90% accuracy.
+#   count 0 -> tick 14, threshold 123-14 = 109. min roll 103 < 109 <= max 122,
+#              so the fan straddles the threshold: SPLIT (4 branches).
+#   count 1 -> tick 28, threshold 123-28 =  95. min roll 103 > 95, so EVERY
+#              non-crit roll is residual-lethal: NO split (3 branches).
+# Under the old `max(count, 1)` mirror both cases split at 109, which is the
+# regression this pins.
+# ---------------------------------------------------------------------------
+def probe_residual_lethality_partition() -> None:
+    def state_for(toxic_count: int):
+        attacker = pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=150,
+            moves=[pe.Move(id="rockslide", pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="fearow", level=81,
+            types=("normal", "flying"), base_types=("normal", "flying"),
+            hp=123, maxhp=238, ability="none", item="none",
+            attack=170, defense=145, special_attack=110,
+            special_defense=125, speed=180, status="toxic",
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        state = pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+            side_two=pe.Side(
+                active_index="0", pokemon=[defender] + [_dummy()] * 5,
+                side_conditions=pe.SideConditions(toxic_count=toxic_count),
+            ),
+            weather="none", terrain="none", trick_room=False,
+        )
+        return state
+
+    def branches(toxic_count: int) -> list:
+        return pe.generate_instructions(
+            state_for(toxic_count), "rockslide", "splash"
+        )
+
+    # The whole fixture rests on the fan being unable to kill on the hit while
+    # straddling the count-0 threshold. Assert that, do not assume it: if a
+    # damage-formula patch shifts the roll, every branch count below is
+    # meaningless and this is the assertion that says so.
+    max_regular = pe.calculate_damage(
+        state_for(0), "rockslide", "splash", False
+    )[0][0]
+    _report(
+        "residual-partition-fixture",
+        max_regular == 122,
+        f"fixture requires max non-crit roll 122 (< 123 hp, > threshold 109), "
+        f"got {max_regular}",
+    )
+    straddling = branches(0)
+    saturated = branches(1)
+    _report(
+        "residual-partition-splits-when-fan-straddles",
+        len(straddling) == 4,
+        f"toxic_count=0 (tick 14, threshold 109): expected 4 branches, "
+        f"got {len(straddling)}",
+    )
+    _report(
+        "residual-partition-toxic-stage-is-count-plus-one",
+        len(saturated) == 3,
+        f"toxic_count=1 (tick 28, threshold 95) leaves no surviving roll, so "
+        f"the fan must NOT split: expected 3 branches, got {len(saturated)}. "
+        f"4 means the mirror used max(count, 1) instead of count + 1.",
+    )
+    # The saturated case must also actually kill: 112 + clamped 11 == 123.
+    hit = [b for b in saturated if 80.0 < b.percentage < 90.0]
+    lethal = bool(hit) and sum(
+        int(str(i).split(": ")[1])
+        for i in hit[0].instruction_list
+        if str(i).startswith("Damage SideTwo")
+    ) == 123
+    _report(
+        "residual-partition-saturated-arm-is-lethal",
+        lethal,
+        "the single non-crit arm must sum to exactly the defender's 123 hp",
+    )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -328,6 +424,7 @@ def main() -> int:
     probe_stepwise_stab()
     probe_burned_struggle()
     probe_contact_flags()
+    probe_residual_lethality_partition()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")

@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1385,6 +1385,52 @@
+@@ -1385,6 +1385,59 @@
  /// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
  /// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
  /// fires, while the representative 135 leaves 126 and it correctly declines).
@@ -36,8 +36,15 @@
 +    match active.status {
 +        PokemonStatus::POISON => total += cmp::max(active.maxhp / 8, 1),
 +        PokemonStatus::TOXIC => {
-+            let stage = cmp::max(side.side_conditions.toxic_count, 1) as i16;
-+            total += cmp::max(active.maxhp / 16, 1) * stage;
++            // Mirror the phase EXACTLY: normalize in i16 (storage is i8), then
++            // stage = normalized + 1. See `let stage = normalized_toxic_count + 1`
++            // in add_end_of_turn_instructions. `max(count, 1)` coincides with the
++            // phase only at count 0 and understates every higher ladder rung by a
++            // full stage, which puts the residual threshold in the wrong place and
++            // hands the surviving arm rolls that in fact die. Measured: at
++            // toxic_count 1 the real tick is maxhp/8, not maxhp/16.
++            let normalized = cmp::min(cmp::max(side.side_conditions.toxic_count as i16, 0), 14);
++            total += cmp::max(active.maxhp / 16, 1) * (normalized + 1);
 +        }
 +        _ => {}
 +    }
@@ -53,7 +60,7 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
-@@ -2453,6 +2499,13 @@
+@@ -2453,6 +2506,13 @@
      mut final_instructions: &mut Vec<StateInstructions>,
      branch_on_damage: bool,
  ) {
@@ -67,7 +74,7 @@
      if state.use_damage_dealt {
          reset_damage_dealt(
              state.get_side(&attacking_side),
-@@ -3056,6 +3109,37 @@
+@@ -3056,6 +3116,37 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
@@ -105,7 +112,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,9 +3167,39 @@
+@@ -3083,9 +3174,39 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {
