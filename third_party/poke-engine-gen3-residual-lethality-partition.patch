@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1385,6 +1385,187 @@
+@@ -1385,6 +1385,203 @@
  /// maxhp/2 is paid and whether Attack goes to +6 (seed 19000073 step 1:
  /// Thunderbolt's realised roll 127 leaves Linoone at 134/261 and the drum
  /// fires, while the representative 135 leaves 126 and it correctly declines).
@@ -27,6 +27,19 @@
 +///   10.6      status damage          brn/psn maxhp/8, tox maxhp/16 * (count + 1)
 +///   10.9      partial trap damage    min(maxhp / 16.0, hp)
 +///
++/// KNOWN GAPS in this mirror, recorded so the risk surface does not have to be
++/// re-derived. None fabricates a KO -- the real phase still decides life or death
++/// -- but each can misprice the threshold and so the mass split:
++///   * Future Sight (order 11) is neither simulated nor declined. It only ADDS
++///     damage, so the true threshold is strictly LOWER and this UNDER-partitions:
++///     it declines or splits too high, never inventing a residual KO.
++///   * Leech Seed at 10.5 is cross-side and speed-major. A faster ATTACKER holding
++///     LEECHSEED heals the defender before the defender's own 10.x set runs; with
++///     LIQUIDOOZE it damages instead. Only the defender's own seed is modelled.
++///   * DRYSKIN heals maxhp/8 in rain at 10.3. Dead code for gen3 randbats (Gen 4
++///     ability, absent from the pool), but it falsifies "Rain Dish is the only
++///     HP-changing ability" and goes live if the pool or generation changes.
++///
 +/// Heals run BEFORE every damage tick, so a damage-only SUM puts the threshold
 +/// too low. Summing is also unsound in the other direction: the order-8 chip can
 +/// kill before the 10.4 heal, so a net can read "survives" for a defender that is
@@ -40,33 +53,36 @@
 +    // and is not reproduced below. Declining is safe: it falls back to the
 +    // unpartitioned behaviour. Over-partitioning is not -- it moves probability
 +    // mass onto an arm that does not happen.
-+    // Bail ONLY on the items `item_end_of_turn` actually acts on, other than
-+    // Leftovers which is mirrored at 10.4 below. Every other item is inert at end
-+    // of turn, so declining for it would decline almost every real set -- an
-+    // earlier version of this bail was written the other way round (allow-list
-+    // instead of deny-list) and cost three rows by refusing to partition
-+    // whenever the defender held so much as a Choice Band.
-+    //
-+    // Sitrus heals on a THRESHOLD, which breaks the monotonicity in starting HP
-+    // that the bisection depends on (a lower start can finish higher). Lum and
-+    // Chesto cure status and so delete the 10.6 tick outright. Shell Bell and the
-+    // stat berries are bailed for completeness rather than demonstrated need.
-+    // Deny only what can change HP at end of turn, or delete a tick:
-+    //   Sitrus heals on a THRESHOLD, which breaks the monotonicity in starting HP
-+    //     that the bisection depends on -- a lower start can finish higher.
-+    //   Lum and Chesto cure status and so delete the 10.6 tick outright.
-+    //   Shell Bell heals.
-+    // Liechi, Petaya and SALAC are NOT denied: they boost a stat at low HP and
-+    // never touch HP, so they cannot make the predicate non-monotonic. An earlier
-+    // version denied them "for completeness rather than demonstrated need" and
-+    // that cost 19000029/51 -- Blaziken holds a Salac Berry, the mirror declined,
-+    // and the unpartitioned collapsed roll asserted a sandstorm KO that Showdown's
-+    // roll did not score. Breadth in a bail set is not free.
++    // DECLINE only for members that change HP at end of turn or delete a tick.
++    // Every entry here is mechanically justified against item_end_of_turn /
++    // ability_end_of_turn; nothing is denied "for completeness". Two rounds of
++    // getting this wrong cost real coverage in both directions:
++    //   * written as an ALLOW-list, it declined whenever the defender held so much
++    //     as a Choice Band (9 -> 11, reopening two rows another fix had closed);
++    //   * then it still denied Liechi/Petaya/SALAC, which only ever call
++    //     apply_boost_instruction and never touch HP -- Blaziken's Salac Berry in
++    //     19000029/51 made the mirror decline and the unpartitioned roll asserted a
++    //     sandstorm KO Showdown did not score.
++    // Breadth in a bail set is not free: each wrong entry silently gives up a split.
 +    match active.item {
-+        Items::SITRUSBERRY | Items::LUMBERRY | Items::CHESTOBERRY | Items::SHELLBELL => {
-+            return None
-+        }
++        // Threshold heal at hp <= maxhp/2: the only genuinely NON-MONOTONE member,
++        // so the bisection cannot be trusted through it.
++        Items::SITRUSBERRY => return None,
++        // Cures any status, deleting the 10.6 tick outright.
++        Items::LUMBERRY => return None,
++        // Chesto is NOT denied: its arm is gated on PokemonStatus::SLEEP, and sleep
++        // has no 10.6 tick, so it cannot delete one. Shell Bell is NOT denied: it
++        // is not in item_end_of_turn at all -- it is drain on the HOLDER'S attack
++        // (item_modify_attack_being_used), inert on a defender at end of turn.
 +        _ => {}
++    }
++    // Abilities were previously not consulted at all, which left a live gap: SHED
++    // SKIN cures status at 10.3, BEFORE the 10.6 tick, exactly Lum's failure mode.
++    // It is in the gen3 randbats pool (Seviper) and the phase genuinely branches on
++    // it, so no single threshold exists -- measured, the threshold was correct on
++    // only ~2/3 of the mass. Declining is the honest answer.
++    if active.ability == Abilities::SHEDSKIN {
++        return None;
 +    }
 +    let mut hp = start_hp;
 +    if hp <= 0 {
@@ -188,7 +204,7 @@
  fn pending_hp_reading_move(choice: &Choice) -> bool {
      matches!(
          choice.move_id,
-@@ -2989,6 +3170,22 @@
+@@ -2989,6 +3186,22 @@
          state.reverse_instructions(&incoming_instructions.instruction_list);
          return;
      }
@@ -211,7 +227,7 @@
  
      let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
      let defender_active = defender_side.get_active();
-@@ -3056,6 +3253,49 @@
+@@ -3056,6 +3269,49 @@
              };
              // The non-crit roll can never kill here, so it keeps its average.
              regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
@@ -261,7 +277,7 @@
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
              if crit_rate > 0.0
                  && max_crit_damage >= defender_active.hp
-@@ -3083,11 +3323,44 @@
+@@ -3083,11 +3339,44 @@
                      extra_branches.push((survive_ins, average_non_kill_crit_damage));
                  }
              } else {

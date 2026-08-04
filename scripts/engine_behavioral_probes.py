@@ -674,6 +674,140 @@ def probe_pending_read_sees_this_calls_mutations() -> None:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Probe 9: the residual threshold must come from an ORDERED walk, not a sum.
+#
+# This is the discriminator the ordered-walk rewrite shipped without. Nothing
+# else in this file distinguishes the two threshold models: probe 7's oracle
+# deliberately sums damage only ("a fixture carrying Leftovers or a threshold
+# berry would net the heal against the tick and mis-measure it"), so every one of
+# its fixtures avoids the members the rewrite adds. Reverting
+# `residual_phase_final_hp` to the old sum passed the entire suite. Found in
+# review of PR #1066.
+#
+# Fixture: Fearow 123/244, BURNED, holding LEFTOVERS. The phase heals at 10.4
+# BEFORE it burns at 10.6, so:
+#   ground truth  roll 108 -> 15 left -> +15 Leftovers -> -30 burn = 0   DIES
+#                 roll 107 -> 16 left -> +15 Leftovers -> -30 burn = 1   LIVES
+#   ordered walk  h* = 16, threshold = 123 - 16 + 1 = 108   CORRECT
+#   damage sum    123 - (30 - 0) = 93; min roll 103 >= 93 so it does NOT split,
+#                 and collapses to a single non-crit arm at 112
+# So the sum model both mis-places the threshold by 15 and loses the split.
+# ---------------------------------------------------------------------------
+def probe_residual_ordered_walk() -> None:
+    def build(weather, turns_remaining, item, status, hp):
+        attacker = pe.Pokemon(
+            id="gligar", level=81,
+            types=("ground", "flying"), base_types=("ground", "flying"),
+            hp=205, maxhp=205, ability="none", item="none",
+            attack=170, defense=160, special_attack=120,
+            special_defense=130, speed=250,
+            moves=[pe.Move(id="rockslide", pp=16)],
+        )
+        defender = pe.Pokemon(
+            id="fearow", level=81,
+            types=("normal", "flying"), base_types=("normal", "flying"),
+            hp=hp, maxhp=244, ability="none", item=item,
+            attack=170, defense=145, special_attack=110,
+            special_defense=125, speed=100, status=status,
+            moves=[pe.Move(id="splash", pp=16)],
+        )
+        kw = {}
+        if turns_remaining is not None:
+            kw["weather_turns_remaining"] = turns_remaining
+        return pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+            side_two=pe.Side(active_index="0", pokemon=[defender] + [_dummy()] * 5),
+            weather=weather, terrain="none", trick_room=False, **kw
+        )
+
+    def arms(**kw):
+        branches = pe.generate_instructions(build(**kw), "rockslide", "splash")
+        out = []
+        for b in branches:
+            dealt = [
+                int(str(i).split(": ")[1])
+                for i in b.instruction_list
+                if str(i).startswith("Damage SideTwo")
+            ]
+            out.append((round(b.percentage, 4), dealt[0] if dealt else None))
+        return out
+
+    def split_values(arm_list, hp):
+        """Distinct non-crit hit damages. Rock Slide flinches 30% of the time, so
+        every arm appears twice and a raw branch COUNT is not a usable signal --
+        an earlier version of this probe asserted 4 and saw 6. Drop the 10% miss
+        arm and the crit arm (which deals exactly `hp`), then count distinct
+        damages: 2 means the fan was partitioned, 1 means it was collapsed."""
+        return sorted(
+            {
+                d
+                for pct, d in arm_list
+                if d is not None and d != hp and abs(pct - 10.0) > 1e-9
+            }
+        )
+
+    # --- the motivating case: heal at 10.4 precedes the burn at 10.6 ----------
+    burn_leftovers = arms(weather="none", turns_remaining=None,
+                          item="leftovers", status="burn", hp=123)
+    damages = sorted(d for _, d in burn_leftovers if d is not None)
+    _report(
+        "ordered-walk-heal-before-damage",
+        108 in damages,
+        f"Leftovers (+15 at 10.4) heals BEFORE the burn (-30 at 10.6), so the "
+        f"residual-lethal threshold is 108, not the damage-sum's 93. Expected an "
+        f"arm at exactly 108; got arms {burn_leftovers}. A single non-crit arm at "
+        f"112 means the threshold came from a sum.",
+    )
+    _report(
+        "ordered-walk-splits-the-fan",
+        split_values(burn_leftovers, 123) == [105, 108],
+        f"the fan straddles 108 (min roll 103), so it must partition into a "
+        f"surviving representative and the threshold: expected non-crit damages "
+        f"[105, 108], got {split_values(burn_leftovers, 123)} -- {burn_leftovers}",
+    )
+
+    # --- the weather decrement runs BEFORE the chip ---------------------------
+    # turns_remaining == 1 expires during upkeep and never chips, so nothing is
+    # pending and the fan must NOT split. 5 and -1 (permanent) both chip.
+    expiring = arms(weather="sand", turns_remaining=1, item="none", status="none", hp=123)
+    lasting = arms(weather="sand", turns_remaining=5, item="none", status="none", hp=123)
+    permanent = arms(weather="sand", turns_remaining=-1, item="none", status="none", hp=123)
+    _report(
+        "ordered-walk-expiring-weather-does-not-chip",
+        len(split_values(expiring, 123)) == 1,
+        f"sand with turns_remaining=1 is decremented to 0 and ENDS before the "
+        f"chip, so nothing is pending and the fan must not split: expected ONE "
+        f"non-crit damage, got {split_values(expiring, 123)} -- {expiring}. "
+        f"weather_is_active ignores "
+        f"turns_remaining, so a mirror consulting it alone over-counts here.",
+    )
+    _report(
+        "ordered-walk-lasting-weather-chips",
+        len(split_values(lasting, 123)) == 2 and len(split_values(permanent, 123)) == 2,
+        f"sand that survives upkeep must chip and split -- turns_remaining=5 gave "
+        f"{split_values(lasting, 123)}, permanent gave "
+        f"{split_values(permanent, 123)}, expiring gave "
+        f"{split_values(expiring, 123)}. If these match the expiring case the "
+        f"guard is inert.",
+    )
+
+    # --- the bail set gives up a split for every wrong entry ------------------
+    # Salac only boosts a stat; Chesto's arm is gated on SLEEP (no 10.6 tick);
+    # Shell Bell is not in item_end_of_turn at all. All three must still split.
+    for item in ("salacberry", "chestoberry", "shellbell"):
+        held = arms(weather="none", turns_remaining=None, item=item,
+                    status="burn", hp=140)
+        _report(
+            f"ordered-walk-inert-item-still-splits-{item}",
+            len(split_values(held, 140)) == 2,
+            f"{item} does not change HP at end of turn, so declining for it "
+            f"silently gives up a split: expected two non-crit damages, got "
+            f"{split_values(held, 140)} -- {held}",
+        )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -697,6 +831,7 @@ def main() -> int:
     probe_residual_lethality_partition()
     probe_residual_partition_masses()
     probe_pending_read_sees_this_calls_mutations()
+    probe_residual_ordered_walk()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")
