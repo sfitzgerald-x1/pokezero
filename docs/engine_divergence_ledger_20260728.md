@@ -2468,10 +2468,37 @@ acceptance artifact must be a pass, full stop; no baseline run.**
 
 **Consequence worth checking.** The reserved block at seed **2,000,000+ remains
 entirely unconsumed.** No acceptance shard has ever run, so the next attempt
-still has a pristine block, exactly as §5.2 reserved it. Every seed burned to
-date remains below 2,000,000. If a future reader finds seeds at or above
-2,000,000 in any report, an acceptance attempt happened that this ledger does
-not record.
+still has a pristine block, exactly as §5.2 reserved it. Every ACCEPTANCE seed burned to
+date remains below 2,000,000.
+
+**Amended 2026-08-04 (C116 M7): the sentinel needed a namespace.** As originally
+written this clause said "every seed burned to date remains below 2,000,000" and
+that any report citing seeds at or above 2,000,000 implied an unrecorded
+acceptance attempt. That became a false positive on every engine-fidelity report,
+because the fidelity differential window sits at **19,000,000+** and has been
+swept dozens of times. A provenance sentinel that fires on routine work stops
+being trusted, which is worse than not having one. The seed space is therefore
+partitioned by purpose, and the invariant is restated against the acceptance
+namespace only:
+
+| namespace | range | purpose | status |
+| --- | --- | --- | --- |
+| acceptance / strength-eval shards | `2,000,000`–`2,799,999` (§5.2: `2000000 + k*100000`, k=0..7, each `+1249`) | the 8x1250 acceptance run | **pristine — never consumed** |
+| fidelity differential, dev window | `19,000,000`–`19,000,199` | the 200-game window the 208 → 7 era iterated against | consumed continuously |
+| fidelity differential, **validation holdout** | `19,100,000`–`19,100,199` | out-of-window check; swept to baseline, then sparingly | reserved (C116 Phase 1) |
+| fidelity differential, **final holdout** | `19,200,000`–`19,200,199` | terminal fidelity claim, swept **once** | reserved, untouched |
+
+**The invariant, restated.** If a future reader finds seeds in
+`2,000,000`–`2,799,999` in any report, an acceptance attempt happened that this
+ledger does not record. Seeds at `19,000,000+` are fidelity-differential seeds and
+carry no such implication.
+
+**The new invariant this creates**, which is the one C116 Phase 1 depends on: the
+final holdout block `19,200,000+` must appear in **exactly one** measurement in the
+whole record. If it appears twice, it stopped being a holdout and the terminal
+fidelity claim built on it is void. Iterating against a window and then reporting
+that window is the failure mode the entire 208 → 7 era is exposed to (C116 M6);
+these two reserved blocks exist to bound it.
 
 **What would have changed the decision.** Nothing about the measurement — the
 apparatus was gated, `acceptance_eligible: true`, 97.80 % coverage, 0 harness

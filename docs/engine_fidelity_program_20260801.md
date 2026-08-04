@@ -134,6 +134,55 @@ The C27 sequence, because it is what made C27's claims checkable:
    branch-structure change.
 5. **Report the delta honestly**, including a falsified prediction.
 
+## Two disposition rules added 2026-08-04 (C116 M1, M3)
+
+Both are adopted because the program violated them and measurement caught it.
+
+### A `limit:` disposition requires a written demonstration
+
+"Comparison limit" is the one disposition that ends inquiry, so it carries the
+heaviest burden of proof. It was instead used as an exit, and it failed **three
+times out of three**: of the rows C111 v1 called genuine limits, one closed on an
+engine fix (`19000198/33`), one reduced to a known cause (`19000191/63` → A7), and
+one was never a divergence of the claimed kind at all (`19000008/54` — the engine
+dragged the *same* Pokémon; only a component tag differed). In every case the label
+came from a **class name** rather than a demonstration.
+
+A `limit:` disposition is therefore not accepted without a **demonstration
+artifact** stating:
+
+1. exactly what information the methodology lacks at that boundary;
+2. why no harness change can supply it — not "we do not currently", but why not;
+3. the measurement that would falsify the claim if it were wrong.
+
+A class name is not a demonstration. "The engine enumerates a branch set against a
+single realised sample" is a *template* for a demonstration, not one. And a limit
+cannot be adjudicated while a missing mechanic confounds the row: if the engine does
+not implement the mechanic at all, the row is blocked on an engine fix regardless of
+what the harness can know.
+
+### A pin is not a pin until it has been seen red
+
+Five fixtures in the 208 → 7 era read PASS while asserting less than intended: a
+composition case where neither split fired; a threshold placed outside the fan so
+both eras agreed; pins straddling the crit arm instead of the non-crit arm they were
+meant to protect; a control that changed two variables; and a probe reading a
+residual tick as a damage roll. Each was caught by inspection or review, not by the
+suite.
+
+Every PR that adds or changes a pin therefore includes the **red run**: the same
+pin, unmodified, failing on the pre-fix tree, with the output quoted. A pin that has
+only ever been observed green is evidence of nothing.
+
+Two corollaries, both learned the hard way:
+
+- **Tie the metric to the mechanism, not to branch shape.** A branch *count* moves
+  with any unrelated secondary (Rock Slide's 30% flinch doubles every arm), so it is
+  not a usable signal. Count distinct outcome values, or assert masses.
+- **Controls must move exactly one variable**, and must themselves be live — a
+  control that passes identically in both eras proves the fixture is anchored; a
+  control that changes two things proves nothing.
+
 ## Time-box, and the licence to refuse
 
 An unbounded re-litigation of every family is a crusade, not a program.
