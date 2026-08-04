@@ -10,8 +10,23 @@ Era: engine fingerprint `8a00d812b41566a0`, 58 patches, mass gate
 **The two artifacts have different source commits and the same engine fingerprint.**
 That is what makes the comparison valid, and it should be stated rather than left to a
 reader: `git diff 6ba1145b 89bbabe4 -- scripts src rust third_party` shows
-`engine_transition_differential.py` and the entire search crate untouched; the only
-`src` changes are path-portability helpers in `local_showdown.py` / `randbat.py`. The
+`engine_transition_differential.py` and the entire search crate untouched.
+
+**But that diff is not only path helpers, and two earlier revisions of this paragraph said
+it was.** Within the very pathspec this report invites the reader to run, it also carries
+`third_party/poke-engine-gen3-residual-lethality-partition.patch` **+55** — the #1069 Case A
+three-way arm — and `src/pokezero/paths.py` **+45**, a new file. `6ba1145b` is #1066, and
+#1069 landed later at `795a1f90`, yet `sweep_ca.json` reports 7 divergences and the
+post-#1069 fingerprint, because it ran from #1069's branch base with the patch present but
+uncommitted. A reader running that command finds an engine change this sentence did not
+mention and concludes the report is wrong.
+
+**The conclusion survives on the other argument, which is the stronger one: `source_commit`
+is not an engine identifier — the fingerprint is.** `compute_fingerprint()`
+(`engine_build_fingerprint.py:145`) hashes patch bytes *and* crate sources, and each run
+nulls its own stamp unless it equals its run-time recomputation. Both runs' stamps are
+non-null and equal, so the engines were byte-identical regardless of what the commits differ
+by. That is the sentence that was missing, and it makes §1 stronger rather than weaker. The
 fingerprint is a real engine stamp, not the C111 v1 mix-up: the differential nulls the
 venv stamp unless it equals `compute_fingerprint()` recomputed from tracked patch bytes
 at run time (`scripts/engine_transition_differential.py:2493-2500`).
@@ -104,7 +119,9 @@ source (`source == ''`), not literally the string `move`; and the claim that the
 arm carries `spikes=-29` is not shown by that arm's output — its miss line breaks at the
 roll check so its exact components were never printed. The `-29` is provable instead
 from the Ho-Oh arm, whose `observed_only` omits it. Ho-Oh is Flying and therefore Spikes-
-immune, which is also why only five arms carry chip.
+immune, which is why **one of the five** arms carries no chip. (An earlier revision said
+this was "why only five arms carry chip". Ho-Oh's immunity explains the *missing* chip, not
+the arm count — that is just the five alive reserves.)
 
 The renderer site is now pinned: `rust/pokezero-search/src/events.rs:2383` renders a
 defender `Damage` in the ordinary move path as a bare `|-damage|` with no `[from]`.
@@ -230,15 +247,23 @@ I subtracted only the two Belly Drum rows and ignored the five other rows the ta
 marks as unnamed or unowned.
 
 Derived from the corrected filings: **15 of 25 rows land on the six causes named in
-C111** — 11 B1, 3 A1, 1 A5 — and **10 do not**: 2 the Belly Drum cause (A7b), 2 the
+C111** — 11 B1, 3 A1, 1 A5 — and **10 do not**: 2 the Belly Drum cause (**A10**), 2 the
 pre-move status read (**A8**), 1 the unrendered Wish (**A9**), 2 an unnamed renderer
 mis-tag (leechseed-for-Leftovers), 2 Pain Split collapse tax, and 1 unowned
 (`19100180/24`, a side-condition state divergence).
 
+**A10 is Belly Drum**, named here because an earlier revision called it "A7b" — a label
+that appeared once, was defined nowhere, and collided with C111's A7 (*a collapsed lethal arm
+discards the clamped sap*), an unrelated mechanism. A dangling sub-letter under the wrong
+cause is worse than no label. Its derivation is in §4 below.
+
 **So the number of causes rose by three, not one**, and two earlier revisions of this
 paragraph said one and then said it again after being corrected. The honest summary is
-weaker than the one this report wanted: 25 holdout rows resolve into **six existing causes
-plus three new ones**, where the dev window's 7 resolved into six. That is still very far
+weaker than the one this report wanted: 25 holdout rows resolve into **nine buckets** — three of C111's six causes (B1, A1, A5;
+A2, A4 and A6 have no holdout rows at all), three new ones (A8, A9, A10), and three sitting
+outside both: the leechseed renderer mis-tag ×2, Pain Split collapse tax ×2, and one unowned
+row. An earlier revision glossed this as "six existing causes plus three new ones", which
+does not account for five of its own rows. That is still very far
 from "25 investigations" — the compression is real — but "the number of causes rose by
 one" was reached by filing three rows to a cause whose fix had already shipped.
 
@@ -263,7 +288,7 @@ owed.
    presence of `|drag|`, so the class can still mask a future defect the same way.
 4. Investigate **A8** (is a correct threshold computable before the move's secondary is
    decided?) and **A9** (why the planned Wish heal is not rendered).
-4. Leave `19,200,000+` untouched. Per the §J.7 amendment it must appear in **exactly
+5. Leave `19,200,000+` untouched. Per the §J.7 amendment it must appear in **exactly
    one** measurement in the whole record; this report deliberately does not touch it.
 
 ## 6. A note on what this measurement cost
