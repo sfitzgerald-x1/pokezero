@@ -1146,6 +1146,30 @@ def _default_observation_spec() -> ObservationSpec:
 _EXPORTABLE_TABLE_SCHEMAS = frozenset({"v2.2", "v3", "v4"})
 
 
+def _assert_tables_match_schema(tables_json: str, schema_version: str, *, source: str) -> None:
+    """Refuse an encoder-tables artifact whose own layout is for a different schema.
+
+    The layouts differ in width (v2.2/v3 numeric 155, v4 132), in categorical count (51 vs 41) and
+    in vocab size (1217 rows vs 899), so a mismatch is not a near-miss -- it is a different table
+    read through the wrong indices, and it surfaces as an obscure missing-column error deep in the
+    encoder instead of here.
+    """
+    import json  # noqa: PLC0415
+
+    try:
+        layout = (json.loads(tables_json) or {}).get("layout") or {}
+    except ValueError as error:
+        raise ValueError(f"encoder tables at {source} are not valid JSON: {error}") from error
+    found = str(layout.get("schema_version") or "")
+    if found and found != str(schema_version):
+        raise ValueError(
+            f"encoder tables at {source} are for observation schema {found!r}, "
+            f"but this env encodes at {schema_version!r}; rebuild with "
+            f"scripts/export_encoder_tables.py --observation-schema "
+            f"{encoder_tables_schema(schema_version)}"
+        )
+
+
 def encoder_tables_schema(schema_version: str) -> str:
     """The exporter's short layout name for an observation schema version.
 
@@ -1175,7 +1199,16 @@ def _load_encoder_tables(
     ``corpus/`` (gitignored build output, not a source file).
     """
     if path is not None:
-        return Path(path).read_text(encoding="utf-8")
+        # VALIDATED, not trusted. This lane was returning the file's bytes unchecked, so an
+        # explicitly-passed artifact built for another schema was accepted silently -- the same
+        # wrong-layout defect as the derive-and-build lane below, and in the lane production
+        # actually uses (`rollout_cli.py --engine-encoder-tables`,
+        # `scripts/engine_env_benchmark.py --encoder-tables`). Caught in review of the fix for the
+        # other lane: fixing one and leaving the other would have been the neighbouring-instance
+        # mistake this effort keeps making.
+        text = Path(path).read_text(encoding="utf-8")
+        _assert_tables_match_schema(text, schema_version, source=str(path))
+        return text
 
     from .local_showdown import LocalShowdownConfig  # noqa: PLC0415
 

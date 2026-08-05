@@ -618,8 +618,10 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
     columns exist, so the failure surfaced deep inside the encoder as a missing column, on the
     first `encode_leaf`, rather than here as an unsupported schema.
 
-    Needs no Showdown checkout: the schema-to-layout decision happens before any artifact is read
-    or built, so a bogus path is enough to prove the selection while keeping the test hermetic.
+    Hermetic: the schema-to-layout decision happens before any artifact is read or built, so these
+    tests touch no filesystem and need no Showdown checkout. (An earlier version of this docstring
+    claimed "a bogus path is enough to prove the selection" -- no test here passes a path; that
+    sentence described an abandoned first draft.)
     """
 
     def _selected_schema(self, schema_version: str) -> str:
@@ -655,7 +657,14 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
         script = (
             _Path(__file__).resolve().parents[1] / "scripts" / "export_encoder_tables.py"
         ).read_text(encoding="utf-8")
-        match = re.search(r"choices=\((\s*\"v[^)]*)\)", script)
+        # Anchored to the --observation-schema argument, not the first `choices=(` in the file: a
+        # future argument with a `("v...")` choices tuple earlier in the script would otherwise
+        # silently redirect this comparison.
+        block = re.search(
+            r'"--observation-schema".*?choices=\((.*?)\)', script, re.S
+        )
+        self.assertIsNotNone(block, "could not locate the --observation-schema argument")
+        match = re.search(r"(\s*\"v[^)]*)", block.group(1))
         self.assertIsNotNone(match, "could not find the exporter's --observation-schema choices")
         advertised = set(re.findall(r'"([^"]+)"', match.group(1)))
         self.assertEqual(
@@ -663,6 +672,61 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
             set(engine_env._EXPORTABLE_TABLE_SCHEMAS),
             "engine_env._EXPORTABLE_TABLE_SCHEMAS has drifted from the exporter's CLI choices",
         )
+
+    def test_the_loader_itself_rejects_an_unbuildable_schema(self) -> None:
+        """Exercises `_load_encoder_tables`, not just the helper it calls.
+
+        The first version of these tests only covered `encoder_tables_schema`, so restoring the old
+        inline expression at the actual defect site left every one of them green -- the extraction
+        that was supposed to cure vacuity moved the tested surface off the changed line. Found in
+        review. Hermetic: the schema check runs before any artifact is read or built.
+        """
+        from pokezero.engine_env import _load_encoder_tables
+
+        with self.assertRaises(ValueError) as caught:
+            _load_encoder_tables(None, None, "pokezero.observation.v9")
+        self.assertIn("v9", str(caught.exception))
+
+    def test_the_loader_rejects_a_supported_schema_the_exporter_cannot_build(self) -> None:
+        """v2.1 and v2 are real observation schemas with no exporter layout.
+
+        These are the interesting unknowns, not `v9`: before the fix they silently resolved to
+        v2.2 tables, and they are the inputs whose behaviour this change actually alters.
+        """
+        from pokezero.engine_env import _load_encoder_tables
+
+        for schema_version in ("pokezero.observation.v2.1", "pokezero.observation.v2"):
+            with self.subTest(schema=schema_version):
+                with self.assertRaises(ValueError):
+                    _load_encoder_tables(None, None, schema_version)
+
+    def test_an_explicitly_passed_artifact_must_match_the_env_schema(self) -> None:
+        """The lane production uses (`--engine-encoder-tables`) trusted the file unchecked.
+
+        The layouts differ in numeric width (155 vs 132), categorical count (51 vs 41) and vocab
+        size (1217 vs 899 rows), so accepting a mismatched artifact means reading a different table
+        through the wrong indices.
+        """
+        import json
+        import tempfile
+        from pathlib import Path as _Path
+
+        from pokezero.engine_env import _load_encoder_tables
+
+        payload = json.dumps({"layout": {"schema_version": "pokezero.observation.v2.2"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = _Path(tmp) / "encoder_tables_v2.2.json"
+            artifact.write_text(payload, encoding="utf-8")
+            # Matching schema: accepted, returned verbatim.
+            self.assertEqual(
+                _load_encoder_tables(artifact, None, "pokezero.observation.v2.2"), payload
+            )
+            # Mismatched: refused, naming both schemas.
+            with self.assertRaises(ValueError) as caught:
+                _load_encoder_tables(artifact, None, "pokezero.observation.v4")
+            message = str(caught.exception)
+            self.assertIn("v2.2", message)
+            self.assertIn("v4", message)
 
     def test_an_unknown_schema_fails_here_rather_than_in_the_encoder(self) -> None:
         with self.assertRaises(ValueError):
