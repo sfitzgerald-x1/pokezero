@@ -937,14 +937,30 @@ class PublicBattleBeliefEngine:
                     self._running_ability[tracer.key] = str(primary)
                 target_slot, target_ident = traced_slot, traced_ident
                 traced_belief = self._target_belief(target_slot, target_ident)
-                # Trace copies whatever the target is CURRENTLY running, which for a transformed
-                # mon is its copy target's ability, not its own. Recording it as a certain reveal
-                # writes a fact the mon cannot have -- a Ditto transformed into Claydol yields
-                # `revealed_ability=Levitate` on Ditto, whose only pool ability is Limber, and the
-                # set collapses to the inconsistent fallback. It widens rather than dropping the
-                # true variant, so it is safe, but it is a wrong and sticky fact. The engine
-                # already tracks the flag, so simply decline the reveal.
-                if traced_belief is not None and traced_belief.transformed:
+                # Trace copies whatever the target is CURRENTLY running, which is not always the
+                # target's OWN ability. Recording it as a certain reveal then writes a fact the mon
+                # cannot have. It widens rather than dropping the true variant, so it is safe, but
+                # it is wrong and it is STICKY -- the conflicting-ability guard keeps the first
+                # claim for the rest of the game.
+                #
+                # There are TWO producers of a running ability and this guarded only one of them:
+                #
+                #   TRANSFORM  a Ditto transformed into Claydol yields `revealed_ability=Levitate`
+                #              on Ditto, whose only pool ability is Limber.
+                #   TRACE      a tracer that has already copied something is running THAT. The pool
+                #              has two Trace carriers (Porygon2, Gardevoir), so a Gardevoir which
+                #              Traced Absol's Pressure, then gets Traced by Porygon2, has
+                #              `revealed_ability=Pressure` written onto IT. Measured on a Gardevoir
+                #              already narrowed by one revealed move: 4 candidate variants and
+                #              uncertainty 0.40 become 10 and 1.00 -- the full-pool fallback, for
+                #              the rest of the battle.
+                #
+                # `_running_ability` is exactly the state needed to detect the second case, and it
+                # exists because of this same change; the original guard was written next to it and
+                # covered only the transform half. Found in independent review.
+                if traced_belief is not None and (
+                    traced_belief.transformed or traced_belief.key in self._running_ability
+                ):
                     return
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:

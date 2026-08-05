@@ -149,3 +149,55 @@ class TraceOnTransformedTargetTest(unittest.TestCase):
             "|turn|1",
         ]
         self.assertEqual(_ability(_belief(_engine(lines), "p2", "Claydol")), "levitate")
+
+
+class TraceOfATracerTest(unittest.TestCase):
+    """A tracer that has already copied something is RUNNING that, not its own ability.
+
+    Trace carries `notrace`, so a tracer cannot copy Trace itself -- but it can copy whatever a
+    tracer is currently running, and the `[of]` redirect then writes that onto the FIRST tracer as
+    a certain reveal. It is a fact that mon cannot have: Gardevoir's only pool ability is Trace.
+
+    The damage is the sticky full-pool collapse this module exists to prevent. `randbat.py` filters
+    every Gardevoir variant against `revealed_ability=Pressure`, finds none, and falls back to the
+    whole species pool -- and the conflicting-ability guard then keeps that wrong claim for the
+    rest of the battle.
+
+    Reachable: the gen3 randbats pool has exactly two Trace carriers, Porygon2 and Gardevoir, so
+    one Tracing the other is an ordinary game. Found in independent review; the sibling guard for
+    the TRANSFORM producer was already present eight lines away.
+    """
+
+    LINES = [
+        "|start",
+        "|switch|p1a: Gardevoir|Gardevoir, L79, F|100/100",
+        "|switch|p2a: Absol|Absol, L81, M|100/100",
+        # Gardevoir Traces Absol: it is now RUNNING Pressure.
+        "|-ability|p1a: Gardevoir|Pressure|Trace|[from] ability: Trace|[of] p2a: Absol",
+        "|turn|1",
+        "|switch|p2a: Porygon2|Porygon2, L80|100/100",
+        # Porygon2 Traces Gardevoir and copies what Gardevoir is RUNNING, not what it has.
+        "|-ability|p2a: Porygon2|Pressure|Trace|[from] ability: Trace|[of] p1a: Gardevoir",
+        "|turn|2",
+    ]
+
+    def test_the_second_trace_does_not_write_a_false_ability_onto_the_first_tracer(self) -> None:
+        gardevoir = _belief(_engine(self.LINES), "p1", "Gardevoir")
+        self.assertNotEqual(
+            _ability(gardevoir),
+            "pressure",
+            "the second Trace wrote Absol's Pressure onto Gardevoir, whose only pool ability is "
+            "Trace -- a fact it cannot have, and a sticky one",
+        )
+
+    def test_the_first_tracer_is_not_collapsed_to_the_full_pool(self) -> None:
+        """The consequence that matters: a false ability filters out every real variant."""
+        engine = _engine(self.LINES)
+        gardevoir = _belief(engine, "p1", "Gardevoir")
+        without_second_trace = _belief(_engine(self.LINES[:5]), "p1", "Gardevoir")
+        self.assertLessEqual(
+            len(gardevoir.candidate_variants),
+            len(without_second_trace.candidate_variants),
+            "the second Trace WIDENED the first tracer's candidate set, which is the "
+            "inconsistent-fallback collapse",
+        )

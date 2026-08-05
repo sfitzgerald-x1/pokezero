@@ -14,8 +14,14 @@ is suppressed:
         parts[4] = '';
 
 Toxic against a sleeping/immune target, Encore, Will-O-Wisp, Leech Seed and Spikes all hit that
-path routinely -- measured over 60 games, Toxic's target slot was blank on 53 of 328 lines. Every
-one of those lost its Pressure double and the PP ledger drifted for the rest of the battle.
+path routinely, and every blanked line lost its Pressure double, drifting the PP ledger for the
+rest of the battle. For the size of the class, run the census rather than trusting a number here:
+
+    PYTHONPATH=src .venv/bin/python scripts/blank_target_slot_census.py 60 999
+
+(An earlier version of this docstring quoted "53 of 328 Toxic lines", which no re-run reproduces.
+That figure was retracted in 6e550366 and replaced by the script above -- this was its fourth
+copy, surviving in a file that commit edited.)
 
 These tests pin the two directions (pressured / never pressured) plus the two members of the
 never-pressured set that are not self-evident, and the second producer of a running Pressure.
@@ -131,9 +137,6 @@ class TransformedPressureTest(unittest.TestCase):
         ditto = next(m for m in engine.snapshot().side("p1") if m.species.startswith("Ditto"))
         self.assertNotEqual((ditto.revealed_ability or "").lower(), "pressure")
 
-
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
@@ -288,3 +291,11 @@ class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
             "a Ghost-type Curse carrier is in the pool, so Curse is FOE-targeted for it and "
             "must leave _NEVER_PRESSURED_POOL_MOVES",
         )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END of the file, deliberately. It sat above NeverPressuredSetMatchesThePoolTest, so
+    # direct execution ran 9 tests while pytest collected 11 -- and the two silently omitted ones
+    # were exactly the data-decay guards added to stop the never-pressured set drifting from the
+    # pool it was derived from.
+    unittest.main()

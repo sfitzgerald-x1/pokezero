@@ -62,14 +62,34 @@ HISTORY_NUMERIC_COLUMN_NAMES = (
 )
 
 
+# `NUMERIC_STAT_WEATHER_REVEAL_OFFSET` names the START of a block, not a column: per weather in
+# `_WEATHER_REVEAL_ORDER` it is a (set-this-game, turn-fraction) pair, so 4 x 2 = 8 columns
+# (`showdown.py:232-234`). Only the offset itself appears in the exported layout, so resolving the
+# name list alone recovered 1 of those 8 -- the original hardcoded `range(92, 105)` covered them
+# all. Under v4 the block starts at public column 126 and the numeric array is 132 wide, so 126-131
+# are live and unnamed; the allowance was missing five of them.
+#
+# The test stayed green only because none of the five sampled decisions has a weather reveal. The
+# first regeneration whose sample contains one would have failed on 127-131 as if parity had
+# broken -- exactly the false-failure mode the name-resolution rewrite was written to remove.
+# Found in independent review; the non-empty guard could not see it (9 of 11 names resolving
+# satisfies a truthiness check).
+_BLOCK_NUMERIC_COLUMN_NAMES = {"NUMERIC_STAT_WEATHER_REVEAL_OFFSET": 8}
+
+
 def _history_numeric_columns(layout) -> frozenset:
-    """Resolve the history-column NAMES to indices in this schema's layout."""
+    """Resolve the history-column NAMES to indices, expanding block offsets to their full width."""
     numeric_columns = layout["numeric_columns"]
-    return frozenset(
-        numeric_columns[name]
-        for name in HISTORY_NUMERIC_COLUMN_NAMES
-        if name in numeric_columns
-    )
+    width = layout.get("numeric_feature_count") or (max(numeric_columns.values()) + 1)
+    resolved: set[int] = set()
+    for name in HISTORY_NUMERIC_COLUMN_NAMES:
+        if name not in numeric_columns:
+            continue
+        start = numeric_columns[name]
+        span = _BLOCK_NUMERIC_COLUMN_NAMES.get(name, 1)
+        # Clipped to the array width: a block can name more columns than a narrower schema carries.
+        resolved.update(index for index in range(start, start + span) if index < width)
+    return frozenset(resolved)
 
 
 def _transition_token_start(layout) -> int:
@@ -111,8 +131,6 @@ def _rust_encoder_available() -> bool:
     return hasattr(pokezero_search, "encode_decision")
 
 
-@unittest.skipIf(numpy is None, "requires numpy")
-
 def _sample_schema_version(corpus) -> str:
     """The observation schema the committed sample was encoded at, from its own header.
 
@@ -124,6 +142,7 @@ def _sample_schema_version(corpus) -> str:
     return str(corpus.header["observation"]["schema_version"])
 
 
+@unittest.skipIf(numpy is None, "requires numpy")
 class DiffLogicTest(unittest.TestCase):
     def setUp(self) -> None:
         self.harness = _load_script("validate_rust_encoder")
@@ -239,10 +258,25 @@ class GoldenSampleBackendTest(unittest.TestCase):
         )["layout"]
         history_columns = _history_numeric_columns(layout)
         transition_start = _transition_token_start(layout)
-        # The allowance must not swallow the assertion: if the history set resolved to nothing,
-        # every mismatch would be reported as an unexpected column and the test would still look
-        # meaningful while testing something else entirely.
-        self.assertTrue(history_columns, "no history columns resolved in this schema's layout")
+        # An EXPECTED COUNT, not a truthiness check. The previous `assertTrue(history_columns)`
+        # was satisfied by 9 of 11 names resolving, which is how the weather-reveal block silently
+        # shrank from 8 columns to 1 (see `_history_numeric_columns`). A count makes any future
+        # shrink loud at the point it happens rather than at the next regeneration.
+        expected = {
+            "pokezero.observation.v2.2": 18,
+            "pokezero.observation.v3": 18,
+            "pokezero.observation.v4": 14,
+        }.get(_sample_schema_version(self.corpus))
+        self.assertIsNotNone(
+            expected,
+            "unknown schema in the committed sample; add its expected history-column count",
+        )
+        self.assertEqual(
+            len(history_columns),
+            expected,
+            "the history-column allowance changed size; a SHRINK turns legitimate history "
+            "divergence into a false parity failure, a GROWTH hides a real one",
+        )
 
         for row in self.corpus.decision_rows:
             got = backend.encode(self.backends_module.row_inputs_from_decision_row(row))
