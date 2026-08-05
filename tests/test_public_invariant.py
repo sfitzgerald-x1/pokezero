@@ -94,8 +94,11 @@ class TestFileStructureTest(unittest.TestCase):
     A mid-file `if __name__ == "__main__": unittest.main()` makes direct execution and pytest
     disagree about what ran, and everything below it is invisible to `python <file>`. Measured
     before this guard existed: `test_belief.py` ran 16 tests directly against 69 under pytest,
-    `test_belief_variant_narrowing.py` 10 against 13, and `test_randbat.py` NameErrored because two
-    helpers were defined below the block.
+    `test_belief_variant_narrowing.py` 10 against 13, and `test_randbat.py` broke two ways at once
+    -- two helpers were defined below the block, so with POKEZERO_SHOWDOWN_ROOT set direct
+    execution raised NameError, and with it unset it silently ran 23 of its 26 tests. (An earlier
+    revision of this docstring said only "NameErrored", which is the half that needs the env var;
+    the sibling comment in test_randbat.py was corrected and this copy was missed.)
 
     That is not a hypothetical tidiness rule. In every one of those three files the stranded region
     held guards added specifically to catch a defect -- so the tests written to prevent a regression
@@ -170,9 +173,12 @@ class DuplicateTestClassTest(unittest.TestCase):
 
     A redefinition silently shadows the first, so whichever copy is earlier never runs and the two
     can drift apart unnoticed. Found for real: `tests/test_mcts_eval_manifest.py` held two
-    byte-identical 5,005-byte copies of `TrimmedEncoderTablesTest` (lines 392 and 578). Nothing
-    failed, pytest collected 39 either way, and the only visible symptom was that a class list
-    counted it twice.
+    copies of `TrimmedEncoderTablesTest` at lines 392 and 578 with identical SHA-256 -- so which
+    one Python bound (the second; binding is top-to-bottom) made no behavioural difference, and the
+    deletion of the second left the previously-dead first copy as the survivor. Nothing failed,
+    pytest collected 39 either way, and the only visible symptom was a class list counting it twice.
+    (A byte count stood here; reviewer and author measured the same blob and got different figures,
+    so it is replaced by the digest equality, which is the load-bearing fact and is checkable.)
 
     The structural guard next door catches classes stranded BELOW `unittest.main()`; this catches
     classes hidden BEHIND another definition. Same failure — a test that looks present and is not.
