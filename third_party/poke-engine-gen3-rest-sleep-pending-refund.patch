@@ -187,3 +187,18 @@
              Instruction::SetRestTurns(s) => {
                  write!(
                      f,
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -706,6 +706,12 @@
+             } else {
+                 Some(Box::new(PreTransform::deserialize(&self.pre_transform)))
+             },
++            // pokezero row-2 plumbing: not exposed on PyPokemon, so a state
++            // built through the binding always starts with no pending refund.
++            // Only SetRestSleepPendingRefund inside search may make it nonzero,
++            // which is what keeps this patch behaviour-neutral. Emitting the
++            // value from the harness needs a PyPokemon field as well.
++            rest_sleep_pending_refund: 0,
+         }
+     }
+ }
