@@ -52,13 +52,30 @@ def _stubbed_capability_probe():
 
     import pokezero.engine_world as engine_world
 
-    calls: list[int] = []
+    class _Calls(list):
+        """A list that can also carry the refund probe's own tally.
+
+        Existing tests treat this as a plain list (len / clear / == []), so it has
+        to stay one; a bare list cannot take an attribute.
+        """
+
+        refund_calls: list[int]
+
+    calls = _Calls()
+    refund_calls: list[int] = []
     original = engine_world.require_rest_turns_support
+    # The refund probe was NOT stubbed in the first version of the write side, so
+    # two building tests silently called the real one against the real wheel --
+    # exactly the undeclared wheel dependency this stub exists to prevent.
+    original_refund = engine_world.require_rest_sleep_refund_support
     engine_world.require_rest_turns_support = lambda *a, **k: calls.append(1)
+    engine_world.require_rest_sleep_refund_support = lambda *a, **k: refund_calls.append(1)
+    calls.refund_calls = refund_calls
     try:
         yield calls
     finally:
         engine_world.require_rest_turns_support = original
+        engine_world.require_rest_sleep_refund_support = original_refund
 
 
 # --- fixtures ---------------------------------------------------------------------
@@ -232,6 +249,77 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         )
         self.assertEqual(self.probe_calls, [])
 
+    def test_building_a_pending_refund_gates_on_its_own_capability(self) -> None:
+        """The refund probe's call site, which was unpinned.
+
+        Its sibling `require_rest_turns_support` has had this pin since it landed;
+        deleting the refund probe's call left every test green. The failures differ
+        in DIRECTION -- dropping rest_turns re-arms Sleep Clause, dropping the bank
+        wakes the mon early -- so each needs its own gate and its own pin.
+        """
+
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=1,
+            skipped_time=1,
+        )
+        battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_sleep_turns=True
+        )
+        self.assertEqual(len(self.probe_calls.refund_calls), 1)
+
+        # And an ordinary sleeper with no bank must NOT reach for it, or every
+        # sleep would start demanding a wheel capability it has no use for.
+        self.probe_calls.refund_calls.clear()
+        self._sleeper(rest_attempts=1)
+        self.assertEqual(self.probe_calls.refund_calls, [])
+
+    def test_a_pending_refund_leaving_no_counter_refuses_rather_than_building_zero(self) -> None:
+        """The floor-at-1 on the unfolded path, which was also unpinned.
+
+        rest_turns == 0 is not a representable Rest sleep: the engine reads 0 as
+        ORDINARY sleep and consults sleep_turns, and #1109's switch-in consumer is
+        guarded on rest_turns > 0. So a 0 counter would both re-arm the Sleep Clause
+        the Rest is exempt from AND hold a refund that can never land. Three
+        attempts with nothing refunded leaves 3 - 3 = 0, so this must refuse.
+        """
+
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=3,
+            skipped_time=1,
+        )
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_sleep_turns=True
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_a_pre_write_side_row_refuses_under_its_own_reason_code(self) -> None:
+        """A stored corpus row: both flags set, counts withheld by the old harness.
+
+        Fail-closed either way, but the code matters. Falling through to
+        `provenance_unrepresentable` blames malformed public data for a stale
+        corpus and inflates a different counted class in replay telemetry -- the
+        same misattribution the third legacy code was invented to prevent. The
+        legacy canary cannot catch these: they carry the producer flag and return
+        before that check.
+        """
+
+        payload = _payload(self.dex, refund_pending=True, sleeper_active=True)
+        self.assertNotIn("restSleepAttempts", payload["sides"]["p2"]["pokemon"][0])
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_sleep_turns=True
+            )
+        self.assertEqual(
+            caught.exception.reason, "rest_sleep_refund_pending_precounts_legacy"
+        )
+
     def test_each_attempt_count_maps_onto_the_engines_own_counter(self) -> None:
         # The engine sets rest_turns 3 on Rest and decrements once per move ATTEMPT,
         # waking at 1. In the ordinary (non-Early-Bird, no-refund) path, k public
@@ -340,23 +428,52 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         sleeper = self._sleeper(rest_attempts=3, refunded_time=3)
         self.assertEqual(sleeper.rest_turns, 3)
 
-    def test_pending_refund_refuses_even_when_approximate_sleep_is_enabled(self) -> None:
-        payload = _payload(self.dex, refund_pending=True, sleeper_active=True)
-        with self.assertRaises(EngineWorldUnsupported) as caught:
-            battle_spec_from_payload(
-                payload,
-                _override(),
-                dex=self.dex,
-                approximate_sleep_turns=True,
-            )
-        self.assertEqual(caught.exception.reason, "rest_sleep_active_refund_pending")
+    def test_pending_refund_now_builds_and_carries_the_bank_unfolded(self) -> None:
+        """Producer B no longer refuses -- the engine has somewhere to put the refund.
+
+        Was: assertRaises(rest_sleep_active_refund_pending). This is the class that
+        cost 781 decisions in era 58, 28.7% of all fallback.
+
+        The load-bearing assertion is that the refund is NOT folded into rest_turns.
+        Folding is right for a benched mon, whose next attempt is necessarily
+        preceded by a switch-in; for an active one it double-counts, because the
+        engine credits the bank again on switch-in.
+        """
+
+        # The attempt counts are part of the row now. Before this change
+        # local_showdown set the flag and `continue`d, so restSleepAttempts was
+        # never written for exactly these rows -- which is why deleting the refusal
+        # alone would have changed nothing: construction is gated on that key.
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=1,
+            skipped_time=1,
+        )
+        world = battle_spec_from_payload(
+            payload,
+            _override(),
+            dex=self.dex,
+            approximate_sleep_turns=True,
+        )
+        sleeper = world.spec.side_two.pokemon[0]
+        self.assertEqual(sleeper.status, "sleep")
+        self.assertEqual(sleeper.rest_sleep_pending_refund, 1)
+        # _payload writes one attempt and one skipped turn, so the unfolded counter
+        # is 3 - 1 = 2 and the folded one would have been 3. Asserting 2 is what
+        # distinguishes the two; asserting "non-zero" would pass either way.
+        self.assertEqual(sleeper.rest_turns, 2)
 
     def test_the_split_reason_codes_reach_world_construction_distinctly(self) -> None:
         # The flags are only useful if they survive into the refusal REASON, which is
         # what the fallback ledger counts. Both must refuse even with approximation on.
+        # restSleepActiveRefundPending is deliberately NOT in this list any more: it
+        # builds now rather than refusing, and its own test asserts that. The other
+        # two still refuse, for different owners -- one is a harness snapshot gap,
+        # one is a pre-split corpus row whose producer is unrecoverable.
         for flag, reason in (
             ("restSleepAttemptUnsettled", "rest_sleep_attempt_unsettled"),
-            ("restSleepActiveRefundPending", "rest_sleep_active_refund_pending"),
             ("restSleepRefundPending", "rest_sleep_refund_pending_unsplit_legacy"),
         ):
             with self.subTest(flag=flag):
@@ -385,9 +502,14 @@ class RestTurnsReconstructionTests(unittest.TestCase):
             "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
             "|upkeep", "|turn|2",
         ]
+        # Producer B's expectation is None: it BUILDS now instead of refusing. The
+        # ordering guard still holds, and is arguably sharper this way -- if the
+        # legacy check were moved ahead of the producer checks, a B row would refuse
+        # with the legacy code instead of building, so "builds" is a strictly
+        # stronger statement than "refuses with B's code" was.
         cases = (
             ("A", ["|cant|p2a: Skarmory|slp"], "rest_sleep_attempt_unsettled"),
-            ("B", talk, "rest_sleep_active_refund_pending"),
+            ("B", talk, None),
         )
         for producer, tail, expected in cases:
             with self.subTest(producer=producer):
@@ -409,11 +531,21 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                 # ordering load-bearing in the first place.
                 self.assertTrue(rows[0].get("restSleepRefundPending"), rows[0])
 
-                with self.assertRaises(EngineWorldUnsupported) as caught:
-                    battle_spec_from_payload(
+                if expected is None:
+                    world = battle_spec_from_payload(
                         payload, _override(), dex=self.dex, approximate_sleep_turns=True
                     )
-                self.assertEqual(caught.exception.reason, expected)
+                    sleeper = world.spec.side_two.pokemon[0]
+                    self.assertEqual(sleeper.status, "sleep")
+                    # The bank is what proves the PRODUCER branch ran rather than a
+                    # generic sleep path: only that branch sets it.
+                    self.assertEqual(sleeper.rest_sleep_pending_refund, 1)
+                else:
+                    with self.assertRaises(EngineWorldUnsupported) as caught:
+                        battle_spec_from_payload(
+                            payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                        )
+                    self.assertEqual(caught.exception.reason, expected)
 
     def test_the_retired_reason_code_is_gone_from_the_engine_world_source(self) -> None:
         # A grep-level guard, deliberately. The point of retiring the old name rather
@@ -602,11 +734,22 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
     def _annotate_active_sleeper(self, lines):
         return self._annotate_either(lines, active=True)
 
-    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+    def test_active_sleep_talk_row_now_carries_its_attempt_counts(self) -> None:
+        """Was: assertNotIn("restSleepAttempts").
+
+        Withholding the attempt counts was the bail-out that made producer B a
+        refusal, and it is the reason deleting the decline in engine_world would
+        have changed nothing on its own -- construction is gated on this key. The
+        flag still gets written, and still means "pending, not folded", so a
+        checkout predating the engine field keeps refusing rather than reading the
+        counts and silently dropping the refund.
+        """
+
         rows = self._annotate_active_sleeper(self._RESTED + [*self._ACTIVE_SLEEP_TALK])
-        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
         # Producer B: the Sleep Talk |move| classifies the attempt immediately, so this
-        # is the known-value/nowhere-to-put-it case, not an unsettled one.
+        # is the known-value case, not an unsettled one.
         self.assertTrue(rows[0]["restSleepActiveRefundPending"])
         self.assertNotIn("restSleepAttemptUnsettled", rows[0])
 

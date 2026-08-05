@@ -49,6 +49,11 @@ MCTS_ENTRYPOINT_API = ("monte_carlo_tree_search",)
 POKE_ENGINE_BUILD_COMMAND = "scripts/setup_poke_engine.sh /path/to/venv/bin/python"
 # Any mid-Rest value works; 2 is the middle of the reachable 1..3 range.
 _REST_TURNS_PROBE_VALUE = 2
+# Not 1: a refund of 1 could also be produced by a bool coerced to int or an
+# off-by-one, so it cannot distinguish 'carried' from 'accidentally 1'.
+_REST_SLEEP_REFUND_PROBE_VALUE = 2
+# Gen 3 Rest sets a 3-turn counter, and the engine's wake match PANICS above it.
+_REST_SLEEP_TURNS_MAX = 3
 
 
 class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
@@ -99,6 +104,17 @@ class PokeEngineRestTurnsUnsupportedError(PokeEngineUnavailableError):
     move Showdown would let through (or, on the other side, believes its own sleep
     move is blocked). The damage is worst exactly where this fix aims: a benched
     Rest-sleeper, whose mis-modelled state nothing else in the position reveals.
+    """
+
+
+class PokeEngineRestSleepRefundUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a world carries a pending Rest refund the binding cannot express.
+
+    Distinct from :class:`PokeEngineRestTurnsUnsupportedError` in the direction of
+    the error. Dropping ``rest_turns`` re-arms the Sleep Clause; dropping
+    ``rest_sleep_pending_refund`` loses turns the sim would credit back, so the mon
+    wakes EARLY on every branch that switches it in. Both are silent, which is why
+    each gets a probe rather than a version check.
     """
 
 
@@ -158,6 +174,12 @@ class PokemonSpec:
     nature: str | None = None
     gender: str | None = None
     rest_turns: int = 0
+    # Rest sleep turns already skipped by Sleep Talk/Snore that gen 3 credits back
+    # on SWITCH-IN. Only an ACTIVE sleeper needs it: for a benched one a switch-in
+    # necessarily precedes the next attempt, so construction folds the refund
+    # straight into ``rest_turns``. An active mon may never switch, and search
+    # explores the stay-in branch too, where pre-applying would wake it early.
+    rest_sleep_pending_refund: int = 0
     sleep_turns: int = 0
     weight_kg: float | None = None
     # BASE IDENTITY: what the engine restores when a temporary change to the
@@ -490,6 +512,78 @@ def require_rest_turns_support(engine: Any | None = None) -> None:
 @lru_cache(maxsize=32)
 def _cached_rest_turns_supported(engine: Any) -> bool:
     return _rest_turns_supported(engine)
+
+
+@lru_cache(maxsize=32)
+def _cached_rest_sleep_refund_supported(engine: Any) -> bool:
+    return _rest_sleep_refund_supported(engine)
+
+
+def require_rest_sleep_refund_support(engine: Any | None = None) -> None:
+    """Prove the installed binding preserves a pending Rest refund end to end.
+
+    Same house pattern as :func:`require_rest_turns_support`, and needed for a
+    sharper reason. The refund only ever reaches search through the pyo3
+    conversion, and that direction is the one the Rust compiler does NOT protect:
+    adding the field to ``PyPokemon`` forces ``E0063`` in ``From<Pokemon>`` and in
+    ``#[new]``, but ``impl Into<Pokemon>`` compiles perfectly well while writing a
+    literal 0. A binding built that way accepts the keyword, drops the value, and
+    hands search a sleeper whose skipped turns are simply gone -- an UNDER-credit
+    that no test on this side can see. Probe the round trip, not the install.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_rest_sleep_refund_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable; production modules are not.
+        supported = _rest_sleep_refund_supported(engine)
+    if not supported:
+        raise PokeEngineRestSleepRefundUnsupportedError(
+            "An active Rest-sleeper with skipped Sleep Talk/Snore turns requires a "
+            "poke-engine that round-trips Pokemon.rest_sleep_pending_refund; the "
+            "installed engine dropped it, which would build the sleeper with its "
+            "skipped turns simply gone and wake it EARLY on every branch that "
+            "switches it back in. Rebuild with: "
+            f"{POKE_ENGINE_BUILD_COMMAND}"
+        )
+
+
+def _rest_sleep_refund_supported(engine: Any) -> bool:
+    """Return whether the binding preserves a pending Rest refund end to end."""
+
+    state_type = getattr(engine, "State", None)
+    side_type = getattr(engine, "Side", None)
+    pokemon_type = getattr(engine, "Pokemon", None)
+    if state_type is None or side_type is None or pokemon_type is None:
+        return False
+
+    def serialize(pending: int) -> str:
+        state = state_type(
+            side_one=side_type(
+                pokemon=[
+                    pokemon_type(
+                        id="snorlax",
+                        status="sleep",
+                        rest_turns=1,
+                        rest_sleep_pending_refund=pending,
+                    )
+                ]
+            ),
+            side_two=side_type(),
+        )
+        return str(state.to_string())
+
+    try:
+        # Difference proves the write is carried; the fixed point proves it
+        # survives the read as well, since a field that made it out but not back
+        # in would still corrupt a search root.
+        pending = serialize(_REST_SLEEP_REFUND_PROBE_VALUE)
+        if pending == serialize(0):
+            return False
+        return str(state_type.from_string(pending).to_string()) == pending
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
 
 
 def _rest_turns_supported(engine: Any) -> bool:
@@ -924,6 +1018,24 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
         kwargs["gender"] = mapped_gender
     if _require_non_negative_int(member.rest_turns, f"{path}.rest_turns"):
         kwargs["rest_turns"] = member.rest_turns
+    if _require_non_negative_int(
+        member.rest_sleep_pending_refund, f"{path}.rest_sleep_pending_refund"
+    ):
+        kwargs["rest_sleep_pending_refund"] = member.rest_sleep_pending_refund
+    # Deliberately OUTSIDE the block above. A first version only ran this when the
+    # refund was nonzero, which left rest_turns=4/refund=0 building happily and then
+    # panicking the engine with "Invalid rest_turns value: 4" -- half the domain
+    # guarded while the constant and the refusal channel were both already in hand.
+    #
+    # The engine clamps because search has no refusal channel by then. The
+    # constructor has one, and refusing a decision beats truncating a refund into a
+    # plausible-looking counter.
+    total = int(member.rest_turns) + int(member.rest_sleep_pending_refund)
+    if total > _REST_SLEEP_TURNS_MAX:
+        raise ValueError(
+            f"{path}: rest_turns + rest_sleep_pending_refund must be "
+            f"<= {_REST_SLEEP_TURNS_MAX}, got {total}"
+        )
     if _require_non_negative_int(member.sleep_turns, f"{path}.sleep_turns"):
         kwargs["sleep_turns"] = member.sleep_turns
     if member.pre_transform is not None:

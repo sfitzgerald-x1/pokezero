@@ -44,6 +44,7 @@ from .poke_engine_adapter import (
     build_poke_engine_state,
     require_charge_state_support,
     require_move_trap_support,
+    require_rest_sleep_refund_support,
     require_rest_turns_support,
 )
 from .showdown_fixture import FixturePokemon, _STAT_ORDER
@@ -1496,7 +1497,7 @@ def _build_pokemon_spec(
     }
 
     resolved_ability = _resolved_ability(mon, row)
-    hp, status, rest_turns = _hp_and_status(
+    hp, status, rest_turns, rest_sleep_pending_refund = _hp_and_status(
         row,
         maxhp=maxhp,
         slot=slot,
@@ -1512,6 +1513,12 @@ def _build_pokemon_spec(
         # exempt from and hands search a sleep move Showdown would refuse. Failing the
         # decision is strictly better than searching a rule the sim does not have.
         require_rest_turns_support()
+    if rest_sleep_pending_refund:
+        # Separate probe from rest_turns, because the failure is the opposite
+        # direction: a binding that drops this field does not re-arm Sleep Clause,
+        # it loses turns the sim credits back and wakes the mon EARLY on every
+        # branch that switches it in. Both are silent, so both get probed.
+        require_rest_sleep_refund_support()
     moves = _move_specs(
         mon,
         row,
@@ -1542,6 +1549,7 @@ def _build_pokemon_spec(
         # (gen3/generate_instructions.rs), so a Rest sleep has no elapsed-turn count
         # to carry and inventing one would be read by nothing.
         rest_turns=rest_turns,
+        rest_sleep_pending_refund=rest_sleep_pending_refund,
         # A protocol-CONFIRMED ability beats the sampled battle-start assignment, for the
         # same reason the item does below: Trace publicly replaces the holder's ability
         # mid-battle, and a world rebuilt from the sampled set hands the engine TRACE, which
@@ -1589,22 +1597,22 @@ def _hp_and_status(
     is_self: bool,
     approximate_sleep_turns: bool = False,
     rest_sleep_early_bird: bool = False,
-) -> tuple[int, str, int]:
-    """Return ``(hp, engine status, rest_turns)`` for one public row.
+) -> tuple[int, str, int, int]:
+    """Return ``(hp, engine status, rest_turns, rest_sleep_pending_refund)`` for one row.
 
     ``rest_turns`` is non-zero only for a mon whose sleep the public protocol attributed
     to its own Rest; see :func:`_rest_turns_from_row`.
     """
 
     if row is None:
-        return maxhp, "none", 0
+        return maxhp, "none", 0, 0
     condition = str(row.get("condition") or "")
     if not condition:
         raise EngineWorldUnsupported("payload_malformed", f"{slot}: {species!r} row has no condition")
     hp_part, _, status_part = condition.partition(" ")
     status_code = status_part.strip()
     if status_code == "fnt" or hp_part == "0":
-        return 0, "none", 0
+        return 0, "none", 0, 0
     current_raw, _, max_raw = hp_part.partition("/")
     try:
         current = int(current_raw)
@@ -1660,12 +1668,40 @@ def _hp_and_status(
                     f"{slot}: {species!r} has an unsettled public Rest sleep attempt",
                 )
             if bool(row.get("restSleepActiveRefundPending")):
-                # Engine representation: skippedTime is known but an ACTIVE mon has
-                # nowhere to carry a refund that only a future switch-in applies.
-                raise EngineWorldUnsupported(
-                    "rest_sleep_active_refund_pending",
-                    f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
+                # NO LONGER A REFUSAL. The engine now carries the pending refund on
+                # the mon (`Pokemon.rest_sleep_pending_refund`) and spends it only on
+                # the branch where a switch-in actually happens, so the value that
+                # used to have nowhere to go now has somewhere to go.
+                #
+                # The refund is deliberately NOT folded into rest_turns here. Folding
+                # it in is right for a BENCHED mon -- a switch-in necessarily precedes
+                # its next attempt -- and wrong for an active one, which may never
+                # switch while search explores the stay-in branch. Doing both would
+                # credit the same turns twice.
+                if "restSleepAttempts" not in row:
+                    # A row written by the PRE-write-side harness: it set the flags
+                    # and withheld the counts. Fail closed, but under its OWN code --
+                    # falling through to `provenance_unrepresentable` would blame
+                    # malformed public data for what is really a stale corpus, and
+                    # silently inflate a different counted class in replay telemetry.
+                    # The legacy canary cannot catch it either: these rows carry the
+                    # producer flag and return before that check.
+                    raise EngineWorldUnsupported(
+                        "rest_sleep_refund_pending_precounts_legacy",
+                        f"{slot}: {species!r} carries a pending Rest refund with no "
+                        "attempt counts, so it predates the write side",
+                    )
+                skipped = row.get("restSleepSkippedTime", 0)
+                rest_turns = _rest_turns_from_row(
+                    row, early_bird=rest_sleep_early_bird, fold_skipped=False
                 )
+                if rest_turns is None or not isinstance(skipped, int) or isinstance(skipped, bool):
+                    raise EngineWorldUnsupported(
+                        "rest_sleep_provenance_unrepresentable",
+                        f"{slot}: {species!r} has unrepresentable public Rest provenance "
+                        "for a pending refund",
+                    )
+                return hp, "sleep", rest_turns, skipped
             # LAST, and load-bearing that it is last. A live row sets this flag too
             # (see `_mark_legacy_rest_refund_pending`) so that a pre-split checkout
             # replaying it still refuses instead of silently approximating. Reaching
@@ -1688,7 +1724,7 @@ def _hp_and_status(
                 if rest_turns is not None:
                     # EXACT, not approximated: the public attempt count reconstructs the
                     # engine's own Rest counter with nothing left to guess.
-                    return hp, "sleep", rest_turns
+                    return hp, "sleep", rest_turns, 0
                 # A present annotation is positive Rest provenance, even when its
                 # counter is invalid. Never reinterpret it as induced sleep: that
                 # would zero rest_turns and re-arm Sleep Clause.
@@ -1700,15 +1736,17 @@ def _hp_and_status(
                 # Documented approximation only for an unannotated, induced sleep.
                 # Model the mon as freshly asleep (sleep_turns=0); this biases wake-up
                 # odds late in a sleep. The exact fix is public sleep-counter tracking.
-                return hp, "sleep", 0
+                return hp, "sleep", 0, 0
         raise EngineWorldUnsupported(
             "status_unsupported",
             f"{slot}: {species!r} status {status_code!r} (sleep needs public turn counts)",
         )
-    return hp, status, 0
+    return hp, status, 0, 0
 
 
-def _rest_turns_from_row(row: Mapping[str, Any], *, early_bird: bool = False) -> int | None:
+def _rest_turns_from_row(
+    row: Mapping[str, Any], *, early_bird: bool = False, fold_skipped: bool = True
+) -> int | None:
     """Rebuild the engine's Rest counter from the row's public attempt count.
 
     ``restSleepAttempts`` (k) is written by ``local_showdown._apply_rest_sleep_provenance``
@@ -1795,12 +1833,36 @@ def _rest_turns_from_row(row: Mapping[str, Any], *, early_bird: bool = False) ->
         # A Rest starts at three units, so the second Early Bird attempt wakes before it
         # can emit another sleep cant. Treat a larger public count as inconsistent.
         return None
+    # ``fold_skipped=False`` is for an ACTIVE sleeper, whose refund rides on the mon
+    # as ``rest_sleep_pending_refund`` and is spent only on the branch where a
+    # switch-in actually happens. Folding it in here as well would credit the same
+    # turns TWICE -- with attempts=2, refunded=0, skipped=1 the true counter is 1
+    # with 1 pending, but a fold plus a pending field gives the engine 2 + 1 and it
+    # clamps to 3. Benched mons keep the fold, because for them a switch-in
+    # necessarily precedes the next attempt.
     rest_turns = (
         _REST_SLEEP_TURNS
         - attempts * (2 if early_bird else 1)
         + refunded
-        + skipped
+        + (skipped if fold_skipped else 0)
     )
+    if not fold_skipped:
+        # Still floored at 1, NOT 0. Two independent reasons, and both bite silently:
+        # the engine's wake match treats rest_turns == 0 as ordinary sleep and reads
+        # sleep_turns instead, and its switch-in consumer is guarded on
+        # rest_turns > 0, so a 0 counter would never be credited the refund at all.
+        # A row implying 0 remaining with turns still banked is therefore not
+        # representable, and refusing beats building a Sleep-Clause-re-armed mon.
+        if not 1 <= rest_turns <= _REST_SLEEP_TURNS:
+            return None
+        # The SUM is what the engine holds once the refund lands, so it is the sum
+        # that has to fit. A BACKSTOP, not the decisive check, and review proved it:
+        # the `refunded + skipped > attempts` rejection above already forces
+        # 3 - k*(1|2) + refunded + skipped <= 3, and an exhaustive sweep over
+        # (k, refunded, skipped) x Early Bird found zero inputs where this line is
+        # the one doing the rejecting. Kept because the fail-closed contract should
+        # not depend on that derivation staying true.
+        return rest_turns if rest_turns + skipped <= _REST_SLEEP_TURNS else None
     return rest_turns if 1 <= rest_turns <= _REST_SLEEP_TURNS else None
 
 

@@ -67,6 +67,17 @@ jobs:
             # nonzero assertion touches only this file, so the gate that would
             # catch it never runs. Found by review of #1108.
             tests/test_rest_sleep_refund_boundary.py
+            # Pins the harness write side: the double-count guard and the
+            # capability probe's negative control. Same reason as the line above --
+            # a PR that weakens only this file must still trigger the gate.
+            tests/test_rest_sleep_refund_write_side.py
+            # Holds test_member_coverage_is_locked_to_the_pokemon_spec_surface, an
+            # AUTOMATIC guard that every PokemonSpec field appears in the transport
+            # attestation. It caught rest_sleep_pending_refund the moment the field
+            # was added -- and nobody saw it, because this module was in no
+            # workflow's FILTERS and no step. A guard nothing runs. Found by review
+            # of #1113.
+            tests/test_engine_stat_attestation.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -295,6 +306,107 @@ jobs:
             echo "::error::a binding boundary pin SKIPPED"
             exit 1
           fi
+
+      # The transport attestation, which nothing ran before this. Its
+      # member-coverage test fails automatically whenever a PokemonSpec field is
+      # added without extending the spec-vs-native comparison -- which is exactly
+      # what #1113 did at 7abf3343, invisibly, because no workflow executed it.
+      - name: Engine stat attestation
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_stat_attestation -v 2>&1 \
+            | tee /tmp/attest.log
+          # The module has TWO skipTest sites, and only one of them can fire here:
+          # test_real_replay_materializes_and_attests_transport_with_source_hash
+          # needs a built Showdown checkout (dist/sim/index.js), which CI has not
+          # got. The other (test_real_adapter_positive_and_negative_controls, on
+          # "poke-engine is not installed/ready") cannot fire only because this step
+          # runs AFTER the build -- move it above and you get two skips and a red
+          # gate: right outcome, misleading message.
+          #
+          # So a bare '^OK$' is a FALSE gate -- it red-flagged this step on the first
+          # attempt, because the author's machine HAS a Showdown checkout and saw
+          # 16/16 clean. A module-wide no-skip assertion would be the same trap the
+          # A5 step above documents. Allow the one reachable skip BY NAME and nothing
+          # else, which is stricter than tolerating any skip.
+          if ! grep -qE '^OK( \(skipped=1\))?$' /tmp/attest.log; then
+            echo "::error::the transport attestation suite did not end OK"
+            exit 1
+          fi
+          skips=$(grep -cE '\.\.\. skipped' /tmp/attest.log || true)
+          if [ "${skips:-0}" -gt 1 ]; then
+            echo "::error::more than one attestation test skipped (${skips})"
+            exit 1
+          fi
+          if [ "${skips:-0}" -eq 1 ] && ! grep -qE \
+              '^test_real_replay_materializes_and_attests_transport_with_source_hash \(.*\) \.\.\. skipped' \
+              /tmp/attest.log; then
+            echo "::error::an UNEXPECTED attestation test skipped"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 16 tests' /tmp/attest.log; then
+            echo "::error::expected 16 attestation tests; the suite shrank or grew"
+            exit 1
+          fi
+          # The guard this step exists for. It fails automatically whenever a
+          # PokemonSpec field is added without extending the attestation, so it must
+          # actually RUN, not merely be present in a skipped module.
+          grep -qE '^test_member_coverage_is_locked_to_the_pokemon_spec_surface \(.*\)( |$)' \
+            /tmp/attest.log || {
+            echo "::error::the PokemonSpec coverage guard did not run"
+            exit 1
+          }
+
+      # Row 2 step 4. Two SILENT failure modes, neither visible without a test:
+      # folding the refund into rest_turns while also banking it double-counts and
+      # the engine clamps the result (mon sleeps too long, nothing errors), and a
+      # binding that drops the field builds a state with the refund simply gone.
+      # The dropping-binding negative control is what makes the probe more than
+      # decoration -- the same shape that let #1105's wheel break reach CI.
+      - name: Rest refund write-side pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_rest_sleep_refund_write_side -v 2>&1 \
+            | tee /tmp/writeside.log
+          if ! grep -qE 'Ran 6 tests' /tmp/writeside.log; then
+            echo "::error::expected 6 write-side pins; the suite shrank or grew"
+            exit 1
+          fi
+          # Anchored on the word boundary, not a bare grep for 'skipped': this
+          # domain is full of 'skippedTime' and a docstring first line would red
+          # the gate for nothing.
+          if grep -qE '(^|[^a-zA-Z])skipped=' /tmp/writeside.log; then
+            echo "::error::a write-side pin SKIPPED"
+            exit 1
+          fi
+          # expectedFailure reads as OK to every check above. Review disarmed the
+          # negative control with @unittest.expectedFailure and all four
+          # assertions still passed -- count, no-skip, and a bare name grep.
+          if grep -qE 'expected failures|unexpected successes' /tmp/writeside.log; then
+            echo "::error::a write-side pin is marked expectedFailure"
+            exit 1
+          fi
+          # `unittest -v` prints the DOCSTRING line, not the test-name line, before
+          # '... ok' -- so a per-pin '... ok' match (the gen3 step's shape) silently
+          # matches nothing here for any test that has a docstring. Instead: require
+          # the run to end OK, which means all five passed, and require each name to
+          # be present, which means these five are the five that ran.
+          if ! grep -qE '^OK$' /tmp/writeside.log; then
+            echo "::error::the write-side suite did not end OK"
+            exit 1
+          fi
+          for pin in \
+            test_a_legal_split_survives_into_the_engine_pokemon \
+            test_an_unrepresentable_sum_fails_closed_rather_than_clamping \
+            test_the_boundary_sum_is_allowed \
+            test_the_installed_binding_round_trips_the_field \
+            test_a_binding_that_drops_the_field_is_rejected \
+            test_an_illegal_counter_alone_is_refused_even_with_no_refund; do
+            grep -qE "^$pin \(" /tmp/writeside.log || {
+              echo "::error::write-side pin did not run: $pin"
+              exit 1
+            }
+          done
 
       # test_search_depth_tactics is deliberately NOT here. It is skipUnless a built
       # Showdown checkout (dist/sim/index.js) is present, which CI does not have, so it
