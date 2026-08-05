@@ -36,10 +36,45 @@ SCRIPTS = REPO_ROOT / "scripts"
 SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
 DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
-# History-derived numeric columns (not reconstructable from the stored per-row
-# surface; see docs/golden_corpus_notes.md + the track B phase 1 finding).
-HISTORY_NUMERIC_COLUMNS = frozenset({63, 64, 65, 138, 139}) | frozenset(range(92, 105))
-TRANSITION_TOKEN_START = 23
+# History-derived numeric columns: not reconstructable from the stored per-row surface, so the
+# reference backend is allowed to differ from the recorded arrays there and only there
+# (docs/golden_corpus_notes.md + the track B phase 1 finding).
+#
+# Named, not indexed. This was a frozenset of raw v2.2 column indices --
+# `{63, 64, 65, 138, 139} | range(92, 105)` -- which silently stopped meaning anything the moment
+# the sample was regenerated at v4: column 52 there is NUMERIC_MON_TURNS_ACTIVE_TOTAL, a genuine
+# history column, and the test failed as if parity had broken. Six of those indices had no name in
+# v2.2 at all, and two (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED) do not exist in
+# v4 -- resolved leniently below so the set stays correct across schema generations rather than
+# needing a hand edit at each one.
+HISTORY_NUMERIC_COLUMN_NAMES = (
+    "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+    "NUMERIC_MON_STAYED_AND_ATTACKED",
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+    "NUMERIC_TIER2_CB_PINNED",
+    "NUMERIC_TIER2_INVESTMENT_PINNED",
+    "NUMERIC_STAT_OPP_SWITCH_COUNT",
+    "NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES",
+    "NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK",
+    "NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT",
+    "NUMERIC_STAT_MY_SWITCH_TURNS",
+    "NUMERIC_STAT_WEATHER_REVEAL_OFFSET",
+)
+
+
+def _history_numeric_columns(layout) -> frozenset:
+    """Resolve the history-column NAMES to indices in this schema's layout."""
+    numeric_columns = layout["numeric_columns"]
+    return frozenset(
+        numeric_columns[name]
+        for name in HISTORY_NUMERIC_COLUMN_NAMES
+        if name in numeric_columns
+    )
+
+
+def _transition_token_start(layout) -> int:
+    """First transition token, from the layout rather than a pinned 23."""
+    return int(layout["token_offsets"]["transition"])
 
 
 def _load_script(name: str):
@@ -77,6 +112,18 @@ def _rust_encoder_available() -> bool:
 
 
 @unittest.skipIf(numpy is None, "requires numpy")
+
+def _sample_schema_version(corpus) -> str:
+    """The observation schema the committed sample was encoded at, from its own header.
+
+    Reading it rather than hardcoding is what keeps these tests pinned to PARITY instead of to a
+    particular schema generation: the sample is regenerated each time the encode contract moves
+    (v2.2 -> v4 most recently), and every hardcoded default turned that regeneration into a wall
+    of failures that look like parity breaks and are not.
+    """
+    return str(corpus.header["observation"]["schema_version"])
+
+
 class DiffLogicTest(unittest.TestCase):
     def setUp(self) -> None:
         self.harness = _load_script("validate_rust_encoder")
@@ -185,6 +232,18 @@ class GoldenSampleBackendTest(unittest.TestCase):
     def _assert_at_stored_surface_ceiling(self, backend) -> None:
         from pokezero.golden_corpus import GOLDEN_ARRAY_FIELDS
 
+        exporter = _load_script("export_encoder_tables")
+        layout = exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=_sample_schema_version(self.corpus),
+        )["layout"]
+        history_columns = _history_numeric_columns(layout)
+        transition_start = _transition_token_start(layout)
+        # The allowance must not swallow the assertion: if the history set resolved to nothing,
+        # every mismatch would be reported as an unexpected column and the test would still look
+        # meaningful while testing something else entirely.
+        self.assertTrue(history_columns, "no history columns resolved in this schema's layout")
+
         for row in self.corpus.decision_rows:
             got = backend.encode(self.backends_module.row_inputs_from_decision_row(row))
             for name, dtype, _rank in GOLDEN_ARRAY_FIELDS:
@@ -195,7 +254,7 @@ class GoldenSampleBackendTest(unittest.TestCase):
                     continue
                 if name == "attention_mask":
                     self.assertTrue(
-                        numpy.array_equal(have[:TRANSITION_TOKEN_START], want[:TRANSITION_TOKEN_START])
+                        numpy.array_equal(have[:transition_start], want[:transition_start])
                     )
                     continue
                 if want.dtype.kind == "f":
@@ -204,10 +263,10 @@ class GoldenSampleBackendTest(unittest.TestCase):
                     unequal = have != want
                 for token, column in numpy.argwhere(unequal):
                     token, column = int(token), int(column)
-                    if token >= TRANSITION_TOKEN_START:
+                    if token >= transition_start:
                         continue
                     self.assertEqual(name, "numeric_features", (name, token, column))
-                    self.assertIn(column, HISTORY_NUMERIC_COLUMNS, (token, column))
+                    self.assertIn(column, history_columns, (token, column))
 
     def test_python_reference_at_ceiling(self) -> None:
         backend = self.backends_module.PythonReferenceBackend(
@@ -218,8 +277,14 @@ class GoldenSampleBackendTest(unittest.TestCase):
     @unittest.skipIf(not _rust_encoder_available(), "pokezero_search.encode_decision not installed")
     def test_rust_matches_python_reference_byte_for_byte(self) -> None:
         exporter = _load_script("export_encoder_tables")
+        # Build tables at the SCHEMA THE CORPUS WAS WRITTEN AT, not `build_tables`'s v2.2 default.
+        # The committed sample is regenerated whenever the schema moves; hardcoding the default
+        # made these tests fail on the regeneration rather than on a real parity break.
         tables_json = json.dumps(
-            exporter.build_tables(str(_showdown_root())),
+            exporter.build_tables(
+                str(_showdown_root()),
+                observation_schema_version=_sample_schema_version(self.corpus),
+            ),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
@@ -260,7 +325,10 @@ class OovParityTests(unittest.TestCase):
         exporter = _load_script("export_encoder_tables")
         corpus = load_golden_corpus(SAMPLE_DIR)
         tables_json = _json.dumps(
-            exporter.build_tables(str(_showdown_root())),
+            exporter.build_tables(
+                str(_showdown_root()),
+                observation_schema_version=_sample_schema_version(corpus),
+            ),
             sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         )
         rust = backends_module.RustBackend(tables_json=tables_json, header=corpus.header)
@@ -302,8 +370,13 @@ class CompareBackendsCliTests(unittest.TestCase):
         exporter = _load_script("export_encoder_tables")
         cli = _load_script("validate_rust_encoder")
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            from pokezero.golden_corpus import load_golden_corpus as _load_corpus
+
             handle.write(_json.dumps(
-                exporter.build_tables(str(_showdown_root())),
+                exporter.build_tables(
+                    str(_showdown_root()),
+                    observation_schema_version=_sample_schema_version(_load_corpus(SAMPLE_DIR)),
+                ),
                 sort_keys=True, separators=(",", ":"), ensure_ascii=True,
             ))
             tables_path = handle.name

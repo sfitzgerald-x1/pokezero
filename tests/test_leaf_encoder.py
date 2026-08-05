@@ -40,7 +40,12 @@ except ModuleNotFoundError:  # pragma: no cover
     pokezero_search = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COMMITTED_SAMPLE_DIR = Path(__file__).parent / "data" / "golden_corpus_sample"
+# V3-era sample, deliberately NOT the primary v4 one: the leaf/fold surfaces compared here
+# include the TRANSITION token block, and `observation.v4` has none (23 tokens,
+# `transition_token_count == 0`). Pointing this at the v4 sample would not fail loudly -- it
+# would quietly compare a surface with the interesting rows removed. Both samples come from
+# the same generator at different --observation-schema values; both are provenance-clean.
+COMMITTED_SAMPLE_DIR = Path(__file__).parent / "data" / "golden_corpus_sample_v3"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 from pokezero.golden_corpus import (  # noqa: E402
@@ -69,8 +74,19 @@ def _tables_json() -> str | None:
         sys.path.insert(0, str(SCRIPTS_DIR))
         from export_encoder_tables import build_tables  # noqa: E402
 
+        # Built at the SCHEMA THE COMMITTED SAMPLE WAS WRITTEN AT, not `build_tables`'s v2.2
+        # default. The default matched the sample only by coincidence of when each was last
+        # touched; the encoder rejects the pairing outright ("row observation schema ... does not
+        # match encoder-table layout"), so the coincidence was load-bearing.
+        # The schema lives in the corpus HEADER row, not in manifest.json (which carries only the
+        # corpus schema and array shapes).
+        with (COMMITTED_SAMPLE_DIR / "rows.jsonl").open() as handle:
+            header_row = json.loads(handle.readline())
+        schema_version = str(header_row["observation"]["schema_version"])
         return json.dumps(
-            build_tables(str(DEFAULT_SHOWDOWN_ROOT)),
+            build_tables(
+                str(DEFAULT_SHOWDOWN_ROOT), observation_schema_version=schema_version
+            ),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,

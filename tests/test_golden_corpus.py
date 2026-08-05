@@ -31,6 +31,7 @@ from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
 
 TESTS_DATA_DIR = Path(__file__).parent / "data"
 COMMITTED_SAMPLE_DIR = TESTS_DATA_DIR / "golden_corpus_sample"
+V3_SAMPLE_DIR = TESTS_DATA_DIR / "golden_corpus_sample_v3"
 
 # Synthetic corpora use small token tables on purpose: the row/array plumbing is
 # shape-agnostic (shapes live in the manifest); production shapes are asserted
@@ -231,20 +232,43 @@ class GoldenCorpusCommittedSampleTest(unittest.TestCase):
     """Permanent regression net: the committed 5-row sample must stay readable."""
 
     def test_committed_sample_verifies_with_production_shapes(self) -> None:
+        """The primary sample is v4. Two assertions, doing different jobs.
+
+        The SCHEMA is pinned by hand (`OBSERVATION_SCHEMA_VERSION_V4`) so that moving the corpus
+        to a new generation is a deliberate edit here rather than something a regeneration does
+        quietly. The SHAPES are then checked against that schema's own spec rather than retyped as
+        literals -- the previous `(151, 51)` / `(151, 155)` constants restated v2.2's layout in a
+        second place, so a regeneration failed on four hand-copied numbers that carried no
+        information the spec did not already have.
+        """
+        from pokezero.showdown import (
+            OBSERVATION_SCHEMA_VERSION_V4,
+            observation_spec_for_schema,
+        )
+
         verification = verify_golden_corpus(COMMITTED_SAMPLE_DIR)
 
         self.assertEqual(verification.games, 1)
         self.assertEqual(verification.decisions, 5)
         self.assertEqual(verification.fold_rows, 5)  # schema v2: fold surface present
-        self.assertEqual(verification.array_shapes["categorical_ids"], (151, 51))
-        self.assertEqual(verification.array_shapes["numeric_features"], (151, 155))
-        self.assertEqual(verification.array_shapes["token_type_ids"], (151,))
-        self.assertEqual(verification.array_shapes["attention_mask"], (151,))
+
+        spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V4)
+        tokens = spec.token_count
+        self.assertEqual(
+            verification.array_shapes["categorical_ids"],
+            (tokens, spec.categorical_feature_count),
+        )
+        self.assertEqual(
+            verification.array_shapes["numeric_features"],
+            (tokens, spec.numeric_feature_count),
+        )
+        self.assertEqual(verification.array_shapes["token_type_ids"], (tokens,))
+        self.assertEqual(verification.array_shapes["attention_mask"], (tokens,))
         self.assertEqual(verification.array_shapes["legal_action_mask"], (ACTION_COUNT,))
 
         corpus = load_golden_corpus(COMMITTED_SAMPLE_DIR)
         for row in corpus.decision_rows:
-            self.assertEqual(row.observation_schema_version, "pokezero.observation.v2.2")
+            self.assertEqual(row.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V4)
             self.assertIn("belief_view", row.observation_metadata)
             self.assertIn("sides", row.public_materialization)
         for player in ("p1", "p2"):
@@ -254,6 +278,45 @@ class GoldenCorpusCommittedSampleTest(unittest.TestCase):
             for entry in team["pokemon"]:
                 self.assertIn("evs", entry["set"])
                 self.assertIn("ivs", entry["set"])
+
+
+@unittest.skipIf(numpy is None, "requires numpy")
+@unittest.skipIf(
+    not V3_SAMPLE_DIR.exists(), "committed v3 golden corpus sample not present"
+)
+class GoldenCorpusV3SampleTest(unittest.TestCase):
+    """The v3-era sample kept alongside the v4 one, and why it exists.
+
+    `observation.v4` has NO transition token block (23 tokens,
+    `transition_token_count == 0`). The v3 parity and leaf/fold tests compare surfaces that
+    include those tokens, so pointing them at the v4 sample would not fail -- it would silently
+    compare a surface with the interesting rows removed. This fixture keeps that coverage alive,
+    and this test keeps the fixture itself honest.
+    """
+
+    def test_v3_sample_verifies_and_actually_carries_transition_tokens(self) -> None:
+        from pokezero.showdown import (
+            OBSERVATION_SCHEMA_VERSION_V3,
+            observation_spec_for_schema,
+        )
+
+        verification = verify_golden_corpus(V3_SAMPLE_DIR)
+        self.assertEqual(verification.games, 1)
+        self.assertEqual(verification.decisions, 5)
+
+        spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
+        self.assertEqual(verification.array_shapes["token_type_ids"], (spec.token_count,))
+        # The whole point of keeping this fixture: it must have the block v4 lacks.
+        self.assertGreater(
+            spec.transition_token_count,
+            0,
+            "the v3 sample is retained FOR its transition tokens; a v3 spec without them "
+            "means this fixture no longer earns its place",
+        )
+
+        corpus = load_golden_corpus(V3_SAMPLE_DIR)
+        for row in corpus.decision_rows:
+            self.assertEqual(row.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V3)
 
 
 @unittest.skipIf(numpy is None, "requires numpy")

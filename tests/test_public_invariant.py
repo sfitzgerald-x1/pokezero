@@ -74,16 +74,17 @@ _FORBIDDEN_PATTERNS = [
 # PER-RULE, deliberately: a blanket file allowlist would exempt the file from the
 # internal-cluster checks as well, silently weakening the older invariant to accommodate the
 # newer one. Keyed by rule label.
-_ALLOWED_FOR_RULE = {
-    # Recorded provenance inside a TAMPER-EVIDENT golden corpus: every row carries a
-    # `row_sha256` over its own payload, so the paths cannot be scrubbed in place without
-    # forging those hashes -- which would defeat the guarantee the field exists to provide.
-    # The corpus must be REGENERATED instead, after `randbat.py` stops recording absolute
-    # `sets_path`/`generator_path` values. Tracked as a follow-up; this entry should shrink to
-    # nothing, and is here so the exception is a visible, reviewable line rather than a
-    # weakened pattern.
-    "maintainer home directory": {"tests/data/golden_corpus_sample/rows.jsonl"},
-}
+# EMPTY, and that is the point. This held one carve-out -- the golden corpus sample's
+# `rows.jsonl`, whose recorded provenance embedded absolute `sets_path` / `generator_path` /
+# `showdown_root` values. Those could not be scrubbed in place (each row carries a `row_sha256`
+# over its own payload, so editing them would mean forging the hash that makes the corpus
+# tamper-evident), so the corpus had to be REGENERATED after the writer was fixed to emit
+# relative paths. It has been: both committed samples are v4/v3 regenerations carrying
+# `sets_path: data/random-battles/gen3/sets.json` and no absolute paths at all.
+#
+# Kept as an empty dict rather than deleted, so the mechanism stays available and the next
+# exception has to be written down here to exist.
+_ALLOWED_FOR_RULE: dict[str, set[str]] = {}
 
 
 class PublicInvariantTest(unittest.TestCase):
