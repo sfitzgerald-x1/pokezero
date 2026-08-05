@@ -202,10 +202,15 @@ class ExitCriterionTest(unittest.TestCase):
         self.assertIn("< required 20000", reasons)
         self.assertIn("never reached", reasons)
         # Finding F3: the liveness failure must name EVERY dead tracker, not fire on "none of
-        # them moved". In a two-step run all eight are dead, so all eight must be listed.
+        # them moved". Finding F14: liveness is keyed per (tracker, SEAT), so a two-step run has
+        # all eight dead on both seats -- sixteen entries, each naming its seat.
+        constant = summary["reachability"]["accumulator_scalars_constant"]
         self.assertEqual(
-            len(summary["reachability"]["accumulator_scalars_constant"]),
-            len(gate.ACCUMULATOR_METADATA_KEYS),
+            len(constant), len(gate.ACCUMULATOR_METADATA_KEYS) * len(gate.PLAYERS)
+        )
+        self.assertTrue(
+            all(entry.endswith("[p1]") or entry.endswith("[p2]") for entry in constant),
+            f"liveness entries must name their seat, got {constant}",
         )
         self.assertIn("published accumulator scalars never moved", reasons)
         # ... and it fails for the RIGHT reason: the four states really are byte-identical, so
@@ -242,11 +247,32 @@ class ExitCriterionTest(unittest.TestCase):
             "NUMERIC_LAST_DAMAGE_TAKEN",
         ):
             self.assertGreater(reach[column], 0, f"5-game sweep never reached {column}")
-        self.assertEqual(
-            summary["reachability"]["accumulator_scalars_constant"],
-            [],
-            "EVERY published accumulator scalar must move -- not just one (finding F3)",
+        # PER-SEAT liveness (finding F14). This 5-game sweep CANNOT reach 16/16 and asserting it
+        # would be false precision: measured at seed 3, four (tracker, seat) pairs stay constant at
+        # 5 and 8 games, two at 12, and 16/16 is only reached at certification scale (220 games,
+        # seed 4711 -- recorded in the deploy status doc). So this asserts the property the sample
+        # DOES support, and it is the sharper one anyway: the mirror pairs that POOLING HID.
+        #
+        # `self_hazard_damage_suffered` is constant on p1 and varies on p2 here. Pooling the two
+        # seats merged them into one value set, so the tracker read as "varied" and the dead seat
+        # was invisible. Per-seat, p1 is named. That makes this a regression test for the fix
+        # rather than a restatement of the gate's own threshold.
+        constant = summary["reachability"]["accumulator_scalars_constant"]
+        self.assertIn(
+            "self_hazard_damage_suffered[p1]",
+            constant,
+            "the seat-specific dead tracker is missing: either the sweep changed or liveness has "
+            "gone back to pooling the two perspectives",
         )
+        self.assertIn(
+            "self_hazard_damage_suffered[p2]",
+            summary["reachability"]["accumulator_scalars_varied"],
+            "the MIRROR seat must be live -- if both seats are dead this test proves nothing "
+            "about pooling",
+        )
+        # And every entry is seat-qualified, so a future pooled regression fails loudly.
+        for entry in constant + summary["reachability"]["accumulator_scalars_varied"]:
+            self.assertRegex(entry, r"\[(p1|p2)\]$", f"not seat-qualified: {entry}")
         self.assertGreater(
             summary["reachability"]["v4_pack_categorical_states_reached"][
                 "CATEGORY_LAST_USED_MOVE"

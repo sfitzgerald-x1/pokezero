@@ -514,7 +514,14 @@ def run_gate(
     # history EMPTY by design (its docstring says so), so those columns can never light up here.
     numeric_nonzero: set[str] = set()
     # Did the published accumulators actually MOVE? (the one accumulation claim in reach)
-    accumulator_values: dict[str, set[float]] = {key: set() for key in ACCUMULATOR_METADATA_KEYS}
+    # Keyed by (metadata key, SEAT), not pooled. Pooling let a tracker that is dead for exactly one
+    # seat count as varied from the other seat's rows -- and that is not hypothetical: keying this
+    # way immediately shows `self_hazard_damage_suffered` constant on p1 while varying on p2 over a
+    # 3-game sweep. A per-seat accumulator that never moves is a wrong input at that seat's next
+    # search, which is the whole reason this liveness check exists.
+    accumulator_values: dict[tuple[str, str], set[float]] = {
+        (key, player): set() for key in ACCUMULATOR_METADATA_KEYS for player in PLAYERS
+    }
 
     try:
         for game in range(games):
@@ -570,14 +577,7 @@ def run_gate(
                     for key in ACCUMULATOR_METADATA_KEYS:
                         value = metadata.get(key)
                         if isinstance(value, (int, float)) and not isinstance(value, bool):
-                            # KNOWN GAP (review R1), deliberately not closed here: this pools both
-                            # perspectives, so a tracker dead for exactly ONE seat still counts as
-                            # varied from the other seat's rows. Keying by (key, player) makes it
-                            # visible -- verified: a 3-game sweep then reports
-                            # self_hazard_damage_suffered[p1] constant while [p2] varies -- but it
-                            # also raises the certification bar in a way that needs a 200-game
-                            # validation and test updates, so it is filed rather than rushed.
-                            accumulator_values[key].add(float(value))
+                            accumulator_values[(key, player)].add(float(value))
 
                     differing: list[tuple[str, Any, Any]] = []
                     for name in backends.ARRAY_NAMES:
@@ -617,8 +617,12 @@ def run_gate(
     unreached_categorical = [
         name for name in require_categorical_columns if categorical_reach[name] <= 0
     ]
-    varied = sorted(key for key, seen in accumulator_values.items() if len(seen) > 1)
-    unvaried = sorted(key for key, seen in accumulator_values.items() if len(seen) <= 1)
+    varied = sorted(
+        f"{key}[{player}]" for (key, player), seen in accumulator_values.items() if len(seen) > 1
+    )
+    unvaried = sorted(
+        f"{key}[{player}]" for (key, player), seen in accumulator_values.items() if len(seen) <= 1
+    )
     never_nonzero = sorted(set(numeric_columns) - numeric_nonzero)
 
     # The verdict enforces the plan's exit criterion instead of restating it in a docstring
@@ -647,8 +651,10 @@ def run_gate(
     # same vacuous OR that B2 removed from the reachability check: with seven of the eight
     # trackers frozen and only `self_last_damage_dealt` live, `varied` is non-empty and the gate
     # passed with seven dead trackers.
+    # PER SEAT (finding F14). Pooling the two perspectives meant a tracker dead on one seat was
+    # paid for by the other; the failure now names the seat.
     if unvaried:
-        failures.append(f"published accumulator scalars never moved: {unvaried}")
+        failures.append(f"published accumulator scalars never moved, per seat: {unvaried}")
 
     return {
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
