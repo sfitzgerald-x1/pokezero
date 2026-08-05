@@ -1140,6 +1140,76 @@ def _default_observation_spec() -> ObservationSpec:
     return DEFAULT_REPLAY_OBSERVATION_SPEC
 
 
+# The schemas `scripts/export_encoder_tables.py --observation-schema` accepts. Kept beside the
+# loader so a new schema is one edit, and so an unsupported one is a named failure rather than a
+# silent fallback to whichever layout the else-branch happened to name.
+_EXPORTABLE_TABLE_SCHEMAS = frozenset({"v2.2", "v3", "v4"})
+
+
+def _assert_tables_match_schema(tables_json: str, schema_version: str, *, source: str) -> None:
+    """Refuse an encoder-tables artifact whose own layout is for a different schema.
+
+    The layouts differ in width (v2.2/v3 numeric 155, v4 132), in categorical count (51 vs 41) and
+    in vocab size (1217 rows vs 899), so a mismatch is not a near-miss -- it is a different table
+    read through the wrong indices, and it surfaces as an obscure missing-column error deep in the
+    encoder instead of here.
+    """
+    try:
+        payload = json.loads(tables_json)
+    except ValueError as error:
+        raise ValueError(f"encoder tables at {source} are not valid JSON: {error}") from error
+    # A JSON non-object (list, string, number) reached `.get` and raised AttributeError, escaping
+    # the ValueError this function installs for exactly that case.
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            f"encoder tables at {source} are not a JSON object (got {type(payload).__name__})"
+        )
+    layout = payload.get("layout")
+    if not isinstance(layout, Mapping):
+        # Absent or non-mapping layout: nothing to check against. Accepted deliberately -- a caller
+        # who passes an artifact this loader cannot introspect keeps the pre-existing behaviour of
+        # being trusted, and the encoder's own allowlist is the backstop.
+        return
+    found = str(layout.get("schema_version") or "")
+    if not found or found == str(schema_version):
+        return
+    # The rebuild hint is CONDITIONAL. It used to call `encoder_tables_schema(schema_version)`
+    # unguarded, which raises for any schema the exporter cannot build -- so this lane, whose whole
+    # point is accepting tables for such a schema, produced "no encoder-tables layout for v2.1"
+    # instead of the mismatch, naming the wrong problem and prescribing an impossible remedy.
+    # v2.1 is an advertised `rollout_cli.py --observation-schema` choice, so that was reachable.
+    try:
+        short = encoder_tables_schema(schema_version)
+    except ValueError:
+        hint = ""
+    else:
+        hint = (
+            "; rebuild with scripts/export_encoder_tables.py --observation-schema " + short
+        )
+    raise ValueError(
+        f"encoder tables at {source} are for observation schema {found!r}, "
+        f"but this env encodes at {schema_version!r}{hint}"
+    )
+
+
+def encoder_tables_schema(schema_version: str) -> str:
+    """The exporter's short layout name for an observation schema version.
+
+    A pure function, extracted so the test can exercise THIS rather than restate it. The first
+    version of that test re-derived the mapping inside the test body, which would have passed with
+    production still broken -- the exact vacuity this codebase has been finding all week.
+    """
+    prefix = "pokezero.observation."
+    text = str(schema_version)
+    schema = text[len(prefix):] if text.startswith(prefix) else ""
+    if schema not in _EXPORTABLE_TABLE_SCHEMAS:
+        raise ValueError(
+            f"no encoder-tables layout for observation schema {schema_version!r}; "
+            f"scripts/export_encoder_tables.py supports {sorted(_EXPORTABLE_TABLE_SCHEMAS)}"
+        )
+    return schema
+
+
 def _load_encoder_tables(
     path: Path | None, showdown_root: Path | None, schema_version: str
 ) -> str:
@@ -1151,18 +1221,45 @@ def _load_encoder_tables(
     ``corpus/`` (gitignored build output, not a source file).
     """
     if path is not None:
-        return Path(path).read_text(encoding="utf-8")
+        # VALIDATED, not trusted. This lane was returning the file's bytes unchecked, so an
+        # explicitly-passed artifact built for another schema was accepted silently -- the same
+        # wrong-layout defect as the derive-and-build lane below, and in the lane production
+        # actually uses (`rollout_cli.py --engine-encoder-tables`,
+        # `scripts/engine_env_benchmark.py --encoder-tables`). Caught in review of the fix for the
+        # other lane: fixing one and leaving the other would have been the neighbouring-instance
+        # mistake this effort keeps making.
+        text = Path(path).read_text(encoding="utf-8")
+        _assert_tables_match_schema(text, schema_version, source=str(path))
+        return text
 
     from .local_showdown import LocalShowdownConfig  # noqa: PLC0415
 
     root = LocalShowdownConfig(showdown_root=showdown_root).resolved_showdown_root()
     repo = Path(__file__).resolve().parents[2]
-    # Schema versions look like "pokezero.observation.v2.2"; the exporter takes
-    # the short form and only knows the two current layouts.
-    schema = "v3" if str(schema_version).endswith(".v3") else "v2.2"
+    # Schema versions look like "pokezero.observation.v2.2"; the exporter takes the short form.
+    #
+    # Derived from the version string, not enumerated. The previous form was
+    # `"v3" if ...endswith(".v3") else "v2.2"`, written when v2.2 and v3 were "the two current
+    # layouts" -- so v4 fell through the else and silently loaded V2.2 TABLES, which is a wrong
+    # answer rather than an error: the layouts disagree on width (132 vs 155) and on which columns
+    # exist at all, so the first encode raises deep in the encoder about a missing column instead
+    # of here about an unsupported schema.
+    #
+    # `export_encoder_tables.py` already accepts v4 (`choices=("v2.2", "v3", "v4")`); only this
+    # mapping had to be told. Unknown schemas now fail HERE, named, rather than falling back to a
+    # layout that happens to parse.
+    schema = encoder_tables_schema(schema_version)
     cache = repo / "corpus" / f"encoder_tables_{schema}.json"
     if cache.exists():
-        return cache.read_text(encoding="utf-8")
+        cached = cache.read_text(encoding="utf-8")
+        # Validated, not trusted. `corpus/` is gitignored build output that survives branch
+        # switches and exporter revisions, and `--out` is arbitrary, so nothing binds a filename to
+        # its content. It matters more here than in the explicit-path lane: `_tables()` then
+        # RELABELS the payload with the env's own schema, erasing the only evidence of a mismatch
+        # for every downstream consumer. An earlier revision deferred this while its own comment
+        # claimed parity with this lane -- the neighbouring-instance mistake, third time.
+        _assert_tables_match_schema(cached, schema_version, source=str(cache))
+        return cached
 
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
@@ -1192,7 +1289,14 @@ def _load_encoder_tables(
         raise EngineEnvError(
             f"export_encoder_tables.py failed (exit {result.returncode}): {result.stderr.strip()}"
         )
-    return cache.read_text(encoding="utf-8")
+    built = cache.read_text(encoding="utf-8")
+    # Validated too, even though we just asked the exporter for this schema. An exporter that
+    # silently produced a different layout would otherwise be undetectable here, and the check is
+    # free. Note this site is 4-space indented where the cache-hit site above is 8 -- a bulk
+    # replace matched only the latter, and I nearly claimed both were guarded on the strength of a
+    # replacement count that had matched one.
+    _assert_tables_match_schema(built, schema_version, source=str(cache))
+    return built
 
 
 
