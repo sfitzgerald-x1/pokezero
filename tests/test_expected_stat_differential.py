@@ -491,11 +491,15 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
         # def/spa/spd/spe = 256/222/256/216 against the flat 257/223/257/217, i.e. BELOW the true
         # bound -- exactly the unsoundness this guard exists to prevent. Candidate order comes from
         # the belief engine, not from this test, so the guard has to hold in all of them.
-        plain = {"moves": ["bodyslam", "earthquake", "rest", "sleeptalk"], "item": "leftovers"}
+        # The third variant must ALSO carry an IV override. An earlier draft used a plain
+        # no-Hidden-Power set here, which made the arm VACUOUS: under the mutation the surviving
+        # suffix maxes to exactly the flat value, so the assertion could not tell the two apart.
+        # That is why this test reported 4 subtest failures under mutation rather than 8.
+        good2 = {"moves": ["hiddenpowerice", "gigadrain", "synthesis", "toxic"], "item": "leftovers"}
         for label, variants in (
             ("broken last", (good, broken)),
             ("broken first", (broken, good)),
-            ("broken middle", (good, broken, plain)),
+            ("broken middle", (good, broken, good2)),
         ):
             abandoned = _encode(self.dex, species=species, level=level, variants=variants)
             for stat, slot in COLUMNS:

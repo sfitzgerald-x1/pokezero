@@ -6809,8 +6809,10 @@ def _encode_expected_stats(
     # the generator overwrites IVs from the carried Hidden Power type's ``HPivs`` entry
     # (``data/random-battles/gen3/teams.ts``: ``for (iv in HPivs) ivs[iv] = HPivs[iv]``), which
     # lowers one or more of these four to 30 on 716 of the 1682 real candidate variants (42.6%).
-    # Emitting the flat iv=31 value was wrong, by one point, on 18.5%/24.8%/19.9%/8.6% of those
-    # variants (def/spa/spd/spe) -- the same fork-the-generator defect as C1, in the block C1's
+    # Emitting the flat iv=31 value was wrong, by one point, on 18.5%/24.8%/19.9%/8.6% of ALL 1682
+    # variants (def/spa/spd/spe) -- NOT of the 716, on which the rates would be
+    # 43.6/58.2/46.6/20.3%; the nearest antecedent made the smaller figures read as the latter.
+    # The same fork-the-generator defect as C1, in the block C1's
     # fix did not reach.
     #
     # Counted over the CANDIDATE VARIANTS the encoder actually sees, not over sets.json rows: a
