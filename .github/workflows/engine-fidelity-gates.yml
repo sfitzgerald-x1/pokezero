@@ -78,7 +78,13 @@ jobs:
           # src/pokezero/x.py lib/` reports ONLY the destination, so moving a file
           # OUT of a gated directory would match nothing and skip the gates on a
           # change certain to break them.
-          if ! changed=$(git diff --no-renames --name-only "$BASE...$HEAD"); then
+          # core.quotePath=false: git otherwise C-quotes non-ASCII paths, emitting
+          # `"src/pokezero/caf\303\251.py"` -- with literal quotes -- which then
+          # matches no glob. That is the ONE direction in which this filter is
+          # narrower than GitHub's `paths:` rather than wider, i.e. the only
+          # fail-OPEN divergence. No non-ASCII path exists in the tree today; this
+          # keeps it that way by construction rather than by luck.
+          if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE...$HEAD"); then
             echo "could not diff $BASE..$HEAD; running the gates anyway"
             echo "fidelity=true" >> "$GITHUB_OUTPUT"
             exit 0
