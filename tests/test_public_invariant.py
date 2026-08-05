@@ -128,10 +128,15 @@ class TestFileStructureTest(unittest.TestCase):
                     for sub in ast.walk(node.test)
                 ):
                     return False
+                # Both spellings: `unittest.main()` (Attribute) and `from unittest import main`
+                # then `main()` (Name). The Attribute-only form missed the latter -- no test file
+                # uses it today, but the miss was silent and the widening is one clause.
                 return any(
                     isinstance(sub, ast.Call)
-                    and isinstance(sub.func, ast.Attribute)
-                    and sub.func.attr == "main"
+                    and (
+                        (isinstance(sub.func, ast.Attribute) and sub.func.attr == "main")
+                        or (isinstance(sub.func, ast.Name) and sub.func.id == "main")
+                    )
                     for sub in ast.walk(node)
                 )
 
@@ -157,6 +162,51 @@ class TestFileStructureTest(unittest.TestCase):
             [],
             "move `unittest.main()` to the end of the file — anything below it is invisible to "
             "direct execution, and pytest and `python <file>` will report different counts",
+        )
+
+
+class DuplicateTestClassTest(unittest.TestCase):
+    """No test module may define the same top-level class twice.
+
+    A redefinition silently shadows the first, so whichever copy is earlier never runs and the two
+    can drift apart unnoticed. Found for real: `tests/test_mcts_eval_manifest.py` held two
+    byte-identical 5,005-byte copies of `TrimmedEncoderTablesTest` (lines 392 and 578). Nothing
+    failed, pytest collected 39 either way, and the only visible symptom was that a class list
+    counted it twice.
+
+    The structural guard next door catches classes stranded BELOW `unittest.main()`; this catches
+    classes hidden BEHIND another definition. Same failure — a test that looks present and is not.
+    """
+
+    def test_no_tracked_test_module_defines_a_class_twice(self) -> None:
+        import ast
+        from collections import Counter
+
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            counts = Counter(
+                node.name for node in tree.body if isinstance(node, ast.ClassDef)
+            )
+            for name, count in sorted(counts.items()):
+                if count > 1:
+                    lines = [
+                        node.lineno
+                        for node in tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == name
+                    ]
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}: {name} defined {count}x at lines "
+                        f"{', '.join(map(str, lines))}"
+                    )
+
+        self.assertEqual(
+            offenders,
+            [],
+            "a redefined class shadows the earlier one, so the earlier copy never runs",
         )
 
 
