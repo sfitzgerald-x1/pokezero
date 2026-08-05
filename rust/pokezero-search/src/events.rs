@@ -3703,15 +3703,29 @@ fn residual_heal_cause(
     // whenever the plan fails reconciliation for an unrelated reason, and
     // without the guard it re-arms exactly the H.1 mislabel the plan exists to
     // prevent.
+    //
+    // ORDER MATTERS HERE, and it used to be wrong. Leftovers is residual phase
+    // 10.4 and the seeder's drain is 10.5, so when a side could produce BOTH the
+    // first heal is the Leftovers tick and only a later one can be the drain.
+    // This fallback sees one heal with no ordering context, so it must answer
+    // with the earlier phase.
+    //
+    // Measured on holdout `19100193/46`. The engine state has the opponent
+    // seeded and both actives alive when the plan is built, so a drain slot is
+    // reserved — but the SEEDER dies to poison at 10.6 before the 10.5 sap can
+    // run, `emitted_heal` is one short of `plan.heal`, reconciliation fails, and
+    // this fallback is reached. Checking Leech Seed first labelled Cacturne's
+    // Leftovers tick `[from] Leech Seed`: magnitude right (18 = 290/16), source
+    // wrong. A real drain from Miltank would have been 273/8 = 34.
+    if s.get_active_immutable().item == Items::LEFTOVERS {
+        return "item: Leftovers".to_string();
+    }
     if opponent
         .volatile_statuses
         .contains(&PokemonVolatileStatus::LEECHSEED)
         && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
     {
         return "Leech Seed".to_string();
-    }
-    if s.get_active_immutable().item == Items::LEFTOVERS {
-        return "item: Leftovers".to_string();
     }
     "item: Leftovers".to_string()
 }
@@ -5408,6 +5422,74 @@ mod tests {
         assert!(
             tags.iter().all(|t| t == "psn"),
             "a desynced plan must not invent labels; got {tags:?}"
+        );
+    }
+
+    /// A side whose OPPONENT is seeded must not have its Leftovers tick
+    /// attributed to the Leech Seed drain. Regression for holdout row
+    /// `19100193/46`.
+    ///
+    /// `residual_heal_cause` is the fallback reached when the residual plan fails
+    /// reconciliation, and it used to test Leech Seed BEFORE Leftovers. Leftovers
+    /// is residual phase 10.4 and the seeder's drain is 10.5, so when a side
+    /// could produce both, the FIRST heal is the Leftovers tick. On that row the
+    /// plan reserved a drain slot — opponent seeded, both actives alive when it
+    /// was built — but the seeder died to poison at 10.6 before the 10.5 sap
+    /// could run, so `emitted_heal` came up one short, the plan was discarded,
+    /// and this fallback tagged an 18-point Leftovers tick (290/16) as
+    /// `[from] Leech Seed`. A real drain would have been 273/8 = 34.
+    #[test]
+    fn a_seeded_opponent_does_not_steal_the_leftovers_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::LEFTOVERS;
+        // The opponent is seeded, so a drain heal on side one is POSSIBLE — which
+        // is exactly the condition that used to win the fallback outright.
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] item: Leftovers"),
+            "a seeded opponent stole the Leftovers tag: {:?}",
+            rendered.lines
+        );
+    }
+
+    /// The converse, so the reorder cannot pass by always answering Leftovers:
+    /// a side WITHOUT Leftovers whose opponent is seeded still gets the drain
+    /// label.
+    #[test]
+    fn without_leftovers_a_seeded_opponent_still_yields_the_drain_label() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::NONE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] Leech Seed"),
+            "the drain label was lost entirely: {:?}",
+            rendered.lines
         );
     }
 
