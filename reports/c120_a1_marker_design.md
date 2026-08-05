@@ -15,9 +15,9 @@
 >
 > So: cite §(b). Do not cite v2's headline, this document's former title, or §3.
 
-## 0. The two corrections, measured
+## 0. The corrections, measured — one survives, one is retracted
 
-**(a) Showdown defers too.** `scripts/gen3_switch_differential.py` is the repo's Showdown
+**(a) ~~Showdown defers too.~~ RETRACTED — see the block below.** `scripts/gen3_switch_differential.py` is the repo's Showdown
 ground-truth gate, and its `faintresiduals` scenario is measured *on the faint ply* with
 `expect={"residual_block_ran": False, "survivor_healed": False}` — the comment explains that
 `runAction` sees the pending switch flag, issues a switch request, and returns with the queued
