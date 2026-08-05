@@ -1,0 +1,189 @@
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -967,6 +967,13 @@
+     /// is transformed, holding its own base form so the switch-out revert can
+     /// restore it. `None` for every untransformed Pokemon.
+     pub pre_transform: Option<Box<PreTransform>>,
++
++    /// pokezero gen3 fidelity fix (Rest skippedTime): Sleep Talk / Snore turns
++    /// that gen3 refunds on the NEXT switch-in. Held here rather than folded into
++    /// `rest_turns` because an ACTIVE mon may act again without switching, and
++    /// search explores both branches; pre-applying would wake it early on the
++    /// stay-in branch. 0 for every Pokemon with nothing owed.
++    pub rest_sleep_pending_refund: i8,
+ }
+ 
+ impl Default for Pokemon {
+@@ -1002,6 +1009,7 @@
+                 m3: Default::default(),
+             },
+             pre_transform: None,
++            rest_sleep_pending_refund: 0,
+         }
+     }
+ }
+@@ -1058,10 +1066,21 @@
+         // serializes byte-for-byte as it did before this patch, and every
+         // previously-written state string still deserializes.
+         let base = self.serialize_base();
+-        match &self.pre_transform {
++        let mut serialized = match &self.pre_transform {
+             Some(pre_transform) => format!("{},{}", base, pre_transform.serialize()),
+             None => base,
++        };
++        // TAGGED, not positional. `pre_transform` is emitted only when `Some`, so
++        // index 29 exists conditionally and a positionally-appended field would land
++        // ON it for every untransformed Pokemon -- `PreTransform::deserialize` indexes
++        // `split[6 + index]` and would PANIC. Tagging follows `LastUsedMove`'s
++        // `move:` / `switch:` idiom and makes the two optional trailing fields
++        // order-independent. Omitted entirely when 0, so untouched Pokemon serialize
++        // byte-for-byte as before.
++        if self.rest_sleep_pending_refund != 0 {
++            serialized.push_str(&format!(",refund:{}", self.rest_sleep_pending_refund));
+         }
++        serialized
+     }
+ 
+     fn serialize_base(&self) -> String {
+@@ -1157,10 +1176,23 @@
+             // pokezero gen3 fidelity fix (Transform): optional trailing field,
+             // read with the same tolerant `.get()` idiom as `gender` above so
+             // pre-patch state strings keep parsing.
+-            pre_transform: split
+-                .get(29)
+-                .filter(|value| !value.is_empty())
++            // Trailing optionals are matched by TAG, not position: `refund:<n>` is
++            // recognised by prefix, and the single remaining untagged trailing field
++            // is the pre-transform snapshot. A third trailing optional would require
++            // tagging `PreTransform` too.
++            pre_transform: split
++                .get(29..)
++                .unwrap_or(&[])
++                .iter()
++                .find(|value| !value.is_empty() && !value.starts_with("refund:"))
+                 .map(|value| Box::new(PreTransform::deserialize(value))),
++            rest_sleep_pending_refund: split
++                .get(29..)
++                .unwrap_or(&[])
++                .iter()
++                .find_map(|value| value.strip_prefix("refund:"))
++                .and_then(|value| value.parse::<i8>().ok())
++                .unwrap_or(0),
+         }
+     }
+ }
+@@ -2022,6 +2054,10 @@
+             }
+             Instruction::ChangeSubstituteHealth(instruction) => {
+                 self.set_substitute_health(&instruction.side_ref, instruction.health_change);
++            }
++            Instruction::SetRestSleepPendingRefund(instruction) => {
++                self.get_side(&instruction.side_ref).pokemon[instruction.pokemon_index]
++                    .rest_sleep_pending_refund = instruction.new_turns;
+             }
+             Instruction::SetRestTurns(instruction) => {
+                 self.set_rest_turn(
+@@ -2251,6 +2287,10 @@
+             }
+             Instruction::ChangeSubstituteHealth(instruction) => {
+                 self.set_substitute_health(&instruction.side_ref, -1 * instruction.health_change);
++            }
++            Instruction::SetRestSleepPendingRefund(instruction) => {
++                self.get_side(&instruction.side_ref).pokemon[instruction.pokemon_index]
++                    .rest_sleep_pending_refund = instruction.previous_turns;
+             }
+             Instruction::SetRestTurns(instruction) => {
+                 self.set_rest_turn(
+@@ -2575,5 +2615,63 @@
+         };
+         state.set_conditional_mechanics();
+         state
++    }
++}
++
++#[cfg(test)]
++mod rest_sleep_pending_refund_tests {
++    use super::*;
++    use crate::instruction::{Instruction, SetSleepTurnsInstruction};
++
++    /// A Pokemon with nothing owed must serialize EXACTLY as before this field
++    /// existed, so every stored corpus row keeps round-tripping.
++    #[test]
++    fn zero_refund_is_omitted_from_serialization() {
++        let pkmn = Pokemon::default();
++        assert_eq!(pkmn.rest_sleep_pending_refund, 0);
++        assert!(!pkmn.serialize().contains("refund:"));
++        assert_eq!(Pokemon::deserialize(&pkmn.serialize()).rest_sleep_pending_refund, 0);
+     }
++
++    /// The tag survives a round trip, and -- the point of tagging rather than
++    /// appending positionally -- it does so with NO pre_transform present, which is
++    /// the case where a positional field would land on index 29 and panic.
++    #[test]
++    fn refund_round_trips_without_a_pre_transform() {
++        let mut pkmn = Pokemon::default();
++        pkmn.rest_sleep_pending_refund = 2;
++        let serialized = pkmn.serialize();
++        assert!(serialized.ends_with(",refund:2"), "{serialized}");
++        let back = Pokemon::deserialize(&serialized);
++        assert_eq!(back.rest_sleep_pending_refund, 2);
++        assert!(back.pre_transform.is_none(), "refund must not be read as a PreTransform");
++    }
++
++    /// Old rows -- written before this field existed -- must still parse.
++    #[test]
++    fn a_pre_field_serialization_still_parses() {
++        let legacy = Pokemon::default().serialize_base();
++        let back = Pokemon::deserialize(&legacy);
++        assert_eq!(back.rest_sleep_pending_refund, 0);
++        assert!(back.pre_transform.is_none());
++    }
++
++    /// apply-then-reverse must return the state bit-identical. This is the invariant
++    /// that forced an Instruction variant instead of a bare field write.
++    #[test]
++    fn apply_then_reverse_is_bit_identical() {
++        let mut state = State::default();
++        let before = state.serialize();
++        let instruction = Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++            side_ref: SideReference::SideOne,
++            pokemon_index: PokemonIndex::P0,
++            new_turns: 3,
++            previous_turns: 0,
++        });
++        state.apply_one_instruction(&instruction);
++        assert_eq!(state.side_one.pokemon[PokemonIndex::P0].rest_sleep_pending_refund, 3);
++        assert_ne!(state.serialize(), before, "apply must actually change the state");
++        state.reverse_instructions(&vec![instruction]);
++        assert_eq!(state.serialize(), before, "reverse must restore bit-identically");
++    }
+ }
+--- a/src/instruction.rs
++++ b/src/instruction.rs
+@@ -72,6 +72,12 @@
+     DamageSubstitute(DamageInstruction),
+     DecrementRestTurns(DecrementRestTurnsInstruction),
+     SetRestTurns(SetSleepTurnsInstruction),
++    /// pokezero gen3 fidelity fix (Rest skippedTime): set `rest_sleep_pending_refund`.
++    /// MUST be an Instruction rather than a bare field write: `reverse_one_instruction`
++    /// dispatches an explicit match arm per variant with no generic snapshot beneath
++    /// it, so a mutation made outside an Instruction is never undone and would leak
++    /// across every sibling branch the search explores.
++    SetRestSleepPendingRefund(SetSleepTurnsInstruction),
+     SetSleepTurns(SetSleepTurnsInstruction),
+     ChangeSubstituteHealth(ChangeSubsituteHealthInstruction),
+     FormeChange(FormeChangeInstruction),
+@@ -245,6 +251,13 @@
+             Instruction::DecrementRestTurns(d) => {
+                 write!(f, "DecrementRestTurns {:?}", d.side_ref)
+             }
++            Instruction::SetRestSleepPendingRefund(s) => {
++                write!(
++                    f,
++                    "SetRestSleepPendingRefund {:?}-{:?}: {:?} -> {:?}",
++                    s.side_ref, s.pokemon_index, s.previous_turns, s.new_turns
++                )
++            }
+             Instruction::SetRestTurns(s) => {
+                 write!(
+                     f,

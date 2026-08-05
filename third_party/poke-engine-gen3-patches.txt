@@ -1271,3 +1271,17 @@ poke-engine-gen3-a5-wake-before-contact.patch
 # then |win|. The per-Pokemon guards in order 10 are correct and untouched.
 # reports/c122.
 poke-engine-gen3-weather-entry-truncation.patch
+
+# Row 2 of the era-58 fallback ledger: 781 killed decisions, 28.7% of all fallback,
+# and #1093 measured producer A at 0 so this addresses the whole class as observed.
+# PLUMBING ONLY -- adds `rest_sleep_pending_refund` to Pokemon and an Instruction
+# variant to set it reversibly. NOTHING reads the field yet; no search behaviour
+# changes. The consuming emission on switch-in is a separate patch.
+#
+# The field is a TAGGED trailing value (`refund:<n>`), not a positional one:
+# `pre_transform` is appended only when Some, so index 29 exists conditionally and a
+# positional append would land on it for every untransformed Pokemon, where
+# PreTransform::deserialize indexes split[6 + index] and PANICS. Tagging follows
+# LastUsedMove's `move:`/`switch:` idiom. Design and that correction:
+# fp-power-deploy reports/evidence/row2-engine-fix-design-20260805.md.
+poke-engine-gen3-rest-sleep-pending-refund.patch
