@@ -562,5 +562,91 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         )
 
 
+class HpSnapshotClassifierTest(unittest.TestCase):
+    """The classifier's own table, for the entries a battle fixture cannot reliably reach.
+
+    Two entries needed this. ``[from] confusion`` only matters on a turn whose FIRST published line
+    is the confusion self-hit -- rare enough that a short sweep does not hit it (measured: 1 line in
+    35,283 on seed 555001, 0 on 31337), so no fixture-based test binds it. And the
+    ``_ACTION_PHASE_EVENT_TYPES`` set is what re-opens the action phase after ``turnLoop``'s copy of
+    the bare marker; its members are load-bearing for every action-phase HP line in the format, which
+    makes a targeted assertion clearer than the diffuse failure they produce.
+    """
+
+    def _action(self, raw_line: str, *, residual: bool) -> str:
+        from pokezero.belief import _hp_snapshot_action
+
+        return _hp_snapshot_action(raw_line, in_residual_phase=residual)
+
+    def test_confusion_self_damage_is_action_phase_whatever_the_tracked_phase_says(self) -> None:
+        """``confusion.onBeforeMove`` deals it inside move execution, so it is always pre-slot.
+
+        A confused mon that hits itself publishes ``|-activate|…|confusion`` and ``|-damage|…|[from]
+        confusion`` and NO ``|move|`` line, so on that turn nothing has re-opened the action phase
+        yet. Without this entry the snapshot is discarded instead of updated -- declined evidence, not
+        a wrong belief, but a measurable divergence from the sim, and the differential asserts zero.
+
+        Kill-confirmed by emptying ``_ACTION_PHASE_ONLY_HP_TAGS``.
+        """
+        from pokezero.belief import _HP_SNAPSHOT_UPDATE
+
+        line = "|-damage|p2a: Octillery|169/272|[from] confusion"
+        self.assertEqual(self._action(line, residual=True), _HP_SNAPSHOT_UPDATE)
+        self.assertEqual(self._action(line, residual=False), _HP_SNAPSHOT_UPDATE)
+
+    def test_an_unrecognized_residual_phase_source_is_declined_not_assumed(self) -> None:
+        """The default that makes the tag lists safe to be incomplete.
+
+        Kill-confirmed by returning ``_HP_SNAPSHOT_UPDATE`` at the end of ``_hp_snapshot_action``.
+        """
+        from pokezero.belief import _HP_SNAPSHOT_DISCARD, _HP_SNAPSHOT_UPDATE
+
+        line = "|-damage|p2a: Octillery|169/272|[from] SomeFutureResidual"
+        self.assertEqual(self._action(line, residual=True), _HP_SNAPSHOT_DISCARD)
+        self.assertEqual(self._action(line, residual=False), _HP_SNAPSHOT_UPDATE)
+
+    def test_every_action_phase_event_type_reopens_the_action_phase(self) -> None:
+        """Each member of ``_ACTION_PHASE_EVENT_TYPES`` must actually close the residual phase.
+
+        These are the line types that can only appear while actions are resolving, and the first of
+        them after ``turnLoop``'s bare marker is what tells the engine the turn has begun.
+
+        The expected members are written out rather than read from the set: the first version of this
+        test iterated ``_ACTION_PHASE_EVENT_TYPES`` itself, so removing a member removed it from the
+        iteration too and the mutation survived. That is the vacuous-assertion shape the plan's §3
+        forbids, reproduced inside the test written to prevent it.
+
+        Kill-confirmed by removing any single member: this test then fails naming that member.
+        """
+        from pokezero.belief import _ACTION_PHASE_EVENT_TYPES, PublicBattleBeliefEngine
+
+        self.assertEqual(
+            _ACTION_PHASE_EVENT_TYPES,
+            frozenset({"move", "switch", "drag", "replace", "cant"}),
+            "the action-phase line types changed; the differential in test_belief_coherence.py is "
+            "what should justify the new set",
+        )
+        for event_type in ["move", "switch", "drag", "replace", "cant", "turn"]:
+            engine = PublicBattleBeliefEngine()
+            engine.ingest_event({"event_type": "unknown", "raw_line": "|"})
+            self.assertTrue(engine._in_residual_phase, "the bare marker must open the phase")
+            engine.ingest_event({"event_type": event_type, "raw_line": f"|{event_type}|p1a: X|Y"})
+            self.assertFalse(
+                engine._in_residual_phase,
+                f"|{event_type}| is action-phase-only and must close the residual phase",
+            )
+
+    def test_a_residual_phase_line_does_not_reopen_the_action_phase(self) -> None:
+        """Reachability for the test above: the phase must not be closed by everything."""
+        from pokezero.belief import PublicBattleBeliefEngine
+
+        engine = PublicBattleBeliefEngine()
+        engine.ingest_event({"event_type": "unknown", "raw_line": "|"})
+        engine.ingest_event(
+            {"event_type": "-damage", "raw_line": "|-damage|p1a: X|100/200|[from] psn"}
+        )
+        self.assertTrue(engine._in_residual_phase)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
