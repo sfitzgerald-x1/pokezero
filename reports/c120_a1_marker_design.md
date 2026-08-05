@@ -1,9 +1,19 @@
-# C120 v2 — A1 is two shapes, not one, and v1's keying fact was false
+# C120 v3 — A1 is two shapes, not one. v1's keying fact was RIGHT.
 
-> **v1 claimed Showdown runs its residual block on the faint boundary and the engine on the
-> replacement, so a "residuals already ran" marker could key on that. The fixture v1 itself
-> cites says the opposite. And v1's "all five rows have this property" is false for two of
-> five. Both corrections below; v1 should not be cited.**
+> **One correction survives, and it is not the one this document was written to make.**
+>
+> v2 asserted two corrections to v1. Only the second holds. **v1's "all five rows have this
+> property" is indeed false for two of five** — that split is measured and reproducible, and it
+> is the substance of §(b).
+>
+> **v1's keying fact is NOT false, and v2's claim that it was is retracted.** v1 said Showdown
+> runs its residual block on the faint boundary and the engine on the replacement. The retained
+> repros for all three rows this report keeps in A1 record `observed_only=[]` — Showdown emitted
+> no residual component at the divergent boundary at all — which is exactly what v1 described.
+> v2 reached the opposite conclusion by reading one fixture scenario and consulting the
+> artifacts only for the two rows where they helped.
+>
+> So: cite §(b). Do not cite v2's headline, this document's former title, or §3.
 
 ## 0. The two corrections, measured
 
@@ -20,7 +30,7 @@ residual action untouched, so the protocol block ends at `|faint|`. Its sibling
 > **Correction (review of #1087). The generalisation was wrong, and I made it by reading a
 > fixture and not opening the artifacts.** `faintresidualsdeferred` establishes its own
 > configuration and nothing wider. Placement is *conditional*, which the vendored
-> `poke-engine-gen3-residual-defer-on-faint.patch:19-20` states in terms: "a faint caused BY the
+> `poke-engine-gen3-residual-defer-on-faint.patch:25-26` states in terms: "a faint caused BY the
 > residual block, which has already run, never gets the flag and so is never mistaken for a
 > pending one." The fixture exercises only the faint-from-a-move arm.
 >
@@ -102,12 +112,20 @@ different cause, and should not be filed A1.
 recorded ply placement still holds, then scope the marker to the three-row group and re-argue
 whether it is a harness or engine fix on the measured placement rather than the assumed one.
 
-## 3. Why v1 was wrong
+## 3. ~~Why v1 was wrong~~ — retracted; this described v2, not v1
 
-v1 cited a fixture for the half that suited its argument and did not read the half that
-refuted it. The fixture is 13 lines and names both plies explicitly. This is the same failure as
-C118 v1 — verifying that a citation resolves rather than that it says what you need — and it is
-now the second time in this program that a report has been corrected for exactly it.
+> **Retracted in full (review of #1087).** This section said v1 "cited a fixture for the half
+> that suited its argument and did not read the half that refuted it". That is a precise
+> description of what **v2** did, and v2 wrote it about v1.
+>
+> v1 read the artifacts and got the placement right. v2 read
+> `gen3_switch_differential.py::faintresidualsdeferred`, generalised one scenario into a
+> universal rule, and checked the repros only for the two rows that supported it — never for the
+> three it kept, all of which record `observed_only=[]`.
+>
+> The transferable lesson is intact but the subject is inverted: a fixture establishes its own
+> configuration and nothing wider, and when a fixture and a recorded artifact disagree, the
+> artifact wins. Filed against v2.
 
 ---
 
