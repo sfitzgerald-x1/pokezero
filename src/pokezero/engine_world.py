@@ -1638,10 +1638,50 @@ def _hp_and_status(
                     "rest_sleep_provenance_unrepresentable",
                     f"{slot}: {species!r} has malformed public Rest provenance",
                 )
+            # These two were ONE code (`rest_sleep_skipped_time_pending`) and ONE row
+            # flag (`restSleepRefundPending`) until this split. They have different
+            # causes and different owners, and conflating them made the class
+            # unsizeable: era-57 could not say how much of its 607 decisions an engine
+            # field would actually recover.
+            #
+            # BOTH old names are retired, and the flag rename is not cosmetic. Stored
+            # corpora keep `public_materialization` rows verbatim (`golden_corpus.py`),
+            # and several scripts re-feed those rows straight back through here. A
+            # pre-split row carrying `restSleepRefundPending` may have come from EITHER
+            # producer, so reusing that flag for B would silently bank producer-A rows
+            # as B's share -- the exact misattribution the code retirement prevents on
+            # the reason axis. Legacy rows therefore get their own third code: they
+            # still refuse, and they are never counted as either producer.
+            if bool(row.get("restSleepAttemptUnsettled")):
+                # Harness/observation: the attempt is unclassified because the snapshot
+                # landed mid-turn. Not an engine limitation.
+                raise EngineWorldUnsupported(
+                    "rest_sleep_attempt_unsettled",
+                    f"{slot}: {species!r} has an unsettled public Rest sleep attempt",
+                )
+            if bool(row.get("restSleepActiveRefundPending")):
+                # Engine representation: skippedTime is known but an ACTIVE mon has
+                # nowhere to carry a refund that only a future switch-in applies.
+                raise EngineWorldUnsupported(
+                    "rest_sleep_active_refund_pending",
+                    f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
+                )
+            # LAST, and load-bearing that it is last. A live row sets this flag too
+            # (see `_mark_legacy_rest_refund_pending`) so that a pre-split checkout
+            # replaying it still refuses instead of silently approximating. Reaching
+            # HERE therefore means the row carries the old flag and NEITHER producer
+            # flag -- i.e. it really was written before the split, and its producer is
+            # not recoverable. Moving this check earlier would swallow every live row.
+            #
+            # CANARY: in a fresh post-split era this code must count exactly ZERO.
+            # Every live row carries a producer flag, so anything landing here came
+            # from a replayed pre-split corpus or a mixed-version fleet. A nonzero
+            # count in new telemetry is a signal to act on, not noise.
             if bool(row.get("restSleepRefundPending")):
                 raise EngineWorldUnsupported(
-                    "rest_sleep_skipped_time_pending",
-                    f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
+                    "rest_sleep_refund_pending_unsplit_legacy",
+                    f"{slot}: {species!r} carries the pre-split Rest refund flag alone, "
+                    "whose producer is not recoverable from the row",
                 )
             if "restSleepAttempts" in row:
                 rest_turns = _rest_turns_from_row(row, early_bird=rest_sleep_early_bird)

@@ -2573,6 +2573,43 @@ def _apply_public_item_materialization_state(
         matching_rows[0]["currentItem"] = current_item
 
 
+def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
+    """Also set the PRE-SPLIT flag, for rows read back by a pre-split checkout.
+
+    The split renamed this flag so that an old row could not be miscounted as
+    producer B. Renaming alone creates the mirror hazard, which is worse: a row
+    written HERE and replayed by a checkout older than the split matches none of
+    that checkout's branches, falls through to ``approximate_sleep_turns``, and
+    silently builds ``rest_turns=0`` instead of refusing. Stored corpora keep
+    ``public_materialization`` verbatim and all four replay scripts
+    (``leaf_root_parity``, ``bench_leaf_search``, ``leaf_vs_reality``,
+    ``prior_mapping_assert``) pass ``approximate_sleep_turns=True``, so that is a
+    silently wrong world, not a mislabelled refusal.
+
+    Writing BOTH keys keeps every direction honest, because the three cases stay
+    distinguishable by which keys are present:
+
+        new row + new code  -> a producer flag is checked first; this one is never reached
+        new row + OLD code  -> sees this flag and refuses, exactly as before the split
+        OLD row + new code  -> carries ONLY this flag, so it gets the third legacy code
+
+    That last line is why the legacy check must stay last, and why no live path may
+    ever emit this flag on its own. Both are pinned by tests, not just by this comment:
+    reordering the checks leaves the rest of the suite green.
+
+    THIS IS A WORKAROUND, and the exit has been available the whole time. It exists only
+    because a stored row cannot say which annotator wrote it — yet `golden_corpus` has
+    carried a `record_type: "header"` record with a writer-owned-field guard since
+    `aad856c5`, long before this PR. So the workaround was never blocked on missing
+    infrastructure. #1091 (`39d26f4a`) is the *precedent* worth copying, not the
+    enabler: it versions a corpus contract in that existing header (selectable
+    observation schema) rather than inferring it. Stamp the annotator era the same way
+    and BOTH this dual-write and the third reason code become unnecessary.
+    """
+
+    row["restSleepRefundPending"] = True
+
+
 def _apply_rest_sleep_provenance(
     rows: list[dict[str, Any]],
     replay: ShowdownReplayState,
@@ -2702,7 +2739,15 @@ def _apply_rest_sleep_provenance(
             row["restSleepProvenanceUnrepresentable"] = True
             continue
         if pending:
-            row["restSleepRefundPending"] = True
+            # DISTINCT from the active-refund case below, which used to share this
+            # flag. Here the attempt is simply still unclassified: the snapshot was
+            # taken between the `|cant|...|slp` and the `|upkeep|`/`|turn|` that
+            # `_settle_pending_rest_sleep_attempts` uses to resolve it. skippedTime
+            # may well be 0 and the world exactly buildable -- appending `|upkeep|`
+            # to the same stream builds it. Nothing about the engine's
+            # representation is at fault, so do not report an engine gap.
+            row["restSleepAttemptUnsettled"] = True
+            _mark_legacy_rest_refund_pending(row)
             continue
         skipped = skipped_turns.get(key, 0)
         refunded = refunded_turns.get(key, 0)
@@ -2722,7 +2767,17 @@ def _apply_rest_sleep_provenance(
             if bool(row.get("active")):
                 # The simulator will apply skippedTime only on a future switch-in. The
                 # direct world has no place to preserve that pending refund for an active mon.
-                row["restSleepRefundPending"] = True
+                # A GENUINE engine-representation gap: the value is known and there is
+                # nowhere to put it. Kept separate from the unsettled-attempt flag above
+                # so the two are countable apart -- only this one is closed by adding a
+                # pending-skipped-time field to `Pokemon`.
+                #
+                # RENAMED from `restSleepRefundPending`, which both producers used to
+                # set. The old key survives in corpora captured before the split and
+                # cannot be attributed to a producer, so `engine_world` gives it a
+                # third code rather than folding it into this one.
+                row["restSleepActiveRefundPending"] = True
+                _mark_legacy_rest_refund_pending(row)
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible

@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+import pathlib
 import sys
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from pokezero import engine_world  # noqa: E402
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -151,7 +153,7 @@ def _payload(
     if skipped_time is not None:
         sleeper_row["restSleepSkippedTime"] = skipped_time
     if refund_pending:
-        sleeper_row["restSleepRefundPending"] = True
+        sleeper_row["restSleepActiveRefundPending"] = True
     other_row = {"species": "Starmie", "condition": "100/100", "active": not sleeper_active}
     return {
         "turn": 9,
@@ -347,7 +349,81 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                 dex=self.dex,
                 approximate_sleep_turns=True,
             )
-        self.assertEqual(caught.exception.reason, "rest_sleep_skipped_time_pending")
+        self.assertEqual(caught.exception.reason, "rest_sleep_active_refund_pending")
+
+    def test_the_split_reason_codes_reach_world_construction_distinctly(self) -> None:
+        # The flags are only useful if they survive into the refusal REASON, which is
+        # what the fallback ledger counts. Both must refuse even with approximation on.
+        for flag, reason in (
+            ("restSleepAttemptUnsettled", "rest_sleep_attempt_unsettled"),
+            ("restSleepActiveRefundPending", "rest_sleep_active_refund_pending"),
+            ("restSleepRefundPending", "rest_sleep_refund_pending_unsplit_legacy"),
+        ):
+            with self.subTest(flag=flag):
+                payload = _payload(self.dex, sleeper_active=True)
+                payload["sides"]["p2"]["pokemon"][0][flag] = True
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                    )
+                self.assertEqual(caught.exception.reason, reason)
+
+    def test_a_real_annotated_row_reaches_its_PRODUCER_code_not_the_legacy_one(self) -> None:
+        """The legacy check must stay LAST, and this is what pins that.
+
+        Every other test in this file sets the flags by hand, one at a time, so none
+        of them exercises the thing the dual-write created: a live row carrying BOTH
+        its producer flag and the pre-split flag. With the checks in the wrong order
+        such a row is swallowed by the legacy branch and reported as un-attributable
+        — the split silently 100% undone — and review confirmed the whole suite stays
+        green when that happens. So: annotate a real stream, prove the row really does
+        carry the legacy key, then build it and demand the PRODUCER code.
+        """
+        talk = [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|upkeep", "|turn|2",
+        ]
+        cases = (
+            ("A", ["|cant|p2a: Skarmory|slp"], "rest_sleep_attempt_unsettled"),
+            ("B", talk, "rest_sleep_active_refund_pending"),
+        )
+        for producer, tail, expected in cases:
+            with self.subTest(producer=producer):
+                payload = _payload(self.dex, sleeper_active=True)
+                rows = payload["sides"]["p2"]["pokemon"]
+                lines = [
+                    "|player|p1|Alice|", "|player|p2|Bob|",
+                    "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+                    "|switch|p2a: Skarmory|Skarmory, L76|100/100",
+                    "|turn|1",
+                    "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+                    "|-status|p2a: Skarmory|slp|[from] move: Rest",
+                    *tail,
+                ]
+                _apply_rest_sleep_provenance(
+                    rows, parse_showdown_replay(lines, battle_id="order-guard"), "p2"
+                )
+                # The premise: this row carries BOTH keys, which is what makes the
+                # ordering load-bearing in the first place.
+                self.assertTrue(rows[0].get("restSleepRefundPending"), rows[0])
+
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                    )
+                self.assertEqual(caught.exception.reason, expected)
+
+    def test_the_retired_reason_code_is_gone_from_the_engine_world_source(self) -> None:
+        # A grep-level guard, deliberately. The point of retiring the old name rather
+        # than reusing it for producer B is that no historical count can be silently
+        # read as one producer's share; that only holds if the name cannot come back.
+        source = pathlib.Path(engine_world.__file__).read_text(encoding="utf-8")
+        # The QUOTED form only: the prose comment above the split names the retired
+        # code on purpose, and a bare substring check would forbid documenting it.
+        self.assertNotIn('"rest_sleep_skipped_time_pending"', source)
+        self.assertNotIn("'rest_sleep_skipped_time_pending'", source)
 
     def test_a_valid_unannotated_sleeper_can_still_use_approximation(self) -> None:
         # An opponent-induced sleeper is never annotated, so it must still fail
@@ -508,19 +584,192 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
         self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
 
-    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
-        lines = self._RESTED + [
-            "|cant|p2a: Skarmory|slp",
-            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
-            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
-        ]
+    _ACTIVE_SLEEP_TALK = (
+        "|cant|p2a: Skarmory|slp",
+        "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+        "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+    )
+
+    def _annotate_either(self, lines, *, active):
+        """``_annotate``, but with the sleeper's active flag under the test's control."""
         replay = parse_showdown_replay(lines, battle_id="active-sleep-talk")
         rows = self._rows()
-        rows[0]["active"] = True
-        rows[1]["active"] = False
+        rows[0]["active"] = active
+        rows[1]["active"] = not active
         _apply_rest_sleep_provenance(rows, replay, "p2")
+        return rows
+
+    def _annotate_active_sleeper(self, lines):
+        return self._annotate_either(lines, active=True)
+
+    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+        rows = self._annotate_active_sleeper(self._RESTED + [*self._ACTIVE_SLEEP_TALK])
         self.assertNotIn("restSleepAttempts", rows[0])
-        self.assertTrue(rows[0]["restSleepRefundPending"])
+        # Producer B: the Sleep Talk |move| classifies the attempt immediately, so this
+        # is the known-value/nowhere-to-put-it case, not an unsettled one.
+        self.assertTrue(rows[0]["restSleepActiveRefundPending"])
+        self.assertNotIn("restSleepAttemptUnsettled", rows[0])
+
+    def test_the_two_producers_separate_on_different_axes(self) -> None:
+        """The whole 2x2 the split exists to make countable.
+
+        These two were one reason code, and the natural guess -- that they are the
+        same situation seen before and after ``|upkeep|`` -- is WRONG. They separate
+        on different axes, which is exactly why conflating them made the class
+        unsizeable:
+
+        * Producer A fires when the attempt is still UNCLASSIFIED (no ``|upkeep|``
+          yet). It does not care whether the sleeper is active, and appending
+          ``|upkeep|`` builds the world outright -- so it is a harness/observation
+          boundary, not an engine limitation.
+        * Producer B fires when the attempt IS classified as a sleep-usable skip and
+          the sleeper is ACTIVE. Benched, the same stream builds with the refund
+          folded in. Only this one is closed by a pending-skipped-time field on
+          ``Pokemon``.
+
+        B is driven by much more than Sleep Talk, and NOT by an enumerable little
+        list. Three routes reach `_mark_pending_rest_sleep_refundable`:
+
+        * a sleep-usable ``|move|`` -- Sleep Talk or Snore;
+        * ``|-activate|`` filtered to ``confusion`` / ``moveattract``;
+        * **any later same-actor** ``|cant|`` -- that branch (``showdown.py:3281``)
+          has **no reason filter at all**. Its own comment names flinch/Truant/
+          paralysis/Attract; `recharge` and `nomoves` reach it too and are named by
+          nothing. So the rule is what this test asserts, not a list. Two earlier
+          versions of this docstring got that wrong in opposite ways: one claimed
+          "six line families" (an undercount read off a comment rather than the
+          code), the next implied `par` was unnamed when the comment names it.
+        """
+        upkeep = ["|upkeep", "|turn|2"]
+        bare = ["|cant|p2a: Skarmory|slp"]
+
+        # --- producer A: unclassified, either seat position, and it is recoverable.
+        for active in (False, True):
+            with self.subTest(producer="A", active=active):
+                rows = self._annotate_either(self._RESTED + bare, active=active)
+                self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
+                self.assertNotIn("restSleepActiveRefundPending", rows[0])
+                # The proof it is not an engine gap: settle the turn and it builds.
+                settled = self._annotate_either(self._RESTED + bare + upkeep, active=active)
+                self.assertEqual(settled[0]["restSleepAttempts"], 1)
+                self.assertNotIn("restSleepAttemptUnsettled", settled[0])
+
+        # --- producer B: classified skip; refused ONLY while active. Sampled across
+        #     all three routes, including `cant` reasons that no comment enumerates.
+        skip_families = {
+            "move:sleeptalk": list(self._ACTIVE_SLEEP_TALK[1:]),
+            "move:snore": ["|move|p2a: Skarmory|Snore|p1a: Snorlax"],
+            "cant:flinch": ["|cant|p2a: Skarmory|flinch"],
+            "cant:truant": ["|cant|p2a: Skarmory|ability: Truant"],
+            # `-activate` route ONLY -- no trailing `|cant|`. With the `|cant|` line
+            # present these two pass via the unfiltered `cant` route instead, so
+            # deleting "moveattract" from the `-activate` filter was a SILENT
+            # mutation. Review caught that; the filter had zero coverage repo-wide.
+            "activate:confusion": ["|-activate|p2a: Skarmory|confusion",
+                                   "|-damage|p2a: Skarmory|80/100"],
+            "activate:attract": ["|-activate|p2a: Skarmory|move: Attract"],
+        }
+        # Code-property probes, NOT claimed producers. Gen 3 major statuses are
+        # exclusive, so a `slp` row cannot emit `|cant|...|par`, and a mon cannot
+        # self-Rest while recharging. They are here to pin that the `cant` branch is
+        # unfiltered -- a property of THIS annotator, characterised, not validated
+        # against the Node sim this file names as ground truth. If gen 3 does not in
+        # fact refund these, that is a bug these subtests would protect.
+        unfiltered_probes = {
+            "cant:par": ["|cant|p2a: Skarmory|par"],
+            "cant:recharge": ["|cant|p2a: Skarmory|recharge"],
+            "cant:nomoves": ["|cant|p2a: Skarmory|nomoves"],
+        }
+        for name, events in {**skip_families, **unfiltered_probes}.items():
+            with self.subTest(producer="B", family=name):
+                lines = self._RESTED + bare + events + upkeep
+
+                benched = self._annotate_either(lines, active=False)
+                self.assertEqual(benched[0]["restSleepAttempts"], 1)
+                self.assertEqual(benched[0]["restSleepSkippedTime"], 1)
+                self.assertNotIn("restSleepActiveRefundPending", benched[0])
+
+                active_row = self._annotate_either(lines, active=True)
+                self.assertTrue(active_row[0]["restSleepActiveRefundPending"])
+                self.assertNotIn("restSleepAttemptUnsettled", active_row[0])
+
+    def test_the_pre_split_flag_is_never_emitted_alone(self) -> None:
+        """A live row sets the old flag TOO, but never on its own.
+
+        Writing it keeps a pre-split checkout refusing rather than silently
+        approximating (`_mark_legacy_rest_refund_pending`). Writing it *alone* is
+        what must never happen: the third legacy reason code is defined as "old flag,
+        neither producer flag", so a live row emitting it bare would be counted as
+        un-attributable and the split would lose exactly the traffic it exists to
+        separate.
+        """
+        streams = [
+            [],
+            ["|cant|p2a: Skarmory|slp"],
+            [*self._ACTIVE_SLEEP_TALK],
+            [*self._ACTIVE_SLEEP_TALK, "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+             "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|cant|p2a: Skarmory|flinch",
+             "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|switch|p2a: Starmie|Starmie, L79|100/100",
+             "|upkeep", "|turn|2"],
+        ]
+        # Every OTHER branch of the annotator too, not just the refusing pair. Review
+        # showed the first version of this guard missed a stray bare write in the
+        # `induced` branch entirely, because none of the streams above reach it: each
+        # of these ends at a different `continue`.
+        other_branches = [
+            # induced sleep -> restSleepProvenanceUnrepresentable
+            (_LEADS + ["|move|p1a: Snorlax|Hypnosis|p2a: Skarmory",
+                       "|-status|p2a: Skarmory|slp"], False),
+            # own Rest, then induced by the opponent as well -> the `induced` conflict
+            (self._RESTED + ["|move|p1a: Snorlax|Hypnosis|p2a: Skarmory",
+                             "|-status|p2a: Skarmory|slp"], False),
+            # woken -> annotation retired
+            (self._RESTED + ["|-curestatus|p2a: Skarmory|slp"], False),
+        ]
+
+        producer_flags = ("restSleepAttemptUnsettled", "restSleepActiveRefundPending")
+        cases = [(self._RESTED + t, a) for t in streams for a in (False, True)]
+        cases += other_branches
+        for index, (lines, active) in enumerate(cases):
+            with self.subTest(case=index, active=active):
+                for row in self._annotate_either(lines, active=active):
+                    if "restSleepRefundPending" not in row:
+                        continue
+                    self.assertTrue(
+                        any(flag in row for flag in producer_flags),
+                        f"row emitted the pre-split flag alone: {row}",
+                    )
+
+    def test_a_live_row_still_refuses_under_a_pre_split_consumer(self) -> None:
+        """The mirror hazard the flag rename would otherwise create.
+
+        A pre-split `engine_world` knows neither producer flag. If a live row carried
+        only those, it would match no branch there, fall through to
+        ``approximate_sleep_turns`` and build ``rest_turns=0`` -- a silently wrong
+        world, strictly worse than the mislabelled refusal the rename fixed. Simulated
+        by asking only the question a pre-split consumer can ask.
+        """
+        cases = (
+            ["|cant|p2a: Skarmory|slp"],                                  # producer A
+            [*self._ACTIVE_SLEEP_TALK, "|upkeep", "|turn|2"],             # producer B
+        )
+        for index, tail in enumerate(cases):
+            for active in (False, True):
+                with self.subTest(case=index, active=active):
+                    rows = self._annotate_either(self._RESTED + tail, active=active)
+                    row = rows[0]
+                    if not any(f in row for f in
+                               ("restSleepAttemptUnsettled", "restSleepActiveRefundPending")):
+                        continue  # this combination builds; nothing to preserve
+                    self.assertTrue(
+                        row.get("restSleepRefundPending"),
+                        "a refusing live row must still carry the pre-split flag, or a "
+                        "pre-split consumer will approximate it instead of refusing",
+                    )
+
 
     def test_interrupted_sleep_usable_attempts_keep_the_switch_refund(self) -> None:
         # The sleep handler (priority 10) increments skippedTime before each of
@@ -547,7 +796,8 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
     def test_unresolved_sleep_attempt_is_explicitly_refused(self) -> None:
         rows = self._annotate(self._RESTED + ["|cant|p2a: Skarmory|slp"])
         self.assertNotIn("restSleepAttempts", rows[0])
-        self.assertTrue(rows[0]["restSleepRefundPending"])
+        # Producer A, since the attempt is still unclassified at the snapshot.
+        self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
 
     def test_benched_sleep_talk_clock_does_not_tick_until_switch_back(self) -> None:
         rows = self._annotate(self._RESTED + [
