@@ -124,7 +124,7 @@
 +        let mut pkmn = Pokemon::default();
 +        pkmn.rest_sleep_pending_refund = 2;
 +        let serialized = pkmn.serialize();
-+        assert!(serialized.ends_with(",refund:2"), "{serialized}");
++        assert!(serialized.ends_with(",refund:2"), "{}", serialized);
 +        let back = Pokemon::deserialize(&serialized);
 +        assert_eq!(back.rest_sleep_pending_refund, 2);
 +        assert!(back.pre_transform.is_none(), "refund must not be read as a PreTransform");
