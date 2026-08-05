@@ -16,39 +16,75 @@ name: Engine fidelity gates
 
 on:
   pull_request:
-    paths:
-      - "third_party/poke-engine-gen3-*.patch"
-      - "third_party/poke-engine-gen3-patches.txt"
-      - "rust/pokezero-search/**"
-      - "scripts/apply_poke_engine_patches.py"
-      - "scripts/build_search_crate_engine.sh"
-      - "scripts/setup_poke_engine.sh"
-      - "scripts/vendor_poke_engine_src.sh"
-      - "scripts/engine_behavioral_probes.py"
-      - "scripts/engine_build_fingerprint.py"
-      - "scripts/verify_poke_engine_source.py"
-      - "third_party/poke-engine-base-source.json"
-      - "tests/test_branch_mass_reconstruction.py"
-      # Without these the classifier half of B1 -- which edits the differential --
-      # triggers no workflow at all. Found by review of #1081.
-      - "scripts/engine_transition_differential.py"
-      - "src/pokezero/**"
-      - "tests/test_sleep_talk_phaze_drag.py"
-      - "tests/test_instruction_event_mapping.py"
-      # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
-      - "tests/test_crit_kill_split_patch.py"
-      - "tests/test_drag_limit_is_a_last_resort.py"
-      # Imported by the differential (engine_transition_differential.py:105).
-      - "scripts/fidelity_gate_events.py"
-      - "tests/test_poke_engine_patch_stack.py"
-      # A5 lives here. Without this entry the patch that fixes it triggers the
-      # workflow (via the .patch and patches.txt globs) but the suite holding its
-      # pins is not even a trigger, let alone a step.
-      - "tests/test_engine_gen3_abilities.py"
-      - ".github/workflows/engine-fidelity-gates.yml"
-
 jobs:
+  # The path filter used to live on the workflow trigger. A REQUIRED status check
+  # cannot be path-filtered that way: on a PR that touches none of these paths the
+  # workflow never starts, the check never reports, and the PR is blocked forever
+  # waiting for a job that will not run. So the trigger is unconditional and the
+  # filtering moved here, with `gate-status` below reporting on every PR.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      fidelity: ${{ steps.f.outputs.fidelity }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          FILTERS: |
+            third_party/poke-engine-gen3-*.patch
+            third_party/poke-engine-gen3-patches.txt
+            rust/pokezero-search/**
+            scripts/apply_poke_engine_patches.py
+            scripts/build_search_crate_engine.sh
+            scripts/setup_poke_engine.sh
+            scripts/vendor_poke_engine_src.sh
+            scripts/engine_behavioral_probes.py
+            scripts/engine_build_fingerprint.py
+            scripts/verify_poke_engine_source.py
+            third_party/poke-engine-base-source.json
+            tests/test_branch_mass_reconstruction.py
+            scripts/engine_transition_differential.py
+            src/pokezero/**
+            tests/test_sleep_talk_phaze_drag.py
+            tests/test_instruction_event_mapping.py
+            tests/test_crit_kill_split_patch.py
+            tests/test_drag_limit_is_a_last_resort.py
+            scripts/fidelity_gate_events.py
+            tests/test_poke_engine_patch_stack.py
+            tests/test_engine_gen3_abilities.py
+            .github/workflows/engine-fidelity-gates.yml
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Fail CLOSED: if the diff cannot be computed, run the gates.
+          if ! changed=$(git diff --name-only "$BASE" "$HEAD"); then
+            echo "could not diff $BASE..$HEAD; running the gates anyway"
+            echo "fidelity=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$changed"
+          matched=false
+          while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              # shellcheck disable=SC2254
+              case "$file" in
+                $pattern) matched=true ;;
+              esac
+            done <<< "$changed"
+          done <<< "$FILTERS"
+          echo "fidelity=$matched" >> "$GITHUB_OUTPUT"
+          echo "fidelity paths touched: $matched"
+        # Single source of truth for what counts as a fidelity-relevant change.
+        # Kept as a here-doc rather than a trigger `paths:` list so the required
+        # check can still report when nothing here is touched.
   mass-gate:
+    needs: changes
+    if: needs.changes.outputs.fidelity == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -245,3 +281,42 @@ jobs:
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
+
+  # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
+  # always report. It is the only job in this workflow that should ever be marked
+  # required in branch protection -- requiring `mass-gate` directly would block any
+  # PR that does not touch the fidelity paths, because a skipped job never reports.
+  #
+  # Fails when the gates ran and failed, and when they were cancelled or errored.
+  # Passes only on success or on a deliberate skip. `if: always()` is load-bearing:
+  # without it this job inherits the skip and stops reporting, restoring exactly the
+  # hole it exists to close.
+  gate-status:
+    needs: [changes, mass-gate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the fidelity gate result
+        env:
+          TOUCHED: ${{ needs.changes.outputs.fidelity }}
+          RESULT: ${{ needs.mass-gate.result }}
+        run: |
+          set -euo pipefail
+          echo "fidelity paths touched: ${TOUCHED}"
+          echo "mass-gate result: ${RESULT}"
+          case "${RESULT}" in
+            success)
+              echo "engine fidelity gates passed"
+              ;;
+            skipped)
+              if [ "${TOUCHED}" = "true" ]; then
+                echo "::error::mass-gate skipped while fidelity paths WERE touched"
+                exit 1
+              fi
+              echo "no fidelity-relevant paths changed; gates correctly not run"
+              ;;
+            *)
+              echo "::error::engine fidelity gates did not pass (mass-gate: ${RESULT})"
+              exit 1
+              ;;
+          esac
