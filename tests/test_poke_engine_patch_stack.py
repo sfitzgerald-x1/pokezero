@@ -123,6 +123,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 [entry.name for entry in applied[-7:]],
                 [
+                    "poke-engine-gen3-residual-lethality-partition.patch",
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
