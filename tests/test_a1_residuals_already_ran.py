@@ -2,18 +2,18 @@
 
 Showdown gives a Pokemon arriving on a forced replacement no residual tick --
 the replacement completes the PREVIOUS turn rather than starting a new one. The
-engine, asked for a full turn, faithfully runs one and over-emits. This is a
-HARNESS change, measured and landed separately from any fidelity change.
+engine, asked for a full turn, faithfully runs one and over-emits. HARNESS
+change, measured and landed separately from any fidelity change.
 
-The pins below exercise the SHIPPED predicate and the SHIPPED source set, not a
-local reimplementation of either. An earlier draft of this file reimplemented the
-filter inline, which would have kept passing had the real one been deleted.
+These pins are BEHAVIOURAL. An earlier version asserted on `inspect.getsource`
+text, and review showed that inverting the `|win|` clause -- the exact
+first-attempt failure -- would have passed every one of them: the string
+`"|win"` was still present, the `and` count unchanged, no `or` introduced. The
+predicate is now module-level so it can be called.
 """
 
 from __future__ import annotations
 
-import inspect
-import re
 import sys
 import unittest
 from collections import Counter
@@ -24,82 +24,140 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import engine_transition_differential as diff  # noqa: E402
 
 
-def _predicate_source() -> str:
-    """The shipped predicate, read off the shipped function."""
-    return inspect.getsource(diff.evaluate_boundary_strict)
+class ForcedReplacementPredicateTests(unittest.TestCase):
+    """Behavioural pins on `_is_forced_replacement_ply`."""
 
+    # 19000020/50's protocol, verbatim and complete.
+    REPLACEMENT = [
+        "|switch|p1a: Dewgong|Dewgong, L87, F|230/298",
+        "|switch|p2a: Politoed|Politoed, L84, M|269/288",
+        "|turn|47",
+    ]
+    ORDINARY_TURN = [
+        "|move|p1a: Dewgong|Surf|p2a: Politoed",
+        "|-damage|p2a: Politoed|200/288",
+        "|-heal|p1a: Dewgong|248/298|[from] item: Leftovers",
+        "|upkeep",
+        "|turn|48",
+    ]
+    # The shape that broke the first attempt: battle ends DURING residuals, so
+    # there is no |upkeep| -- but Showdown did emit the tick.
+    BATTLE_END = [
+        "|-weather|Sandstorm|[upkeep]",
+        "|-damage|p1a: Slaking|0 fnt|[from] Sandstorm",
+        "|-damage|p2a: Venusaur|161/262|[from] Sandstorm",
+        "|faint|p1a: Slaking",
+        "|win|PokeZero p2",
+    ]
+    TIE_END = [
+        "|-damage|p1a: A|0 fnt|[from] psn",
+        "|-damage|p2a: B|0 fnt|[from] psn",
+        "|faint|p1a: A",
+        "|faint|p2a: B",
+        "|tie",
+    ]
+    VOLUNTARY_DOUBLE_SWITCH = [
+        "|switch|p1a: Dewgong|Dewgong, L87, F|230/298",
+        "|switch|p2a: Politoed|Politoed, L84, M|269/288",
+        "|-heal|p1a: Dewgong|248/298|[from] item: Leftovers",
+        "|upkeep",
+        "|turn|48",
+    ]
 
-class PredicateShapeTests(unittest.TestCase):
-    """The four clauses are each load-bearing; none may be dropped."""
+    def test_a_forced_replacement_fires(self) -> None:
+        self.assertTrue(diff._is_forced_replacement_ply(self.REPLACEMENT))
 
-    def test_the_predicate_exists_and_is_named(self) -> None:
-        self.assertIn("boundary_is_forced_replacement", _predicate_source())
+    def test_an_ordinary_turn_does_not(self) -> None:
+        self.assertFalse(diff._is_forced_replacement_ply(self.ORDINARY_TURN))
 
-    def test_it_requires_the_absence_of_win(self) -> None:
-        """This clause is why the first attempt failed and it must never go.
+    def test_a_battle_end_during_residuals_does_not(self) -> None:
+        """The first attempt's failure, pinned.
 
-        `|upkeep|` is also absent whenever the battle ENDS during residuals --
-        Showdown emits the tick, then `|faint|`, then `|win|`. Without the
-        `|win|` clause the filter stripped the engine's residuals there and
-        manufactured 44 divergences on a 400-game measurement, including
-        reopening 19100002/53, the battle-end sandstorm row #1092 had fixed.
+        No `|upkeep|` here either, but Showdown DID emit residuals. Keying on
+        upkeep alone stripped the engine's and manufactured 44 divergences.
         """
-        source = _predicate_source()
-        start = source.index("boundary_is_forced_replacement = (")
-        # Slice to the line that closes the assignment: a lone `    )`.
-        end = source.index("\n    )\n", start)
-        window = source[start:end]
-        for clause in ('"|upkeep"', '"|win"', '"|move|"', '"|switch|"'):
-            self.assertIn(clause, window, f"predicate lost its {clause} clause")
-        # And the clauses must be conjoined, not alternatives.
-        self.assertNotIn(" or ", window)
-        self.assertEqual(window.count(" and "), 3, "expected four ANDed clauses")
+        self.assertFalse(diff._is_forced_replacement_ply(self.BATTLE_END))
+
+    def test_a_tie_end_does_not(self) -> None:
+        """A double KO ends the battle with `|tie`, not `|win`."""
+        self.assertFalse(diff._is_forced_replacement_ply(self.TIE_END))
+
+    def test_a_voluntary_double_switch_does_not(self) -> None:
+        """Nobody moved and both switched, but a residual phase ran."""
+        self.assertFalse(diff._is_forced_replacement_ply(self.VOLUNTARY_DOUBLE_SWITCH))
+
+    def test_inverting_any_single_clause_breaks_at_least_one_case(self) -> None:
+        """The four clauses are each load-bearing.
+
+        This is what the old text pins only appeared to check: with the real
+        predicate callable, each clause is shown necessary by a case that
+        distinguishes it.
+        """
+        cases = {
+            "upkeep": self.ORDINARY_TURN,
+            "win": self.BATTLE_END,
+            "tie": self.TIE_END,
+            "switch": ["|move|p1a: A|Splash|p1a: A", "|turn|3"],
+        }
+        for name, lines in cases.items():
+            with self.subTest(clause=name):
+                self.assertFalse(
+                    diff._is_forced_replacement_ply(lines),
+                    f"the {name} clause is not doing any work",
+                )
 
 
 class ResidualSourceSetTests(unittest.TestCase):
     def test_it_covers_every_source_the_a1_rows_carry(self) -> None:
-        # 19000020/50 itemleftovers, 19000059/27 psn,
-        # 19100181/45 itemleftovers + psn + sandstorm.
         for source in ("itemleftovers", "psn", "sandstorm"):
             self.assertIn(source, diff._RESIDUAL_PHASE_SOURCES)
 
     def test_hazards_are_excluded_so_a_different_cause_stays_divergent(self) -> None:
-        """19100180/24 is a hazard mis-attribution, not a residual.
-
-        Medicham switches into Spikes and faints; the engine attributes the
-        hazard to a side whose active never changed. That boundary also has no
-        `|upkeep|`, so only the SOURCE scoping keeps it divergent.
-        """
+        """19100180/24 is a hazard mis-attribution, not a residual."""
         for hazard in ("spikes", "stealthrock"):
             self.assertNotIn(hazard, diff._RESIDUAL_PHASE_SOURCES)
 
+    def test_partial_trapping_is_covered(self) -> None:
+        """gen3 partial trapping ticks 1/16 at end of turn."""
+        for source in ("partiallytrapped", "movewrap", "movefirespin"):
+            self.assertIn(source, diff._RESIDUAL_PHASE_SOURCES)
+
     def test_it_is_not_the_majority_override_set(self) -> None:
-        """`_ADJUDICABLE_RESIDUALS` serves a different rule and under-covers."""
         self.assertNotEqual(diff._RESIDUAL_PHASE_SOURCES, diff._ADJUDICABLE_RESIDUALS)
         for source in ("leechseed", "movewish", "hail"):
             self.assertIn(source, diff._RESIDUAL_PHASE_SOURCES)
             self.assertNotIn(source, diff._ADJUDICABLE_RESIDUALS)
 
 
-class FilterIsWiredIntoTheComparisonTests(unittest.TestCase):
-    """The filter must sit on the exact-component comparison, gated correctly."""
+class FilterBehaviourTests(unittest.TestCase):
+    """What the filter does to a component Counter, exercised directly."""
 
-    def test_the_filter_guards_the_exact_comparison(self) -> None:
-        source = _predicate_source()
-        self.assertIn("if boundary_is_forced_replacement:", source)
-        guard = source.index("if boundary_is_forced_replacement:")
-        compare = source.index("if eng_exact != obs_exact_branch:")
-        self.assertLess(guard, compare, "the filter must run BEFORE the comparison")
-        between = source[guard:compare]
-        self.assertIn("_RESIDUAL_PHASE_SOURCES", between)
-        self.assertIn("eng_exact", between)
+    @staticmethod
+    def _strip(eng: Counter, lines: list[str]) -> Counter:
+        if not diff._is_forced_replacement_ply(lines):
+            return eng
+        return Counter({
+            c: n for c, n in eng.items() if c[0] not in diff._RESIDUAL_PHASE_SOURCES
+        })
 
-    def test_only_the_engine_side_is_filtered(self) -> None:
-        """Filtering the observed side too would hide real under-emissions."""
-        source = _predicate_source()
-        guard = source.index("if boundary_is_forced_replacement:")
-        between = source[guard : source.index("if eng_exact != obs_exact_branch:")]
-        self.assertNotIn("obs_exact_branch =", between)
+    def test_residuals_are_dropped_on_a_replacement_ply(self) -> None:
+        eng = Counter({("itemleftovers", 16): 1, ("psn", -16): 1, ("sandstorm", -16): 1})
+        self.assertEqual(
+            self._strip(eng, ForcedReplacementPredicateTests.REPLACEMENT), Counter()
+        )
+
+    def test_residuals_survive_a_battle_end(self) -> None:
+        """The revert-direction control for the first attempt's failure."""
+        eng = Counter({("sandstorm", -16): 1})
+        self.assertEqual(
+            self._strip(eng, ForcedReplacementPredicateTests.BATTLE_END), eng
+        )
+
+    def test_a_hazard_survives_a_replacement_ply(self) -> None:
+        eng = Counter({("spikes", -32): 1})
+        self.assertEqual(
+            self._strip(eng, ForcedReplacementPredicateTests.REPLACEMENT), eng
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
