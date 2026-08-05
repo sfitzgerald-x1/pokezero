@@ -4242,9 +4242,13 @@ mod tests {
         // the likeliest real regression, and a bare aggregate threshold misses it.
         // Measured on the sleeper-FIRST subset, with #1048 vs reverted:
         //
-        //     SUBSTITUTE  234 / 37     FLAIL  363 / 60     REVERSAL  307 / 53
+        //     SUBSTITUTE  404 / 37     FLAIL  900 / 60     REVERSAL  900 / 53
         //
-        // A floor of 150 separates those with ~4x margin. Scoping matters: on the
+        // (The #1048 column read 234 / 363 / 307 when first written and was never
+        // asserted, so it drifted unnoticed -- the exact failure mode the tally pin
+        // below now closes. Re-measured from this test's own output.)
+        //
+        // A floor of 150 separates those with ~6x margin. Scoping matters: on the
         // FULL matrix the revert leaves {FLAIL 142, REVERSAL 135, SUBSTITUTE 50},
         // an 8-branch margin, and it degrades predictably -- sleeper-second agrees
         // are INVARIANT under a `defender_choice` revert (the gate needs
@@ -4313,30 +4317,37 @@ mod tests {
             total_branches - agree
         );
 
-        // PIN THE TALLIES, not just their shape. Everything above asserts the
-        // partition is non-vacuous and exact, which a change to the vendored engine or
-        // to the renderer can satisfy while silently moving the numbers -- the
-        // partition identity holds for ANY split of the same total. These four values
-        // are quoted as evidence outside this repo (the deploy campaign's fallback
-        // ledger cites "221 of 237" as the measured effect of #1070), so drift here is
-        // a reporting defect elsewhere, not just a test update.
-        //
-        // If you are here because this failed: that is the signal working. Decide
-        // whether the change was intended, then update BOTH these numbers and the
-        // ledger's row-1 disposition. Do not update one without the other.
-        assert_eq!(
-            (total_branches, agree, multi_label_unattributed, multi_label_refused),
-            (2614, 2377, 221, 16),
-            "the Sleep Talk attribution oracle moved. Expected \
-             branches/agree/usable/unrenderable = 2614/2377/221/16. See the comment \
-             above: the deploy ledger quotes these."
-        );
-
+        // PRINT BEFORE THE PIN BELOW, deliberately. The pin's own message tells you to
+        // decide whether a change was intended, and that decision needs the
+        // per-defender map -- which an `assert_eq!` placed first would suppress,
+        // because a panic never reaches this line.
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
              ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
              {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
+        );
+
+        // PIN THE TALLIES, not just their shape. Everything above asserts the partition
+        // is non-vacuous and exact -- and both hold for ANY split of the same total, so
+        // a vendored-engine or renderer change can move these numbers with the suite
+        // green. Demonstrated: narrowing the renderability allowlist so `Damage` stops
+        // qualifying gives 20 usable / 217 unrenderable, and every other assertion in
+        // this test still passes.
+        //
+        // They are quoted outside this repo -- the deploy campaign's fallback ledger
+        // states them as the measured effect of #1070 -- so drift is a reporting defect
+        // elsewhere, not merely a test update.
+        //
+        // If you are here because this failed: that is the signal working. The
+        // breakdown printed above says WHERE it moved. Decide whether the change was
+        // intended, then update these values AND the ledger's row-1 disposition
+        // together. Do not update one without the other.
+        assert_eq!(
+            (total_branches, agree, multi_label_unattributed, multi_label_refused),
+            (2614, 2377, 221, 16),
+            "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
+             printed above, and the comment here on what else must be updated."
         );
     }
 
