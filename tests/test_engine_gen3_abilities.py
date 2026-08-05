@@ -575,6 +575,44 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
         self.assertNotIn("Boost SideOne Speed", text)
 
+    def test_white_herb_fires_after_a_secondary_effect_drop(self) -> None:
+        # Site 2. Secondaries are applied AFTER the boost-effect site, so the
+        # first version of this patch missed them entirely: a Deoxys hit by
+        # Crunch kept its -1 SpD. Richly reachable -- counted from sets.json
+        # movepools, Ice Beam is on 79 pool species, Shadow Ball 59, Thunderbolt
+        # 50, Psychic 42, Flamethrower 23, Crunch 9, Iron Tail 7.
+        # gen3 Crunch drops SpD, not Def.
+        deoxys = self._mon("deoxys", "pressure", "splash", item="whiteherb", speed=50)
+        opponent = self._mon("tyranitar", "sandstream", "crunch", speed=200)
+        branches = poke_engine.generate_instructions(
+            self._state(deoxys, opponent), "splash", "crunch"
+        )
+        dropped = [b for b in branches if "SpecialDefense: -1" in self._text(b)]
+        self.assertTrue(dropped, "Crunch must actually drop SpD, or this pin is vacuous")
+        for branch in dropped:
+            text = self._text(branch)
+            self.assertIn("Boost SideOne SpecialDefense: 1", text)
+            self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
+    def test_white_herb_fires_on_an_intimidate_switch_in(self) -> None:
+        # Site 3. Intimidate drops the opposing Attack as the holder switches in,
+        # which is neither a move's boost effect nor a secondary, so the first
+        # version of this patch missed it. 18 gen3 randbats species carry
+        # Intimidate: arbok, arcanine, granbull, gyarados, hitmontop, masquerain,
+        # mawile, mightyena, salamence, stantler, tauros and more.
+        deoxys = self._mon("deoxys", "pressure", "splash", item="whiteherb", speed=50)
+        active = self._mon("pidgey", "keeneye", "splash", speed=200)
+        gyarados = self._mon("gyarados", "intimidate", "splash", speed=200)
+        branches = poke_engine.generate_instructions(
+            self._state(deoxys, active, defender_party=[gyarados]),
+            "splash",
+            "gyarados",
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        self.assertIn("Boost SideOne Attack: -1", text)
+        self.assertIn("Boost SideOne Attack: 1", text)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")
         poison_attacker = self._mon(

@@ -19,7 +19,7 @@
      },
      default = UNKNOWNITEM
  }
-@@ -292,7 +293,91 @@
+@@ -292,7 +293,95 @@
          }));
      attacker.item = Items::NONE;
  }
@@ -33,22 +33,26 @@
 +/// it is not a reset.
 +///
 +/// Showdown fires it from `onAnySwitchIn` (priority -2), `onAnyAfterMega`,
-+/// `onAnyAfterMove`, and `onResidual` at order 29. This engine wires the
-+/// after-move one only, called once after `get_instructions_from_boosts`, which
-+/// is the reachable case here: White Herb is on Deoxys and Deoxys-Attack ONLY
-+/// (`data/random-battles/gen3/teams.ts:471` returns it unconditionally for both,
-+/// in the high-priority block ahead of any randomness), and their movepool --
-+/// extremespeed, icebeam, psychoboost, shadowball, superpower -- carries two
-+/// self-droppers: Superpower (-1 Atk, -1 Def) and Psycho Boost (-2 SpA).
-+/// Opponent-inflicted drops delivered as a move's boost effect are covered too,
-+/// because `get_instructions_from_boosts` handles both targets and this runs
-+/// after it for both sides.
++/// `onAnyAfterMove`, and `onResidual` at order 29. This engine calls it from
++/// THREE sites, each checking BOTH sides:
++///   1. after `get_instructions_from_boosts` -- a move's boost effect, covering
++///      self-drops (Superpower -1 Atk/-1 Def, Psycho Boost -2 SpA) and
++///      opponent-target drops (Growl, Leer);
++///   2. after `get_instructions_from_secondaries` -- secondary stat drops;
++///   3. after `ability_on_switch_in` -- Intimidate.
 +///
-+/// NOT covered, recorded rather than silently omitted: secondary-effect stat
-+/// drops, Intimidate on switch-in, and the residual-order-29 sweep. Each needs
-+/// its own call site. The row this exists for (reports/c111 A6, `19000112/32`)
-+/// is a Superpower self-drop, which the after-move site does cover.
-+pub fn item_white_herb_after_boosts(
++/// Sites 2 and 3 were MISSING in the first version of this patch, justified by a
++/// reachability argument that only reasoned about Deoxys' OWN moves and ignored
++/// what an opponent can do to it. Both gaps were measured, not theorised: a
++/// Deoxys hit by Crunch kept its -1 SpD, and 18 pool species carry Intimidate.
++/// Secondary droppers in the gen3 randbats pool, counted from `sets.json`
++/// movepools: Ice Beam 79 species, Shadow Ball 59, Thunderbolt 50, Psychic 42,
++/// Flamethrower 23, Crunch 9 (gen3 Crunch drops SpD, not Def), Iron Tail 7.
++///
++/// Still NOT covered, and now genuinely narrow: `onResidual` order 29, which only
++/// matters for a drop that survives to end-of-turn without any move, ability or
++/// switch having fired in between.
++pub fn item_white_herb_check(
 +    state: &mut State,
 +    side_ref: &SideReference,
 +    instructions: &mut StateInstructions,
@@ -118,11 +122,27 @@
  use super::items::{
      item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
 -    Items,
-+    item_white_herb_after_boosts, Items,
++    item_white_herb_check, Items,
  };
  use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
  use crate::choices::{Choice, MoveCategory};
-@@ -5115,6 +5115,17 @@
+@@ -550,6 +550,15 @@
+         > 0
+     {
+         ability_on_switch_in(state, &switching_side_ref, incoming_instructions);
++        // gen3 White Herb, site 3: Intimidate. The INCOMING mon's ability drops
++        // the opponent's Attack, so the herb to check is usually the other
++        // side's -- both are checked. 18 gen3 randbats species carry Intimidate.
++        item_white_herb_check(state, &switching_side_ref, incoming_instructions);
++        item_white_herb_check(
++            state,
++            &switching_side_ref.get_other_side(),
++            incoming_instructions,
++        );
+     }
+ 
+     state.reverse_instructions(&incoming_instructions.instruction_list);
+@@ -5115,6 +5124,17 @@
  
      if let Some(boost) = &choice.boost {
          get_instructions_from_boosts(state, boost, &attacking_side, &mut instructions);
@@ -131,8 +151,8 @@
 +        // `get_instructions_from_boosts` applies MoveTarget::User and
 +        // MoveTarget::Opponent alike, so a self-drop (Superpower, Psycho Boost)
 +        // and an opponent-inflicted drop are both caught here.
-+        item_white_herb_after_boosts(state, &attacking_side, &mut instructions);
-+        item_white_herb_after_boosts(
++        item_white_herb_check(state, &attacking_side, &mut instructions);
++        item_white_herb_check(
 +            state,
 +            &attacking_side.get_other_side(),
 +            &mut instructions,
@@ -140,3 +160,20 @@
      }
  
      if choice.flags.drag {
+@@ -5241,6 +5261,16 @@
+                 state.reverse_instructions(&branch.instruction_list);
+             }
+         }
++        // gen3 White Herb, site 2: secondary stat drops land here, AFTER the
++        // boost-effect site. Not gated on `does_damage` -- a status move's
++        // secondary can drop a stat too. Measured gap in the first version of
++        // this patch: a Deoxys hit by Crunch kept its -1 SpD.
++        for branch in instructions_vec_after_secondaries.iter_mut() {
++            state.apply_instructions(&branch.instruction_list);
++            item_white_herb_check(state, &attacking_side, branch);
++            item_white_herb_check(state, &attacking_side.get_other_side(), branch);
++            state.reverse_instructions(&branch.instruction_list);
++        }
+         final_instructions.extend(instructions_vec_after_secondaries);
+     } else {
+         state.reverse_instructions(&instructions.instruction_list);
