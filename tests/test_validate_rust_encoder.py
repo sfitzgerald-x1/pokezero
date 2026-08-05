@@ -24,6 +24,8 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+
+import pokezero.showdown as showdown_module
 from _showdown_root import showdown_root_str
 
 try:
@@ -63,32 +65,45 @@ HISTORY_NUMERIC_COLUMN_NAMES = (
 
 
 # `NUMERIC_STAT_WEATHER_REVEAL_OFFSET` names the START of a block, not a column: per weather in
-# `_WEATHER_REVEAL_ORDER` it is a (set-this-game, turn-fraction) pair, so 4 x 2 = 8 columns
-# (`showdown.py:232-234`). Only the offset itself appears in the exported layout, so resolving the
-# name list alone recovered 1 of those 8 -- the original hardcoded `range(92, 105)` covered them
-# all. Under v4 the block starts at public column 126 and the numeric array is 132 wide, so 126-131
-# are live and unnamed; the allowance was missing five of them.
+# `_WEATHER_REVEAL_ORDER` it is a (set-this-game, turn-fraction) pair (`showdown.py:232-234`).
+# Only the offset itself appears in the exported layout, so resolving names alone recovered 1 of
+# them where the original hardcoded `range(92, 105)` covered the lot.
 #
-# The test stayed green only because none of the five sampled decisions has a weather reveal. The
-# first regeneration whose sample contains one would have failed on 127-131 as if parity had
-# broken -- exactly the false-failure mode the name-resolution rewrite was written to remove.
-# Found in independent review; the non-empty guard could not see it (9 of 11 names resolving
-# satisfies a truthiness check).
-_BLOCK_NUMERIC_COLUMN_NAMES = {"NUMERIC_STAT_WEATHER_REVEAL_OFFSET": 8}
+# The block is NOT a fixed 8. v3 explicitly drops the last weather pair --
+# `NUMERIC_STAT_WEATHER_REVEAL_OFFSET + 6` and `+ 7` are in `V3_DROPPED_LEGACY_NUMERIC_INDICES`
+# (`showdown.py:789-790`), and v4 inherits that -- so the live block is 8 columns at v2.2 and 6 at
+# v3/v4. An earlier version of this code used a fixed span of 8 clipped by the array width, which
+# gave the right answer at v4 only because the block happens to sit at the end of that layout, and
+# the WRONG answer at v3: it pulled physical 121/122 (`NUMERIC_TT_DAMAGE_FRACTION`,
+# `NUMERIC_TT_N_HITS`) into the allowance. Those are transition numerics, and the first is in
+# `V3_REWRITTEN_LEGACY_NUMERIC_INDICES` -- a column whose v3 semantics deliberately changed, so
+# exactly the wrong thing to silently exempt from a parity comparison.
+#
+# Resolved through the schema projection instead, which answers None for precisely the dropped
+# indices and needs no width heuristic.
+_BLOCK_LEGACY_SPANS = {"NUMERIC_STAT_WEATHER_REVEAL_OFFSET": 8}
 
 
 def _history_numeric_columns(layout) -> frozenset:
-    """Resolve the history-column NAMES to indices, expanding block offsets to their full width."""
+    """History-column NAMES to physical indices, block offsets expanded via the schema projection."""
+    from pokezero.showdown import numeric_index_if_present_for_schema
+
     numeric_columns = layout["numeric_columns"]
-    width = layout.get("numeric_feature_count") or (max(numeric_columns.values()) + 1)
+    schema_version = layout["schema_version"]
     resolved: set[int] = set()
     for name in HISTORY_NUMERIC_COLUMN_NAMES:
         if name not in numeric_columns:
             continue
-        start = numeric_columns[name]
-        span = _BLOCK_NUMERIC_COLUMN_NAMES.get(name, 1)
-        # Clipped to the array width: a block can name more columns than a narrower schema carries.
-        resolved.update(index for index in range(start, start + span) if index < width)
+        span = _BLOCK_LEGACY_SPANS.get(name)
+        if span is None:
+            resolved.add(numeric_columns[name])
+            continue
+        # Block: walk the LEGACY indices and let the projection drop the ones this schema omits.
+        legacy_start = getattr(showdown_module, name)
+        for offset in range(span):
+            physical = numeric_index_if_present_for_schema(schema_version, legacy_start + offset)
+            if physical is not None:
+                resolved.add(physical)
     return frozenset(resolved)
 
 
@@ -264,7 +279,7 @@ class GoldenSampleBackendTest(unittest.TestCase):
         # shrink loud at the point it happens rather than at the next regeneration.
         expected = {
             "pokezero.observation.v2.2": 18,
-            "pokezero.observation.v3": 18,
+            "pokezero.observation.v3": 16,
             "pokezero.observation.v4": 14,
         }.get(_sample_schema_version(self.corpus))
         self.assertIsNotNone(

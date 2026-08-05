@@ -174,6 +174,11 @@ class TraceOfATracerTest(unittest.TestCase):
         "|switch|p2a: Absol|Absol, L81, M|100/100",
         # Gardevoir Traces Absol: it is now RUNNING Pressure.
         "|-ability|p1a: Gardevoir|Pressure|Trace|[from] ability: Trace|[of] p2a: Absol",
+        # One revealed move, so Gardevoir is NARROWED (10 pool variants -> 4) before the second
+        # Trace lands. Without this the mon sits at the full pool in both worlds and the collapse
+        # assertion below cannot distinguish them -- which is exactly how the first version of
+        # this test managed to measure nothing.
+        "|move|p1a: Gardevoir|Calm Mind|p1a: Gardevoir",
         "|turn|1",
         "|switch|p2a: Porygon2|Porygon2, L80|100/100",
         # Porygon2 Traces Gardevoir and copies what Gardevoir is RUNNING, not what it has.
@@ -191,13 +196,47 @@ class TraceOfATracerTest(unittest.TestCase):
         )
 
     def test_the_first_tracer_is_not_collapsed_to_the_full_pool(self) -> None:
-        """The consequence that matters: a false ability filters out every real variant."""
-        engine = _engine(self.LINES)
-        gardevoir = _belief(engine, "p1", "Gardevoir")
-        without_second_trace = _belief(_engine(self.LINES[:5]), "p1", "Gardevoir")
-        self.assertLessEqual(
-            len(gardevoir.candidate_variants),
-            len(without_second_trace.candidate_variants),
-            "the second Trace WIDENED the first tracer's candidate set, which is the "
-            "inconsistent-fallback collapse",
+        """The consequence that matters: a false ability filters out every real variant.
+
+        Uses the REAL randbats source, because the collapse happens in `randbat.py:262` --
+        `if revealed_ability and _normalize_id(self.ability) != _normalize_id(revealed_ability)`.
+        Without a set source `candidate_variants` is `()` unconditionally and any comparison
+        between the two worlds is `0 <= 0`; the first version of this test did exactly that and
+        measured nothing, which independent review caught.
+        """
+        import os
+
+        from pokezero.randbat import Gen3RandbatSource
+
+        root = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+        if not root or not os.path.isdir(root):
+            self.skipTest("requires POKEZERO_SHOWDOWN_ROOT")
+        source = Gen3RandbatSource.from_showdown_root(root)
+
+        def gardevoir_after(lines):
+            engine = PublicBattleBeliefEngine.from_events(
+                parse_showdown_replay(
+                    lines, battle_id="battle-gen3randombattle-trace"
+                ).public_events,
+                format_id="gen3randombattle",
+                set_source=source,
+            )
+            return _belief(engine, "p1", "Gardevoir")
+
+        without_second = gardevoir_after(self.LINES[:6])
+        # Measured: 4 of Gardevoir's 10 pool variants survive one Calm Mind reveal.
+        with_second = gardevoir_after(self.LINES)
+
+        # Precondition: the source must actually be narrowing, or the comparison is vacuous again.
+        self.assertGreater(
+            len(without_second.candidate_variants),
+            0,
+            "no candidate variants without the second Trace; the set source is not attached and "
+            "this test would compare 0 against 0",
+        )
+        self.assertEqual(
+            len(with_second.candidate_variants),
+            len(without_second.candidate_variants),
+            "the second Trace changed the first tracer's candidate set -- writing a false "
+            "revealed_ability filters every real variant out and falls back to the full pool",
         )
