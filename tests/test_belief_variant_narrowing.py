@@ -122,8 +122,6 @@ class VariantNarrowingTest(unittest.TestCase):
         self.assertEqual(len(_summarized(engine).candidate_variants), 3)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class RefusalGuardsTest(unittest.TestCase):
@@ -232,3 +230,9 @@ class ApplySideRefusalTest(unittest.TestCase):
         belief = _summarized(engine)
         self.assertEqual(len(belief.candidate_variants), 3, "the set was emptied by a stale pin")
         self.assertEqual(engine.variant_pin_conflicts.get(KEY), 1, "the contradiction was not counted")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END of the file. Previously it sat at line 126 of 234, stranding RefusalGuardsTest and ApplySideRefusalTest --
+    # so `python <this file>` and pytest disagreed on what ran.
+    unittest.main()

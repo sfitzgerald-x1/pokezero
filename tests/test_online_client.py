@@ -183,8 +183,6 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class BeliefSetSourceGateTest(unittest.TestCase):
@@ -214,3 +212,10 @@ class BeliefSetSourceGateTest(unittest.TestCase):
             from pokezero.local_showdown import belief_set_source_env_enabled
 
             self.assertFalse(belief_set_source_env_enabled())
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 186, stranding BeliefSetSourceGateTest
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

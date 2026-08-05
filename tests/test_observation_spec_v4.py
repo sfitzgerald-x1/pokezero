@@ -1292,8 +1292,6 @@ class V4VocabularyTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class V4ExactSpreadsTest(V4EncodeTestBase):
@@ -1551,3 +1549,8 @@ class V4ExactSpreadsTest(V4EncodeTestBase):
         )
 
 
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 1295, stranding V4ExactSpreadsTest
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

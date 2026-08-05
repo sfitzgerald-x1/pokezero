@@ -307,8 +307,6 @@ class EngineMctsPolicySpecTest(unittest.TestCase):
         )
         self.assertTrue(callable(factory))
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class EngineMctsPolicyModeTest(unittest.TestCase):
@@ -684,3 +682,10 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
             path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
             with self.assertRaisesRegex(ContractError, "tier2_investment"):
                 validate_encoder_tables(contract, path)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 310, stranding EncoderTableVocabPolarityTest, EngineMctsPolicyModeTest, MaterializationGateTest, TrimmedEncoderTablesTest
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

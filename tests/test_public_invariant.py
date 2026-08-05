@@ -88,6 +88,78 @@ _FORBIDDEN_PATTERNS = [
 _ALLOWED_FOR_RULE: dict[str, set[str]] = {}
 
 
+class TestFileStructureTest(unittest.TestCase):
+    """No test file may define tests below its `unittest.main()` block.
+
+    A mid-file `if __name__ == "__main__": unittest.main()` makes direct execution and pytest
+    disagree about what ran, and everything below it is invisible to `python <file>`. Measured
+    before this guard existed: `test_belief.py` ran 16 tests directly against 69 under pytest,
+    `test_belief_variant_narrowing.py` 10 against 13, and `test_randbat.py` NameErrored because two
+    helpers were defined below the block.
+
+    That is not a hypothetical tidiness rule. In every one of those three files the stranded region
+    held guards added specifically to catch a defect -- so the tests written to prevent a regression
+    were the ones not running. It happened twice in one pull request: the second time, new tests
+    were appended below a stranded block in one file by the same change that fixed a stranded block
+    in another.
+
+    A file-structure rule catches the whole class; fixing each instance does not.
+    """
+
+    def test_no_tracked_test_defines_anything_below_unittest_main(self) -> None:
+        import ast
+
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            # Detected structurally. A first version of this guard tested
+            # `"unittest.main" in ast.dump(node)`, which NEVER matches: `ast.dump` renders the call
+            # as `Attribute(value=Name(id='unittest'), attr='main')`, so that substring cannot
+            # appear. The guard silently matched nothing in all 206 test files and reported a clean
+            # repo -- caught by mutating a file to violate it and watching the guard pass.
+            def _is_main_guard(node) -> bool:
+                if not isinstance(node, ast.If):
+                    return False
+                if not any(
+                    isinstance(sub, ast.Name) and sub.id == "__name__"
+                    for sub in ast.walk(node.test)
+                ):
+                    return False
+                return any(
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "main"
+                    for sub in ast.walk(node)
+                )
+
+            main_line = next(
+                (node.lineno for node in tree.body if _is_main_guard(node)), None
+            )
+            if main_line is None:
+                continue
+            below = [
+                node.name
+                for node in tree.body
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.lineno > main_line
+            ]
+            if below:
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}: unittest.main() at line {main_line}, "
+                    f"but these are defined after it: {', '.join(below)}"
+                )
+
+        self.assertEqual(
+            offenders,
+            [],
+            "move `unittest.main()` to the end of the file — anything below it is invisible to "
+            "direct execution, and pytest and `python <file>` will report different counts",
+        )
+
+
 class PublicInvariantTest(unittest.TestCase):
     def test_fleet_worker_workflow_runs_for_every_tracked_change(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "fleet-worker.yml").read_text(encoding="utf-8")

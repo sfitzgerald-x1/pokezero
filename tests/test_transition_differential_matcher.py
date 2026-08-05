@@ -589,8 +589,6 @@ class EventAwareBranchLegality(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PainSplitSetHp(unittest.TestCase):
@@ -756,3 +754,10 @@ class PairBySource(unittest.TestCase):
         from triage_roll_components import _pair_by_source
 
         self.assertEqual(_pair_by_source([("drain", -10)], []), [])
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 592, stranding MajorityBranchOverride, PainSplitSetHp, PairBySource
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

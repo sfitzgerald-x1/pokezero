@@ -412,8 +412,6 @@ def _belief(
     )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ExactStateLedgerTest(unittest.TestCase):
@@ -1653,3 +1651,9 @@ class AbsorbAbilityAttributionTest(unittest.TestCase):
             ruled_out_abilities=zapdos.ruled_out_abilities,
         )
         self.assertFalse(summary.inconsistent)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END of the file. Previously it sat at line 416 of 1655, stranding ExactStateLedgerTest and two more classes --
+    # so `python <this file>` and pytest disagreed on what ran.
+    unittest.main()

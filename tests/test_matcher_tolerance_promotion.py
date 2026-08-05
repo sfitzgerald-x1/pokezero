@@ -434,8 +434,6 @@ class FaintWithoutADamageEventIsSynthesised(unittest.TestCase):
         self.assertEqual(got["p2"], [])
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CappedLethalCascade(unittest.TestCase):
@@ -532,3 +530,10 @@ class CappedLethalCascade(unittest.TestCase):
                 damage_scales=(165, 165), direct_damage_scales=(125, 133),
             )
         )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 437, stranding CappedLethalCascade
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

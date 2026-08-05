@@ -865,8 +865,6 @@ class CertificationContractTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FidelityKpiTests(unittest.TestCase):
@@ -970,3 +968,10 @@ class CertificationVerdictTests(unittest.TestCase):
                 self.assertEqual(
                     readout.certification_verdict(**{**self.OK, **override}), "FAIL"
                 )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 868, stranding CertificationVerdictTests, FidelityKpiTests
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()
