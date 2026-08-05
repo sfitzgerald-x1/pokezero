@@ -485,10 +485,22 @@ impl Tables {
     /// and zero base stats while Python emitted real values. Measured at 514 diverging cells over
     /// one 120-game replay.
     ///
-    /// Deliberately NOT applied at every `species_info` call site: Python routes only four encode
-    /// paths through its fallback (formechange types, type categories, base stats, expected stats)
-    /// and uses the bare lookup elsewhere. Parity means matching Python, including where Python is
-    /// arguably inconsistent -- widening this further would be a NEW divergence, not a fix.
+    /// Deliberately NOT applied at every `species_info` call site. Python routes exactly four
+    /// ENCODE PATHS through its fallback -- formechange types, type categories, base stats and
+    /// expected stats -- which is **five call sites**, because `_encode_expected_stats` looks up
+    /// twice (`battle_info` and `hp_info`). The native side mirrors that one-for-one: five
+    /// `species_info_base_fallback` calls, three bare `species_info` calls. Counting paths and
+    /// counting call sites give different numbers, and an earlier description of this change said
+    /// "4 of 7 call sites" by conflating them.
+    ///
+    /// The three left bare pair with Python's three bare ones: transformed expected-HP base
+    /// species, transformed original base HP, and the acting mon's user types. Python has a
+    /// FOURTH bare call (`_is_grounded_for_spikes`) with no native counterpart at all -- spikes
+    /// layers arrive precomputed on the token -- so the two site sets are 8 and 9, not equal.
+    ///
+    /// Parity means matching Python, including where Python is arguably inconsistent: it uses the
+    /// fallback for `hp_info` in the expected-stats path but NOT in the transform path's twin.
+    /// Widening this further would be a NEW divergence, not a fix.
     fn species_info_base_fallback(&self, name: &str) -> Option<&SpeciesEntry> {
         if let Some(info) = self.species_info(name) {
             return Some(info);
