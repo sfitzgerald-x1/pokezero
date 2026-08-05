@@ -124,7 +124,14 @@ class RestSleepRefundBoundaryTests(unittest.TestCase):
         )
         once = _state_with(transformed).to_string()
 
-        self.assertIn(f",refund:{PENDING}", once)
+        # Both halves must be asserted. Checking only the refund leaves this
+        # test passing when pre_transform is DROPPED -- and a dropped payload
+        # is the plausible regression, since the `is_empty()` conditional that
+        # emits it sits directly above the refund line in Into<Pokemon>. A
+        # MALFORMED payload cannot slip through instead: PreTransform's
+        # deserialize unwraps, so it panics rather than parsing to nothing.
+        self.assertIn("DITTO;100;100;100;100;100;NONE:0;NONE:0;NONE:0;NONE:0", once)
+        self.assertIn(f",refund:{PENDING}=", once)
         self.assertEqual(State.from_string(once).to_string(), once)
 
 
