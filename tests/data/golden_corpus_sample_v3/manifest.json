@@ -8,21 +8,21 @@
   },
   "array_shapes": {
     "attention_mask": [
-      23
+      87
     ],
     "categorical_ids": [
-      23,
-      41
+      87,
+      51
     ],
     "legal_action_mask": [
       9
     ],
     "numeric_features": [
-      23,
-      132
+      87,
+      155
     ],
     "token_type_ids": [
-      23
+      87
     ]
   },
   "counts": {
@@ -32,17 +32,17 @@
   },
   "files": {
     "arrays.npz": {
-      "bytes": 4236,
-      "sha256": "1c8f7e8ffa5c22ab587734336ce3475c879f7986f33dccd2d413d657b6f13a2f"
+      "bytes": 6366,
+      "sha256": "a9a2b0346351a12c139a53b6a868bfec53307872a5eba84f9c190beaddf4918d"
     },
     "fold.jsonl.gz": {
-      "bytes": 3441,
-      "sha256": "f26d9b36d2b13f0c29f2aebf95dd187d22ebaff0aae6ee21b48c9aca4e2bf421",
+      "bytes": 3445,
+      "sha256": "0e7201170053285cb7b759e676450d261c48eee017d12189df93dabbb7179d90",
       "uncompressed_bytes": 51913
     },
     "rows.jsonl": {
-      "bytes": 102600,
-      "sha256": "c1f2a681fcea4cf16f74f2aab73324cecce0caf6e2c1a0ecb4ec5d58a47f98c7"
+      "bytes": 98031,
+      "sha256": "31f56b811783803b3b35ca2e536564e52c0aebe0a7ea486f1bd3844f13d8e935"
     }
   },
   "schema_sha256": "879230ebe3c45556aaae820a17fd0c5da10207d69e3322f75f8cf27d9bb564f1",
