@@ -1,0 +1,22 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1594,7 +1594,18 @@
+ fn pending_hp_reading_move(choice: &Choice) -> bool {
+     matches!(
+         choice.move_id,
+-        Choices::FLAIL | Choices::REVERSAL | Choices::SUBSTITUTE | Choices::BELLYDRUM
++        Choices::FLAIL
++            | Choices::REVERSAL
++            | Choices::SUBSTITUTE
++            | Choices::BELLYDRUM
++            // pokezero gen3 fidelity fix (C116 Phase 2). Pain Split AVERAGES the
++            // two actives' HP, so the first move's damage roll changes the
++            // result directly -- it is as HP-reading as Flail. Its omission was
++            // found by the Phase 2 spike: enumerating on every damaging move
++            // closed exactly two holdout rows, 19100148/76 and 19100179/21, and
++            // both are Pain Split. Adding the one missing arm gets the same two
++            // rows without enumerating anywhere else.
++            | Choices::PAINSPLIT
+     )
+ }
+ 

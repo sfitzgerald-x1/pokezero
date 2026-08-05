@@ -39,7 +39,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "c2949c0bf88e77c59ff5fb7f88483ad31252b14c0ae044125e582f1c6a595dec",
+    "src/gen3/generate_instructions.rs": "90e1819ef4aad01ffcf45ffa5ef8f5b6278dd356b35ba3fe0c26be4f29f42fd9",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
@@ -121,7 +121,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-6:]],
+                [entry.name for entry in applied[-7:]],
                 [
                     "poke-engine-gen3-bellydrum-roll-gate.patch",
                     "poke-engine-gen3-residual-lethality-partition.patch",
@@ -129,6 +129,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
                     "poke-engine-gen3-white-herb.patch",
+                    "poke-engine-gen3-painsplit-hp-reading.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
