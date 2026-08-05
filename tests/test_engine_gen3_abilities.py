@@ -557,6 +557,15 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertIn("Boost SideOne Attack: 1", text)
         self.assertIn("Boost SideOne Defense: 1", text)
         self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+        # Exactly once. Three call sites each check both sides, so the
+        # early-return-on-consumed guard is what stops a double proc; this locks
+        # it rather than leaving it structurally implied.
+        for branch in branches:
+            self.assertLessEqual(
+                self._text(branch).count("ChangeItem SideOne: WHITEHERB -> NONE"),
+                1,
+                "White Herb must be consumed at most once per branch",
+            )
 
     def test_white_herb_leaves_positive_boosts_alone(self) -> None:
         # It is not a reset. Showdown zeroes only the NEGATIVE entries, so a

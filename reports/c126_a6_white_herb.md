@@ -112,6 +112,16 @@ secondaries (deliberately *not* gated on `does_damage` — a status move's secon
 stat), and after `ability_on_switch_in`. Still uncovered, and now genuinely narrow: `onResidual`
 order 29, which needs a drop surviving to end-of-turn with no move, ability or switch in between.
 
+Independent review of #1102 enumerated every producer rather than reasoning by example — the
+five `BoostInstruction` sites and the three `apply_boost_instruction` callers — and found the
+three call sites cover all of them bar two: the **Transform / Psych-Up boost copy**
+(`choice_effects.rs:1205`) and **Trick-style item acquisition** (Showdown's `setItem` fires the
+item's `onStart`). Both are unreachable here: the only holders are `deoxys` and `deoxysattack`,
+whose single set's movepool is `{extremespeed, icebeam, psychoboost, shadowball, superpower}` —
+no Transform, no Psych Up, no Trick, no Baton Pass. That enumeration also retroactively justifies
+omitting order 29: if every reachable producer is one of the three sites, no negative boost can
+survive to end-of-turn unconsumed. `onAnyAfterMega` is gen6+ and vacuous in gen3.
+
 Two further pins, both seen red first: the secondary pin failed with the `-1 SpD` present and no
 restore, and it asserts the drop actually happens so it cannot pass vacuously; the Intimidate pin
 failed with `Boost SideOne Attack: -1` present and no `Boost SideOne Attack: 1`.
