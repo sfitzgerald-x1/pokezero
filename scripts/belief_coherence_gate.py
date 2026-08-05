@@ -188,6 +188,9 @@ def _check_pp_ledger(
         request = env._latest_requests.get(owner) or {}
         active = request.get("active") or []
         if not active or not isinstance(active[0], Mapping):
+            # Counted, not silently dropped: a differential that skips most of its opportunities
+            # and reports "0 violations" is indistinguishable from one that checked everything.
+            counts["pp_skipped_no_active_request"] += 1
             continue
         truth: dict[str, tuple[int, int]] = {}
         for entry in active[0].get("moves") or ():
@@ -198,18 +201,49 @@ def _check_pp_ledger(
             if move_id and isinstance(pp, int) and isinstance(max_pp, int):
                 truth[move_id] = (pp, max_pp)
         if not truth:
+            counts["pp_skipped_request_without_pp"] += 1
             continue
         # The opponent's belief about THIS mon.
         view = env._belief_engine.resolved_player_view(_other(owner))
         for belief in view.opponent_pokemon:
             if not belief.active:
                 continue
+            if belief.transformed:
+                # While a mon is transformed the request's `active[0].moves` describes the COPIED
+                # slots, not the mon's own set: `sim/pokemon.ts transformInto` replaces every
+                # moveSlot with the target's, at `pp: 5` but keeping the TARGET's `maxpp`. Measured
+                # on seed 4711 game 90 turn 48, a Ditto transformed into Jirachi reports
+                # psychic 2/16, calmmind 4/20, icepunch 4/15, thunderbolt 3/15 -- Jirachi's moves
+                # and Jirachi's maxpp, on a mon whose own moveset is [Transform].
+                #
+                # So the two sides of this differential are not the same quantity during a
+                # transform, and comparing them is an error in the HARNESS. It stayed invisible
+                # until a Ditto transformed into the opposing DITTO: the copied slot is then
+                # `transform` 5/16, which collides with the mon's own move id, and the gate read
+                # 5 against belief's untouched 16 - 1 = 15. Five violations, one game, seed 4711.
+                #
+                # Skipped rather than modelled: belief's 15 is the right answer for Ditto's OWN
+                # Transform PP, which is what survives the revert. What the encoded column does
+                # NOT represent is that a transformed mon cannot reach its own moves at all --
+                # that is an action-availability gap, not a PP disagreement, and it is recorded as
+                # an open item in the status doc rather than papered over here.
+                counts["pp_skipped_transformed_mon"] += 1
+                continue
             uses = {_norm(k): int(v) for k, v in (belief.move_uses or ())}
             revealed = {_norm(m) for m in (belief.revealed_moves or ())}
             for move_id in sorted(revealed):
                 observed = truth.get(move_id)
                 info = dex.move_info(move_id)
-                if observed is None or info is None or not info.max_pp:
+                if observed is None:
+                    # The belief has this move revealed but the owning seat's request does not
+                    # list it. Fully attributed by measurement: this fired 163 times over 400
+                    # games on seed 4711 BEFORE the transform skip above existed, and 0 times
+                    # after -- every instance was a transformed mon whose slots had been replaced.
+                    # Kept as a counter so a new cause cannot arrive silently.
+                    counts["pp_skipped_move_absent_from_request"] += 1
+                    continue
+                if info is None or not info.max_pp:
+                    counts["pp_skipped_no_dex_max_pp"] += 1
                     continue
                 true_remaining, true_max = observed
                 # The encoder's own arithmetic (showdown.py): remaining = max(0, max_pp - uses).
@@ -245,6 +279,15 @@ def _check_pp_ledger(
                     # agreeing on an untouched full-PP move is nearly free and would let this
                     # family look exercised while never testing the ledger's arithmetic.
                     counts["pp_spent_comparisons"] += 1
+
+
+def _record_pressure_reachability(*, env, counts: Counter) -> None:
+    """Fold the belief engine's Pressure tallies into the run counts (see
+    `PublicBattleBeliefEngine.pressure_charge_counts`). Reported per game because the engine is
+    rebuilt per game; the counter names are prefixed so they read as reachability, not violations.
+    """
+    for key, value in (env._belief_engine.pressure_charge_counts or {}).items():
+        counts[f"pressure_{key}"] += int(value)
 
 
 def _check_mon(
@@ -533,6 +576,19 @@ def run_sweep(
             "belief_mons_without_truth": 0,
             "pp_comparisons": 0,
             "pp_spent_comparisons": 0,
+            # The PP arm's non-comparisons and its Pressure-branch reachability, seeded for the
+            # same reason as everything else here: a missing key and a measured zero must not look
+            # alike in the artifact.
+            "pp_skipped_no_active_request": 0,
+            "pp_skipped_request_without_pp": 0,
+            "pp_skipped_transformed_mon": 0,
+            "pp_skipped_move_absent_from_request": 0,
+            "pp_skipped_no_dex_max_pp": 0,
+            "pressure_charges": 0,
+            "pressure_vs_pressure": 0,
+            "pressure_doubled": 0,
+            "pressure_single_self_targeted_vs_pressure": 0,
+            "pressure_doubled_despite_blank_or_self_wire_slot": 0,
             "truncated_games": 0,
             "games_without_both_requests": 0,
         }
@@ -712,6 +768,10 @@ def run_sweep(
                     break
                 env.step(actions)
                 steps += 1
+
+            # Per game: the engine is rebuilt on reset(), so fold its Pressure tallies before the
+            # next game discards them.
+            _record_pressure_reachability(env=env, counts=counts)
     finally:
         env.close()
 
@@ -730,6 +790,15 @@ def run_sweep(
         # the ledger's arithmetic at all.
         "pp_comparisons": counts["pp_comparisons"],
         "pp_spent_comparisons": counts["pp_spent_comparisons"],
+        # V3 Pressure: `pp_spent_comparisons` binds the ledger's arithmetic in general, but the
+        # Pressure branch is a minority of charges and a sweep can exercise the ledger thoroughly
+        # while never doubling once. These two make the branch's own coverage explicit -- and the
+        # second one is the defect class specifically: a double charged on a move whose wire
+        # target slot the engine had blanked, which is exactly what the old proxy got wrong.
+        "pressure_doubled": counts["pressure_doubled"],
+        "pressure_doubled_despite_blank_or_self_wire_slot": counts[
+            "pressure_doubled_despite_blank_or_self_wire_slot"
+        ],
     }
     reached = all(value > 0 for value in reachability.values())
 
@@ -860,6 +929,28 @@ def main() -> int:
         f"pp={counts.get('pp_comparisons', 0)}/{counts.get('pp_spent_comparisons', 0)}-spent "
         f"violations={total_violations} reached={reached} "
         f"skips={sum(summary['skipped'].values())} pin_conflicts={summary['pin_conflict_family']}"
+    )
+    # The PP arm's own accounting, printed rather than left in the artifact: a differential that
+    # declines most of its opportunities and reports "0 violations" reads identically to one that
+    # checked everything. None of these are silent skips in the `skipped` sense (no mon is dropped)
+    # -- they are turns where the two sides are not the same quantity -- but they belong in the
+    # verdict line's field of view.
+    print(
+        "[belief-coherence] V3 PP arm: "
+        f"compared={counts['pp_comparisons']} spent={counts['pp_spent_comparisons']} | "
+        f"not-compared: no-active-request={counts['pp_skipped_no_active_request']} "
+        f"request-without-pp={counts['pp_skipped_request_without_pp']} "
+        f"transformed-mon={counts['pp_skipped_transformed_mon']} "
+        f"move-absent-from-request={counts['pp_skipped_move_absent_from_request']} "
+        f"no-dex-max-pp={counts['pp_skipped_no_dex_max_pp']}"
+    )
+    print(
+        "[belief-coherence] V3 Pressure branch: "
+        f"charges={counts['pressure_charges']} vs-pressure={counts['pressure_vs_pressure']} "
+        f"doubled={counts['pressure_doubled']} "
+        f"single-because-self-targeted={counts['pressure_single_self_targeted_vs_pressure']} "
+        f"doubled-on-a-blanked-wire-slot="
+        f"{counts['pressure_doubled_despite_blank_or_self_wire_slot']}"
     )
     print(f"[belief-coherence] family-5 ability arm: {summary['ruled_out_ability_arm']}")
     print(
