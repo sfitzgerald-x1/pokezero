@@ -1,0 +1,208 @@
+"""V4 review — CI coverage for ``scripts/v4_boundary_encode_differential.py``.
+
+Three of the four review findings against that gate were about the INSTRUMENT rather than the
+encoder, and an instrument with no test is how they survived review in the first place. Each
+test here is the kill-confirm for one guard, run in CI so the guard cannot silently rot back:
+
+- ``test_short_run_cannot_pass_the_exit_criterion`` (finding B2): the previous gate printed
+  ``PASS states=4`` and exited 0 for ``--games 1 --seed 41 --max-steps 2``, because its only
+  precondition was ``accumulator_states_reached > 0`` over an OR of nine columns. The verdict
+  now enforces the plan's ``>=200 games / ~20k states`` minimums and PER-COLUMN reachability.
+- ``test_ledger_aggregates_over_the_whole_run_not_a_head_slice`` (finding B1, first half): the
+  previous report was ``mismatches[:40]``, a FIFO head cap, so every reported row came from the
+  first offending game and the run-level picture was whatever game 0 happened to do.
+- ``test_ledger_attributes_categorical_columns_by_name`` (finding B1, second half):
+  ``detail["columns"]`` was computed only for ``numeric_features``, so a categorical divergence
+  was reported as bare "categorical_ids differ". Guessing what that meant is what produced the
+  PR's wrong claim that "the species categorical differs" -- the diverging column is
+  CATEGORY_TYPE_1.
+- ``test_native_build_identity_distinguishes_binaries`` (finding B4): the previous artifact read
+  ``pokezero_search.ENGINE_BUILD_FINGERPRINT``, which does not exist, so the recorded value was
+  always ``null`` and the recorded module was a constant venv path -- identical for a fresh
+  wheel and a stale one, which is the exact failure plan §3 exists to prevent.
+
+The gate itself needs a built Showdown checkout plus the native wheel, so the full-sweep test
+skips without them (the ``scripts/expected_stat_gate.py`` pattern from #1073). The ledger and
+build-identity tests need neither and always run.
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+import numpy
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+import v4_boundary_encode_differential as gate  # noqa: E402
+
+from ._showdown_root import showdown_root  # noqa: E402
+
+
+def _ledger() -> gate._MismatchLedger:
+    return gate._MismatchLedger(
+        numeric_columns={"NUMERIC_BASE_HP": 0, "NUMERIC_EXPECTED_HP": 1},
+        categorical_columns={"CATEGORY_SPECIES": 0, "CATEGORY_TYPE_1": 1},
+    )
+
+
+def _pair(shape, index, left_value, right_value, dtype=numpy.float64):
+    left = numpy.zeros(shape, dtype=dtype)
+    right = numpy.zeros(shape, dtype=dtype)
+    left[index] = left_value
+    right[index] = right_value
+    return left, right
+
+
+class MismatchLedgerTest(unittest.TestCase):
+    def test_ledger_aggregates_over_the_whole_run_not_a_head_slice(self) -> None:
+        """Every game contributes to the counts, and late-game modes still get an example.
+
+        The head-cap defect is only visible with MORE offending states than the report cap, so
+        the fixture deliberately exceeds it: 200 states in game 0 with one signature, then one
+        state in game 199 with a different one. A ``[:40]`` report shows the first signature 40
+        times and never mentions the second.
+        """
+        ledger = _ledger()
+        for step in range(200):
+            left, right = _pair((3, 2), (0, 0), 0.24, 0.0)
+            ledger.record(
+                game=0, step=step, player="p1", requested_seat=True,
+                differing=[("numeric_features", left, right)],
+            )
+        left, right = _pair((3, 2), (1, 1), 0.5, 0.25)
+        ledger.record(
+            game=199, step=7, player="p2", requested_seat=False,
+            differing=[("numeric_features", left, right)],
+        )
+        payload = ledger.payload()
+
+        self.assertEqual(payload["mismatched_states"], 201)
+        self.assertEqual(
+            payload["column_mismatch_states"],
+            {"numeric_features:NUMERIC_BASE_HP": 200, "numeric_features:NUMERIC_EXPECTED_HP": 1},
+        )
+        self.assertEqual(payload["mismatch_games"], [0, 199])
+        self.assertEqual(
+            payload["mismatch_states_by_seat_kind"], {"non_requested": 1, "requested": 200}
+        )
+        # The late-game signature survives, which a FIFO head slice would have dropped.
+        self.assertEqual(payload["distinct_signatures"], 2)
+        self.assertIn(
+            199, [example["game"] for example in payload["signature_examples"]]
+        )
+
+    def test_ledger_attributes_categorical_columns_by_name(self) -> None:
+        """A categorical divergence resolves to a column NAME, not "categorical_ids differ"."""
+        left, right = _pair((3, 2), (0, 1), 41, 0, dtype=numpy.int32)
+        ledger = _ledger()
+        ledger.record(
+            game=2, step=1, player="p2", requested_seat=True,
+            differing=[("categorical_ids", left, right)],
+        )
+        payload = ledger.payload()
+        self.assertEqual(
+            payload["column_mismatch_states"], {"categorical_ids:CATEGORY_TYPE_1": 1}
+        )
+        self.assertNotIn("categorical_ids:CATEGORY_SPECIES", payload["column_mismatch_states"])
+        example = payload["signature_examples"][0]
+        self.assertEqual(example["first"]["python"], 41)
+        self.assertEqual(example["first"]["rust"], 0)
+
+    def test_ledger_attributes_one_dimensional_arrays_by_index(self) -> None:
+        """The mask arrays have no column names, so the index is the attribution."""
+        left = numpy.zeros(5, dtype=numpy.bool_)
+        right = numpy.zeros(5, dtype=numpy.bool_)
+        left[3] = True
+        ledger = _ledger()
+        ledger.record(
+            game=0, step=0, player="p1", requested_seat=True,
+            differing=[("legal_action_mask", left, right)],
+        )
+        self.assertEqual(
+            ledger.payload()["column_mismatch_states"], {"legal_action_mask:INDEX_3": 1}
+        )
+
+
+class NativeBuildIdentityTest(unittest.TestCase):
+    def test_native_build_identity_distinguishes_binaries(self) -> None:
+        identity = gate.native_build_identity()
+        # The compiled extension, not the 143-byte re-export stub: only the .so moves when the
+        # crate is rebuilt. ``lib.rs`` compiles in nothing that does.
+        self.assertTrue(
+            str(identity.get("extension", "")).endswith((".so", ".pyd")),
+            f"build identity must point at the compiled extension, got {identity.get('extension')!r}",
+        )
+        digest = identity.get("extension_sha256")
+        self.assertIsInstance(digest, str)
+        self.assertEqual(len(str(digest)), 64, f"expected a sha256 hex digest, got {digest!r}")
+        self.assertGreater(int(identity["extension_bytes"]), 0)
+        # And the crate SOURCE fingerprint, so "source moved but the .so did not" is detectable
+        # rather than requiring the reader to remember whether they rebuilt.
+        self.assertNotIn(
+            "unavailable", str(identity["crate_source_fingerprint"]),
+            "the crate source fingerprint must resolve in a source checkout",
+        )
+
+
+class ExitCriterionTest(unittest.TestCase):
+    def test_short_run_cannot_pass_the_exit_criterion(self) -> None:
+        if not (showdown_root() / "dist" / "sim" / "index.js").exists():
+            self.skipTest("needs a BUILT Showdown checkout (dist/sim/index.js) and node")
+        try:
+            import pokezero_search  # noqa: F401
+        except Exception as error:  # pragma: no cover
+            self.skipTest(f"needs the native wheel: {error}")
+        # The EXACT invocation that the previous gate reported as PASS / exit 0.
+        summary = gate.run_gate(showdown_root=showdown_root(), games=1, seed=41, max_steps=2)
+        self.assertEqual(summary["verdict"], "FAIL", summary["failures"])
+        reasons = " | ".join(summary["failures"])
+        self.assertIn("games 1 < required 200", reasons)
+        self.assertIn("< required 20000", reasons)
+        self.assertIn("never reached", reasons)
+        # ... and it fails for the RIGHT reason: the four states really are byte-identical, so
+        # this is the vacuity guard firing and not a masked encoder mismatch.
+        self.assertEqual(summary["divergence"]["mismatched_states"], 0)
+        self.assertEqual(summary["counts"]["states"], 4)
+
+    def test_a_real_sweep_reaches_the_pack_and_moves_the_accumulators(self) -> None:
+        """Reachability and accumulator MOVEMENT are measured, not assumed.
+
+        Kept short enough for CI. It deliberately does not assert PASS: the gate's own exit
+        criterion is 200 games, and a 5-game run asserting PASS would be the vacuity this
+        review was about. What it asserts is that the instrument's reachability and
+        accumulator-variation channels are live -- a frozen tracker would still be byte-parity
+        clean on both sides, so movement is the only accumulation property in reach here.
+        """
+        if not (showdown_root() / "dist" / "sim" / "index.js").exists():
+            self.skipTest("needs a BUILT Showdown checkout (dist/sim/index.js) and node")
+        try:
+            import pokezero_search  # noqa: F401
+        except Exception as error:  # pragma: no cover
+            self.skipTest(f"needs the native wheel: {error}")
+        summary = gate.run_gate(
+            showdown_root=showdown_root(), games=5, seed=3, min_games=5, min_states=100
+        )
+        reach = summary["reachability"]["v4_pack_states_reached"]
+        for column in (
+            "NUMERIC_SELF_HAZARD_CREDIT",
+            "NUMERIC_MON_STAYED_VS_ACTIVE",
+            "NUMERIC_LAST_DAMAGE_DEALT",
+            "NUMERIC_LAST_DAMAGE_TAKEN",
+        ):
+            self.assertGreater(reach[column], 0, f"5-game sweep never reached {column}")
+        self.assertEqual(
+            summary["reachability"]["accumulator_scalars_constant"],
+            [],
+            "every published accumulator scalar must move across five games",
+        )
+        # The vacuity channel must be honest about the history surface it cannot reach.
+        self.assertGreater(summary["vacuity"]["numeric_columns_never_nonzero_count"], 0)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
