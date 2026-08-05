@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+import pathlib
 import sys
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from pokezero import engine_world  # noqa: E402
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -347,7 +349,33 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                 dex=self.dex,
                 approximate_sleep_turns=True,
             )
-        self.assertEqual(caught.exception.reason, "rest_sleep_skipped_time_pending")
+        self.assertEqual(caught.exception.reason, "rest_sleep_active_refund_pending")
+
+    def test_the_split_reason_codes_reach_world_construction_distinctly(self) -> None:
+        # The flags are only useful if they survive into the refusal REASON, which is
+        # what the fallback ledger counts. Both must refuse even with approximation on.
+        for flag, reason in (
+            ("restSleepAttemptUnsettled", "rest_sleep_attempt_unsettled"),
+            ("restSleepRefundPending", "rest_sleep_active_refund_pending"),
+        ):
+            with self.subTest(flag=flag):
+                payload = _payload(self.dex, sleeper_active=True)
+                payload["sides"]["p2"]["pokemon"][0][flag] = True
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                    )
+                self.assertEqual(caught.exception.reason, reason)
+
+    def test_the_retired_reason_code_is_gone_from_the_engine_world_source(self) -> None:
+        # A grep-level guard, deliberately. The point of retiring the old name rather
+        # than reusing it for producer B is that no historical count can be silently
+        # read as one producer's share; that only holds if the name cannot come back.
+        source = pathlib.Path(engine_world.__file__).read_text(encoding="utf-8")
+        # The QUOTED form only: the prose comment above the split names the retired
+        # code on purpose, and a bare substring check would forbid documenting it.
+        self.assertNotIn('"rest_sleep_skipped_time_pending"', source)
+        self.assertNotIn("'rest_sleep_skipped_time_pending'", source)
 
     def test_a_valid_unannotated_sleeper_can_still_use_approximation(self) -> None:
         # An opponent-induced sleeper is never annotated, so it must still fail
@@ -508,19 +536,74 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
         self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
 
-    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
-        lines = self._RESTED + [
-            "|cant|p2a: Skarmory|slp",
-            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
-            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
-        ]
+    _ACTIVE_SLEEP_TALK = (
+        "|cant|p2a: Skarmory|slp",
+        "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+        "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+    )
+
+    def _annotate_either(self, lines, *, active):
+        """``_annotate``, but with the sleeper's active flag under the test's control."""
         replay = parse_showdown_replay(lines, battle_id="active-sleep-talk")
         rows = self._rows()
-        rows[0]["active"] = True
-        rows[1]["active"] = False
+        rows[0]["active"] = active
+        rows[1]["active"] = not active
         _apply_rest_sleep_provenance(rows, replay, "p2")
+        return rows
+
+    def _annotate_active_sleeper(self, lines):
+        return self._annotate_either(lines, active=True)
+
+    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+        rows = self._annotate_active_sleeper(self._RESTED + [*self._ACTIVE_SLEEP_TALK])
         self.assertNotIn("restSleepAttempts", rows[0])
+        # Producer B: the Sleep Talk |move| classifies the attempt immediately, so this
+        # is the known-value/nowhere-to-put-it case, not an unsettled one.
         self.assertTrue(rows[0]["restSleepRefundPending"])
+        self.assertNotIn("restSleepAttemptUnsettled", rows[0])
+
+    def test_the_two_producers_separate_on_different_axes(self) -> None:
+        """The whole 2x2 the split exists to make countable.
+
+        These two were one reason code, and the natural guess -- that they are the
+        same situation seen before and after ``|upkeep|`` -- is WRONG. They separate
+        on different axes, which is exactly why conflating them made the class
+        unsizeable:
+
+        * Producer A fires when the attempt is still UNCLASSIFIED (no ``|upkeep|``
+          yet). It does not care whether the sleeper is active, and appending
+          ``|upkeep|`` builds the world outright -- so it is a harness/observation
+          boundary, not an engine limitation.
+        * Producer B fires when the attempt IS classified as a sleep-usable skip and
+          the sleeper is ACTIVE. Benched, the same stream builds with the refund
+          folded in. Only this one is closed by a pending-skipped-time field on
+          ``Pokemon``.
+        """
+        upkeep = ["|upkeep", "|turn|2"]
+        bare = ["|cant|p2a: Skarmory|slp"]
+
+        # --- producer A: unclassified, either seat position, and it is recoverable.
+        for active in (False, True):
+            with self.subTest(producer="A", active=active):
+                rows = self._annotate_either(self._RESTED + bare, active=active)
+                self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
+                self.assertNotIn("restSleepRefundPending", rows[0])
+                # The proof it is not an engine gap: settle the turn and it builds.
+                settled = self._annotate_either(self._RESTED + bare + upkeep, active=active)
+                self.assertEqual(settled[0]["restSleepAttempts"], 1)
+                self.assertNotIn("restSleepAttemptUnsettled", settled[0])
+
+        # --- producer B: classified skip; refused ONLY while active.
+        talk = [*self._ACTIVE_SLEEP_TALK, *upkeep]
+        benched = self._annotate_either(self._RESTED + talk, active=False)
+        self.assertEqual(benched[0]["restSleepAttempts"], 1)
+        self.assertEqual(benched[0]["restSleepSkippedTime"], 1)
+        self.assertNotIn("restSleepRefundPending", benched[0])
+
+        active_row = self._annotate_either(self._RESTED + talk, active=True)
+        self.assertTrue(active_row[0]["restSleepRefundPending"])
+        self.assertNotIn("restSleepAttemptUnsettled", active_row[0])
+
 
     def test_interrupted_sleep_usable_attempts_keep_the_switch_refund(self) -> None:
         # The sleep handler (priority 10) increments skippedTime before each of
@@ -547,7 +630,8 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
     def test_unresolved_sleep_attempt_is_explicitly_refused(self) -> None:
         rows = self._annotate(self._RESTED + ["|cant|p2a: Skarmory|slp"])
         self.assertNotIn("restSleepAttempts", rows[0])
-        self.assertTrue(rows[0]["restSleepRefundPending"])
+        # Producer A, since the attempt is still unclassified at the snapshot.
+        self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
 
     def test_benched_sleep_talk_clock_does_not_tick_until_switch_back(self) -> None:
         rows = self._annotate(self._RESTED + [

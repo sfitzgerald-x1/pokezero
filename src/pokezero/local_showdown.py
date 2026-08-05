@@ -2702,7 +2702,14 @@ def _apply_rest_sleep_provenance(
             row["restSleepProvenanceUnrepresentable"] = True
             continue
         if pending:
-            row["restSleepRefundPending"] = True
+            # DISTINCT from the active-refund case below, which used to share this
+            # flag. Here the attempt is simply still unclassified: the snapshot was
+            # taken between the `|cant|...|slp` and the `|upkeep|`/`|turn|` that
+            # `_settle_pending_rest_sleep_attempts` uses to resolve it. skippedTime
+            # may well be 0 and the world exactly buildable -- appending `|upkeep|`
+            # to the same stream builds it. Nothing about the engine's
+            # representation is at fault, so do not report an engine gap.
+            row["restSleepAttemptUnsettled"] = True
             continue
         skipped = skipped_turns.get(key, 0)
         refunded = refunded_turns.get(key, 0)
@@ -2722,6 +2729,10 @@ def _apply_rest_sleep_provenance(
             if bool(row.get("active")):
                 # The simulator will apply skippedTime only on a future switch-in. The
                 # direct world has no place to preserve that pending refund for an active mon.
+                # A GENUINE engine-representation gap: the value is known and there is
+                # nowhere to put it. Kept separate from the unsettled-attempt flag above
+                # so the two are countable apart -- only this one is closed by adding a
+                # pending-skipped-time field to `Pokemon`.
                 row["restSleepRefundPending"] = True
                 continue
         if count < 0 or refunded + skipped > count:
