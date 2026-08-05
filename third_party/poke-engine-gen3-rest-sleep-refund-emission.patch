@@ -11,14 +11,60 @@
  };
  use std::cmp;
  
-@@ -304,6 +304,41 @@
+@@ -303,7 +303,87 @@
+         }));
      side.last_used_move = LastUsedMove::Move(used_move);
  }
- 
++
 +/// The upper bound of `rest_turns`. Not a style choice: the Rest wake `match`
 +/// in `generate_instructions_from_move` enumerates 0/1/2/3 and its final arm is
 +/// `panic!("Invalid rest_turns value")`, so exceeding this crashes search.
 +const REST_TURNS_MAX: i8 = 3;
+ 
++/// pokezero gen3 fidelity fix (Rest skippedTime): apply Showdown's
++/// `slp.onBeforeMove` bookkeeping for one move attempt made while Rest-asleep.
++///
++/// ```js
++/// onBeforeMove: ... this.add('cant', pokemon, 'slp');
++///               if (move.sleepUsable) { this.effectState.skippedTime++; return; }
++///               this.effectState.skippedTime = 0;
++///               return false;
++/// ```
++/// (`data/mods/gen3/conditions.ts`, quoted in
++/// `docs/engine_divergence_ledger_20260728.md` Q.2.)
++///
++/// The discard is the half that matters: the bank dies on ANY non-`sleepUsable`
++/// attempt, not merely when the sleep stint ends. Retiring it only at stint end
++/// is strictly weaker than the real sim, and the difference is an OVER-credit --
++/// the mon sleeps a turn longer than Showdown. Reachable at depth 1 from any
++/// Rest-sleeper root: attempt a normal move, switch out, switch back in.
++fn update_rest_sleep_refund_for_attempt(
++    pkmn: &mut Pokemon,
++    sleep_usable_move: bool,
++    side_ref: SideReference,
++    pokemon_index: PokemonIndex,
++    incoming_instructions: &mut StateInstructions,
++) {
++    let previous = pkmn.rest_sleep_pending_refund;
++    // Bounded by the same domain the refund can ever be spent into, so a long
++    // Sleep Talk run cannot bank more than could legally be credited back.
++    let new_pending = if sleep_usable_move {
++        cmp::min(previous as i16 + 1, REST_TURNS_MAX as i16) as i8
++    } else {
++        0
++    };
++    if new_pending != previous {
++        incoming_instructions.instruction_list.push(
++            Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                side_ref,
++                pokemon_index,
++                new_turns: new_pending,
++                previous_turns: previous,
++            }),
++        );
++        pkmn.rest_sleep_pending_refund = new_pending;
++    }
++}
 +
 +/// pokezero gen3 fidelity fix (Rest skippedTime): retire a pending Rest refund.
 +///
@@ -31,7 +77,7 @@
 +///
 +/// Reachable without this: sleeper with a pending refund wakes while still
 +/// active, uses Rest again later in the same branch, then switches.
-+fn clear_rest_sleep_pending_refund(
++pub(crate) fn clear_rest_sleep_pending_refund(
 +    pkmn: &mut Pokemon,
 +    side_ref: SideReference,
 +    pokemon_index: PokemonIndex,
@@ -53,10 +99,12 @@
  fn generate_instructions_from_switch(
      state: &mut State,
      new_pokemon_index: PokemonIndex,
-@@ -506,6 +541,56 @@
+@@ -504,6 +584,56 @@
+             switching_side_ref,
+             incoming_instructions,
          );
-     }
- 
++    }
++
 +    // pokezero gen3 fidelity fix (Rest skippedTime): gen 3 credits a Rest
 +    // sleeper's turns skipped by Sleep Talk/Snore back on switch-in --
 +    // Showdown's `slp.onSwitchIn` does `time += skippedTime`. The refund rides
@@ -105,12 +153,10 @@
 +                incoming_instructions,
 +            );
 +        }
-+    }
-+
+     }
+ 
      let side = state.get_side(&switching_side_ref);
-     let switched_in_pkmn = side.get_active_immutable();
-     if side.side_conditions.spikes > 0 && switched_in_pkmn.is_grounded() {
-@@ -776,6 +861,14 @@
+@@ -776,6 +906,14 @@
                          previous_turns: pkmn.rest_turns,
                      }));
                  pkmn.rest_turns = 0;
@@ -125,7 +171,7 @@
              } else if pkmn.sleep_turns > 0 {
                  incoming_instructions
                      .instruction_list
-@@ -2367,6 +2460,13 @@
+@@ -2367,6 +2505,13 @@
                          );
                      }
                      attacker_active.rest_turns = 0;
@@ -139,7 +185,7 @@
                  }
                  // Pokemon is asleep because of Rest, and will wake up this turn
                  1 => {
-@@ -2387,6 +2487,13 @@
+@@ -2387,6 +2532,13 @@
                                  side_ref: *attacking_side_ref,
                              },
                          ));
@@ -153,9 +199,72 @@
                  }
                  3 if attacker_active.ability == Abilities::EARLYBIRD => {
                      // Skips this action and lands at 1: asleep for the whole turn.
+@@ -2399,6 +2551,14 @@
+                             }),
+                         );
+                     }
++                    // Still asleep and a move was attempted: onBeforeMove ran.
++                    update_rest_sleep_refund_for_attempt(
++                        attacker_active,
++                        sleep_usable_move,
++                        *attacking_side_ref,
++                        current_active_index,
++                        incoming_instructions,
++                    );
+                 }
+                 // Pokemon is asleep because of Rest, and will stay asleep this turn
+                 2 | 3 => {
+@@ -2411,6 +2571,16 @@
+                                 side_ref: *attacking_side_ref,
+                             },
+                         ));
++                    // The ordinary `|cant|...|slp` turn, and the single most
++                    // common way the bank changes: banked by Sleep Talk/Snore,
++                    // discarded by anything else.
++                    update_rest_sleep_refund_for_attempt(
++                        attacker_active,
++                        sleep_usable_move,
++                        *attacking_side_ref,
++                        current_active_index,
++                        incoming_instructions,
++                    );
+                 }
+                 _ => panic!("Invalid rest_turns value: {}", attacker_active.rest_turns),
+             }
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -1,5 +1,7 @@
+ use super::abilities::{update_forecast, Abilities};
+-use super::generate_instructions::add_remove_status_instructions;
++use super::generate_instructions::{
++    add_remove_status_instructions, clear_rest_sleep_pending_refund,
++};
+ use super::items::{get_choice_move_disable_instructions, Items};
+ use super::state::{PokemonVolatileStatus, Weather, MOVE_INDICES};
+ use crate::choices::{Boost, Choice, Choices, Heal, MoveCategory, MoveTarget, StatBoosts};
+@@ -770,6 +772,19 @@
+                         new_turns: 3,
+                         previous_turns: active_pkmn.rest_turns,
+                     }));
++                // pokezero gen3 fidelity fix (Rest skippedTime): `slp.onStart`
++                // does `skippedTime = 0`, so a new stint never inherits the old
++                // one's bank. This is the STRUCTURAL guarantee that a refund can
++                // only be spent on the stint that created it -- enumerating every
++                // way a stint can end leaks (Lum Berry and Natural Cure both
++                // clear status without going through the status-removal funnel),
++                // whereas a refund cannot be spent at all unless Rest ran first.
++                clear_rest_sleep_pending_refund(
++                    active_pkmn,
++                    *attacking_side_ref,
++                    active_index,
++                    instructions,
++                );
+                 instructions
+                     .instruction_list
+                     .push(Instruction::Heal(HealInstruction {
 --- a/tests/test_gen3.rs
 +++ b/tests/test_gen3.rs
-@@ -610,4 +610,224 @@
+@@ -610,4 +610,423 @@
          },
      ];
      assert_eq!(expected_instructions, vec_of_instructions);
@@ -217,7 +326,7 @@
 +        "{:?}",
 +        instructions
 +    );
-+}
+ }
 +
 +#[test]
 +fn test_rest_refund_is_clamped_to_the_legal_maximum() {
@@ -272,7 +381,7 @@
 +        "{:?}",
 +        vec_of_instructions[0].instruction_list
 +    );
- }
++}
 +
 +#[test]
 +fn test_switch_in_of_a_healthy_mon_emits_nothing() {
@@ -379,4 +488,203 @@
 +            );
 +        }
 +    }
++}
++
++#[test]
++fn test_a_non_sleep_usable_attempt_discards_the_refund() {
++    // Showdown's slp.onBeforeMove zeroes skippedTime on any attempt that is not
++    // sleepUsable -- the bank dies MID-stint, not just when the stint ends.
++    // Without this the mon sleeps a turn longer than the real sim, reachable at
++    // depth 1: attempt Tackle, switch out, switch back in.
++    let mut state = State::default();
++    let pkmn = state.side_one.get_active();
++    pkmn.status = PokemonStatus::SLEEP;
++    pkmn.rest_turns = 2;
++    pkmn.rest_sleep_pending_refund = 1;
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::TACKLE,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P0,
++                    new_turns: 0,
++                    previous_turns: 1,
++                }),
++            )
++        }),
++        "a non-sleepUsable attempt must discard the bank: {:?}",
++        vec_of_instructions
++    );
++}
++
++#[test]
++fn test_a_sleep_usable_attempt_banks_a_turn() {
++    // The other half of onBeforeMove: Sleep Talk emits |cant| and still acts,
++    // banking the skipped turn.
++    let mut state = State::default();
++    let pkmn = state.side_one.get_active();
++    pkmn.status = PokemonStatus::SLEEP;
++    pkmn.rest_turns = 2;
++    pkmn.rest_sleep_pending_refund = 0;
++    // Sleep Talk recursively calls another move; with only Sleep Talk known it
++    // has no callee and the engine generates nothing at all.
++    pkmn.replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::SLEEPTALK,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P0,
++                    new_turns: 1,
++                    previous_turns: 0,
++                }),
++            )
++        }),
++        "a sleepUsable attempt must bank a turn: {:?}",
++        vec_of_instructions
++    );
++}
++
++#[test]
++fn test_using_rest_again_discards_the_previous_stints_refund() {
++    // slp.onStart does skippedTime = 0. This is the structural guarantee that a
++    // refund can only be spent on the stint that created it: enumerating every
++    // way a stint can END leaks, because Lum Berry and Natural Cure both clear
++    // status without going through the status-removal funnel.
++    let mut state = State::default();
++    let pkmn = state.side_one.get_active();
++    pkmn.hp = 1;
++    pkmn.rest_sleep_pending_refund = 2;
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::REST,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P0,
++                    new_turns: 0,
++                    previous_turns: 2,
++                }),
++            )
++        }),
++        "Rest must start a stint with an empty bank: {:?}",
++        vec_of_instructions
++    );
++}
++
++#[test]
++fn test_early_bird_wake_voids_a_pending_rest_refund() {
++    // The Early Bird wake arm is a separate void site from the natural wake and
++    // was previously unpinned -- deleting its clear left every test green.
++    let mut state = State::default();
++    let pkmn = state.side_one.get_active();
++    pkmn.status = PokemonStatus::SLEEP;
++    pkmn.rest_turns = 2;
++    pkmn.rest_sleep_pending_refund = 2;
++    pkmn.ability = Abilities::EARLYBIRD;
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::TACKLE,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P0,
++                    new_turns: 0,
++                    previous_turns: 2,
++                }),
++            )
++        }),
++        "Early Bird waking must void the bank: {:?}",
++        vec_of_instructions
++    );
++}
++
++#[test]
++fn test_a_cured_sleep_voids_a_pending_rest_refund() {
++    // The add_remove_status_instructions void site, and getting a fixture that
++    // genuinely reaches it took three attempts -- each earlier one passed while
++    // the site's mutant stayed alive, i.e. pinned nothing:
++    //   1. Chesto Berry on Rest -- Rest zeroes the bank first, so nothing left.
++    //   2. The sleeper itself using Heal Bell -- it is asleep, so it cannot
++    //      move; the |cant| discard zeroed the bank and the cure never ran.
++    // The BENCHED sleeper is the case where the funnel is the only path: Heal
++    // Bell cures the whole party, and a benched mon makes no move attempt.
++    let mut state = State::default();
++    let benched = &mut state.side_one.pokemon[PokemonIndex::P1];
++    benched.status = PokemonStatus::SLEEP;
++    benched.rest_turns = 2;
++    benched.rest_sleep_pending_refund = 2;
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::HEALBELL,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P1,
++                    new_turns: 0,
++                    previous_turns: 2,
++                }),
++            )
++        }),
++        "curing a benched sleeper must void its bank: {:?}",
++        vec_of_instructions
++    );
++}
++
++#[test]
++fn test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited() {
++    // Pins the `status == SLEEP` clause of the switch-in guard, which was
++    // previously unpinned: an AWAKE mon carrying a bank must not be credited.
++    let mut state = State::default();
++    let pkmn = &mut state.side_one.pokemon[PokemonIndex::P1];
++    pkmn.status = PokemonStatus::NONE;
++    pkmn.rest_turns = 2;
++    pkmn.rest_sleep_pending_refund = 2;
++
++    let vec_of_instructions = generate_instructions_with_state_assertion(
++        &mut state,
++        &MoveChoice::Switch(PokemonIndex::P1),
++        &MoveChoice::None,
++    );
++
++    assert!(
++        !vec_of_instructions[0]
++            .instruction_list
++            .iter()
++            .any(|instruction| matches!(instruction, Instruction::SetRestTurns(_))),
++        "{:?}",
++        vec_of_instructions[0].instruction_list
++    );
 +}
