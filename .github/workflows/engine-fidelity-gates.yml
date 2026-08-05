@@ -62,6 +62,11 @@ jobs:
             # workflow (via the .patch and patches.txt globs) but the suite holding its
             # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
+            # Pins `Ran 6 tests` and a no-skip guard on the pyo3 binding boundary.
+            # Omitting it is self-defeating: a PR that adds a skipIf or drops the
+            # nonzero assertion touches only this file, so the gate that would
+            # catch it never runs. Found by review of #1108.
+            tests/test_rest_sleep_refund_boundary.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -220,6 +225,32 @@ jobs:
           # a venv with no wheel -- the pins asserted nothing and looked green.
           if grep -q 'skipped' /tmp/a5pins.log; then
             echo "::error::the A5 pins SKIPPED; they must never skip"
+            exit 1
+          fi
+
+      # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
+      # #1105: adding a field to the engine's Pokemon broke the wheel build, and
+      # nothing local caught it because `cargo test -p pokezero-search` never
+      # compiles poke-engine-py. Compiling is necessary but NOT sufficient --
+      # `impl Into<Pokemon>` keeps compiling while hardcoding a value, which is a
+      # silent wrong answer on the exact path production uses to build state
+      # (poke_engine_adapter.py: engine.State(...)). Only a nonzero assertion
+      # distinguishes "carried" from "hardcoded"; verified by reintroducing the
+      # literal 0, which fails 2 of these 5.
+      - name: Engine binding boundary pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_rest_sleep_refund_boundary -v 2>&1 \
+            | tee /tmp/boundary.log
+          if ! grep -qE 'Ran 6 tests' /tmp/boundary.log; then
+            echo "::error::expected 6 boundary pins; the suite shrank or grew"
+            exit 1
+          fi
+          # The module imports poke_engine at top level precisely so a missing
+          # wheel is an ERROR, not a skip. Assert it anyway: a future edit that
+          # adds skipIf would otherwise quietly disarm the whole file.
+          if grep -q 'skipped' /tmp/boundary.log; then
+            echo "::error::a binding boundary pin SKIPPED"
             exit 1
           fi
 
