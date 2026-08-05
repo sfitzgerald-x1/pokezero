@@ -618,7 +618,9 @@ class PainSplitSetHp(unittest.TestCase):
 
     def test_end_to_end_pin_seed_1500008_step_101(self):
         got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
-        # Pain Split is deterministic: floor((132 + 125) / 2) = 128 for both.
+        # The resulting HP is deterministic given the inputs: floor((132 + 125) / 2) = 128 for
+        # both. The DELTA is not -- it moves with whatever damage landed earlier in the turn,
+        # which is why `movepainsplit` is roll-scaled (see the classification test below).
         self.assertEqual(got["p1"], [("movepainsplit", -4), ("itemleftovers", 13)])
         self.assertEqual(got["p2"], [("movepainsplit", 3), ("itemleftovers", 25)])
 
@@ -643,18 +645,76 @@ class PainSplitSetHp(unittest.TestCase):
         got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
         self.assertIn(("movepainsplit", 3), got["p2"])
 
-    def test_pain_split_is_compared_EXACTLY_not_roll_scaled(self):
-        exact, rolled = _split_components([("movepainsplit", -4)])
-        self.assertEqual(dict(exact), {("movepainsplit", -4): 1})
-        self.assertEqual(rolled, [])
+    def test_pain_split_is_ROLL_SCALED_because_its_magnitude_inherits_a_roll(self):
+        """Pain Split is roll-DEPENDENT, and this test used to assert the opposite.
 
-    def test_a_four_point_disagreement_on_pain_split_FAILS(self):
-        """Being deterministic, Pain Split gets no roll tolerance at all."""
-        self.assertFalse(
-            roll_components_agree(
-                [("movepainsplit", -4)], [("movepainsplit", -8)], None
-            )
-        )
+        It read `test_pain_split_is_compared_EXACTLY_not_roll_scaled`, asserting
+        `movepainsplit` landed in the exact bucket with nothing rolled — the behaviour before
+        `movepainsplit` was added to `_ROLL_SCALED_SOURCES`. That change was deliberate and its
+        reasoning is recorded at `engine_transition_differential.py:310-317`: Pain Split sets both
+        mons to `floor((hp_a + hp_b) / 2)`, so its magnitude is a function of the HP left after
+        whatever damage landed earlier in the SAME turn. It inherits that hit's roll exactly as a
+        capped heal does, and demanding an exact match was a matcher defect that produced the whole
+        `I3_roll_inherited` family (reports/c95, reports/c101).
+
+        The test was left behind by that fix and had been failing on main since. Its old name
+        asserted the contract backwards, which is why it is renamed rather than edited in place.
+        """
+        exact, rolled = _split_components([("movepainsplit", -4)])
+        self.assertEqual(dict(exact), {}, "movepainsplit must not be in the EXACT bucket")
+        self.assertEqual(rolled, [("movepainsplit", -4)])
+
+    def test_pain_splits_roll_window_is_the_currently_shipped_band(self):
+        """Roll-scaled is not unbounded — this pins the window that ships TODAY, at its edges.
+
+        The predicate is `abs(eng) * 0.92 - 1` to `abs(eng) * 1.09 + 1`
+        (`engine_transition_differential.py:1014-1015`); for an engine magnitude of 4 that is
+        [2.68, 5.36], so 5 is the last accepted value and 6 the first rejected.
+
+        Two corrections to an earlier version of this test, both from review:
+
+        1. It used -8 as the only upper case. -8 is 1.75x the engine magnitude, so every subcase
+           still passed with the upper coefficient widened from 1.09 to anything under 1.75
+           (4k + 1 < 8). The name claimed "and no wider" while measuring nothing of the sort.
+           `(-6, False)` is the actual edge and is now included. (The lower edge was already tight:
+           -2 against -3 straddles 2.68.)
+
+        2. It called the band "what a floor-divided quantity needs and no more". The repo's own
+           record says otherwise and says it is UNRESOLVED:
+           `reports/c101_i3_painsplit_tolerance_derivation.json` -- which is headed
+           `RETRACTED IN ITS CENTRAL CLAIM`, but the retraction targets its refutation claim, NOT
+           the field cited here, and `what_survives.the_floor_argument` keeps the floor reasoning --
+           derives
+           `|delta| <= ceil(roll_gap / 2)` -- an ABSOLUTE bound, since `d/dx floor((a+x)/2)` is 1/2
+           -- and its `still_to_derive` field records that the implementation still needs that
+           derivation; #1054's own message calls the proportional band "the wrong SHAPE for this
+           class", noting that with no preceding damage Pain Split must match EXACTLY while the
+           band would accept +/-(9%+1). So this test pins the shipped window, not a justified one.
+        """
+        # At engine magnitude 4 the COEFFICIENT and the +/-1 CONSTANT are not separately
+        # identified: the upper edge is satisfied by any c in [1.0, 1.25). A large magnitude
+        # separates them, because there the constant is negligible and the ratio dominates --
+        # engine 100 gives [91.0, 110.0], so 91/110 are the last accepted and 90/111 the first
+        # rejected on each side. Both scales are asserted for that reason, not for coverage.
+        for engine, showdown, expected in (
+            (-4, -3, True),
+            (-4, -4, True),
+            (-4, -5, True),
+            (-4, -2, False),
+            (-4, -6, False),
+            (-4, -8, False),
+            (-100, -91, True),
+            (-100, -110, True),
+            (-100, -90, False),
+            (-100, -111, False),
+        ):
+            with self.subTest(engine=engine, showdown=showdown):
+                self.assertIs(
+                    roll_components_agree(
+                        [("movepainsplit", showdown)], [("movepainsplit", engine)], None
+                    ),
+                    expected,
+                )
 
     def test_untagged_sethp_does_not_fall_into_the_roll_scaled_bucket(self):
         got = damage_components(
