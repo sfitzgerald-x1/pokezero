@@ -2242,8 +2242,10 @@ def _hp_snapshot_action(raw_line: Optional[str], *, in_residual_phase: bool) -> 
     tag at all (``sim/battle.ts:2293-2296``, ``case 'leechseed': case 'rest': this.add('-heal',
     target, target.getHealth, '[silent]')``), so it read as action-phase, overwrote the snapshot with
     a residual-phase HP, and ruled out the true Leftovers on a mon that was at full HP when its slot
-    ran. That was 85 violations at 400 games on seed 31337 and 65 on seed 555001, all of them family
-    5 ``ruled_out_item`` / "true item 'leftovers' was ruled out".
+    ran. The pre-fix magnitude -- 85 violations at 400 games on seed 31337 and 65 on 555001, all of
+    them family 5 ``ruled_out_item`` / "true item 'leftovers' was ruled out" -- is the REVIEW's
+    measurement of the pre-fix code, recorded here with that attribution because this round ran only
+    the post-fix sweeps, which are 0 on both seeds.
 
     A blanket "``[silent]`` means residual" rule does not work either, because that same engine
     branch emits ``[silent]`` for REST, which is an ACTION-phase heal and is carried by 46 pool

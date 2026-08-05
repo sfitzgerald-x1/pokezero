@@ -337,8 +337,10 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         both decline. That test binds the classifier's RETURN VALUE; this one binds its APPLICATION.
 
         Here the mon is damaged in the action phase FIRST, so there is a below-full snapshot that the
-        discard has to actively destroy. Tangela is a live pool Leech Seed carrier (12 species carry
-        the move) whose sets hold Leftovers, so this is the shape the 85 violations were made of.
+        discard has to actively destroy. Tangela is one of the 12 pool species that carry Leech Seed,
+        and all 11 of its sets hold Leftovers (verified against the pool), so the wrong elimination
+        empties its candidate set outright rather than dropping one variant — the Octillery failure
+        mode: the inconsistent fallback fires and uncertainty pins to 1.0.
 
         Ordering: the seeded Shuckle's leechseed handler (10/5) runs before Tangela's own item slot
         (10/4) because ``comparePriority`` puts SPEED ahead of subOrder across two Pokemon, and the
