@@ -18,8 +18,9 @@ perspectives, this asserts the plan's seven families:
    and every fallback is counted and attributed, not silently absorbed;
 4. **zero pin conflicts** -- ``variant_pin_conflicts`` stays empty with narrowing off;
 5. **ruled-out soundness** -- ``ruled_out_abilities`` never contains the true ability and
-   ``ruled_out_items`` never the true item (the ``TRAPPER_ALIVE`` correctness check rides this
-   sweep: Shadow Tag and Arena Trap are both pool-reachable);
+   ``ruled_out_items`` never the true item. Only the ITEM arm has a producer in this format; the
+   ability arm is reported ``n/a`` and does NOT count toward reachability (see
+   ``_ABILITY_ARM_STATUS``);
 6. **derived-stat legality** -- every surviving variant's spread stays inside the generator's legal
    set (the C1 guard, at game scale);
 7. **clone equivalence** -- sampled-world beliefs equal the parent's on the checked properties.
@@ -68,6 +69,26 @@ from pokezero.tier2 import variant_has_physical_attack  # noqa: E402
 from tier2_gate import _first_requests, _team_truth  # noqa: E402
 
 PLAYERS = ("p1", "p2")
+
+# Family 5 has two arms and only ONE of them can fire in this format.
+#
+# ``ruled_out_abilities`` has exactly one producer in the engine -- the Intimidate non-trigger rule
+# in ``_resolve_pending_switches_as_no_trigger`` (``belief.py``). Both its gates,
+# ``_can_queue_intimidate_non_trigger`` and ``_can_rule_out_intimidate``, require the mon to have
+# Intimidate AND at least one OTHER possible ability, because a mon whose only ability is Intimidate
+# cannot have it eliminated. Measured against the gen3 randbats pool (220 species): all 11
+# Intimidate carriers -- Arbok, Arcanine, Tauros, Gyarados, Granbull, Stantler, Hitmontop,
+# Mightyena, Masquerain, Mawile, Salamence -- have Intimidate as their SOLE ability, and only 15
+# pool species have more than one possible ability at all (none of them an Intimidate carrier). So
+# the arm is structurally unfailable here, and the sweep confirms it: 0 mons with a non-empty
+# ``ruled_out_abilities`` over 206,653 observations.
+#
+# The docstring used to justify this arm as "the TRAPPER_ALIVE correctness check ... Shadow Tag and
+# Arena Trap are both pool-reachable". That is false as a justification. The SPECIES are reachable
+# (Wobbuffet/Shadow Tag, Dugtrio/Arena Trap) but each is its species' only ability, so neither can
+# ever land in ``ruled_out_abilities`` -- this sweep cannot check TRAPPER_ALIVE's soundness, and
+# claiming it did is the vacuous-assertion failure the plan's §3 names.
+_ABILITY_ARM_STATUS = "n/a (no producer in gen3 randbats)"
 
 
 def _other(player: str) -> str:
@@ -228,8 +249,11 @@ def _check_mon(
         counts["narrowing_steps"] += 1
     seen_counts[key] = len(candidates)
 
-    # (5) ruled-out soundness -- never rule out the truth. This is also the TRAPPER_ALIVE
-    # correctness check: that column is derived from ruled_out_abilities.
+    # (5) ruled-out soundness -- never rule out the truth. The ITEM arm is live; the ABILITY arm
+    # has NO PRODUCER in this format and is reported n/a (see ``_ABILITY_ARM_STATUS``). The
+    # ability assertion is kept -- it costs one set-membership test and would bind the day a
+    # producer appears -- but it must not be advertised as coverage, and it is not counted as
+    # reached.
     true_ability = _norm(truth_row.get("ability"))
     true_item = _norm(truth_row.get("item"))
     if true_ability and true_ability in {_norm(a) for a in belief.ruled_out_abilities or ()}:
@@ -267,6 +291,14 @@ def _check_mon(
         counts["mons_with_ruled_out_abilities"] += 1
     if belief.ruled_out_items:
         counts["mons_with_ruled_out_items"] += 1
+    # The ability arm's ONLY producer is the Intimidate non-trigger rule, and
+    # ``_can_queue_intimidate_non_trigger``/``_can_rule_out_intimidate`` both require the mon to
+    # have Intimidate AND at least one other possible ability. Counting that precondition turns
+    # "the arm never fired" from an inference into a measurement: if this stays 0 while
+    # ``mon_observations`` is large, the arm is unfailable in this format rather than merely lucky.
+    ability_ids = {_norm(a) for a in belief.possible_abilities or ()}
+    if "intimidate" in ability_ids and len(ability_ids) > 1:
+        counts["intimidate_ruleout_preconditions"] += 1
 
     # (6) derived-stat legality -- every surviving variant's spread inside the generator's legal
     # set. _variant_spread_stats RAISES on an illegal spread by design, so a raise here is the
@@ -379,6 +411,8 @@ def run_sweep(
             "clone_equivalence_checks": 0,
             "mons_with_ruled_out_abilities": 0,
             "mons_with_ruled_out_items": 0,
+            "intimidate_ruleout_preconditions": 0,
+            "pins_observed": 0,
             "ambiguous_true_variant_matches": 0,
             "mons_without_resolvable_true_variant": 0,
             "belief_mons_without_truth": 0,
@@ -484,6 +518,14 @@ def run_sweep(
                         )
                     )
                 counts["pin_conflict_checks"] += 1
+                # ...and whether any PIN was ever written, which is the precondition for a
+                # conflict to be recordable at all. `pin_conflict_checks` only counts loop
+                # iterations, so it cannot tell "no conflicts because the state is clean" from
+                # "no conflicts because nothing ever pinned". Reporting the config flag instead of
+                # observed pin activity has the same hole: the flag can be ON while the tier2 /
+                # investment producers still never write a pin in a given sweep.
+                if getattr(env._belief_engine, "_variant_pins", None):
+                    counts["pins_observed"] += 1
 
                 # (7) clone equivalence -- a sampled world's beliefs must equal the parent's on
                 # the checked properties. Sampling a search world goes through clone(), so a
@@ -567,18 +609,48 @@ def run_sweep(
     # `_variant_pins`, and only the tier2/investment producers write those. Counting loop
     # iterations as "reached" reported a property as exercised when it could not fire.
     # It is reported as n/a instead, and the verdict says so.
+    #
+    # The status is derived from OBSERVED pin activity, not from the config flag. Reporting the
+    # flag said "exercised" as soon as `--item-belief-narrowing` was passed, which is a claim about
+    # the invocation and not about the run: the producers can be enabled and still never write a
+    # pin (nothing pinned => nothing to conflict), and the reader had no way to tell.
     narrowing_on = env_narrowing_flags["investment"] or env_narrowing_flags["item"]
-    pin_conflict_status = "exercised" if narrowing_on else "n/a (narrowing off)"
+    if counts["pins_observed"]:
+        pin_conflict_status = f"exercised ({counts['pins_observed']} turns with pins)"
+    elif narrowing_on:
+        pin_conflict_status = "n/a (narrowing on, but no pin was ever written)"
+    else:
+        pin_conflict_status = "n/a (narrowing off; no producer writes _variant_pins)"
+
+    # Family 5's ABILITY arm has no producer in gen3 randbats -- see ``_ABILITY_ARM_STATUS``. The
+    # measurement is carried in the summary so the claim is checkable from the artifact rather than
+    # taken on the docstring's word.
+    ability_arm_status = (
+        f"exercised ({counts['mons_with_ruled_out_abilities']} mons with ruled-out abilities)"
+        if counts["mons_with_ruled_out_abilities"]
+        else (
+            f"{_ABILITY_ARM_STATUS}; measured: 0 of {counts['mon_observations']} observations had a"
+            f" non-empty ruled_out_abilities and"
+            f" {counts['intimidate_ruleout_preconditions']} met the rule's precondition"
+        )
+    )
 
     # Mons the sweep SKIPPED must fail the run, not vanish into a counter. A regression in truth
     # resolution would otherwise drop most of the population and still print PASS: mutating
     # `_true_variant_for` to fail for half the species silently skipped 1106 of 2551 observations
     # -- including the very mon whose defect motivated this harness -- and the verdict stayed
     # green. Both counters are 0 on every clean run, so requiring 0 costs nothing and binds.
+    #
+    # ``games_without_both_requests`` belongs here too: it was counted but not gated, so a change
+    # that stopped `_first_requests` from resolving either seat's opening request would `continue`
+    # past EVERY game, leave `games` at 0, and -- because the reachability counters are all also 0
+    # -- report FAIL only by accident of the reachability gate rather than by naming the cause. It
+    # is 0 on every clean run.
     skipped = {
         "mons_without_resolvable_true_variant": counts["mons_without_resolvable_true_variant"],
         "belief_mons_without_truth": counts["belief_mons_without_truth"],
         "truncated_games": counts["truncated_games"],
+        "games_without_both_requests": counts["games_without_both_requests"],
     }
     no_silent_skips = all(value == 0 for value in skipped.values())
 
@@ -590,6 +662,7 @@ def run_sweep(
         "reached": reached,
         "reachability": reachability,
         "pin_conflict_family": pin_conflict_status,
+        "ruled_out_ability_arm": ability_arm_status,
         "skipped": skipped,
         "inconsistent_fallback_details": fallbacks[:50],
         "no_silent_skips": no_silent_skips,
@@ -657,6 +730,11 @@ def main() -> int:
         f"violations={total_violations} reached={reached} "
         f"skips={sum(summary['skipped'].values())} pin_conflicts={summary['pin_conflict_family']}"
     )
+    print(f"[belief-coherence] family-5 ability arm: {summary['ruled_out_ability_arm']}")
+    print(
+        f"[belief-coherence] family-5 item arm: "
+        f"{counts.get('mons_with_ruled_out_items', 0)} mons with ruled-out items"
+    )
     for name, rows in violations.items():
         if rows:
             print(f"  [{name}] {len(rows)} violation(s); first: {rows[0]}")
@@ -680,8 +758,20 @@ def _engine_state_mismatches(parent, twin) -> list[str]:
     Kill-confirmed by dropping ``twin._hp_after_actions`` from ``clone()``: 20 violations naming
     that field. Stated precisely, because the bound matters: this detects a dropped copy only for
     state that is actually POPULATED in the run. ``_variant_pins`` is empty with narrowing off, so
-    dropping its copy is undetectable here -- not a hole in the check, but a reason the
-    narrowing-on rerun is where that particular copy gets its coverage.
+    dropping its copy is undetectable BY VALUE here -- see the identity check below, which does
+    cover it.
+
+    VALUE equality is not enough on its own. ``repr()`` is identical for a field the clone COPIED
+    and a field the clone ALIASED, so an aliasing bug -- ``twin._x = self._x`` on a mutable
+    container instead of ``dict(self._x)`` -- was completely invisible to this check, in either
+    direction: the two engines then share one object and every subsequent mutation of the sampled
+    world writes back into the live game's belief state. That is the same class of defect as a
+    dropped copy and strictly harder to see, so mutable containers additionally get an IDENTITY
+    check. Only ``dict``/``list``/``set`` are checked: a correct copy always constructs a new
+    container, and immutable state (ints, strings, ``None``, frozen dataclasses like
+    ``_PendingTrick``) is shared on purpose and would false-positive. Unlike the value check, the
+    identity check binds on EMPTY containers too, which is why it also covers ``_variant_pins``
+    with narrowing off.
     """
     mismatches: list[str] = []
     parent_state = vars(parent)
@@ -692,8 +782,13 @@ def _engine_state_mismatches(parent, twin) -> list[str]:
         if name not in twin_state:
             mismatches.append(f"{name}: missing on the clone")
             continue
-        if repr(parent_state[name]) != repr(twin_state[name]):
+        parent_value = parent_state[name]
+        twin_value = twin_state[name]
+        if repr(parent_value) != repr(twin_value):
             mismatches.append(name)
+            continue
+        if isinstance(parent_value, (dict, list, set)) and parent_value is twin_value:
+            mismatches.append(f"{name}: clone ALIASED the parent's container instead of copying it")
     if parent.set_source is not twin.set_source:
         mismatches.append("set_source: clone must SHARE the source, not copy it")
     return mismatches
