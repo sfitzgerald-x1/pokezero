@@ -19,8 +19,8 @@ What is actually asserted, in the order the value of the env depends on it:
 
 from __future__ import annotations
 
-import random
 import json
+import random
 import subprocess
 import unittest
 from pathlib import Path
@@ -830,7 +830,16 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
                 with mock.patch.object(
                     engine_env, "__file__", str(fake_module)
                 ), mock.patch("subprocess.run", _run):
-                    with self.assertRaises(ValueError) as caught:
+                    # assertRaisesRegex on the MISMATCH phrasing, not a bare ValueError. Dropping
+                    # "v4" from _EXPORTABLE_TABLE_SCHEMAS makes the loader raise the
+                    # unbuildable-schema error instead, whose text also contains "v2.2" (via
+                    # "supports ['v2.2', 'v3']") and "v4" -- so assertRaises plus two assertIns
+                    # passed without either cache guard ever being reached. Same soft spot this
+                    # change fixed one site over; taking the same fix here rather than shipping the
+                    # neighbouring instance again.
+                    with self.assertRaisesRegex(
+                        ValueError, "are for observation schema"
+                    ) as caught:
                         engine_env._load_encoder_tables(
                             None, None, "pokezero.observation.v4"
                         )
