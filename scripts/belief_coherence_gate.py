@@ -212,15 +212,29 @@ def _check_pp_ledger(
                 # While a mon is transformed the request's `active[0].moves` describes the COPIED
                 # slots, not the mon's own set. `sim/pokemon.ts transformInto` (`:1306-1326`, not
                 # overridden in the gen3 chain -- the five `data/mods/*/scripts.ts` that redefine
-                # it are format mods) clears `moveSlots` and rebuilds them from the target at
-                # `pp = Math.min(5, move.pp)`, with `maxpp = calculatePP(move, this.ppUps[i])` for
-                # gen < 5. So maxpp is the COPIED MOVE's full maxpp computed against the
-                # TRANSFORMER's PP-ups -- equal to the target's in randbats, where every slot has
-                # 3 PP-ups, but not by the mechanism an earlier version of this comment claimed
-                # ("keeping the target's maxpp"). Measured
-                # on seed 4711 game 90 turn 48, a Ditto transformed into Jirachi reports
-                # psychic 2/16, calmmind 4/20, icepunch 4/15, thunderbolt 3/15 -- Jirachi's moves
-                # and Jirachi's maxpp, on a mon whose own moveset is [Transform].
+                # it are format mods) clears `moveSlots` and rebuilds them from the target:
+                #
+                #     pp    = Math.min(5, move.pp)
+                #     maxpp = gen >= 5 ? pp : calculatePP(move, this.ppUps[i] || 0)
+                #
+                # The `|| 0` is the whole story, and TWO earlier versions of this comment got it
+                # wrong -- both claimed the slots keep "the target's maxpp". They do not.
+                # `this.ppUps` is built from the TRANSFORMER's own `set.moves`
+                # (`sim/pokemon.ts:350-373`), so it is indexed by slot and sized to the
+                # transformer's move count. A gen3 randbats Ditto has `movepool: ["transform"]`,
+                # so `ppUps == [3]`: slot 0 gets 3 PP-ups and slots 1-3 fall through to 0.
+                # With `calculatePP = pp * (5 + ppUps) / 5` (`sim/battle.ts:2390-2395`):
+                #
+                #     slot 0  psychic      base 10  @3 -> 16    <- the only boosted slot
+                #     slot 1  calmmind     base 20  @0 -> 20
+                #     slot 2  icepunch     base 15  @0 -> 15
+                #     slot 3  thunderbolt  base 15  @0 -> 15
+                #
+                # Measured on seed 4711 game 90 turn 48, the transformed Ditto reports exactly
+                # 16/20/15/15 -- while JIRACHI'S OWN request that turn reports 16/32/24/24. The
+                # copied maxpp is not the target's; three of the four slots are the copied move's
+                # unboosted base. The observed numbers were what disproved the earlier claim, and
+                # they were sitting in the same paragraph that made it.
                 #
                 # So the two sides of this differential are not the same quantity during a
                 # transform, and comparing them is an error in the HARNESS. It stayed invisible
