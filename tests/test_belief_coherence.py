@@ -189,8 +189,16 @@ class ResidualPhaseDifferentialTest(unittest.TestCase):
     does with the line -- not on the phase bit, because two tags (``[from] confusion``, and the
     residual-only tags) are settled without the phase by design.
 
-    This runs a short sweep. The same differential at 400 games on seeds 31337 and 555001 covered
-    67,583 HP lines with zero disagreements.
+    Pairing is by RAW LINE, not by position. An earlier version indexed the engine's Nth HP event
+    against the Nth raw HP line with only an end-of-game count check, so a single dropped or extra
+    line would have silently mis-paired everything after it -- and the counts are not always equal
+    (they differed in 2 of 400 games per seed), which is exactly the condition that hides it. The
+    cursor now resynchronizes on the line text, an unmatchable event is a hard failure, and any raw
+    line the engine never saw is counted and reported rather than absorbed.
+
+    Two POLICIES are run, because the line mix a policy produces is not the same and a differential
+    that only ever sees one action distribution is a weaker claim than it looks: uniform-random over
+    the legal mask, and the move-biased policy the gate itself uses.
     """
 
     GAMES = 3
@@ -222,61 +230,94 @@ class ResidualPhaseDifferentialTest(unittest.TestCase):
 
         from pokezero.belief import PublicBattleBeliefEngine, _hp_snapshot_action
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.showdown import MOVE_ACTION_COUNT
 
+        HP_EVENTS = {"-damage", "-heal", "-sethp"}
         env = LocalShowdownEnv(
             LocalShowdownConfig(showdown_root=str(_integration_root()), set_belief_source=True)
         )
         checked = 0
         residual_checked = 0
-        disagreements: list[tuple[str, str, str]] = []
+        unmatched_raw_lines = 0
+        per_policy: dict[str, int] = {}
+        disagreements: list[tuple[str, str, str, str]] = []
         try:
-            for game in range(self.GAMES):
-                rng = random.Random(self.SEED * 1_000_003 + game)
-                env.reset(seed=self.SEED + game)
-                steps = 0
-                while steps < 400 and env.terminal() is None:
-                    requested = env.requested_players()
-                    if not requested:
-                        break
-                    actions = {}
-                    for player in requested:
-                        mask = env.observe(player).legal_action_mask
-                        legal = [index for index, allowed in enumerate(mask) if allowed]
-                        if not legal:
+            # move_bias None = uniform over the legal mask; 0.75 = the gate's own policy.
+            for policy, move_bias in (("uniform-random-legal", None), ("move-bias-0.75", 0.75)):
+                per_policy[policy] = 0
+                for game in range(self.GAMES):
+                    rng = random.Random(self.SEED * 1_000_003 + game)
+                    env.reset(seed=self.SEED + game)
+                    steps = 0
+                    while steps < 400 and env.terminal() is None:
+                        requested = env.requested_players()
+                        if not requested:
                             break
-                        actions[player] = rng.choice(legal)
-                    if len(actions) != len(requested):
-                        break
-                    env.step(actions)
-                    steps += 1
+                        actions = {}
+                        for player in requested:
+                            mask = env.observe(player).legal_action_mask
+                            legal = [index for index, allowed in enumerate(mask) if allowed]
+                            if not legal:
+                                break
+                            moves = [i for i in legal if i < MOVE_ACTION_COUNT]
+                            if move_bias is not None and moves and rng.random() < move_bias:
+                                actions[player] = rng.choice(moves)
+                            else:
+                                actions[player] = rng.choice(legal)
+                        if len(actions) != len(requested):
+                            break
+                        env.step(actions)
+                        steps += 1
 
-                truth = self._truth_phases(env.protocol_lines)
-                engine = PublicBattleBeliefEngine()
-                seen = 0
-                for event in env._parser.public_events:
-                    engine.ingest_event(event)
-                    if event.event_type not in {"-damage", "-heal", "-sethp"}:
-                        continue
-                    self.assertLess(seen, len(truth), "more HP events than raw HP lines")
-                    raw_line, truth_phase = truth[seen]
-                    seen += 1
-                    checked += 1
-                    if truth_phase:
-                        residual_checked += 1
-                    want = _hp_snapshot_action(raw_line, in_residual_phase=truth_phase)
-                    got = _hp_snapshot_action(
-                        event.raw_line, in_residual_phase=engine._in_residual_phase
-                    )
-                    if want != got:
-                        disagreements.append((raw_line, want, got))
-                self.assertEqual(seen, len(truth), "engine saw a different set of HP lines")
+                    truth = self._truth_phases(env.protocol_lines)
+                    engine = PublicBattleBeliefEngine()
+                    cursor = 0
+                    for event in env._parser.public_events:
+                        engine.ingest_event(event)
+                        if event.event_type not in HP_EVENTS:
+                            continue
+                        # Resynchronize on the LINE TEXT. Advancing past non-matching entries makes a
+                        # dropped raw line cost one counted skip instead of mis-pairing the rest of
+                        # the game, and running off the end is a failure rather than a silent stop.
+                        start = cursor
+                        while cursor < len(truth) and truth[cursor][0] != event.raw_line:
+                            cursor += 1
+                        self.assertLess(
+                            cursor,
+                            len(truth),
+                            f"engine HP event {event.raw_line!r} has no matching raw protocol line; "
+                            "the differential cannot be paired and would otherwise pass vacuously",
+                        )
+                        unmatched_raw_lines += cursor - start
+                        raw_line, truth_phase = truth[cursor]
+                        cursor += 1
+                        checked += 1
+                        per_policy[policy] += 1
+                        if truth_phase:
+                            residual_checked += 1
+                        want = _hp_snapshot_action(raw_line, in_residual_phase=truth_phase)
+                        got = _hp_snapshot_action(
+                            event.raw_line, in_residual_phase=engine._in_residual_phase
+                        )
+                        if want != got:
+                            disagreements.append((policy, raw_line, want, got))
         finally:
             env.close()
 
         # Reachability first: a differential over zero residual-phase HP lines proves nothing, and
-        # the whole defect lived in the residual phase.
+        # the whole defect lived in the residual phase. Both policies must contribute.
         self.assertGreater(checked, 200, "too few HP lines to be a differential")
         self.assertGreater(residual_checked, 50, "no residual-phase HP lines reached")
+        for policy, count in per_policy.items():
+            self.assertGreater(count, 50, f"policy {policy} contributed almost nothing")
+        # Not asserted as zero: the parser legitimately drops a few lines, and the point of counting
+        # is that a LARGE number would mean the pairing has gone wrong rather than that a line was
+        # dropped. Kept loose enough not to be brittle, tight enough to catch systematic mis-pairing.
+        self.assertLess(
+            unmatched_raw_lines,
+            max(10, checked // 50),
+            f"{unmatched_raw_lines} raw HP lines never matched an engine event",
+        )
         self.assertEqual(disagreements[:10], [], f"{len(disagreements)} classification mismatches")
 
 

@@ -2084,8 +2084,8 @@ _TRICK_EFFECT = re.compile(r"move: Trick(?![\w-])")
 # numbers are gen5+ and different; citing them is the "generalized from the shared engine file"
 # mistake the Hidden Power premise already made once.
 #
-#   Wish 7  <  weather field 8 (Sandstorm/Hail, and Rain Dish's onWeather heal rides it)
-#     <  Ingrain 10/1  <  [ Leftovers and pinch berries 10/4 ]
+#   Wish 7  <  weather field 8 (Sandstorm/Hail)
+#     <  Ingrain 10/1  <  Rain Dish 10/3  <  [ Leftovers and pinch berries 10/4 ]
 #     <  Leech Seed 10/5  <  brn/psn/tox 10/6  <  Nightmare 10/7  <  Curse 10/8
 #     <  partiallytrapped 10/9  <  Future Sight 11 (unreachable: no pool set carries it)
 #
@@ -2110,9 +2110,22 @@ _TRICK_EFFECT = re.compile(r"move: Trick(?![\w-])")
 #   * Sandstorm  -- LIVE. Reachable via Sand Stream, carried by all 15 Tyranitar sets (the pool's
 #     only Sand Stream holder); no pool set carries the Sandstorm move itself.
 #   * Hail       -- unreachable. No pool set carries Hail and no pool ability summons it.
-#   * Rain Dish  -- unreachable. No pool set has the ability. (Its heal is an `onWeather` handler,
-#     `data/abilities.ts` raindish, so it rides the weather field residual at order 8 -- NOT
-#     order 10/3 as an earlier version of this comment claimed.)
+#   * Rain Dish  -- unreachable. No pool set has the ability. Order 10/3, from
+#     `data/mods/gen3/abilities.ts` raindish, which sets `onWeather: undefined, // no inherit` and
+#     replaces it with `onResidualOrder: 10, onResidualSubOrder: 3` plus its own `onResidual`.
+#     Neither gen4 nor gen5 overrides it, so the gen3 entry is what runs.
+#
+#     A previous revision of this comment "corrected" 10/3 to "order 8, because it is an `onWeather`
+#     handler in `data/abilities.ts`". That was wrong, and it was wrong in the exact way this file
+#     warns about three times: the shared file's `onWeather` form is gen5+, and the gen3 MOD replaces
+#     it. The mechanical cause is worth naming because it is repeatable -- the lookup was written as
+#     `grep gen4/abilities.ts && echo ... && grep gen3/abilities.ts`, and grep exits non-zero when it
+#     finds nothing, so the FAILED gen4 lookup short-circuited the `&&` chain and the gen3 lookup
+#     never ran. Empty output was then read as "no mod override". Never gate a mod-chain lookup on
+#     `&&`: check every layer unconditionally and make a miss print something.
+#
+#     Behaviourally inert here (10/3 and 8 are both pre-slot, and the ability is pool-unreachable),
+#     but it was presented as the corrected reading, which is how a wrong engine fact gets inherited.
 #   * Ingrain    -- unreachable. No pool set carries the move.
 _PRE_ITEM_SLOT_RESIDUAL_HP_TAGS = (
     "[from] move: Wish",

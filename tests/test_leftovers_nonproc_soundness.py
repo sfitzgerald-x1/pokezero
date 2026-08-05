@@ -325,6 +325,53 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
             "position against the drainer's own 10/4 slot, so it is not pre-slot evidence",
         )
 
+    def test_a_discarded_snapshot_actually_clears_the_earlier_value(self) -> None:
+        """The DISCARD branch must overwrite the snapshot, not merely decline to update it.
+
+        ``_hp_snapshot_action`` returning ``discard`` is worthless unless ``_apply_hp_observation``
+        acts on it, and that application was a SURVIVING MUTANT: deleting
+        ``elif action == _HP_SNAPSHOT_DISCARD: self._hp_after_actions[key] = None`` left the whole
+        suite green. The Flygon test above did not bind it, and it is worth being precise about why --
+        Flygon is at FULL when the untagged heal arrives, so its snapshot is already 1.0 from the
+        switch-in and the psn line only has to be classified ``keep``. Discarding 1.0 or keeping 1.0
+        both decline. That test binds the classifier's RETURN VALUE; this one binds its APPLICATION.
+
+        Here the mon is damaged in the action phase FIRST, so there is a below-full snapshot that the
+        discard has to actively destroy. Tangela is a live pool Leech Seed carrier (12 species carry
+        the move) whose sets hold Leftovers, so this is the shape the 85 violations were made of.
+
+        Ordering: the seeded Shuckle's leechseed handler (10/5) runs before Tangela's own item slot
+        (10/4) because ``comparePriority`` puts SPEED ahead of subOrder across two Pokemon, and the
+        drain heal takes Tangela to full. Tangela's Leftovers is then offered with no room and stays
+        silent -- so its silence is not evidence, and the elimination would be wrong.
+
+        Kill-confirmed: deleting the discard assignment yields ``('leftovers',)`` and fails this test
+        alone.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Tangela|Tangela, L84, F|277/277",
+                "|switch|p2a: Shuckle|Shuckle, L88, M|198/198",
+                "|turn|1",
+                "|move|p1a: Tangela|Leech Seed|p2a: Shuckle",
+                "|-start|p2a: Shuckle|move: Leech Seed",
+                "|move|p2a: Shuckle|Rock Slide|p1a: Tangela",
+                "|-damage|p1a: Tangela|240/277",
+                _RESIDUAL_MARKER,
+                "|-damage|p2a: Shuckle|174/198|[from] Leech Seed|[of] p1a: Tangela",
+                "|-heal|p1a: Tangela|277/277|[silent]",
+                "|upkeep",
+            ]
+        )
+        tangela = [b for b in engine.snapshot().sides["p1"] if b.species == "Tangela"][0]
+        self.assertIsNone(tangela.revealed_item, "precondition: the sweep must not skip this mon")
+        self.assertEqual(
+            tangela.ruled_out_items,
+            (),
+            "the untagged drain heal made the pre-slot HP undeterminable, so the turn must yield "
+            "no evidence -- the below-full action-phase snapshot has to be discarded, not kept",
+        )
+
     def test_rest_is_an_ACTION_phase_silent_heal_and_still_updates_the_snapshot(self) -> None:
         """Why ``[silent]`` cannot simply be added to the at/after list.
 
