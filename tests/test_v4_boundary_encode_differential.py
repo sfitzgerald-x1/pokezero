@@ -29,6 +29,7 @@ build-identity tests need neither and always run.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -129,7 +130,43 @@ class MismatchLedgerTest(unittest.TestCase):
 
 
 class NativeBuildIdentityTest(unittest.TestCase):
-    def test_native_build_identity_distinguishes_binaries(self) -> None:
+    def test_binary_identity_distinguishes_two_binaries(self) -> None:
+        """The claim in the name, on two ACTUAL binaries.
+
+        Finding F6: the previous test of this name never compared two artifacts -- it inspected
+        the one installed extension and checked the digest was 64 hex characters, which would
+        hold for any constant. The property that matters is that the SAME bytes hash the same
+        (reinstalling one wheel must not look like a new build) and DIFFERENT bytes do not.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "one.so"
+            second = root / "two.so"
+            copy = root / "one-reinstalled.so"
+            first.write_bytes(b"\x7fELF fake extension A")
+            second.write_bytes(b"\x7fELF fake extension B")
+            copy.write_bytes(first.read_bytes())
+
+            a = gate.binary_identity(first)
+            b = gate.binary_identity(second)
+            again = gate.binary_identity(copy)
+
+            self.assertNotEqual(
+                a["extension_sha256"], b["extension_sha256"], "two different binaries must differ"
+            )
+            self.assertEqual(
+                a["extension_sha256"],
+                again["extension_sha256"],
+                "the same bytes at a different path must hash the same",
+            )
+            self.assertEqual(a["extension_bytes"], len(b"\x7fELF fake extension A"))
+
+    def test_binary_identity_of_a_missing_artifact_is_null(self) -> None:
+        identity = gate.binary_identity(Path("/nonexistent/pokezero_search.so"))
+        self.assertIsNone(identity["extension"])
+        self.assertIsNone(identity["extension_sha256"])
+
+    def test_native_build_identity_is_derived_from_the_artifact(self) -> None:
         identity = gate.native_build_identity()
         # The compiled extension, not the 143-byte re-export stub: only the .so moves when the
         # crate is rebuilt. ``lib.rs`` compiles in nothing that does.
@@ -164,6 +201,13 @@ class ExitCriterionTest(unittest.TestCase):
         self.assertIn("games 1 < required 200", reasons)
         self.assertIn("< required 20000", reasons)
         self.assertIn("never reached", reasons)
+        # Finding F3: the liveness failure must name EVERY dead tracker, not fire on "none of
+        # them moved". In a two-step run all eight are dead, so all eight must be listed.
+        self.assertEqual(
+            len(summary["reachability"]["accumulator_scalars_constant"]),
+            len(gate.ACCUMULATOR_METADATA_KEYS),
+        )
+        self.assertIn("published accumulator scalars never moved", reasons)
         # ... and it fails for the RIGHT reason: the four states really are byte-identical, so
         # this is the vacuity guard firing and not a masked encoder mismatch.
         self.assertEqual(summary["divergence"]["mismatched_states"], 0)
@@ -190,6 +234,9 @@ class ExitCriterionTest(unittest.TestCase):
         reach = summary["reachability"]["v4_pack_states_reached"]
         for column in (
             "NUMERIC_SELF_HAZARD_CREDIT",
+            # The column an earlier revision excluded from the required set on an unmeasured
+            # "0/40850 states" claim (finding F2). Five games reach it; 200 reach it in 1315.
+            "NUMERIC_OPP_HAZARD_EXPECTED",
             "NUMERIC_MON_STAYED_VS_ACTIVE",
             "NUMERIC_LAST_DAMAGE_DEALT",
             "NUMERIC_LAST_DAMAGE_TAKEN",
@@ -198,7 +245,13 @@ class ExitCriterionTest(unittest.TestCase):
         self.assertEqual(
             summary["reachability"]["accumulator_scalars_constant"],
             [],
-            "every published accumulator scalar must move across five games",
+            "EVERY published accumulator scalar must move -- not just one (finding F3)",
+        )
+        self.assertGreater(
+            summary["reachability"]["v4_pack_categorical_states_reached"][
+                "CATEGORY_LAST_USED_MOVE"
+            ],
+            0,
         )
         # The vacuity channel must be honest about the history surface it cannot reach.
         self.assertGreater(summary["vacuity"]["numeric_columns_never_nonzero_count"], 0)

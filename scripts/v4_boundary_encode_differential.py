@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """V4 — full-game Python/Rust differential over the BOUNDARY encode surface.
 
-WHAT THIS TESTS, stated plainly (the previous name of this file, "replay parity gate
-(accumulator drift)", claimed something it structurally cannot do -- see NOT TESTED below):
+WHAT THIS TESTS, stated plainly. The previous name of this file, "replay parity gate
+(accumulator drift)", claimed a cross-language accumulator differential that cannot exist; the
+two classes below say what is and is not covered instead.
 
 For every decision point of a full self-play game, this takes the sanctioned per-row input
 surface (``observation_metadata`` + ``public_materialization``, composed with production's own
@@ -20,16 +21,46 @@ categorical vocabulary mapping, mask construction, timed-condition arithmetic. T
 re-implemented twice, so it can drift twice -- and does; see the divergence report in the
 accompanying commit.
 
-NOT TESTED -- and no Python/Rust differential can test it, which is why this file no longer
-claims to. The v4 k0 pack's B-columns (hazard credit, items-removed credit, switch propensity)
-and the last-damage ledgers are ACCUMULATORS, but they are accumulated in exactly ONE place:
-the Python protocol tracker. ``showdown.field_credit_values`` derives them once and publishes
-the settled scalars on ``observation_metadata``; ``encoder.rs`` (~1245) reads those published
-scalars verbatim ("derives these ONCE in Python and publishes the settled numbers on the
-observation metadata, so this side reads them"), and ``backends.state_from_row_inputs`` reads
-the same keys verbatim on the Python side. There is no second implementation, so there is no
-cross-language accumulator DRIFT to detect: for those columns this differential is
-copy-vs-copy of one scalar and would agree even if the accumulation were completely wrong.
+The v4 k0 pack splits into TWO classes here, and the difference is the whole point. An earlier
+revision of this docstring called the whole pack "copy-vs-copy"; that was wrong in the safe
+direction and under-claimed real coverage, so the split is spelled out.
+
+CLASS 1 -- PUBLICATION vs RE-DERIVATION, genuinely covered (the six credit/expected columns).
+``_observation_metadata`` (showdown.py ~7507) publishes ``**field_credit_values(state, dex=dex)``
+-- the six SETTLED scalars -- and ALSO publishes the raw counters they came from
+(``self_hazard_damage_suffered``, ``opponent_hazard_damage_suffered``, ``self_items_removed``,
+``opponent_items_removed``). The two sides then take DIFFERENT routes to the same columns:
+
+    native  ``encoder.rs`` 1252-1258   reads the six PUBLISHED scalars
+    Python  ``state_from_row_inputs``  reads the RAW COUNTERS (it contains zero occurrences of
+                                       hazard_credit/items_removed_credit/hazard_expected), and
+                                       ``_encode_field_credit_features`` (showdown.py 5825)
+                                       RE-DERIVES the six values via ``field_credit_values``
+
+So this differential is a round trip of the gen3 grounding rule: derivation-from-raw against
+published-derived. It catches a publication that went stale against its own counters, a
+re-derivation whose inputs are not reconstructable from the row surface, and any key or scaling
+error on the native read. That is not incidental -- ``opponent_hazard_expected`` re-derives
+through ``_healthy_grounded_bench`` (Levitate/Flying grounding, the belief view's
+per-species overlay, ``unseen_slots`` for unrevealed party slots) times
+``_SPIKES_DAMAGE_BY_LAYERS[layers]`` over ``_TEAM_SIZE``, all of which must survive the
+reconstruction. DO NOT delete these six columns from this harness as "redundant with fixture
+parity". Kill-confirmed: freezing only the four RAW counters
+(self/opponent_hazard_damage_suffered, self/opponent_items_removed) while leaving the published
+scalars live moves a 5-game sweep from 39 to 89 mismatched states, attributed by name to
+NUMERIC_{SELF,OPP}_HAZARD_CREDIT and NUMERIC_{SELF,OPP}_ITEMS_REMOVED_CREDIT. Under copy-vs-copy
+that mutation is a no-op on both sides. The two hazard_EXPECTED columns are not exercised by
+that particular mutation because they re-derive from the side-condition counts and the bench
+rather than from those counters -- they are non-verbatim for the same structural reason (zero
+occurrences of ``hazard_expected`` anywhere in ``golden_encoder_backends.py``), just via a
+different input set.
+
+CLASS 2 -- verbatim on both sides, so byte-parity over them IS vacuous (the other seven:
+NUMERIC_MON_SWITCHED_VS_ACTIVE, NUMERIC_MON_STAYED_VS_ACTIVE, NUMERIC_LAST_DAMAGE_DEALT,
+NUMERIC_LAST_DAMAGE_TAKEN, NUMERIC_TRUANT_LOAF, NUMERIC_CHOICE_LOCKED, NUMERIC_ITEM_SWAPPED).
+Both sides read one published value per column and neither derives anything, so no
+cross-language DRIFT exists to detect and the comparison would agree even if the accumulation
+were completely wrong. For these seven the only claim this file makes is liveness (below).
 
 The native LEAF lane does not accumulate them either, by design and already documented:
 ``scripts/leaf_vs_reality.py::V4_ROOT_FROZEN_PACK_COLUMNS`` (~165-212) classifies fifteen v4
@@ -40,16 +71,19 @@ grounding rule in Rust "is the duplication this design deliberately refuses". Gr
 design, not a defect. ``leaf_vs_reality.py`` is the harness that covers the leaf lane and it
 correctly reports these as an accepted residual class rather than pretending to test them.
 
-So the accumulation itself is single-implementation and must be gated against the SIM, not
-against Python -- plan §3's first standard ("differentials compare against the engine or the
-sim, never Python-vs-Python"). ``scripts/oracle_differential.py`` is that lane. What this file
-adds on that axis is narrow and honest: it asserts the published accumulators actually MOVE
-across a game (``pack_columns_varied``), so a tracker that silently froze fails here even
-though both encoders would still agree byte-for-byte.
+The ACCUMULATION ITSELF -- whether the counters are counting the right things -- is
+single-implementation in both classes and must be gated against the SIM, not against Python
+(plan §3's first standard: "differentials compare against the engine or the sim, never
+Python-vs-Python"). ``scripts/oracle_differential.py`` is that lane, not this one. What this
+file adds on that axis is narrow: EVERY published accumulator scalar must MOVE across the
+sweep, so a tracker that silently froze fails here even though both encoders would still agree
+byte-for-byte.
 
 Exit criterion (plan §1, V4): byte-identical across >=200 full games (~20k states) with every
-required v4 pack column reached. All three are ENFORCED by the verdict -- ``--games 1`` cannot
-pass.
+required v4 pack column reached and every accumulator live. All of it is ENFORCED by the
+verdict -- ``--games 1`` cannot pass. The state minimum counts REQUESTED-SEAT states only: the
+non-requested seat is a shape production never builds, so letting it count toward the criterion
+would inflate the sweep with states no consumer ever encodes.
 
 Per plan §3 the wheel must be rebuilt and reinstalled before results are read. The summary
 records the sha256 of the loaded extension module, so the artifact says WHICH binary produced
@@ -104,11 +138,14 @@ PLAYERS = ("p1", "p2")
 # tests/test_rust_encoder_v4.py:193-208 already asserts for its single fixture -- a full-game
 # gate must not be WEAKER than the fixture test it claims to improve on.
 #
-# NUMERIC_OPP_HAZARD_EXPECTED is measured and REPORTED but not required: it is the opponent
-# arm of the hazard-expectation pair and is unreachable from the public surface in self-play
-# sampling (measured 0/40850 states, see --require-columns to demand it). Requiring a column
-# that cannot be reached would make the gate unpassable; omitting it silently is what B2 was
-# about, so it is named here instead.
+# EVERY column in this tuple is required. An earlier revision excluded
+# NUMERIC_OPP_HAZARD_EXPECTED on the stated ground that it was "unreachable from the public
+# surface in self-play sampling (measured 0/40850 states)". That number was never run: the same
+# revision's own committed 200-game artifact recorded NUMERIC_OPP_HAZARD_EXPECTED reached in
+# 1315 states. Excluding a reachable column on an unmeasured claim is precisely the vacuity this
+# file exists to prevent, so the exclusion and the claim are both gone. If a column ever really
+# is unreachable, `--require-columns` narrows the set explicitly at the call site, where it is
+# visible in the artifact's `args`, instead of silently in a module constant.
 V4_PACK_NUMERIC_COLUMNS = (
     "NUMERIC_SELF_HAZARD_CREDIT",
     "NUMERIC_OPP_HAZARD_CREDIT",
@@ -124,13 +161,27 @@ V4_PACK_NUMERIC_COLUMNS = (
     "NUMERIC_CHOICE_LOCKED",
     "NUMERIC_ITEM_SWAPPED",
 )
-DEFAULT_REQUIRED_COLUMNS = tuple(
-    name for name in V4_PACK_NUMERIC_COLUMNS if name != "NUMERIC_OPP_HAZARD_EXPECTED"
-)
 
-# The published accumulator scalars, read VERBATIM by both sides (so byte-parity over them is
-# vacuous -- see the module docstring). What is NOT vacuous is whether they move at all, which
-# is the one accumulation property this harness can honestly assert.
+# The v4 pack's CATEGORICAL columns (finding F9). Reachability used to be numeric-only, so these
+# two -- both members of leaf_vs_reality.py's frozen fifteen -- carried no requirement at all.
+# Which of them can be REQUIRED is a measurement, not a guess. Measured on `--games 200 --seed 3`
+# (22754 states) in the session that added this: CATEGORY_LAST_USED_MOVE 22754 states (every one),
+# CATEGORY_TRACED_ABILITY 390. Both are reachable, so both are required. Trace is rare enough
+# that a SHORT sweep will not reach CATEGORY_TRACED_ABILITY -- a 5-game run reaches 0 -- which is
+# the gate correctly refusing to certify a sweep too small to exercise it, not a bug.
+V4_PACK_CATEGORICAL_COLUMNS = (
+    "CATEGORY_LAST_USED_MOVE",
+    "CATEGORY_TRACED_ABILITY",
+)
+DEFAULT_REQUIRED_COLUMNS = V4_PACK_NUMERIC_COLUMNS
+DEFAULT_REQUIRED_CATEGORICAL_COLUMNS = V4_PACK_CATEGORICAL_COLUMNS
+
+# The published accumulator scalars whose LIVENESS is asserted. Note the two classes from the
+# module docstring: the first four are RAW counters that only the Python side reads (it
+# re-derives the credit columns from them; the native side reads the published derived scalars
+# instead), and the last four are read verbatim by both. Liveness is the one accumulation
+# property this harness can honestly assert either way -- whether the counters are counting the
+# RIGHT things is oracle_differential.py's job, not this file's.
 ACCUMULATOR_METADATA_KEYS = (
     "self_hazard_damage_suffered",
     "opponent_hazard_damage_suffered",
@@ -176,6 +227,26 @@ def _v4_header(spec) -> dict[str, Any]:
     }
 
 
+def binary_identity(path: Path) -> dict[str, Any]:
+    """Content identity of ONE compiled artifact, as a plain function of its bytes.
+
+    Split out from :func:`native_build_identity` so the claim "this distinguishes one wheel from
+    another" is testable on two actual binaries (finding F6: the test asserting that claim only
+    ever inspected the single installed extension, so its name outran its code). Content hash
+    rather than mtime or path: reinstalling the same wheel must look the same, and a rebuilt one
+    must not.
+    """
+    if not path.is_file():
+        return {"extension": None, "extension_sha256": None}
+    stat = path.stat()
+    return {
+        "extension": str(path),
+        "extension_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "extension_bytes": int(stat.st_size),
+        "extension_mtime": _dt.datetime.fromtimestamp(stat.st_mtime, _dt.timezone.utc).isoformat(),
+    }
+
+
 def native_build_identity() -> dict[str, Any]:
     """WHICH binary is loaded, in a form that distinguishes one wheel from another.
 
@@ -195,18 +266,7 @@ def native_build_identity() -> dict[str, Any]:
         "model_feature_enabled": getattr(pokezero_search, "MODEL_FEATURE_ENABLED", None),
     }
     inner = getattr(pokezero_search, "pokezero_search", None)
-    extension = Path(getattr(inner, "__file__", "") or "")
-    if extension.is_file():
-        stat = extension.stat()
-        identity["extension"] = str(extension)
-        identity["extension_sha256"] = hashlib.sha256(extension.read_bytes()).hexdigest()
-        identity["extension_bytes"] = int(stat.st_size)
-        identity["extension_mtime"] = _dt.datetime.fromtimestamp(
-            stat.st_mtime, _dt.timezone.utc
-        ).isoformat()
-    else:  # pragma: no cover - a wheel without its extension cannot encode anything
-        identity["extension"] = None
-        identity["extension_sha256"] = None
+    identity.update(binary_identity(Path(getattr(inner, "__file__", "") or "")))
     # The crate SOURCE fingerprint, so a stale binary is detectable as well as identifiable:
     # source moved + extension sha256 unchanged == the wheel was not rebuilt.
     try:
@@ -275,7 +335,13 @@ class _MismatchLedger:
         if lhs.shape != rhs.shape:
             return [f"{array}:SHAPE({lhs.shape}!={rhs.shape})"]
         bad = numpy.argwhere(lhs != rhs)
-        if not len(bad):  # pragma: no cover - bytes differed so values must
+        if not len(bad):
+            # REACHABLE, despite the bytes having differed: `!=` is value equality, not bit
+            # equality. -0.0 != +0.0 is False while the two differ in the sign bit, so a side
+            # that writes a negative zero where the other writes a positive one lands here. NaN
+            # is the opposite case and needs no help (nan != nan is True). BYTES_ONLY is
+            # therefore a real, attributable outcome and not a can't-happen branch -- if it ever
+            # appears in a report, look for a signed-zero write rather than dismissing it.
             return [f"{array}:BYTES_ONLY"]
         if lhs.ndim == 2:
             by_index = (
@@ -381,6 +447,7 @@ def run_gate(
     min_games: int = DEFAULT_MIN_GAMES,
     min_states: int = DEFAULT_MIN_STATES,
     require_columns: tuple[str, ...] = DEFAULT_REQUIRED_COLUMNS,
+    require_categorical_columns: tuple[str, ...] = DEFAULT_REQUIRED_CATEGORICAL_COLUMNS,
 ) -> dict[str, Any]:
     if seats not in {"both", "requested"}:
         raise ValueError("seats must be 'both' or 'requested'")
@@ -397,6 +464,13 @@ def run_gate(
     unknown = [name for name in require_columns if name not in numeric_columns]
     if unknown:
         raise ValueError(f"required columns absent from the v4 layout: {unknown}")
+    unknown_categorical = [
+        name for name in require_categorical_columns if name not in categorical_columns
+    ]
+    if unknown_categorical:
+        raise ValueError(
+            f"required categorical columns absent from the v4 layout: {unknown_categorical}"
+        )
 
     python_backend = backends.PythonReferenceBackend(showdown_root=showdown_root, header=header)
     rust_backend = backends.RustBackend(tables_json=tables_json, header=header)
@@ -425,6 +499,9 @@ def run_gate(
     )
     # Per-column reachability over the whole run (B2), on the PYTHON side -- the reference.
     column_reach: Counter = Counter({name: 0 for name in V4_PACK_NUMERIC_COLUMNS})
+    # ... and for the pack's categorical columns (F9). A categorical cell is UNSET as vocabulary
+    # id 0 (the encoder simply does not write it), so nonzero is "this feature was populated".
+    categorical_reach: Counter = Counter({name: 0 for name in V4_PACK_CATEGORICAL_COLUMNS})
     # Vacuity: numeric columns that were nonzero on NEITHER side in ANY state. Byte-parity over
     # those is vacuous and the summary must say so rather than let the reader assume 97 columns
     # were exercised. `state_from_row_inputs` rebuilds the transition/tendency/turn-merged
@@ -469,6 +546,11 @@ def run_gate(
                         index = numeric_columns.get(name)
                         if index is not None and reference_numeric[:, index].any():
                             column_reach[name] += 1
+                    reference_categorical = numpy.asarray(want["categorical_ids"])
+                    for name in V4_PACK_CATEGORICAL_COLUMNS:
+                        index = categorical_columns.get(name)
+                        if index is not None and reference_categorical[:, index].any():
+                            categorical_reach[name] += 1
                     for name, index in numeric_columns.items():
                         if name not in numeric_nonzero and (
                             reference_numeric[:, index].any() or native_numeric[:, index].any()
@@ -515,6 +597,9 @@ def run_gate(
         env.close()
 
     unreached = [name for name in require_columns if column_reach[name] <= 0]
+    unreached_categorical = [
+        name for name in require_categorical_columns if categorical_reach[name] <= 0
+    ]
     varied = sorted(key for key, seen in accumulator_values.items() if len(seen) > 1)
     unvaried = sorted(key for key, seen in accumulator_values.items() if len(seen) <= 1)
     never_nonzero = sorted(set(numeric_columns) - numeric_nonzero)
@@ -527,12 +612,26 @@ def run_gate(
         failures.append(f"{ledger.mismatched_states} mismatched states")
     if counts["games"] < min_games:
         failures.append(f"games {counts['games']} < required {min_games}")
-    if counts["states"] < min_states:
-        failures.append(f"states {counts['states']} < required {min_states}")
+    # REQUESTED-SEAT states only (finding F8). Counting the non-requested seat toward the
+    # criterion inflated it with a shape production never builds -- 1661 of 22754 states, 7.3%,
+    # on the sweep that motivated this. The gate still COMPARES both seats by default (a wrong
+    # value on the idle seat is a wrong input at the next search); it just does not let them pay
+    # for the exit criterion.
+    if counts["states_requested_seat"] < min_states:
+        failures.append(
+            f"requested-seat states {counts['states_requested_seat']} < required {min_states} "
+            f"(total states compared: {counts['states']})"
+        )
     if unreached:
-        failures.append(f"v4 pack columns never reached: {unreached}")
-    if not varied:
-        failures.append("no published accumulator scalar took more than one value")
+        failures.append(f"v4 pack numeric columns never reached: {unreached}")
+    if unreached_categorical:
+        failures.append(f"v4 pack categorical columns never reached: {unreached_categorical}")
+    # EVERY accumulator must move, not merely one of them (finding F3). `if not varied` was the
+    # same vacuous OR that B2 removed from the reachability check: with seven of the eight
+    # trackers frozen and only `self_last_damage_dealt` live, `varied` is non-empty and the gate
+    # passed with seven dead trackers.
+    if unvaried:
+        failures.append(f"published accumulator scalars never moved: {unvaried}")
 
     return {
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -549,14 +648,23 @@ def run_gate(
             "seats": seats,
             "min_games": min_games,
             "min_states": min_states,
+            "min_states_counts": "states_requested_seat",
             "require_columns": list(require_columns),
+            "require_categorical_columns": list(require_categorical_columns),
         },
         "counts": dict(counts),
         "reachability": {
             "v4_pack_states_reached": dict(sorted(column_reach.items())),
+            "v4_pack_categorical_states_reached": dict(sorted(categorical_reach.items())),
             "required_columns_unreached": unreached,
+            "required_categorical_columns_unreached": unreached_categorical,
             "accumulator_scalars_varied": varied,
             "accumulator_scalars_constant": unvaried,
+            "note": (
+                "the state minimum is enforced against states_requested_seat only; the "
+                "non-requested seat is compared but is a shape production never builds, so it "
+                "does not pay for the exit criterion (finding F8)."
+            ),
         },
         "vacuity": {
             # Named so nobody reads "97 numeric columns byte-identical" as 97 columns tested.
@@ -582,9 +690,12 @@ def _print_summary(summary: dict[str, Any]) -> None:
     divergence = summary["divergence"]
     print(
         f"[v4-boundary-encode] {summary['verdict']} games={counts.get('games', 0)} "
-        f"states={counts.get('states', 0)} arrays={counts.get('arrays_compared', 0)} "
+        f"states={counts.get('states', 0)}"
+        f"(requested={counts.get('states_requested_seat', 0)}) "
+        f"arrays={counts.get('arrays_compared', 0)} "
         f"mismatched_states={divergence['mismatched_states']} "
-        f"unreached={reach['required_columns_unreached']} "
+        f"unreached={reach['required_columns_unreached']}"
+        f"+{reach['required_categorical_columns_unreached']} "
         f"accumulators_varied={len(reach['accumulator_scalars_varied'])}"
         f"/{len(reach['accumulator_scalars_varied']) + len(reach['accumulator_scalars_constant'])} "
         f"native_so_sha256={str(native.get('extension_sha256'))[:16]}"
@@ -612,11 +723,21 @@ def main() -> int:
     parser.add_argument("--move-bias", type=float, default=0.75)
     parser.add_argument("--seats", choices=("both", "requested"), default="both")
     parser.add_argument("--min-games", type=int, default=DEFAULT_MIN_GAMES)
-    parser.add_argument("--min-states", type=int, default=DEFAULT_MIN_STATES)
+    parser.add_argument(
+        "--min-states",
+        type=int,
+        default=DEFAULT_MIN_STATES,
+        help="minimum REQUESTED-SEAT states (the non-requested seat does not count; finding F8)",
+    )
     parser.add_argument(
         "--require-columns",
         default=",".join(DEFAULT_REQUIRED_COLUMNS),
-        help="comma-separated v4 pack columns that must each be reached at least once",
+        help="comma-separated v4 pack numeric columns that must each be reached at least once",
+    )
+    parser.add_argument(
+        "--require-categorical-columns",
+        default=",".join(DEFAULT_REQUIRED_CATEGORICAL_COLUMNS),
+        help="comma-separated v4 pack categorical columns that must each be reached at least once",
     )
     parser.add_argument("--showdown-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
@@ -633,6 +754,9 @@ def main() -> int:
         min_states=args.min_states,
         require_columns=tuple(
             name.strip() for name in args.require_columns.split(",") if name.strip()
+        ),
+        require_categorical_columns=tuple(
+            name.strip() for name in args.require_categorical_columns.split(",") if name.strip()
         ),
     )
     args.out.mkdir(parents=True, exist_ok=True)
