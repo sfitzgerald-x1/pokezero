@@ -146,7 +146,31 @@ class RandbatSourceMetadata:
     source_hash: str
 
     def to_payload(self) -> dict[str, Any]:
-        return asdict(self)
+        """Serialized form -- PORTABLE, unlike the in-memory dataclass.
+
+        These three path fields reach far further than they look: ``source_metadata`` is copied onto
+        every ``RevealedPokemonBelief``, so a golden-corpus row carries them once per believed mon.
+        That is how a maintainer's absolute home directory ended up inside a TAMPER-EVIDENT artifact
+        in a public repo -- every row hashes its own payload, so the paths cannot be scrubbed in
+        place without forging those hashes, which is why
+        ``tests/test_public_invariant.py::_ALLOWED_FOR_RULE`` had to carve out an exception rather
+        than the corpus simply being fixed.
+
+        The absolute paths stay on the in-memory object, where they are useful for diagnostics. What
+        gets SERIALIZED is relative to the checkout root, which is the part that actually identifies
+        the artifact -- and identity proper is ``source_hash``, which is unaffected.
+        """
+        payload = asdict(self)
+        root = self.showdown_root
+        for key in ("sets_path", "generator_path"):
+            value = payload.get(key)
+            if value and root and str(value).startswith(str(root)):
+                payload[key] = str(Path(value).relative_to(root))
+        # The root itself is pure local filesystem layout: it names WHERE the checkout is, never
+        # WHICH one it is. `source_hash` answers the latter, so dropping this loses nothing a
+        # consumer can act on.
+        payload["showdown_root"] = None
+        return payload
 
 
 @dataclass(frozen=True)
