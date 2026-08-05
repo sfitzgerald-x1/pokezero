@@ -316,15 +316,36 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_engine_stat_attestation -v 2>&1 \
             | tee /tmp/attest.log
-          if ! grep -qE '^OK$' /tmp/attest.log; then
+          # ONE test in this module legitimately skips here:
+          # test_real_replay_materializes_and_attests_transport_with_source_hash
+          # needs a built Showdown checkout (dist/sim/index.js), which CI has not
+          # got. So a bare '^OK$' is a FALSE gate -- it red-flagged this step on the
+          # first attempt -- and a module-wide no-skip assertion would be too, the
+          # same trap the A5 step above documents. Allow that one skip BY NAME and
+          # nothing else, which is stricter than tolerating any skip.
+          if ! grep -qE '^OK( \(skipped=1\))?$' /tmp/attest.log; then
             echo "::error::the transport attestation suite did not end OK"
+            exit 1
+          fi
+          skips=$(grep -cE '\.\.\. skipped' /tmp/attest.log || true)
+          if [ "${skips:-0}" -gt 1 ]; then
+            echo "::error::more than one attestation test skipped (${skips})"
+            exit 1
+          fi
+          if [ "${skips:-0}" -eq 1 ] && ! grep -qE \
+              '^test_real_replay_materializes_and_attests_transport_with_source_hash \(.*\) \.\.\. skipped' \
+              /tmp/attest.log; then
+            echo "::error::an UNEXPECTED attestation test skipped"
             exit 1
           fi
           if ! grep -qE 'Ran 16 tests' /tmp/attest.log; then
             echo "::error::expected 16 attestation tests; the suite shrank or grew"
             exit 1
           fi
-          grep -qE '^test_member_coverage_is_locked_to_the_pokemon_spec_surface \(' \
+          # The guard this step exists for. It fails automatically whenever a
+          # PokemonSpec field is added without extending the attestation, so it must
+          # actually RUN, not merely be present in a skipped module.
+          grep -qE '^test_member_coverage_is_locked_to_the_pokemon_spec_surface \(.*\)( |$)' \
             /tmp/attest.log || {
             echo "::error::the PokemonSpec coverage guard did not run"
             exit 1
