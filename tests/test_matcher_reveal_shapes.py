@@ -66,7 +66,9 @@ class MatcherRevealShapeTest(unittest.TestCase):
 
         The engine OMITS the level token at L100 (`sim/pokemon.ts:541`), and 9 pool species are
         L100 -- the real capture reads `|switch|p2a: Luvdisc|Luvdisc, M|248/248` (this helper omits
-        the gender token, which the belief engine does not read). That is the one
+        the gender token, which belief RECORDS -- `belief.py` populates
+        `RevealedPokemonBelief.gender` from the switch line -- but which no ENCODED column reads;
+        it is one of the audit plan's §1b held-but-never-encoded fields). That is the one
         details shape the plan's own table blames for the L100 zeroing defect ("the details-shape no
         fixture carried"), so this sweep emits it rather than a synthetic `, L100`.
         """
@@ -144,7 +146,7 @@ class MatcherRevealShapeTest(unittest.TestCase):
                     # `survivors == expected` false-failing.
                     self.assertFalse(belief.ruled_out_items or belief.ruled_out_abilities)
                     self.assertEqual(len(belief.revealed_moves), 1)
-                    if summary is not None and summary.inconsistent:
+                    if summary.inconsistent:
                         off_script += 1
                         failures.append(
                             f"{display}: reveal {emitted!r} (pool id {move_id!r}) matched NO set "
@@ -237,7 +239,7 @@ class MatcherRevealShapeTest(unittest.TestCase):
           cost if reachable: `this.random(2, 6)` returns an integer in [2, 6)
           (`sim/prng.ts:88`), so it deducts **2-5** PP, which the `move_uses` ledger has no term
           for. And gen3 emits `roll` -- the REQUESTED deduction -- rather than `deductPP`'s return,
-          unlike the shared implementation (`data/moves.ts:17656`, fixed 4, emitting the actual
+          unlike the shared implementation (`data/moves.ts:17656` deducts a fixed 4, and `:17658` emits the actual
           `ppDeducted`), so the wire number can EXCEED the PP actually lost. The reachability
           screen is the only reason V3's ledger is safe here.
         - **Encore IS reachable** (8+ pool species) but emits `|-start|TARGET|Encore`
@@ -303,7 +305,8 @@ class MatcherRevealShapeTest(unittest.TestCase):
             # The stricter form silently skipped 52 of 220 species -- Salamence, Rayquaza, Raikou,
             # Gyarados, Dragonite, Aerodactyl, Jolteon, Crobat, Forretress, Unown among them --
             # every one of which has plenty of non-HP moves and simply carries an HP in every
-            # variant.
+            # variant. Unown stays skipped BY CONSTRUCTION -- it is the one pool species whose
+            # every variant is a single Hidden Power move -- so this arm reaches 219 of 220.
             carrier = move_id = None
             for candidate in universe.variants:
                 pick = next(
