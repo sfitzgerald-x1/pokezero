@@ -117,6 +117,21 @@ class RefundReachesTheEngineTests(unittest.TestCase):
         self.assertEqual(built.rest_turns + built.rest_sleep_pending_refund, LEGAL_MAX)
 
 
+    def test_an_illegal_counter_alone_is_refused_even_with_no_refund(self):
+        """G2: the sum guard must not be scoped to the nonzero-refund case.
+
+        A first version ran it only when the refund was nonzero, so
+        rest_turns=4/refund=0 built happily and the engine then panicked with
+        "Invalid rest_turns value: 4". The comment recorded that lesson and nothing
+        enforced it -- moving the guard back inside the block passed every test.
+        """
+
+        with self.assertRaises(ValueError) as caught:
+            _build_pokemon(poke_engine, _sleeper(4, 0), "side_one.pokemon[0]")
+
+        self.assertIn("4", str(caught.exception))
+
+
 class CapabilityProbeTests(unittest.TestCase):
     def test_the_installed_binding_round_trips_the_field(self):
         self.assertTrue(_rest_sleep_refund_supported(poke_engine))

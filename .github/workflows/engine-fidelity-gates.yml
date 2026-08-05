@@ -71,6 +71,13 @@ jobs:
             # capability probe's negative control. Same reason as the line above --
             # a PR that weakens only this file must still trigger the gate.
             tests/test_rest_sleep_refund_write_side.py
+            # Holds test_member_coverage_is_locked_to_the_pokemon_spec_surface, an
+            # AUTOMATIC guard that every PokemonSpec field appears in the transport
+            # attestation. It caught rest_sleep_pending_burden the moment the field
+            # was added -- and nobody saw it, because this module was in no
+            # workflow's FILTERS and no step. A guard nothing runs. Found by review
+            # of #1113.
+            tests/test_engine_stat_attestation.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -300,6 +307,29 @@ jobs:
             exit 1
           fi
 
+      # The transport attestation, which nothing ran before this. Its
+      # member-coverage test fails automatically whenever a PokemonSpec field is
+      # added without extending the spec-vs-native comparison -- which is exactly
+      # what #1113 did at 7abf3343, invisibly, because no workflow executed it.
+      - name: Engine stat attestation
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_stat_attestation -v 2>&1 \
+            | tee /tmp/attest.log
+          if ! grep -qE '^OK$' /tmp/attest.log; then
+            echo "::error::the transport attestation suite did not end OK"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 16 tests' /tmp/attest.log; then
+            echo "::error::expected 16 attestation tests; the suite shrank or grew"
+            exit 1
+          fi
+          grep -qE '^test_member_coverage_is_locked_to_the_pokemon_spec_surface \(' \
+            /tmp/attest.log || {
+            echo "::error::the PokemonSpec coverage guard did not run"
+            exit 1
+          }
+
       # Row 2 step 4. Two SILENT failure modes, neither visible without a test:
       # folding the refund into rest_turns while also banking it double-counts and
       # the engine clamps the result (mon sleeps too long, nothing errors), and a
@@ -311,8 +341,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_rest_sleep_refund_write_side -v 2>&1 \
             | tee /tmp/writeside.log
-          if ! grep -qE 'Ran 5 tests' /tmp/writeside.log; then
-            echo "::error::expected 5 write-side pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 6 tests' /tmp/writeside.log; then
+            echo "::error::expected 6 write-side pins; the suite shrank or grew"
             exit 1
           fi
           # Anchored on the word boundary, not a bare grep for 'skipped': this
@@ -343,7 +373,8 @@ jobs:
             test_an_unrepresentable_sum_fails_closed_rather_than_clamping \
             test_the_boundary_sum_is_allowed \
             test_the_installed_binding_round_trips_the_field \
-            test_a_binding_that_drops_the_field_is_rejected; do
+            test_a_binding_that_drops_the_field_is_rejected \
+            test_an_illegal_counter_alone_is_refused_even_with_no_refund; do
             grep -qE "^$pin \(" /tmp/writeside.log || {
               echo "::error::write-side pin did not run: $pin"
               exit 1

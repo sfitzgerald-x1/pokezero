@@ -577,6 +577,16 @@ class BattleSpecTransportAttestationTests(unittest.TestCase):
             ("member.status", "Pokemon", set_value("status", "paralysis")),
             ("member.weight", "Pokemon", set_value("weight_kg", 27.3)),
             ("member.rest_turns", "Pokemon", set_value("rest_turns", 0)),
+            # Pins that the ACTUAL side reads the native object, not the spec.
+            # Without an entry here, changing `native_member` to `member` in the
+            # actual dict makes this field a tautology -- spec compared against
+            # itself, always agreeing, a real binding drop invisible. Same shape as
+            # the vacuous probe control, one instrument up. Found by review of #1113.
+            (
+                "member.rest_sleep_pending_refund",
+                "Pokemon",
+                set_value("rest_sleep_pending_refund", 1),
+            ),
             ("member.sleep_turns", "Pokemon", set_value("sleep_turns", 1)),
             (
                 "member.pre_transform",
