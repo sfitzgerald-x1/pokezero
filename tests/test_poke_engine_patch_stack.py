@@ -119,11 +119,11 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 [entry.name for entry in applied[-5:]],
                 [
-                    "poke-engine-gen3-bellydrum-roll-gate.patch",
                     "poke-engine-gen3-residual-lethality-partition.patch",
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
+                    "poke-engine-gen3-rest-sleep-pending-refund.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
