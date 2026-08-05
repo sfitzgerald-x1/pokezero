@@ -469,7 +469,17 @@ class PublicBattleBeliefEngine:
         # ``sleepUsable`` (Sleep Talk / Snore) move that would mark the turn as ``skippedTime``.
         # Any key still unresolved at ``|upkeep`` was a plain sleep turn, which resets skip to 0.
         self._sleep_cant_pending: set[str] = set()
+        # HP each active mon was at when the gen3 ITEM RESIDUAL SLOT (order 10 / subOrder 4, where
+        # Leftovers and the pinch berries both fire) ran, as far as the public log can determine it.
+        # ``None`` for a key means "not determinable this turn" and is treated as NO EVIDENCE, which
+        # is different from an absent key only in intent. Maintained by ``_apply_hp_observation``.
         self._hp_after_actions: dict[str, Optional[float]] = {}
+        # True from the sim's action->residual boundary marker until the next turn's first action.
+        # ``sim/battle.ts`` emits a BARE ``|`` line at the top of the ``residual`` queue action
+        # (``case 'residual': this.add('')``), which is the only in-band signal separating the two
+        # phases -- and the phase, not the ``[from]`` tag, is what actually decides whether an HP
+        # change happened before the item slot. See ``_track_residual_phase``.
+        self._in_residual_phase: bool = False
         # Choice-lock bookkeeping: belief key -> the FIRST freely selected move of the mon's
         # current stay on the field, which is the move a Choice Band would have locked it into.
         # Cleared on switch-in. See ``_note_choice_lock_selection``.
@@ -524,6 +534,7 @@ class PublicBattleBeliefEngine:
         secondary = _event_value(event, "secondary")
         raw_line = _event_value(event, "raw_line")
         self._event_count += 1
+        self._track_residual_phase(event_type, raw_line)
         self._track_trick_pairing(event_type, raw_line)
 
         if event_type not in {"switch", "drag", "replace"}:
@@ -666,8 +677,9 @@ class PublicBattleBeliefEngine:
             if belief is not None:
                 if event_type == "-heal" and raw_line and "[from] item: Leftovers" in raw_line:
                     self._leftovers_healed_this_turn.add(belief.key)
-                if _is_action_phase_hp_change(raw_line):
-                    self._hp_after_actions[belief.key] = _hp_fraction_from_condition(_string_or_none(primary))
+                self._apply_hp_observation(
+                    belief.key, _string_or_none(primary), raw_line=raw_line
+                )
                 if (
                     event_type == "-damage"
                     and self._pending_mudshot is not None
@@ -823,8 +835,10 @@ class PublicBattleBeliefEngine:
             return
 
         if event_type == "-sethp" and raw_line:
-            # Pain Split: ``|-sethp|p1a: X|155/307`` — keep condition (and the pre-residual
-            # snapshot) current or later pinch-berry sweeps read stale HP.
+            # Pain Split: ``|-sethp|p1a: X|155/307`` — keep condition (and the pre-slot HP
+            # snapshot) current or later pinch-berry sweeps read stale HP. Pain Split is a move, so
+            # this is always action-phase; it goes through the same classifier anyway rather than
+            # writing the snapshot directly, so there is one place that decides.
             parts = raw_line.split("|")
             sethp_ident = parts[2] if len(parts) > 2 else None
             sethp_slot = _slot_from_ident(sethp_ident)
@@ -833,7 +847,9 @@ class PublicBattleBeliefEngine:
                 belief = self._target_belief(sethp_slot, sethp_ident)
                 if belief is not None:
                     self._replace_belief(belief, condition=sethp_condition)
-                    self._hp_after_actions[belief.key] = _hp_fraction_from_condition(sethp_condition)
+                    self._apply_hp_observation(
+                        belief.key, sethp_condition, raw_line=raw_line
+                    )
             return
 
         if event_type == "turn":
@@ -860,6 +876,22 @@ class PublicBattleBeliefEngine:
             self._leftovers_healed_this_turn = set()
             self._berry_ate_this_turn = set()
             self._shed_skin_activated_this_turn = set()
+            # The pre-slot HP snapshot is PER-TURN evidence, like everything else cleared here: a mon
+            # that takes NO HP line at all on a turn published nothing about that turn, and the phase
+            # classifier cannot help, because it only sees lines that exist. The live reproducer was
+            # Togetic (true item Leftovers): no HP change on the turn, snapshot stale at 135/264 from
+            # two turns earlier, toxic chip at 10/6 leaving it at full when its 10/4 slot ran, and
+            # Leftovers ruled out from the stale value.
+            #
+            # Scope of the claim, stated precisely because the previous version of this comment
+            # overstated it: with the classifier fixed, a stale snapshot can only ever be HIGHER than
+            # the true HP at the next slot (HP rises only through lines that update the snapshot,
+            # discard it, or reveal the item outright), so leaving it would cost narrowing, not
+            # soundness. The clear stays because the policy is that these rules reason from what THIS
+            # turn published rather than from a monotonicity argument across turns. Its guard is
+            # ``test_the_pre_slot_snapshot_is_cleared_at_upkeep``, which asserts the invariant
+            # directly; that test's own docstring explains why no behavioural fixture can.
+            self._hp_after_actions = {}
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
@@ -1222,6 +1254,7 @@ class PublicBattleBeliefEngine:
         twin._cure_all_count = dict(self._cure_all_count)
         twin._sleep_clause_holder = dict(self._sleep_clause_holder)
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
+        twin._in_residual_phase = self._in_residual_phase
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._stay_locked_move = dict(self._stay_locked_move)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
@@ -1513,6 +1546,34 @@ class PublicBattleBeliefEngine:
             "forbids that, so Choice Band variants were removed.",
         )
 
+    def _track_residual_phase(self, event_type: Optional[str], raw_line: Optional[str]) -> None:
+        """Follow the sim's own action -> residual boundary, which is a BARE ``|`` protocol line.
+
+        ``sim/battle.ts:2836`` -- ``case 'residual': this.add('')`` -- emits it at the top of the
+        residual queue action, immediately before ``fieldEvent('Residual')`` runs every residual
+        handler and then adds ``|upkeep``. It survives the parser intact: a bare line yields
+        ``ShowdownPublicEvent(event_type='unknown', raw_line='|')`` (``_public_event_from_line``
+        maps the empty type token to ``'unknown'``), verified live on the local env.
+
+        See ``_ACTION_PHASE_EVENT_TYPES`` for why the marker from ``turnLoop`` does not need to be
+        told apart from this one.
+        """
+        if raw_line is not None and raw_line.strip() == "|":
+            self._in_residual_phase = True
+            return
+        if event_type == "turn" or event_type in _ACTION_PHASE_EVENT_TYPES:
+            self._in_residual_phase = False
+
+    def _apply_hp_observation(
+        self, key: str, condition: Optional[str], *, raw_line: Optional[str]
+    ) -> None:
+        """Fold one HP line into the pre-item-slot snapshot, per ``_hp_snapshot_action``."""
+        action = _hp_snapshot_action(raw_line, in_residual_phase=self._in_residual_phase)
+        if action == _HP_SNAPSHOT_UPDATE:
+            self._hp_after_actions[key] = _hp_fraction_from_condition(condition)
+        elif action == _HP_SNAPSHOT_DISCARD:
+            self._hp_after_actions[key] = None
+
     def _sweep_end_of_turn_non_procs(self) -> None:
         for side in ("p1", "p2"):
             belief = self._active_belief(side)
@@ -1521,9 +1582,50 @@ class PublicBattleBeliefEngine:
             hp_fraction = _hp_fraction_from_condition(belief.condition)
             if hp_fraction is None or hp_fraction <= 0.0:
                 continue
-            # Leftovers evidence keys off the PRE-RESIDUAL state: gen3 runs the Leftovers slot
-            # before status/Leech chip, so a mon damaged only by later residuals gave its
-            # Leftovers no chance to fire. No snapshot => no evidence (conservative).
+            # Both rules below read ONE value: the HP this mon was at when its own item residual
+            # slot (order 10 / subOrder 4) ran. ``_hp_snapshot_action`` maintains it; the ordering
+            # facts and their reachability live there.
+            #
+            # ``None`` -- absent key or an explicitly discarded snapshot -- means NO EVIDENCE, and
+            # both rules decline. The snapshot is also cleared per turn at ``|upkeep``, so a value
+            # from an earlier turn cannot masquerade as this turn's.
+            #
+            # A mon at FULL HP when its slot runs needs no separate guard: a pre-slot heal to full
+            # (Wish 7, or an action-phase Rest/Recover) UPDATES the snapshot to 1.0, and
+            # ``hp_pre_residual < 1.0`` then declines on its own. A dedicated
+            # ``_healed_to_full_this_turn`` set used to sit here doing that job a second time. It was
+            # removed because it was both redundant and WRONG: it keyed off "healed to full at any
+            # point this turn", not "was full when the slot ran", so it suppressed sound
+            # eliminations -- Recover to full and then take a hit down to 180/267, or Wish to full
+            # and then eat Sandstorm chip (field order 8, still before the slot) down to 255/272. In
+            # both the mon was demonstrably below full at 10/4 with no heal line, which is exactly
+            # the evidence this rule exists to use. It was also a surviving mutant: deleting its
+            # clause left the whole suite green while three docstrings claimed to isolate it.
+            #
+            # The Octillery shape that motivated the original guard (565 violations / 250 games) is
+            # still covered, by the snapshot rather than by a second set:
+            #
+            #   |-damage|p2a: Octillery|169/272
+            #   |-heal|p2a: Octillery|272/272|[from] move: Wish|[wisher] Umbreon
+            #   |upkeep
+            #
+            # Wish is pre-slot, so the snapshot ends at 1.0 and the rule declines. Octillery really
+            # does hold Leftovers, and because every Octillery variant holds it the rule-out emptied
+            # the candidate set; on a mixed-item species it would drop the true variant instead.
+            #
+            # An earlier version of this fix required the mon to END the turn below full. That proxy
+            # is UNSOUND and is gone: the slot is at 10/4 while brn/psn/tox chip at 10/6, so a mon
+            # can be full when Leftovers runs and below full at ``|upkeep``. It let the defect
+            # survive in live data (21 violations / 400 games) on exactly that shape.
+            #
+            # This rule has now been wrong FOUR TIMES, each time because a fix was written as if it
+            # had closed the family: the end-of-turn proxy, the stale snapshot, Liquid Ooze damage on
+            # the drainer, and the untagged Leech Seed drain heal on the drainer. Three of the four
+            # were the same mistake -- an HP change that lands outside the action phase read as
+            # though it described the pre-slot HP. So the family is NOT declared closed here. What
+            # changed is that the classifier's default flipped: an HP change it cannot place now
+            # DISCARDS the snapshot instead of being assumed action-phase, so the next unenumerated
+            # source costs narrowing rather than soundness. That is the only claim being made.
             hp_pre_residual = self._hp_after_actions.get(belief.key)
             if (
                 hp_pre_residual is not None
@@ -1541,13 +1643,20 @@ class PublicBattleBeliefEngine:
                     ("lumberry",),
                     "Status persisted without an instant Lum cure; Lum variants removed.",
                 )
-            # Pinch berries (Salac/Petaya/Liechi) activate on an HP DROP during the action
-            # phase (being hit), NOT on an end-of-turn residual crossing: in gen3 a mon that
-            # first falls to/below 25% from a later residual (Toxic/burn/sand/Leech chip) got
-            # no berry-activation opportunity at this boundary. Gate on the action-phase HP
-            # snapshot, exactly like the Leftovers slot above, so only a genuine action-phase
-            # non-proc — HP already at/below threshold after actions with no berry eaten —
-            # rules the pinch variants out. No snapshot => no evidence (conservative).
+            # Pinch berries (Salac/Petaya/Liechi) fire at the RESIDUAL item slot in gen3 --
+            # `data/mods/gen3/items.ts` sets `onUpdate: undefined` (no inherit) plus
+            # `onResidualOrder: 10, onResidualSubOrder: 4`, i.e. the SAME slot as Leftovers. The
+            # comment here used to say the opposite -- that they activate on an action-phase HP
+            # drop and never on a residual crossing -- and that premise was backwards. It is what
+            # made this rule eliminate the TRUE berry: any heal ordered before 10/4 (Wish 7, weather
+            # field 8) lifts the mon back over the 25% line before the berry is ever offered, so its
+            # silence is not evidence.
+            #
+            # The gate is therefore the same pre-slot HP snapshot the Leftovers rule uses, and the
+            # correctness rests on ``_hp_snapshot_action`` classifying by PHASE first and gen3 order
+            # second: pre-slot changes UPDATE the snapshot, at/after-slot changes leave it, and an
+            # unclassifiable one discards it.
+            # No snapshot => no evidence (conservative).
             if (
                 hp_pre_residual is not None
                 and hp_pre_residual <= 0.25
@@ -1963,42 +2072,236 @@ _SLEEP_USABLE_MOVES = frozenset({"sleeptalk", "snore"})
 _TRICK_EFFECT = re.compile(r"move: Trick(?![\w-])")
 
 
-_RESIDUAL_HP_TAGS = (
-    "[from] psn",
-    "[from] brn",
+# Everything below classifies an HP change against ONE reference point: the gen3 item residual
+# slot, order 10 / subOrder 4, where Leftovers (`data/mods/gen4/items.ts` leftovers) and the pinch
+# berries (`data/mods/gen3/items.ts` salacberry/petayaberry/liechiberry) both fire. Both non-proc
+# rules ask the same question -- "what HP was this mon at when its own item slot ran" -- so the only
+# thing that matters about an HP line is whether it landed before that slot, at/after it, or at an
+# UNDETERMINED position.
+#
+# Orders below are the gen3-EFFECTIVE ones, walked through the mod chain
+# (`data/mods/gen3/scripts.ts` is `inherit: 'gen4'`). The shared `data/moves.ts` / `data/items.ts`
+# numbers are gen5+ and different; citing them is the "generalized from the shared engine file"
+# mistake the Hidden Power premise already made once.
+#
+#   Wish 7  <  weather field 8 (Sandstorm/Hail)
+#     <  Ingrain 10/1  <  Rain Dish 10/3  <  [ Leftovers and pinch berries 10/4 ]
+#     <  Leech Seed 10/5  <  brn/psn/tox 10/6  <  Nightmare 10/7  <  Curse 10/8
+#     <  partiallytrapped 10/9  <  Future Sight 11 (unreachable: no pool set carries it)
+#
+# CAUTION, and this is why the lists below are not the whole story: that is NOT a total order over
+# handlers. `Battle.comparePriority` (`sim/battle.ts:404-411`) sorts order, then priority, then
+# SPEED DESCENDING, then subOrder -- so among the many order-10 handlers, speed dominates subOrder
+# and the subOrder chain only holds WITHIN ONE POKEMON (same effect holder => same speed => subOrder
+# decides). Every entry in the at/after list is an effect on the mon whose own item slot is in
+# question, which is what makes its position guaranteed. A CROSS-POKEMON residual -- the Leech Seed
+# drain heal on the drainer, Liquid Ooze damage on the drainer -- can land on either side of the
+# other mon's slot depending on the speed tie, so it is not classifiable at all and gets the third
+# treatment: the snapshot is DISCARDED and the turn yields no evidence.
+
+# Residual sources that resolve strictly BEFORE the item slot, so their result IS the HP the item
+# saw. Missing an entry here only costs narrowing (it degrades to "undetermined"), never soundness.
+#
+# Reachability in gen3 randbats, measured against the pool (220 species) rather than assumed --
+# THREE OF THE FIVE ARE DEAD ENTRIES, kept for correctness-by-construction, and a reader has to be
+# able to tell which. An earlier revision of this list deleted the reachability notes entirely,
+# which left live and dead entries indistinguishable:
+#   * Wish       -- LIVE. 16 pool species carry it.
+#   * Sandstorm  -- LIVE. Reachable via Sand Stream, carried by all 15 Tyranitar sets (the pool's
+#     only Sand Stream holder); no pool set carries the Sandstorm move itself.
+#   * Hail       -- unreachable. No pool set carries Hail and no pool ability summons it.
+#   * Rain Dish  -- unreachable. No pool set has the ability. Order 10/3, from
+#     `data/mods/gen3/abilities.ts` raindish, which sets `onWeather: undefined, // no inherit` and
+#     replaces it with `onResidualOrder: 10, onResidualSubOrder: 3` plus its own `onResidual`.
+#     Neither gen4 nor gen5 overrides it, so the gen3 entry is what runs.
+#
+#     A previous revision of this comment "corrected" 10/3 to "order 8, because it is an `onWeather`
+#     handler in `data/abilities.ts`". That was wrong, and it was wrong in the exact way this file
+#     warns about three times: the shared file's `onWeather` form is gen5+, and the gen3 MOD replaces
+#     it. The mechanical cause is worth naming because it is repeatable -- the lookup was written as
+#     `grep gen4/abilities.ts && echo ... && grep gen3/abilities.ts`, and grep exits non-zero when it
+#     finds nothing, so the FAILED gen4 lookup short-circuited the `&&` chain and the gen3 lookup
+#     never ran. Empty output was then read as "no mod override". Never gate a mod-chain lookup on
+#     `&&`: check every layer unconditionally and make a miss print something.
+#
+#     Behaviourally inert here (10/3 and 8 are both pre-slot, and the ability is pool-unreachable),
+#     but it was presented as the corrected reading, which is how a wrong engine fact gets inherited.
+#   * Ingrain    -- unreachable. No pool set carries the move.
+_PRE_ITEM_SLOT_RESIDUAL_HP_TAGS = (
+    "[from] move: Wish",
     "[from] Sandstorm",
     "[from] Hail",
-    "[from] Leech Seed",
-    "[from] item: Leftovers",
     "[from] ability: Rain Dish",
-    "[from] Curse",
-    "[from] Nightmare",
-    "[from] move: Wrap",
-    "[from] partiallytrapped",
-    # Wish's landing heal is an end-of-turn RESIDUAL heal (gen3 slotCondition, residual order 7),
-    # exactly like the Leftovers / Rain Dish residual heals above: it must NOT overwrite the
-    # action-phase HP snapshot the non-proc item pruning reads (same #769 mechanism as the psn/brn
-    # residual-DAMAGE tags). Without this, a Wish landing on a mon that fell to <=25% during the
-    # action phase (no berry eaten) would overwrite the low pre-residual snapshot with the healed
-    # value and MASK the action-phase non-proc, wrongly leaving the pinch variants un-pruned.
-    # (Ingrain is deliberately NOT listed — 0 gen3-randbats pool carriers, unreachable.)
-    "[from] move: Wish",
+    "[from] move: Ingrain",
 )
 
+# Residual sources on the SAME Pokemon whose subOrder puts them at or after the item slot, so the
+# snapshot must survive them unchanged. Missing an entry here also only costs narrowing.
+#
+# Every one of these is a RESIDUAL-ONLY effect in gen3 -- none of them can produce an HP line during
+# the action phase -- so the tag alone settles the classification and it is applied without
+# consulting the phase. That is deliberate belt-and-braces: it keeps the at/after cases correct on
+# any event stream that reached this engine with the phase markers stripped, and it is what the
+# ``|`` marker is NOT relied on for.
+#
+#   * Leftovers 10/4        -- LIVE (the slot itself; also latches `_leftovers_healed_this_turn`).
+#   * Leech Seed 10/5       -- LIVE. Damage on the SEEDED mon, i.e. same-Pokemon. 12 pool species
+#     carry the move. (The paired drain HEAL on the drainer is cross-Pokemon; see below.)
+#   * brn / psn / tox 10/6  -- LIVE. `data/mods/gen4/conditions.ts` brn/psn/tox. Toxic chip is
+#     emitted as `[from] psn` (measured: 6,695 `[from] psn` lines and zero `[from] tox` lines over
+#     400 games / 2 seeds), so two tags cover all three conditions. A third `"[from] tox"` entry was
+#     dropped rather than kept as belt: it never matches, and as a bare substring it would also
+#     match any future `[from] tox…` effect name, which is a way to be wrong for free.
+#   * Nightmare 10/7        -- unreachable. `data/mods/gen4/moves.ts` nightmare sets 10/7; no pool
+#     set carries the move.
+#   * Curse 10/8            -- unreachable. `data/mods/gen4/moves.ts` curse sets 10/8, but only the
+#     GHOST-type branch inflicts the residual, and none of the 5 pool Curse carriers (Dunsparce,
+#     Miltank, Muk, Regirock, Snorlax) is Ghost -- they all get the stat-drop branch. The 6 pool
+#     Ghost species never carry Curse.
+#   * partiallytrapped 10/9 -- LIVE, barely. `data/mods/gen4/conditions.ts` partiallytrapped sets
+#     10/9; Shuckle's Wrap is the pool's only source.
+#
+# An earlier version of this list said the sub-orders of Curse, Nightmare and Wrap "are not
+# established here". They are, at the three sites cited above; the uncertainty was in the reading,
+# not in the engine.
+_AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS = (
+    "[from] item: Leftovers",
+    "[from] Leech Seed",
+    "[from] psn",
+    "[from] brn",
+    "[from] Nightmare",
+    "[from] Curse",
+    "[from] move: Wrap",
+    "[from] partiallytrapped",
+)
 
-def _is_action_phase_hp_change(raw_line: Optional[str]) -> bool:
-    """True for HP changes that land before the end-of-turn residual slots.
+# Sources that are ACTION-PHASE ONLY in gen3, so the tag settles it the other way.
+#
+# Confusion self-damage is dealt from ``confusion.onBeforeMove`` (`data/mods/gen4/conditions.ts`,
+# gen3 has no override), i.e. strictly inside move execution. It needs the exception because it is
+# the one HP line in the format that can be the FIRST thing in a turn: a confused mon that hits
+# itself emits ``|-activate|…|confusion`` and ``|-damage|…|[from] confusion`` and NO ``|move|`` line,
+# so on that turn nothing has yet re-opened the action phase after ``turnLoop``'s bare marker.
+# Measured against the raw protocol, with the POLICY NAMED in each case. The policy matters and an
+# unqualified line count invites over-generalizing: the residual-phase share of HP lines moves from
+# 66% to 59% between the two policies below, so "N lines checked" means different coverage under each.
+# Zero classification disagreements and zero unpairable lines in every run:
+#   * uniform-random-legal, 150 games seed 31337: 24,316 HP lines, 16,073 residual-phase;
+#   * move-bias 0.75 (the gate's own policy), 150 games seed 31337: 18,364 lines, 10,872 residual;
+#   * move-bias 0.75, 150 games seed 555001: 17,026 lines, 10,228 residual.
+# (An earlier round measured 67,583 lines over 400 games / 2 seeds, uniform policy only.)
+# Without this exception, exactly the confusion lines diverge -- 1 of 35,283 on seed 555001 in that
+# earlier uniform run -- and the divergence direction is a discarded snapshot, i.e. declined
+# evidence, not a wrong belief. Closed anyway so the differential can assert zero.
+#
+# The same runs establish that the residual-phase HP-line vocabulary is CLOSED in this format:
+# `[from] item: Leftovers`, `[from] psn`, `[from] Sandstorm`, `[from] brn`,
+# `[from] move: Wrap|[partiallytrapped]`, `[silent]`, `[from] move: Wish`, `[from] Leech Seed`.
+# `[silent]` is in NO tuple and lands on the discard default deliberately -- it is the Leech Seed
+# drain heal, whose position against the 10/4 slot is not determinable from the line, and
+# discarding is the whole fix. So do NOT read the tuples as exhaustive over this vocabulary and
+# "tighten" the default: that reintroduces the defect this classifier exists to remove. Every OTHER
+# listed tag is handled explicitly; the default is what keeps the next addition safe rather than
+# silent.
+_ACTION_PHASE_ONLY_HP_TAGS = ("[from] confusion",)
 
-    Untagged damage/heals are action-phase; Spikes switch-in chip is action-phase (it fires on
-    entry, before any residual). Residual-tagged sources must NOT update the pre-residual
-    snapshot or gen3's residual order (Leftovers before status/Leech chip) manufactures false
-    Leftovers evidence.
+# Sources whose position against the holder's own item slot is UNDETERMINABLE in either phase, so
+# they always discard the snapshot.
+#
+# Liquid Ooze turns a drain into damage ON THE DRAINER (`data/mods/gen4/abilities.ts` liquidooze,
+# `canOoze = ['drain', 'leechseed']`; gen3 inherits gen4), and the protocol line does not name which
+# of the two it was:
+#   * from an action-phase drain move it is action-phase, i.e. pre-slot;
+#   * from the Leech Seed residual it is cross-Pokemon at order 10, where SPEED outranks subOrder, so
+#     it can land on either side of the drainer's own 10/4 slot.
+# Neither the tag nor the phase resolves it, so it is declined unconditionally. Pool-reachable via
+# Swalot and Tentacruel. Found by the V1 sweep at 400 games, and it broke CONTAINMENT rather than
+# merely widening:
+#   |switch|p2a: Flygon|Flygon, L78, F|253/253      <- full when Leftovers ran, so no heal line
+#   |-damage|p1a: Swalot|0 fnt|[from] Leech Seed|[of] p2a: Flygon
+#   |-damage|p2a: Flygon|220/253|[from] ability: Liquid Ooze|[of] p1a: Swalot
+# Flygon's true item IS Leftovers, and Flygon is a mixed-item species, so the rule-out dropped the
+# true variant and left a confidently wrong single-candidate pin.
+_UNORDERED_HP_TAGS = ("[from] ability: Liquid Ooze",)
+
+# What to do with the pre-slot HP snapshot when an HP line arrives.
+_HP_SNAPSHOT_UPDATE = "update"
+_HP_SNAPSHOT_KEEP = "keep"
+_HP_SNAPSHOT_DISCARD = "discard"
+
+
+def _hp_snapshot_action(raw_line: Optional[str], *, in_residual_phase: bool) -> str:
+    """How an HP line bears on the pre-item-slot HP snapshot.
+
+    ``update`` -- the line landed before the item slot, so its new HP IS what the item saw.
+    ``keep``   -- the line landed at or after the slot, so the snapshot still describes it.
+    ``discard``-- the line's position relative to the slot is not determinable, so the turn yields
+    no evidence for this mon. Declining is the only safe answer: the audit requires beliefs
+    "degrade to absent, never to plausible", and a wrong snapshot rules out the TRUE item.
+
+    The PHASE is what closes the classification, and it comes from the engine rather than from a tag
+    list. Classifying by ``[from]`` tag alone required the at/after list to be exhaustive over every
+    residual source that might ever emit an HP line -- an open-ended obligation, and it was already
+    unmet: the Leech Seed drain heal on the DRAINER is emitted with ``[silent]`` and no ``[from]``
+    tag at all (``sim/battle.ts:2293-2296``, ``case 'leechseed': case 'rest': this.add('-heal',
+    target, target.getHealth, '[silent]')``), so it read as action-phase, overwrote the snapshot with
+    a residual-phase HP, and ruled out the true Leftovers on a mon that was at full HP when its slot
+    ran. The pre-fix magnitude -- 85 violations at 400 games on seed 31337 and 65 on 555001, all of
+    them family 5 ``ruled_out_item`` / "true item 'leftovers' was ruled out" -- is the REVIEW's
+    measurement of the pre-fix code, recorded here with that attribution because this round ran only
+    the post-fix sweeps, which are 0 on both seeds.
+
+    A blanket "``[silent]`` means residual" rule does not work either, because that same engine
+    branch emits ``[silent]`` for REST, which is an ACTION-phase heal and is carried by 46 pool
+    species. The phase separates the two exactly, with no tag involved -- and, more to the point, an
+    unenumerated residual source now lands on ``discard`` instead of silently reading as
+    action-phase, so the list no longer has to be exhaustive to be safe.
     """
     if not raw_line:
-        return True
-    if "[from] Spikes" in raw_line or "[from] drain" in raw_line or "Recoil" in raw_line:
-        return True
-    return not any(tag in raw_line for tag in _RESIDUAL_HP_TAGS)
+        # No line text, so there is no tag to read -- but the PHASE is still known, and that is
+        # enough on the action side: everything there precedes every residual regardless of source.
+        # In the residual phase nothing is left to classify with, so it declines.
+        #
+        # This branch used to return ``update`` unconditionally, which made the one case with the
+        # LEAST information the most permissive -- the opposite of the rule the rest of this function
+        # exists to enforce, and the same shape as the four defects that preceded it. It was also a
+        # surviving mutant: flipping it to ``discard`` left all 90 tests green. Not reachable from the
+        # parser (``ShowdownPublicEvent.raw_line`` is always populated), but ``ingest_event`` also
+        # accepts plain mappings, so it is reachable by construction.
+        return _HP_SNAPSHOT_DISCARD if in_residual_phase else _HP_SNAPSHOT_UPDATE
+    if any(tag in raw_line for tag in _UNORDERED_HP_TAGS):
+        return _HP_SNAPSHOT_DISCARD
+    if any(tag in raw_line for tag in _ACTION_PHASE_ONLY_HP_TAGS):
+        return _HP_SNAPSHOT_UPDATE
+    if any(tag in raw_line for tag in _AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS):
+        # Residual-only effects, so the tag settles it without the phase (see that tuple's note).
+        return _HP_SNAPSHOT_KEEP
+    if not in_residual_phase:
+        # Action phase: recoil, drain, Spikes chip on entry, Rest, Recover, direct damage. All of it
+        # precedes every residual, so all of it updates the snapshot.
+        return _HP_SNAPSHOT_UPDATE
+    if any(tag in raw_line for tag in _PRE_ITEM_SLOT_RESIDUAL_HP_TAGS):
+        return _HP_SNAPSHOT_UPDATE
+    # Residual phase, unrecognized source. Reached today by the ``[silent]`` Leech Seed drain heal on
+    # the drainer -- cross-Pokemon at order 10, where speed outranks subOrder, so it has no
+    # determinable position against the drainer's own 10/4 slot. It is also the landing spot for any
+    # residual source not yet enumerated, which is the point: the default is to decline evidence
+    # rather than to invent a phase for it.
+    return _HP_SNAPSHOT_DISCARD
+
+
+# Event types that can only occur in the ACTION phase, used to close the residual phase.
+#
+# The bare ``|`` marker is emitted from three sites in ``sim/battle.ts``: ``turnLoop`` (2963, always
+# immediately followed by ``|t:|``), the ``residual`` queue action (2836, the one that matters), and
+# ``win`` (1526). The parser DROPS ``|t:|`` lines before the belief engine sees them
+# (``showdown.py`` ``_feed_line``: they are wall-clock noise that would make replay-from-root
+# observations differ), so the two markers are indistinguishable at this layer by lookahead. They do
+# not need to be: ``turnLoop``'s marker is followed by the turn's actions, and every action opens
+# with one of these lines, so the first of them re-opens the action phase. Differentially verified
+# against the raw protocol -- where ``|t:|`` IS visible and the phase is therefore exactly known --
+# over 400 games on two seeds: zero disagreements on any HP line.
+_ACTION_PHASE_EVENT_TYPES = frozenset({"move", "switch", "drag", "replace", "cant"})
 
 
 def _other_side(showdown_slot: str) -> str:

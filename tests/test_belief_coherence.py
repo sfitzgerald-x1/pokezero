@@ -35,14 +35,15 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from belief_coherence_gate import run_sweep
 
-        # Deliberately SMALL, and this is a known limitation rather than a choice: the Leftovers
-        # defect this harness found needs ~26-400 games to surface depending on seed, so a guard
-        # big enough to catch it would be red on this branch. It is raised in the PR that fixes
-        # that defect, where the tree is green. The fleet sweep is the real bar either way.
+        # 25 games at seed 4711, not 3 at seed 7. The Leftovers defect this harness found needed
+        # ~26 games at this seed (and 400 at others) to surface, so a 3-game guard was green on a
+        # red tree -- it could not have caught the very defect that motivated it. Seed chosen
+        # because it reaches the defect class fastest of those measured. The >=20k fleet sweep is
+        # still the real bar; this is the always-on regression floor.
         cls.summary = run_sweep(
             showdown_root=_integration_root(),
-            games=3,
-            seed=7,
+            games=25,
+            seed=4711,
             clone_equivalence_every=5,
         )
 
@@ -169,6 +170,155 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
             counts.get("mon_observations", -1),
             "some observations were not containment-checked or not contained",
         )
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class ResidualPhaseDifferentialTest(unittest.TestCase):
+    """The belief engine's action/residual phase must match the sim's, on every HP line.
+
+    This is the verification the ``[silent]`` Leftovers defect needed and did not have. The engine
+    reads the phase from the bare ``|`` marker (``sim/battle.ts:2836``, ``case 'residual':
+    this.add('')``), but that marker is emitted from three sites, and the parser drops the ``|t:|``
+    line that distinguishes ``turnLoop``'s copy of it -- so the engine closes the residual phase on
+    the first action line instead. Whether that reconstruction is EXACT is a measurable question, and
+    measuring it against the sim rather than against a second Python implementation is the plan's §3
+    rule ("differentials compare against the engine or the sim, never Python-vs-Python").
+
+    Ground truth is computed from the RAW protocol, where ``|t:|`` is still present and the phase is
+    therefore known exactly. The comparison is on the CLASSIFICATION -- what the pre-slot snapshot
+    does with the line -- not on the phase bit, because two tags (``[from] confusion``, and the
+    residual-only tags) are settled without the phase by design.
+
+    Pairing is by RAW LINE, not by position. An earlier version indexed the engine's Nth HP event
+    against the Nth raw HP line with only an end-of-game count check, so a single dropped or extra
+    line would have silently mis-paired everything after it -- and the counts are not always equal
+    (they differed in 2 of 400 games per seed), which is exactly the condition that hides it. The
+    cursor now resynchronizes on the line text, an unmatchable event is a hard failure, and any raw
+    line the engine never saw is counted and reported rather than absorbed.
+
+    Two POLICIES are run, because the line mix a policy produces is not the same and a differential
+    that only ever sees one action distribution is a weaker claim than it looks: uniform-random over
+    the legal mask, and the move-biased policy the gate itself uses.
+    """
+
+    GAMES = 3
+    SEED = 31337
+
+    @classmethod
+    def _truth_phases(cls, raw_lines) -> list[tuple[str, bool]]:
+        """(raw_line, in_residual_phase) for every HP line, from the raw protocol."""
+        lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith(">")]
+        out: list[tuple[str, bool]] = []
+        phase = False
+        for index, line in enumerate(lines):
+            parts = line.split("|")
+            event_type = parts[1] if len(parts) > 1 else ""
+            if event_type == "":
+                # The ONLY discriminator, and it is only available here: ``turnLoop`` always follows
+                # its marker with ``|t:|``; the residual marker never does.
+                following = lines[index + 1].split("|") if index + 1 < len(lines) else []
+                phase = (following[1] if len(following) > 1 else None) != "t:"
+                continue
+            if event_type == "turn":
+                phase = False
+            if event_type in {"-damage", "-heal", "-sethp"}:
+                out.append((line, phase))
+        return out
+
+    def test_the_tracked_phase_never_changes_a_classification(self) -> None:
+        import random
+
+        from pokezero.belief import PublicBattleBeliefEngine, _hp_snapshot_action
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.showdown import MOVE_ACTION_COUNT
+
+        HP_EVENTS = {"-damage", "-heal", "-sethp"}
+        env = LocalShowdownEnv(
+            LocalShowdownConfig(showdown_root=str(_integration_root()), set_belief_source=True)
+        )
+        checked = 0
+        residual_checked = 0
+        unmatched_raw_lines = 0
+        per_policy: dict[str, int] = {}
+        disagreements: list[tuple[str, str, str, str]] = []
+        try:
+            # move_bias None = uniform over the legal mask; 0.75 = the gate's own policy.
+            for policy, move_bias in (("uniform-random-legal", None), ("move-bias-0.75", 0.75)):
+                per_policy[policy] = 0
+                for game in range(self.GAMES):
+                    rng = random.Random(self.SEED * 1_000_003 + game)
+                    env.reset(seed=self.SEED + game)
+                    steps = 0
+                    while steps < 400 and env.terminal() is None:
+                        requested = env.requested_players()
+                        if not requested:
+                            break
+                        actions = {}
+                        for player in requested:
+                            mask = env.observe(player).legal_action_mask
+                            legal = [index for index, allowed in enumerate(mask) if allowed]
+                            if not legal:
+                                break
+                            moves = [i for i in legal if i < MOVE_ACTION_COUNT]
+                            if move_bias is not None and moves and rng.random() < move_bias:
+                                actions[player] = rng.choice(moves)
+                            else:
+                                actions[player] = rng.choice(legal)
+                        if len(actions) != len(requested):
+                            break
+                        env.step(actions)
+                        steps += 1
+
+                    truth = self._truth_phases(env.protocol_lines)
+                    engine = PublicBattleBeliefEngine()
+                    cursor = 0
+                    for event in env._parser.public_events:
+                        engine.ingest_event(event)
+                        if event.event_type not in HP_EVENTS:
+                            continue
+                        # Resynchronize on the LINE TEXT. Advancing past non-matching entries makes a
+                        # dropped raw line cost one counted skip instead of mis-pairing the rest of
+                        # the game, and running off the end is a failure rather than a silent stop.
+                        start = cursor
+                        while cursor < len(truth) and truth[cursor][0] != event.raw_line:
+                            cursor += 1
+                        self.assertLess(
+                            cursor,
+                            len(truth),
+                            f"engine HP event {event.raw_line!r} has no matching raw protocol line; "
+                            "the differential cannot be paired and would otherwise pass vacuously",
+                        )
+                        unmatched_raw_lines += cursor - start
+                        raw_line, truth_phase = truth[cursor]
+                        cursor += 1
+                        checked += 1
+                        per_policy[policy] += 1
+                        if truth_phase:
+                            residual_checked += 1
+                        want = _hp_snapshot_action(raw_line, in_residual_phase=truth_phase)
+                        got = _hp_snapshot_action(
+                            event.raw_line, in_residual_phase=engine._in_residual_phase
+                        )
+                        if want != got:
+                            disagreements.append((policy, raw_line, want, got))
+        finally:
+            env.close()
+
+        # Reachability first: a differential over zero residual-phase HP lines proves nothing, and
+        # the whole defect lived in the residual phase. Both policies must contribute.
+        self.assertGreater(checked, 200, "too few HP lines to be a differential")
+        self.assertGreater(residual_checked, 50, "no residual-phase HP lines reached")
+        for policy, count in per_policy.items():
+            self.assertGreater(count, 50, f"policy {policy} contributed almost nothing")
+        # Not asserted as zero: the parser legitimately drops a few lines, and the point of counting
+        # is that a LARGE number would mean the pairing has gone wrong rather than that a line was
+        # dropped. Kept loose enough not to be brittle, tight enough to catch systematic mis-pairing.
+        self.assertLess(
+            unmatched_raw_lines,
+            max(10, checked // 50),
+            f"{unmatched_raw_lines} raw HP lines never matched an engine event",
+        )
+        self.assertEqual(disagreements[:10], [], f"{len(disagreements)} classification mismatches")
 
 
 class CloneEquivalenceAliasingTest(unittest.TestCase):
