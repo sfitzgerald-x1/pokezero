@@ -24,6 +24,7 @@ jobs:
   # filtering moved here, with `gate-status` below reporting on every PR.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       fidelity: ${{ steps.f.outputs.fidelity }}
     steps:
@@ -45,14 +46,21 @@ jobs:
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
+            # Without these the classifier half of B1 -- which edits the differential --
+            # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
+            # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
             tests/test_crit_kill_split_patch.py
             tests/test_drag_limit_is_a_last_resort.py
+            # Imported by the differential (engine_transition_differential.py:105).
             scripts/fidelity_gate_events.py
             tests/test_poke_engine_patch_stack.py
+            # A5 lives here. Without this entry the patch that fixes it triggers the
+            # workflow (via the .patch and patches.txt globs) but the suite holding its
+            # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
@@ -60,7 +68,17 @@ jobs:
         run: |
           set -euo pipefail
           # Fail CLOSED: if the diff cannot be computed, run the gates.
-          if ! changed=$(git diff --name-only "$BASE" "$HEAD"); then
+          # THREE dots: diff from the merge base, which is what GitHub's own
+          # `paths:` filter and the Files-changed view use. A two-dot diff against
+          # the base-branch TIP normally over-matches (harmless), but if an
+          # identical change also landed on main the trees agree, the file drops
+          # out, and a touched path silently stops matching.
+          #
+          # --no-renames: with rename detection on (the default), `git mv
+          # src/pokezero/x.py lib/` reports ONLY the destination, so moving a file
+          # OUT of a gated directory would match nothing and skip the gates on a
+          # change certain to break them.
+          if ! changed=$(git diff --no-renames --name-only "$BASE...$HEAD"); then
             echo "could not diff $BASE..$HEAD; running the gates anyway"
             echo "fidelity=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -69,6 +87,12 @@ jobs:
           matched=false
           while IFS= read -r pattern; do
             [ -z "$pattern" ] && continue
+            # The old trigger `paths:` list carried a one-line rationale per entry
+            # ("Found by review of #1081", "A5 lives here", ...). A YAML block
+            # scalar cannot hold YAML comments, so they live inside it and are
+            # skipped here -- deleting the provenance of each glob was not worth
+            # the tidiness.
+            case "$pattern" in \#*) continue ;; esac
             while IFS= read -r file; do
               [ -z "$file" ] && continue
               # shellcheck disable=SC2254
@@ -79,9 +103,6 @@ jobs:
           done <<< "$FILTERS"
           echo "fidelity=$matched" >> "$GITHUB_OUTPUT"
           echo "fidelity paths touched: $matched"
-        # Single source of truth for what counts as a fidelity-relevant change.
-        # Kept as a here-doc rather than a trigger `paths:` list so the required
-        # check can still report when nothing here is touched.
   mass-gate:
     needs: changes
     if: needs.changes.outputs.fidelity == 'true'
@@ -295,15 +316,38 @@ jobs:
     needs: [changes, mass-gate]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Report the fidelity gate result
         env:
           TOUCHED: ${{ needs.changes.outputs.fidelity }}
           RESULT: ${{ needs.mass-gate.result }}
+          FILTER: ${{ needs.changes.result }}
         run: |
           set -euo pipefail
+          echo "changes result: ${FILTER}"
           echo "fidelity paths touched: ${TOUCHED}"
           echo "mass-gate result: ${RESULT}"
+
+          # The filter job must have SUCCEEDED before its output means anything.
+          # Without this, a failed or cancelled `changes` job leaves TOUCHED as the
+          # empty string -- not "false" -- and `mass-gate` reads `skipped` because
+          # its dependency never succeeded. The skipped arm's `= "true"` guard does
+          # not fire on "", so this job printed "gates correctly not run" and exited
+          # 0: a green REQUIRED check on a PR whose gates never ran. There is no
+          # `concurrency:` block in this repo, so the only thing that cancels a run
+          # is a person -- which made an 11-second window in which anyone with write
+          # access could cancel `changes` and mint themselves a passing gate.
+          if [ "${FILTER}" != "success" ]; then
+            echo "::error::the path-filter job did not succeed (${FILTER}); the gates did not run"
+            exit 1
+          fi
+          # And demand an explicit negative rather than "anything that is not true".
+          if [ "${TOUCHED}" != "true" ] && [ "${TOUCHED}" != "false" ]; then
+            echo "::error::path filter produced no verdict (fidelity='${TOUCHED}')"
+            exit 1
+          fi
+
           case "${RESULT}" in
             success)
               echo "engine fidelity gates passed"
