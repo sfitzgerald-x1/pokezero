@@ -1294,3 +1294,17 @@ poke-engine-gen3-rest-sleep-pending-refund.patch
 # tests/test_rest_sleep_refund_boundary.py with a nonzero value rather than by the
 # compiler.
 poke-engine-gen3-rest-sleep-refund-binding.patch
+# Implement gen3 White Herb (cause A6). Absent from gen3 entirely -- WHITEHERB
+# existed only under src/genx/ -- so a Deoxys never restored the Superpower drop
+# and Golem's Rock Slide landed against an undropped Defence in Showdown but a
+# dropped one here, flipping the whole roll band. The item is KNOWABLE, not a
+# hidden-item limit: teams.ts:471 returns White Herb unconditionally for deoxys
+# and deoxysattack. Zeroes NEGATIVE boosts only -- positives are untouched, it is
+# not a reset -- and consumes the item. Wired at THREE sites, each checking both
+# sides: after a move's boost effect, after get_instructions_from_secondaries,
+# and after ability_on_switch_in (Intimidate). Sites 2 and 3 were missing in the
+# first version and were added after self-review found the reachability argument
+# false. Remaining uncovered producers are Transform/Psych-Up boost copy and
+# Trick-style item acquisition, both unreachable: the only holders are deoxys and
+# deoxysattack and their movepool carries none of them. reports/c124, c126.
+poke-engine-gen3-white-herb.patch
