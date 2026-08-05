@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 59-patch stack. Only abilities.rs moved:
+# Post-patch content pins for the 60-patch stack. Only generate_instructions.rs moved:
 # a5-wake-before-contact is the one patch added since the 58-patch pins and it
 # touches nothing else. generate_instructions.rs and choice_effects.rs are BOTH
 # byte-identical to the 58-patch pins. Two unchanged digests either side of one
@@ -36,7 +36,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "8442a6d5c28bfd4c90837c8f9f174ed4e04a55d97712d0e6516ef6a6521f2fde",
+    "src/gen3/generate_instructions.rs": "3e5d2b352dd43cd0db634486108663597c27580aa5d83256f176da3b553a0c2d",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
@@ -117,12 +117,13 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-4:]],
+                [entry.name for entry in applied[-5:]],
                 [
                     "poke-engine-gen3-bellydrum-roll-gate.patch",
                     "poke-engine-gen3-residual-lethality-partition.patch",
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
+                    "poke-engine-gen3-weather-entry-truncation.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

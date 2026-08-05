@@ -1,0 +1,41 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3849,11 +3849,34 @@
+     }
+ 
+     // Weather Damage
++    //
++    // pokezero gen3 fidelity fix (battle-end truncation GRANULARITY): this guard
++    // belongs OUTSIDE the loop, and it used to be inside it.
++    //
++    // Showdown checks `this.ended` between residual ENTRIES, never mid-entry --
++    // which is what `poke-engine-gen3-battle-end-residuals.patch` says in its own
++    // rationale, and then contradicts by installing the guard per SIDE. Weather is
++    // one entry that chips BOTH actives: `faintMessages(); if (this.ended) return;`
++    // runs after the whole entry, so a mon killed by its own sand chip does not
++    // stop the other active from taking its chip in that same entry.
++    //
++    // Recorded protocol at holdout row `19100002/53`, in order:
++    //     |-weather|Sandstorm|[upkeep]
++    //     |-damage|p1a: Slaking|0 fnt|[from] Sandstorm
++    //     |-damage|p2a: Venusaur|161/262|[from] Sandstorm
++    //     |faint|p1a: Slaking
++    //     |win|PokeZero p2
++    // Both chips land, THEN the faint resolves, THEN the battle ends. With the
++    // guard inside the loop the winner's chip was dropped, which is exactly the
++    // `observed_only=[('sandstorm', -16)]` miss on that row and on `19100154/75`.
++    //
++    // The per-Pokemon guards in order 10 below are NOT affected and stay where they
++    // are: that class really is one handler per Pokemon, so `ended` really is
++    // checked between them. Only the shared weather entry was mis-sliced. Keeping
++    // one guard here still skips the whole weather entry when the battle was
++    // already over before it began.
++    stop_residuals_if_battle_ended!(state, incoming_instructions);
+     for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         if state.weather_is_active(&Weather::HAIL) {
+             let active_pkmn = state.get_side(side_ref).get_active();
+             if active_pkmn.hp == 0 || active_pkmn.has_type(&PokemonType::ICE) {

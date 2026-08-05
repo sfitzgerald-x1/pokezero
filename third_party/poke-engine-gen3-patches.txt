@@ -1261,3 +1261,13 @@ poke-engine-gen3-contact-flags.patch
 # branch that keeps the status is one where the move never lands. Sleep Talk and
 # the move it calls are the exception and keep refusing. reports/c118.
 poke-engine-gen3-a5-wake-before-contact.patch
+
+# Truncate battle-end residuals BETWEEN entries, not mid-entry, for weather.
+# battle-end-residuals.patch states the Showdown rule correctly -- the faint-causing
+# entry runs to completion, then every remaining handler is skipped -- and then
+# installs its guard per SIDE inside the weather loop. Weather is ONE entry chipping
+# both actives, so a mon killed by its own sand chip was cancelling the other
+# active's chip. Recorded protocol on 19100002/53 emits both chips, then the faint,
+# then |win|. The per-Pokemon guards in order 10 are correct and untouched.
+# reports/c122.
+poke-engine-gen3-weather-entry-truncation.patch
