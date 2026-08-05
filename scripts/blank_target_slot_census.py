@@ -16,13 +16,20 @@ Pass, Refresh) blank often and it is harmless -- they are in
 that mattered are the foe-targeted ones.
 """
 import collections, os, random, sys
-from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from pokezero.local_showdown import (
+    DEFAULT_SHOWDOWN_ROOT,
+    LocalShowdownConfig,
+    LocalShowdownEnv,
+)
 
 GAMES = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 4711
-ROOT = os.environ.get("POKEZERO_SHOWDOWN_ROOT", "")
-if not ROOT:
-    raise SystemExit("set POKEZERO_SHOWDOWN_ROOT to a built Showdown checkout")
+# Falls back to the repo's default root rather than hard-requiring the env var: this script is
+# quoted as a reproducer in belief.py and tests/test_pressure_pp_charge.py, and a reproducer that
+# exits 1 in the default configuration is no better than the unreproducible number it replaced.
+ROOT = os.environ.get("POKEZERO_SHOWDOWN_ROOT") or str(DEFAULT_SHOWDOWN_ROOT)
+if not os.path.isdir(ROOT):
+    raise SystemExit(f"no Showdown checkout at {ROOT}; set POKEZERO_SHOWDOWN_ROOT")
 
 total = collections.Counter()
 blank = collections.Counter()
