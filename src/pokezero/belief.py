@@ -2135,7 +2135,10 @@ _PRE_ITEM_SLOT_RESIDUAL_HP_TAGS = (
 #   * Leech Seed 10/5       -- LIVE. Damage on the SEEDED mon, i.e. same-Pokemon. 12 pool species
 #     carry the move. (The paired drain HEAL on the drainer is cross-Pokemon; see below.)
 #   * brn / psn / tox 10/6  -- LIVE. `data/mods/gen4/conditions.ts` brn/psn/tox. Toxic chip is
-#     emitted as `[from] psn`, so one tag covers both.
+#     emitted as `[from] psn` (measured: 6,695 `[from] psn` lines and zero `[from] tox` lines over
+#     400 games / 2 seeds), so two tags cover all three conditions. A third `"[from] tox"` entry was
+#     dropped rather than kept as belt: it never matches, and as a bare substring it would also
+#     match any future `[from] tox…` effect name, which is a way to be wrong for free.
 #   * Nightmare 10/7        -- unreachable. `data/mods/gen4/moves.ts` nightmare sets 10/7; no pool
 #     set carries the move.
 #   * Curse 10/8            -- unreachable. `data/mods/gen4/moves.ts` curse sets 10/8, but only the
@@ -2153,7 +2156,6 @@ _AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS = (
     "[from] Leech Seed",
     "[from] psn",
     "[from] brn",
-    "[from] tox",
     "[from] Nightmare",
     "[from] Curse",
     "[from] move: Wrap",
