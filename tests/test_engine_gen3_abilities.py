@@ -124,6 +124,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         defender_safeguard: int = 0,
         attacker_spikes: int = 0,
         attacker_yawn_duration: int = 0,
+        attacker_speed_boost: int = 0,
     ):
         dummy = poke_engine.Pokemon(id="pikachu", level=1, hp=0)
         p1 = [attacker, *attacker_party]
@@ -133,6 +134,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         return poke_engine.State(
             side_one=poke_engine.Side(
                 active_index="0",
+                speed_boost=attacker_speed_boost,
                 pokemon=p1,
                 volatile_statuses=set(attacker_volatiles),
                 volatile_status_durations=poke_engine.VolatileStatusDurations(
@@ -532,6 +534,46 @@ class AbilityMechanicsTests(unittest.TestCase):
             msg="a paralyzed Tauros must still land Tackle 75% of the time",
         )
         self.assertAlmostEqual(self._mass(branches, "-> POISON"), 0.0, places=4)
+
+    def test_white_herb_restores_a_self_inflicted_drop_and_is_consumed(self) -> None:
+        # A6. gen3 White Herb was absent from the engine entirely (WHITEHERB
+        # existed only under src/genx/), so a Deoxys never restored Superpower's
+        # -1 Def and the next physical hit landed against a dropped stat.
+        # Showdown: data/items.ts:7653, no gen3/gen4 override -- zero the
+        # NEGATIVE boosts, consume, render `-enditem` + `-clearnegativeboost`.
+        # The item is knowable: teams.ts:471 gives it to Deoxys unconditionally.
+        attacker = self._mon(
+            "deoxys", "pressure", "superpower", speed=200, item="whiteherb"
+        )
+        defender = self._mon("golem", "rockhead", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "superpower", "splash"
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        # Superpower drops the USER's Attack and Defense by one each.
+        self.assertIn("Boost SideOne Attack: -1", text)
+        self.assertIn("Boost SideOne Defense: -1", text)
+        # White Herb restores both to zero and is consumed.
+        self.assertIn("Boost SideOne Attack: 1", text)
+        self.assertIn("Boost SideOne Defense: 1", text)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
+    def test_white_herb_leaves_positive_boosts_alone(self) -> None:
+        # It is not a reset. Showdown zeroes only the NEGATIVE entries, so a
+        # Pokemon that is +2 Speed and -1 Defense keeps the +2. Without this the
+        # implementation could pass the test above by clearing every boost.
+        attacker = self._mon(
+            "deoxys", "pressure", "superpower", speed=200, item="whiteherb"
+        )
+        defender = self._mon("golem", "rockhead", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender, attacker_speed_boost=2),
+            "superpower",
+            "splash",
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+        self.assertNotIn("Boost SideOne Speed", text)
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")

@@ -1,0 +1,142 @@
+--- a/src/gen3/items.rs
++++ b/src/gen3/items.rs
+@@ -3,8 +3,8 @@
+ use crate::choices::{Choice, Choices};
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+-    ChangeItemInstruction, ChangeStatusInstruction, DisableMoveInstruction, HealInstruction,
+-    Instruction, StateInstructions,
++    BoostInstruction, ChangeItemInstruction, ChangeStatusInstruction, DisableMoveInstruction,
++    HealInstruction, Instruction, StateInstructions,
+ };
+ use crate::state::{
+     Pokemon, PokemonBoostableStat, PokemonStatus, Side, SideReference, State,
+@@ -171,6 +171,7 @@
+         LOADEDDICE,
+         RUSTEDSWORD,
+         RUSTEDSHIELD,
++        WHITEHERB,
+     },
+     default = UNKNOWNITEM
+ }
+@@ -292,7 +293,91 @@
+         }));
+     attacker.item = Items::NONE;
+ }
++
++/// gen3 White Herb: zero the NEGATIVE boosts and consume the item.
++///
++/// Showdown `data/items.ts:7653`. There is no gen3 or gen4 override, so the base
++/// handler applies (gen3's `scripts.ts` is `inherit: 'gen4'`). Its `onStart`
++/// scans boosts, sets each negative entry to 0, calls `useItem()` -- rendered as
++/// `-enditem` -- and adds `-clearnegativeboost`. POSITIVE boosts are untouched:
++/// it is not a reset.
++///
++/// Showdown fires it from `onAnySwitchIn` (priority -2), `onAnyAfterMega`,
++/// `onAnyAfterMove`, and `onResidual` at order 29. This engine wires the
++/// after-move one only, called once after `get_instructions_from_boosts`, which
++/// is the reachable case here: White Herb is on Deoxys and Deoxys-Attack ONLY
++/// (`data/random-battles/gen3/teams.ts:471` returns it unconditionally for both,
++/// in the high-priority block ahead of any randomness), and their movepool --
++/// extremespeed, icebeam, psychoboost, shadowball, superpower -- carries two
++/// self-droppers: Superpower (-1 Atk, -1 Def) and Psycho Boost (-2 SpA).
++/// Opponent-inflicted drops delivered as a move's boost effect are covered too,
++/// because `get_instructions_from_boosts` handles both targets and this runs
++/// after it for both sides.
++///
++/// NOT covered, recorded rather than silently omitted: secondary-effect stat
++/// drops, Intimidate on switch-in, and the residual-order-29 sweep. Each needs
++/// its own call site. The row this exists for (reports/c111 A6, `19000112/32`)
++/// is a Superpower self-drop, which the after-move site does cover.
++pub fn item_white_herb_after_boosts(
++    state: &mut State,
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++) {
++    let side = state.get_side(side_ref);
++    {
++        let active = side.get_active_immutable();
++        if active.item != Items::WHITEHERB || active.hp == 0 {
++            return;
++        }
++    }
+ 
++    let negatives: Vec<(PokemonBoostableStat, i8)> = vec![
++        (PokemonBoostableStat::Attack, side.attack_boost),
++        (PokemonBoostableStat::Defense, side.defense_boost),
++        (PokemonBoostableStat::SpecialAttack, side.special_attack_boost),
++        (PokemonBoostableStat::SpecialDefense, side.special_defense_boost),
++        (PokemonBoostableStat::Speed, side.speed_boost),
++        (PokemonBoostableStat::Evasion, side.evasion_boost),
++        (PokemonBoostableStat::Accuracy, side.accuracy_boost),
++    ]
++    .into_iter()
++    .filter(|(_, amount)| *amount < 0)
++    .collect();
++
++    if negatives.is_empty() {
++        return;
++    }
++
++    for (stat, amount) in negatives {
++        // Restore to exactly 0 -- `-amount`, not a clamp to some floor.
++        match stat {
++            PokemonBoostableStat::Attack => side.attack_boost = 0,
++            PokemonBoostableStat::Defense => side.defense_boost = 0,
++            PokemonBoostableStat::SpecialAttack => side.special_attack_boost = 0,
++            PokemonBoostableStat::SpecialDefense => side.special_defense_boost = 0,
++            PokemonBoostableStat::Speed => side.speed_boost = 0,
++            PokemonBoostableStat::Evasion => side.evasion_boost = 0,
++            PokemonBoostableStat::Accuracy => side.accuracy_boost = 0,
++        }
++        instructions
++            .instruction_list
++            .push(Instruction::Boost(BoostInstruction {
++                side_ref: *side_ref,
++                stat,
++                amount: -amount,
++            }));
++    }
++
++    instructions
++        .instruction_list
++        .push(Instruction::ChangeItem(ChangeItemInstruction {
++            side_ref: *side_ref,
++            current_item: Items::WHITEHERB,
++            new_item: Items::NONE,
++        }));
++    side.get_active().item = Items::NONE;
++}
++
+ pub fn item_before_move(
+     state: &mut State,
+     choice: &mut Choice,
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -27,7 +27,7 @@
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+     item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
+-    Items,
++    item_white_herb_after_boosts, Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+@@ -5115,6 +5115,17 @@
+ 
+     if let Some(boost) = &choice.boost {
+         get_instructions_from_boosts(state, boost, &attacking_side, &mut instructions);
++        // gen3 White Herb (A6). Showdown fires it from `onAnyAfterMove`, so it
++        // runs once after the move's boost effect and is checked for BOTH sides:
++        // `get_instructions_from_boosts` applies MoveTarget::User and
++        // MoveTarget::Opponent alike, so a self-drop (Superpower, Psycho Boost)
++        // and an opponent-inflicted drop are both caught here.
++        item_white_herb_after_boosts(state, &attacking_side, &mut instructions);
++        item_white_herb_after_boosts(
++            state,
++            &attacking_side.get_other_side(),
++            &mut instructions,
++        );
+     }
+ 
+     if choice.flags.drag {

@@ -1271,3 +1271,12 @@ poke-engine-gen3-a5-wake-before-contact.patch
 # then |win|. The per-Pokemon guards in order 10 are correct and untouched.
 # reports/c122.
 poke-engine-gen3-weather-entry-truncation.patch
+
+# Implement gen3 White Herb (cause A6). Absent from gen3 entirely -- WHITEHERB
+# existed only under src/genx/ -- so a Deoxys never restored the Superpower drop
+# and Golem's Rock Slide landed against an undropped Defence in Showdown but a
+# dropped one here, flipping the whole roll band. The item is KNOWABLE, not a
+# hidden-item limit: teams.ts:471 returns White Herb unconditionally for deoxys
+# and deoxysattack. Zeroes NEGATIVE boosts only and consumes; wired after the
+# move's boost effect for both sides. reports/c124, reports/c126.
+poke-engine-gen3-white-herb.patch
