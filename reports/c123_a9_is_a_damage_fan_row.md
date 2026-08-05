@@ -1,0 +1,154 @@
+# C123 — A9 is misfiled: the Wish heal is not unrendered, it is never generated
+
+Row `19100113/62`, the sole A9 row, is filed in `reports/c117_validation_holdout_baseline.md`
+as an **unrendered Wish heal** — a renderer defect — and `reports/c119_phase2_scoping.md`
+counts it as "no" for Phase 2 on that basis. Both are wrong, and the correction moves the row
+from the renderer to the Phase 2 decision.
+
+> **On the C116 citation.** As in C121/C122: the C116 plan is not in this repository, so it is
+> provenance for why work was queued and never evidence. Everything below is measured.
+
+## 1. The measurement
+
+The recorded engine state, replayed through the installed engine with the row's own choices
+(`p1 seismictoss`, `p2 bonemerang`):
+
+| mass | p1 damage | heal | 253 HP → | outcome |
+|---|---|---|---|---|
+| 10.0000 % | 0 | 0 | 253 | Bonemerang missed |
+| 84.3750 % | 253 | 0 | **0** | dead |
+| 3.8672 % | 253 | 0 | **0** | dead |
+| 1.7578 % | 253 | 0 | **0** | dead |
+
+Showdown, from the row's protocol:
+
+```
+|-damage|p1a: Registeel|125/253 slp      128
+|-damage|p1a: Registeel|4/253 slp        121   -> survives at 4
+|-heal|p1a: Registeel|130/253 slp|[from] move: Wish|[wisher] Umbreon    126
+|-heal|p1a: Registeel|145/253 slp|[from] item: Leftovers                 15
+```
+
+**There is no engine branch in which the Pokémon survives the hit.** It is dead in 90 % of the
+mass and untouched at full HP in the other 10 %, and a full-HP mon heals nothing. So the Wish
+and Leftovers heals are not *rendered wrongly* — they are never *generated*. No renderer change
+can produce them.
+
+`reports/artifacts/c122_weather_holdout_sweep.json` records the miss as
+`observed_only=[('itemleftovers', 15), ('movewish', 126)] engine_only=[]`, which is consistent
+with both explanations; the replay is what distinguishes them, and it was one command away.
+
+## 2. Why the engine has no surviving branch
+
+The branch masses give the mechanism exactly. Bonemerang is 90 % accurate:
+
+- `84.3750 = 90 × 15/16`
+- crit mass `3.8672 + 1.7578 = 5.6250 = 90 × 1/16`
+
+~~That is **one crit roll and no damage-roll fan at all**.~~
+
+> **Correction (review of #1098): my own masses refute that sentence.** The crit split
+> `3.8672 / 1.7578` is **11/16 and 5/16 of the crit mass** — that IS a 16-roll fan. It comes from
+> the Case B crit-kill partition at `gen3/generate_instructions.rs:3355-3380` (the test at `:3356-3358`), where
+> `compare_health_with_damage_multiples(max_crit_damage = 282, hp = 253)` returns `(244, 11)`:
+> kill mass `0.9 × 1/16 × 11/16 = 0.038671875`, survive mass `0.017578125`,
+> `average_non_kill_crit_damage = 244`. So **244 is roll variation** — the mean of crit rolls
+> 85–89 — not clamping.
+>
+> That 1.7578 % arm is labelled "survive" by the partition and still shows as **dead** in §1's
+> table (`244+9`), which looks contradictory and is not: the arm survives the FIRST hit at 244,
+> then the second hit clamps to the remaining 9 and kills. That is the hit-count blindness itself,
+> visible in the branch listing. Those masses were printed in this very report and I did not read them.
+>
+> **The real reason no non-crit branch survives is better than the one I gave, and actionable:**
+> the KO partitions compare a **per-hit** maximum against the defender's **full** HP, with no
+> `hit_count` scaling anywhere: Case A at `:3227-3230` tests `max_damage_dealt >= hp && min < hp`
+> with the non-crit per-hit max of **140**, and Case B at `:3356-3358` does the same with the
+> crit per-hit max of **282**. `hit_count` is computed at `:3091` and consumed only at `:3158`,
+> `:3430`, `:3452` and `:5055` — neither partition references it. So `140 < 253` means the
+> non-crit arm never partitions, though two hits reach 280. A hit-count-aware threshold (max 280, min 238,
+> straddling 253) yields exactly the 6/16 band computed in §2b, **with no gate change at all**.
+> That is a distinct, unfiled defect: **the KO partition threshold is hit-count-blind for
+> multi-hit moves.**
+
+The 85–100 roll fan lives behind the gate at `gen3/generate_instructions.rs:3117`:
+
+```rust
+if branch_on_damage
+    && choice.first_move
+    && pending_hp_reading_move(defender_choice)
+    && fixed_damage.is_none()
+```
+
+Neither `seismictoss` nor `bonemerang` reads HP, so the gate is closed and the whole fan
+collapses to a single roll. That single roll deals **exactly 253** into exactly 253 max HP —
+the three damaged branches differ only in how the total is split across the two hits
+(`129+124`, `253`, `244+9`) — and per the correction above, `244` is the crit-roll average,
+not a clamp.
+
+**The gate is also not closed by `pending_hp_reading_move`.** It has four clauses, and
+`choice.first_move` closes it here independently: Registeel (speed 123) outspeeds Marowak (122),
+confirmed by the protocol — `|cant|p1a: Registeel|slp` precedes `|move|p2a: Marowak|Bonemerang` —
+so side one moves first and Bonemerang's `first_move` is false. Measured: 4 branches with roll
+enumeration forced on, 4 with it off.
+
+Showdown's roll totalled 249. **The margin between the two worlds is 4 HP out of 253.**
+
+## 2b. Does widening the fan actually produce a surviving branch?
+
+The diagnosis above would be worthless for Phase 2 if every roll were still lethal, so this is
+measured rather than assumed. `poke_engine.calculate_damage` on the same state returns
+`([78], [140, 282])` — p1's Seismic Toss at its fixed 78, and Bonemerang's per-hit maximum of
+**140** non-crit. The fan scales that as `(raw * random / 100)` for `random` in 85..=100:
+
+| roll | per hit | 2-hit total | outcome |
+|---|---|---|---|
+| 85 | 119 | 238 | survives at 15 |
+| 88 | 123 | 246 | survives at 7 |
+| 90 | 126 | 252 | **survives at 1** |
+| 91 | 127 | 254 | dead |
+| 100 | 140 | 280 | dead |
+
+**Rolls 85–90 survive; 91–100 do not.** So widening the gate puts **6 of 16 rolls — 37.5 % of
+the non-crit mass — on branches where the Pokémon lives and the residual walk runs.** The
+conclusion follows.
+
+One honest caveat this exposes, which is a separate question from A9: the engine's fan applies
+**one roll to the whole move**, so a two-hit move always produces an even split and can only
+land on the totals above. Showdown rolls **each hit independently** — 128 and 121, totalling
+249, which is not reachable at all under a shared roll. That is a second, narrower divergence in
+multi-hit damage; it does not affect this refiling (survival is reachable either way) and it is
+recorded here rather than folded in.
+
+## 3. Disposition
+
+**A9 is refiled from "renderer omission" to the damage-fan class, and it is absorbed by Phase 2.**
+
+This matters for the Phase 2 decision specifically. `reports/c119_phase2_scoping.md` lists A9 as
+"**no** — a renderer omission" and that judgement is load-bearing in its 5 → 2 headline. On the
+measurement above it is a **yes** — but NOT by the route this report first gave. Widening
+`pending_hp_reading_move` does **nothing** here: `choice.first_move` blocks the row regardless,
+measured at 4 branches either way. The route that would absorb it is the **hit-count-aware KO
+threshold** above, which needs no gate change. Filed as a separate defect, not folded into
+Phase 2.
+
+That also connects to the finding already recorded on #1088: the engine **already ships**
+enumerate-then-merge at `:3117`, whose `for random in 85..=100` loop is at `:3146`, running through `run_move` per
+roll and merging with `combine_duplicate_instructions`. Phase 2 is therefore not "build a
+mechanism" — the mechanism ships already. But note §3: widening the gate buys nothing for THIS
+row, because `choice.first_move` blocks it. The route here is the hit-count-aware KO threshold,
+so this row is evidence about the THRESHOLD, not about what widening buys.
+
+**No fix is proposed here and none should be inferred.** Widening that gate is a throughput
+decision — the engine's own comment at `:2911-2916` records "12 branches to
+144, ~8x slower per call" — but that measures Sleep Talk used SECOND firing 32-way enumeration,
+not the cost of widening this gate, so it is not a Phase 2 price. It belongs to the Phase 2 measurement, not to a row-by-row
+patch. This report changes an attribution, nothing else.
+
+## 4. Note
+
+C117 filed this row from its miss signature, which named the two missing components and was
+correct about them. The inference from "these components are missing" to "the renderer omits
+them" was never measured, and the replay that refutes it takes one `State.from_string` and one
+`generate_instructions`. Same shape as C118 v1, C119 and C120: the artifact was available, the
+structural story was cheaper to reach for, and it was wrong.

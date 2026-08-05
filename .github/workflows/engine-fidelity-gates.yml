@@ -228,6 +228,48 @@ jobs:
             exit 1
           fi
 
+      # The ENGINE's own suite. Nothing ran it before this step: the only cargo
+      # test in any workflow targets rust/pokezero-search, so every test in
+      # third_party/poke-engine-src/tests/ was a pin nothing executed -- the
+      # defect this workflow's header forbids, and the same one that let the
+      # #1105 wheel break reach CI. The gen3 Rest-refund tests added alongside
+      # this step are worthless without it. Runs after the build, which is what
+      # materialises the patched source tree.
+      - name: Engine gen3 suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --test test_gen3 2>&1 \
+            | tee /tmp/gen3suite.log
+          if ! grep -qE '^test result: ok\. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+              /tmp/gen3suite.log; then
+            echo "::error::expected 28 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+          # And NAME the pins. A total can be restored by unrelated tests, which
+          # is the defect the crate step below calls out; a count alone would let
+          # the Rest-refund tests be deleted and replaced with any six others.
+          # Each of these has a killed mutant behind it.
+          for pin in \
+            test_rest_refund_is_credited_on_switch_in \
+            test_rest_refund_is_clamped_to_the_legal_maximum \
+            test_rest_refund_is_credited_before_spikes_damage \
+            test_ordinary_sleep_never_receives_a_rest_refund \
+            test_switch_in_of_a_healthy_mon_emits_nothing \
+            test_natural_wake_voids_a_pending_rest_refund \
+            test_early_bird_wake_voids_a_pending_rest_refund \
+            test_a_cured_sleep_voids_a_pending_rest_refund \
+            test_a_non_sleep_usable_attempt_discards_the_refund \
+            test_a_sleep_usable_attempt_banks_a_turn \
+            test_using_rest_again_discards_the_previous_stints_refund \
+            test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited \
+            test_early_bird_staying_asleep_discards_the_refund; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/gen3suite.log || {
+              echo "::error::gen3 pin did not run: $pin"
+              exit 1
+            }
+          done
+
       # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
       # #1105: adding a field to the engine's Pokemon broke the wheel build, and
       # nothing local caught it because `cargo test -p pokezero-search` never
