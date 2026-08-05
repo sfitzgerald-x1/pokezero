@@ -247,32 +247,55 @@ class ExitCriterionTest(unittest.TestCase):
             "NUMERIC_LAST_DAMAGE_TAKEN",
         ):
             self.assertGreater(reach[column], 0, f"5-game sweep never reached {column}")
-        # PER-SEAT liveness (finding F14). This 5-game sweep CANNOT reach 16/16 and asserting it
-        # would be false precision: measured at seed 3, four (tracker, seat) pairs stay constant at
-        # 5 and 8 games, two at 12, and 16/16 is only reached at certification scale (220 games,
-        # seed 4711 -- recorded in the deploy status doc). So this asserts the property the sample
-        # DOES support, and it is the sharper one anyway: the mirror pairs that POOLING HID.
+        # PER-SEAT liveness. This 5-game sweep CANNOT reach 16/16 and asserting it would be false
+        # precision: measured at seed 3, four (tracker, seat) pairs stay constant at 5 and 8 games,
+        # two at 12. 16/16 is only reached at certification scale -- 220 games at seed 4711,
+        # 26,220 states. (An earlier version of this comment cited the deploy status doc as
+        # recording that; the doc said 8/8, the POOLED denominator, and it is untracked, so the
+        # pointer was wrong in both directions. The number is stated here instead, where it can
+        # be checked by re-running the gate.)
         #
-        # `self_hazard_damage_suffered` is constant on p1 and varies on p2 here. Pooling the two
-        # seats merged them into one value set, so the tracker read as "varied" and the dead seat
-        # was invisible. Per-seat, p1 is named. That makes this a regression test for the fix
-        # rather than a restatement of the gate's own threshold.
+        # So this asserts the PROPERTY that distinguishes per-seat keying from pooled, rather than
+        # the instance: at least one tracker must have exactly ONE seat constant and the other
+        # varied. Pooling cannot produce that shape -- it merges the two into a single set, so a
+        # constant seat beside a varying one reads as "varied" and vanishes. Asserting the property
+        # survives a change in WHICH tracker happens to be asymmetric; at seed 3 there are two
+        # independent witnesses (self_hazard_damage_suffered and opponent_items_removed on p1,
+        # mirrored on p2), where naming one would have depended on one sweep's outcome.
+        #
+        # Worth recording why the old assertion went: it was `constant == []`, and it passed on main
+        # only BECAUSE of the pooling bug -- four of sixteen pairs were dead and pooling reported
+        # zero. It was satisfied by the defect, not despite it.
         constant = summary["reachability"]["accumulator_scalars_constant"]
-        self.assertIn(
-            "self_hazard_damage_suffered[p1]",
-            constant,
-            "the seat-specific dead tracker is missing: either the sweep changed or liveness has "
-            "gone back to pooling the two perspectives",
+        varied = summary["reachability"]["accumulator_scalars_varied"]
+
+        def _by_tracker(entries):
+            out: dict[str, set[str]] = {}
+            for entry in entries:
+                name, _, seat = entry.rpartition("[")
+                out.setdefault(name, set()).add(seat.rstrip("]"))
+            return out
+
+        constant_seats = _by_tracker(constant)
+        varied_seats = _by_tracker(varied)
+        asymmetric = sorted(
+            name
+            for name, seats in constant_seats.items()
+            if len(seats) == 1 and len(varied_seats.get(name, set()) - seats) == 1
         )
-        self.assertIn(
-            "self_hazard_damage_suffered[p2]",
-            summary["reachability"]["accumulator_scalars_varied"],
-            "the MIRROR seat must be live -- if both seats are dead this test proves nothing "
-            "about pooling",
+        self.assertTrue(
+            asymmetric,
+            "no tracker has exactly one seat constant and the other varied, so this sweep cannot "
+            "distinguish per-seat liveness from pooled -- either the sweep changed or liveness "
+            f"has gone back to pooling. constant={constant} varied={varied}",
         )
         # And every entry is seat-qualified, so a future pooled regression fails loudly.
-        for entry in constant + summary["reachability"]["accumulator_scalars_varied"]:
-            self.assertRegex(entry, r"\[(p1|p2)\]$", f"not seat-qualified: {entry}")
+        seat_suffixes = tuple(f"[{player}]" for player in gate.PLAYERS)
+        for entry in constant + varied:
+            self.assertTrue(
+                entry.endswith(seat_suffixes),
+                f"not seat-qualified with one of {seat_suffixes}: {entry}",
+            )
         self.assertGreater(
             summary["reachability"]["v4_pack_categorical_states_reached"][
                 "CATEGORY_LAST_USED_MOVE"
