@@ -580,11 +580,17 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
           folded in. Only this one is closed by a pending-skipped-time field on
           ``Pokemon``.
 
-        B is driven by more than Sleep Talk: Snore reaches it the same way, and the
-        ``_mark_pending_rest_sleep_refundable`` interruptions (flinch, Truant,
-        confusion, Attract) reach it with **no sleep-usable move line at all**. All
-        six are exercised, because "the classified-skip case" is the axis, not the
-        Sleep Talk fixture that happens to be the most familiar instance of it.
+        B is driven by much more than Sleep Talk, and NOT by an enumerable little
+        list. Three routes reach `_mark_pending_rest_sleep_refundable`:
+
+        * a sleep-usable ``|move|`` -- Sleep Talk or Snore;
+        * ``|-activate|`` filtered to ``confusion`` / ``moveattract``;
+        * **any later same-actor** ``|cant|`` -- that branch (``showdown.py:3281``)
+          has **no reason filter at all**. Its comment names flinch/Truant/paralysis/
+          Attract, but `par`, `recharge` and `nomoves` reach it just as well, which
+          is why this test asserts the rule rather than a list. An earlier version of
+          this docstring claimed "six line families"; that was an undercount taken
+          from a comment instead of from the code.
         """
         upkeep = ["|upkeep", "|turn|2"]
         bare = ["|cant|p2a: Skarmory|slp"]
@@ -600,17 +606,21 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
                 self.assertEqual(settled[0]["restSleepAttempts"], 1)
                 self.assertNotIn("restSleepAttemptUnsettled", settled[0])
 
-        # --- producer B: classified skip; refused ONLY while active. Every family
-        #     that classifies the attempt, not just the Sleep Talk one.
+        # --- producer B: classified skip; refused ONLY while active. Sampled across
+        #     all three routes, including `cant` reasons that no comment enumerates.
         skip_families = {
-            "sleeptalk": list(self._ACTIVE_SLEEP_TALK[1:]),
-            "snore": ["|move|p2a: Skarmory|Snore|p1a: Snorlax"],
-            "flinch": ["|cant|p2a: Skarmory|flinch"],
-            "truant": ["|cant|p2a: Skarmory|ability: Truant"],
-            "confusion": ["|-activate|p2a: Skarmory|confusion",
-                          "|-damage|p2a: Skarmory|80/100"],
-            "attract": ["|-activate|p2a: Skarmory|move: Attract",
-                        "|cant|p2a: Skarmory|Attract"],
+            "move:sleeptalk": list(self._ACTIVE_SLEEP_TALK[1:]),
+            "move:snore": ["|move|p2a: Skarmory|Snore|p1a: Snorlax"],
+            "cant:flinch": ["|cant|p2a: Skarmory|flinch"],
+            "cant:truant": ["|cant|p2a: Skarmory|ability: Truant"],
+            # Unlisted in the branch's own comment -- proof it is unfiltered.
+            "cant:par": ["|cant|p2a: Skarmory|par"],
+            "cant:recharge": ["|cant|p2a: Skarmory|recharge"],
+            "cant:nomoves": ["|cant|p2a: Skarmory|nomoves"],
+            "activate:confusion": ["|-activate|p2a: Skarmory|confusion",
+                                   "|-damage|p2a: Skarmory|80/100"],
+            "activate:attract": ["|-activate|p2a: Skarmory|move: Attract",
+                                 "|cant|p2a: Skarmory|Attract"],
         }
         for name, events in skip_families.items():
             with self.subTest(producer="B", family=name):
