@@ -69,8 +69,9 @@ The branch masses give the mechanism exactly. Bonemerang is 90 % accurate:
 > non-crit arm never partitions, though two hits reach 280. A hit-count-aware threshold (max 280, min 238,
 > straddling 253) yields exactly the 6/16 band computed in §2b, **with no gate change at all**.
 > That is a distinct, unfiled defect: **the KO partition threshold is hit-count-blind for
-> multi-hit moves.** The 85–100 roll fan lives behind the
-gate at `gen3/generate_instructions.rs:3117`:
+> multi-hit moves.**
+
+The 85–100 roll fan lives behind the gate at `gen3/generate_instructions.rs:3117`:
 
 ```rust
 if branch_on_damage
@@ -132,14 +133,16 @@ threshold** above, which needs no gate change. Filed as a separate defect, not f
 Phase 2.
 
 That also connects to the finding already recorded on #1088: the engine **already ships**
-enumerate-then-merge at `:3117`, whose `for random in 85..=100` loop is at `:3146`,, enumerating `for random in 85..=100` through `run_move` per
+enumerate-then-merge at `:3117`, whose `for random in 85..=100` loop is at `:3146`, running through `run_move` per
 roll and merging with `combine_duplicate_instructions`. Phase 2 is therefore not "build a
-mechanism" but "widen an existing gate", and this row is evidence about what widening buys.
+mechanism" — the mechanism ships already. But note §3: widening the gate buys nothing for THIS
+row, because `choice.first_move` blocks it. The route here is the hit-count-aware KO threshold,
+so this row is evidence about the THRESHOLD, not about what widening buys.
 
 **No fix is proposed here and none should be inferred.** Widening that gate is a throughput
 decision — the engine's own comment at `:2911-2916` records "12 branches to
 144, ~8x slower per call" — but that measures Sleep Talk used SECOND firing 32-way enumeration,
-not the cost of widening this gate, so it is not a Phase 2 price — and it belongs to the Phase 2 measurement, not to a row-by-row
+not the cost of widening this gate, so it is not a Phase 2 price. It belongs to the Phase 2 measurement, not to a row-by-row
 patch. This report changes an attribution, nothing else.
 
 ## 4. Note
