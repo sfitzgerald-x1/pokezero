@@ -49,20 +49,28 @@ The branch masses give the mechanism exactly. Bonemerang is 90 % accurate:
 
 > **Correction (review of #1098): my own masses refute that sentence.** The crit split
 > `3.8672 / 1.7578` is **11/16 and 5/16 of the crit mass** — that IS a 16-roll fan. It comes from
-> the Case B crit-kill partition at `gen3/generate_instructions.rs:3374-3400`, where
+> the Case B crit-kill partition at `gen3/generate_instructions.rs:3355-3380` (the test at `:3356-3358`), where
 > `compare_health_with_damage_multiples(max_crit_damage = 282, hp = 253)` returns `(244, 11)`:
 > kill mass `0.9 × 1/16 × 11/16 = 0.038671875`, survive mass `0.017578125`,
 > `average_non_kill_crit_damage = 244`. So **244 is roll variation** — the mean of crit rolls
-> 85–89 — not clamping. Those masses were printed in this very report and I did not read them.
+> 85–89 — not clamping.
+>
+> That 1.7578 % arm is labelled "survive" by the partition and still shows as **dead** in §1's
+> table (`244+9`), which looks contradictory and is not: the arm survives the FIRST hit at 244,
+> then the second hit clamps to the remaining 9 and kills. That is the hit-count blindness itself,
+> visible in the branch listing. Those masses were printed in this very report and I did not read them.
 >
 > **The real reason no non-crit branch survives is better than the one I gave, and actionable:**
-> the KO partitions at `:3247` and `:3376` compare the **per-hit** maximum (140) against the
-> defender's **full** HP (253), with no `hit_count` scaling. `140 < 253`, so the non-crit arm
-> never partitions — though two hits reach 280. A hit-count-aware threshold (max 280, min 238,
+> the KO partitions compare a **per-hit** maximum against the defender's **full** HP, with no
+> `hit_count` scaling anywhere: Case A at `:3227-3230` tests `max_damage_dealt >= hp && min < hp`
+> with the non-crit per-hit max of **140**, and Case B at `:3356-3358` does the same with the
+> crit per-hit max of **282**. `hit_count` is computed at `:3091` and consumed only at `:3158`,
+> `:3430`, `:3452` and `:5055` — neither partition references it. So `140 < 253` means the
+> non-crit arm never partitions, though two hits reach 280. A hit-count-aware threshold (max 280, min 238,
 > straddling 253) yields exactly the 6/16 band computed in §2b, **with no gate change at all**.
 > That is a distinct, unfiled defect: **the KO partition threshold is hit-count-blind for
 > multi-hit moves.** The 85–100 roll fan lives behind the
-gate at `gen3/generate_instructions.rs:3137`:
+gate at `gen3/generate_instructions.rs:3117`:
 
 ```rust
 if branch_on_damage
@@ -124,12 +132,12 @@ threshold** above, which needs no gate change. Filed as a separate defect, not f
 Phase 2.
 
 That also connects to the finding already recorded on #1088: the engine **already ships**
-enumerate-then-merge at `:3137`, enumerating `for random in 85..=100` through `run_move` per
+enumerate-then-merge at `:3117`, whose `for random in 85..=100` loop is at `:3146`,, enumerating `for random in 85..=100` through `run_move` per
 roll and merging with `combine_duplicate_instructions`. Phase 2 is therefore not "build a
 mechanism" but "widen an existing gate", and this row is evidence about what widening buys.
 
 **No fix is proposed here and none should be inferred.** Widening that gate is a throughput
-decision — the engine's own comment at `:2931-2936` records "12 branches to
+decision — the engine's own comment at `:2911-2916` records "12 branches to
 144, ~8x slower per call" — but that measures Sleep Talk used SECOND firing 32-way enumeration,
 not the cost of widening this gate, so it is not a Phase 2 price — and it belongs to the Phase 2 measurement, not to a row-by-row
 patch. This report changes an attribution, nothing else.
