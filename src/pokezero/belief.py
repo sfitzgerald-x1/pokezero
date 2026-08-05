@@ -2472,7 +2472,15 @@ def _append_evidence(
 # anywhere in the gen3 chain): `pressureTargets = targets`, zeroed only for `foeSide` and re-filled
 # by `mustpressure`. So a foe is present for every target kind
 # EXCEPT `self` and the ally-side ones. Enumerated over all 125 pool moves from
-# `data/random-battles/gen3/sets.json`: 23 `self` + 2 `allyTeam`, everything else pressured.
+# `data/random-battles/gen3/sets.json`: 23 `self` + 2 `allyTeam`, everything else pressured
+# (`all` 4, `allAdjacent` 3, `allAdjacentFoes` 3, `any` 2, `foeSide` 1, `normal` 85, `scripted` 2).
+#
+# Targets resolved along the MOD CHAIN, not read off shared `data/moves.ts`, because two pool moves
+# declare theirs in a mod: `surf` is `allAdjacentFoes` in `data/mods/gen3/moves.ts` where the shared
+# file says `allAdjacent`, and `curse` is re-declared `normal` in `data/mods/gen7/moves.ts`. Neither
+# changes which side of this set the move lands on -- both still reach a foe -- but the first
+# derivation here did read only the shared file, and "it happened not to matter this time" is not a
+# method.
 #
 # Curse is the one move whose dex target lies: `sim/pokemon.ts:998-1004` retargets it to
 # `nonGhostTarget` (self) unless the user is Ghost, and all five pool carriers -- Muk (Poison),
