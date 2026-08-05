@@ -2597,11 +2597,14 @@ def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
     ever emit this flag on its own. Both are pinned by tests, not just by this comment:
     reordering the checks leaves the rest of the suite green.
 
-    THIS IS A WORKAROUND, and the thing that retires it has just landed. It exists only
-    because a stored row cannot say which annotator wrote it. #1091 (`39d26f4a`) adds a
-    corpus HEADER row carrying writer-owned provenance; once a corpus stamps its
-    annotator era, `engine_world` can tell pre- from post-split rows directly and BOTH
-    this dual-write and the third reason code become unnecessary.
+    THIS IS A WORKAROUND, and the exit has been available the whole time. It exists only
+    because a stored row cannot say which annotator wrote it — yet `golden_corpus` has
+    carried a `record_type: "header"` record with a writer-owned-field guard since
+    `aad856c5`, long before this PR. So the workaround was never blocked on missing
+    infrastructure. #1091 (`39d26f4a`) is the *precedent* worth copying, not the
+    enabler: it versions a corpus contract in that existing header (selectable
+    observation schema) rather than inferring it. Stamp the annotator era the same way
+    and BOTH this dual-write and the third reason code become unnecessary.
     """
 
     row["restSleepRefundPending"] = True
