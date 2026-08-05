@@ -62,6 +62,11 @@ jobs:
             # workflow (via the .patch and patches.txt globs) but the suite holding its
             # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
+            # Pins `Ran 6 tests` and a no-skip guard on the pyo3 binding boundary.
+            # Omitting it is self-defeating: a PR that adds a skipIf or drops the
+            # nonzero assertion touches only this file, so the gate that would
+            # catch it never runs. Found by review of #1108.
+            tests/test_rest_sleep_refund_boundary.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -237,8 +242,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_rest_sleep_refund_boundary -v 2>&1 \
             | tee /tmp/boundary.log
-          if ! grep -qE 'Ran 5 tests' /tmp/boundary.log; then
-            echo "::error::expected 5 boundary pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 6 tests' /tmp/boundary.log; then
+            echo "::error::expected 6 boundary pins; the suite shrank or grew"
             exit 1
           fi
           # The module imports poke_engine at top level precisely so a missing

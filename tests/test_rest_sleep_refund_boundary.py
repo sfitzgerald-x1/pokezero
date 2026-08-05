@@ -9,12 +9,13 @@ So `impl Into<Pokemon> for PyPokemon` is the production path for getting this
 value into search.
 
 That conversion is the one the Rust compiler does not protect. Adding the field
-to `PyPokemon` forces `E0063` in `From<Pokemon> for PyPokemon` and in the
-`#[new]` signature, so those cannot be left behind. But `Into<Pokemon>` would
-have gone on compiling with the literal `0` that the plumbing patch put there,
-dropping every refund the harness emits. The wheel builds, every gate goes
-green, and the field arrives as 0 -- a silent wrong answer rather than a
-failure.
+to `PyPokemon` forces `E0063` in `From<Pokemon> for PyPokemon`, and pyo3's
+macro backend independently rejects a `#[pyo3(signature)]` that desyncs from
+the `fn new` parameter list, so neither of those can be left behind. But
+`Into<Pokemon>` would have gone on compiling with the literal `0` that the
+plumbing patch put there, dropping every refund the harness emits. The wheel
+builds, every gate goes green, and the field arrives as 0 -- a silent wrong
+answer rather than a failure.
 
 A test asserting `refund == 0` would pass against that bug. Only a nonzero
 value distinguishes "the binding carries it" from "the binding hardcodes zero",
@@ -74,8 +75,10 @@ class RestSleepRefundBoundaryTests(unittest.TestCase):
 
         serialized = _state_with(_sleeper()).to_string()
 
+        # Anchored on both sides: "," opens the field and "=" is the party
+        # separator. A bare `refund:2` would also match `refund:20`.
         self.assertIn(
-            f"refund:{PENDING}",
+            f",refund:{PENDING}=",
             serialized,
             "the refund did not reach the engine Pokemon; Into<Pokemon> is "
             "probably still writing a literal 0",
@@ -103,7 +106,26 @@ class RestSleepRefundBoundaryTests(unittest.TestCase):
         once = _state_with(_sleeper()).to_string()
 
         self.assertEqual(State.from_string(once).to_string(), once)
-        self.assertIn(f"refund:{PENDING}", State.from_string(once).to_string())
+        self.assertIn(f",refund:{PENDING}=", State.from_string(once).to_string())
+
+    def test_refund_and_pre_transform_coexist_as_trailing_fields(self):
+        """Both optional trailing fields present at once, which nothing else covers.
+
+        `Into<Pokemon>` is the only code that can emit both. The engine parses
+        trailing fields by TAG rather than by position precisely so the two are
+        order-independent -- a positional append here would have fed the refund
+        to `PreTransform::deserialize`, which panics. #1105's Rust tests cover
+        each field alone and never the pair.
+        """
+
+        # id;atk;def;spa;spd;spe then four MOVE:pp slots (state.rs PreTransform).
+        transformed = _sleeper(
+            pre_transform="ditto;100;100;100;100;100;NONE:0;NONE:0;NONE:0;NONE:0"
+        )
+        once = _state_with(transformed).to_string()
+
+        self.assertIn(f",refund:{PENDING}", once)
+        self.assertEqual(State.from_string(once).to_string(), once)
 
 
 if __name__ == "__main__":
