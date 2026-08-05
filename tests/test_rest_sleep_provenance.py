@@ -153,7 +153,7 @@ def _payload(
     if skipped_time is not None:
         sleeper_row["restSleepSkippedTime"] = skipped_time
     if refund_pending:
-        sleeper_row["restSleepRefundPending"] = True
+        sleeper_row["restSleepActiveRefundPending"] = True
     other_row = {"species": "Starmie", "condition": "100/100", "active": not sleeper_active}
     return {
         "turn": 9,
@@ -356,7 +356,8 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         # what the fallback ledger counts. Both must refuse even with approximation on.
         for flag, reason in (
             ("restSleepAttemptUnsettled", "rest_sleep_attempt_unsettled"),
-            ("restSleepRefundPending", "rest_sleep_active_refund_pending"),
+            ("restSleepActiveRefundPending", "rest_sleep_active_refund_pending"),
+            ("restSleepRefundPending", "rest_sleep_refund_pending_unsplit_legacy"),
         ):
             with self.subTest(flag=flag):
                 payload = _payload(self.dex, sleeper_active=True)
@@ -559,7 +560,7 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertNotIn("restSleepAttempts", rows[0])
         # Producer B: the Sleep Talk |move| classifies the attempt immediately, so this
         # is the known-value/nowhere-to-put-it case, not an unsettled one.
-        self.assertTrue(rows[0]["restSleepRefundPending"])
+        self.assertTrue(rows[0]["restSleepActiveRefundPending"])
         self.assertNotIn("restSleepAttemptUnsettled", rows[0])
 
     def test_the_two_producers_separate_on_different_axes(self) -> None:
@@ -578,6 +579,12 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
           the sleeper is ACTIVE. Benched, the same stream builds with the refund
           folded in. Only this one is closed by a pending-skipped-time field on
           ``Pokemon``.
+
+        B is driven by more than Sleep Talk: Snore reaches it the same way, and the
+        ``_mark_pending_rest_sleep_refundable`` interruptions (flinch, Truant,
+        confusion, Attract) reach it with **no sleep-usable move line at all**. All
+        six are exercised, because "the classified-skip case" is the axis, not the
+        Sleep Talk fixture that happens to be the most familiar instance of it.
         """
         upkeep = ["|upkeep", "|turn|2"]
         bare = ["|cant|p2a: Skarmory|slp"]
@@ -587,22 +594,63 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             with self.subTest(producer="A", active=active):
                 rows = self._annotate_either(self._RESTED + bare, active=active)
                 self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
-                self.assertNotIn("restSleepRefundPending", rows[0])
+                self.assertNotIn("restSleepActiveRefundPending", rows[0])
                 # The proof it is not an engine gap: settle the turn and it builds.
                 settled = self._annotate_either(self._RESTED + bare + upkeep, active=active)
                 self.assertEqual(settled[0]["restSleepAttempts"], 1)
                 self.assertNotIn("restSleepAttemptUnsettled", settled[0])
 
-        # --- producer B: classified skip; refused ONLY while active.
-        talk = [*self._ACTIVE_SLEEP_TALK, *upkeep]
-        benched = self._annotate_either(self._RESTED + talk, active=False)
-        self.assertEqual(benched[0]["restSleepAttempts"], 1)
-        self.assertEqual(benched[0]["restSleepSkippedTime"], 1)
-        self.assertNotIn("restSleepRefundPending", benched[0])
+        # --- producer B: classified skip; refused ONLY while active. Every family
+        #     that classifies the attempt, not just the Sleep Talk one.
+        skip_families = {
+            "sleeptalk": list(self._ACTIVE_SLEEP_TALK[1:]),
+            "snore": ["|move|p2a: Skarmory|Snore|p1a: Snorlax"],
+            "flinch": ["|cant|p2a: Skarmory|flinch"],
+            "truant": ["|cant|p2a: Skarmory|ability: Truant"],
+            "confusion": ["|-activate|p2a: Skarmory|confusion",
+                          "|-damage|p2a: Skarmory|80/100"],
+            "attract": ["|-activate|p2a: Skarmory|move: Attract",
+                        "|cant|p2a: Skarmory|Attract"],
+        }
+        for name, events in skip_families.items():
+            with self.subTest(producer="B", family=name):
+                lines = self._RESTED + bare + events + upkeep
 
-        active_row = self._annotate_either(self._RESTED + talk, active=True)
-        self.assertTrue(active_row[0]["restSleepRefundPending"])
-        self.assertNotIn("restSleepAttemptUnsettled", active_row[0])
+                benched = self._annotate_either(lines, active=False)
+                self.assertEqual(benched[0]["restSleepAttempts"], 1)
+                self.assertEqual(benched[0]["restSleepSkippedTime"], 1)
+                self.assertNotIn("restSleepActiveRefundPending", benched[0])
+
+                active_row = self._annotate_either(lines, active=True)
+                self.assertTrue(active_row[0]["restSleepActiveRefundPending"])
+                self.assertNotIn("restSleepAttemptUnsettled", active_row[0])
+
+    def test_no_annotator_path_emits_the_pre_split_flag(self) -> None:
+        """``restSleepRefundPending`` must now be unreachable from a live replay.
+
+        It survives only in corpora captured before the split, where it could have
+        come from either producer. If the annotator could still emit it, the third
+        legacy reason code would silently absorb live producer-B traffic and undo
+        the whole point of the split.
+        """
+        streams = [
+            [],
+            ["|cant|p2a: Skarmory|slp"],
+            [*self._ACTIVE_SLEEP_TALK],
+            [*self._ACTIVE_SLEEP_TALK, "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+             "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|cant|p2a: Skarmory|flinch",
+             "|upkeep", "|turn|2"],
+            ["|cant|p2a: Skarmory|slp", "|switch|p2a: Starmie|Starmie, L79|100/100",
+             "|upkeep", "|turn|2"],
+        ]
+        for index, tail in enumerate(streams):
+            for active in (False, True):
+                with self.subTest(stream=index, active=active):
+                    rows = self._annotate_either(self._RESTED + tail, active=active)
+                    self.assertNotIn("restSleepRefundPending", rows[0])
+                    self.assertNotIn("restSleepRefundPending", rows[1])
 
 
     def test_interrupted_sleep_usable_attempts_keep_the_switch_refund(self) -> None:

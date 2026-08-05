@@ -1638,14 +1638,20 @@ def _hp_and_status(
                     "rest_sleep_provenance_unrepresentable",
                     f"{slot}: {species!r} has malformed public Rest provenance",
                 )
-            # These two were ONE code (`rest_sleep_skipped_time_pending`) and one row
-            # flag until this split. They have different causes and different owners,
-            # and conflating them made the class unsizeable: era-57 could not say how
-            # much of its 607 decisions an engine field would actually recover.
-            # The old reason code is RETIRED rather than reassigned to producer B, so
-            # no historical count is silently reread as one producer's share. (The row
-            # flag `restSleepRefundPending` does keep its name -- it only ever meant
-            # producer B's case once the other producer stopped borrowing it.)
+            # These two were ONE code (`rest_sleep_skipped_time_pending`) and ONE row
+            # flag (`restSleepRefundPending`) until this split. They have different
+            # causes and different owners, and conflating them made the class
+            # unsizeable: era-57 could not say how much of its 607 decisions an engine
+            # field would actually recover.
+            #
+            # BOTH old names are retired, and the flag rename is not cosmetic. Stored
+            # corpora keep `public_materialization` rows verbatim (`golden_corpus.py`),
+            # and several scripts re-feed those rows straight back through here. A
+            # pre-split row carrying `restSleepRefundPending` may have come from EITHER
+            # producer, so reusing that flag for B would silently bank producer-A rows
+            # as B's share -- the exact misattribution the code retirement prevents on
+            # the reason axis. Legacy rows therefore get their own third code: they
+            # still refuse, and they are never counted as either producer.
             if bool(row.get("restSleepAttemptUnsettled")):
                 # Harness/observation: the attempt is unclassified because the snapshot
                 # landed mid-turn. Not an engine limitation.
@@ -1653,12 +1659,18 @@ def _hp_and_status(
                     "rest_sleep_attempt_unsettled",
                     f"{slot}: {species!r} has an unsettled public Rest sleep attempt",
                 )
-            if bool(row.get("restSleepRefundPending")):
+            if bool(row.get("restSleepActiveRefundPending")):
                 # Engine representation: skippedTime is known but an ACTIVE mon has
                 # nowhere to carry a refund that only a future switch-in applies.
                 raise EngineWorldUnsupported(
                     "rest_sleep_active_refund_pending",
                     f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
+                )
+            if bool(row.get("restSleepRefundPending")):
+                raise EngineWorldUnsupported(
+                    "rest_sleep_refund_pending_unsplit_legacy",
+                    f"{slot}: {species!r} carries the pre-split Rest refund flag, "
+                    "whose producer is not recoverable from the row",
                 )
             if "restSleepAttempts" in row:
                 rest_turns = _rest_turns_from_row(row, early_bird=rest_sleep_early_bird)

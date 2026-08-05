@@ -2733,7 +2733,12 @@ def _apply_rest_sleep_provenance(
                 # nowhere to put it. Kept separate from the unsettled-attempt flag above
                 # so the two are countable apart -- only this one is closed by adding a
                 # pending-skipped-time field to `Pokemon`.
-                row["restSleepRefundPending"] = True
+                #
+                # RENAMED from `restSleepRefundPending`, which both producers used to
+                # set. The old key survives in corpora captured before the split and
+                # cannot be attributed to a producer, so `engine_world` gives it a
+                # third code rather than folding it into this one.
+                row["restSleepActiveRefundPending"] = True
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible
