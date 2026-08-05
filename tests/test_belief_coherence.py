@@ -56,6 +56,35 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
         )
         self.assertEqual(self.summary["verdict"], "PASS")
 
+    def test_the_pp_ledger_agrees_with_the_omniscient_channel(self) -> None:
+        """V3's exit criterion: 100% agreement with TRUE remaining PP.
+
+        Two independent derivations of one quantity: the sim's own `active[0].moves[].pp` on the
+        owning seat's request, against the opponent's belief computing `max_pp - move_uses`. That
+        makes it a differential, not a self-check.
+
+        Step 1 of V3 (reading the engine rules rather than recalling them) is recorded in
+        `deployment/docs/v3-pp-ledger-engine-rules-20260804.md`, and it settled that the plan's
+        suspected defect does NOT hold: Pressure double-charges in gen3 and `move_uses` already
+        accounts for it. This is the measurement that was still owed for the item.
+        """
+        self.assertEqual(self.summary["violation_counts"]["pp_remaining"], 0)
+        self.assertEqual(self.summary["violation_counts"]["pp_max"], 0)
+
+    def test_the_pp_arm_actually_compared_spent_moves(self) -> None:
+        """The vacuity guard for V3.
+
+        Agreeing on an untouched full-PP move is nearly free, so a run could compare thousands of
+        moves and never once exercise the ledger's arithmetic. The SPENT count is what binds.
+        Kill-confirmed against the plan's own suspected defect: charging 1 instead of 2 under
+        Pressure yields 24 violations at 6 games, with the expected off-by-one-per-use shape.
+        """
+        reach = self.summary["reachability"]
+        self.assertGreater(reach["pp_comparisons"], 100, "the PP arm barely ran")
+        self.assertGreater(
+            reach["pp_spent_comparisons"], 50, "no move with PP actually spent was compared"
+        )
+
     def test_no_mon_was_silently_skipped(self) -> None:
         """A skipped mon must fail the run, not vanish into a counter.
 

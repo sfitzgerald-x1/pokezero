@@ -158,6 +158,95 @@ def _true_variant_for(
     return None
 
 
+def _check_pp_ledger(
+    *,
+    env,
+    dex,
+    game: int,
+    turn: int,
+    counts: Counter,
+    violations: dict[str, list[Violation]],
+) -> None:
+    """V3 -- the PP-ledger differential, riding this sweep (plan item V3).
+
+    The omniscient channel: each seat's OWN request carries its active mon's true remaining PP per
+    move (``active[0].moves[].pp``). The OPPONENT's belief independently derives the same number as
+    ``max_pp - move_uses``, and ``showdown._encode_opponent_move_pp`` turns that into
+    ``OPP_MOVE_PP_OFFSET``. Those are two independent derivations of one quantity, so comparing them
+    is a real differential rather than a self-check.
+
+    Exit criterion (plan V3): **100% agreement with true remaining PP**, or a settled owner decision
+    that the contract is "observed uses". Step 1 of V3 -- reading the engine rules rather than
+    recalling them -- is recorded in ``deployment/docs/v3-pp-ledger-engine-rules-20260804.md``; it
+    settled that Pressure DOES double-charge in gen3 and that ``move_uses`` already accounts for it,
+    so the plan's suspected defect does not hold. This is the measurement that was still owed.
+
+    Only REVEALED moves are compared: the column is populated for revealed moves only, so an
+    unrevealed one has no encoded value to be wrong about.
+    """
+    for owner in PLAYERS:
+        request = env._latest_requests.get(owner) or {}
+        active = request.get("active") or []
+        if not active or not isinstance(active[0], Mapping):
+            continue
+        truth: dict[str, tuple[int, int]] = {}
+        for entry in active[0].get("moves") or ():
+            if not isinstance(entry, Mapping):
+                continue
+            move_id = _norm(entry.get("id"))
+            pp, max_pp = entry.get("pp"), entry.get("maxpp")
+            if move_id and isinstance(pp, int) and isinstance(max_pp, int):
+                truth[move_id] = (pp, max_pp)
+        if not truth:
+            continue
+        # The opponent's belief about THIS mon.
+        view = env._belief_engine.resolved_player_view(_other(owner))
+        for belief in view.opponent_pokemon:
+            if not belief.active:
+                continue
+            uses = {_norm(k): int(v) for k, v in (belief.move_uses or ())}
+            revealed = {_norm(m) for m in (belief.revealed_moves or ())}
+            for move_id in sorted(revealed):
+                observed = truth.get(move_id)
+                info = dex.move_info(move_id)
+                if observed is None or info is None or not info.max_pp:
+                    continue
+                true_remaining, true_max = observed
+                # The encoder's own arithmetic (showdown.py): remaining = max(0, max_pp - uses).
+                believed = max(0, int(info.max_pp) - uses.get(move_id, 0))
+                counts["pp_comparisons"] += 1
+                if int(info.max_pp) != true_max:
+                    violations["pp_max"].append(
+                        Violation(
+                            {
+                                "game": game, "turn": turn, "owner": owner,
+                                "species": belief.species, "move": move_id,
+                                "detail": "dex max_pp disagrees with the request's maxpp",
+                                "dex_max_pp": int(info.max_pp), "request_maxpp": true_max,
+                            }
+                        )
+                    )
+                if believed != true_remaining:
+                    violations["pp_remaining"].append(
+                        Violation(
+                            {
+                                "game": game, "turn": turn, "owner": owner,
+                                "species": belief.species, "move": move_id,
+                                "detail": "believed remaining PP != true remaining PP",
+                                "believed": believed, "true": true_remaining,
+                                "max_pp": int(info.max_pp),
+                                "uses": uses.get(move_id, 0),
+                                "revealed_moves": list(belief.revealed_moves),
+                            }
+                        )
+                    )
+                elif believed != int(info.max_pp):
+                    # A comparison where PP has actually been spent. Counted separately because
+                    # agreeing on an untouched full-PP move is nearly free and would let this
+                    # family look exercised while never testing the ledger's arithmetic.
+                    counts["pp_spent_comparisons"] += 1
+
+
 def _check_mon(
     *,
     belief: RevealedPokemonBelief,
@@ -442,6 +531,8 @@ def run_sweep(
             "ambiguous_true_variant_matches": 0,
             "mons_without_resolvable_true_variant": 0,
             "belief_mons_without_truth": 0,
+            "pp_comparisons": 0,
+            "pp_spent_comparisons": 0,
             "truncated_games": 0,
             "games_without_both_requests": 0,
         }
@@ -458,6 +549,8 @@ def run_sweep(
             "ruled_out_item",
             "stat_legality",
             "clone_equivalence",
+            "pp_remaining",
+            "pp_max",
         )
     }
     species_seen: set[str] = set()
@@ -527,6 +620,12 @@ def run_sweep(
                             violations=violations,
                             fallbacks=fallbacks,
                         )
+
+                # (8) V3 -- PP ledger vs the omniscient channel.
+                _check_pp_ledger(
+                    env=env, dex=dex, game=game, turn=turn,
+                    counts=counts, violations=violations,
+                )
 
                 # (4) zero pin conflicts with narrowing off.
                 conflicts = dict(env._belief_engine.variant_pin_conflicts)
@@ -626,6 +725,11 @@ def run_sweep(
         "pinned_and_correct": counts["pinned_and_correct"],
         "stat_legality_checks": counts["stat_legality_checks"],
         "clone_equivalence_checks": counts["clone_equivalence_checks"],
+        # V3: agreeing on an untouched full-PP move is nearly free, so the SPENT count is the one
+        # that binds -- without it this family could report itself exercised while never testing
+        # the ledger's arithmetic at all.
+        "pp_comparisons": counts["pp_comparisons"],
+        "pp_spent_comparisons": counts["pp_spent_comparisons"],
     }
     reached = all(value > 0 for value in reachability.values())
 
@@ -753,6 +857,7 @@ def main() -> int:
         f"narrowings={counts.get('narrowing_steps', 0)} fallbacks={counts.get('inconsistent_fallbacks', 0)} "
         f"stat_checks={counts.get('stat_legality_checks', 0)} "
         f"clone_checks={counts.get('clone_equivalence_checks', 0)} "
+        f"pp={counts.get('pp_comparisons', 0)}/{counts.get('pp_spent_comparisons', 0)}-spent "
         f"violations={total_violations} reached={reached} "
         f"skips={sum(summary['skipped'].values())} pin_conflicts={summary['pin_conflict_family']}"
     )
