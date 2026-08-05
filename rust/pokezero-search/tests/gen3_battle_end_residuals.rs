@@ -360,10 +360,20 @@ fn deferral_and_battle_end_are_mutually_exclusive() {
     assert!(!ended.contains(&Instruction::ToggleSideTwoForceSwitch));
 }
 
-/// Neither side may take a residual after the battle ends — not just the winner.
-/// Sand chips BOTH actives, so without truncation the winning side would tick too.
+/// The winner takes the SHARED weather chip and nothing after it.
+///
+/// This pin previously asserted the opposite — "the winner takes no residual once
+/// the battle is over — not sand" — and that was the defect, not the rule.
+/// `poke-engine-gen3-battle-end-residuals.patch` states the Showdown boundary as
+/// BETWEEN entries, never mid-entry, and then installed its guard per SIDE inside
+/// the weather loop. Weather is ONE entry chipping both actives, so the loser
+/// dying to its own sand chip was cancelling the winner's chip in that same entry.
+///
+/// Recorded protocol at holdout row `19100002/53`, in order: both `[from] Sandstorm`
+/// damages, then `|faint|`, then `|win|`. So the winner's sand lands and only the
+/// entries AFTER weather — its Leftovers heal and its own burn tick — are skipped.
 #[test]
-fn no_side_takes_a_residual_after_the_battle_ends() {
+fn the_winner_takes_the_shared_weather_chip_and_nothing_after_it() {
     let mut state = poison_kill_state(false);
     state.weather = poke_engine::state::StateWeather {
         weather_type: poke_engine::engine::state::Weather::SAND,
@@ -378,10 +388,25 @@ fn no_side_takes_a_residual_after_the_battle_ends() {
 
     state.apply_instructions(&list);
     assert_eq!(state.battle_is_over(), 1.0);
+
+    // The winner is 200/300, so its sand chip is 300/16 = 18. Exactly one damage
+    // to side one: the shared weather chip. Its burn tick (order 10.6) is a LATER
+    // entry and must not appear, which is what distinguishes this from simply
+    // deleting the guard.
+    let winner_damages = damages(&list, SideReference::SideOne);
+    assert_eq!(
+        winner_damages,
+        vec![18],
+        "the winner takes its sand chip from the shared weather entry and nothing \
+         after it — no burn tick, no Leftovers: {:?}",
+        list
+    );
+
+    // And the guard still truncates: Leftovers would HEAL side one at order 10.4,
+    // after the faint resolves. If this fires, the hoist went too far.
     assert!(
-        damages(&list, SideReference::SideOne).is_empty(),
-        "the winner takes no residual once the battle is over — not sand, not its \
-         own burn: {:?}",
+        !format!("{:?}", list).contains("Heal(HealInstruction { side_ref: SideOne"),
+        "side one must not reach its Leftovers heal, which is a later entry: {:?}",
         list
     );
 }
