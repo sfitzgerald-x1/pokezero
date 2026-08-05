@@ -202,10 +202,16 @@ class ExitCriterionTest(unittest.TestCase):
         self.assertIn("< required 20000", reasons)
         self.assertIn("never reached", reasons)
         # Finding F3: the liveness failure must name EVERY dead tracker, not fire on "none of
-        # them moved". In a two-step run all eight are dead, so all eight must be listed.
+        # them moved". Finding F14: liveness is keyed per (tracker, SEAT), so a two-step run has
+        # all eight dead on both seats -- sixteen entries, each naming its seat.
+        constant = summary["reachability"]["accumulator_scalars_constant"]
         self.assertEqual(
-            len(summary["reachability"]["accumulator_scalars_constant"]),
-            len(gate.ACCUMULATOR_METADATA_KEYS),
+            len(constant), len(gate.ACCUMULATOR_METADATA_KEYS) * len(gate.PLAYERS)
+        )
+        seat_suffixes = tuple(f"[{player}]" for player in gate.PLAYERS)
+        self.assertTrue(
+            all(entry.endswith(seat_suffixes) for entry in constant),
+            f"liveness entries must name their seat (one of {seat_suffixes}), got {constant}",
         )
         self.assertIn("published accumulator scalars never moved", reasons)
         # ... and it fails for the RIGHT reason: the four states really are byte-identical, so
@@ -242,11 +248,66 @@ class ExitCriterionTest(unittest.TestCase):
             "NUMERIC_LAST_DAMAGE_TAKEN",
         ):
             self.assertGreater(reach[column], 0, f"5-game sweep never reached {column}")
-        self.assertEqual(
-            summary["reachability"]["accumulator_scalars_constant"],
-            [],
-            "EVERY published accumulator scalar must move -- not just one (finding F3)",
+        # PER-SEAT liveness. This 5-game sweep CANNOT reach 16/16 and asserting it would be false
+        # precision: measured at seed 3, four (tracker, seat) pairs stay constant at 5 and 8 games,
+        # two at 12. 16/16 is only reached at certification scale -- 220 games at seed 4711,
+        # 26,220 states. (An earlier version of this comment cited the deploy status doc as
+        # recording that; the doc said 8/8, the POOLED denominator, and it is untracked, so the
+        # pointer was wrong in both directions. The number is stated here instead, where it can
+        # be checked by re-running the gate.)
+        #
+        # So this asserts the PROPERTY that distinguishes per-seat keying from pooled, rather than
+        # the instance: at least one tracker must have exactly ONE seat constant and the other
+        # varied. Pooling cannot produce that shape -- it merges the two into a single set, so a
+        # constant seat beside a varying one reads as "varied" and vanishes. Asserting the property
+        # survives a change in WHICH tracker happens to be asymmetric. At seed 3 it matches FOUR
+        # tracker names -- self_hazard_damage_suffered and opponent_items_removed (constant on p1)
+        # plus their mirrors opponent_hazard_damage_suffered and self_items_removed (constant on
+        # p2) -- which is two independent PHENOMENA seen from both perspectives, since p1's
+        # `self_hazard` is physically p2's `opponent_hazard`. Four entries, two facts; naming one
+        # pair would have depended on one sweep's outcome.
+        #
+        # Worth recording why the old assertion went: it was `constant == []`, and it passed on main
+        # only BECAUSE of the pooling bug -- four of sixteen pairs were dead and pooling reported
+        # zero. It was satisfied by the defect, not despite it.
+        constant = summary["reachability"]["accumulator_scalars_constant"]
+        varied = summary["reachability"]["accumulator_scalars_varied"]
+
+        def _by_tracker(entries):
+            out: dict[str, set[str]] = {}
+            for entry in entries:
+                name, bracket, seat = entry.rpartition("[")
+                # An UNSUFFIXED entry is what pooled keying emits. Skipping it rather than letting
+                # it bucket under "" matters: a pooled run with exactly one constant and one varied
+                # tracker would otherwise produce a false witness named "".
+                if not bracket or not name:
+                    continue
+                out.setdefault(name, set()).add(seat.rstrip("]"))
+            return out
+
+        constant_seats = _by_tracker(constant)
+        varied_seats = _by_tracker(varied)
+        asymmetric = sorted(
+            name
+            for name, seats in constant_seats.items()
+            # `>= 1` on the difference, not `== 1`: with two seats they are equivalent, but if
+            # PLAYERS ever grew, one-constant/two-varied is still a shape pooling cannot produce
+            # and should still count as a witness rather than failing the test spuriously.
+            if len(seats) == 1 and len(varied_seats.get(name, set()) - seats) >= 1
         )
+        self.assertTrue(
+            asymmetric,
+            "no tracker has exactly one seat constant and the other varied, so this sweep cannot "
+            "distinguish per-seat liveness from pooled -- either the sweep changed or liveness "
+            f"has gone back to pooling. constant={constant} varied={varied}",
+        )
+        # And every entry is seat-qualified, so a future pooled regression fails loudly.
+        seat_suffixes = tuple(f"[{player}]" for player in gate.PLAYERS)
+        for entry in constant + varied:
+            self.assertTrue(
+                entry.endswith(seat_suffixes),
+                f"not seat-qualified with one of {seat_suffixes}: {entry}",
+            )
         self.assertGreater(
             summary["reachability"]["v4_pack_categorical_states_reached"][
                 "CATEGORY_LAST_USED_MOVE"
