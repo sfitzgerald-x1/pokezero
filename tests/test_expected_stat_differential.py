@@ -476,20 +476,35 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
             "fixture does not separate the subset bound from the flat value; assertion vacuous",
         )
 
-        abandoned = _encode(self.dex, species=species, level=level, variants=(good, broken))
-        for stat, slot in COLUMNS:
-            if not info.base_stats.get(stat):
-                continue
-            with self.subTest(stat=stat):
-                self.assertAlmostEqual(
-                    abandoned[slot],
-                    flat[slot],
-                    places=9,
-                    msg=(
-                        f"{stat}: one unevaluable candidate did not abandon the set -- the "
-                        "emitted value is a max over a strict subset, which is not a bound"
-                    ),
-                )
+        # EVERY ORDER, and this is the point. The first version of this test only tried
+        # (good, broken) -- with the unevaluable candidate LAST, which is the one order where a
+        # `break` -> `continue` mutation is harmless: the list is cleared and never refilled, so
+        # the flat fallback happens anyway and the mutation survives with the whole suite green.
+        # Reversed, that same mutation emits a max over the strict subset {good}: measured
+        # def/spa/spd/spe = 256/222/256/216 against the flat 257/223/257/217, i.e. BELOW the true
+        # bound -- exactly the unsoundness this guard exists to prevent. Candidate order comes from
+        # the belief engine, not from this test, so the guard has to hold in all of them.
+        plain = {"moves": ["bodyslam", "earthquake", "rest", "sleeptalk"], "item": "leftovers"}
+        for label, variants in (
+            ("broken last", (good, broken)),
+            ("broken first", (broken, good)),
+            ("broken middle", (good, broken, plain)),
+        ):
+            abandoned = _encode(self.dex, species=species, level=level, variants=variants)
+            for stat, slot in COLUMNS:
+                if not info.base_stats.get(stat):
+                    continue
+                with self.subTest(order=label, stat=stat):
+                    self.assertAlmostEqual(
+                        abandoned[slot],
+                        flat[slot],
+                        places=9,
+                        msg=(
+                            f"{stat} ({label}): one unevaluable candidate did not abandon the "
+                            "set -- the emitted value is a max over a strict subset, which is "
+                            "not a bound"
+                        ),
+                    )
 
     def test_flat_iv31_encoder_is_killed(self) -> None:
         """Kill-confirmed mutation: the pre-fix encoder must FAIL this file's differential.

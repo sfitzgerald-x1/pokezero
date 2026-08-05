@@ -1698,6 +1698,14 @@ fn encode_expected_stats(
     // NUMERIC_LEVEL) and the one in the transformed-stats path mirrors `if level is None ...
     // return`. Only this one, matching `_encode_expected_stats`.
     let level = level_from_details(details).unwrap_or(100);
+    // SCOPE LIMIT, stated because the spread math below is now Python-equivalent and it would be
+    // easy to read that as closed equivalence for these columns. `Tables::species_info` is a bare
+    // normalized lookup with no twin of Python's `_species_info_base_fallback`, so a COSMETIC FORME
+    // (every `unown*` except the base) resolves here to None and this function returns early --
+    // leaving all ten NUMERIC_EXPECTED_* columns at zero while Python emits real values. Measured
+    // at 514 diverging cells over one 120-game replay. The divergence is one lookup EARLIER than
+    // the spread work, is pre-existing, and is tracked as its own fix; it is not introduced or
+    // closed here.
     let Some(battle_info) = tables.species_info(battle_species) else {
         return Ok(());
     };
