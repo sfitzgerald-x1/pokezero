@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 import hashlib
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -174,6 +175,13 @@ class RandbatSourceMetadata:
             value = payload.get(key)
             if not value:
                 continue
+            if not isinstance(value, (str, os.PathLike)):
+                # A wrong-typed field is the one input that could still make this serializer throw
+                # (`Path(12345)` raises TypeError). Unreachable through `from_showdown_root` or
+                # `from_payload`, both of which coerce to str -- but "a serializer must not throw"
+                # should be literally true, not true-by-ingress.
+                payload[key] = None
+                continue
             candidate = Path(value)
             relative: str | None = None
             if root:
@@ -188,12 +196,24 @@ class RandbatSourceMetadata:
             if relative is not None:
                 payload[key] = relative
                 continue
-            if not candidate.is_absolute() and not value.startswith("~"):
+            if (
+                not candidate.is_absolute()
+                and not candidate.drive
+                and not candidate.root
+                and ".." not in candidate.parts
+                and not value.startswith("~")
+            ):
                 # ALREADY relative -- this is the re-serialization of a payload that has been
                 # through here once (the on-disk cache is written from `to_payload` and read back
                 # via `from_payload`, which yields root=None). Dropping it here would make the
                 # transform non-idempotent, so a source's provenance would depend on how many
                 # times it had been cached.
+                #
+                # The extra clauses are not decoration. A bare `is_absolute()` test admits
+                # a drive-letter path or a bare anchorless one on POSIX -- both of which can carry
+                # a username --
+                # plus UNC paths and `..` escapes. None is emitted by `portable_path` today, so this
+                # is closing the shape rather than a live leak.
                 continue
             # Not relative to the checkout => machine-specific WHATEVER ITS PREFIX. Testing
             # `is_absolute()` here was wrong: `portable_path` collapses $HOME to "~", and
