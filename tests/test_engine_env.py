@@ -20,6 +20,8 @@ What is actually asserted, in the order the value of the env depends on it:
 from __future__ import annotations
 
 import random
+import json
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -616,10 +618,14 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
     columns exist, so the failure surfaced deep inside the encoder as a missing column, on the
     first `encode_leaf`, rather than here as an unsupported schema.
 
-    Hermetic: the schema-to-layout decision happens before any artifact is read or built, so these
-    tests touch no filesystem and need no Showdown checkout. (An earlier version of this docstring
-    claimed "a bogus path is enough to prove the selection" -- no test here passes a path; that
-    sentence described an abandoned first draft.)
+    Needs no Showdown checkout: `resolved_showdown_root()` only resolves a path, it does not stat
+    one, and the schema decision happens before any artifact is read or built.
+
+    These tests DO touch the filesystem -- several write a tempfile artifact and pass its path, one
+    drives a fake repo root through the exporter lane. Two earlier versions of this docstring said
+    otherwise ("touch no filesystem", "no test here passes a path"); both were false when written
+    and got falser as tests were added. A round-3 commit message claimed the wording had been fixed
+    while the diff did not touch it.
     """
 
     def _selected_schema(self, schema_version: str) -> str:
@@ -745,7 +751,10 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             artifact = _Path(tmp) / "tables.json"
             artifact.write_text(payload, encoding="utf-8")
-            with self.assertRaises(ValueError) as caught:
+            # assertRaisesRegex on the mismatch phrasing: the buggy message also contained both
+            # "v2.1" and "v2.2" (the latter via "supports ['v2.2', 'v3', 'v4']"), so the two
+            # assertIn checks alone passed on the bug and only the assertNotIn discriminated.
+            with self.assertRaisesRegex(ValueError, "are for observation schema") as caught:
                 _load_encoder_tables(artifact, None, "pokezero.observation.v2.1")
         message = str(caught.exception)
         self.assertIn("v2.2", message)
@@ -769,42 +778,65 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
                         _load_encoder_tables(artifact, None, "pokezero.observation.v4")
                     self.assertIn("not a JSON object", str(caught.exception))
 
-    def test_the_derived_cache_lane_is_validated_too(self) -> None:
-        """The cache-hit and post-build reads must go through the validator, not just the
-        explicitly-passed path.
+    def test_both_derived_cache_reads_validate_against_a_cache_this_test_owns(self) -> None:
+        """Binds BOTH cache-lane guards without depending on gitignored build output.
 
-        Dropping both cache-lane calls left the whole suite green, so they were unverified code --
-        guards with no guard. This asserts the WIRING (the validator is actually invoked for a cache
-        read), which source inspection cannot do and a helper-level test does not reach.
+        An earlier version of this coverage read the repo's own `corpus/encoder_tables_v2.2.json`,
+        so it SKIPPED on any clean checkout -- `corpus/` is gitignored -- leaving both cache guards
+        unverified in CI. It also only ever reached the cache-HIT read: deleting the post-build
+        guard left the whole suite green, which is the "guards with no guard" state this change's
+        own earlier message complained about, at the neighbouring site.
 
-        Uses the repo's own `corpus/encoder_tables_v2.2.json` when present; skips otherwise, since a
-        cache-hit cannot be exercised without a cache.
+        Here the test owns the repo root, so both branches are reachable and neither depends on
+        build output:
+          - post-build: `subprocess.run` is patched to write a MISMATCHED artifact.
+          - cache-hit: the artifact is present up front, and the exporter must not be invoked.
         """
+        import tempfile
         from pathlib import Path as _Path
         from unittest import mock
 
         from pokezero import engine_env
 
-        repo = _Path(engine_env.__file__).resolve().parents[2]
-        cache = repo / "corpus" / "encoder_tables_v2.2.json"
-        if not cache.exists():
-            self.skipTest("no derived encoder-tables cache to exercise the cache-hit lane")
+        wrong = json.dumps({"layout": {"schema_version": "pokezero.observation.v2.2"}})
 
-        seen: list[str] = []
-        real = engine_env._assert_tables_match_schema
+        for lane in ("post-build", "cache-hit"):
+            with self.subTest(lane=lane), tempfile.TemporaryDirectory() as tmp:
+                root = _Path(tmp)
+                # `_load_encoder_tables` derives the repo root from the module's own __file__.
+                (root / "src" / "pokezero").mkdir(parents=True)
+                fake_module = root / "src" / "pokezero" / "engine_env.py"
+                fake_module.write_text("", encoding="utf-8")
+                # The loader refuses to build when the exporter is absent, so the fake root needs
+                # one. Empty is enough -- `subprocess.run` is patched and never executes it.
+                (root / "scripts").mkdir()
+                (root / "scripts" / "export_encoder_tables.py").write_text("", encoding="utf-8")
+                cache = root / "corpus" / "encoder_tables_v4.json"
+                cache.parent.mkdir(parents=True)
 
-        def _recording(tables_json, schema_version, *, source):
-            seen.append(source)
-            return real(tables_json, schema_version, source=source)
+                if lane == "cache-hit":
+                    cache.write_text(wrong, encoding="utf-8")
 
-        with mock.patch.object(engine_env, "_assert_tables_match_schema", _recording):
-            engine_env._load_encoder_tables(None, None, "pokezero.observation.v2.2")
+                    def _run(*args, **kwargs):  # pragma: no cover - must not be reached
+                        raise AssertionError("cache hit should not invoke the exporter")
+                else:
+                    def _run(*args, **kwargs):
+                        cache.write_text(wrong, encoding="utf-8")
+                        return subprocess.CompletedProcess(args, 0, "", "")
 
-        self.assertEqual(
-            seen,
-            [str(cache)],
-            "the derived-cache read did not go through _assert_tables_match_schema",
-        )
+                # `subprocess` is imported INSIDE `_load_encoder_tables` (a deliberate lazy
+                # import), so `engine_env.subprocess` does not exist as a module attribute --
+                # patch the real target instead.
+                with mock.patch.object(
+                    engine_env, "__file__", str(fake_module)
+                ), mock.patch("subprocess.run", _run):
+                    with self.assertRaises(ValueError) as caught:
+                        engine_env._load_encoder_tables(
+                            None, None, "pokezero.observation.v4"
+                        )
+                message = str(caught.exception)
+                self.assertIn("v2.2", message)
+                self.assertIn("v4", message)
 
     def test_the_validator_accepts_an_artifact_it_cannot_introspect(self) -> None:
         """Absent/blank `layout.schema_version` is accepted DELIBERATELY, and pinned so the
