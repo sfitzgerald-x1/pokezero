@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -3413,13 +3413,37 @@
+@@ -3413,13 +3413,54 @@
              max_damage_dealt
          } else {
              (max_damage_dealt as f32 * 0.85) as i16
@@ -23,12 +23,29 @@
 +            max_damage_dealt.saturating_mul(hit_count as i16)
 +        } else {
 +            max_damage_dealt
-         };
++        };
++        // The floor MUST come from the same basis the comparator uses, or the
++        // gate can fire on a window where every one of the comparator's 16 rolls
++        // is at or above `health` -- leaving `num_less_than == 0` and dividing by
++        // zero at `compare_health_with_damage_multiples`.
++        //
++        // `min_damage_dealt` is `floor(0.85 * max)`. Multiplying THAT by
++        // `hit_count` gives a total up to `hit_count * frac(0.85 * max)` BELOW
++        // the comparator's own lowest roll, which is `(max * hit_count) * 0.85`.
++        // Unscaled the mismatch was impossible -- for integers,
++        // `floor(x) < hp` implies `x < floor(x) + 1 <= hp` -- and multiplying by
++        // `hit_count` breaks exactly that proof.
++        //
++        // Reproduced before this correction: per-hit max 87 over two hits panics
++        // at hp=147 (window `146 < hp <= 147.9`), and real 3-hit moves panic too
++        // -- bonerush at 112, furyswipes at 121, spikecannon at 136. A 400-game
++        // sweep reported `engine_errors: 0` because the window is one or two HP
++        // values per matchup: sample size, not safety.
 +        let ko_min_damage = if hit_count > 1 {
-+            min_damage_dealt.saturating_mul(hit_count as i16)
++            (ko_max_damage as f32 * 0.85) as i16
 +        } else {
 +            min_damage_dealt
-+        };
+         };
          if branch_on_damage
 -            && max_damage_dealt >= defender_active.hp
 -            && min_damage_dealt < defender_active.hp
@@ -41,7 +58,7 @@
  
              let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
                  || defender_active.ability == Abilities::SHELLARMOR
-@@ -3457,7 +3481,18 @@
+@@ -3457,15 +3498,49 @@
              // `compare_health_with_damage_multiples` counts rolls AT OR ABOVE its
              // threshold, and every hit-lethal roll is also at or above the residual
              // threshold, so the residual-only population is the difference.
@@ -60,8 +77,55 @@
 +            };
              let mut residual_kill_chance = 0.0_f32;
              if let Some(residual_threshold) = residual_threshold_opt {
++                // This third arm counts the rolls that SURVIVE the move but die to
++                // residuals -- the band `[residual_threshold, hp)`. It gets that
++                // count by SUBTRACTING `num_kill_rolls`, so both counts must share
++                // a basis, and the KO scaling above made `num_kill_rolls` TOTAL.
++                //
++                // Leaving a per-hit `max_damage_dealt` here mixes the two. For a
++                // multi-hit move the total clears `hp` on more rolls than the
++                // per-hit damage clears the LOWER threshold, so `num_at_or_above -
++                // num_kill_rolls` goes negative, fails `> 0`, and the arm silently
++                // vanishes for exactly the population this patch is about. These
++                // are `i16`, so it underflows to a skip instead of panicking --
++                // which is why no gate caught it.
++                //
++                // `residual_min` reuses Case A's floor rule for the same reason it
++                // exists there: it is the comparator's own lowest roll, so gating
++                // on it guarantees `num_less_than >= 1` and the `0/0` at
++                // `compare_health_with_damage_multiples` stays unreachable here too.
++                let residual_max = ko_max_damage;
++                let residual_min = if hit_count > 1 {
++                    (residual_max as f32 * 0.85) as i16
++                } else {
++                    min_damage_dealt
++                };
                  if residual_threshold > 0
-@@ -3543,9 +3578,20 @@
+                     && residual_threshold < defender_active.hp
+-                    && min_damage_dealt < residual_threshold
++                    && residual_min < residual_threshold
+                 {
+                     let (average_surviving_damage, num_at_or_above) =
+-                        compare_health_with_damage_multiples(max_damage_dealt, residual_threshold);
++                        compare_health_with_damage_multiples(residual_max, residual_threshold);
+                     let num_residual_only = num_at_or_above - num_kill_rolls;
+                     if num_residual_only > 0 {
+                         residual_kill_chance =
+@@ -3475,7 +3550,12 @@
+                         let mut residual_ins = incoming_instructions.clone();
+                         residual_ins.update_percentage(residual_kill_chance);
+                         extra_branches.push((residual_ins, residual_threshold));
+-                        survive_representative = average_surviving_damage;
++                        // Now a TOTAL, for the same reason as the KO arm above.
++                        survive_representative = if hit_count > 1 {
++                            average_surviving_damage / hit_count as i16
++                        } else {
++                            average_surviving_damage
++                        };
+                     }
+                 }
+             }
+@@ -3543,9 +3623,21 @@
                  }
              }
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
@@ -71,8 +135,9 @@
 +            } else {
 +                max_crit_damage
 +            };
++            // Same floor-basis requirement as Case A above; see that comment.
 +            let ko_min_crit = if hit_count > 1 {
-+                min_crit_damage.saturating_mul(hit_count as i16)
++                (ko_max_crit as f32 * 0.85) as i16
 +            } else {
 +                min_crit_damage
 +            };
@@ -84,7 +149,7 @@
              {
                  // The CRIT roll range straddles the KO threshold while the
                  // non-crit range does not. Collapsing this arm to its average
-@@ -3555,7 +3601,7 @@
+@@ -3555,7 +3647,7 @@
                  // have scored, or the reverse. Partition it with the identity
                  // Case A already uses; do not introduce a second one.
                  let (average_non_kill_crit_damage, num_crit_kill_rolls) =
@@ -93,7 +158,7 @@
                  let crit_kill_chance = crit_rate * (num_crit_kill_rolls as f32 / 16.0);
                  let crit_survive_chance = crit_rate - crit_kill_chance;
                  if crit_kill_chance > 0.0 {
-@@ -3566,7 +3612,13 @@
+@@ -3566,7 +3658,13 @@
                  if crit_survive_chance > 0.0 {
                      let mut survive_ins = incoming_instructions.clone();
                      survive_ins.update_percentage(crit_survive_chance);
