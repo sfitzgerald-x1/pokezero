@@ -25,7 +25,7 @@ PATCH_ROOT = REPO_ROOT / "third_party"
 # patch stack. It deliberately hashes only paths named by ``+++`` patch
 # headers, rather than globbing the source tree: upstream has case-colliding
 # README files which are not build inputs for this patch stack.
-PATCHED_TARGET_TREE_SHA256 = "2910c3d4b9eb71dadee126d8340269382f54a0fe3753de46e12e1bf3a640e67e"
+PATCHED_TARGET_TREE_SHA256 = "83fdbcee4369f3a6c070613a25e1e392e2cb0246451808ce4b22e89d9b4fde6b"
 _TARGET_TREE_DOMAIN = b"pokezero.poke-engine.patched-target-tree/v1\0"
 
 # GNU and BSD patch both consult these variables when deciding whether to keep

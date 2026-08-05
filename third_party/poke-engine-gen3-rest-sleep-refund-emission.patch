@@ -264,7 +264,7 @@
                      .push(Instruction::Heal(HealInstruction {
 --- a/tests/test_gen3.rs
 +++ b/tests/test_gen3.rs
-@@ -610,4 +610,423 @@
+@@ -610,4 +610,459 @@
          },
      ];
      assert_eq!(expected_instructions, vec_of_instructions);
@@ -288,7 +288,7 @@
 +    pkmn.status = PokemonStatus::SLEEP;
 +    pkmn.rest_turns = rest_turns;
 +    pkmn.rest_sleep_pending_refund = pending;
-+}
+ }
 +
 +#[test]
 +fn test_rest_refund_is_credited_on_switch_in() {
@@ -326,7 +326,7 @@
 +        "{:?}",
 +        instructions
 +    );
- }
++}
 +
 +#[test]
 +fn test_rest_refund_is_clamped_to_the_legal_maximum() {
@@ -686,5 +686,41 @@
 +            .any(|instruction| matches!(instruction, Instruction::SetRestTurns(_))),
 +        "{:?}",
 +        vec_of_instructions[0].instruction_list
++    );
++}
++
++#[test]
++fn test_early_bird_staying_asleep_discards_the_refund() {
++    // The `3 if EARLYBIRD` arm: Early Bird burns two counters, so at 3 the mon
++    // STAYS asleep (landing at 1) rather than waking. That is a move attempt, so
++    // onBeforeMove still runs and a non-sleepUsable move still discards the
++    // bank. Distinct from test_early_bird_wake_voids_..., which enters at 2 and
++    // takes the wake arm -- leaving this discard unpinned, which review caught.
++    let mut state = State::default();
++    let pkmn = state.side_one.get_active();
++    pkmn.status = PokemonStatus::SLEEP;
++    pkmn.rest_turns = 3;
++    pkmn.rest_sleep_pending_refund = 2;
++    pkmn.ability = Abilities::EARLYBIRD;
++
++    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
++        &mut state,
++        Choices::TACKLE,
++        Choices::SPLASH,
++    );
++
++    assert!(
++        vec_of_instructions.iter().any(|state_instruction| {
++            state_instruction.instruction_list.contains(
++                &Instruction::SetRestSleepPendingRefund(SetSleepTurnsInstruction {
++                    side_ref: SideReference::SideOne,
++                    pokemon_index: PokemonIndex::P0,
++                    new_turns: 0,
++                    previous_turns: 2,
++                }),
++            )
++        }),
++        "staying asleep under Early Bird must still discard the bank: {:?}",
++        vec_of_instructions
 +    );
 +}

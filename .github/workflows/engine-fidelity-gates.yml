@@ -241,9 +241,9 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --test test_gen3 2>&1 \
             | tee /tmp/gen3suite.log
-          if ! grep -qE '^test result: ok\. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3suite.log; then
-            echo "::error::expected 27 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 28 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           # And NAME the pins. A total can be restored by unrelated tests, which
@@ -262,7 +262,8 @@ jobs:
             test_a_non_sleep_usable_attempt_discards_the_refund \
             test_a_sleep_usable_attempt_banks_a_turn \
             test_using_rest_again_discards_the_previous_stints_refund \
-            test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited; do
+            test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited \
+            test_early_bird_staying_asleep_discards_the_refund; do
             grep -qxE "test $pin \.\.\. ok" /tmp/gen3suite.log || {
               echo "::error::gen3 pin did not run: $pin"
               exit 1
