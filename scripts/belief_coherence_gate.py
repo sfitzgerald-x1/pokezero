@@ -226,7 +226,32 @@ def _check_mon(
         looks_like_fallback = (
             pool_size and len(candidates) == pool_size and float(belief.uncertainty) >= 1.0
         )
-        if looks_like_fallback:
+        # SECOND legitimate growth cause, found by this sweep and attributed rather than absorbed:
+        # an item mutation. A revealed item narrows the set; Knock Off / Trick then removes it, the
+        # candidate filter stops constraining on it, and previously-excluded variants are
+        # re-admitted. Captured live:
+        #   |-enditem|p1a: Raichu|Leftovers|[from] move: Knock Off|[of] p2a: Lickitung
+        #   revealed_item Leftovers, candidates 3 -> 4
+        # It widens rather than narrows, so containment is preserved -- the SAFE direction -- but it
+        # discards evidence the reveal had already established, so it is reported with its cause
+        # rather than treated as clean. The plan's family-3 criterion is attribution, not zero
+        # growth; silently absorbing this is what it forbids.
+        item_mutation = bool(
+            getattr(belief, "item_mutated", False) or getattr(belief, "item_removed", False)
+        )
+        if item_mutation and not looks_like_fallback:
+            counts["item_mutation_regrowths"] += 1
+            fallbacks.append(
+                {
+                    **ctx,
+                    "previous": previous,
+                    "pool_size": pool_size,
+                    "cause": "item mutation re-widened the set (Knock Off / Trick)",
+                    "revealed_item": belief.revealed_item,
+                    "original_public_item": getattr(belief, "original_public_item", None),
+                }
+            )
+        elif looks_like_fallback:
             counts["inconsistent_fallbacks"] += 1
             # ATTRIBUTED, not just counted: the plan requires every fallback tied to a cause, and
             # a bare integer cannot be checked against that by a reader.
@@ -405,6 +430,7 @@ def run_sweep(
             "pinned_and_correct": 0,
             "narrowing_steps": 0,
             "inconsistent_fallbacks": 0,
+            "item_mutation_regrowths": 0,
             "stat_legality_checks": 0,
             "unevaluable_candidate_spreads": 0,
             "pin_conflict_checks": 0,
