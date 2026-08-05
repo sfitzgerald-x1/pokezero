@@ -586,11 +586,12 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         * a sleep-usable ``|move|`` -- Sleep Talk or Snore;
         * ``|-activate|`` filtered to ``confusion`` / ``moveattract``;
         * **any later same-actor** ``|cant|`` -- that branch (``showdown.py:3281``)
-          has **no reason filter at all**. Its comment names flinch/Truant/paralysis/
-          Attract, but `par`, `recharge` and `nomoves` reach it just as well, which
-          is why this test asserts the rule rather than a list. An earlier version of
-          this docstring claimed "six line families"; that was an undercount taken
-          from a comment instead of from the code.
+          has **no reason filter at all**. Its own comment names flinch/Truant/
+          paralysis/Attract; `recharge` and `nomoves` reach it too and are named by
+          nothing. So the rule is what this test asserts, not a list. Two earlier
+          versions of this docstring got that wrong in opposite ways: one claimed
+          "six line families" (an undercount read off a comment rather than the
+          code), the next implied `par` was unnamed when the comment names it.
         """
         upkeep = ["|upkeep", "|turn|2"]
         bare = ["|cant|p2a: Skarmory|slp"]
@@ -613,16 +614,26 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             "move:snore": ["|move|p2a: Skarmory|Snore|p1a: Snorlax"],
             "cant:flinch": ["|cant|p2a: Skarmory|flinch"],
             "cant:truant": ["|cant|p2a: Skarmory|ability: Truant"],
-            # Unlisted in the branch's own comment -- proof it is unfiltered.
+            # `-activate` route ONLY -- no trailing `|cant|`. With the `|cant|` line
+            # present these two pass via the unfiltered `cant` route instead, so
+            # deleting "moveattract" from the `-activate` filter was a SILENT
+            # mutation. Review caught that; the filter had zero coverage repo-wide.
+            "activate:confusion": ["|-activate|p2a: Skarmory|confusion",
+                                   "|-damage|p2a: Skarmory|80/100"],
+            "activate:attract": ["|-activate|p2a: Skarmory|move: Attract"],
+        }
+        # Code-property probes, NOT claimed producers. Gen 3 major statuses are
+        # exclusive, so a `slp` row cannot emit `|cant|...|par`, and a mon cannot
+        # self-Rest while recharging. They are here to pin that the `cant` branch is
+        # unfiltered -- a property of THIS annotator, characterised, not validated
+        # against the Node sim this file names as ground truth. If gen 3 does not in
+        # fact refund these, that is a bug these subtests would protect.
+        unfiltered_probes = {
             "cant:par": ["|cant|p2a: Skarmory|par"],
             "cant:recharge": ["|cant|p2a: Skarmory|recharge"],
             "cant:nomoves": ["|cant|p2a: Skarmory|nomoves"],
-            "activate:confusion": ["|-activate|p2a: Skarmory|confusion",
-                                   "|-damage|p2a: Skarmory|80/100"],
-            "activate:attract": ["|-activate|p2a: Skarmory|move: Attract",
-                                 "|cant|p2a: Skarmory|Attract"],
         }
-        for name, events in skip_families.items():
+        for name, events in {**skip_families, **unfiltered_probes}.items():
             with self.subTest(producer="B", family=name):
                 lines = self._RESTED + bare + events + upkeep
 
@@ -635,13 +646,15 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
                 self.assertTrue(active_row[0]["restSleepActiveRefundPending"])
                 self.assertNotIn("restSleepAttemptUnsettled", active_row[0])
 
-    def test_no_annotator_path_emits_the_pre_split_flag(self) -> None:
-        """``restSleepRefundPending`` must now be unreachable from a live replay.
+    def test_the_pre_split_flag_is_never_emitted_alone(self) -> None:
+        """A live row sets the old flag TOO, but never on its own.
 
-        It survives only in corpora captured before the split, where it could have
-        come from either producer. If the annotator could still emit it, the third
-        legacy reason code would silently absorb live producer-B traffic and undo
-        the whole point of the split.
+        Writing it keeps a pre-split checkout refusing rather than silently
+        approximating (`_mark_legacy_rest_refund_pending`). Writing it *alone* is
+        what must never happen: the third legacy reason code is defined as "old flag,
+        neither producer flag", so a live row emitting it bare would be counted as
+        un-attributable and the split would lose exactly the traffic it exists to
+        separate.
         """
         streams = [
             [],
@@ -655,12 +668,60 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             ["|cant|p2a: Skarmory|slp", "|switch|p2a: Starmie|Starmie, L79|100/100",
              "|upkeep", "|turn|2"],
         ]
-        for index, tail in enumerate(streams):
+        # Every OTHER branch of the annotator too, not just the refusing pair. Review
+        # showed the first version of this guard missed a stray bare write in the
+        # `induced` branch entirely, because none of the streams above reach it: each
+        # of these ends at a different `continue`.
+        other_branches = [
+            # induced sleep -> restSleepProvenanceUnrepresentable
+            (_LEADS + ["|move|p1a: Snorlax|Hypnosis|p2a: Skarmory",
+                       "|-status|p2a: Skarmory|slp"], False),
+            # own Rest, then induced by the opponent as well -> the `induced` conflict
+            (self._RESTED + ["|move|p1a: Snorlax|Hypnosis|p2a: Skarmory",
+                             "|-status|p2a: Skarmory|slp"], False),
+            # woken -> annotation retired
+            (self._RESTED + ["|-curestatus|p2a: Skarmory|slp"], False),
+        ]
+
+        producer_flags = ("restSleepAttemptUnsettled", "restSleepActiveRefundPending")
+        cases = [(self._RESTED + t, a) for t in streams for a in (False, True)]
+        cases += other_branches
+        for index, (lines, active) in enumerate(cases):
+            with self.subTest(case=index, active=active):
+                for row in self._annotate_either(lines, active=active):
+                    if "restSleepRefundPending" not in row:
+                        continue
+                    self.assertTrue(
+                        any(flag in row for flag in producer_flags),
+                        f"row emitted the pre-split flag alone: {row}",
+                    )
+
+    def test_a_live_row_still_refuses_under_a_pre_split_consumer(self) -> None:
+        """The mirror hazard the flag rename would otherwise create.
+
+        A pre-split `engine_world` knows neither producer flag. If a live row carried
+        only those, it would match no branch there, fall through to
+        ``approximate_sleep_turns`` and build ``rest_turns=0`` -- a silently wrong
+        world, strictly worse than the mislabelled refusal the rename fixed. Simulated
+        by asking only the question a pre-split consumer can ask.
+        """
+        cases = (
+            ["|cant|p2a: Skarmory|slp"],                                  # producer A
+            [*self._ACTIVE_SLEEP_TALK, "|upkeep", "|turn|2"],             # producer B
+        )
+        for index, tail in enumerate(cases):
             for active in (False, True):
-                with self.subTest(stream=index, active=active):
+                with self.subTest(case=index, active=active):
                     rows = self._annotate_either(self._RESTED + tail, active=active)
-                    self.assertNotIn("restSleepRefundPending", rows[0])
-                    self.assertNotIn("restSleepRefundPending", rows[1])
+                    row = rows[0]
+                    if not any(f in row for f in
+                               ("restSleepAttemptUnsettled", "restSleepActiveRefundPending")):
+                        continue  # this combination builds; nothing to preserve
+                    self.assertTrue(
+                        row.get("restSleepRefundPending"),
+                        "a refusing live row must still carry the pre-split flag, or a "
+                        "pre-split consumer will approximate it instead of refusing",
+                    )
 
 
     def test_interrupted_sleep_usable_attempts_keep_the_switch_refund(self) -> None:

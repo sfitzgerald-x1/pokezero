@@ -2573,6 +2573,33 @@ def _apply_public_item_materialization_state(
         matching_rows[0]["currentItem"] = current_item
 
 
+def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
+    """Also set the PRE-SPLIT flag, for rows read back by a pre-split checkout.
+
+    The split renamed this flag so that an old row could not be miscounted as
+    producer B. Renaming alone creates the mirror hazard, which is worse: a row
+    written HERE and replayed by a checkout older than the split matches none of
+    that checkout's branches, falls through to ``approximate_sleep_turns``, and
+    silently builds ``rest_turns=0`` instead of refusing. Stored corpora keep
+    ``public_materialization`` verbatim and all four replay scripts
+    (``leaf_root_parity``, ``bench_leaf_search``, ``leaf_vs_reality``,
+    ``prior_mapping_assert``) pass ``approximate_sleep_turns=True``, so that is a
+    silently wrong world, not a mislabelled refusal.
+
+    Writing BOTH keys keeps every direction honest, because the three cases stay
+    distinguishable by which keys are present:
+
+        new row + new code  -> a producer flag is checked first; this one is never reached
+        new row + OLD code  -> sees this flag and refuses, exactly as before the split
+        OLD row + new code  -> carries ONLY this flag, so it gets the third legacy code
+
+    That last line is why the legacy check must stay last, and why no live path may
+    ever emit this flag on its own.
+    """
+
+    row["restSleepRefundPending"] = True
+
+
 def _apply_rest_sleep_provenance(
     rows: list[dict[str, Any]],
     replay: ShowdownReplayState,
@@ -2710,6 +2737,7 @@ def _apply_rest_sleep_provenance(
             # to the same stream builds it. Nothing about the engine's
             # representation is at fault, so do not report an engine gap.
             row["restSleepAttemptUnsettled"] = True
+            _mark_legacy_rest_refund_pending(row)
             continue
         skipped = skipped_turns.get(key, 0)
         refunded = refunded_turns.get(key, 0)
@@ -2739,6 +2767,7 @@ def _apply_rest_sleep_provenance(
                 # cannot be attributed to a producer, so `engine_world` gives it a
                 # third code rather than folding it into this one.
                 row["restSleepActiveRefundPending"] = True
+                _mark_legacy_rest_refund_pending(row)
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible

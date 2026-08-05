@@ -1666,10 +1666,16 @@ def _hp_and_status(
                     "rest_sleep_active_refund_pending",
                     f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
                 )
+            # LAST, and load-bearing that it is last. A live row sets this flag too
+            # (see `_mark_legacy_rest_refund_pending`) so that a pre-split checkout
+            # replaying it still refuses instead of silently approximating. Reaching
+            # HERE therefore means the row carries the old flag and NEITHER producer
+            # flag -- i.e. it really was written before the split, and its producer is
+            # not recoverable. Moving this check earlier would swallow every live row.
             if bool(row.get("restSleepRefundPending")):
                 raise EngineWorldUnsupported(
                     "rest_sleep_refund_pending_unsplit_legacy",
-                    f"{slot}: {species!r} carries the pre-split Rest refund flag, "
+                    f"{slot}: {species!r} carries the pre-split Rest refund flag alone, "
                     "whose producer is not recoverable from the row",
                 )
             if "restSleepAttempts" in row:
