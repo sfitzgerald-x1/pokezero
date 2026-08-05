@@ -1595,13 +1595,19 @@ class PublicBattleBeliefEngine:
                     ("lumberry",),
                     "Status persisted without an instant Lum cure; Lum variants removed.",
                 )
-            # Pinch berries (Salac/Petaya/Liechi) activate on an HP DROP during the action
-            # phase (being hit), NOT on an end-of-turn residual crossing: in gen3 a mon that
-            # first falls to/below 25% from a later residual (Toxic/burn/sand/Leech chip) got
-            # no berry-activation opportunity at this boundary. Gate on the action-phase HP
-            # snapshot, exactly like the Leftovers slot above, so only a genuine action-phase
-            # non-proc — HP already at/below threshold after actions with no berry eaten —
-            # rules the pinch variants out. No snapshot => no evidence (conservative).
+            # Pinch berries (Salac/Petaya/Liechi) fire at the RESIDUAL item slot in gen3 --
+            # `data/mods/gen3/items.ts` sets `onUpdate: undefined` (no inherit) plus
+            # `onResidualOrder: 10, onResidualSubOrder: 4`, i.e. the SAME slot as Leftovers. The
+            # comment here used to say the opposite -- that they activate on an action-phase HP
+            # drop and never on a residual crossing -- and that premise was backwards. It is what
+            # made this rule eliminate the TRUE berry: any heal ordered before 10/4 (Wish 7,
+            # Sandstorm/Hail field 8, Ingrain 10/1, Rain Dish 10/3) lifts the mon back over the
+            # 25% line before the berry is ever offered, so its silence is not evidence.
+            #
+            # The gate is therefore the same pre-slot HP snapshot the Leftovers rule uses, and the
+            # correctness now rests on `_RESIDUAL_HP_TAGS` classifying by gen3 order: pre-slot
+            # heals UPDATE that snapshot, at/after-slot changes do not.
+            # No snapshot => no evidence (conservative).
             if (
                 hp_pre_residual is not None
                 and hp_pre_residual <= 0.25
@@ -2017,26 +2023,31 @@ _SLEEP_USABLE_MOVES = frozenset({"sleeptalk", "snore"})
 _TRICK_EFFECT = re.compile(r"move: Trick(?![\w-])")
 
 
+# HP changes that land AT OR AFTER the gen3 item slot (residual order 10 / subOrder 4, where
+# Leftovers AND the pinch berries both fire). Only these must be kept out of the pre-slot HP
+# snapshot the non-proc pruning reads.
+#
+# The split is by gen3-EFFECTIVE order, walked through the mod chain (`data/mods/gen3/scripts.ts`
+# is `inherit: 'gen4'`), not by "is it a residual":
+#
+#   Wish 7  <  Sandstorm/Hail field 8  <  Ingrain 10/1  <  Rain Dish 10/3
+#     <  [ Leftovers and pinch berries 10/4 ]  <  Leech Seed 10/5  <  brn/psn/tox 10/6
+#
+# So Wish, Sandstorm, Hail and Rain Dish resolve BEFORE the slot and therefore DO describe the HP
+# the item saw -- they were previously listed here and excluded, which is backwards. That mistake
+# was load-bearing: it is why a Wish that lifted a mon over the 25% line still let the pinch-berry
+# rule fire, and why a Wish that topped a mon off still let the Leftovers rule fire.
 _RESIDUAL_HP_TAGS = (
     "[from] psn",
     "[from] brn",
-    "[from] Sandstorm",
-    "[from] Hail",
     "[from] Leech Seed",
     "[from] item: Leftovers",
-    "[from] ability: Rain Dish",
     "[from] Curse",
     "[from] Nightmare",
     "[from] move: Wrap",
     "[from] partiallytrapped",
-    # Wish's landing heal is an end-of-turn RESIDUAL heal (gen3 slotCondition, residual order 7),
-    # exactly like the Leftovers / Rain Dish residual heals above: it must NOT overwrite the
-    # action-phase HP snapshot the non-proc item pruning reads (same #769 mechanism as the psn/brn
-    # residual-DAMAGE tags). Without this, a Wish landing on a mon that fell to <=25% during the
-    # action phase (no berry eaten) would overwrite the low pre-residual snapshot with the healed
-    # value and MASK the action-phase non-proc, wrongly leaving the pinch variants un-pruned.
-    # (Ingrain is deliberately NOT listed — 0 gen3-randbats pool carriers, unreachable.)
-    "[from] move: Wish",
+    # Curse / Nightmare / Wrap: their gen3 sub-orders are not established here, so they stay
+    # excluded. That is the conservative direction (it only ever DECLINES evidence).
     # Liquid Ooze turns a LEECH SEED drain into damage on the drainer
     # (`data/mods/gen4/abilities.ts` liquidooze, `canOoze = ['drain', 'leechseed']`; gen3 inherits
     # gen4), and Leech Seed is residual 10/subOrder 5 — AFTER the Leftovers slot at 10/4. Untagged,

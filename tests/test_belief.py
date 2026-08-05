@@ -1363,27 +1363,37 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIn("petayaberry", salamence.ruled_out_items)
         self.assertIn("liechiberry", salamence.ruled_out_items)
 
-    def test_wish_landing_heal_does_not_mask_the_action_phase_pinch_non_proc(self) -> None:
-        # #769 pinch-berry class, Wish variant: Wish's landing heal is an END-OF-TURN RESIDUAL
-        # (|-heal|SLOT|…|[from] move: Wish), so — like the Leftovers residual heal — it must NOT
-        # overwrite the action-phase HP snapshot. A mon HIT to <=25% in the action phase without
-        # eating its berry rules the pinch variants out (the berry had its chance to fire); a Wish
-        # heal arriving LATER in the residual phase must not wipe that evidence. Before the
-        # `[from] move: Wish` residual tag, the heal overwrote the low pre-residual snapshot and
-        # MASKED the non-proc, wrongly leaving the pinch variants un-pruned (candidate over-count).
+    def test_a_wish_heal_over_the_threshold_keeps_the_pinch_berries(self) -> None:
+        # INVERTED 2026-08-04, against the engine. This test previously asserted the opposite --
+        # that a Wish landing heal must not "mask" an action-phase pinch non-proc -- on the premise
+        # that a mon hit to <=25% during the action phase "had its chance to fire". That premise is
+        # false in gen3, and it was the defect: `data/mods/gen3/items.ts` gives all three pinch
+        # berries `onUpdate: undefined, // no inherit` plus
+        # `onResidualOrder: 10, onResidualSubOrder: 4` and
+        # `onResidual(pokemon) { if (pokemon.hp <= pokemon.maxhp / 4) pokemon.eatItem(); }`.
+        #
+        # So the berry has NO action-phase activation at all; it is offered once, at the residual
+        # item slot, and it tests the HP it sees THERE. Wish resolves at residual order 7
+        # (`data/mods/gen4/moves.ts`, which gen3 inherits), i.e. BEFORE that slot -- so by the time
+        # the berry is offered this Salamence is at 220/320 = 69%, the berry legitimately does not
+        # fire, and its silence is not evidence of absence.
+        #
+        # Found live by the V1 coherence sweep, which caught this rule eliminating the TRUE item on
+        # mixed-item species (Zangoose/salacberry, Scyther/liechiberry) and pinning the belief to a
+        # single wrong variant.
         engine = self.engine_from([
             "|switch|p1a: Tyranitar|Tyranitar, L76|350/350",
             "|switch|p2a: Salamence|Salamence, L76|320/320",
             "|turn|1",
             "|move|p1a: Tyranitar|Rock Slide|p2a: Salamence",
-            "|-damage|p2a: Salamence|60/320",                     # action-phase to ~19%, no berry
-            "|-heal|p2a: Salamence|220/320|[from] move: Wish",    # residual Wish heal (masks w/o fix)
+            "|-damage|p2a: Salamence|60/320",                     # action phase to ~19%
+            "|-heal|p2a: Salamence|220/320|[from] move: Wish",    # residual order 7, BEFORE 10/4
             "|upkeep",
         ])
         salamence = self.opponent(engine, "Salamence")
-        self.assertIn("salacberry", salamence.ruled_out_items)
-        self.assertIn("petayaberry", salamence.ruled_out_items)
-        self.assertIn("liechiberry", salamence.ruled_out_items)
+        self.assertNotIn("salacberry", salamence.ruled_out_items)
+        self.assertNotIn("petayaberry", salamence.ruled_out_items)
+        self.assertNotIn("liechiberry", salamence.ruled_out_items)
 
     def test_wish_landing_heal_after_residual_only_crossing_keeps_the_berry(self) -> None:
         # Companion to #769 (test_residual_pinch_crossing_keeps_berry_...): a residual-ONLY <=25%
