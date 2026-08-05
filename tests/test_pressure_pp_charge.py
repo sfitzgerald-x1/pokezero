@@ -28,6 +28,8 @@ never-pressured set that are not self-evident, and the second producer of a runn
 """
 import unittest
 
+from _showdown_root import requires_showdown, showdown_root_str
+
 from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.showdown import parse_showdown_replay
 
@@ -139,6 +141,7 @@ class TransformedPressureTest(unittest.TestCase):
 
 
 
+@requires_showdown("re-derives the never-pressured set from the randbats data files")
 class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
     """`_NEVER_PRESSURED_POOL_MOVES` is a STATIC set derived from a live data file. Guard it.
 
@@ -164,9 +167,7 @@ class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
         import os
         import re
 
-        root = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-        if not root or not os.path.isdir(root):
-            self.skipTest("requires POKEZERO_SHOWDOWN_ROOT")
+        root = showdown_root_str()
         sets_path = os.path.join(root, "data", "random-battles", "gen3", "sets.json")
         if not os.path.exists(sets_path):
             self.skipTest("no gen3 randbats sets.json")
@@ -243,7 +244,7 @@ class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
         pool, _ = self._pool_and_targets()
         self.assertIn("curse", pool, "Curse left the pool; its entry in the set is now dead")
 
-        root = os.environ["POKEZERO_SHOWDOWN_ROOT"]
+        root = showdown_root_str()
         sets_path = os.path.join(root, "data", "random-battles", "gen3", "sets.json")
         carriers = [
             species

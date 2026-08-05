@@ -149,7 +149,6 @@ class TraceOnTransformedTargetTest(unittest.TestCase):
         self.assertEqual(_ability(_belief(_engine(lines), "p2", "Claydol")), "levitate")
 
 
-@requires_showdown("the collapse is measured against the real randbats set source")
 class TraceOfATracerTest(unittest.TestCase):
     """A tracer that has already copied something is RUNNING that, not its own ability.
 
@@ -194,6 +193,11 @@ class TraceOfATracerTest(unittest.TestCase):
             "Trace -- a fact it cannot have, and a sticky one",
         )
 
+    # Decorated per-METHOD, not on the class. The sibling test below needs no checkout -- it is
+    # pure fixture -- and CI has none (`.github/workflows/engine-fidelity-gates.yml`). A
+    # class-level decorator skipped BOTH there, taking this belief fix from one executing
+    # regression test in CI to zero: worse than before the decorator was added.
+    @requires_showdown("the collapse is measured against the real randbats set source")
     def test_the_first_tracer_is_not_collapsed_to_the_full_pool(self) -> None:
         """The consequence that matters: a false ability filters out every real variant.
 
@@ -221,12 +225,21 @@ class TraceOfATracerTest(unittest.TestCase):
         # Measured: 4 of Gardevoir's 10 pool variants survive one Calm Mind reveal.
         with_second = gardevoir_after(self.LINES)
 
-        # Precondition: the source must actually be narrowing, or the comparison is vacuous again.
-        self.assertGreater(
+        # Precondition: the mon must be NARROWED, not merely non-empty. `> 0` was too weak -- if a
+        # randbats change ever put Calm Mind on all ten Gardevoir variants, `without_second` would
+        # be 10, the bug also yields 10, and `10 == 10` would pass while measuring nothing. That is
+        # the round-4 finding re-armed, so the bound is the full pool.
+        full_pool = len(
+            source.summarize(
+                format_id="gen3randombattle", species="Gardevoir", revealed_moves=()
+            ).candidate_variants
+        )
+        self.assertGreater(full_pool, 0, "the set source resolved no Gardevoir variants at all")
+        self.assertLess(
             len(without_second.candidate_variants),
-            0,
-            "no candidate variants without the second Trace; the set source is not attached and "
-            "this test would compare 0 against 0",
+            full_pool,
+            "the Calm Mind reveal did not narrow Gardevoir below its full pool, so this test "
+            "cannot distinguish the collapse it exists to catch",
         )
         self.assertEqual(
             len(with_second.candidate_variants),

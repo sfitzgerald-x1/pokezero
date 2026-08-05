@@ -81,6 +81,16 @@ HISTORY_NUMERIC_COLUMN_NAMES = (
 #
 # Resolved through the schema projection instead, which answers None for precisely the dropped
 # indices and needs no width heuristic.
+# Expected resolved history-column count per schema. Measured, not derived: v2.2 keeps the full
+# 8-column weather block, v3 and v4 drop the last pair, and v4 additionally lacks both
+# NUMERIC_TIER2_*_PINNED. Shared by the corpus-facing ceiling assertion and the corpus-free
+# resolution test so the two cannot drift.
+HISTORY_COLUMN_COUNT_BY_SCHEMA = {
+    "pokezero.observation.v2.2": 18,
+    "pokezero.observation.v3": 16,
+    "pokezero.observation.v4": 14,
+}
+
 _BLOCK_LEGACY_SPANS = {"NUMERIC_STAT_WEATHER_REVEAL_OFFSET": 8}
 
 
@@ -169,16 +179,10 @@ class HistoryColumnResolutionTest(unittest.TestCase):
     Needs no corpus and no wheel; just the exported layout.
     """
 
-    SCHEMAS = {
-        "pokezero.observation.v2.2": 18,
-        "pokezero.observation.v3": 16,
-        "pokezero.observation.v4": 14,
-    }
-
     @requires_showdown("resolves the exported layout")
     def test_every_schema_resolves_the_expected_history_columns(self) -> None:
         exporter = _load_script("export_encoder_tables")
-        for schema_version, expected in self.SCHEMAS.items():
+        for schema_version, expected in HISTORY_COLUMN_COUNT_BY_SCHEMA.items():
             with self.subTest(schema=schema_version):
                 layout = exporter.build_tables(
                     showdown_root_str(), observation_schema_version=schema_version
@@ -336,11 +340,10 @@ class GoldenSampleBackendTest(unittest.TestCase):
         # was satisfied by 9 of 11 names resolving, which is how the weather-reveal block silently
         # shrank from 8 columns to 1 (see `_history_numeric_columns`). A count makes any future
         # shrink loud at the point it happens rather than at the next regeneration.
-        expected = {
-            "pokezero.observation.v2.2": 18,
-            "pokezero.observation.v3": 16,
-            "pokezero.observation.v4": 14,
-        }.get(_sample_schema_version(self.corpus))
+        # One source of truth, shared with HistoryColumnResolutionTest. Written twice they can
+        # drift apart in the direction where the corpus-facing number is wrong and the
+        # corpus-free test stays green.
+        expected = HISTORY_COLUMN_COUNT_BY_SCHEMA.get(_sample_schema_version(self.corpus))
         self.assertIsNotNone(
             expected,
             "unknown schema in the committed sample; add its expected history-column count",
