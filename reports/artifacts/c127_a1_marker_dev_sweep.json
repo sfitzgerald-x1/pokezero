@@ -18,8 +18,8 @@
   },
   "gating_exact": 13893,
   "gating_support_based": 1331,
-  "elapsed_seconds": 481.28,
-  "games_per_hour": 1496.0,
+  "elapsed_seconds": 555.32,
+  "games_per_hour": 1296.5,
   "boundaries_full_round": 15968,
   "boundaries_measured": 15224,
   "transitions_matched": 15222,
@@ -32,8 +32,6 @@
     "component_missing_in_engine:sandstorm": 1
   },
   "counters": {
-    "a1probe:v1_no_upkeep": 2024,
-    "a1probe:v2_replacement": 248,
     "boundaries_full_round": 15968,
     "boundaries_measured": 15224,
     "divergence_class:component_magnitude:heal": 1,
@@ -133,7 +131,6 @@
         "p1": false,
         "p2": true
       },
-      "_a1_v2": false,
       "divergence_class": "component_missing_in_engine:sandstorm",
       "branch_count": 3,
       "branch_misses": [
@@ -143,7 +140,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785922245",
+        "|t:|1785943569",
         "|switch|p2a: Rapidash|Rapidash, L83, F|244/244",
         "|move|p1a: Furret|Return|p2a: Rapidash",
         "|-crit|p2a: Rapidash",
@@ -230,7 +227,6 @@
         "p1": false,
         "p2": false
       },
-      "_a1_v2": false,
       "divergence_class": "component_magnitude:heal",
       "branch_count": 14,
       "branch_misses": [
@@ -249,7 +245,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785922512",
+        "|t:|1785943877",
         "|move|p1a: Raichu|Thunderbolt|p2a: Tangela",
         "|-resisted|p2a: Tangela",
         "|-damage|p2a: Tangela|201/277",
@@ -272,7 +268,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"d87094661429f240c4e36e427196d281b6815bfefdb1eca3bac0cc8c542ee960\", \"image_commit\": null, \"source_commit\": \"110d4d84aeeecc726750436fb1aaa501c2b28c86\"}"
+      "{\"engine_fingerprint\": \"6a8848f3a89c84cc454a10a1bd8bbfa50a2db9ca3250297e39515155100e4588\", \"image_commit\": null, \"source_commit\": \"6696a9afa81afb80574551d8111641fbc6d806f4\"}"
     ]
   }
 }
