@@ -235,6 +235,17 @@ class TraceOfATracerTest(unittest.TestCase):
             ).candidate_variants
         )
         self.assertGreater(full_pool, 0, "the set source resolved no Gardevoir variants at all")
+        # BOTH bounds. The upper one alone is satisfied by an empty set -- `0 < 10` passes, and so
+        # does `0 == 0` below -- which is exactly the round-4 vacuity this precondition exists to
+        # prevent, and exactly what the previous revision reintroduced by REPLACING the lower bound
+        # instead of adding to it. `full_pool` comes straight from the source, so it stays 10 even
+        # when the source never reached the engine; only this line notices that.
+        self.assertGreater(
+            len(without_second.candidate_variants),
+            0,
+            "no candidate variants without the second Trace; the set source did not reach the "
+            "engine and this test would compare 0 against 0",
+        )
         self.assertLess(
             len(without_second.candidate_variants),
             full_pool,

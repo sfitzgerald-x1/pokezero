@@ -17,21 +17,17 @@ that mattered are the foe-targeted ones.
 """
 import collections, os, random, sys
 from pokezero.local_showdown import (
-    DEFAULT_SHOWDOWN_ROOT as default_showdown_root_const,
+    DEFAULT_SHOWDOWN_ROOT,
     LocalShowdownConfig,
     LocalShowdownEnv,
 )
-
-
-def default_showdown_root():
-    return default_showdown_root_const
 
 GAMES = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 SEED = int(sys.argv[2]) if len(sys.argv) > 2 else 4711
 # Falls back to the repo's default root rather than hard-requiring the env var: this script is
 # quoted as a reproducer in belief.py and tests/test_pressure_pp_charge.py, and a reproducer that
 # exits 1 in the default configuration is no better than the unreproducible number it replaced.
-ROOT = os.environ.get("POKEZERO_SHOWDOWN_ROOT") or str(default_showdown_root())
+ROOT = os.environ.get("POKEZERO_SHOWDOWN_ROOT") or str(DEFAULT_SHOWDOWN_ROOT)
 if not os.path.isdir(ROOT):
     raise SystemExit(f"no Showdown checkout at {ROOT}; set POKEZERO_SHOWDOWN_ROOT")
 
