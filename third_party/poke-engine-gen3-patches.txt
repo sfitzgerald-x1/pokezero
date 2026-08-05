@@ -1321,3 +1321,11 @@ poke-engine-gen3-white-herb.patch
 # on switch-in already. The harness write-side only adds the observed-root case.
 poke-engine-gen3-rest-sleep-refund-emission.patch
 
+# Pain Split is an HP-reading move and was missing from
+# `pending_hp_reading_move`, so the roll fan that Flail/Reversal/Substitute/
+# Belly Drum get was never run ahead of it. It AVERAGES the two actives' HP, so
+# the first move's damage roll changes its result directly. Found by the C116
+# Phase 2 spike: enumerating on EVERY damaging move closed exactly two holdout
+# rows and both were Pain Split, so the one missing arm gets the same two
+# without enumerating anywhere else. Decision and numbers: reports/c128.
+poke-engine-gen3-painsplit-hp-reading.patch

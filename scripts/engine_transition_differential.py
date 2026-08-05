@@ -1661,6 +1661,49 @@ _MISS_PCT_RE = re.compile(r"pct=(?P<pct>[\d.]+)")
 # an unattributed or roll-scaled component is never "the residual".
 _ADJUDICABLE_RESIDUALS = frozenset({"itemleftovers", "psn", "brn", "sandstorm", "tox"})
 
+# End-of-turn residual phase sources, for the A1 marker. A SEPARATE set from
+# `_ADJUDICABLE_RESIDUALS` above, which serves the majority-override rule and is
+# narrower on purpose. Hazards are deliberately absent and that absence is
+# load-bearing: 19100180/24 is a Spikes mis-attribution, not a residual, and only
+# this scoping keeps it divergent.
+_RESIDUAL_PHASE_SOURCES = frozenset({
+    "itemleftovers", "psn", "tox", "brn", "sandstorm", "hail",
+    "leechseed", "movewish", "abilityraindish", "ingrain", "nightmare", "curse",
+    # gen3 partial trapping ticks 1/16 at end of turn, and the harness spells it
+    # per-move, so every variant is listed. Omitting them would under-strip,
+    # which leaves a row divergent -- the safe direction -- but visible is not
+    # the same as correct.
+    "partiallytrapped", "movewrap", "movebind", "movefirespin", "moveclamp",
+    "movewhirlpool", "movesandtomb",
+})
+
+
+def _is_forced_replacement_ply(step_lines: Sequence[str]) -> bool:
+    """A ply on which Showdown ran NO residual phase, because it is a replacement.
+
+    Nobody moved, somebody switched, no residual phase ran, and the battle did
+    not end.
+
+    Hoisted to module level so it can be pinned BEHAVIOURALLY. An earlier version
+    lived inline and its pins asserted on `inspect.getsource` TEXT, which meant
+    inverting the `|win|` clause would have passed every one of them -- the exact
+    first-attempt failure the pins existed to prevent.
+
+    The result clauses are load-bearing. `|upkeep|` is ALSO absent whenever the
+    battle ENDS during residuals: Showdown emits the tick, then `|faint|`, then
+    the result, and never reaches upkeep. Keying on `|upkeep|` alone manufactured
+    44 divergences on a 400-game measurement and reopened 19100002/53, the
+    battle-end sandstorm row #1092 had just fixed. `|tie` is checked alongside
+    `|win` because a double KO ends the battle the same way and emits `|tie`.
+    """
+
+    return (
+        not any(line.startswith("|upkeep") for line in step_lines)
+        and not any(line.startswith(("|win", "|tie")) for line in step_lines)
+        and not any(line.startswith("|move|") for line in step_lines)
+        and any(line.startswith("|switch|") for line in step_lines)
+    )
+
 
 def _majority_miss(misses: Sequence[str]) -> str | None:
     """The miss carrying the largest share of the branch probability mass."""
@@ -1862,6 +1905,8 @@ def evaluate_boundary_strict(
 ) -> tuple[str, list[str], int]:
     """Per-damage-source comparison against the mapper-rendered engine branches."""
 
+    boundary_is_forced_replacement = _is_forced_replacement_ply(step_lines)
+
     side_one_choice = choices["p1"] if slot_sides["p1"] == "side_one" else choices["p2"]
     side_two_choice = choices["p2"] if slot_sides["p2"] == "side_two" else choices["p1"]
     # The mapper renders side_one/side_two; map its p1/p2 labels back to slots.
@@ -2007,6 +2052,17 @@ def evaluate_boundary_strict(
                     )
                     ok = False
                     break
+                # A1 -- "the residuals already ran". On a forced replacement
+                # Showdown gives the incoming Pokemon no residual tick; the
+                # engine, asked for a full turn, runs one and over-emits.
+                # Scoped to RESIDUAL sources: 19100180/24 is a hazard
+                # mis-attribution and must stay divergent.
+                if boundary_is_forced_replacement:
+                    eng_exact = Counter({
+                        component: count
+                        for component, count in eng_exact.items()
+                        if component[0] not in _RESIDUAL_PHASE_SOURCES
+                    })
                 if eng_exact != obs_exact_branch:
                     only_obs = obs_exact_branch - eng_exact
                     only_eng = eng_exact - obs_exact_branch

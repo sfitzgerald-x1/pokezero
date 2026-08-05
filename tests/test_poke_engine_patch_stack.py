@@ -38,7 +38,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "4fabf4c86b351b715569938679dabf6d8e086ecda1e8d9cb84e1b869e466ffdf",
+    "src/gen3/generate_instructions.rs": "588b33f55454cf46cec2dabd7de89a50713b7bf7f802f0c8593670db6f3075f9",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "d5d80797375cca74deec75df7078abae898194bb9f967e6d30db5c843bbae3dc",
@@ -120,7 +120,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-7:]],
+                [entry.name for entry in applied[-8:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -129,6 +129,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-rest-sleep-refund-binding.patch",
                     "poke-engine-gen3-white-herb.patch",
                     "poke-engine-gen3-rest-sleep-refund-emission.patch",
+                    "poke-engine-gen3-painsplit-hp-reading.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
