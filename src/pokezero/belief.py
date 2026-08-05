@@ -2197,8 +2197,12 @@ _AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS = (
 # The same runs establish that the residual-phase HP-line vocabulary is CLOSED in this format:
 # `[from] item: Leftovers`, `[from] psn`, `[from] Sandstorm`, `[from] brn`,
 # `[from] move: Wrap|[partiallytrapped]`, `[silent]`, `[from] move: Wish`, `[from] Leech Seed`.
-# Every one is handled by the tuples above, so nothing currently lands on the discard default by
-# accident -- but the default is what keeps the next addition safe rather than silent.
+# `[silent]` is in NO tuple and lands on the discard default deliberately -- it is the Leech Seed
+# drain heal, whose position against the 10/4 slot is not determinable from the line, and
+# discarding is the whole fix. So do NOT read the tuples as exhaustive over this vocabulary and
+# "tighten" the default: that reintroduces the defect this classifier exists to remove. Every OTHER
+# listed tag is handled explicitly; the default is what keeps the next addition safe rather than
+# silent.
 _ACTION_PHASE_ONLY_HP_TAGS = ("[from] confusion",)
 
 # Sources whose position against the holder's own item slot is UNDETERMINABLE in either phase, so

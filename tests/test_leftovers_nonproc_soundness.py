@@ -295,7 +295,7 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         Flygon is a mixed-item species, so this broke CONTAINMENT rather than merely widening: it
         dropped the true variant and left a confidently wrong single-candidate pin.
 
-        Kill-confirmed two ways, each failing this test alone: (1) delete the ``_HP_SNAPSHOT_DISCARD``
+        Kill-confirmed two ways, each failing this test (measured: 2 and 3 tests respectively -- the exclusivity wording was wrong): (1) delete the ``_HP_SNAPSHOT_DISCARD``
         return at the end of ``_hp_snapshot_action``, and (2) delete the bare-``|`` branch of
         ``_track_residual_phase`` so the phase is never entered.
         """
