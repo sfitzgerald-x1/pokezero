@@ -4227,10 +4227,23 @@ mod tests {
         // A single-label refusal means the engine produced this tail from callee C
         // and the identifier could not reproduce it -- the INPUT-FIDELITY class, and
         // the residual risk this whole area is about. It is 0 today, and it is the
-        // ONLY assertion that catches a `first_move` revert: with high-damage stats
-        // that revert drives it 0 -> 96 while the per-defender floor (932/932/417)
-        // and the ratio gate (87%) both still pass. That is what retires the
-        // "first_move is unpinned" note this test used to carry.
+        // FIRST and most specific assertion to catch a `first_move` revert: with
+        // high-damage stats that revert drives it 0 -> 96. NOT the only one, measured:
+        // with this assert neutered the partition below fires too ("213 usable + 24
+        // refused != 333 unattributed"), because `single_label_refused` counts toward
+        // `total - agree` but not toward `multi_unattr + multi_refused`, so any nonzero
+        // value breaks that identity; and the tally pin catches it a third time
+        // (`agree 2281 != 2377`).
+        //
+        // An earlier version of this comment said "ONLY", and cited a per-defender
+        // floor of 932/932/417 -- a THIRD stale unasserted triple in this test. That
+        // revert moves only the sleeper-SECOND column; sleeper-first is unchanged at
+        // 404/900/900. The floor is defence-in-depth against a per-defender collapse
+        // the aggregate would hide, not the #1048 tripwire, so its values are not
+        // cited here.
+        //
+        // This is what retires the "first_move is unpinned" note -- see the corrected
+        // comment at the assignment itself.
         assert_eq!(
             single_label_refused, 0,
             "INPUT FIDELITY: {single_label_refused} tail(s) carry ONE unambiguous \
