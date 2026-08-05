@@ -23,3 +23,9 @@ from pathlib import Path
 _TESTS_DIR = str(Path(__file__).resolve().parent)
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
+
+# Same reason as tests/__init__.py: pin ``pokezero`` to this checkout ahead of the
+# editable install, so a pytest run from a scratch clone tests the clone's tree.
+_SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)

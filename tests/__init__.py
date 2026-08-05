@@ -19,3 +19,25 @@ from pathlib import Path
 _TESTS_DIR = str(Path(__file__).resolve().parent)
 if _TESTS_DIR not in sys.path:
     sys.path.insert(0, _TESTS_DIR)
+
+# And pin ``pokezero`` itself to THIS checkout, ahead of the editable install's .pth.
+#
+# 157 of 207 test modules have no ``sys.path.insert`` of their own, so they resolve
+# ``pokezero`` through the editable install -- whatever tree that points at, which is not
+# necessarily the tree the test file lives in. From the primary checkout the two are the
+# same directory and nothing is wrong. From a SECOND clone or a ``git worktree`` sharing
+# the venv they are not, and every one of those 157 modules silently exercises the other
+# tree while appearing to test this one.
+#
+# That is not hypothetical and it is not rare: reviewing a PR from a scratch clone is a
+# workflow this repo's own guidance prescribes, and a reviewer hit exactly this -- a
+# module-level run read a false GREEN against a tree that did not contain the change.
+# Worse, it is ORDER-DEPENDENT: ``sys.modules`` caches by name, so in one
+# ``python -m unittest A B C`` the first module to import ``pokezero`` fixes the tree for
+# all of them. A mutation matrix can therefore be correct only by argument ordering.
+#
+# Inserting here makes the 157 per-module inserts redundant rather than load-bearing,
+# because unittest imports this package to resolve ``tests.test_x``.
+_SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
