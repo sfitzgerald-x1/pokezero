@@ -516,8 +516,8 @@ def run_gate(
     # Did the published accumulators actually MOVE? (the one accumulation claim in reach)
     # Keyed by (metadata key, SEAT), not pooled. Pooling let a tracker that is dead for exactly one
     # seat count as varied from the other seat's rows -- and that is not hypothetical: keying this
-    # way immediately shows `self_hazard_damage_suffered` constant on p1 while varying on p2 over a
-    # 3-game sweep. A per-seat accumulator that never moves is a wrong input at that seat's next
+    # way immediately shows `self_hazard_damage_suffered` constant on p1 while varying on p2 --
+    # measured at seed 3 over 5 and 8 games (four such pairs), narrowing to two at 12 games. A per-seat accumulator that never moves is a wrong input at that seat's next
     # search, which is the whole reason this liveness check exists.
     accumulator_values: dict[tuple[str, str], set[float]] = {
         (key, player): set() for key in ACCUMULATOR_METADATA_KEYS for player in PLAYERS
