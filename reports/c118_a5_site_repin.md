@@ -10,6 +10,14 @@ answer.
 
 Era: `main` `012d8451`, engine fingerprint `4098f204…`, 58 patches.
 
+> **Era caveat, and it applies to §1's own table** (review of #1089). `third_party/poke-engine-src`
+> is gitignored and locally rebuilt, so the `abilities.rs` extents in §1 — 22–52 / 174–207 /
+> 648–925, arms at `:672`…`:793` — no longer resolve in a current tree; they have shifted +47 to
+> +72, partly from #1090's own predicate edit. The structural conclusion is unaffected — every
+> contact secondary is still inside `ability_modify_attack_against`, re-verified at `:695` with
+> arms at `:724`…`:865` — but the +N-shift lesson this document teaches about `:2682`/`:2694`
+> applies to its own numbers. Line anchors here are era-scoped; enclosing functions are not.
+
 ## 1. What v1 claimed, and why both halves were wrong
 
 **v1 finding (a): "C111 pinned the wrong hook."** Inverted. Function extents in
@@ -38,16 +46,15 @@ C111 v2 also does not pin an `abilities.rs` arm at all. It pins the two **call s
 > `poke-engine` 0.0.47 code — pristine sdist `src/gen3/generate_instructions.rs:1652`, wrapping
 > that same call — and no patch in the stack adds it. (`poke-engine-gen3-pp-ordering.patch`
 > does add a line reading `if !choice.sleep_talk_move {`, but it wraps the **PP decrement**
-> block ~174 lines below, at `:3005`. Precisely: that is how a grep of the PATCH FILES
-> misleads. It does not mislead in the built source, where `lockedmove-pp.patch` later extends
+> block ~174 lines below, at `:3005`. That is how a grep of the PATCH FILES misleads. It does not mislead in the built source, where `lockedmove-pp.patch` later extends
 > that line to `if !choice.sleep_talk_move && !in_locked_turn(...)`, so the exact string has
 > exactly one hit there. Checking the built tree would have caught this; checking the patch
 > files is what did not.)
 >
 > What actually moved: the whole region shifted a **uniform +137 lines**
 > (2682 + 137 = 2819, 2694 + 137 = 2831, 2695 + 137 = 2832) as
-> `residual-lethality-partition.patch` grew from +53 to +197 inserted lines across
-> #1065/#1066/#1069. That is +144, not +137: the missing 7 are a second hunk of the same patch
+> `residual-lethality-partition.patch` grew from +53 to +197 inserted lines — the growth is
+> entirely at **#1066**; #1065 only relocated a second hunk, and #1069 left the first at +197. That is +144, not +137: the missing 7 are a second hunk of the same patch
 > that sat *above* this site at #1062 and was relocated below it by #1065, so it stopped
 > contributing to the offset. Nothing was inserted *between* the two call sites.
 >
