@@ -411,6 +411,79 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                 name,
             )
 
+    def test_a_cosmetic_unown_forme_encodes_identically(self) -> None:
+        """A cosmetic forme resolves to nothing in the native dex, so the mon encoded blank.
+
+        gen3 randbats emit Unown as lettered cosmetic formes -- `Unown-C`, `Unown-Z`,
+        `Unown-Exclamation` -- which are NOT separate Pokedex entries. Python retries the lookup
+        against the collapsed base id (`showdown._species_info_base_fallback` ->
+        `randbat.canonical_gen3_randbat_species_id`); the native `Tables::species_info` was a bare
+        normalized lookup, so every one of them missed and left CATEGORY_TYPE_1/2, all six
+        NUMERIC_BASE_* and all ten NUMERIC_EXPECTED_* columns at zero while Python wrote real
+        values.
+
+        Reachable in every battle against an Unown, and invisible to the rest of this file because
+        the fixture's species are all ordinary ones.
+        """
+        header, inputs, metadata = self._fixture()
+        # Distinct cosmetic suffixes, including both word-suffix formes -- a fallback that only
+        # handled single letters would pass a letters-only fixture.
+        formes = ["Unown-C", "Unown-Z", "Unown-Exclamation", "Unown-Question"]
+        for index, mon in enumerate(metadata["opponent_team"]):
+            forme = formes[index % len(formes)]
+            mon["species"] = forme
+            mon["details"] = f"{forme}, L100"
+        spec, masks = self.backends.observation_contract_from_header(header)
+        reference = self.backends.PythonReferenceBackend(
+            showdown_root=_showdown_root(), header=header
+        )
+        state = self.backends.state_from_row_inputs(inputs)
+        self._publish_credit_values(inputs, state, reference._dex)
+        state = self.backends.state_from_row_inputs(inputs)
+        observation = observation_from_player_state(
+            state,
+            category_vocab=reference._vocab,
+            spec=spec,
+            dex=reference._dex,
+            feature_masks=masks,
+        )
+        want = self.backends.arrays_dict_from_observation_arrays(
+            self.backends.GoldenObservationArrays.from_observation(observation)
+        )
+        tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+        )
+        numeric_columns = tables["layout"]["numeric_columns"]
+        offsets = tables["layout"]["token_offsets"]
+        opponent = slice(
+            offsets["opponent_pokemon"],
+            offsets["opponent_pokemon"] + len(metadata["opponent_team"]),
+        )
+        # Reachability on the OPPONENT tokens: Python must actually have resolved the base forme
+        # and written non-zero base stats. Without this the parity assertion below would pass
+        # trivially if BOTH sides zeroed -- which is exactly the pre-fix native behaviour, and the
+        # shape a fixture drift would silently restore.
+        hp_column = want["numeric_features"][:, numeric_columns["NUMERIC_BASE_HP"]]
+        self.assertTrue(
+            numpy.all(hp_column[opponent] > 0.0),
+            "fixture did not reach a resolvable cosmetic forme: opponent NUMERIC_BASE_HP is "
+            f"{hp_column[opponent]!r}",
+        )
+        rust = self.backends.RustBackend(
+            tables_json=json.dumps(
+                tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
+            header=header,
+        )
+        got = rust.encode(inputs)
+        for name in self.backends.ARRAY_NAMES:
+            self.assertEqual(
+                numpy.ascontiguousarray(got[name]).tobytes(),
+                numpy.ascontiguousarray(want[name]).tobytes(),
+                name,
+            )
+
     def test_a_details_string_that_carries_no_level_at_all_still_matches(self) -> None:
         """The SECOND half of the level-100 fix, which the L100 test above cannot reach.
 

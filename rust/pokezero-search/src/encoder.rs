@@ -108,6 +108,27 @@ fn normalize_identifier(value: &str) -> String {
         .collect()
 }
 
+/// Port of `randbat.canonical_gen3_randbat_species_id`: collapse a cosmetic Unown forme onto the
+/// base species id that the dex and the randbat source actually carry.
+///
+/// Only genuine Unown cosmetic suffixes collapse -- the 26 letters plus `exclamation` and
+/// `question`. Real distinct dex formes (Deoxys-Attack/Defense/Speed, Castform's weather formes,
+/// Nidoran-F/M) resolve on the direct lookup and must never reach here, which is why this matches
+/// the suffix set exactly rather than stripping any `-suffix`.
+fn canonical_gen3_randbat_species_id(value: &str) -> String {
+    let normalized = normalize_identifier(value);
+    if let Some(suffix) = normalized.strip_prefix("unown") {
+        let cosmetic = suffix.len() == 1
+            && suffix.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            || suffix == "exclamation"
+            || suffix == "question";
+        if cosmetic {
+            return "unown".to_string();
+        }
+    }
+    normalized
+}
+
 // ---------------------------------------------------------------------------
 // Tables (vocab + layout + dex) from scripts/export_encoder_tables.py
 // ---------------------------------------------------------------------------
@@ -454,6 +475,34 @@ impl Tables {
             return None;
         }
         self.species.get(&key)
+    }
+
+    /// `species_info` with a cosmetic-forme fallback to the base species.
+    ///
+    /// The twin of Python's `showdown._species_info_base_fallback`. gen3 randbats emit Unown as
+    /// lettered cosmetic formes (`Unown-C`, `Unown-Z`, `Unown-Exclamation`, ...) which are NOT
+    /// separate Pokedex entries, so the direct lookup misses and the mon encoded with blank types
+    /// and zero base stats while Python emitted real values. Measured at 514 diverging cells over
+    /// one 120-game replay.
+    ///
+    /// Deliberately NOT applied at every `species_info` call site: Python routes only four encode
+    /// paths through its fallback (formechange types, type categories, base stats, expected stats)
+    /// and uses the bare lookup elsewhere. Parity means matching Python, including where Python is
+    /// arguably inconsistent -- widening this further would be a NEW divergence, not a fix.
+    fn species_info_base_fallback(&self, name: &str) -> Option<&SpeciesEntry> {
+        if let Some(info) = self.species_info(name) {
+            return Some(info);
+        }
+        let canonical = canonical_gen3_randbat_species_id(name);
+        if canonical.is_empty() {
+            return None;
+        }
+        // Only retry when the collapse actually changed something, mirroring Python's
+        // `if canonical and canonical != species`.
+        if canonical == normalize_identifier(name) {
+            return None;
+        }
+        self.species.get(&canonical)
     }
 
     fn move_info(&self, name: &str) -> Option<&MoveEntry> {
@@ -1349,7 +1398,9 @@ fn live_type_slots(tables: &Tables, source: &str) -> Option<(String, Option<Stri
     if kind != "forme" {
         return None;
     }
-    if let Some(info) = tables.species_info(payload) {
+    // Base-forme fallback: Python's twin (`showdown.py:5972`) goes through
+    // `_species_info_base_fallback` here, so a cosmetic Unown retype must resolve.
+    if let Some(info) = tables.species_info_base_fallback(payload) {
         if let Some(first) = info.types.first() {
             return Some((first.clone(), info.types.get(1).cloned()));
         }
@@ -1485,7 +1536,9 @@ fn encode_species_type_categories(
     species: &str,
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    if let Some(info) = tables.species_info(species) {
+    // Base-forme fallback: twin of `_encode_species_type_categories` (`showdown.py:5985`).
+    // Without it every `unown*` but the base left CATEGORY_TYPE_1/2 unset.
+    if let Some(info) = tables.species_info_base_fallback(species) {
         if let Some(first) = info.types.first() {
             grid.set_cat(
                 token,
@@ -1519,7 +1572,9 @@ fn encode_pokemon_stats(
             (level as f64 / 100.0).min(1.0),
         );
     }
-    if let Some(info) = tables.species_info(species) {
+    // Base-forme fallback: twin of the base-stat block at `showdown.py:6045`. Without it a
+    // cosmetic Unown zeroed all six NUMERIC_BASE_* columns.
+    if let Some(info) = tables.species_info_base_fallback(species) {
         for (stat, column) in &layout.base_stat_slots {
             let value = info.base_stats.get(stat).copied().unwrap_or(0);
             if value != 0 {
@@ -1698,18 +1753,14 @@ fn encode_expected_stats(
     // NUMERIC_LEVEL) and the one in the transformed-stats path mirrors `if level is None ...
     // return`. Only this one, matching `_encode_expected_stats`.
     let level = level_from_details(details).unwrap_or(100);
-    // SCOPE LIMIT, stated because the spread math below is now Python-equivalent and it would be
-    // easy to read that as closed equivalence for these columns. `Tables::species_info` is a bare
-    // normalized lookup with no twin of Python's `_species_info_base_fallback`, so a COSMETIC FORME
-    // (every `unown*` except the base) resolves here to None and this function returns early --
-    // leaving all ten NUMERIC_EXPECTED_* columns at zero while Python emits real values. Measured
-    // at 514 diverging cells over one 120-game replay. The divergence is one lookup EARLIER than
-    // the spread work, is pre-existing, and is tracked as its own fix; it is not introduced or
-    // closed here.
-    let Some(battle_info) = tables.species_info(battle_species) else {
+    // The scope limit that stood here -- `Tables::species_info` being a bare lookup with no twin of
+    // Python's `_species_info_base_fallback`, so every `unown*` but the base returned early and
+    // left all ten NUMERIC_EXPECTED_* columns at zero -- is CLOSED: both lookups below now go
+    // through `species_info_base_fallback`.
+    let Some(battle_info) = tables.species_info_base_fallback(battle_species) else {
         return Ok(());
     };
-    let Some(hp_info) = tables.species_info(base_species) else {
+    let Some(hp_info) = tables.species_info_base_fallback(base_species) else {
         return Ok(());
     };
     let atk_base = battle_info.base_stats.get("atk").copied().unwrap_or(0);
