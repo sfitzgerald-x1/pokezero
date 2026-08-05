@@ -24,7 +24,9 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
-from _showdown_root import showdown_root_str
+
+import pokezero.showdown as showdown_module
+from _showdown_root import requires_showdown, showdown_root_str
 
 try:
     import numpy
@@ -36,10 +38,88 @@ SCRIPTS = REPO_ROOT / "scripts"
 SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
 DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
-# History-derived numeric columns (not reconstructable from the stored per-row
-# surface; see docs/golden_corpus_notes.md + the track B phase 1 finding).
-HISTORY_NUMERIC_COLUMNS = frozenset({63, 64, 65, 138, 139}) | frozenset(range(92, 105))
-TRANSITION_TOKEN_START = 23
+# History-derived numeric columns: not reconstructable from the stored per-row surface, so the
+# reference backend is allowed to differ from the recorded arrays there and only there
+# (docs/golden_corpus_notes.md + the track B phase 1 finding).
+#
+# Named, not indexed. This was a frozenset of raw v2.2 column indices --
+# `{63, 64, 65, 138, 139} | range(92, 105)` -- which silently stopped meaning anything the moment
+# the sample was regenerated at v4: column 52 there is NUMERIC_MON_TURNS_ACTIVE_TOTAL, a genuine
+# history column, and the test failed as if parity had broken. Six of those indices had no name in
+# v2.2 at all, and two (NUMERIC_TIER2_CB_PINNED, NUMERIC_TIER2_INVESTMENT_PINNED) do not exist in
+# v4 -- resolved leniently below so the set stays correct across schema generations rather than
+# needing a hand edit at each one.
+HISTORY_NUMERIC_COLUMN_NAMES = (
+    "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+    "NUMERIC_MON_STAYED_AND_ATTACKED",
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+    "NUMERIC_TIER2_CB_PINNED",
+    "NUMERIC_TIER2_INVESTMENT_PINNED",
+    "NUMERIC_STAT_OPP_SWITCH_COUNT",
+    "NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES",
+    "NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK",
+    "NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT",
+    "NUMERIC_STAT_MY_SWITCH_TURNS",
+    "NUMERIC_STAT_WEATHER_REVEAL_OFFSET",
+)
+
+
+# `NUMERIC_STAT_WEATHER_REVEAL_OFFSET` names the START of a block, not a column: per weather in
+# `_WEATHER_REVEAL_ORDER` it is a (set-this-game, turn-fraction) pair (`showdown.py:232-234`).
+# Only the offset itself appears in the exported layout, so resolving names alone recovered 1 of
+# them where the original hardcoded `range(92, 105)` covered the lot.
+#
+# The block is NOT a fixed 8. v3 explicitly drops the last weather pair --
+# `NUMERIC_STAT_WEATHER_REVEAL_OFFSET + 6` and `+ 7` are in `V3_DROPPED_LEGACY_NUMERIC_INDICES`
+# (`showdown.py:789-790`), and v4 inherits that -- so the live block is 8 columns at v2.2 and 6 at
+# v3/v4. An earlier version of this code used a fixed span of 8 clipped by the array width, which
+# gave the right answer at v4 only because the block happens to sit at the end of that layout, and
+# the WRONG answer at v3: it pulled physical 121/122 (`NUMERIC_TT_DAMAGE_FRACTION`,
+# `NUMERIC_TT_N_HITS`) into the allowance. Those are transition numerics, and the first is in
+# `V3_REWRITTEN_LEGACY_NUMERIC_INDICES` -- a column whose v3 semantics deliberately changed, so
+# exactly the wrong thing to silently exempt from a parity comparison.
+#
+# Resolved through the schema projection instead, which answers None for precisely the dropped
+# indices and needs no width heuristic.
+# Expected resolved history-column count per schema. Measured, not derived: v2.2 keeps the full
+# 8-column weather block, v3 and v4 drop the last pair, and v4 additionally lacks both
+# NUMERIC_TIER2_*_PINNED. Shared by the corpus-facing ceiling assertion and the corpus-free
+# resolution test so the two cannot drift.
+HISTORY_COLUMN_COUNT_BY_SCHEMA = {
+    "pokezero.observation.v2.2": 18,
+    "pokezero.observation.v3": 16,
+    "pokezero.observation.v4": 14,
+}
+
+_BLOCK_LEGACY_SPANS = {"NUMERIC_STAT_WEATHER_REVEAL_OFFSET": 8}
+
+
+def _history_numeric_columns(layout) -> frozenset:
+    """History-column NAMES to physical indices, block offsets expanded via the schema projection."""
+    from pokezero.showdown import numeric_index_if_present_for_schema
+
+    numeric_columns = layout["numeric_columns"]
+    schema_version = layout["schema_version"]
+    resolved: set[int] = set()
+    for name in HISTORY_NUMERIC_COLUMN_NAMES:
+        if name not in numeric_columns:
+            continue
+        span = _BLOCK_LEGACY_SPANS.get(name)
+        if span is None:
+            resolved.add(numeric_columns[name])
+            continue
+        # Block: walk the LEGACY indices and let the projection drop the ones this schema omits.
+        legacy_start = getattr(showdown_module, name)
+        for offset in range(span):
+            physical = numeric_index_if_present_for_schema(schema_version, legacy_start + offset)
+            if physical is not None:
+                resolved.add(physical)
+    return frozenset(resolved)
+
+
+def _transition_token_start(layout) -> int:
+    """First transition token, from the layout rather than a pinned 23."""
+    return int(layout["token_offsets"]["transition"])
 
 
 def _load_script(name: str):
@@ -74,6 +154,70 @@ def _rust_encoder_available() -> bool:
     except ModuleNotFoundError:
         return False
     return hasattr(pokezero_search, "encode_decision")
+
+
+def _sample_schema_version(corpus) -> str:
+    """The observation schema the committed sample was encoded at, from its own header.
+
+    Reading it rather than hardcoding is what keeps these tests pinned to PARITY instead of to a
+    particular schema generation: the sample is regenerated each time the encode contract moves
+    (v2.2 -> v4 most recently), and every hardcoded default turned that regeneration into a wall
+    of failures that look like parity breaks and are not.
+    """
+    return str(corpus.header["observation"]["schema_version"])
+
+
+class HistoryColumnResolutionTest(unittest.TestCase):
+    """The history allowance, resolved at every schema — not just the sample's.
+
+    `_history_numeric_columns` is only ever called with the committed corpus's schema, which is
+    v4, so the v2.2 and v3 expected counts in `_assert_at_stored_surface_ceiling` were correct but
+    never executed. Unexercised constants decay silently, and this file has already shipped one
+    allowance that was wrong at v3 while green at v4 — the weather block, which v3 and v4 truncate
+    from 8 columns to 6 (`showdown.py:789-790`).
+
+    Needs no corpus and no wheel; just the exported layout.
+    """
+
+    @requires_showdown("resolves the exported layout")
+    def test_every_schema_resolves_the_expected_history_columns(self) -> None:
+        exporter = _load_script("export_encoder_tables")
+        for schema_version, expected in HISTORY_COLUMN_COUNT_BY_SCHEMA.items():
+            with self.subTest(schema=schema_version):
+                layout = exporter.build_tables(
+                    showdown_root_str(), observation_schema_version=schema_version
+                )["layout"]
+                self.assertEqual(len(_history_numeric_columns(layout)), expected)
+
+    @requires_showdown("resolves the exported layout")
+    def test_v3_does_not_absorb_the_transition_numerics(self) -> None:
+        """The specific regression: a fixed span of 8 pulled v3's 121/122 into the allowance.
+
+        Those are NUMERIC_TT_DAMAGE_FRACTION and NUMERIC_TT_N_HITS — transition numerics, and the
+        first is in `V3_REWRITTEN_LEGACY_NUMERIC_INDICES`, a column whose v3 semantics deliberately
+        changed. Exempting it from a parity comparison is the worst case, so it gets its own test
+        rather than riding on a count.
+        """
+        exporter = _load_script("export_encoder_tables")
+        layout = exporter.build_tables(
+            showdown_root_str(), observation_schema_version="pokezero.observation.v3"
+        )["layout"]
+        columns = _history_numeric_columns(layout)
+        for name in ("NUMERIC_TT_DAMAGE_FRACTION", "NUMERIC_TT_N_HITS"):
+            index = layout["numeric_columns"].get(name)
+            self.assertIsNotNone(index, f"{name} vanished from the v3 layout")
+            self.assertNotIn(index, columns, f"{name} is in the history allowance")
+
+    def test_every_block_offset_name_declares_its_span(self) -> None:
+        """A future `*_OFFSET` added to the name list without a span contributes 1, silently."""
+        missing = [
+            name
+            for name in HISTORY_NUMERIC_COLUMN_NAMES
+            if name.endswith("_OFFSET") and name not in _BLOCK_LEGACY_SPANS
+        ]
+        self.assertEqual(
+            missing, [], "block-offset names must declare a span in _BLOCK_LEGACY_SPANS"
+        )
 
 
 @unittest.skipIf(numpy is None, "requires numpy")
@@ -185,6 +329,32 @@ class GoldenSampleBackendTest(unittest.TestCase):
     def _assert_at_stored_surface_ceiling(self, backend) -> None:
         from pokezero.golden_corpus import GOLDEN_ARRAY_FIELDS
 
+        exporter = _load_script("export_encoder_tables")
+        layout = exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=_sample_schema_version(self.corpus),
+        )["layout"]
+        history_columns = _history_numeric_columns(layout)
+        transition_start = _transition_token_start(layout)
+        # An EXPECTED COUNT, not a truthiness check. The previous `assertTrue(history_columns)`
+        # was satisfied by 9 of 11 names resolving, which is how the weather-reveal block silently
+        # shrank from 8 columns to 1 (see `_history_numeric_columns`). A count makes any future
+        # shrink loud at the point it happens rather than at the next regeneration.
+        # One source of truth, shared with HistoryColumnResolutionTest. Written twice they can
+        # drift apart in the direction where the corpus-facing number is wrong and the
+        # corpus-free test stays green.
+        expected = HISTORY_COLUMN_COUNT_BY_SCHEMA.get(_sample_schema_version(self.corpus))
+        self.assertIsNotNone(
+            expected,
+            "unknown schema in the committed sample; add its expected history-column count",
+        )
+        self.assertEqual(
+            len(history_columns),
+            expected,
+            "the history-column allowance changed size; a SHRINK turns legitimate history "
+            "divergence into a false parity failure, a GROWTH hides a real one",
+        )
+
         for row in self.corpus.decision_rows:
             got = backend.encode(self.backends_module.row_inputs_from_decision_row(row))
             for name, dtype, _rank in GOLDEN_ARRAY_FIELDS:
@@ -195,7 +365,7 @@ class GoldenSampleBackendTest(unittest.TestCase):
                     continue
                 if name == "attention_mask":
                     self.assertTrue(
-                        numpy.array_equal(have[:TRANSITION_TOKEN_START], want[:TRANSITION_TOKEN_START])
+                        numpy.array_equal(have[:transition_start], want[:transition_start])
                     )
                     continue
                 if want.dtype.kind == "f":
@@ -204,10 +374,10 @@ class GoldenSampleBackendTest(unittest.TestCase):
                     unequal = have != want
                 for token, column in numpy.argwhere(unequal):
                     token, column = int(token), int(column)
-                    if token >= TRANSITION_TOKEN_START:
+                    if token >= transition_start:
                         continue
                     self.assertEqual(name, "numeric_features", (name, token, column))
-                    self.assertIn(column, HISTORY_NUMERIC_COLUMNS, (token, column))
+                    self.assertIn(column, history_columns, (token, column))
 
     def test_python_reference_at_ceiling(self) -> None:
         backend = self.backends_module.PythonReferenceBackend(
@@ -218,8 +388,14 @@ class GoldenSampleBackendTest(unittest.TestCase):
     @unittest.skipIf(not _rust_encoder_available(), "pokezero_search.encode_decision not installed")
     def test_rust_matches_python_reference_byte_for_byte(self) -> None:
         exporter = _load_script("export_encoder_tables")
+        # Build tables at the SCHEMA THE CORPUS WAS WRITTEN AT, not `build_tables`'s v2.2 default.
+        # The committed sample is regenerated whenever the schema moves; hardcoding the default
+        # made these tests fail on the regeneration rather than on a real parity break.
         tables_json = json.dumps(
-            exporter.build_tables(str(_showdown_root())),
+            exporter.build_tables(
+                str(_showdown_root()),
+                observation_schema_version=_sample_schema_version(self.corpus),
+            ),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
@@ -260,7 +436,10 @@ class OovParityTests(unittest.TestCase):
         exporter = _load_script("export_encoder_tables")
         corpus = load_golden_corpus(SAMPLE_DIR)
         tables_json = _json.dumps(
-            exporter.build_tables(str(_showdown_root())),
+            exporter.build_tables(
+                str(_showdown_root()),
+                observation_schema_version=_sample_schema_version(corpus),
+            ),
             sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         )
         rust = backends_module.RustBackend(tables_json=tables_json, header=corpus.header)
@@ -302,8 +481,13 @@ class CompareBackendsCliTests(unittest.TestCase):
         exporter = _load_script("export_encoder_tables")
         cli = _load_script("validate_rust_encoder")
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            from pokezero.golden_corpus import load_golden_corpus as _load_corpus
+
             handle.write(_json.dumps(
-                exporter.build_tables(str(_showdown_root())),
+                exporter.build_tables(
+                    str(_showdown_root()),
+                    observation_schema_version=_sample_schema_version(_load_corpus(SAMPLE_DIR)),
+                ),
                 sort_keys=True, separators=(",", ":"), ensure_ascii=True,
             ))
             tables_path = handle.name
