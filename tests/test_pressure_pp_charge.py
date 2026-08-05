@@ -134,3 +134,136 @@ class TransformedPressureTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
+    """`_NEVER_PRESSURED_POOL_MOVES` is a STATIC set derived from a live data file. Guard it.
+
+    The set was derived once, by hand, from `data/random-battles/gen3/sets.json` and the
+    gen3-effective move targets. Two premises make it correct, and neither was checked by anything
+    until this test:
+
+    1. the pool's `self` + `allyTeam` moves are exactly the 25 non-Curse members, and
+    2. Curse -- whose dex target is `normal` -- is retargeted to `self` for every pool carrier,
+       because `sim/pokemon.ts` only applies `nonGhostTarget` to a non-Ghost user and all five
+       gen3-randbats carriers (Muk, Snorlax, Dunsparce, Miltank, Regirock) are non-Ghost.
+
+    The failure this guards is SILENT and in the dangerous direction: a move wrongly IN the set
+    never gets its Pressure double, and the PP ledger drifts for the rest of the battle with
+    nothing raised. That is precisely the defect this whole change fixed, so re-introducing it via
+    a data change rather than a code change should not be possible without a red test.
+
+    Skipped without a Showdown checkout, like the rest of the data-dependent suites.
+    """
+
+    def _pool_and_targets(self):
+        import json
+        import os
+        import re
+
+        root = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+        if not root or not os.path.isdir(root):
+            self.skipTest("requires POKEZERO_SHOWDOWN_ROOT")
+        sets_path = os.path.join(root, "data", "random-battles", "gen3", "sets.json")
+        if not os.path.exists(sets_path):
+            self.skipTest("no gen3 randbats sets.json")
+
+        def blocks(path):
+            """Top-level `\\tmoveid: {` blocks, brace-matched."""
+            if not os.path.exists(path):
+                return {}
+            text = open(path).read()
+            out = {}
+            for match in re.finditer(r"^\t([a-z0-9]+): \{$", text, re.M):
+                index, depth = match.end() - 1, 0
+                while index < len(text):
+                    if text[index] == "{":
+                        depth += 1
+                    elif text[index] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    index += 1
+                out[match.group(1)] = text[match.end():index]
+            return out
+
+        # Resolved along the MOD CHAIN, not off shared data/moves.ts: `surf` is allAdjacentFoes in
+        # gen3 and `curse` is re-declared in gen7. Note the checkout writes `target: "self",` with
+        # DOUBLE quotes; a single-quote pattern silently matches nothing and every move then looks
+        # target-less, which is a failure mode this parser has already hit once.
+        chain = [
+            os.path.join(root, "data", "mods", g, "moves.ts")
+            for g in ("gen3", "gen4", "gen5", "gen6", "gen7", "gen8")
+        ] + [os.path.join(root, "data", "moves.ts")]
+        layers = [blocks(p) for p in chain]
+
+        def effective_target(move_id):
+            for layer in layers:
+                body = layer.get(move_id)
+                if body is None:
+                    continue
+                found = re.search(r"""^\t\ttarget: ['"]([a-zA-Z]+)['"],""", body, re.M)
+                if found:
+                    return found.group(1)
+            return None
+
+        pool = set()
+        for entry in json.load(open(sets_path)).values():
+            for spec in entry.get("sets", []):
+                pool |= {
+                    m.lower().replace(" ", "").replace("-", "").replace("'", "")
+                    for m in spec.get("movepool", [])
+                }
+        return pool, effective_target
+
+    def test_the_static_set_still_equals_what_the_pool_implies(self) -> None:
+        from pokezero.belief import _NEVER_PRESSURED_POOL_MOVES
+
+        pool, effective_target = self._pool_and_targets()
+        unresolved = sorted(m for m in pool if effective_target(m) is None)
+        self.assertEqual(unresolved, [], "pool moves with no resolvable target")
+
+        derived = {m for m in pool if effective_target(m) in ("self", "allyTeam")} | {"curse"}
+        self.assertEqual(
+            derived,
+            set(_NEVER_PRESSURED_POOL_MOVES),
+            "the pool no longer implies the hardcoded never-pressured set; a move added to it "
+            "loses its Pressure double SILENTLY",
+        )
+
+    def test_every_pool_curse_carrier_is_still_non_ghost(self) -> None:
+        """Curse is in the set only because `nonGhostTarget` retargets it for these carriers."""
+        import json
+        import os
+        import re
+
+        pool, _ = self._pool_and_targets()
+        self.assertIn("curse", pool, "Curse left the pool; its entry in the set is now dead")
+
+        root = os.environ["POKEZERO_SHOWDOWN_ROOT"]
+        sets_path = os.path.join(root, "data", "random-battles", "gen3", "sets.json")
+        carriers = [
+            species
+            for species, entry in json.load(open(sets_path)).items()
+            for spec in entry.get("sets", [])
+            if any(m.lower().replace(" ", "") == "curse" for m in spec.get("movepool", []))
+        ]
+        self.assertTrue(carriers, "no Curse carriers found; the derivation cannot be checked")
+
+        dex = open(os.path.join(root, "data", "pokedex.ts")).read()
+        ghosts = []
+        for species in sorted(set(carriers)):
+            block = re.search(
+                r"^\t" + re.escape(species) + r": \{(.*?)^\t\},", dex, re.S | re.M
+            )
+            if block is None:
+                self.fail(f"{species} not found in pokedex.ts")
+            types = re.search(r"types: \[([^\]]*)\]", block.group(1))
+            if types and "Ghost" in types.group(1):
+                ghosts.append(species)
+        self.assertEqual(
+            ghosts,
+            [],
+            "a Ghost-type Curse carrier is in the pool, so Curse is FOE-targeted for it and "
+            "must leave _NEVER_PRESSURED_POOL_MOVES",
+        )
