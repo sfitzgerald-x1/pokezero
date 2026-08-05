@@ -618,7 +618,9 @@ class PainSplitSetHp(unittest.TestCase):
 
     def test_end_to_end_pin_seed_1500008_step_101(self):
         got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
-        # Pain Split is deterministic: floor((132 + 125) / 2) = 128 for both.
+        # The resulting HP is deterministic given the inputs: floor((132 + 125) / 2) = 128 for
+        # both. The DELTA is not -- it moves with whatever damage landed earlier in the turn,
+        # which is why `movepainsplit` is roll-scaled (see the classification test below).
         self.assertEqual(got["p1"], [("movepainsplit", -4), ("itemleftovers", 13)])
         self.assertEqual(got["p2"], [("movepainsplit", 3), ("itemleftovers", 25)])
 
@@ -662,15 +664,38 @@ class PainSplitSetHp(unittest.TestCase):
         self.assertEqual(dict(exact), {}, "movepainsplit must not be in the EXACT bucket")
         self.assertEqual(rolled, [("movepainsplit", -4)])
 
-    def test_pain_splits_roll_window_is_the_flooring_slack_and_no_wider(self):
-        """Roll-scaled is not unbounded: the band is the existing one-HP flooring slack.
+    def test_pain_splits_roll_window_is_the_currently_shipped_band(self):
+        """Roll-scaled is not unbounded — this pins the window that ships TODAY, at its edges.
 
-        `abs(eng) * 0.92 - 1` to `abs(eng) * 1.09 + 1` — for an engine magnitude of 4 that is
-        [2.68, 5.36], which is what a floor-divided quantity needs and no more. Measured at that
-        boundary rather than asserted from the formula, because the point of the change was that no
-        NEW tolerance was introduced.
+        The predicate is `abs(eng) * 0.92 - 1` to `abs(eng) * 1.09 + 1`
+        (`engine_transition_differential.py:1014-1015`); for an engine magnitude of 4 that is
+        [2.68, 5.36], so 5 is the last accepted value and 6 the first rejected.
+
+        Two corrections to an earlier version of this test, both from review:
+
+        1. It used -8 as the only upper case. -8 is 1.75x the engine magnitude, so every subcase
+           still passed with the upper coefficient widened from 1.09 to anything under 1.75
+           (4k + 1 < 8). The name claimed "and no wider" while measuring nothing of the sort.
+           `(-6, False)` is the actual edge and is now included. (The lower edge was already tight:
+           -2 against -3 straddles 2.68.)
+
+        2. It called the band "what a floor-divided quantity needs and no more". The repo's own
+           record says otherwise and says it is UNRESOLVED:
+           `reports/c101_i3_painsplit_tolerance_derivation.json` derives
+           `|delta| <= ceil(roll_gap / 2)` -- an ABSOLUTE bound, since `d/dx floor((a+x)/2)` is 1/2
+           -- and its `still_to_derive` field records that the implementation still needs that
+           derivation; #1054's own message calls the proportional band "the wrong SHAPE for this
+           class", noting that with no preceding damage Pain Split must match EXACTLY while the
+           band would accept +/-(9%+1). So this test pins the shipped window, not a justified one.
         """
-        for showdown, expected in ((-3, True), (-4, True), (-5, True), (-2, False), (-8, False)):
+        for showdown, expected in (
+            (-3, True),
+            (-4, True),
+            (-5, True),
+            (-2, False),
+            (-6, False),
+            (-8, False),
+        ):
             with self.subTest(showdown=showdown):
                 self.assertIs(
                     roll_components_agree(
