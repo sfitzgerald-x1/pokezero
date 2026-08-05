@@ -16,6 +16,8 @@ Reachable in the gen3 randbats pool via Gardevoir and Porygon2.
 """
 import unittest
 
+from _showdown_root import requires_showdown, showdown_root_str
+
 from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.showdown import parse_showdown_replay
 
@@ -109,10 +111,6 @@ class TraceAttributionTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TraceOnTransformedTargetTest(unittest.TestCase):
     """Trace copies what the target is CURRENTLY running, which for a transformed mon is its
     copy target's ability, not its own.
@@ -151,6 +149,7 @@ class TraceOnTransformedTargetTest(unittest.TestCase):
         self.assertEqual(_ability(_belief(_engine(lines), "p2", "Claydol")), "levitate")
 
 
+@requires_showdown("the collapse is measured against the real randbats set source")
 class TraceOfATracerTest(unittest.TestCase):
     """A tracer that has already copied something is RUNNING that, not its own ability.
 
@@ -204,14 +203,9 @@ class TraceOfATracerTest(unittest.TestCase):
         between the two worlds is `0 <= 0`; the first version of this test did exactly that and
         measured nothing, which independent review caught.
         """
-        import os
-
         from pokezero.randbat import Gen3RandbatSource
 
-        root = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
-        if not root or not os.path.isdir(root):
-            self.skipTest("requires POKEZERO_SHOWDOWN_ROOT")
-        source = Gen3RandbatSource.from_showdown_root(root)
+        source = Gen3RandbatSource.from_showdown_root(showdown_root_str())
 
         def gardevoir_after(lines):
             engine = PublicBattleBeliefEngine.from_events(
@@ -240,3 +234,11 @@ class TraceOfATracerTest(unittest.TestCase):
             "the second Trace changed the first tracer's candidate set -- writing a false "
             "revealed_ability filters every real variant out and falls back to the full pool",
         )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat above TraceOnTransformedTargetTest and TraceOfATracerTest, so direct
+    # execution ran 5 of 9 tests and never even DEFINED the two classes carrying this change's
+    # kill-confirmation. Round 3 fixed exactly this defect in test_pressure_pp_charge.py, and I
+    # then added new tests below the same defect in this file.
+    unittest.main()

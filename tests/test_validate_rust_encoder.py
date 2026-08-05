@@ -26,7 +26,7 @@ import sys
 import unittest
 
 import pokezero.showdown as showdown_module
-from _showdown_root import showdown_root_str
+from _showdown_root import requires_showdown, showdown_root_str
 
 try:
     import numpy
@@ -155,6 +155,65 @@ def _sample_schema_version(corpus) -> str:
     of failures that look like parity breaks and are not.
     """
     return str(corpus.header["observation"]["schema_version"])
+
+
+class HistoryColumnResolutionTest(unittest.TestCase):
+    """The history allowance, resolved at every schema — not just the sample's.
+
+    `_history_numeric_columns` is only ever called with the committed corpus's schema, which is
+    v4, so the v2.2 and v3 expected counts in `_assert_at_stored_surface_ceiling` were correct but
+    never executed. Unexercised constants decay silently, and this file has already shipped one
+    allowance that was wrong at v3 while green at v4 — the weather block, which v3 and v4 truncate
+    from 8 columns to 6 (`showdown.py:789-790`).
+
+    Needs no corpus and no wheel; just the exported layout.
+    """
+
+    SCHEMAS = {
+        "pokezero.observation.v2.2": 18,
+        "pokezero.observation.v3": 16,
+        "pokezero.observation.v4": 14,
+    }
+
+    @requires_showdown("resolves the exported layout")
+    def test_every_schema_resolves_the_expected_history_columns(self) -> None:
+        exporter = _load_script("export_encoder_tables")
+        for schema_version, expected in self.SCHEMAS.items():
+            with self.subTest(schema=schema_version):
+                layout = exporter.build_tables(
+                    showdown_root_str(), observation_schema_version=schema_version
+                )["layout"]
+                self.assertEqual(len(_history_numeric_columns(layout)), expected)
+
+    @requires_showdown("resolves the exported layout")
+    def test_v3_does_not_absorb_the_transition_numerics(self) -> None:
+        """The specific regression: a fixed span of 8 pulled v3's 121/122 into the allowance.
+
+        Those are NUMERIC_TT_DAMAGE_FRACTION and NUMERIC_TT_N_HITS — transition numerics, and the
+        first is in `V3_REWRITTEN_LEGACY_NUMERIC_INDICES`, a column whose v3 semantics deliberately
+        changed. Exempting it from a parity comparison is the worst case, so it gets its own test
+        rather than riding on a count.
+        """
+        exporter = _load_script("export_encoder_tables")
+        layout = exporter.build_tables(
+            showdown_root_str(), observation_schema_version="pokezero.observation.v3"
+        )["layout"]
+        columns = _history_numeric_columns(layout)
+        for name in ("NUMERIC_TT_DAMAGE_FRACTION", "NUMERIC_TT_N_HITS"):
+            index = layout["numeric_columns"].get(name)
+            self.assertIsNotNone(index, f"{name} vanished from the v3 layout")
+            self.assertNotIn(index, columns, f"{name} is in the history allowance")
+
+    def test_every_block_offset_name_declares_its_span(self) -> None:
+        """A future `*_OFFSET` added to the name list without a span contributes 1, silently."""
+        missing = [
+            name
+            for name in HISTORY_NUMERIC_COLUMN_NAMES
+            if name.endswith("_OFFSET") and name not in _BLOCK_LEGACY_SPANS
+        ]
+        self.assertEqual(
+            missing, [], "block-offset names must declare a span in _BLOCK_LEGACY_SPANS"
+        )
 
 
 @unittest.skipIf(numpy is None, "requires numpy")
