@@ -2182,10 +2182,23 @@ _AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS = (
 # the one HP line in the format that can be the FIRST thing in a turn: a confused mon that hits
 # itself emits ``|-activate|…|confusion`` and ``|-damage|…|[from] confusion`` and NO ``|move|`` line,
 # so on that turn nothing has yet re-opened the action phase after ``turnLoop``'s bare marker.
-# Measured: with this exception the engine's phase classification matches the raw-protocol ground
-# truth on ALL 67,583 HP lines over 400 games / 2 seeds; without it, exactly these lines diverge
-# (1 of 35,283 on seed 555001), and the divergence direction is a discarded snapshot -- declined
+# Measured against the raw protocol, with the POLICY NAMED in each case. The policy matters and an
+# unqualified line count invites over-generalizing: the residual-phase share of HP lines moves from
+# 66% to 59% between the two policies below, so "N lines checked" means different coverage under each.
+# Zero classification disagreements and zero unpairable lines in every run:
+#   * uniform-random-legal, 150 games seed 31337: 24,316 HP lines, 16,073 residual-phase;
+#   * move-bias 0.75 (the gate's own policy), 150 games seed 31337: 18,364 lines, 10,872 residual;
+#   * move-bias 0.75, 150 games seed 555001: 17,026 lines, 10,228 residual.
+# (An earlier round measured 67,583 lines over 400 games / 2 seeds, uniform policy only.)
+# Without this exception, exactly the confusion lines diverge -- 1 of 35,283 on seed 555001 in that
+# earlier uniform run -- and the divergence direction is a discarded snapshot, i.e. declined
 # evidence, not a wrong belief. Closed anyway so the differential can assert zero.
+#
+# The same runs establish that the residual-phase HP-line vocabulary is CLOSED in this format:
+# `[from] item: Leftovers`, `[from] psn`, `[from] Sandstorm`, `[from] brn`,
+# `[from] move: Wrap|[partiallytrapped]`, `[silent]`, `[from] move: Wish`, `[from] Leech Seed`.
+# Every one is handled by the tuples above, so nothing currently lands on the discard default by
+# accident -- but the default is what keeps the next addition safe rather than silent.
 _ACTION_PHASE_ONLY_HP_TAGS = ("[from] confusion",)
 
 # Sources whose position against the holder's own item slot is UNDETERMINABLE in either phase, so
