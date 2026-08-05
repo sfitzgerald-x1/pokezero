@@ -1262,8 +1262,6 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["move_categories"]["cat_toxic"]["total_uses"], 2)  # timeout still counted
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class MissingInputGuard(unittest.TestCase):
@@ -1332,3 +1330,10 @@ class MeasureSeatProvenance(unittest.TestCase):
                 m = TE.extract([path], lineage="x", milestone=1, measure_seat=seat)
                 self.assertEqual(m["measure_seat"], seat,
                                  "seat provenance must be recorded in the metrics")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 1265, stranding MeasureSeatProvenance, MissingInputGuard
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

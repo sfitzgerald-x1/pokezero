@@ -88,6 +88,136 @@ _FORBIDDEN_PATTERNS = [
 _ALLOWED_FOR_RULE: dict[str, set[str]] = {}
 
 
+class TestFileStructureTest(unittest.TestCase):
+    """No test file may define tests below its `unittest.main()` block.
+
+    A mid-file `if __name__ == "__main__": unittest.main()` makes direct execution and pytest
+    disagree about what ran, and everything below it is invisible to `python <file>`. Measured
+    before this guard existed: `test_belief.py` ran 16 tests directly against 69 under pytest,
+    `test_belief_variant_narrowing.py` 10 against 13, and `test_randbat.py` broke two ways at once
+    -- two helpers were defined below the block, so with POKEZERO_SHOWDOWN_ROOT set direct
+    execution raised NameError, and with it unset it silently ran 23 of its 26 tests. (An earlier
+    revision of this docstring said only "NameErrored", which is the half that needs the env var;
+    the sibling comment in test_randbat.py was corrected and this copy was missed.)
+
+    That is not a hypothetical tidiness rule. In every one of those three files the stranded region
+    held guards added specifically to catch a defect -- so the tests written to prevent a regression
+    were the ones not running. It happened twice in one pull request: the second time, new tests
+    were appended below a stranded block in one file by the same change that fixed a stranded block
+    in another.
+
+    A file-structure rule catches the whole class; fixing each instance does not.
+    """
+
+    def test_no_tracked_test_defines_anything_below_unittest_main(self) -> None:
+        import ast
+
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            # Detected structurally. A first version of this guard tested
+            # `"unittest.main" in ast.dump(node)`, which NEVER matches: `ast.dump` renders the call
+            # as `Attribute(value=Name(id='unittest'), attr='main')`, so that substring cannot
+            # appear. The guard silently matched nothing in all 206 test files and reported a clean
+            # repo -- caught by mutating a file to violate it and watching the guard pass.
+            def _is_main_guard(node) -> bool:
+                if not isinstance(node, ast.If):
+                    return False
+                if not any(
+                    isinstance(sub, ast.Name) and sub.id == "__name__"
+                    for sub in ast.walk(node.test)
+                ):
+                    return False
+                # Both spellings: `unittest.main()` (Attribute) and `from unittest import main`
+                # then `main()` (Name). The Attribute-only form missed the latter -- no test file
+                # uses it today, but the miss was silent and the widening is one clause.
+                return any(
+                    isinstance(sub, ast.Call)
+                    and (
+                        (isinstance(sub.func, ast.Attribute) and sub.func.attr == "main")
+                        or (isinstance(sub.func, ast.Name) and sub.func.id == "main")
+                    )
+                    for sub in ast.walk(node)
+                )
+
+            main_line = next(
+                (node.lineno for node in tree.body if _is_main_guard(node)), None
+            )
+            if main_line is None:
+                continue
+            below = [
+                node.name
+                for node in tree.body
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.lineno > main_line
+            ]
+            if below:
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}: unittest.main() at line {main_line}, "
+                    f"but these are defined after it: {', '.join(below)}"
+                )
+
+        self.assertEqual(
+            offenders,
+            [],
+            "move `unittest.main()` to the end of the file — anything below it is invisible to "
+            "direct execution, and pytest and `python <file>` will report different counts",
+        )
+
+
+class DuplicateTestClassTest(unittest.TestCase):
+    """No test module may define the same top-level class twice.
+
+    A redefinition silently shadows the first, so whichever copy is earlier never runs and the two
+    can drift apart unnoticed. Found for real: `tests/test_mcts_eval_manifest.py` held two
+    copies of `TrimmedEncoderTablesTest` at lines 392 and 578 with identical SHA-256 -- so which
+    one Python bound (the second; binding is top-to-bottom) made no behavioural difference, and the
+    deletion of the second left the previously-dead first copy as the survivor. Nothing failed,
+    pytest collected 39 either way, and the only visible symptom was a class list counting it twice.
+    (A byte count stood here and reviewer and author got different figures for it. Reconciled: the
+    class body holds three em dashes at 3 bytes each in UTF-8, so 5,010 BYTES is 5,004 CHARACTERS --
+    both measurements were right about different units. The digest is kept anyway, being the fact
+    the argument rests on and immune to that confusion.)
+
+    The structural guard next door catches classes stranded BELOW `unittest.main()`; this catches
+    classes hidden BEHIND another definition. Same failure — a test that looks present and is not.
+    """
+
+    def test_no_tracked_test_module_defines_a_class_twice(self) -> None:
+        import ast
+        from collections import Counter
+
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            counts = Counter(
+                node.name for node in tree.body if isinstance(node, ast.ClassDef)
+            )
+            for name, count in sorted(counts.items()):
+                if count > 1:
+                    lines = [
+                        node.lineno
+                        for node in tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == name
+                    ]
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}: {name} defined {count}x at lines "
+                        f"{', '.join(map(str, lines))}"
+                    )
+
+        self.assertEqual(
+            offenders,
+            [],
+            "a redefined class shadows the earlier one, so the earlier copy never runs",
+        )
+
+
 class PublicInvariantTest(unittest.TestCase):
     def test_fleet_worker_workflow_runs_for_every_tracked_change(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "fleet-worker.yml").read_text(encoding="utf-8")

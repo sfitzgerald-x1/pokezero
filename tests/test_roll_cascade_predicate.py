@@ -245,8 +245,6 @@ class RollCascadeTests(unittest.TestCase):
         self.assertFalse(cascade(observed, engine))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PhysicalFloorTests(unittest.TestCase):
@@ -463,3 +461,10 @@ class PreDirectHitTests(unittest.TestCase):
             comp("itemleftovers_to_full", 2, 3),
         ]
         self.assertTrue(cascade(observed, engine))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 248, stranding PhysicalFloorTests, PreDirectHitTests, PrefixWalkScopeTests
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()

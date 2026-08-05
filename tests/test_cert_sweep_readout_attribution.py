@@ -162,8 +162,6 @@ class CertificationAttributionTests(unittest.TestCase):
         self.assertIn("without a sibling engine arm", basis)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class NarrowingPinTests(unittest.TestCase):
@@ -404,3 +402,10 @@ class TracedTruantTests(unittest.TestCase):
     def test_a_non_truant_cant_still_does_not(self) -> None:
         _, basis = attribute_row(self._row(["|cant|p2a: Porygon2|par"]))
         self.assertNotIn("loaf-phase", basis, basis)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 165, stranding NarrowingPinTests and TracedTruantTests from
+    # direct execution -- found by the repo-wide structural guard in test_public_invariant.py
+    # once that guard's own AST detection was fixed.
+    unittest.main()

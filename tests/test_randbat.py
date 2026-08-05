@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.belief import PublicBattleBeliefEngine
+from _showdown_root import requires_showdown, showdown_root_str
+
 from pokezero.randbat import (
     Gen3RandbatSource,
     _audit_source_paths,
@@ -282,9 +284,9 @@ class Gen3RandbatSourceTest(unittest.TestCase):
         with self.assertRaisesRegex(FileNotFoundError, "Run `node build`"):
             Gen3RandbatSource.from_showdown_root(temp_dir, use_cache=False)
 
-    @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "POKEZERO_SHOWDOWN_ROOT is not set")
+    @requires_showdown("reads representative output from a real Showdown checkout")
     def test_optional_showdown_root_covers_representative_showdown_output(self) -> None:
-        showdown_root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        showdown_root = Path(showdown_root_str())
         set_source = Gen3RandbatSource.from_showdown_root(
             showdown_root,
             use_cache=False,
@@ -561,13 +563,25 @@ class Gen3RandbatStabRelaxationTest(unittest.TestCase):
             self.assertIn("psychic", combo)
 
 
-@unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "POKEZERO_SHOWDOWN_ROOT is not set")
+# `requires_showdown`, not `skipUnless(os.environ.get(...))`. The env-var form skipped even when a
+# usable checkout sat at the default root, so this gate was dark in the ordinary configuration:
+# 23 passed / 3 skipped with the variable unset, 26 passed with it set.
+#
+# What was dark matters: this is the corpus-level reproduction gate asserting that 400 teams from
+# the VENDORED GENERATOR never read as off-script -- generator snapshot drift. (The `summarize`
+# API contract is covered separately by the fixture tests above, which always ran; an earlier
+# write-up of this follow-up overstated it as the gate on `summarize` itself.)
+#
+# The bare `os.environ[...]` reads inside the class are fixed in the SAME edit deliberately: the
+# skip guard is what stopped them raising KeyError, so replacing the guard alone would convert
+# three honest skips into two hard errors.
+@requires_showdown("reproduces 400 teams from the vendored generator")
 class Gen3RandbatGoldStandardTest(unittest.TestCase):
     """Gold-standard reproduction gate: the reconstructed candidate universe must CONTAIN every
     real set the vendored Showdown generator produces (no true opponent set is pruned)."""
 
     def test_universe_contains_every_showdown_generated_set(self) -> None:
-        showdown_root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        showdown_root = Path(showdown_root_str())
         source = Gen3RandbatSource.from_showdown_root(showdown_root, use_cache=False)
         n_teams = int(os.environ.get("POKEZERO_GOLD_STANDARD_TEAMS", "400"))
         generated = _sample_showdown_sets(showdown_root, n_teams)
@@ -598,7 +612,7 @@ class Gen3RandbatGoldStandardTest(unittest.TestCase):
         # Fix 3: Yanma's ability is Compound Eyes iff the set has an inaccurate move, else Speed
         # Boost. Never-miss moves (accuracy: true) must NOT be miscounted as inaccurate, so Speed
         # Boost sets must appear in the universe.
-        showdown_root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        showdown_root = Path(showdown_root_str())
         source = Gen3RandbatSource.from_showdown_root(showdown_root, use_cache=False)
         universe = source.universe_for("Yanma")
         self.assertIsNotNone(universe)
@@ -607,8 +621,6 @@ class Gen3RandbatGoldStandardTest(unittest.TestCase):
         self.assertIn("Compound Eyes", offered)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 def _sample_showdown_sets(showdown_root: Path, n_teams: int) -> list[dict[str, object]]:
@@ -691,3 +703,11 @@ class Gen3HiddenPowerCullTest(unittest.TestCase):
             _enumerate_move_sets(["protect", "hiddenpowerice"], **self._KW),
             (("protect", "hiddenpowerice"),),
         )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END of the file. Previously helpers _sample_showdown_sets/_sample_showdown_set were DEFINED BELOW it. With
+    # POKEZERO_SHOWDOWN_ROOT set that made direct execution NameError; with it unset it silently
+    # under-reported (23 ran, 3 skipped, exit 0). Both broken, differently --
+    # so `python <this file>` and pytest disagreed on what ran.
+    unittest.main()

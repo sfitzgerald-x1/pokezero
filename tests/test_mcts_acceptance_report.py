@@ -182,8 +182,6 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn("staged config expects", result.stdout + result.stderr)
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class ModelPathDepthInstrumentationTest(unittest.TestCase):
@@ -224,3 +222,10 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
         source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text()
         self.assertIn("policy_stats", source)
         self.assertIn("to_payload()", source)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 185, stranding ModelPathDepthInstrumentationTest
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()
