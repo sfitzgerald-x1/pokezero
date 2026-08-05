@@ -85,6 +85,51 @@ Artifacts committed as `reports/artifacts/c126_whiteherb_{dev,holdout}_sweep.jso
 
 Residue is now **dev 4 / holdout 11**, reported as an outcome.
 
+## 5b. Self-review found the reachability argument false, and it is fixed
+
+No independent reviewer was obtainable (twelve consecutive API 529s), so this was self-reviewed
+against the same axes I had written into the reviewer's brief — one of which was *"can a Deoxys
+receive a negative boost from a source the patch does NOT cover?"* It can, and the first version
+of §2's argument was wrong.
+
+That argument reasons only about **Deoxys' own moves**. It says nothing about what an
+**opponent** can do to Deoxys, which is most of how a Pokémon acquires a negative boost. Two
+live gaps, reproduced rather than theorised:
+
+| gap | evidence | pool reach |
+|---|---|---|
+| secondary stat drops, applied *after* the boost-effect site | Deoxys hit by Crunch kept `-1 SpD`, no restore, no `ChangeItem` (gen3 Crunch drops **SpD**) | Ice Beam 79 species, Shadow Ball 59, Thunderbolt 50, Psychic 42, Flamethrower 23, Crunch 9, Iron Tail 7 |
+| Intimidate on switch-in | `onAnySwitchIn` unwired | **18** species — arbok, arcanine, granbull, gyarados, hitmontop, masquerain, mawile, mightyena, salamence, stantler, tauros, … |
+
+This is the same shape as the `sets.json`-for-items error corrected in
+`reports/c124_a6_is_knowable.md`: right instrument, wrong question. There the reachability check
+was applied to the item when that file cannot answer for items; here it was applied to the item
+**holder** and not to the **sources** of the effect.
+
+Fixed rather than re-scoped. `item_white_herb_after_boosts` is renamed `item_white_herb_check`
+and called from **three** sites, each checking both sides: after a move's boost effect, after
+secondaries (deliberately *not* gated on `does_damage` — a status move's secondary can drop a
+stat), and after `ability_on_switch_in`. Still uncovered, and now genuinely narrow: `onResidual`
+order 29, which needs a drop surviving to end-of-turn with no move, ability or switch in between.
+
+Two further pins, both seen red first: the secondary pin failed with the `-1 SpD` present and no
+restore, and it asserts the drop actually happens so it cannot pass vacuously; the Intimidate pin
+failed with `Boost SideOne Attack: -1` present and no `Boost SideOne Attack: 1`.
+
+**The extension measures NEUTRAL, and that is the expected and correct result.** Re-sweeping both
+windows against the §5 figures:
+
+| window | boundaries | matched | diverged | closed | opened |
+|---|---|---|---|---|---|
+| dev | 15,224 | 15,220 | 4 | none | **none** |
+| validation holdout | 15,396 | 15,385 | 11 | none | **none** |
+
+No residue row involves a White Herb holder taking a secondary or an Intimidate drop, so nothing
+was expected to close. The sweep's value here is the **negative** result: three call sites, each
+firing on both sides, and nothing over-fires. Justification for the extension is correctness plus
+pool reachability, **not** a residue reduction — recorded that way so it is not later cited as
+one. Artifacts: `reports/artifacts/c126_whiteherb_{dev,holdout}_sweep_extended.json`.
+
 ## 6. Where Phase 3 stands
 
 | item | state |
