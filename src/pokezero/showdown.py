@@ -6666,7 +6666,26 @@ _NON_HP_SPREAD_STATS = ("def", "spa", "spd", "spe")
 
 
 def _variant_has_physical_attack(dex: "ShowdownDex", variant: "Mapping[str, Any]") -> bool:
-    """The generator's ``counter.get('Physical')`` truthiness for one candidate variant."""
+    """This encoder's has-physical predicate for one candidate variant.
+
+    NOT the generator's ``counter.get('Physical')`` rule, despite what an earlier
+    version of this docstring said. It delegates to ``_is_physical_attack``, which
+    additionally requires ``base_power > 0``; the generator
+    (``data/random-battles/gen7/teams.ts`` ``newQueryMoves``) gates only on
+    ``!move.damage && !move.damageCallback``, so basePowerCallback moves --
+    ``return``, ``frustration``, ``flail``, ``reversal`` -- count for the generator
+    and do not count here. ``tier2.variant_has_physical_attack`` implements the real
+    rule via ``_BP_CALLBACK_PHYSICAL``; the two disagree.
+
+    That divergence is PRE-EXISTING and out of this change's four-column scope (all
+    four are has-physical-independent), and the Rust twin mirrors it faithfully so
+    parity holds. It is live, though: measured against opening ``|request|`` truth
+    over 60 games, 13 of 720 mons get an ``EXPECTED_ATK`` band that excludes the
+    engine's Atk -- e.g. a Farfetch'd with ``return`` banded 133..133 against an
+    engine value of 185. Filed here rather than fixed, because claiming the
+    generator's rule while implementing a different one is what this comment used to
+    do.
+    """
     return any(
         _is_physical_attack(dex, _normalize_identifier(str(move)))
         for move in _as_sequence(variant.get("moves"))

@@ -15,8 +15,12 @@ What this file establishes, and the order matters:
    differential whose two sides share a bug proves nothing (plan §3), so the chain is
    encoder -> core -> engine, with this file owning the first link and the gate the second;
 3. the specific defect this item found stays dead: Def/SpA/SpD/Spe were computed at a flat
-   ``iv=31``, ignoring the generator's Hidden Power ``HPivs`` override, and were wrong by one
-   point on 205 of 393 pool sets. ``test_flat_iv31_encoder_is_killed`` is the kill-confirmed
+   ``iv=31``, ignoring the generator's Hidden Power ``HPivs`` override. Scope, at the variant
+   level (the shape that actually exists): **716 of 1682 variants, 42.6%**, carry a def/spa/spd/spe
+   override -- def 312, spa 417, spd 334, spe 145. (An earlier revision of this line said "205 of
+   393 pool sets"; 205 is the number of sets.json ROWS carrying an override, not a count of wrong
+   values, and a sets.json row is a whole movepool -- a shape no real variant has. The cell-level
+   figure on that surface is 348 of 820.) ``test_flat_iv31_encoder_is_killed`` is the kill-confirmed
    mutation for that -- a guard nobody has broken on purpose is not measured coverage (plan §3).
 
 Reachability is asserted, not assumed: a sweep that never reached a Hidden-Power set would pass
@@ -398,7 +402,10 @@ class ExpectedStatDifferentialTest(unittest.TestCase):
     def test_ambiguous_candidates_emit_the_upper_bound_never_a_midpoint(self) -> None:
         """With candidates that disagree, the column is the MAX -- a real bound, not a fiction.
 
-        30 of 220 pool species have candidate sets that disagree on at least one of the four
+        29 of 220 pool species have candidate sets that disagree on at least one of the four
+        on the sets.json-row shape this test uses (60 disagreeing cells); on the 1682-variant
+        surface, which is the shape that really occurs, it is 77 of 220. An earlier revision said
+        30, which is neither.
         (different Hidden Power types, hence different IV overrides). A single-valued column
         cannot carry a band, so the contract is: exact when the candidates agree, and otherwise
         the maximum over them, which is a value some real candidate actually has. A midpoint or

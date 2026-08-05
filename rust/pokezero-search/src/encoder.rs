@@ -626,8 +626,8 @@ impl RandbatsSpread {
     }
 }
 
-/// Native twin of `gen3_damage.randbats_spread_details`, narrowed to the two stats the encoder
-/// bands: `(hp, atk)`. Mirrors `data/random-battles/gen3/teams.ts` -- 85 EVs / 31 IVs / neutral
+/// Native twin of `gen3_damage.randbats_spread_details`, returning all six stats the encoder
+/// bands, not just `(hp, atk)`. Mirrors `data/random-battles/gen3/teams.ts` -- 85 EVs / 31 IVs / neutral
 /// everywhere, then Hidden Power IV overrides, the first HP-trim loop, Atk zeroing, and the
 /// second HP-trim pass.
 ///
@@ -1686,7 +1686,7 @@ fn encode_expected_stats(
         return Ok(());
     }
 
-    // `showdown.py:6743-6745` does this fix in TWO halves and both are load bearing:
+    // `showdown.py:6778-6780` does this fix in TWO halves and both are load bearing:
     // `_level_from_details` returns 100 for a token-less details string, AND this caller
     // coerces a None level to 100 anyway -- "belt-and-suspenders ... rather than silently
     // zeroing this otherwise-deterministic block". Porting only the first half left
