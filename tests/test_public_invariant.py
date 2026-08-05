@@ -177,8 +177,10 @@ class DuplicateTestClassTest(unittest.TestCase):
     one Python bound (the second; binding is top-to-bottom) made no behavioural difference, and the
     deletion of the second left the previously-dead first copy as the survivor. Nothing failed,
     pytest collected 39 either way, and the only visible symptom was a class list counting it twice.
-    (A byte count stood here; reviewer and author measured the same blob and got different figures,
-    so it is replaced by the digest equality, which is the load-bearing fact and is checkable.)
+    (A byte count stood here and reviewer and author got different figures for it. Reconciled: the
+    class body holds three em dashes at 3 bytes each in UTF-8, so 5,010 BYTES is 5,004 CHARACTERS --
+    both measurements were right about different units. The digest is kept anyway, being the fact
+    the argument rests on and immune to that confusion.)
 
     The structural guard next door catches classes stranded BELOW `unittest.main()`; this catches
     classes hidden BEHIND another definition. Same failure — a test that looks present and is not.

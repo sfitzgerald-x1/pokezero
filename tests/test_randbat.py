@@ -706,7 +706,7 @@ class Gen3HiddenPowerCullTest(unittest.TestCase):
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # At the END of the file. Previously helpers _sample_showdown_sets/_sample_showdown_set are DEFINED BELOW it. With
+    # At the END of the file. Previously helpers _sample_showdown_sets/_sample_showdown_set were DEFINED BELOW it. With
     # POKEZERO_SHOWDOWN_ROOT set that made direct execution NameError; with it unset it silently
     # under-reported (23 ran, 3 skipped, exit 0). Both broken, differently --
     # so `python <this file>` and pytest disagreed on what ran.
