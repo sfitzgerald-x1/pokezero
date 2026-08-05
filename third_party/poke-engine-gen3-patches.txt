@@ -1285,3 +1285,12 @@ poke-engine-gen3-weather-entry-truncation.patch
 # LastUsedMove's `move:`/`switch:` idiom. Design and that correction:
 # fp-power-deploy reports/evidence/row2-engine-fix-design-20260805.md.
 poke-engine-gen3-rest-sleep-pending-refund.patch
+
+# Exposes rest_sleep_pending_refund on the pyo3 Pokemon binding. Needed because
+# pokezero builds engine state through the binding (poke_engine_adapter.py:
+# engine.State(...)), NOT through State::deserialize -- so the field added by the
+# patch above could never reach search without this. The Into<Pokemon> half is the
+# dangerous one: it compiles fine while silently writing 0, so it is pinned by
+# tests/test_rest_sleep_refund_boundary.py with a nonzero value rather than by the
+# compiler.
+poke-engine-gen3-rest-sleep-refund-binding.patch

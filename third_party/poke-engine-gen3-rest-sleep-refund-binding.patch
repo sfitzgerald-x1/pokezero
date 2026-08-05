@@ -1,0 +1,100 @@
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -604,6 +604,11 @@
+     /// pre-copy form across too, or the engine has nothing to restore on
+     /// switch-out and degrades to "keep the copied form".
+     pub pre_transform: String,
++    /// pokezero row 2: Rest sleep turns skipped by Sleep Talk/Snore that gen 3
++    /// credits back on switch-in. Carried here rather than pre-applied, because
++    /// an ACTIVE mon may never switch and MCTS searches the stay-in branch too;
++    /// pre-applying would wake it early there. 0 means nothing pending.
++    pub rest_sleep_pending_refund: i8,
+ }
+ 
+ impl From<Pokemon> for PyPokemon {
+@@ -647,6 +652,7 @@
+                 .as_ref()
+                 .map(|pre_transform| pre_transform.serialize())
+                 .unwrap_or_default(),
++            rest_sleep_pending_refund: other.rest_sleep_pending_refund,
+             moves: other
+                 .moves
+                 .into_iter()
+@@ -706,12 +712,16 @@
+             } else {
+                 Some(Box::new(PreTransform::deserialize(&self.pre_transform)))
+             },
+-            // pokezero row-2 plumbing: not exposed on PyPokemon, so a state
+-            // built through the binding always starts with no pending refund.
+-            // Only SetRestSleepPendingRefund inside search may make it nonzero,
+-            // which is what keeps this patch behaviour-neutral. Emitting the
+-            // value from the harness needs a PyPokemon field as well.
+-            rest_sleep_pending_refund: 0,
++            // pokezero row 2: this is the Python->engine direction, and it is the
++            // one the compiler does NOT protect. Adding the field to PyPokemon
++            // forces E0063 in `From<Pokemon> for PyPokemon` and in `#[new]`, but
++            // this initializer would have gone on compiling with the literal 0
++            // that plumbing left here, silently dropping every refund the harness
++            // emits. Production builds state through this path
++            // (poke_engine_adapter.py: engine.State(...)), so that would be
++            // invisible: wheel builds, gates green, field arrives 0. Pinned by
++            // tests/test_rest_sleep_refund_boundary.py with a NONZERO value.
++            rest_sleep_pending_refund: self.rest_sleep_pending_refund,
+         }
+     }
+ }
+@@ -745,6 +755,7 @@
+         tera_type="typeless".to_string(),
+         gender="none".to_string(),
+         pre_transform="".to_string(),
++        rest_sleep_pending_refund=0,
+     ))]
+     fn new(
+         id: String,
+@@ -772,6 +783,7 @@
+         tera_type: String,
+         gender: String,
+         pre_transform: String,
++        rest_sleep_pending_refund: i8,
+     ) -> Self {
+         if base_ability == "" {
+             base_ability = ability.clone();
+@@ -802,6 +814,7 @@
+             tera_type,
+             moves,
+             pre_transform,
++            rest_sleep_pending_refund,
+         }
+     }
+     #[staticmethod]
+--- a/poke-engine-py/python/poke_engine/poke_engine.pyi
++++ b/poke-engine-py/python/poke_engine/poke_engine.pyi
+@@ -208,6 +208,12 @@
+     :type times_attacked: int
+     :param stellar_boosted_types: For pokemon terastallized into the Stellar type, this keeps track the types that have been boosted by Stellar Boost.
+     :type stellar_boosted_types: list[str]
++    :param rest_sleep_pending_refund: pokezero row 2. Rest sleep turns skipped by
++        Sleep Talk/Snore that gen 3 credits back on switch-in. Supply it for an
++        ACTIVE sleeper whose refund has not been spent yet; the engine holds it and
++        applies it only on the branch where a switch-in actually happens. 0 means
++        nothing pending.
++    :type rest_sleep_pending_refund: int
+     """
+ 
+     id: str
+@@ -236,6 +242,7 @@
+     moves: List[Move]
+     times_attacked: int
+     stellar_boosted_types: Optional[list[str]]
++    rest_sleep_pending_refund: int
+ 
+     def __init__(
+         self,
+@@ -265,6 +272,7 @@
+         times_attacked: int = 0,
+         stellar_boosted_types: Optional[list[str]] = None,
+         gender: str = "none",
++        rest_sleep_pending_refund: int = 0,
+     ) -> None: ...
+     @staticmethod
+     def create_fainted() -> Pokemon: ...
