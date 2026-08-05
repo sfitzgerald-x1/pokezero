@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import pathlib
 import random
 import sys
 import tempfile
@@ -2173,6 +2174,92 @@ class FallbackAddressTests(unittest.TestCase):
         self.assertIn("fallback:no_public_state", samples)
         self.assertEqual(samples["fallback:no_public_state"][0]["reason"],
                          "no_public_state")
+
+    def test_a_class_that_stops_refusing_does_not_stop_being_counted(self) -> None:
+        """The whole reason `lossy_subcase_renders` exists.
+
+        `sleeptalk_called_unidentified:ambiguous` appeared in `world_failure_reasons` only
+        BECAUSE it aborted the world. Making it usable therefore deletes the one number
+        that tracked it -- and this campaign spent two eras unable to say what had changed
+        inside a class, which is exactly that failure. So the usable arm is counted on its
+        own channel and that channel reaches the shard report.
+        """
+        stats = EngineMctsStats()
+        stats.lossy_subcase_renders["sleeptalk_called_unidentified:ambiguous"] += 7
+        stats.lossy_subcase_renders[
+            "sleeptalk_called_unidentified:ambiguous_unrenderable"
+        ] += 2
+        emitted = stats.to_dict()["lossy_subcase_renders"]
+        self.assertEqual(emitted["sleeptalk_called_unidentified:ambiguous"], 7)
+        self.assertEqual(
+            emitted["sleeptalk_called_unidentified:ambiguous_unrenderable"], 2
+        )
+        # And it must be a real dict in the report, not a Counter that a json.dumps
+        # elsewhere might refuse or render differently.
+        self.assertIsInstance(emitted, dict)
+        import json as _json
+
+        _json.dumps(stats.to_dict())
+
+    def test_the_crate_report_lossy_subcases_reach_the_stats(self) -> None:
+        """The seam, not just the container.
+
+        The crate emits `lossy_subcases` as a sub-case -> count object in its search
+        report. If nothing reads it, the counter above stays empty forever and the class is
+        invisible in exactly the way this test exists to prevent.
+        """
+        import unittest.mock as mock
+
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=mock.Mock(), config=EngineMctsConfig()
+        )
+        policy._absorb_lossy_subcases(
+            {
+                "lossy_subcases": {
+                    "sleeptalk_called_unidentified:ambiguous": 5,
+                    "attract_immobilization_source_unknown": 1,
+                },
+            }
+        )
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders[
+                "sleeptalk_called_unidentified:ambiguous"
+            ],
+            5,
+        )
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders["attract_immobilization_source_unknown"], 1
+        )
+        # An absent key must be a no-op, not a crash: older images emit no such field.
+        policy._absorb_lossy_subcases({})
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders[
+                "sleeptalk_called_unidentified:ambiguous"
+            ],
+            5,
+        )
+
+    def test_the_crate_and_python_agree_on_the_lossy_subcases_key(self) -> None:
+        """A rename on either side zeroes the class SILENTLY, which is the failure mode.
+
+        `lossy_subcase_renders` is fed from one JSON key that the Rust search report emits
+        and this module reads. Nothing else connects them: if either side is renamed the
+        counter stays at zero forever, no test fails, and the class becomes invisible --
+        precisely the outcome this counter was added to prevent. So the two spellings are
+        asserted against each other.
+        """
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        model_rs = (repo / "rust" / "pokezero-search" / "src" / "model.rs").read_text()
+        engine_py = (repo / "src" / "pokezero" / "engine_search.py").read_text()
+        self.assertIn(
+            '\\"lossy_subcases\\":{}', model_rs,
+            "the crate no longer emits a `lossy_subcases` object in its search report; "
+            "the Python counter below reads that exact key and would silently stay zero",
+        )
+        self.assertIn(
+            'report.get("lossy_subcases")', engine_py,
+            "engine_search no longer reads `lossy_subcases`, so the class is invisible",
+        )
 
     def test_no_fallbacks_means_no_samples_not_a_stub(self) -> None:
         self.assertEqual(EngineMctsStats().to_dict()["fallback_samples"], {})

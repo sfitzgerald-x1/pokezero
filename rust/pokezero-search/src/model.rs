@@ -786,6 +786,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
+    // Renders that were COUNTED rather than refused, per sub-case. Without this the
+    // usable-ambiguity class is invisible in aggregate: before the split it showed up as
+    // `world_failure_reasons["...:ambiguous"]` because it refused, and after the split it
+    // would show up nowhere at all. An invisible class is how this campaign spent two eras
+    // unable to say what had changed.
+    let mut lossy_subcase_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut attribution_unsafe_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
@@ -973,6 +980,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     render_nanos += render_started.elapsed().as_nanos();
                     if !rendered.lossy.is_empty() {
                         lossy_renders += 1;
+                    }
+                    for subcase in &rendered.lossy_subcases {
+                        *lossy_subcase_counts.entry(subcase.clone()).or_insert(0) += 1;
                     }
                     if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
                         attribution_unsafe_renders += 1;
@@ -1242,7 +1252,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
-         \"lossy_renders\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
+         \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
          \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
@@ -1252,6 +1262,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         rounds,
         model_evals,
         lossy_renders,
+        // A JSON object of sub-case -> count, so the class is countable in the shard
+        // report instead of only in a per-branch payload nobody aggregates.
+        format!(
+            "{{{}}}",
+            lossy_subcase_counts
+                .iter()
+                .map(|(name, count)| format!("\"{name}\":{count}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         attribution_unsafe_renders,
         fold_by_branch.len(),
         model_priors,
