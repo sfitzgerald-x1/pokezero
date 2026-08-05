@@ -2239,7 +2239,17 @@ def _hp_snapshot_action(raw_line: Optional[str], *, in_residual_phase: bool) -> 
     action-phase, so the list no longer has to be exhaustive to be safe.
     """
     if not raw_line:
-        return _HP_SNAPSHOT_UPDATE
+        # No line text, so there is no tag to read -- but the PHASE is still known, and that is
+        # enough on the action side: everything there precedes every residual regardless of source.
+        # In the residual phase nothing is left to classify with, so it declines.
+        #
+        # This branch used to return ``update`` unconditionally, which made the one case with the
+        # LEAST information the most permissive -- the opposite of the rule the rest of this function
+        # exists to enforce, and the same shape as the four defects that preceded it. It was also a
+        # surviving mutant: flipping it to ``discard`` left all 90 tests green. Not reachable from the
+        # parser (``ShowdownPublicEvent.raw_line`` is always populated), but ``ingest_event`` also
+        # accepts plain mappings, so it is reachable by construction.
+        return _HP_SNAPSHOT_DISCARD if in_residual_phase else _HP_SNAPSHOT_UPDATE
     if any(tag in raw_line for tag in _UNORDERED_HP_TAGS):
         return _HP_SNAPSHOT_DISCARD
     if any(tag in raw_line for tag in _ACTION_PHASE_ONLY_HP_TAGS):

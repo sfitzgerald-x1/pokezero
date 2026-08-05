@@ -641,6 +641,28 @@ class HpSnapshotClassifierTest(unittest.TestCase):
         self.assertEqual(self._action(line, residual=True), _HP_SNAPSHOT_UPDATE)
         self.assertEqual(self._action(line, residual=False), _HP_SNAPSHOT_UPDATE)
 
+    def test_an_HP_line_with_no_text_follows_the_phase_and_declines_in_residuals(self) -> None:
+        """The least-information case must not be the most permissive one.
+
+        With no line text there is no tag, but the phase is still known: on the action side every
+        change precedes every residual regardless of source, so it updates; in the residual phase
+        nothing is left to classify with, so it declines. The branch previously returned ``update``
+        unconditionally — the same "assume action-phase" shape as the four defects this rule has
+        already had — and it was a surviving mutant: flipping it to ``discard`` left all 90 tests
+        green.
+
+        Kill-confirmed by returning ``_HP_SNAPSHOT_UPDATE`` unconditionally.
+        """
+        from pokezero.belief import _HP_SNAPSHOT_DISCARD, _HP_SNAPSHOT_UPDATE, _hp_snapshot_action
+
+        for empty in (None, ""):
+            self.assertEqual(
+                _hp_snapshot_action(empty, in_residual_phase=False), _HP_SNAPSHOT_UPDATE
+            )
+            self.assertEqual(
+                _hp_snapshot_action(empty, in_residual_phase=True), _HP_SNAPSHOT_DISCARD
+            )
+
     def test_an_unrecognized_residual_phase_source_is_declined_not_assumed(self) -> None:
         """The default that makes the tag lists safe to be incomplete.
 
