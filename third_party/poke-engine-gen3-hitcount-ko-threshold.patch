@@ -1,0 +1,110 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3413,13 +3413,37 @@
+             max_damage_dealt
+         } else {
+             (max_damage_dealt as f32 * 0.85) as i16
++        };
++        // pokezero gen3 fidelity fix (hit-count-blind KO threshold). Both KO
++        // partitions compared a PER-HIT maximum against the defender's FULL HP
++        // with no `hit_count` scaling, so a multi-hit move whose single hit
++        // cannot KO never partitioned even when its hits TOGETHER can.
++        //
++        // Bonemerang on holdout row `19100113/62`: per-hit max 140 against 253
++        // HP, so `140 < 253` and the non-crit arm collapsed to one roll -- but
++        // two hits reach 280, and rolls 85..90 total 238..252 and SURVIVE while
++        // 91..100 total 254..280 and kill. That straddle is exactly what this
++        // partition exists to represent, and it was invisible.
++        //
++        // `hit_count` was computed above and consumed only when the hits are
++        // actually applied; neither partition referenced it. Gated on
++        // `hit_count > 1` so every single-hit move is bit-identical.
++        let ko_max_damage = if hit_count > 1 {
++            max_damage_dealt.saturating_mul(hit_count as i16)
++        } else {
++            max_damage_dealt
+         };
++        let ko_min_damage = if hit_count > 1 {
++            min_damage_dealt.saturating_mul(hit_count as i16)
++        } else {
++            min_damage_dealt
++        };
+         if branch_on_damage
+-            && max_damage_dealt >= defender_active.hp
+-            && min_damage_dealt < defender_active.hp
++            && ko_max_damage >= defender_active.hp
++            && ko_min_damage < defender_active.hp
+         {
+             let (average_non_kill_damage, num_kill_rolls) =
+-                compare_health_with_damage_multiples(max_damage_dealt, defender_active.hp);
++                compare_health_with_damage_multiples(ko_max_damage, defender_active.hp);
+ 
+             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
+                 || defender_active.ability == Abilities::SHELLARMOR
+@@ -3457,7 +3481,18 @@
+             // `compare_health_with_damage_multiples` counts rolls AT OR ABOVE its
+             // threshold, and every hit-lethal roll is also at or above the residual
+             // threshold, so the residual-only population is the difference.
+-            let mut survive_representative = average_non_kill_damage;
++            // The comparator was handed a TOTAL (`ko_max_damage`), so it returns a
++            // TOTAL. `run_move` applies `damage_amount` ONCE PER HIT, so feeding
++            // the total straight back through would deal it `hit_count` times.
++            // Measured while building this fix: at 2 hits the surviving arm came
++            // back as 155 per hit, clamped to 155+10 = 165, which KILLED -- the
++            // partition fired and both arms were lethal, so the fix silently
++            // achieved nothing. Convert back to per-hit.
++            let mut survive_representative = if hit_count > 1 {
++                average_non_kill_damage / hit_count as i16
++            } else {
++                average_non_kill_damage
++            };
+             let mut residual_kill_chance = 0.0_f32;
+             if let Some(residual_threshold) = residual_threshold_opt {
+                 if residual_threshold > 0
+@@ -3543,9 +3578,20 @@
+                 }
+             }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
++            // Same hit-count scaling as Case A above; see that comment.
++            let ko_max_crit = if hit_count > 1 {
++                max_crit_damage.saturating_mul(hit_count as i16)
++            } else {
++                max_crit_damage
++            };
++            let ko_min_crit = if hit_count > 1 {
++                min_crit_damage.saturating_mul(hit_count as i16)
++            } else {
++                min_crit_damage
++            };
+             if crit_rate > 0.0
+-                && max_crit_damage >= defender_active.hp
+-                && min_crit_damage < defender_active.hp
++                && ko_max_crit >= defender_active.hp
++                && ko_min_crit < defender_active.hp
+             {
+                 // The CRIT roll range straddles the KO threshold while the
+                 // non-crit range does not. Collapsing this arm to its average
+@@ -3555,7 +3601,7 @@
+                 // have scored, or the reverse. Partition it with the identity
+                 // Case A already uses; do not introduce a second one.
+                 let (average_non_kill_crit_damage, num_crit_kill_rolls) =
+-                    compare_health_with_damage_multiples(max_crit_damage, defender_active.hp);
++                    compare_health_with_damage_multiples(ko_max_crit, defender_active.hp);
+                 let crit_kill_chance = crit_rate * (num_crit_kill_rolls as f32 / 16.0);
+                 let crit_survive_chance = crit_rate - crit_kill_chance;
+                 if crit_kill_chance > 0.0 {
+@@ -3566,7 +3612,13 @@
+                 if crit_survive_chance > 0.0 {
+                     let mut survive_ins = incoming_instructions.clone();
+                     survive_ins.update_percentage(crit_survive_chance);
+-                    extra_branches.push((survive_ins, average_non_kill_crit_damage));
++                    // Same total -> per-hit conversion as Case A; see there.
++                    let crit_survive_per_hit = if hit_count > 1 {
++                        average_non_kill_crit_damage / hit_count as i16
++                    } else {
++                        average_non_kill_crit_damage
++                    };
++                    extra_branches.push((survive_ins, crit_survive_per_hit));
+                 }
+             } else {
+                 // The CRIT fan gets the same residual treatment as the non-crit

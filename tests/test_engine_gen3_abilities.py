@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -621,6 +622,52 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertIn("Boost SideOne Attack: -1", text)
         self.assertIn("Boost SideOne Attack: 1", text)
         self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
+    def test_a_multi_hit_move_partitions_on_its_TOTAL_not_its_per_hit_damage(self) -> None:
+        # The KO partitions compared a PER-HIT maximum against the defender's
+        # FULL HP with no hit_count scaling, so a two-hit move never partitioned
+        # on a threshold only its TOTAL can straddle. Holdout row 19100113/62's
+        # shape: per-hit max 140 against 253 HP while two hits reach 280.
+        #
+        # Sizing matters and a first draft of this pin got it wrong. Bonemerang
+        # here has per-hit max 87, so the straddle band is
+        # 2*0.85*87 = 148 < hp <= 2*87 = 174. At hp=120 EVERY roll kills either
+        # way and the pin passed against the unfixed engine -- vacuous. 165 sits
+        # inside the band: the collapsed average (80+80 = 160) survives, while
+        # the top rolls (2*87 = 174) kill.
+        attacker = self._mon("marowak", "rockhead", "bonemerang", attack=200, speed=200)
+        defender = self._mon("registeel", "clearbody", "splash", hp=165, maxhp=165, defense=80)
+        state = self._state(attacker, defender)
+
+        per_hit_max = poke_engine.calculate_damage(state, "bonemerang", "splash", False)[0][0]
+        per_hit_min = int(per_hit_max * 0.85)
+        self.assertLess(per_hit_max, 165, "one hit must not KO, or there is nothing to fix")
+        self.assertGreaterEqual(2 * per_hit_max, 165, "two hits must be able to KO")
+        self.assertLess(2 * per_hit_min, 165, "the TOTAL must straddle, not merely exceed")
+
+        branches = poke_engine.generate_instructions(state, "bonemerang", "splash")
+        # Non-crit arms only: the crit arm partitions separately and already did.
+        non_crit = [
+            b for b in branches
+            if "Damage SideTwo" in self._text(b) and float(b.percentage) > 10.0
+        ]
+        self.assertTrue(non_crit, "expected a non-crit damaging arm")
+
+        def total(branch) -> int:
+            return sum(
+                int(m) for m in re.findall(r"Damage SideTwo: (\d+)", self._text(branch))
+            )
+
+        totals = sorted({total(b) for b in non_crit})
+        # Before the fix the whole non-crit mass collapses to ONE total (160,
+        # surviving). After it, the fan straddles 165 and both outcomes appear.
+        self.assertGreater(
+            len(totals), 1,
+            f"non-crit mass did not partition: totals={totals}, "
+            f"branches={[self._text(b)[:70] for b in branches]}",
+        )
+        self.assertTrue(any(t >= 165 for t in totals), f"no killing roll: {totals}")
+        self.assertTrue(any(t < 165 for t in totals), f"no surviving roll: {totals}")
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")
