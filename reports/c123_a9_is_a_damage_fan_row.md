@@ -62,6 +62,32 @@ the three damaged branches differ only in how the total is split across the two 
 
 Showdown's roll totalled 249. **The margin between the two worlds is 4 HP out of 253.**
 
+## 2b. Does widening the fan actually produce a surviving branch?
+
+The diagnosis above would be worthless for Phase 2 if every roll were still lethal, so this is
+measured rather than assumed. `poke_engine.calculate_damage` on the same state returns
+`([78], [140, 282])` — p1's Seismic Toss at its fixed 78, and Bonemerang's per-hit maximum of
+**140** non-crit. The fan scales that as `(raw * random / 100)` for `random` in 85..=100:
+
+| roll | per hit | 2-hit total | outcome |
+|---|---|---|---|
+| 85 | 119 | 238 | survives at 15 |
+| 88 | 123 | 246 | survives at 7 |
+| 90 | 126 | 252 | **survives at 1** |
+| 91 | 127 | 254 | dead |
+| 100 | 140 | 280 | dead |
+
+**Rolls 85–90 survive; 91–100 do not.** So widening the gate puts **6 of 16 rolls — 37.5 % of
+the non-crit mass — on branches where the Pokémon lives and the residual walk runs.** The
+conclusion follows.
+
+One honest caveat this exposes, which is a separate question from A9: the engine's fan applies
+**one roll to the whole move**, so a two-hit move always produces an even split and can only
+land on the totals above. Showdown rolls **each hit independently** — 128 and 121, totalling
+249, which is not reachable at all under a shared roll. That is a second, narrower divergence in
+multi-hit damage; it does not affect this refiling (survival is reachable either way) and it is
+recorded here rather than folded in.
+
 ## 3. Disposition
 
 **A9 is refiled from "renderer omission" to the damage-fan class, and it is absorbed by Phase 2.**
