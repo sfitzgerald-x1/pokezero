@@ -210,8 +210,14 @@ def _check_pp_ledger(
                 continue
             if belief.transformed:
                 # While a mon is transformed the request's `active[0].moves` describes the COPIED
-                # slots, not the mon's own set: `sim/pokemon.ts transformInto` replaces every
-                # moveSlot with the target's, at `pp: 5` but keeping the TARGET's `maxpp`. Measured
+                # slots, not the mon's own set. `sim/pokemon.ts transformInto` (`:1306-1326`, not
+                # overridden in the gen3 chain -- the five `data/mods/*/scripts.ts` that redefine
+                # it are format mods) clears `moveSlots` and rebuilds them from the target at
+                # `pp = Math.min(5, move.pp)`, with `maxpp = calculatePP(move, this.ppUps[i])` for
+                # gen < 5. So maxpp is the COPIED MOVE's full maxpp computed against the
+                # TRANSFORMER's PP-ups -- equal to the target's in randbats, where every slot has
+                # 3 PP-ups, but not by the mechanism an earlier version of this comment claimed
+                # ("keeping the target's maxpp"). Measured
                 # on seed 4711 game 90 turn 48, a Ditto transformed into Jirachi reports
                 # psychic 2/16, calmmind 4/20, icepunch 4/15, thunderbolt 3/15 -- Jirachi's moves
                 # and Jirachi's maxpp, on a mon whose own moveset is [Transform].
