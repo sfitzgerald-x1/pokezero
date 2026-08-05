@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 import hashlib
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -146,7 +147,91 @@ class RandbatSourceMetadata:
     source_hash: str
 
     def to_payload(self) -> dict[str, Any]:
-        return asdict(self)
+        """Serialized form -- PORTABLE, unlike the in-memory dataclass.
+
+        These three path fields reach far further than they look: ``source_metadata`` is copied onto
+        every ``RevealedPokemonBelief``, so a golden-corpus row carries them once per believed mon.
+        That is how a maintainer's absolute home directory ended up inside a TAMPER-EVIDENT artifact
+        in a public repo -- every row hashes its own payload, so the paths cannot be scrubbed in
+        place without forging those hashes, which is why
+        ``tests/test_public_invariant.py::_ALLOWED_FOR_RULE`` had to carve out an exception rather
+        than the corpus simply being fixed.
+
+        Note this is NOT serialization-only in effect: the on-disk cache is written from
+        ``Gen3RandbatSource.to_payload()`` and read back through ``from_payload``, so after a cache
+        round-trip the in-memory ``showdown_root`` is ``None`` and the path fields are relative. An
+        earlier version of this docstring claimed the absolute paths "stay on the in-memory object
+        for diagnostics"; that is false on the default cached path, and saying so was the same
+        comment-outruns-code defect this whole effort exists to find.
+
+        On the shape actually being fixed: :func:`portable_path` already collapses ``$HOME`` to
+        ``~``, so a freshly computed metadata is ``~/workspace/...`` rather than an absolute home
+        path. The absolute form that reaches a tracked artifact comes from a cache file written
+        BEFORE that was added. Relativizing here makes the serialized form independent of both.
+        """
+        payload = asdict(self)
+        root = self.showdown_root
+        for key in ("sets_path", "generator_path"):
+            value = payload.get(key)
+            if not value:
+                continue
+            if not isinstance(value, (str, os.PathLike)):
+                # A wrong-typed field is the one input that could still make this serializer throw
+                # (`Path(12345)` raises TypeError). Unreachable through `from_showdown_root` or
+                # `from_payload`, both of which coerce to str -- but "a serializer must not throw"
+                # should be literally true, not true-by-ingress.
+                payload[key] = None
+                continue
+            candidate = Path(value)
+            relative: str | None = None
+            if root:
+                # `startswith` was a STRING test feeding a PATH operation and failed both ways: it
+                # RAISED on a sibling directory ("/opt/showdown-old" under root "/opt/showdown"),
+                # and it LEAKED on a symlinked build layout whose real path is outside the root.
+                try:
+                    if candidate.is_relative_to(root):
+                        relative = str(candidate.relative_to(root))
+                except (ValueError, TypeError):
+                    relative = None
+            if relative is not None:
+                payload[key] = relative
+                continue
+            if (
+                not candidate.is_absolute()
+                and not candidate.drive
+                and not candidate.root
+                and ".." not in candidate.parts
+                and not value.startswith("~")
+            ):
+                # ALREADY relative -- this is the re-serialization of a payload that has been
+                # through here once (the on-disk cache is written from `to_payload` and read back
+                # via `from_payload`, which yields root=None). Dropping it here would make the
+                # transform non-idempotent, so a source's provenance would depend on how many
+                # times it had been cached.
+                #
+                # The extra clauses are not decoration. A bare `is_absolute()` test admits
+                # a drive-letter path or a bare anchorless one on POSIX -- both of which can carry
+                # a username --
+                # plus UNC paths and `..` escapes. None is emitted by `portable_path` today, so this
+                # is closing the shape rather than a live leak.
+                continue
+            # Not relative to the checkout => machine-specific WHATEVER ITS PREFIX. Testing
+            # `is_absolute()` here was wrong: `portable_path` collapses $HOME to "~", and
+            # `Path("~/workspace/...").is_absolute()` is False, so the one shape a real symlinked
+            # layout actually produces sailed through the guard it was written for.
+            #
+            # And this DROPS rather than raises. Raising turned a cosmetic provenance leak into
+            # total loss of function: a checkout under $HOME with data/ symlinked outside it could
+            # not be loaded at all, and since this runs once per believed mon per decision (via
+            # `summarize`), from the sidecar and from the attestation script, it could abort a
+            # collection run mid-battle. `source_hash` carries identity, so omitting the path
+            # costs a diagnostic string and nothing else.
+            payload[key] = None
+        # The root itself is pure local filesystem layout: it names WHERE the checkout is, never
+        # WHICH one it is. `source_hash` answers the latter, so dropping this loses nothing an
+        # external consumer can act on (verified: nothing outside this module reads it).
+        payload["showdown_root"] = None
+        return payload
 
 
 @dataclass(frozen=True)

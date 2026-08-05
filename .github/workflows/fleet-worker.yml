@@ -26,4 +26,23 @@ jobs:
         run: python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
 
       - name: Run fan-in crash matrix
-        run: python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant tests.test_cert_historical_attestation
+        # test_randbat_provenance_portability was rewritten to be checkout-free so it
+        # could run here; without this line it still ran nowhere, which was the exact
+        # gap the rewrite existed to close. test_golden_corpus covers the same surface
+        # (9 of its 17 skip without numpy, which this job installs).
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_fleet_worker tests.test_cache_concat tests.test_rollout tests.test_public_invariant tests.test_cert_historical_attestation tests.test_golden_corpus 2>&1 | tee /tmp/worker.log
+          # The provenance suite is run SEPARATELY and asserted never to skip. It was
+          # rewritten to be checkout-free precisely so it could run here; a skip would
+          # restore the exact zero-coverage state the rewrite existed to end, while
+          # printing OK.
+          python -m unittest tests.test_randbat_provenance_portability -v 2>&1 | tee /tmp/prov.log
+          if grep -q 'skipped' /tmp/prov.log; then
+            echo "::error::the randbat provenance suite SKIPPED; it must never skip"
+            exit 1
+          fi
+          if ! grep -qE 'Ran [0-9]+ tests' /tmp/prov.log; then
+            echo "::error::the randbat provenance suite did not run"
+            exit 1
+          fi

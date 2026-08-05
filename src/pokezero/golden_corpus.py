@@ -81,7 +81,7 @@ from .observation import PokeZeroObservationV0
 from .policy import PolicyContext, PolicyDecision, RandomLegalPolicy, SimpleLegalPolicy
 from .public_decision_corpus import sha256_file
 from .rollout import RolloutConfig, continue_rollout_from_current_state
-from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2
+from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2, observation_spec_for_schema
 from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from .showdown_fixture import FixturePokemon, pack_team
 
@@ -1034,12 +1034,26 @@ def generate_golden_corpus(
     format_id: str = "gen3randombattle",
     max_decision_rounds: int = 250,
     belief_set_source: bool | None = None,
+    observation_schema_version: str | None = None,
 ) -> dict[str, Any]:
-    """Play ``games`` local games and write the golden corpus into ``out_dir``."""
+    """Play ``games`` local games and write the golden corpus into ``out_dir``.
+
+    ``observation_schema_version`` pins the encode contract. It defaults to the env's own default
+    spec, which is how every corpus so far was written -- and why the committed sample is still
+    v2.2-era rows. Regenerating at a newer schema needs the spec to be selectable rather than
+    implied, so a corpus's schema is a stated argument recorded in the corpus HEADER row (manifest.json carries only the corpus
+    schema and shapes) rather than a
+    property of whenever it happened to be generated.
+    """
 
     if games <= 0:
         raise ValueError("games must be positive.")
-    config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
+    spec_kwargs: dict[str, Any] = {}
+    if observation_schema_version is not None:
+        spec_kwargs["observation_spec"] = observation_spec_for_schema(observation_schema_version)
+    config = LocalShowdownConfig(
+        showdown_root=showdown_root, set_belief_source=belief_set_source, **spec_kwargs
+    )
     env = LocalShowdownEnv(config)
     turn_merged_active = (
         config.observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
@@ -1162,6 +1176,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--format-id", default="gen3randombattle")
     parser.add_argument("--max-decision-rounds", type=int, default=250)
     parser.add_argument(
+        "--observation-schema",
+        default=None,
+        help=(
+            "Observation schema to encode at (e.g. pokezero.observation.v4). Defaults to the "
+            "env's default spec."
+        ),
+    )
+    parser.add_argument(
         "--belief-set-source",
         choices=("env", "on", "off"),
         default="env",
@@ -1177,6 +1199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         format_id=args.format_id,
         max_decision_rounds=args.max_decision_rounds,
         belief_set_source=belief_set_source,
+        observation_schema_version=args.observation_schema,
     )
     verification = verify_golden_corpus(args.out)
     print(
