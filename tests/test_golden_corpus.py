@@ -306,15 +306,38 @@ class GoldenCorpusV3SampleTest(unittest.TestCase):
 
         spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
         self.assertEqual(verification.array_shapes["token_type_ids"], (spec.token_count,))
-        # The whole point of keeping this fixture: it must have the block v4 lacks.
+
+        # Assert on the FIXTURE, not on the schema constant. The first version of this test
+        # asserted `spec.transition_token_count > 0`, which is a property of the v3 SCHEMA and
+        # would hold even if every transition row in the committed arrays were flat -- so the test
+        # written specifically to stop this fixture decaying could not have noticed it decaying.
+        # Caught in independent review of the change that added it.
+        #
+        # What is actually checked now: the stored arrays carry attended transition tokens with
+        # real numeric content. Measured on the committed sample: 1-3 attended transition rows per
+        # decision, 3-14 non-zero cells each.
+        start = spec.token_count - spec.transition_token_count
+        self.assertGreater(spec.transition_token_count, 0, "v3 spec lost its transition block")
+        corpus = load_golden_corpus(V3_SAMPLE_DIR)
+        attended = 0
+        nonzero_cells = 0
+        for row in corpus.decision_rows:
+            attended += int(numpy.asarray(row.arrays.attention_mask)[start:].sum())
+            nonzero_cells += int(
+                (numpy.asarray(row.arrays.numeric_features)[start:] != 0).sum()
+            )
         self.assertGreater(
-            spec.transition_token_count,
+            attended,
             0,
-            "the v3 sample is retained FOR its transition tokens; a v3 spec without them "
-            "means this fixture no longer earns its place",
+            "the v3 fixture has a transition BLOCK but no attended transition tokens in it; "
+            "it no longer provides the coverage it is retained for",
+        )
+        self.assertGreater(
+            nonzero_cells,
+            0,
+            "the v3 fixture's transition rows are all zero; byte-comparing them proves nothing",
         )
 
-        corpus = load_golden_corpus(V3_SAMPLE_DIR)
         for row in corpus.decision_rows:
             self.assertEqual(row.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V3)
 

@@ -40,11 +40,19 @@ except ModuleNotFoundError:  # pragma: no cover
     pokezero_search = None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# V3-era sample, deliberately NOT the primary v4 one: the leaf/fold surfaces compared here
-# include the TRANSITION token block, and `observation.v4` has none (23 tokens,
-# `transition_token_count == 0`). Pointing this at the v4 sample would not fail loudly -- it
-# would quietly compare a surface with the interesting rows removed. Both samples come from
-# the same generator at different --observation-schema values; both are provenance-clean.
+# V3-era sample, deliberately NOT the primary v4 one. THIS file is the one that makes the second
+# fixture necessary, and it is necessary because the failure would be SILENT.
+#
+# `_tables_json` builds tables at the sample's own header schema and `_assert_arrays_exact`
+# reshapes the encoder output to the STORED array's shape. Against a v4 sample every piece is
+# self-consistent at 23 tokens: it passes, byte-exact, having compared zero transition rows. No
+# in-test override can conjure the block -- the comparison is against golden arrays that simply
+# would not contain it.
+#
+# (The sibling `test_rust_encoder_v3.py` synthesizes its own transition tokens and would instead
+# fail LOUDLY on a v4 sample; it is on this fixture for convenience, not need. Independent review
+# established that distinction after the original comments here claimed the same rationale for
+# both.) Both samples come from the same generator at different --observation-schema values.
 COMMITTED_SAMPLE_DIR = Path(__file__).parent / "data" / "golden_corpus_sample_v3"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
