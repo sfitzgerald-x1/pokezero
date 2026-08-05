@@ -65,7 +65,8 @@ class MatcherRevealShapeTest(unittest.TestCase):
         """The wire form of a ``details`` string.
 
         The engine OMITS the level token at L100 (`sim/pokemon.ts:541`), and 9 pool species are
-        L100 -- the real capture reads `|switch|p2a: Luvdisc|Luvdisc, M|248/248`. That is the one
+        L100 -- the real capture reads `|switch|p2a: Luvdisc|Luvdisc, M|248/248` (this helper omits
+        the gender token, which the belief engine does not read). That is the one
         details shape the plan's own table blames for the L100 zeroing defect ("the details-shape no
         fixture carried"), so this sweep emits it rather than a synthetic `, L100`.
         """
@@ -135,6 +136,14 @@ class MatcherRevealShapeTest(unittest.TestCase):
                         species=universe.species,
                         revealed_moves=tuple(belief.revealed_moves),
                     )
+                    self.assertIsNotNone(summary, f"no candidate summary for {display}")
+                    # `expected` models the MOVE filter only, while the summary also applies
+                    # revealed ability/item and the ruled-out sets. Pin that those are empty here
+                    # rather than weakening the comparison: if this scenario ever grows a second
+                    # reveal or an upkeep non-proc, this precondition fails loudly instead of
+                    # `survivors == expected` false-failing.
+                    self.assertFalse(belief.ruled_out_items or belief.ruled_out_abilities)
+                    self.assertEqual(len(belief.revealed_moves), 1)
                     if summary is not None and summary.inconsistent:
                         off_script += 1
                         failures.append(
@@ -160,7 +169,12 @@ class MatcherRevealShapeTest(unittest.TestCase):
         self.assertGreater(
             hidden_power_cases, 400, "no Hidden Power reveals reached; the lenient shape is untested"
         )
-        self.assertEqual(failures[:20], [], f"{len(failures)} reveal(s) dropped their own variant")
+        self.assertEqual(
+            failures[:20],
+            [],
+            f"{len(failures)} reveal(s) failed containment, went off-script, or did not narrow "
+            "to exactly the move's carriers",
+        )
 
     def test_a_bare_hidden_power_reveal_never_resolves_to_a_single_type(self) -> None:
         """Bare ``Hidden Power`` is LESS specific than the pool id, so it must not pin a type.
@@ -205,14 +219,14 @@ class MatcherRevealShapeTest(unittest.TestCase):
         )
 
     def test_the_audit_plans_unverified_move_naming_shapes_are_settled(self) -> None:
-        """Closes the audit plan's four named UNVERIFIED items -- three of them by REACHABILITY.
+        """Settles the audit plan's four UNVERIFIED items: closes three, NARROWS the fourth.
 
         The audit plan (§4.1) listed: "Disable, Encore and Spite all name a move in their protocol
         lines, `|cant|...|Disable|MOVE` names one". Read from the engine and screened against the
         pool, that premise is wrong in both directions:
 
         - **Disable is absent from the gen3 randbats pool**, so its `|-start|POKEMON|Disable|MOVE`
-          line is unreachable. The gen3-EFFECTIVE emitter is `data/mods/gen4/moves.ts:318`, not the
+          line is unreachable. The gen3-EFFECTIVE emitter is `data/mods/gen4/moves.ts:319`, not the
           shared `data/moves.ts:3686`: gen3's `disable.condition` inherits gen4's override, which
           replaces `onStart` wholesale. Same shape, but citing the shared handler here would be the
           mod-chain mistake this plan keeps paying for. The `|cant|POKEMON|Disable|MOVE` shape
@@ -220,8 +234,12 @@ class MatcherRevealShapeTest(unittest.TestCase):
           equally unreachable without Disable.
         - **Spite is absent too**, so its `|-activate|TARGET|move: Spite|MOVE_ID|ROLL`
           (`data/mods/gen3/moves.ts:554`) is unreachable. Worth noting what that line WOULD have
-          cost if reachable: it deducts a random 2-6 PP, which the `move_uses` ledger has no term
-          for -- so the reachability screen is the only reason the PP ledger is safe here.
+          cost if reachable: `this.random(2, 6)` returns an integer in [2, 6)
+          (`sim/prng.ts:88`), so it deducts **2-5** PP, which the `move_uses` ledger has no term
+          for. And gen3 emits `roll` -- the REQUESTED deduction -- rather than `deductPP`'s return,
+          unlike the shared implementation (`data/moves.ts:17656`, fixed 4, emitting the actual
+          `ppDeducted`), so the wire number can EXCEED the PP actually lost. The reachability
+          screen is the only reason V3's ledger is safe here.
         - **Encore IS reachable** (8+ pool species) but emits `|-start|TARGET|Encore`
           (`data/moves.ts:4746`) with **no move name at all**, so there is nothing to capture.
 
@@ -281,14 +299,21 @@ class MatcherRevealShapeTest(unittest.TestCase):
             # first 40 universes, and 34 of them carry it in no variant -- so the reveal went
             # off-script, the set was re-widened to the whole pool, and the identity check ran over
             # unfiltered data. Picking a real move keeps this on the filtered path.
-            carrier = next(
-                (v for v in universe.variants if v.moves and not
-                 any(str(m).startswith("hiddenpower") for m in v.moves)),
-                None,
-            )
+            # Pick a variant with a non-HP MOVE, not a variant with NO Hidden Power anywhere.
+            # The stricter form silently skipped 52 of 220 species -- Salamence, Rayquaza, Raikou,
+            # Gyarados, Dragonite, Aerodactyl, Jolteon, Crobat, Forretress, Unown among them --
+            # every one of which has plenty of non-HP moves and simply carries an HP in every
+            # variant.
+            carrier = move_id = None
+            for candidate in universe.variants:
+                pick = next(
+                    (m for m in candidate.moves if not str(m).startswith("hiddenpower")), None
+                )
+                if pick is not None:
+                    carrier, move_id = candidate, pick
+                    break
             if carrier is None:
                 continue
-            move_id = carrier.moves[0]
             expected = {variant_identity(v.to_summary()) for v in universe.variants}
             belief = self._reveal(
                 universe.species, carrier.level, _emitted_move_name(self.dex, move_id)
@@ -299,7 +324,7 @@ class MatcherRevealShapeTest(unittest.TestCase):
                 for entry in survivors:
                     self.assertIn(variant_identity(entry), expected)
             checked += 1
-        self.assertGreater(checked, 150, "identity arm reached too few species")
+        self.assertGreater(checked, 200, "identity arm reached too few species")
 
 
 if __name__ == "__main__":  # pragma: no cover
