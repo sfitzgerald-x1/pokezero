@@ -37,7 +37,7 @@ Showdown does not have this ordering. Verified in the vendored gen3 mod, not inf
 | the secondary is decided *after* damage | `data/mods/gen3/abilities.ts:135-144` | `poisonpoint` overrides `onDamagingHit`, `randomChance(1, 3)` — matching the engine's `100.0/3.0`, and firing after the hit |
 | the wake happens *in* BeforeMove and the move continues | `data/mods/gen3/conditions.ts` `slp.onBeforeMove` (priority 10) | on `time <= 0` it calls `pokemon.cureStatus(); return;` — undefined, not `false`, so the event continues and the move runs statusless |
 | Sleep Talk is the exception | same handler | `if (move.sleepUsable) { skippedTime++; return; }` — announces `|cant|slp` and returns undefined, so the move runs **while still asleep** |
-| freeze thaws and moves | `data/conditions.ts` `frz.onBeforeMove` (priority 10) | `randomChance(1, 5)` then `cureStatus(); return;` |
+| freeze thaws and moves | `data/mods/gen4/conditions.ts:87-98` `frz.onBeforeMove` | `randomChance(1, 5)` then `cureStatus(); return;`. **Reached by inheritance**: gen3's `scripts.ts` is `inherit: 'gen4'`, and `data/mods/gen3/conditions.ts:43-51` defines `frz` with `inherit: true` and an `onDamagingHit` only. An earlier revision of this table cited base `data/conditions.ts` under a heading saying "verified in the vendored gen3 mod" — the substance survives, but resolving inheritance is part of resolving a citation |
 
 So at `onDamagingHit` Showdown's attacker is plainly statusless, and `trySetStatus('psn')`
 succeeds where ours refused.
@@ -60,7 +60,12 @@ branch that keeps the status is a branch on which the move never lands:
   mass.
 
 The one exception is a move that lands a hit *while* its user is asleep — Sleep Talk itself
-and the move Sleep Talk calls, both of which that gate lets past. Those keep refusing, which
+and the move Sleep Talk calls, both of which that gate lets past. (Of the predicate's two
+disjuncts only `sleep_talk_move` can actually fire: `Choices::SLEEPTALK` has
+`target: MoveTarget::User` at `src/choices.rs:15255`, so `ability_modify_attack_against`
+returns at its `target != MoveTarget::Opponent` guard before the match is reached. The
+`move_id == SLEEPTALK` disjunct is dead code, kept for legibility and noted here rather than
+left to read as live.) Those keep refusing, which
 is what Showdown does too: their user really does hold a status at `onDamagingHit`.
 
 PARALYZE, BURN, POISON and TOXIC are untouched. Nothing cures them between the check and the
@@ -99,6 +104,27 @@ The control pin carries an anti-vacuity assertion — that the contact move real
 the time — and **that guard caught its own first version**, which asserted on the string
 `"Tackle"` and never fired because the branch text renders damage, not move names. Without it
 the zero-poison assertion would also have passed on a state where no contact ever happened.
+
+> **Correction (review of #1090): the control does not constrain what §2 advertised.** The
+> reviewer rebuilt the engine with `attacker_moves_while_asleep` hardcoded to `false` — the
+> fully unconditional widening, Sleep Talk exclusion removed — and **both pins stayed green,
+> along with all 59 tests**, with byte-identical branch structures. So the exclusion is
+> defensive, not load-bearing, and nothing in this repository would catch an over-broad
+> version of it. My framing of the controls as "the reason it is a predicate change rather
+> than an unconditional one" was overstated.
+>
+> The reason the unconditional variant is still *correct* is a second gate I did not find and
+> should have: `generate_instructions.rs:810` `immune_to_status` returns `true` when
+> `target_pkmn.status != PokemonStatus::NONE`, and it reads the **live** status at
+> secondary-resolution time rather than at choice-modification time. A Sleep Talk user is
+> genuinely asleep at that point, so the secondary is refused there regardless of what this
+> predicate decided, and no mass-splitting no-op branch is emitted.
+>
+> That is the stronger safety argument — the patch is *structurally* unable to over-apply,
+> not merely careful — and this report reached for a behavioural control where a structural
+> invariant was available. The exclusion stays: it keeps the predicate honest at its own
+> layer and does not depend on a distant gate for correctness. But it should be read as
+> defence in depth, not as the thing the pins prove.
 
 ## 5. Gates
 
@@ -146,6 +172,12 @@ either window, so no row was traded for another.
 
 The prediction was registered before the sweeps were read: dev 6 → 5 on `19000125/226`,
 matched 15,218 → 15,219, boundaries unchanged. It held exactly, and the holdout row closed too.
+
+The `after` sweeps are committed alongside this report as
+`reports/artifacts/c121_a5_dev_sweep.json` and `c121_a5_holdout_sweep.json`, so the figures
+above are checkable rather than asserted. (Review of #1090 noted they were the one set of
+claims here with no committed artifact; sibling reports ship theirs.) The `before` figures are
+corroborated in merged `reports/c117_validation_holdout_baseline.md:137-139`.
 
 Residue is now **dev 5 / holdout 13**. Reported as an outcome, not a target: A5 is
 closed as an *engine fix*, and neither window was retuned to reach it.
