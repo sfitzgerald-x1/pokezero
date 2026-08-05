@@ -43,6 +43,17 @@
 # them) plus once on entry, which is every point at which control passes to the next
 # residual entry.
 #
+# AMENDED by poke-engine-gen3-weather-entry-truncation.patch. The MECHANISM
+# paragraph above contradicts the rationale paragraph before it, and the
+# rationale is the correct one: the boundary is BETWEEN entries. Inserting the
+# guard "at the top of each per-side residual section body" is right for order 10,
+# where each Pokemon really is its own handler, and WRONG for order 8, where the
+# weather chip is ONE Field-held entry damaging both actives. That mis-slice
+# dropped the winner's chip and cost holdout rows 19100002/53 and 19100154/75; the
+# later patch hoists the order-8 guard out of its loop. This paragraph is left in
+# place rather than rewritten because it is the evidence for how the defect stayed
+# invisible: a pin was written to match it. See reports/c122.
+#
 # Pinned by rust/pokezero-search/tests/gen3_battle_end_residuals.rs (three of its
 # five tests fail on the tree without this patch). Touches
 # gen3/generate_instructions.rs only; authored against the tree the list leaves.

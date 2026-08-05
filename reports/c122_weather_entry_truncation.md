@@ -41,8 +41,15 @@ Both chips land, **then** the faint resolves, **then** the battle ends. That is 
 
 ## 3. The fix, and what it deliberately does not touch
 
-The guard is hoisted out of the weather loop, with one left before it so an already-ended
-battle still skips the whole weather entry.
+The guard is hoisted out of the weather loop, with one left before it.
+
+That retained guard is **defence in depth, not the safety argument** — a distinction the review
+of #1092 drew and it is right. The function-top guard already covers battle-over-before-residuals,
+and nothing at residual orders 1-7 (Reflect, Light Screen, Mist, Safeguard, Wish) can reduce HP,
+so no fixture reaches the retained one and no test constrains it. The real guarantee for a
+battle that ended in the move phase is the function-top guard, and that path is confirmed by
+behaviour: with the battle already over, the walk emits no `DecrementWeatherTurnsRemaining` at
+all.
 
 The **order 10 per-Pokémon guards are untouched**, and that is the substance of the change, not
 an omission. That class really is one handler per Pokémon — the engine's own comment says
@@ -76,7 +83,8 @@ present, the winner's absent. The defect in one line.
 | `tests/test_crit_kill_split_patch` | Ran 8, OK |
 | `tests/test_drag_limit_is_a_last_resort` | Ran 3, OK |
 | `tests/test_engine_gen3_abilities` | Ran 46, OK |
-| behavioural probes | all PASS |
+| `scripts/engine_behavioral_probes.py` | exit 0, `all behavioral probes PASS` |
+| full crate suite, `RUSTFLAGS="-C debug-assertions=yes"` | **370 passed across 32 binaries, 0 failed** |
 
 ## 6. Sweep
 
@@ -92,7 +100,17 @@ that says the hoist touched only what it should.
 | validation holdout — after | 15,396 | **15,385** | **11** |
 
 Row level: holdout closed exactly `19100002/53` and `19100154/75`; **nothing opened in either
-window**; dev closed nothing and opened nothing. Identity `matched + diverged == boundaries`
+window**; dev closed nothing and opened nothing.
+
+**One disclosure the control does not license.** Dev row `19000074/27` carries
+`observed_only=[('sandstorm', -18)] engine_only=[]` — the *same miss signature* as the two rows
+just closed — and it is byte-identical before and after. So "neither dev row is battle-end sand"
+is literally true (that mon's side has four live reserves, `battle_is_over()` is 0, and the
+guard never fired there even before this patch), but describing dev purely as "the control that
+says the hoist touched only what it should" would leave a reader thinking the sand-miss class is
+now empty. It is not. That row is a different defect wearing the same signature and it is
+**not** closed by this change; it needs its own investigation, and the first thing to rule out
+is a damage-magnitude or partition-arm divergence rather than truncation. Identity `matched + diverged == boundaries`
 holds on all four rows. Artifacts committed as `reports/artifacts/c122_weather_{dev,holdout}_sweep.json`.
 
 Residue is now **dev 5 / holdout 11**, reported as an outcome.
@@ -104,3 +122,11 @@ source. This one was invisible for as long as it was because a *pin* encoded the
 every gate agreed with the bug — which is the failure mode a gate cannot catch by construction.
 The check that would have found it earlier is comparing a patch's stated rule against its own
 implementation, and that comparison was available the whole time in one file.
+
+Which makes it worth recording that the first version of this very change shipped a fresh
+doc/reality contradiction of its own: the pin comment in `tests/test_poke_engine_patch_stack.py`
+still credited the previous patch for a digest this one moved, and still claimed
+`generate_instructions.rs` was byte-identical to a pin it had just changed. Caught in review.
+The rationale paragraph in `battle-end-residuals.patch` has been amended in place rather than
+deleted, because it is the evidence for how the defect stayed invisible — a pin was written to
+match it.

@@ -26,10 +26,10 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 60-patch stack. Only generate_instructions.rs moved:
-# a5-wake-before-contact is the one patch added since the 58-patch pins and it
-# touches nothing else. generate_instructions.rs and choice_effects.rs are BOTH
-# byte-identical to the 58-patch pins. Two unchanged digests either side of one
+# Post-patch content pins for the 60-patch stack. Only generate_instructions.rs
+# moved: weather-entry-truncation is the one patch added since the 59-patch pins
+# and it touches nothing else. abilities.rs and choice_effects.rs are BOTH
+# byte-identical to the 59-patch pins. Two unchanged digests either side of one
 # changed digest is what makes the update a measurement rather than a paste:
 # drift in the vendored source would have moved all three. Every digest here is
 # read off a REPLAY of the stack into a scratch tree, never off the vendored
