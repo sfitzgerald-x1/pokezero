@@ -7,6 +7,7 @@ changing the public-state tracking API.
 
 from __future__ import annotations
 
+from collections import Counter
 import copy
 from dataclasses import dataclass, replace
 import math
@@ -458,6 +459,14 @@ class PublicBattleBeliefEngine:
         # PRE-RESIDUAL damage state: gen3's Leftovers slot precedes status/Leech chip, so a mon
         # chipped only during residuals gives no Leftovers evidence (its slot ran at full HP).
         self._leftovers_healed_this_turn: set[str] = set()
+        # belief key -> the ability the mon is currently RUNNING (Trace copies onto the tracer).
+        # Distinct from `revealed_ability`, which stays the mon's own set ability.
+        self._running_ability: dict[str, str] = {}
+        # Reachability instrumentation for the Pressure branch of `_charge_move_use`. A PP
+        # differential that reports "0 violations" proves nothing unless the branch it is meant to
+        # cover actually ran, and the branch this counts -- a foe-targeted move whose wire target
+        # slot the engine blanked -- is exactly the one that used to lose its double charge.
+        self._pressure_charge_counts: Counter[str] = Counter()
         self._berry_ate_this_turn: set[str] = set()
         # Belief keys whose Shed Skin ``-activate`` fired this turn. A Shed Skin
         # carrier that Rests can proc its 33% cure on the first upkeep and wake in
@@ -573,6 +582,21 @@ class PublicBattleBeliefEngine:
             target_species = _species_from_ident(primary)
             if species and target_species:
                 belief = self._upsert(showdown_slot=actor_slot, species=species)
+                # Transform copies the target's ABILITY as well as its stats/moves
+                # (`sim/pokemon.ts:1353` in `transformInto`, `if (this.battle.gen > 2)
+                # this.setAbility(pokemon.ability, ...)`; nothing
+                # in the gen3 -> gen4 -> ... chain overrides `transformInto`). So a Ditto that
+                # copies a Pressure mon pressures for real. Second producer of a running ability
+                # after Trace; missing it cost Ho-Oh's Sacred Fire a double-charge.
+                target_belief = self._active_belief(_slot_from_ident(primary) or "")
+                if target_belief is not None:
+                    # The target's RUNNING ability, not its revealed one: transforming into a mon
+                    # that has itself Traced copies what it is running now.
+                    copied = self._running_ability.get(
+                        target_belief.key
+                    ) or target_belief.revealed_ability
+                    if copied:
+                        self._running_ability[belief.key] = str(copied)
                 self._replace_belief(
                     belief,
                     transformed=True,
@@ -652,8 +676,9 @@ class PublicBattleBeliefEngine:
                 # A Sleep-Talk-called move spends none of the callee's PP (the Sleep Talk |move| line
                 # already charged the caller); everything else that reaches here charges normally.
                 if not sleep_talk_called:
-                    foe_targeted = bool(target_slot) and target_slot != actor_slot
-                    belief = self._charge_move_use(belief, move_id, foe_targeted=foe_targeted)
+                    belief = self._charge_move_use(
+                        belief, move_id, wire_target_slot=target_slot or ""
+                    )
                 revealed_moves = _append_unique(belief.revealed_moves, str(primary))
                 evidence = belief.evidence
                 if revealed_moves != belief.revealed_moves:
@@ -902,16 +927,40 @@ class PublicBattleBeliefEngine:
                 traced_slot = _slot_from_ident(traced_ident) if traced_ident else None
                 if not traced_slot:
                     return
+                # The TRACER is now RUNNING the copied ability, even though its own set ability
+                # stays Trace. `revealed_ability` is redirected to the `[of]` mon below and must
+                # stay that way -- writing the copied ability onto the tracer's set would be a
+                # fact it cannot have. But the copy is live for engine purposes, and Pressure is
+                # the case that bites: a traced Pressure really does double-charge the foe's PP.
+                tracer = self._target_belief(target_slot, target_ident)
+                if tracer is not None:
+                    self._running_ability[tracer.key] = str(primary)
                 target_slot, target_ident = traced_slot, traced_ident
                 traced_belief = self._target_belief(target_slot, target_ident)
-                # Trace copies whatever the target is CURRENTLY running, which for a transformed
-                # mon is its copy target's ability, not its own. Recording it as a certain reveal
-                # writes a fact the mon cannot have -- a Ditto transformed into Claydol yields
-                # `revealed_ability=Levitate` on Ditto, whose only pool ability is Limber, and the
-                # set collapses to the inconsistent fallback. It widens rather than dropping the
-                # true variant, so it is safe, but it is a wrong and sticky fact. The engine
-                # already tracks the flag, so simply decline the reveal.
-                if traced_belief is not None and traced_belief.transformed:
+                # Trace copies whatever the target is CURRENTLY running, which is not always the
+                # target's OWN ability. Recording it as a certain reveal then writes a fact the mon
+                # cannot have. It widens rather than dropping the true variant, so it is safe, but
+                # it is wrong and it is STICKY -- the conflicting-ability guard keeps the first
+                # claim for the rest of the game.
+                #
+                # There are TWO producers of a running ability and this guarded only one of them:
+                #
+                #   TRANSFORM  a Ditto transformed into Claydol yields `revealed_ability=Levitate`
+                #              on Ditto, whose only pool ability is Limber.
+                #   TRACE      a tracer that has already copied something is running THAT. The pool
+                #              has two Trace carriers (Porygon2, Gardevoir), so a Gardevoir which
+                #              Traced Absol's Pressure, then gets Traced by Porygon2, has
+                #              `revealed_ability=Pressure` written onto IT. Measured on a Gardevoir
+                #              already narrowed by one revealed move: 4 candidate variants and
+                #              uncertainty 0.40 become 10 and 1.00 -- the full-pool fallback, for
+                #              the rest of the battle.
+                #
+                # `_running_ability` is exactly the state needed to detect the second case, and it
+                # exists because of this same change; the original guard was written next to it and
+                # covered only the transform half. Found in independent review.
+                if traced_belief is not None and (
+                    traced_belief.transformed or traced_belief.key in self._running_ability
+                ):
                     return
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
@@ -1254,6 +1303,8 @@ class PublicBattleBeliefEngine:
         twin._cure_all_count = dict(self._cure_all_count)
         twin._sleep_clause_holder = dict(self._sleep_clause_holder)
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
+        twin._running_ability = dict(self._running_ability)
+        twin._pressure_charge_counts = Counter(self._pressure_charge_counts)
         twin._in_residual_phase = self._in_residual_phase
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._stay_locked_move = dict(self._stay_locked_move)
@@ -1384,20 +1435,46 @@ class PublicBattleBeliefEngine:
     def turn_number(self) -> int:
         return self._turn_number
 
+    @property
+    def pressure_charge_counts(self) -> dict[str, int]:
+        """Reachability tallies for the Pressure branch of the PP ledger (see `__init__`)."""
+        return dict(self._pressure_charge_counts)
+
     def _charge_move_use(
-        self, belief: RevealedPokemonBelief, move_id: str, *, foe_targeted: bool = True
+        self, belief: RevealedPokemonBelief, move_id: str, *, wire_target_slot: str = ""
     ) -> RevealedPokemonBelief:
-        # Pressure on the OPPOSING active doubles PP spent, but only for FOE-TARGETED moves
-        # (gen3 engine behavior — self-targeted Rest/Swords Dance are never pressured). Gen 3
-        # announces Pressure on entry, so the opposing ability is public when the double applies.
+        # Pressure on the OPPOSING active doubles PP spent, but only when a FOE is in the engine's
+        # `pressureTargets` -- self-targeted Rest / Swords Dance are never pressured.
+        #
+        # Decided from the MOVE, never from the protocol line's target slot: the engine blanks that
+        # slot for any move whose animation is suppressed, so it is not a usable signal. See
+        # _NEVER_PRESSURED_POOL_MOVES.
+        normalized_for_target = _normalize_identifier(move_id)
+        foe_targeted = normalized_for_target not in _NEVER_PRESSURED_POOL_MOVES
         opposing = self._active_belief(_other_side(belief.showdown_slot))
-        charge = (
-            2
-            if foe_targeted
-            and opposing is not None
-            and _normalize_identifier(opposing.revealed_ability or "") == "pressure"
-            else 1
-        )
+        # The ability the opposing mon is currently RUNNING, which is not always the one it was
+        # revealed with: Trace copies the target's ability onto the TRACER, and the tracer then
+        # pressures for real. `revealed_ability` deliberately stays the tracer's own set ability
+        # (Trace), so consulting only that missed every traced Pressure -- V3 measured Absol's
+        # Shadow Ball at 22 believed vs 21 true, one of two uses charged single.
+        opposing_ability = ""
+        if opposing is not None:
+            opposing_ability = _normalize_identifier(
+                self._running_ability.get(opposing.key) or opposing.revealed_ability or ""
+            )
+        charge = 2 if foe_targeted and opposing_ability == "pressure" else 1
+        # `wire_target_slot` is instrumentation ONLY -- it never feeds `charge`. It exists so the
+        # differential can report how often the old wire-slot proxy would have disagreed.
+        self._pressure_charge_counts["charges"] += 1
+        if opposing_ability == "pressure":
+            self._pressure_charge_counts["vs_pressure"] += 1
+            if charge == 2:
+                self._pressure_charge_counts["doubled"] += 1
+                wire_says_foe = bool(wire_target_slot) and wire_target_slot != belief.showdown_slot
+                if not wire_says_foe:
+                    self._pressure_charge_counts["doubled_despite_blank_or_self_wire_slot"] += 1
+            else:
+                self._pressure_charge_counts["single_self_targeted_vs_pressure"] += 1
         normalized = _normalize_identifier(move_id)
         uses = dict(belief.move_uses)
         uses[normalized] = uses.get(normalized, 0) + charge
@@ -1425,6 +1502,8 @@ class PublicBattleBeliefEngine:
         # ``choiceband.onStart`` removes the ``choicelock`` volatile, so entering the field
         # clears the lock and the next move selected becomes the new locked one.
         self._stay_locked_move.pop(belief.key, None)
+        # A traced ability does not survive leaving the field.
+        self._running_ability.pop(belief.key, None)
         condition_status = _status_token_from_condition(condition)
         if belief.status_on_exit and condition_status is None:
             # Natural Cure elimination: carried a status out, returned clean, and no public
@@ -2389,6 +2468,62 @@ def _append_evidence(
     if any((item.kind, item.detail, item.source_line) == signature for item in values):
         return values
     return (*values, evidence)
+
+
+# Pool moves that Pressure NEVER charges double, derived from the ENGINE'S TARGET rather than from
+# the protocol line.
+#
+# The wire slot cannot be used for this at all: `sim/battle.ts:3155-3159` BLANKS it whenever the
+# move's animation is suppressed --
+#     } else if (args.includes('[still]')) {
+#         // If no animation plays, the target should never be known
+#         const parts = this.log[this.lastMoveLine].split('|'); parts[4] = '';
+# -- so a foe-targeted status move reads as untargeted and silently loses its Pressure double.
+#
+# Size of the class, re-runnable rather than quoted: `scripts/blank_target_slot_census.py`.
+#     PYTHONPATH=src .venv/bin/python scripts/blank_target_slot_census.py 60 999
+# 60 games, BLANK/total, foe-targeted rows only (self-targeted moves blank too -- Recover 31/113,
+# Refresh 31/39 -- but they are in this set and were never pressured anyway):
+#
+#     seed 999    toxic 70/344  spikes 39/78  whirlwind 26/38  thunderwave 12/50
+#                 solarbeam 9/13  hypnosis 9/40  willowisp 9/26  leechseed 7/28
+#     seed 4711   toxic 28/286  solarbeam 10/11  encore 7/24  spikes 6/35  leechseed 5/23
+#
+# An earlier fix here enumerated the four `target: "all"` moves and called that "the" broken class;
+# toxic alone blanks several times more often than raindance does. (The first version of this
+# comment carried a third table that no re-run reproduces -- it was measured once, early, and then
+# copied forward. Numbers that cannot be re-run do not belong in a comment; hence the script.)
+#
+# The engine rule (`sim/pokemon.ts:792` `getMoveTargets`, resolving at `:853-860`, not overridden
+# anywhere in the gen3 chain): `pressureTargets = targets`, zeroed only for `foeSide` and re-filled
+# by `mustpressure`. So a foe is present for every target kind
+# EXCEPT `self` and the ally-side ones. Enumerated over all 125 pool moves from
+# `data/random-battles/gen3/sets.json`: 23 `self` + 2 `allyTeam`, everything else pressured
+# (`all` 4, `allAdjacent` 3, `allAdjacentFoes` 3, `any` 2, `foeSide` 1, `normal` 85, `scripted` 2).
+#
+# Targets resolved along the MOD CHAIN, not read off shared `data/moves.ts`, because two pool moves
+# declare theirs in a mod: `surf` is `allAdjacentFoes` in `data/mods/gen3/moves.ts` where the shared
+# file says `allAdjacent`, and `curse` is re-declared `normal` in `data/mods/gen7/moves.ts`. Neither
+# changes which side of this set the move lands on -- both still reach a foe -- but the first
+# derivation here did read only the shared file, and "it happened not to matter this time" is not a
+# method.
+#
+# Curse is the one move whose dex target lies: `sim/pokemon.ts:998-1004` retargets it to
+# `nonGhostTarget` (self) unless the user is Ghost, and all five pool carriers -- Muk (Poison),
+# Snorlax, Dunsparce, Miltank (Normal), Regirock (Rock) -- are non-Ghost, so in this pool it is
+# always self-targeted. Listed with that reachability note rather than resolved from the user's
+# type, which the belief engine does not carry.
+_NEVER_PRESSURED_POOL_MOVES = frozenset({
+    # target: "self"
+    "agility", "batonpass", "bellydrum", "bulkup", "calmmind", "destinybond", "dragondance",
+    "endure", "milkdrink", "moonlight", "morningsun", "protect", "recover", "refresh", "rest",
+    "slackoff", "sleeptalk", "softboiled", "substitute", "swordsdance", "synthesis", "tailglow",
+    "wish",
+    # target: "allyTeam"
+    "aromatherapy", "healbell",
+    # retargeted to self for every pool carrier (see above)
+    "curse",
+})
 
 
 def _trace_copy_source(raw_line: str) -> tuple[bool, Optional[str]]:

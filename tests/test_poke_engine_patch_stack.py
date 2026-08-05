@@ -121,13 +121,14 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-7:]],
+                [entry.name for entry in applied[-8:]],
                 [
-                    "poke-engine-gen3-bellydrum-roll-gate.patch",
                     "poke-engine-gen3-residual-lethality-partition.patch",
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
+                    "poke-engine-gen3-rest-sleep-pending-refund.patch",
+                    "poke-engine-gen3-rest-sleep-refund-binding.patch",
                     "poke-engine-gen3-white-herb.patch",
                     "poke-engine-gen3-painsplit-hp-reading.patch",
                 ],

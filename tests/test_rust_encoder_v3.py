@@ -29,7 +29,24 @@ from _showdown_root import showdown_root_str
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
-SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample"
+# V3-era sample rather than the primary v4 one -- but by CHOICE, not necessity, and the
+# distinction matters because the change that introduced this fixture claimed otherwise.
+#
+# This file synthesizes its own transition tokens from PROTOCOL_LINES via FoldState, so it does
+# not need a fixture that contains them. What it would inherit from a v4 sample is that header's
+# `feature_masks.transition_token_budget: 0`, and `showdown.py`'s
+# `budget = min(masks.transition_token_budget, spec.transition_token_count)` would then flatten
+# every NUMERIC_TT_* column -- tripping the coverage loop below with
+# "V3 parity fixture did not exercise NUMERIC_TT_FAIL". LOUDLY, with a diagnostic. Not silently.
+#
+# So this file could run off the v4 sample with a one-line mask override, exactly as the sibling
+# test further down already does. It stays here because `test_leaf_encoder.py` needs the v3
+# fixture regardless (see that file) and pointing both at it is simpler than maintaining an
+# override. Both samples come from the same generator at different --observation-schema values.
+#
+# Corrected after independent review: the original comment here and the one in
+# test_leaf_encoder.py contradicted each other, and this one was the wrong half.
+SAMPLE_DIR = REPO_ROOT / "tests" / "data" / "golden_corpus_sample_v3"
 DEFAULT_SHOWDOWN_ROOT = Path(showdown_root_str())
 
 
@@ -225,9 +242,26 @@ class RustEncoderV3ParityTest(unittest.TestCase):
         legacy_header = copy.deepcopy(self.corpus.header)
         legacy_inputs = copy.deepcopy(inputs)
         legacy_inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V2_2
+        # The legacy header is REWRITTEN to V2.2 rather than inherited from the corpus. It used to
+        # be a straight deepcopy and happened to be right only because the committed sample was
+        # itself V2.2-era; once the sample moved off V2.2 this "legacy" arm silently became
+        # whatever the sample was, pairing a non-V2.2 contract with V2.2 tables (a 151x51 buffer
+        # reshaped into 87x51, which is what surfaced it). The header drives the spec, the masks
+        # AND the backend's expected shapes, so all three have to be told V2.2 in one place.
+        from pokezero.showdown import observation_spec_for_schema
+
+        _v2_2_spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)
+        legacy_header["observation"] = {
+            **legacy_header["observation"],
+            "schema_version": OBSERVATION_SCHEMA_VERSION_V2_2,
+            "token_count": _v2_2_spec.token_count,
+            "categorical_feature_count": _v2_2_spec.categorical_feature_count,
+            "numeric_feature_count": _v2_2_spec.numeric_feature_count,
+        }
         legacy_spec, legacy_masks = self.backends.observation_contract_from_header(
             legacy_header
         )
+        self.assertEqual(legacy_spec.schema_version, OBSERVATION_SCHEMA_VERSION_V2_2)
         legacy_observation = observation_from_player_state(
             state,
             category_vocab=reference._vocab,

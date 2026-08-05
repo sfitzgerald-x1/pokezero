@@ -1272,13 +1272,41 @@ poke-engine-gen3-a5-wake-before-contact.patch
 # reports/c122.
 poke-engine-gen3-weather-entry-truncation.patch
 
+# Row 2 of the era-58 fallback ledger: 781 killed decisions, 28.7% of all fallback,
+# and #1093 measured producer A at 0 so this addresses the whole class as observed.
+# PLUMBING ONLY -- adds `rest_sleep_pending_refund` to Pokemon and an Instruction
+# variant to set it reversibly. NOTHING reads the field yet; no search behaviour
+# changes. The consuming emission on switch-in is a separate patch.
+#
+# The field is a TAGGED trailing value (`refund:<n>`), not a positional one:
+# `pre_transform` is appended only when Some, so index 29 exists conditionally and a
+# positional append would land on it for every untransformed Pokemon, where
+# PreTransform::deserialize indexes split[6 + index] and PANICS. Tagging follows
+# LastUsedMove's `move:`/`switch:` idiom. Design and that correction:
+# fp-power-deploy reports/evidence/row2-engine-fix-design-20260805.md.
+poke-engine-gen3-rest-sleep-pending-refund.patch
+
+# Exposes rest_sleep_pending_refund on the pyo3 Pokemon binding. Needed because
+# pokezero builds engine state through the binding (poke_engine_adapter.py:
+# engine.State(...)), NOT through State::deserialize -- so the field added by the
+# patch above could never reach search without this. The Into<Pokemon> half is the
+# dangerous one: it compiles fine while silently writing 0, so it is pinned by
+# tests/test_rest_sleep_refund_boundary.py with a nonzero value rather than by the
+# compiler.
+poke-engine-gen3-rest-sleep-refund-binding.patch
 # Implement gen3 White Herb (cause A6). Absent from gen3 entirely -- WHITEHERB
 # existed only under src/genx/ -- so a Deoxys never restored the Superpower drop
 # and Golem's Rock Slide landed against an undropped Defence in Showdown but a
 # dropped one here, flipping the whole roll band. The item is KNOWABLE, not a
 # hidden-item limit: teams.ts:471 returns White Herb unconditionally for deoxys
-# and deoxysattack. Zeroes NEGATIVE boosts only and consumes; wired after the
-# move's boost effect for both sides. reports/c124, reports/c126.
+# and deoxysattack. Zeroes NEGATIVE boosts only -- positives are untouched, it is
+# not a reset -- and consumes the item. Wired at THREE sites, each checking both
+# sides: after a move's boost effect, after get_instructions_from_secondaries,
+# and after ability_on_switch_in (Intimidate). Sites 2 and 3 were missing in the
+# first version and were added after self-review found the reachability argument
+# false. Remaining uncovered producers are Transform/Psych-Up boost copy and
+# Trick-style item acquisition, both unreachable: the only holders are deoxys and
+# deoxysattack and their movepool carries none of them. reports/c124, c126.
 poke-engine-gen3-white-herb.patch
 
 # Pain Split is an HP-reading move and was missing from

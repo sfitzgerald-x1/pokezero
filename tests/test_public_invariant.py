@@ -26,6 +26,7 @@ its own scan.
 
 from __future__ import annotations
 
+import gzip
 import re
 import subprocess
 import unittest
@@ -74,16 +75,17 @@ _FORBIDDEN_PATTERNS = [
 # PER-RULE, deliberately: a blanket file allowlist would exempt the file from the
 # internal-cluster checks as well, silently weakening the older invariant to accommodate the
 # newer one. Keyed by rule label.
-_ALLOWED_FOR_RULE = {
-    # Recorded provenance inside a TAMPER-EVIDENT golden corpus: every row carries a
-    # `row_sha256` over its own payload, so the paths cannot be scrubbed in place without
-    # forging those hashes -- which would defeat the guarantee the field exists to provide.
-    # The corpus must be REGENERATED instead, after `randbat.py` stops recording absolute
-    # `sets_path`/`generator_path` values. Tracked as a follow-up; this entry should shrink to
-    # nothing, and is here so the exception is a visible, reviewable line rather than a
-    # weakened pattern.
-    "maintainer home directory": {"tests/data/golden_corpus_sample/rows.jsonl"},
-}
+# EMPTY, and that is the point. This held one carve-out -- the golden corpus sample's
+# `rows.jsonl`, whose recorded provenance embedded absolute `sets_path` / `generator_path` /
+# `showdown_root` values. Those could not be scrubbed in place (each row carries a `row_sha256`
+# over its own payload, so editing them would mean forging the hash that makes the corpus
+# tamper-evident), so the corpus had to be REGENERATED after the writer was fixed to emit
+# relative paths. It has been: both committed samples are v4/v3 regenerations carrying
+# `sets_path: data/random-battles/gen3/sets.json` and no absolute paths at all.
+#
+# Kept as an empty dict rather than deleted, so the mechanism stays available and the next
+# exception has to be written down here to exist.
+_ALLOWED_FOR_RULE: dict[str, set[str]] = {}
 
 
 class PublicInvariantTest(unittest.TestCase):
@@ -105,8 +107,19 @@ class PublicInvariantTest(unittest.TestCase):
         for rel in tracked:
             path = REPO_ROOT / rel
             try:
-                text = path.read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
+                if path.suffix == ".gz":
+                    # Compressed tracked files are DECOMPRESSED and scanned. `read_text` on a
+                    # gzip yields bytes that decode to nothing resembling a path, so a leak inside
+                    # one was invisible to this guard -- and the file that motivated the guard's
+                    # last carve-out, the golden corpus, ships exactly such a sidecar
+                    # (`fold.jsonl.gz`, 51,913 bytes of JSON carrying the same provenance fields as
+                    # rows.jsonl). Both committed samples are clean today; the point is that they
+                    # were clean unverifiably before this.
+                    with gzip.open(path, "rt", errors="ignore") as handle:
+                        text = handle.read()
+                else:
+                    text = path.read_text(errors="ignore")
+            except (OSError, UnicodeDecodeError, EOFError, gzip.BadGzipFile):
                 continue
             for label, needle in _FORBIDDEN:
                 for match in re.finditer(re.escape(needle), text, re.IGNORECASE):

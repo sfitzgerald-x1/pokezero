@@ -59,8 +59,10 @@ from golden_encoder_backends import (  # noqa: E402
     row_inputs_from_decision_row,
 )
 
-# The fixed prefix is shared by V2.2 and V3; the transition block ends at the
-# selected schema's token count (150 for V2.2, 86 for V3).
+# The fixed prefix is shared by every schema from V2.2 on; where a transition block exists it runs
+# from index 23 to the selected schema's token count (last index 150 for V2.2, 86 for V3).
+# V4 has NO transition block at all -- 23 tokens, `transition_token_count == 0` -- so a schema
+# whose token_count is exactly the fixed prefix is well-formed, not malformed.
 FIXED_TOKEN_BLOCKS: tuple[tuple[str, int, int], ...] = (
     ("field[0]", 0, 1),
     ("self_team[1-6]", 1, 7),
@@ -71,8 +73,16 @@ FIXED_TOKEN_BLOCKS: tuple[tuple[str, int, int], ...] = (
 
 
 def token_blocks(token_count: int) -> tuple[tuple[str, int, int], ...]:
-    if token_count <= 23:
-        raise ValueError(f"token_count must include transition rows, got {token_count}")
+    fixed_end = FIXED_TOKEN_BLOCKS[-1][2]
+    if token_count < fixed_end:
+        raise ValueError(
+            f"token_count {token_count} is below the fixed prefix ({fixed_end} tokens)"
+        )
+    if token_count == fixed_end:
+        # Transition-free schema (V4). Previously this raised "token_count must include
+        # transition rows", which was true of V2.2 and V3 and became a false failure the moment
+        # the committed sample was regenerated at V4.
+        return FIXED_TOKEN_BLOCKS
     return (*FIXED_TOKEN_BLOCKS, (f"transition[23-{token_count - 1}]", 23, token_count))
 
 
