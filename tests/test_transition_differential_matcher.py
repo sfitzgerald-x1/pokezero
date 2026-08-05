@@ -651,7 +651,7 @@ class PainSplitSetHp(unittest.TestCase):
         It read `test_pain_split_is_compared_EXACTLY_not_roll_scaled`, asserting
         `movepainsplit` landed in the exact bucket with nothing rolled — the behaviour before
         `movepainsplit` was added to `_ROLL_SCALED_SOURCES`. That change was deliberate and its
-        reasoning is recorded at `engine_transition_differential.py:311-317`: Pain Split sets both
+        reasoning is recorded at `engine_transition_differential.py:310-317`: Pain Split sets both
         mons to `floor((hp_a + hp_b) / 2)`, so its magnitude is a function of the HP left after
         whatever damage landed earlier in the SAME turn. It inherits that hit's roll exactly as a
         capped heal does, and demanding an exact match was a matcher defect that produced the whole
@@ -681,25 +681,37 @@ class PainSplitSetHp(unittest.TestCase):
 
         2. It called the band "what a floor-divided quantity needs and no more". The repo's own
            record says otherwise and says it is UNRESOLVED:
-           `reports/c101_i3_painsplit_tolerance_derivation.json` derives
+           `reports/c101_i3_painsplit_tolerance_derivation.json` -- which is headed
+           `RETRACTED IN ITS CENTRAL CLAIM`, but the retraction targets its refutation claim, NOT
+           the field cited here, and `what_survives.the_floor_argument` keeps the floor reasoning --
+           derives
            `|delta| <= ceil(roll_gap / 2)` -- an ABSOLUTE bound, since `d/dx floor((a+x)/2)` is 1/2
            -- and its `still_to_derive` field records that the implementation still needs that
            derivation; #1054's own message calls the proportional band "the wrong SHAPE for this
            class", noting that with no preceding damage Pain Split must match EXACTLY while the
            band would accept +/-(9%+1). So this test pins the shipped window, not a justified one.
         """
-        for showdown, expected in (
-            (-3, True),
-            (-4, True),
-            (-5, True),
-            (-2, False),
-            (-6, False),
-            (-8, False),
+        # At engine magnitude 4 the COEFFICIENT and the +/-1 CONSTANT are not separately
+        # identified: the upper edge is satisfied by any c in [1.0, 1.25). A large magnitude
+        # separates them, because there the constant is negligible and the ratio dominates --
+        # engine 100 gives [91.0, 110.0], so 91/110 are the last accepted and 90/111 the first
+        # rejected on each side. Both scales are asserted for that reason, not for coverage.
+        for engine, showdown, expected in (
+            (-4, -3, True),
+            (-4, -4, True),
+            (-4, -5, True),
+            (-4, -2, False),
+            (-4, -6, False),
+            (-4, -8, False),
+            (-100, -91, True),
+            (-100, -110, True),
+            (-100, -90, False),
+            (-100, -111, False),
         ):
-            with self.subTest(showdown=showdown):
+            with self.subTest(engine=engine, showdown=showdown):
                 self.assertIs(
                     roll_components_agree(
-                        [("movepainsplit", showdown)], [("movepainsplit", -4)], None
+                        [("movepainsplit", showdown)], [("movepainsplit", engine)], None
                     ),
                     expected,
                 )
