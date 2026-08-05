@@ -1294,6 +1294,7 @@ poke-engine-gen3-rest-sleep-pending-refund.patch
 # tests/test_rest_sleep_refund_boundary.py with a nonzero value rather than by the
 # compiler.
 poke-engine-gen3-rest-sleep-refund-binding.patch
+
 # Implement gen3 White Herb (cause A6). Absent from gen3 entirely -- WHITEHERB
 # existed only under src/genx/ -- so a Deoxys never restored the Superpower drop
 # and Golem's Rock Slide landed against an undropped Defence in Showdown but a
@@ -1308,3 +1309,15 @@ poke-engine-gen3-rest-sleep-refund-binding.patch
 # Trick-style item acquisition, both unreachable: the only holders are deoxys and
 # deoxysattack and their movepool carries none of them. reports/c124, c126.
 poke-engine-gen3-white-herb.patch
+
+
+# Consumes rest_sleep_pending_refund: credits it to rest_turns on switch-in
+# (before Spikes -- Showdown resolves the sleep counter ahead of entry hazards),
+# and voids it whenever the sleep stint ends, so a stale refund cannot be spent
+# on an unrelated later switch-in. The clamp to rest_turns <= 3 is a crash guard:
+# the wake match panics with "Invalid rest_turns value" above that, confirmed by
+# running it. NOT inert: banking on a sleepUsable attempt makes the field nonzero
+# during search with no harness involvement, so a Rest + Sleep Talk mon is credited
+# on switch-in already. The harness write-side only adds the observed-root case.
+poke-engine-gen3-rest-sleep-refund-emission.patch
+

@@ -703,6 +703,12 @@ fn instruction_side(ins: &Instruction) -> Option<SideReference> {
         Instruction::DamageSubstitute(i) => i.side_ref,
         Instruction::DecrementRestTurns(i) => i.side_ref,
         Instruction::SetRestTurns(i) => i.side_ref,
+        // Added by #1105 with no arm here, which was invisible while nothing
+        // emitted it: the catch-all below returns None, and an unattributable
+        // instruction breaks the sleep/Sleep-Talk prelude the renderer is
+        // walking. It only surfaced once the engine started banking a refund on
+        // a sleepUsable attempt. Bookkeeping only -- it maps to no public line.
+        Instruction::SetRestSleepPendingRefund(i) => i.side_ref,
         Instruction::SetSleepTurns(i) => i.side_ref,
         Instruction::ChangeSubstituteHealth(i) => i.side_ref,
         Instruction::DecrementPP(i) => i.side_ref,
@@ -1433,6 +1439,16 @@ fn consume_move_prelude(
                     }
                 }
                 sleep_gate_seen = true;
+            }
+            // pokezero row 2 (Rest skippedTime): pure bookkeeping, no public
+            // line. It rides INSIDE the sleep prelude, because the engine banks
+            // or discards the refund on the very attempt that emits |cant|. The
+            // catch-all below is `break`, so without this arm the walk truncates
+            // right after the sleep gate and drops everything after it -- the
+            // confusion activation and the Sleep Talk call line both vanish.
+            Instruction::SetRestSleepPendingRefund(_) => {
+                sim.apply(ins);
+                *cursor += 1;
             }
             _ => break,
         }
