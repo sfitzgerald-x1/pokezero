@@ -124,6 +124,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         defender_safeguard: int = 0,
         attacker_spikes: int = 0,
         attacker_yawn_duration: int = 0,
+        attacker_speed_boost: int = 0,
     ):
         dummy = poke_engine.Pokemon(id="pikachu", level=1, hp=0)
         p1 = [attacker, *attacker_party]
@@ -133,6 +134,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         return poke_engine.State(
             side_one=poke_engine.Side(
                 active_index="0",
+                speed_boost=attacker_speed_boost,
                 pokemon=p1,
                 volatile_statuses=set(attacker_volatiles),
                 volatile_status_durations=poke_engine.VolatileStatusDurations(
@@ -532,6 +534,93 @@ class AbilityMechanicsTests(unittest.TestCase):
             msg="a paralyzed Tauros must still land Tackle 75% of the time",
         )
         self.assertAlmostEqual(self._mass(branches, "-> POISON"), 0.0, places=4)
+
+    def test_white_herb_restores_a_self_inflicted_drop_and_is_consumed(self) -> None:
+        # A6. gen3 White Herb was absent from the engine entirely (WHITEHERB
+        # existed only under src/genx/), so a Deoxys never restored Superpower's
+        # -1 Def and the next physical hit landed against a dropped stat.
+        # Showdown: data/items.ts:7653, no gen3/gen4 override -- zero the
+        # NEGATIVE boosts, consume, render `-enditem` + `-clearnegativeboost`.
+        # The item is knowable: teams.ts:471 gives it to Deoxys unconditionally.
+        attacker = self._mon(
+            "deoxys", "pressure", "superpower", speed=200, item="whiteherb"
+        )
+        defender = self._mon("golem", "rockhead", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "superpower", "splash"
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        # Superpower drops the USER's Attack and Defense by one each.
+        self.assertIn("Boost SideOne Attack: -1", text)
+        self.assertIn("Boost SideOne Defense: -1", text)
+        # White Herb restores both to zero and is consumed.
+        self.assertIn("Boost SideOne Attack: 1", text)
+        self.assertIn("Boost SideOne Defense: 1", text)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+        # Exactly once. Three call sites each check both sides, so the
+        # early-return-on-consumed guard is what stops a double proc; this locks
+        # it rather than leaving it structurally implied.
+        for branch in branches:
+            self.assertLessEqual(
+                self._text(branch).count("ChangeItem SideOne: WHITEHERB -> NONE"),
+                1,
+                "White Herb must be consumed at most once per branch",
+            )
+
+    def test_white_herb_leaves_positive_boosts_alone(self) -> None:
+        # It is not a reset. Showdown zeroes only the NEGATIVE entries, so a
+        # Pokemon that is +2 Speed and -1 Defense keeps the +2. Without this the
+        # implementation could pass the test above by clearing every boost.
+        attacker = self._mon(
+            "deoxys", "pressure", "superpower", speed=200, item="whiteherb"
+        )
+        defender = self._mon("golem", "rockhead", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender, attacker_speed_boost=2),
+            "superpower",
+            "splash",
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+        self.assertNotIn("Boost SideOne Speed", text)
+
+    def test_white_herb_fires_after_a_secondary_effect_drop(self) -> None:
+        # Site 2. Secondaries are applied AFTER the boost-effect site, so the
+        # first version of this patch missed them entirely: a Deoxys hit by
+        # Crunch kept its -1 SpD. Richly reachable -- counted from sets.json
+        # movepools, Ice Beam is on 79 pool species, Shadow Ball 59, Thunderbolt
+        # 50, Psychic 42, Flamethrower 23, Crunch 9, Iron Tail 7.
+        # gen3 Crunch drops SpD, not Def.
+        deoxys = self._mon("deoxys", "pressure", "splash", item="whiteherb", speed=50)
+        opponent = self._mon("tyranitar", "sandstream", "crunch", speed=200)
+        branches = poke_engine.generate_instructions(
+            self._state(deoxys, opponent), "splash", "crunch"
+        )
+        dropped = [b for b in branches if "SpecialDefense: -1" in self._text(b)]
+        self.assertTrue(dropped, "Crunch must actually drop SpD, or this pin is vacuous")
+        for branch in dropped:
+            text = self._text(branch)
+            self.assertIn("Boost SideOne SpecialDefense: 1", text)
+            self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
+    def test_white_herb_fires_on_an_intimidate_switch_in(self) -> None:
+        # Site 3. Intimidate drops the opposing Attack as the holder switches in,
+        # which is neither a move's boost effect nor a secondary, so the first
+        # version of this patch missed it. 18 gen3 randbats species carry
+        # Intimidate: arbok, arcanine, granbull, gyarados, hitmontop, masquerain,
+        # mawile, mightyena, salamence, stantler, tauros and more.
+        deoxys = self._mon("deoxys", "pressure", "splash", item="whiteherb", speed=50)
+        active = self._mon("pidgey", "keeneye", "splash", speed=200)
+        gyarados = self._mon("gyarados", "intimidate", "splash", speed=200)
+        branches = poke_engine.generate_instructions(
+            self._state(deoxys, active, defender_party=[gyarados]),
+            "splash",
+            "gyarados",
+        )
+        text = " || ".join(self._text(b) for b in branches)
+        self.assertIn("Boost SideOne Attack: -1", text)
+        self.assertIn("Boost SideOne Attack: 1", text)
+        self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")

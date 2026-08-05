@@ -26,18 +26,20 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 63-patch stack. generate_instructions.rs and
-# choice_effects.rs BOTH moved with the Rest-refund emission patch, which edits
-# the switch path and the wake arms in the former and the Rest arm in the
-# latter. abilities.rs is unchanged, and that is the check worth keeping: an
-# unchanged digest alongside the changed ones is what makes this a measurement
-# rather than a paste, because drift in the vendored source would have moved all
-# three. Every digest here is read off a REPLAY of the stack into a scratch
-# tree, never off the vendored tree on disk -- the build rewrites that tree, so
-# pinning it can pin a stale preimage (which it once did, and shipped a red
-# gate).
+# Post-patch content pins for the 64-patch stack. The Rest-refund emission patch
+# moves generate_instructions.rs (switch path plus the wake arms) and
+# choice_effects.rs (the Rest arm); white-herb already moved
+# generate_instructions.rs and items.rs. So two of the four digests below changed
+# with this patch and two did NOT: items.rs and abilities.rs are byte-identical
+# to their pre-emission values. Those two unchanged digests are the drift control
+# -- vendored-source drift would have moved all four, so an update that leaves
+# them fixed is a measurement rather than a paste. Every digest here is
+# read off a REPLAY of the stack into a scratch tree, never off the vendored
+# tree on disk -- the build rewrites that tree, so pinning it can pin a stale
+# preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "605270bc1acd9a65b45eff62337c154a1732f866d100625065a6fcc07cfdc79f",
+    "src/gen3/generate_instructions.rs": "4fabf4c86b351b715569938679dabf6d8e086ecda1e8d9cb84e1b869e466ffdf",
+    "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "d5d80797375cca74deec75df7078abae898194bb9f967e6d30db5c843bbae3dc",
 }
@@ -118,12 +120,14 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-5:]],
+                [entry.name for entry in applied[-7:]],
                 [
+                    "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
                     "poke-engine-gen3-rest-sleep-pending-refund.patch",
                     "poke-engine-gen3-rest-sleep-refund-binding.patch",
+                    "poke-engine-gen3-white-herb.patch",
                     "poke-engine-gen3-rest-sleep-refund-emission.patch",
                 ],
             )

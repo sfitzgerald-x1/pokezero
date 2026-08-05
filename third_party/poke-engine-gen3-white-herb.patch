@@ -1,0 +1,179 @@
+--- a/src/gen3/items.rs
++++ b/src/gen3/items.rs
+@@ -3,8 +3,8 @@
+ use crate::choices::{Choice, Choices};
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+-    ChangeItemInstruction, ChangeStatusInstruction, DisableMoveInstruction, HealInstruction,
+-    Instruction, StateInstructions,
++    BoostInstruction, ChangeItemInstruction, ChangeStatusInstruction, DisableMoveInstruction,
++    HealInstruction, Instruction, StateInstructions,
+ };
+ use crate::state::{
+     Pokemon, PokemonBoostableStat, PokemonStatus, Side, SideReference, State,
+@@ -171,6 +171,7 @@
+         LOADEDDICE,
+         RUSTEDSWORD,
+         RUSTEDSHIELD,
++        WHITEHERB,
+     },
+     default = UNKNOWNITEM
+ }
+@@ -292,7 +293,95 @@
+         }));
+     attacker.item = Items::NONE;
+ }
++
++/// gen3 White Herb: zero the NEGATIVE boosts and consume the item.
++///
++/// Showdown `data/items.ts:7653`. There is no gen3 or gen4 override, so the base
++/// handler applies (gen3's `scripts.ts` is `inherit: 'gen4'`). Its `onStart`
++/// scans boosts, sets each negative entry to 0, calls `useItem()` -- rendered as
++/// `-enditem` -- and adds `-clearnegativeboost`. POSITIVE boosts are untouched:
++/// it is not a reset.
++///
++/// Showdown fires it from `onAnySwitchIn` (priority -2), `onAnyAfterMega`,
++/// `onAnyAfterMove`, and `onResidual` at order 29. This engine calls it from
++/// THREE sites, each checking BOTH sides:
++///   1. after `get_instructions_from_boosts` -- a move's boost effect, covering
++///      self-drops (Superpower -1 Atk/-1 Def, Psycho Boost -2 SpA) and
++///      opponent-target drops (Growl, Leer);
++///   2. after `get_instructions_from_secondaries` -- secondary stat drops;
++///   3. after `ability_on_switch_in` -- Intimidate.
++///
++/// Sites 2 and 3 were MISSING in the first version of this patch, justified by a
++/// reachability argument that only reasoned about Deoxys' OWN moves and ignored
++/// what an opponent can do to it. Both gaps were measured, not theorised: a
++/// Deoxys hit by Crunch kept its -1 SpD, and 18 pool species carry Intimidate.
++/// Secondary droppers in the gen3 randbats pool, counted from `sets.json`
++/// movepools: Ice Beam 79 species, Shadow Ball 59, Thunderbolt 50, Psychic 42,
++/// Flamethrower 23, Crunch 9 (gen3 Crunch drops SpD, not Def), Iron Tail 7.
++///
++/// Still NOT covered, and now genuinely narrow: `onResidual` order 29, which only
++/// matters for a drop that survives to end-of-turn without any move, ability or
++/// switch having fired in between.
++pub fn item_white_herb_check(
++    state: &mut State,
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++) {
++    let side = state.get_side(side_ref);
++    {
++        let active = side.get_active_immutable();
++        if active.item != Items::WHITEHERB || active.hp == 0 {
++            return;
++        }
++    }
+ 
++    let negatives: Vec<(PokemonBoostableStat, i8)> = vec![
++        (PokemonBoostableStat::Attack, side.attack_boost),
++        (PokemonBoostableStat::Defense, side.defense_boost),
++        (PokemonBoostableStat::SpecialAttack, side.special_attack_boost),
++        (PokemonBoostableStat::SpecialDefense, side.special_defense_boost),
++        (PokemonBoostableStat::Speed, side.speed_boost),
++        (PokemonBoostableStat::Evasion, side.evasion_boost),
++        (PokemonBoostableStat::Accuracy, side.accuracy_boost),
++    ]
++    .into_iter()
++    .filter(|(_, amount)| *amount < 0)
++    .collect();
++
++    if negatives.is_empty() {
++        return;
++    }
++
++    for (stat, amount) in negatives {
++        // Restore to exactly 0 -- `-amount`, not a clamp to some floor.
++        match stat {
++            PokemonBoostableStat::Attack => side.attack_boost = 0,
++            PokemonBoostableStat::Defense => side.defense_boost = 0,
++            PokemonBoostableStat::SpecialAttack => side.special_attack_boost = 0,
++            PokemonBoostableStat::SpecialDefense => side.special_defense_boost = 0,
++            PokemonBoostableStat::Speed => side.speed_boost = 0,
++            PokemonBoostableStat::Evasion => side.evasion_boost = 0,
++            PokemonBoostableStat::Accuracy => side.accuracy_boost = 0,
++        }
++        instructions
++            .instruction_list
++            .push(Instruction::Boost(BoostInstruction {
++                side_ref: *side_ref,
++                stat,
++                amount: -amount,
++            }));
++    }
++
++    instructions
++        .instruction_list
++        .push(Instruction::ChangeItem(ChangeItemInstruction {
++            side_ref: *side_ref,
++            current_item: Items::WHITEHERB,
++            new_item: Items::NONE,
++        }));
++    side.get_active().item = Items::NONE;
++}
++
+ pub fn item_before_move(
+     state: &mut State,
+     choice: &mut Choice,
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -27,7 +27,7 @@
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+     item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
+-    Items,
++    item_white_herb_check, Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+@@ -550,6 +550,15 @@
+         > 0
+     {
+         ability_on_switch_in(state, &switching_side_ref, incoming_instructions);
++        // gen3 White Herb, site 3: Intimidate. The INCOMING mon's ability drops
++        // the opponent's Attack, so the herb to check is usually the other
++        // side's -- both are checked. 18 gen3 randbats species carry Intimidate.
++        item_white_herb_check(state, &switching_side_ref, incoming_instructions);
++        item_white_herb_check(
++            state,
++            &switching_side_ref.get_other_side(),
++            incoming_instructions,
++        );
+     }
+ 
+     state.reverse_instructions(&incoming_instructions.instruction_list);
+@@ -5115,6 +5124,17 @@
+ 
+     if let Some(boost) = &choice.boost {
+         get_instructions_from_boosts(state, boost, &attacking_side, &mut instructions);
++        // gen3 White Herb (A6). Showdown fires it from `onAnyAfterMove`, so it
++        // runs once after the move's boost effect and is checked for BOTH sides:
++        // `get_instructions_from_boosts` applies MoveTarget::User and
++        // MoveTarget::Opponent alike, so a self-drop (Superpower, Psycho Boost)
++        // and an opponent-inflicted drop are both caught here.
++        item_white_herb_check(state, &attacking_side, &mut instructions);
++        item_white_herb_check(
++            state,
++            &attacking_side.get_other_side(),
++            &mut instructions,
++        );
+     }
+ 
+     if choice.flags.drag {
+@@ -5241,6 +5261,16 @@
+                 state.reverse_instructions(&branch.instruction_list);
+             }
+         }
++        // gen3 White Herb, site 2: secondary stat drops land here, AFTER the
++        // boost-effect site. Not gated on `does_damage` -- a status move's
++        // secondary can drop a stat too. Measured gap in the first version of
++        // this patch: a Deoxys hit by Crunch kept its -1 SpD.
++        for branch in instructions_vec_after_secondaries.iter_mut() {
++            state.apply_instructions(&branch.instruction_list);
++            item_white_herb_check(state, &attacking_side, branch);
++            item_white_herb_check(state, &attacking_side.get_other_side(), branch);
++            state.reverse_instructions(&branch.instruction_list);
++        }
+         final_instructions.extend(instructions_vec_after_secondaries);
+     } else {
+         state.reverse_instructions(&instructions.instruction_list);
