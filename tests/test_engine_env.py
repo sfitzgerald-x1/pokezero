@@ -605,8 +605,6 @@ class EngineStepExportsTest(unittest.TestCase):
             )
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class EncoderTableSchemaSelectionTest(unittest.TestCase):
@@ -728,6 +726,105 @@ class EncoderTableSchemaSelectionTest(unittest.TestCase):
             self.assertIn("v2.2", message)
             self.assertIn("v4", message)
 
+    def test_a_mismatch_reports_the_mismatch_even_for_an_unbuildable_env_schema(self) -> None:
+        """The error message must not raise while explaining itself.
+
+        The rebuild hint called `encoder_tables_schema(schema_version)` unguarded, which RAISES for
+        any schema the exporter cannot build -- so this lane, whose whole purpose is accepting
+        tables for such a schema, reported "no encoder-tables layout for v2.1" instead of the
+        mismatch: the wrong problem, with an impossible remedy. v2.1 is an advertised
+        `rollout_cli.py --observation-schema` choice, so it was reachable. Found in review.
+        """
+        import json
+        import tempfile
+        from pathlib import Path as _Path
+
+        from pokezero.engine_env import _load_encoder_tables
+
+        payload = json.dumps({"layout": {"schema_version": "pokezero.observation.v2.2"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = _Path(tmp) / "tables.json"
+            artifact.write_text(payload, encoding="utf-8")
+            with self.assertRaises(ValueError) as caught:
+                _load_encoder_tables(artifact, None, "pokezero.observation.v2.1")
+        message = str(caught.exception)
+        self.assertIn("v2.2", message)
+        self.assertIn("v2.1", message)
+        self.assertNotIn("no encoder-tables layout", message)
+
+    def test_a_non_object_artifact_reports_a_clean_error(self) -> None:
+        """A JSON list/string reached `.get` and raised AttributeError, escaping the ValueError
+        this function installs for exactly that case."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        from pokezero.engine_env import _load_encoder_tables
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for body in ("[1, 2, 3]", '"hello"', "42"):
+                artifact = _Path(tmp) / "tables.json"
+                artifact.write_text(body, encoding="utf-8")
+                with self.subTest(body=body):
+                    with self.assertRaises(ValueError) as caught:
+                        _load_encoder_tables(artifact, None, "pokezero.observation.v4")
+                    self.assertIn("not a JSON object", str(caught.exception))
+
+    def test_the_derived_cache_lane_is_validated_too(self) -> None:
+        """The cache-hit and post-build reads must go through the validator, not just the
+        explicitly-passed path.
+
+        Dropping both cache-lane calls left the whole suite green, so they were unverified code --
+        guards with no guard. This asserts the WIRING (the validator is actually invoked for a cache
+        read), which source inspection cannot do and a helper-level test does not reach.
+
+        Uses the repo's own `corpus/encoder_tables_v2.2.json` when present; skips otherwise, since a
+        cache-hit cannot be exercised without a cache.
+        """
+        from pathlib import Path as _Path
+        from unittest import mock
+
+        from pokezero import engine_env
+
+        repo = _Path(engine_env.__file__).resolve().parents[2]
+        cache = repo / "corpus" / "encoder_tables_v2.2.json"
+        if not cache.exists():
+            self.skipTest("no derived encoder-tables cache to exercise the cache-hit lane")
+
+        seen: list[str] = []
+        real = engine_env._assert_tables_match_schema
+
+        def _recording(tables_json, schema_version, *, source):
+            seen.append(source)
+            return real(tables_json, schema_version, source=source)
+
+        with mock.patch.object(engine_env, "_assert_tables_match_schema", _recording):
+            engine_env._load_encoder_tables(None, None, "pokezero.observation.v2.2")
+
+        self.assertEqual(
+            seen,
+            [str(cache)],
+            "the derived-cache read did not go through _assert_tables_match_schema",
+        )
+
+    def test_the_validator_accepts_an_artifact_it_cannot_introspect(self) -> None:
+        """Absent/blank `layout.schema_version` is accepted DELIBERATELY, and pinned so the
+        permissiveness is documented rather than an untested hole in the lane being hardened."""
+        from pokezero.engine_env import _assert_tables_match_schema
+
+        for body in ('{}', '{"layout": {}}', '{"layout": {"schema_version": null}}',
+                     '{"layout": {"schema_version": ""}}', '{"layout": [1, 2]}'):
+            with self.subTest(body=body):
+                _assert_tables_match_schema(
+                    body, "pokezero.observation.v4", source="<probe>"
+                )
+
     def test_an_unknown_schema_fails_here_rather_than_in_the_encoder(self) -> None:
         with self.assertRaises(ValueError):
             self._selected_schema("pokezero.observation.v9")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. My own EncoderTableSchemaSelectionTest was appended BELOW this block, so
+    # direct execution never defined it -- the same defect PR #1112 exists to fix, committed
+    # into a concurrent branch while writing that fix. #1112's repo-wide guard caught it.
+    unittest.main()

@@ -1154,20 +1154,42 @@ def _assert_tables_match_schema(tables_json: str, schema_version: str, *, source
     read through the wrong indices, and it surfaces as an obscure missing-column error deep in the
     encoder instead of here.
     """
-    import json  # noqa: PLC0415
-
     try:
-        layout = (json.loads(tables_json) or {}).get("layout") or {}
+        payload = json.loads(tables_json)
     except ValueError as error:
         raise ValueError(f"encoder tables at {source} are not valid JSON: {error}") from error
-    found = str(layout.get("schema_version") or "")
-    if found and found != str(schema_version):
+    # A JSON non-object (list, string, number) reached `.get` and raised AttributeError, escaping
+    # the ValueError this function installs for exactly that case.
+    if not isinstance(payload, Mapping):
         raise ValueError(
-            f"encoder tables at {source} are for observation schema {found!r}, "
-            f"but this env encodes at {schema_version!r}; rebuild with "
-            f"scripts/export_encoder_tables.py --observation-schema "
-            f"{encoder_tables_schema(schema_version)}"
+            f"encoder tables at {source} are not a JSON object (got {type(payload).__name__})"
         )
+    layout = payload.get("layout")
+    if not isinstance(layout, Mapping):
+        # Absent or non-mapping layout: nothing to check against. Accepted deliberately -- a caller
+        # who passes an artifact this loader cannot introspect keeps the pre-existing behaviour of
+        # being trusted, and the encoder's own allowlist is the backstop.
+        return
+    found = str(layout.get("schema_version") or "")
+    if not found or found == str(schema_version):
+        return
+    # The rebuild hint is CONDITIONAL. It used to call `encoder_tables_schema(schema_version)`
+    # unguarded, which raises for any schema the exporter cannot build -- so this lane, whose whole
+    # point is accepting tables for such a schema, produced "no encoder-tables layout for v2.1"
+    # instead of the mismatch, naming the wrong problem and prescribing an impossible remedy.
+    # v2.1 is an advertised `rollout_cli.py --observation-schema` choice, so that was reachable.
+    try:
+        short = encoder_tables_schema(schema_version)
+    except ValueError:
+        hint = ""
+    else:
+        hint = (
+            "; rebuild with scripts/export_encoder_tables.py --observation-schema " + short
+        )
+    raise ValueError(
+        f"encoder tables at {source} are for observation schema {found!r}, "
+        f"but this env encodes at {schema_version!r}{hint}"
+    )
 
 
 def encoder_tables_schema(schema_version: str) -> str:
@@ -1229,7 +1251,15 @@ def _load_encoder_tables(
     schema = encoder_tables_schema(schema_version)
     cache = repo / "corpus" / f"encoder_tables_{schema}.json"
     if cache.exists():
-        return cache.read_text(encoding="utf-8")
+        cached = cache.read_text(encoding="utf-8")
+        # Validated, not trusted. `corpus/` is gitignored build output that survives branch
+        # switches and exporter revisions, and `--out` is arbitrary, so nothing binds a filename to
+        # its content. It matters more here than in the explicit-path lane: `_tables()` then
+        # RELABELS the payload with the env's own schema, erasing the only evidence of a mismatch
+        # for every downstream consumer. An earlier revision deferred this while its own comment
+        # claimed parity with this lane -- the neighbouring-instance mistake, third time.
+        _assert_tables_match_schema(cached, schema_version, source=str(cache))
+        return cached
 
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
@@ -1259,7 +1289,14 @@ def _load_encoder_tables(
         raise EngineEnvError(
             f"export_encoder_tables.py failed (exit {result.returncode}): {result.stderr.strip()}"
         )
-    return cache.read_text(encoding="utf-8")
+    built = cache.read_text(encoding="utf-8")
+    # Validated too, even though we just asked the exporter for this schema. An exporter that
+    # silently produced a different layout would otherwise be undetectable here, and the check is
+    # free. Note this site is 4-space indented where the cache-hit site above is 8 -- a bulk
+    # replace matched only the latter, and I nearly claimed both were guarded on the strength of a
+    # replacement count that had matched one.
+    _assert_tables_match_schema(built, schema_version, source=str(cache))
+    return built
 
 
 
