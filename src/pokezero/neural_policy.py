@@ -553,6 +553,11 @@ class TransformerTrainingConfig:
     learning_rate_progress_start: float = 0.0
     learning_rate_progress_end: float = 0.0
     learning_rate_warmup_progress: float = 0.0
+    # WARM-RESUME ramp (distinct from the cold-start warmup above; see
+    # learning_rate_for_progress). All three or none.
+    learning_rate_resume_warmup_start_progress: "float | None" = None
+    learning_rate_resume_warmup_end_progress: "float | None" = None
+    learning_rate_resume_warmup_start_lr: "float | None" = None
     weight_decay: float = 0.0
     window_size: int = 1
     discount: float = 1.0
@@ -2932,8 +2937,33 @@ def _decayed_learning_rate(base_learning_rate: float, schedule: str, progress: f
 
 
 def learning_rate_for_progress(
-    *, base_learning_rate: float, schedule: str, progress: float, warmup_progress: float = 0.0
+    *,
+    base_learning_rate: float,
+    schedule: str,
+    progress: float,
+    warmup_progress: float = 0.0,
+    resume_warmup_start_progress: "float | None" = None,
+    resume_warmup_end_progress: "float | None" = None,
+    resume_warmup_start_lr: "float | None" = None,
 ) -> float:
+    """The scheduled learning rate at `progress`, with two DISTINCT warmup shapes.
+
+    ``warmup_progress`` is the COLD-START ramp: 0 -> scheduled, over [0, warmup_progress].
+
+    The ``resume_warmup_*`` triple is the WARM-RESUME ramp, and it exists because the
+    cold-start one structurally cannot express a resume. A run continuing from 10M games
+    against a widened 20M denominator starts at progress 0.5, so the cold-start branch
+    (`progress < warmup_progress`) never fires for any sane window -- passing
+    `--learning-rate-warmup-progress 0.01` for "200k games of warmup" yields the SAME learning
+    rate as passing nothing, and the rendered command looks correct while the run takes the
+    full 2.4x step cold. Making it fire would need warmup_progress > 0.5, which ramps from ZERO
+    across half the schedule. The two shapes are therefore kept separate rather than one being
+    bent to cover both.
+
+    The resume ramp interpolates linearly from `resume_warmup_start_lr` -- the rate the
+    checkpoint was actually last trained at, typically the OLD schedule's floor -- to the new
+    schedule's value at `resume_warmup_end_progress`, and is continuous there by construction.
+    """
     if base_learning_rate <= 0.0 or not math.isfinite(base_learning_rate):
         raise ValueError("base_learning_rate must be positive and finite.")
     if schedule not in LEARNING_RATE_SCHEDULES:
@@ -2942,6 +2972,46 @@ def learning_rate_for_progress(
         raise ValueError("learning rate progress must be finite and between 0 and 1.")
     if not math.isfinite(warmup_progress) or not 0.0 <= warmup_progress <= 1.0:
         raise ValueError("warmup_progress must be finite and between 0 and 1.")
+    resume_args = (
+        resume_warmup_start_progress,
+        resume_warmup_end_progress,
+        resume_warmup_start_lr,
+    )
+    if any(a is not None for a in resume_args):
+        if any(a is None for a in resume_args):
+            raise ValueError(
+                "resume_warmup_start_progress, resume_warmup_end_progress and "
+                "resume_warmup_start_lr must be given together."
+            )
+        if warmup_progress > 0.0:
+            # A run is either a cold start or a warm resume, never both. Silently applying one
+            # while the operator configured the other is the failure this parameter exists to
+            # prevent, so refuse instead of picking.
+            raise ValueError(
+                "warmup_progress (cold start) and the resume_warmup_* triple (warm resume) are "
+                "mutually exclusive."
+            )
+        for name, value in zip(
+            ("resume_warmup_start_progress", "resume_warmup_end_progress"), resume_args[:2]
+        ):
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be finite and between 0 and 1.")
+        if not resume_warmup_start_progress < resume_warmup_end_progress:
+            raise ValueError(
+                "resume_warmup_end_progress must be strictly greater than "
+                "resume_warmup_start_progress."
+            )
+        if not math.isfinite(resume_warmup_start_lr) or resume_warmup_start_lr <= 0.0:
+            raise ValueError("resume_warmup_start_lr must be positive and finite.")
+        if resume_warmup_start_progress <= progress < resume_warmup_end_progress:
+            target = _decayed_learning_rate(
+                base_learning_rate, schedule, resume_warmup_end_progress
+            )
+            span = resume_warmup_end_progress - resume_warmup_start_progress
+            fraction = (float(progress) - resume_warmup_start_progress) / span
+            return float(resume_warmup_start_lr) + fraction * (
+                target - float(resume_warmup_start_lr)
+            )
     # Linear warmup (WS-D): over [0, warmup_progress] ramp 0 -> the scheduled value at
     # warmup_progress, then follow the normal decay. Continuous at the boundary. warmup_progress=0
     # disables it (legacy behavior). Standard at ~50M+ to avoid the cold-start clip spikes we saw.
@@ -2966,6 +3036,9 @@ def _learning_rate_for_epoch(config: TransformerTrainingConfig, epoch: int) -> f
         schedule=config.learning_rate_schedule,
         progress=progress,
         warmup_progress=config.learning_rate_warmup_progress,
+        resume_warmup_start_progress=config.learning_rate_resume_warmup_start_progress,
+        resume_warmup_end_progress=config.learning_rate_resume_warmup_end_progress,
+        resume_warmup_start_lr=config.learning_rate_resume_warmup_start_lr,
     )
 
 
