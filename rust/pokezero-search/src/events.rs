@@ -4313,6 +4313,25 @@ mod tests {
             total_branches - agree
         );
 
+        // PIN THE TALLIES, not just their shape. Everything above asserts the
+        // partition is non-vacuous and exact, which a change to the vendored engine or
+        // to the renderer can satisfy while silently moving the numbers -- the
+        // partition identity holds for ANY split of the same total. These four values
+        // are quoted as evidence outside this repo (the deploy campaign's fallback
+        // ledger cites "221 of 237" as the measured effect of #1070), so drift here is
+        // a reporting defect elsewhere, not just a test update.
+        //
+        // If you are here because this failed: that is the signal working. Decide
+        // whether the change was intended, then update BOTH these numbers and the
+        // ledger's row-1 disposition. Do not update one without the other.
+        assert_eq!(
+            (total_branches, agree, multi_label_unattributed, multi_label_refused),
+            (2614, 2377, 221, 16),
+            "the Sleep Talk attribution oracle moved. Expected \
+             branches/agree/usable/unrenderable = 2614/2377/221/16. See the comment \
+             above: the deploy ledger quotes these."
+        );
+
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
              ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
