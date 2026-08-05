@@ -15,13 +15,30 @@ residual action untouched, so the protocol block ends at `|faint|`. Its sibling
 `faintresidualsdeferred` is measured on the *replacement* ply with
 `residual_block_ran: True`, `replacement_took_sandstorm: True`, `switch_precedes_residuals: True`.
 
-**So Showdown defers exactly like the engine.** v1's §1 — "Showdown does not [run a phase
-here], because it already ran one at the *faint* boundary" — is false, and v1 leaned on this
-same fixture for its *engine* half while contradicting its *Showdown* half. A marker keying on
-"Showdown's tick landed on the preceding boundary" would key on an observable that is not
-there. v1's §4 conclusion — "this is a harness fix, not an engine fix; A1 must not become an
-engine change" — inherits the same assumption and must be re-argued, not restated: with both
-sides deferring, an engine- or renderer-side cause for the dev pair is not excluded.
+**So Showdown defers in THAT SCENARIO.** ~~So Showdown defers exactly like the engine.~~
+
+> **Correction (review of #1087). The generalisation was wrong, and I made it by reading a
+> fixture and not opening the artifacts.** `faintresidualsdeferred` establishes its own
+> configuration and nothing wider. Placement is *conditional*, which the vendored
+> `poke-engine-gen3-residual-defer-on-faint.patch:19-20` states in terms: "a faint caused BY the
+> residual block, which has already run, never gets the flag and so is never mistaken for a
+> pending one." The fixture exercises only the faint-from-a-move arm.
+>
+> Checked against the retained repros for the three rows this report KEEPS in A1 —
+> `19000059/27`, `19000020/50`, `19100181/45` — all three record **`observed_only=[]`**:
+> Showdown emitted no residual component at that boundary at all. If Showdown had run the whole
+> block on the replacement ply the way the fixture expects, those boundaries would MATCH. They
+> diverge. So the recorded evidence says Showdown did **not** defer on these rows, and v1's
+> description matched the artifacts where this revision did not.
+>
+> I consulted the artifacts at §(b) below for the two rows where they helped, and not for the
+> three where they refute the headline. That is precisely the failure this document was written
+> to correct in v1, repeated one level up.
+>
+> The keying claim inverts with it: the tick is demonstrably *not* on the divergent boundary and
+> `|turn|N` advanced, so it landed earlier — the observable v1 assumed is the one the data
+> supports. v1's §4 disposition therefore stands unrefuted by this document, and is not
+> re-opened here.
 
 **(b) A1 is two shapes.** Deserialising each row's recorded `engine_state`:
 
@@ -41,7 +58,19 @@ expect residuals here" cannot address a missing component.
 So v1's "all five rows carry a forced-switch marker" is wrong (3 of 5), and its "in every case
 the boundary carrying Showdown's tick is, by construction, one that compared clean" is refuted
 for those two — Showdown's tick is at the divergent boundary itself and **is** in the artifact.
-The design covers at most **3** rows, which is why plan item 9 says "2 rows".
+The design covers at most **3** rows.
+
+> **Correction (review of #1087).** An earlier revision ended that sentence "…which is why plan
+> item 9 says '2 rows'". Three errors in one clause: 3 does not explain 2; the two pairs are
+> **disjoint** (item 9's pair is the dev pair recorded at `reports/c111_residue_row_causes.md:55`
+> — `19000020/50`, `19000059/27` — while the pair this report ejects is the holdout pair
+> `19100002/53`, `19100154/75`); and the citation is to a plan document that is **not in this
+> repository**, so no reader can check it. Struck.
+>
+> **The ejected pair has since been settled, and the ejection was right.** Both rows were the
+> *battle-end weather* cause — Showdown chips the winner at the final boundary and the engine
+> did not — and #1092 fixed it, closing `19100002/53` and `19100154/75` with nothing opened.
+> They were never A1.
 
 **(c) v1's cost ordering was wrong.** v1 listed a re-sweep with adjacent-boundary retention as
 the cheapest route. It is third-cheapest: `python scripts/gen3_switch_differential.py --only
