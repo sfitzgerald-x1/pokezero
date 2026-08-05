@@ -2463,10 +2463,20 @@ def _append_evidence(
 #         // If no animation plays, the target should never be known
 #         const parts = this.log[this.lastMoveLine].split('|'); parts[4] = '';
 # -- so a foe-targeted status move reads as untargeted and silently loses its Pressure double.
-# Measured over 60 games, BLANK/total: toxic 53/328, encore 13/34, willowisp 9/35, solarbeam 9/17,
-# leechseed 8/43, hypnosis 6/61, thunderwave 6/64, spikes 3/33. An earlier fix here enumerated the
-# four `target: "all"` moves and called that "the" broken class; toxic alone blanks six times more
-# often than raindance did.
+#
+# Size of the class, re-runnable rather than quoted: `scripts/blank_target_slot_census.py`.
+#     PYTHONPATH=src .venv/bin/python scripts/blank_target_slot_census.py 60 999
+# 60 games, BLANK/total, foe-targeted rows only (self-targeted moves blank too -- Recover 31/113,
+# Refresh 31/39 -- but they are in this set and were never pressured anyway):
+#
+#     seed 999    toxic 70/344  spikes 39/78  whirlwind 26/38  thunderwave 12/50
+#                 solarbeam 9/13  hypnosis 9/40  willowisp 9/26  leechseed 7/28
+#     seed 4711   toxic 28/286  solarbeam 10/11  encore 7/24  spikes 6/35  leechseed 5/23
+#
+# An earlier fix here enumerated the four `target: "all"` moves and called that "the" broken class;
+# toxic alone blanks several times more often than raindance does. (The first version of this
+# comment carried a third table that no re-run reproduces -- it was measured once, early, and then
+# copied forward. Numbers that cannot be re-run do not belong in a comment; hence the script.)
 #
 # The engine rule (`sim/pokemon.ts:792` `getMoveTargets`, resolving at `:853-860`, not overridden
 # anywhere in the gen3 chain): `pressureTargets = targets`, zeroed only for `foeSide` and re-filled
