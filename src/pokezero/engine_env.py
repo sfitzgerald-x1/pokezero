@@ -1140,6 +1140,30 @@ def _default_observation_spec() -> ObservationSpec:
     return DEFAULT_REPLAY_OBSERVATION_SPEC
 
 
+# The schemas `scripts/export_encoder_tables.py --observation-schema` accepts. Kept beside the
+# loader so a new schema is one edit, and so an unsupported one is a named failure rather than a
+# silent fallback to whichever layout the else-branch happened to name.
+_EXPORTABLE_TABLE_SCHEMAS = frozenset({"v2.2", "v3", "v4"})
+
+
+def encoder_tables_schema(schema_version: str) -> str:
+    """The exporter's short layout name for an observation schema version.
+
+    A pure function, extracted so the test can exercise THIS rather than restate it. The first
+    version of that test re-derived the mapping inside the test body, which would have passed with
+    production still broken -- the exact vacuity this codebase has been finding all week.
+    """
+    prefix = "pokezero.observation."
+    text = str(schema_version)
+    schema = text[len(prefix):] if text.startswith(prefix) else ""
+    if schema not in _EXPORTABLE_TABLE_SCHEMAS:
+        raise ValueError(
+            f"no encoder-tables layout for observation schema {schema_version!r}; "
+            f"scripts/export_encoder_tables.py supports {sorted(_EXPORTABLE_TABLE_SCHEMAS)}"
+        )
+    return schema
+
+
 def _load_encoder_tables(
     path: Path | None, showdown_root: Path | None, schema_version: str
 ) -> str:
@@ -1157,9 +1181,19 @@ def _load_encoder_tables(
 
     root = LocalShowdownConfig(showdown_root=showdown_root).resolved_showdown_root()
     repo = Path(__file__).resolve().parents[2]
-    # Schema versions look like "pokezero.observation.v2.2"; the exporter takes
-    # the short form and only knows the two current layouts.
-    schema = "v3" if str(schema_version).endswith(".v3") else "v2.2"
+    # Schema versions look like "pokezero.observation.v2.2"; the exporter takes the short form.
+    #
+    # Derived from the version string, not enumerated. The previous form was
+    # `"v3" if ...endswith(".v3") else "v2.2"`, written when v2.2 and v3 were "the two current
+    # layouts" -- so v4 fell through the else and silently loaded V2.2 TABLES, which is a wrong
+    # answer rather than an error: the layouts disagree on width (132 vs 155) and on which columns
+    # exist at all, so the first encode raises deep in the encoder about a missing column instead
+    # of here about an unsupported schema.
+    #
+    # `export_encoder_tables.py` already accepts v4 (`choices=("v2.2", "v3", "v4")`); only this
+    # mapping had to be told. Unknown schemas now fail HERE, named, rather than falling back to a
+    # layout that happens to parse.
+    schema = encoder_tables_schema(schema_version)
     cache = repo / "corpus" / f"encoder_tables_{schema}.json"
     if cache.exists():
         return cache.read_text(encoding="utf-8")

@@ -607,3 +607,63 @@ class EngineStepExportsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EncoderTableSchemaSelectionTest(unittest.TestCase):
+    """`_load_encoder_tables` must pick the layout matching the observation schema.
+
+    The mapping was `"v3" if schema_version.endswith(".v3") else "v2.2"`, written when v2.2 and v3
+    were "the two current layouts". v4 fell through the else and loaded V2.2 TABLES — a wrong
+    answer rather than an error. The layouts disagree on numeric width (132 vs 155) and on which
+    columns exist, so the failure surfaced deep inside the encoder as a missing column, on the
+    first `encode_leaf`, rather than here as an unsupported schema.
+
+    Needs no Showdown checkout: the schema-to-layout decision happens before any artifact is read
+    or built, so a bogus path is enough to prove the selection while keeping the test hermetic.
+    """
+
+    def _selected_schema(self, schema_version: str) -> str:
+        """Calls PRODUCTION. The first version of this helper re-derived the mapping in the test
+        body, which would have passed with `_load_encoder_tables` still broken."""
+        from pokezero.engine_env import encoder_tables_schema
+
+        return encoder_tables_schema(schema_version)
+
+    def test_every_exportable_schema_selects_its_own_layout(self) -> None:
+        from pokezero import engine_env
+
+        for schema in sorted(engine_env._EXPORTABLE_TABLE_SCHEMAS):
+            with self.subTest(schema=schema):
+                self.assertEqual(
+                    self._selected_schema(f"pokezero.observation.{schema}"), schema
+                )
+
+    def test_v4_does_not_silently_resolve_to_v2_2(self) -> None:
+        """The regression, named: this returned "v2.2" for a v4 row."""
+        self.assertEqual(self._selected_schema("pokezero.observation.v4"), "v4")
+
+    def test_the_exportable_set_matches_the_exporter_cli(self) -> None:
+        """If the exporter grows a schema and this set does not, the new one fails as unsupported.
+
+        Read from the script rather than restated, so the two cannot drift silently.
+        """
+        import re
+        from pathlib import Path as _Path
+
+        from pokezero import engine_env
+
+        script = (
+            _Path(__file__).resolve().parents[1] / "scripts" / "export_encoder_tables.py"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"choices=\((\s*\"v[^)]*)\)", script)
+        self.assertIsNotNone(match, "could not find the exporter's --observation-schema choices")
+        advertised = set(re.findall(r'"([^"]+)"', match.group(1)))
+        self.assertEqual(
+            advertised,
+            set(engine_env._EXPORTABLE_TABLE_SCHEMAS),
+            "engine_env._EXPORTABLE_TABLE_SCHEMAS has drifted from the exporter's CLI choices",
+        )
+
+    def test_an_unknown_schema_fails_here_rather_than_in_the_encoder(self) -> None:
+        with self.assertRaises(ValueError):
+            self._selected_schema("pokezero.observation.v9")
