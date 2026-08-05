@@ -251,15 +251,36 @@ class NeverPressuredSetMatchesThePoolTest(unittest.TestCase):
         self.assertTrue(carriers, "no Curse carriers found; the derivation cannot be checked")
 
         dex = open(os.path.join(root, "data", "pokedex.ts")).read()
-        ghosts = []
-        for species in sorted(set(carriers)):
+
+        def types_of(species):
             block = re.search(
                 r"^\t" + re.escape(species) + r": \{(.*?)^\t\},", dex, re.S | re.M
             )
             if block is None:
-                self.fail(f"{species} not found in pokedex.ts")
-            types = re.search(r"types: \[([^\]]*)\]", block.group(1))
-            if types and "Ghost" in types.group(1):
+                return None
+            found = re.search(r"types: \[([^\]]*)\]", block.group(1))
+            return found.group(1) if found is not None else None
+
+        # POSITIVE CONTROL, before trusting a single negative result below. This whole assertion
+        # is "no carrier is Ghost", which passes just as happily when the extractor returns
+        # nothing at all -- and a silent-no-match regex is not hypothetical here: the sibling test
+        # in this file parses `target:` out of moves.ts, where a single-quote pattern matches
+        # nothing because the checkout uses double quotes. Prove the extractor can find a Ghost
+        # before concluding there are none.
+        for ghost_species in ("dusclops", "gengar", "misdreavus"):
+            self.assertIn(
+                "Ghost",
+                types_of(ghost_species) or "",
+                f"type extraction is broken: it cannot see that {ghost_species} is Ghost, so "
+                "the non-Ghost conclusion below would be vacuous",
+            )
+
+        ghosts = []
+        for species in sorted(set(carriers)):
+            types = types_of(species)
+            if types is None:
+                self.fail(f"no types resolved for Curse carrier {species} in pokedex.ts")
+            if "Ghost" in types:
                 ghosts.append(species)
         self.assertEqual(
             ghosts,
