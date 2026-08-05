@@ -643,18 +643,41 @@ class PainSplitSetHp(unittest.TestCase):
         got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
         self.assertIn(("movepainsplit", 3), got["p2"])
 
-    def test_pain_split_is_compared_EXACTLY_not_roll_scaled(self):
-        exact, rolled = _split_components([("movepainsplit", -4)])
-        self.assertEqual(dict(exact), {("movepainsplit", -4): 1})
-        self.assertEqual(rolled, [])
+    def test_pain_split_is_ROLL_SCALED_because_its_magnitude_inherits_a_roll(self):
+        """Pain Split is roll-DEPENDENT, and this test used to assert the opposite.
 
-    def test_a_four_point_disagreement_on_pain_split_FAILS(self):
-        """Being deterministic, Pain Split gets no roll tolerance at all."""
-        self.assertFalse(
-            roll_components_agree(
-                [("movepainsplit", -4)], [("movepainsplit", -8)], None
-            )
-        )
+        It read `test_pain_split_is_compared_EXACTLY_not_roll_scaled`, asserting
+        `movepainsplit` landed in the exact bucket with nothing rolled — the behaviour before
+        `movepainsplit` was added to `_ROLL_SCALED_SOURCES`. That change was deliberate and its
+        reasoning is recorded at `engine_transition_differential.py:311-317`: Pain Split sets both
+        mons to `floor((hp_a + hp_b) / 2)`, so its magnitude is a function of the HP left after
+        whatever damage landed earlier in the SAME turn. It inherits that hit's roll exactly as a
+        capped heal does, and demanding an exact match was a matcher defect that produced the whole
+        `I3_roll_inherited` family (reports/c95, reports/c101).
+
+        The test was left behind by that fix and had been failing on main since. Its old name
+        asserted the contract backwards, which is why it is renamed rather than edited in place.
+        """
+        exact, rolled = _split_components([("movepainsplit", -4)])
+        self.assertEqual(dict(exact), {}, "movepainsplit must not be in the EXACT bucket")
+        self.assertEqual(rolled, [("movepainsplit", -4)])
+
+    def test_pain_splits_roll_window_is_the_flooring_slack_and_no_wider(self):
+        """Roll-scaled is not unbounded: the band is the existing one-HP flooring slack.
+
+        `abs(eng) * 0.92 - 1` to `abs(eng) * 1.09 + 1` — for an engine magnitude of 4 that is
+        [2.68, 5.36], which is what a floor-divided quantity needs and no more. Measured at that
+        boundary rather than asserted from the formula, because the point of the change was that no
+        NEW tolerance was introduced.
+        """
+        for showdown, expected in ((-3, True), (-4, True), (-5, True), (-2, False), (-8, False)):
+            with self.subTest(showdown=showdown):
+                self.assertIs(
+                    roll_components_agree(
+                        [("movepainsplit", showdown)], [("movepainsplit", -4)], None
+                    ),
+                    expected,
+                )
 
     def test_untagged_sethp_does_not_fall_into_the_roll_scaled_bucket(self):
         got = damage_components(
