@@ -26,6 +26,7 @@ its own scan.
 
 from __future__ import annotations
 
+import gzip
 import re
 import subprocess
 import unittest
@@ -106,8 +107,19 @@ class PublicInvariantTest(unittest.TestCase):
         for rel in tracked:
             path = REPO_ROOT / rel
             try:
-                text = path.read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
+                if path.suffix == ".gz":
+                    # Compressed tracked files are DECOMPRESSED and scanned. `read_text` on a
+                    # gzip yields bytes that decode to nothing resembling a path, so a leak inside
+                    # one was invisible to this guard -- and the file that motivated the guard's
+                    # last carve-out, the golden corpus, ships exactly such a sidecar
+                    # (`fold.jsonl.gz`, 51,913 bytes of JSON carrying the same provenance fields as
+                    # rows.jsonl). Both committed samples are clean today; the point is that they
+                    # were clean unverifiably before this.
+                    with gzip.open(path, "rt", errors="ignore") as handle:
+                        text = handle.read()
+                else:
+                    text = path.read_text(errors="ignore")
+            except (OSError, UnicodeDecodeError, EOFError, gzip.BadGzipFile):
                 continue
             for label, needle in _FORBIDDEN:
                 for match in re.finditer(re.escape(needle), text, re.IGNORECASE):
