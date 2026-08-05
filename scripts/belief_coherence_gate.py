@@ -564,7 +564,7 @@ def run_sweep(
                     # `engine.resolved_player_view(p)` against `twin.resolved_player_view(p)` --
                     # but `resolved_player_view` CALLS clone() itself, so both sides went through
                     # the same copy and suffered any state loss identically. It could not fail:
-                    # deleting `_variant_pins`, `_hp_after_actions` or `_healed_to_full_this_turn`
+                    # deleting `_variant_pins`, `_hp_after_actions` or `_leftovers_healed_this_turn`
                     # from clone() each left the sweep PASSing with the full count of checks. A
                     # guard with no possible kill is not coverage (plan §3).
                     mismatches = _engine_state_mismatches(env._belief_engine, twin)

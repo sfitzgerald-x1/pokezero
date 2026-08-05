@@ -172,6 +172,114 @@ class BeliefCoherenceSweepTest(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class ResidualPhaseDifferentialTest(unittest.TestCase):
+    """The belief engine's action/residual phase must match the sim's, on every HP line.
+
+    This is the verification the ``[silent]`` Leftovers defect needed and did not have. The engine
+    reads the phase from the bare ``|`` marker (``sim/battle.ts:2836``, ``case 'residual':
+    this.add('')``), but that marker is emitted from three sites, and the parser drops the ``|t:|``
+    line that distinguishes ``turnLoop``'s copy of it -- so the engine closes the residual phase on
+    the first action line instead. Whether that reconstruction is EXACT is a measurable question, and
+    measuring it against the sim rather than against a second Python implementation is the plan's §3
+    rule ("differentials compare against the engine or the sim, never Python-vs-Python").
+
+    Ground truth is computed from the RAW protocol, where ``|t:|`` is still present and the phase is
+    therefore known exactly. The comparison is on the CLASSIFICATION -- what the pre-slot snapshot
+    does with the line -- not on the phase bit, because two tags (``[from] confusion``, and the
+    residual-only tags) are settled without the phase by design.
+
+    This runs a short sweep. The same differential at 400 games on seeds 31337 and 555001 covered
+    67,583 HP lines with zero disagreements.
+    """
+
+    GAMES = 3
+    SEED = 31337
+
+    @classmethod
+    def _truth_phases(cls, raw_lines) -> list[tuple[str, bool]]:
+        """(raw_line, in_residual_phase) for every HP line, from the raw protocol."""
+        lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith(">")]
+        out: list[tuple[str, bool]] = []
+        phase = False
+        for index, line in enumerate(lines):
+            parts = line.split("|")
+            event_type = parts[1] if len(parts) > 1 else ""
+            if event_type == "":
+                # The ONLY discriminator, and it is only available here: ``turnLoop`` always follows
+                # its marker with ``|t:|``; the residual marker never does.
+                following = lines[index + 1].split("|") if index + 1 < len(lines) else []
+                phase = (following[1] if len(following) > 1 else None) != "t:"
+                continue
+            if event_type == "turn":
+                phase = False
+            if event_type in {"-damage", "-heal", "-sethp"}:
+                out.append((line, phase))
+        return out
+
+    def test_the_tracked_phase_never_changes_a_classification(self) -> None:
+        import random
+
+        from pokezero.belief import PublicBattleBeliefEngine, _hp_snapshot_action
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        env = LocalShowdownEnv(
+            LocalShowdownConfig(showdown_root=str(_integration_root()), set_belief_source=True)
+        )
+        checked = 0
+        residual_checked = 0
+        disagreements: list[tuple[str, str, str]] = []
+        try:
+            for game in range(self.GAMES):
+                rng = random.Random(self.SEED * 1_000_003 + game)
+                env.reset(seed=self.SEED + game)
+                steps = 0
+                while steps < 400 and env.terminal() is None:
+                    requested = env.requested_players()
+                    if not requested:
+                        break
+                    actions = {}
+                    for player in requested:
+                        mask = env.observe(player).legal_action_mask
+                        legal = [index for index, allowed in enumerate(mask) if allowed]
+                        if not legal:
+                            break
+                        actions[player] = rng.choice(legal)
+                    if len(actions) != len(requested):
+                        break
+                    env.step(actions)
+                    steps += 1
+
+                truth = self._truth_phases(env.protocol_lines)
+                engine = PublicBattleBeliefEngine()
+                seen = 0
+                for event in env._parser.public_events:
+                    engine.ingest_event(event)
+                    if event.event_type not in {"-damage", "-heal", "-sethp"}:
+                        continue
+                    self.assertLess(seen, len(truth), "more HP events than raw HP lines")
+                    raw_line, truth_phase = truth[seen]
+                    seen += 1
+                    checked += 1
+                    if truth_phase:
+                        residual_checked += 1
+                    want = _hp_snapshot_action(raw_line, in_residual_phase=truth_phase)
+                    got = _hp_snapshot_action(
+                        event.raw_line, in_residual_phase=engine._in_residual_phase
+                    )
+                    if want != got:
+                        disagreements.append((raw_line, want, got))
+                self.assertEqual(seen, len(truth), "engine saw a different set of HP lines")
+        finally:
+            env.close()
+
+        # Reachability first: a differential over zero residual-phase HP lines proves nothing, and
+        # the whole defect lived in the residual phase.
+        self.assertGreater(checked, 200, "too few HP lines to be a differential")
+        self.assertGreater(residual_checked, 50, "no residual-phase HP lines reached")
+        self.assertEqual(disagreements[:10], [], f"{len(disagreements)} classification mismatches")
+
+
 class CloneEquivalenceAliasingTest(unittest.TestCase):
     """Assertion 7's state check must catch an ALIASED field, not only a dropped one.
 

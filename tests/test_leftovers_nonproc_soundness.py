@@ -11,11 +11,24 @@ truth. Two ways that happened, both found by the V1 coherence sweep
    `onResidualOrder: 7` (`data/mods/gen4/moves.ts`), leftovers `10 / subOrder 4`
    (`data/mods/gen4/items.ts`), Leech Seed `10/5`, brn/psn/tox `10/6`. The shared `data/moves.ts` /
    `data/items.ts` values (4 and 5) are gen5+ and are NOT what gen3 runs.
-2. **A stale pre-residual snapshot -- the root cause.** `_hp_after_actions` was not cleared per
+2. **A stale pre-residual snapshot.** (Called "the root cause" here once. It was not -- see 3.)
+   `_hp_after_actions` was not cleared per
    turn, so a mon damaged on an earlier turn that takes no action-phase hit on this one was still
    judged against the old snapshot. The code's own comment states the policy as "no snapshot => no
    evidence (conservative)", but a STALE snapshot is not no-snapshot. It is now cleared at
    `|upkeep`.
+
+3. **A residual HP change classified as action-phase because it carried no `[from]` tag.** The
+   Leech Seed drain heal on the DRAINER is emitted `[silent]` with no source tag at all
+   (`sim/battle.ts:2293-2296`), so a tag-based classifier read it as action-phase and overwrote the
+   pre-slot snapshot with a residual-phase HP. 85 violations at 400 games on seed 31337, 65 on
+   555001, all family 5 `ruled_out_item`. Leech Seed is on 12 pool species.
+
+   The fix is not another tag: the same engine branch emits `[silent]` for REST, which really is
+   action-phase and is on 46 pool species, so a blanket `[silent]` rule trades one unsound
+   elimination for another. The engine's own action->residual boundary marker -- the bare `|` line
+   from `case 'residual': this.add('')` -- separates them exactly, and an unenumerated residual
+   source now DECLINES rather than reading as action-phase.
 
 The consequence measured in live games: for a species whose every variant holds Leftovers
 (Octillery) the rule-out emptied the candidate set, forced the inconsistent fallback and pinned
@@ -23,8 +36,11 @@ The consequence measured in live games: for a species whose every variant holds 
 `ruled_out_items=("leftovers",)` at the same time. On a mixed-item species it drops the true variant
 instead, which is the unrecoverable direction.
 
-The last test here is the one that keeps this honest: the rule must still FIRE on a genuine
-non-proc, or the "fix" is just the pruning switched off.
+The tests that keep this honest are the SOUND-ELIMINATION ones at the bottom: the rule must still
+fire whenever the mon really was below full at its own 10/4 slot, or the "fix" is just the pruning
+switched off. Two of them exist because a previous version of this fix over-declined -- it keyed off
+"healed to full at any point this turn" instead of "was full when the slot ran", and so refused two
+eliminations that the engine's ordering makes sound.
 """
 
 from __future__ import annotations
@@ -33,6 +49,13 @@ import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine, RevealedPokemonBelief
 from pokezero.showdown import parse_showdown_replay
+
+
+# The sim's action -> residual boundary: ``sim/battle.ts:2836``, ``case 'residual': this.add('')``.
+# Named rather than inlined because a bare "|" in a fixture reads like a typo, and because every
+# fixture that omits it is testing the phase-independent tag path instead (which is a real path --
+# see ``test_a_post_slot_tag_is_honoured_even_without_the_phase_marker`` -- but a different one).
+_RESIDUAL_MARKER = "|"
 
 
 def _engine_from(lines: list[str]) -> PublicBattleBeliefEngine:
@@ -95,17 +118,20 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
         self.assertNotIn("leftovers", _opponent(engine, "Porygon2").ruled_out_items)
 
     def test_a_stale_snapshot_from_an_earlier_turn_is_not_this_turns_evidence(self) -> None:
-        """Isolates the PER-TURN CLEAR of ``_hp_after_actions`` -- only it can block this.
+        """The live Togetic reproducer, end to end.
 
-        The live reproducer the first version of this fix missed (Togetic, true item Leftovers).
-        Turn 1 damages it and Wish tops it off, leaving a stale snapshot. On turn 2 it takes NO
-        action-phase HP change, is at full HP when the Leftovers slot runs (10/4), and only falls
-        below full afterwards from toxic (10/6). So the mon ends turn 2 damaged with no Leftovers
-        heal, and nothing healed it to full DURING turn 2 -- both of the other guards pass, and the
-        elimination is still wrong.
+        Turn 1 damages it and Wish tops it off. On turn 2 it takes no action-phase HP change, is at
+        full HP when its 10/4 slot runs, and only falls below full afterwards from toxic (10/6). The
+        elimination the old code made was wrong.
 
-        This is why "ends the turn below full" was an unsound proxy: it is not the same question as
-        "was below full when the Leftovers slot ran".
+        This test does NOT isolate the per-turn clear -- its docstring used to claim it did, and that
+        claim was false: with the classifier fixed, turn 1's snapshot ends at 1.0 (Wish is pre-slot),
+        so deleting the clear leaves this green. See
+        ``test_the_pre_slot_snapshot_is_cleared_at_upkeep`` for the clear's own guard and for why a
+        behavioural fixture cannot discriminate it.
+
+        It is kept because it is the shape live data produced, and because it pins that the psn chip
+        at 10/6 does not disturb the snapshot.
         """
         engine = _engine_from(
             [
@@ -136,13 +162,20 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
             "a stale snapshot from turn 1 was used as turn 2's evidence",
         )
 
-    def test_reaching_full_then_being_chipped_does_not_rule_out_leftovers(self) -> None:
-        """Isolates the HEAL-TO-FULL guard: only it can block this case.
+    def test_reaching_full_then_being_chipped_by_a_POST_slot_residual_declines(self) -> None:
+        """Wish (7) to full, then toxic (10/6) chip: full at the slot, so silence is not evidence.
 
-        Wish tops the mon off before the Leftovers slot (so Leftovers had no room and stayed
-        silent), and a later residual then chips it back BELOW full. Because the turn does not end
-        at full HP, the end-of-turn guard cannot help here — the heal-to-full tracking is what makes
-        this sound.
+        The docstring here used to say this "isolates the HEAL-TO-FULL guard". It does not, and the
+        guard it named is gone. What makes this sound is the ORDER: Wish resolves before the item
+        slot so it updates the snapshot to 1.0, and psn resolves after it so it leaves the snapshot
+        alone. The mon really was at full when Leftovers was offered.
+
+        Kill-confirmed by moving ``[from] psn`` out of the at/after list (the elimination then
+        fires), and separately by dropping ``[from] move: Wish`` from the pre-slot list (the snapshot
+        is discarded instead of reaching 1.0).
+
+        Contrast ``test_reaching_full_then_being_chipped_by_a_PRE_slot_residual_eliminates``: same
+        shape, chip ordered before the slot instead of after, opposite and equally required verdict.
         """
         engine = _engine_from(
             [
@@ -151,6 +184,7 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
                 "|turn|1",
                 "|move|p1a: Stantler|Return|p2a: Octillery",
                 "|-damage|p2a: Octillery|169/272",
+                _RESIDUAL_MARKER,
                 "|-heal|p2a: Octillery|272/272|[from] move: Wish|[wisher] Umbreon",
                 "|-damage|p2a: Octillery|255/272|[from] psn",
                 "|upkeep",
@@ -239,6 +273,292 @@ class LeftoversNonProcSoundnessTest(unittest.TestCase):
             "leftovers",
             octillery.ruled_out_items,
             "a real end-of-turn non-proc must still eliminate Leftovers",
+        )
+
+    # ------------------------------------------------------------------ the [silent] drain heal
+
+    def test_the_silent_leech_seed_drain_heal_on_the_drainer_is_not_pre_slot_evidence(self) -> None:
+        """The defect that survived the tag-based classifier: 85 violations / 400 games, seed 31337.
+
+        ``Battle.heal`` emits the Leech Seed drain heal on the DRAINER with no source tag at all --
+        ``sim/battle.ts:2293-2296``, ``case 'leechseed': case 'rest': this.add('-heal', target,
+        target.getHealth, '[silent]')`` -- so a classifier that keys off ``[from]`` tags read it as
+        action-phase and wrote a residual-phase HP into the pre-slot snapshot.
+
+        The shape below is the one that turns that into a WRONG elimination. Flygon is at full HP and
+        poisoned. In the residual phase, ordered by ``comparePriority``, Flygon's own handlers run as
+        a group (Leftovers 10/4 first -- no room, so silent -- then psn 10/6), and the seeded Swalot's
+        leechseed 10/5 heals Flygon back up part-way. Flygon was demonstrably FULL when its item slot
+        was offered, so the silence is not evidence; the drain heal to 249/253 is what made it look
+        like "ended a damaged turn with no heal".
+
+        Flygon is a mixed-item species, so this broke CONTAINMENT rather than merely widening: it
+        dropped the true variant and left a confidently wrong single-candidate pin.
+
+        Kill-confirmed two ways, each failing this test alone: (1) delete the ``_HP_SNAPSHOT_DISCARD``
+        return at the end of ``_hp_snapshot_action``, and (2) delete the bare-``|`` branch of
+        ``_track_residual_phase`` so the phase is never entered.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Swalot|Swalot, L84, M|300/300",
+                "|switch|p2a: Flygon|Flygon, L78, F|253/253",
+                "|turn|1",
+                "|move|p2a: Flygon|Leech Seed|p1a: Swalot",
+                "|-start|p1a: Swalot|move: Leech Seed",
+                "|-status|p2a: Flygon|psn",
+                _RESIDUAL_MARKER,
+                # Flygon's own group: 10/4 Leftovers is silent (full), 10/6 psn chips.
+                "|-damage|p2a: Flygon|240/253 psn|[from] psn",
+                # Swalot's group: 10/5 leechseed, whose drain heal lands on Flygon untagged.
+                "|-damage|p1a: Swalot|281/300|[from] Leech Seed|[of] p2a: Flygon",
+                "|-heal|p2a: Flygon|249/253 psn|[silent]",
+                "|upkeep",
+            ]
+        )
+        flygon = [b for b in engine.snapshot().sides["p2"] if b.species == "Flygon"][0]
+        self.assertIsNone(flygon.revealed_item, "precondition: the sweep must not skip this mon")
+        self.assertNotIn(
+            "leftovers",
+            flygon.ruled_out_items,
+            "the [silent] Leech Seed drain heal is a residual-phase change with no determinable "
+            "position against the drainer's own 10/4 slot, so it is not pre-slot evidence",
+        )
+
+    def test_rest_is_an_ACTION_phase_silent_heal_and_still_updates_the_snapshot(self) -> None:
+        """Why ``[silent]`` cannot simply be added to the at/after list.
+
+        The same ``Battle.heal`` branch that emits the untagged drain heal also emits REST's heal
+        (``case 'leechseed': case 'rest':``), and Rest is an action-phase move carried by 46 pool
+        species. Treating ``[silent]`` as residual would leave Rest's heal out of the snapshot, so the
+        snapshot would keep the PRE-Rest value and the rule would eliminate Leftovers on a mon that
+        was at full HP when its slot ran -- the same unsound direction, on a much more common shape.
+
+        Kill-confirmed by adding ``"[silent]"`` to ``_AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS``: this
+        test fails and no other does.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Blastoise|Blastoise, L82, M|264/264",
+                "|turn|1",
+                "|move|p1a: Stantler|Return|p2a: Blastoise",
+                "|-damage|p2a: Blastoise|150/264",
+                "|move|p2a: Blastoise|Rest|p2a: Blastoise",
+                "|-status|p2a: Blastoise|slp|[from] move: Rest",
+                "|-heal|p2a: Blastoise|264/264|[silent]",
+                _RESIDUAL_MARKER,
+                "|upkeep",
+            ]
+        )
+        self.assertNotIn(
+            "leftovers",
+            _opponent(engine, "Blastoise").ruled_out_items,
+            "Rest healed to full during the ACTION phase, so the item slot found no room",
+        )
+
+    def test_a_post_slot_tag_is_honoured_even_without_the_phase_marker(self) -> None:
+        """The at/after tags do not depend on the phase marker, on purpose.
+
+        psn/brn/tox, Leech Seed damage and the Leftovers heal are residual-ONLY effects in gen3 --
+        none of them can produce an HP line during the action phase -- so their tag settles the
+        classification by itself. Applying them without consulting the phase keeps these cases
+        correct on any event stream that reached the engine with the bare ``|`` markers stripped,
+        which is why the marker is load-bearing only for the untagged residual sources.
+
+        This fixture deliberately omits the marker. Kill-confirmed by removing ``[from] psn`` from
+        ``_AT_OR_AFTER_ITEM_SLOT_RESIDUAL_HP_TAGS``.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Stantler|Toxic|p2a: Octillery",
+                "|-status|p2a: Octillery|tox",
+                "|-damage|p2a: Octillery|255/272 tox|[from] psn",
+                "|upkeep",
+            ]
+        )
+        self.assertNotIn(
+            "leftovers",
+            _opponent(engine, "Octillery").ruled_out_items,
+            "toxic chips at 10/6, after the 10/4 item slot, so the mon was full when it ran",
+        )
+
+    # ------------------------------------------------- eliminations that MUST still happen
+
+    def test_reaching_full_then_being_chipped_by_a_PRE_slot_residual_eliminates(self) -> None:
+        """Wish (7) to full, then Sandstorm (field 8) chip: BELOW full at the slot, so eliminate.
+
+        The mirror of the post-slot case, and one of the two eliminations the removed
+        ``_healed_to_full_this_turn`` set wrongly declined -- it asked "was this mon healed to full at
+        any point this turn", which is not the question. Both Wish and the sandstorm chip resolve
+        before the 10/4 slot, so the item was offered at 255/272 and stayed silent. That is exactly
+        the evidence the rule exists to use.
+
+        Sandstorm is pool-reachable: all 15 Tyranitar sets carry Sand Stream, the pool's only source
+        of it. Kill-confirmed by re-adding the ``_healed_to_full_this_turn`` clause, and separately by
+        dropping ``[from] Sandstorm`` from ``_PRE_ITEM_SLOT_RESIDUAL_HP_TAGS`` -- the second is the
+        coverage that entry had none of.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Tyranitar|Tyranitar, L74, M|265/265",
+                "|-weather|Sandstorm|[from] ability: Sand Stream|[of] p1a: Tyranitar",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Tyranitar|Rock Slide|p2a: Octillery",
+                "|-damage|p2a: Octillery|169/272",
+                _RESIDUAL_MARKER,
+                "|-heal|p2a: Octillery|272/272|[from] move: Wish|[wisher] Umbreon",
+                "|-damage|p2a: Octillery|255/272|[from] Sandstorm",
+                "|upkeep",
+            ]
+        )
+        self.assertIn(
+            "leftovers",
+            _opponent(engine, "Octillery").ruled_out_items,
+            "the mon was below full when its 10/4 slot ran and no Leftovers heal followed",
+        )
+
+    def test_a_partial_wish_heal_still_supplies_pre_slot_evidence(self) -> None:
+        """Wish's pre-slot entry, which had no coverage of its own.
+
+        Every other Wish fixture heals to FULL, and those all pass whether Wish is classified as
+        pre-slot (snapshot -> 1.0) or as unclassifiable (snapshot -> discarded): both decline. So the
+        ``[from] move: Wish`` entry survived deletion silently.
+
+        Wish restores half of max HP, so a mon low enough is still below full afterwards. At order 7
+        that lands before the 10/4 slot, which means Leftovers WAS offered -- at 236/272, with room to
+        heal -- and stayed silent. Sound elimination.
+
+        Kill-confirmed by dropping ``[from] move: Wish`` from ``_PRE_ITEM_SLOT_RESIDUAL_HP_TAGS``:
+        this test fails and only this one.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Stantler|Return|p2a: Octillery",
+                "|-damage|p2a: Octillery|100/272",
+                _RESIDUAL_MARKER,
+                "|-heal|p2a: Octillery|236/272|[from] move: Wish|[wisher] Umbreon",
+                "|upkeep",
+            ]
+        )
+        self.assertIn(
+            "leftovers",
+            _opponent(engine, "Octillery").ruled_out_items,
+            "Wish resolves at order 7, so the item slot was offered at 236/272 with room to heal",
+        )
+
+    def test_healing_to_full_and_then_being_hit_in_the_action_phase_eliminates(self) -> None:
+        """Recover to full, then take a hit: below full at the slot, so eliminate.
+
+        The other elimination ``_healed_to_full_this_turn`` wrongly declined. Ordering does not even
+        enter into it -- both lines are action-phase -- which is what made that set plainly wrong
+        rather than merely conservative.
+
+        Kill-confirmed by re-adding the ``_healed_to_full_this_turn`` clause: this test and the
+        Sandstorm one above fail, and nothing else does.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Porygon2|Porygon2, L80|180/267",
+                "|turn|1",
+                "|move|p2a: Porygon2|Recover|p2a: Porygon2",
+                "|-heal|p2a: Porygon2|267/267",
+                "|move|p1a: Stantler|Return|p2a: Porygon2",
+                "|-damage|p2a: Porygon2|180/267",
+                _RESIDUAL_MARKER,
+                "|upkeep",
+            ]
+        )
+        self.assertIn(
+            "leftovers",
+            _opponent(engine, "Porygon2").ruled_out_items,
+            "healed to full EARLIER in the turn is not the same as full when the slot ran",
+        )
+
+    def test_a_pre_slot_sandstorm_crossing_still_eliminates_the_pinch_berries(self) -> None:
+        """The pinch rule reads the same snapshot, so Sandstorm's entry has to bind there too.
+
+        gen3's pinch berries share the item slot exactly (`data/mods/gen3/items.ts` sets
+        ``onUpdate: undefined`` plus ``onResidualOrder: 10, onResidualSubOrder: 4``). A sandstorm chip
+        at field order 8 takes the mon under 25% BEFORE the berry is offered, so the berry's silence
+        is real evidence. Kill-confirmed by dropping ``[from] Sandstorm`` from the pre-slot list.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Tyranitar|Tyranitar, L74, M|265/265",
+                "|-weather|Sandstorm|[from] ability: Sand Stream|[of] p1a: Tyranitar",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Tyranitar|Rock Slide|p2a: Octillery",
+                "|-damage|p2a: Octillery|72/272",
+                _RESIDUAL_MARKER,
+                "|-damage|p2a: Octillery|55/272|[from] Sandstorm",
+                "|upkeep",
+            ]
+        )
+        ruled_out = _opponent(engine, "Octillery").ruled_out_items
+        for berry in ("salacberry", "petayaberry", "liechiberry"):
+            self.assertIn(berry, ruled_out)
+
+    # --------------------------------------------------------- the per-turn clear, white-box
+
+    def test_the_pre_slot_snapshot_is_cleared_at_upkeep(self) -> None:
+        """The per-turn clear, asserted as the state invariant it is.
+
+        This is a white-box assertion on purpose, and the reason is worth writing down: with the
+        classifier fixed, a stale snapshot can only ever be HIGHER than the mon's true HP at the next
+        turn's item slot. HP only rises through a line that updates the snapshot (action-phase heals,
+        Wish, weather), discards it (the untagged drain heal), or reveals the item outright (the
+        Leftovers heal, after which the sweep skips the mon). So a stale value can only make both
+        rules DECLINE, never fire wrongly -- which is exactly why no behavioural fixture can
+        distinguish "cleared" from "stale" any more, and why the previous test that claimed to isolate
+        this line did not.
+
+        The line stays because the policy it implements is not an optimization: the rules are supposed
+        to reason from what THIS turn published, not from an inference chain about HP monotonicity
+        across turns. Deleting it fails this test and only this test.
+        """
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Stantler|Return|p2a: Octillery",
+                "|-damage|p2a: Octillery|169/272",
+                _RESIDUAL_MARKER,
+                "|upkeep",
+            ]
+        )
+        self.assertEqual(
+            engine._hp_after_actions,
+            {},
+            "the pre-slot HP snapshot is per-turn evidence and must not survive |upkeep",
+        )
+
+    def test_the_snapshot_is_populated_before_upkeep(self) -> None:
+        """Reachability for the test above: an empty dict must mean CLEARED, not never-written."""
+        engine = _engine_from(
+            [
+                "|switch|p1a: Stantler|Stantler, L88|300/300",
+                "|switch|p2a: Octillery|Octillery, L87, F|272/272",
+                "|turn|1",
+                "|move|p1a: Stantler|Return|p2a: Octillery",
+                "|-damage|p2a: Octillery|169/272",
+            ]
+        )
+        self.assertTrue(engine._hp_after_actions)
+        self.assertAlmostEqual(
+            next(v for k, v in engine._hp_after_actions.items() if "octillery" in k.lower()),
+            169 / 272,
+            places=6,
         )
 
 
