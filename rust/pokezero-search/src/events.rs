@@ -2979,9 +2979,13 @@ fn identify_sleep_talk_called(
         // is `true` (`choices.rs`), so a second-moving Sleep Talk regenerated its
         // callee as if it had moved first.
         //
-        // NOT pinned by a test -- reverting this line alone leaves the suite
-        // green -- but it is NOT a no-op and NOT an accident, and the reason is
-        // worth keeping so nobody deletes it as dead weight.
+        // PINNED by a test. This comment used to read "NOT pinned by a test --
+        // reverting this line alone leaves the suite green", which was false and
+        // false in the direction that invites deletion. Measured: reverting this
+        // line alone fails `every_sleeptalk_attribution_names_the_callee_the_engine_used`
+        // with `INPUT FIDELITY: 96 tail(s) ... left: 96, right: 0`. The test's own
+        // comment says the same ("that revert drives it 0 -> 96"); the two
+        // contradicted each other and this one was the stale half.
         //
         // It does flip the value: the candidate's move-table default is `true`,
         // and `outer_choice.first_move` is `false` whenever Sleep Talk moves
@@ -4242,13 +4246,19 @@ mod tests {
         // the likeliest real regression, and a bare aggregate threshold misses it.
         // Measured on the sleeper-FIRST subset, with #1048 vs reverted:
         //
-        //     SUBSTITUTE  404 / 37     FLAIL  900 / 60     REVERSAL  900 / 53
+        //     SUBSTITUTE  404     FLAIL  900     REVERSAL  900     (with #1048)
         //
-        // (The #1048 column read 234 / 363 / 307 when first written and was never
-        // asserted, so it drifted unnoticed -- the exact failure mode the tally pin
-        // below now closes. Re-measured from this test's own output.)
+        // The reverted column is DELIBERATELY ABSENT. It read 37 / 60 / 53 here and
+        // 234 / 363 / 307 in the with-#1048 column; both were unasserted and both had
+        // drifted -- the exact failure the tally pin below closes. Replacing them with
+        // fresh unasserted numbers would just restart the clock, and the reverted
+        // column cannot be produced by this test at all: it needs a `defender_choice`
+        // revert (`&Choice::default()` at the `identify_sleep_talk_called` call site),
+        // which trips the WRONG-attribution assert long before this print. Reproduce it
+        // deliberately if you need it; do not transcribe it into a comment.
         //
-        // A floor of 150 separates those with ~6x margin. Scoping matters: on the
+        // What matters for the gate is the live column against the floor of 150, and
+        // that is measured every run by the print below. Scoping matters: on the
         // FULL matrix the revert leaves {FLAIL 142, REVERSAL 135, SUBSTITUTE 50},
         // an 8-branch margin, and it degrades predictably -- sleeper-second agrees
         // are INVARIANT under a `defender_choice` revert (the gate needs
