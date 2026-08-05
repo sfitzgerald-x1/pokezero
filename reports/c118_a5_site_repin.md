@@ -38,14 +38,22 @@ C111 v2 also does not pin an `abilities.rs` arm at all. It pins the two **call s
 > `poke-engine` 0.0.47 code — pristine sdist `src/gen3/generate_instructions.rs:1652`, wrapping
 > that same call — and no patch in the stack adds it. (`poke-engine-gen3-pp-ordering.patch`
 > does add a line reading `if !choice.sleep_talk_move {`, but it wraps the **PP decrement**
-> block several hundred lines away, which is how a grep for the text misleads.)
+> block ~174 lines below, at `:3005`. Precisely: that is how a grep of the PATCH FILES
+> misleads. It does not mislead in the built source, where `lockedmove-pp.patch` later extends
+> that line to `if !choice.sleep_talk_move && !in_locked_turn(...)`, so the exact string has
+> exactly one hit there. Checking the built tree would have caught this; checking the patch
+> files is what did not.)
 >
 > What actually moved: the whole region shifted a **uniform +137 lines**
 > (2682 + 137 = 2819, 2694 + 137 = 2831, 2695 + 137 = 2832) as
 > `residual-lethality-partition.patch` grew from +53 to +197 inserted lines across
-> #1065/#1066/#1069. Nothing was inserted *between* the two call sites.
+> #1065/#1066/#1069. That is +144, not +137: the missing 7 are a second hunk of the same patch
+> that sat *above* this site at #1062 and was relocated below it by #1065, so it stopped
+> contributing to the offset. Nothing was inserted *between* the two call sites.
 >
-> And the discrepancy is an off-by-one in what is being pinned, not a change in the code:
+> And the discrepancy is an off-by-one, not a change in the code. To be fair to the record
+> rather than generous to C111, it is C111's off-by-one: C111 gave the line number of the guard
+> while its prose named the call. Stated plainly rather than as two conventions meeting:
 > C111 pinned the **guard** (`:2694`, now `:2831`); this report pins the **call the guard
 > wraps** (`:2695`, now `:2832`). Like for like the gap is **12 in both eras** —
 > `2694 − 2682` and `2831 − 2819`. So the "same" half of the sentence this note was retracting
@@ -130,9 +138,13 @@ a side-level helper.
 Phase 3 item 8 is re-pointed at its correct site: **`generate_instructions.rs:2819`**
 (`before_move`, which reaches `ability_modify_attack_against` at `:2103`) runs before
 **`:2832`** (`generate_instructions_from_existing_status_conditions`, which generates the
-wake). The fix is an ordering change and its blast radius is that second function — wide
+wake). ~~The fix is an ordering change and its blast radius is that second function — wide
 enough to deserve a dedicated PR with its own pin, generalising across Poison Point, Effect
-Spore, Flame Body, Static and Cute Charm × wake and thaw.
+Spore, Flame Body, Static and Cute Charm × wake and thaw.~~ **Superseded:** #1090 is a
+*predicate* change in `abilities.rs`, chosen deliberately over a reorder (see
+`reports/c121_a5_wake_before_contact.md` §2 — a reorder would move every
+`item_before_move`/`choice_before_move` instruction relative to every sleep, freeze and
+paralysis branch in the game), and it generalises across **four** abilities, not five.
 
 ## 4. What went wrong here, twice, in the same direction
 
