@@ -1659,6 +1659,12 @@ _MISS_PCT_RE = re.compile(r"pct=(?P<pct>[\d.]+)")
 # Residuals whose presence in a miss makes that miss a candidate for the
 # majority override. Deliberately an allow-list of NAMED end-of-turn effects:
 # an unattributed or roll-scaled component is never "the residual".
+# End-of-turn residual phase sources, for the A1 marker.
+_RESIDUAL_PHASE_SOURCES = frozenset({
+    "itemleftovers", "psn", "tox", "brn", "sandstorm", "hail",
+    "leechseed", "movewish", "abilityraindish", "ingrain", "nightmare", "curse",
+})
+
 _ADJUDICABLE_RESIDUALS = frozenset({"itemleftovers", "psn", "brn", "sandstorm", "tox"})
 
 
@@ -1862,6 +1868,21 @@ def evaluate_boundary_strict(
 ) -> tuple[str, list[str], int]:
     """Per-damage-source comparison against the mapper-rendered engine branches."""
 
+    # A1 marker predicate. A FORCED REPLACEMENT ply: nobody moved, somebody
+    # switched, no residual phase ran, and the battle did not end.
+    #
+    # `|win|` is load-bearing and its absence is what broke the first attempt:
+    # `|upkeep|` is also missing whenever the battle ENDS during residuals
+    # (Showdown emits the tick, then |faint|, then |win|), and stripping the
+    # engine's residuals there manufactured 44 divergences -- including
+    # reopening 19100002/53, the battle-end sandstorm row #1092 had just fixed.
+    boundary_is_forced_replacement = (
+        not any(line.startswith("|upkeep") for line in step_lines)
+        and not any(line.startswith("|win") for line in step_lines)
+        and not any(line.startswith("|move|") for line in step_lines)
+        and any(line.startswith("|switch|") for line in step_lines)
+    )
+
     side_one_choice = choices["p1"] if slot_sides["p1"] == "side_one" else choices["p2"]
     side_two_choice = choices["p2"] if slot_sides["p2"] == "side_two" else choices["p1"]
     # The mapper renders side_one/side_two; map its p1/p2 labels back to slots.
@@ -2007,6 +2028,17 @@ def evaluate_boundary_strict(
                     )
                     ok = False
                     break
+                # A1 -- "the residuals already ran". On a forced replacement
+                # Showdown gives the incoming Pokemon no residual tick; the
+                # engine, asked for a full turn, runs one and over-emits.
+                # Scoped to RESIDUAL sources: 19100180/24 is a hazard
+                # mis-attribution and must stay divergent.
+                if boundary_is_forced_replacement:
+                    eng_exact = Counter({
+                        component: count
+                        for component, count in eng_exact.items()
+                        if component[0] not in _RESIDUAL_PHASE_SOURCES
+                    })
                 if eng_exact != obs_exact_branch:
                     only_obs = obs_exact_branch - eng_exact
                     only_eng = eng_exact - obs_exact_branch
