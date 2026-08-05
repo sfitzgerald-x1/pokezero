@@ -172,32 +172,45 @@ class RandbatSourceMetadata:
         root = self.showdown_root
         for key in ("sets_path", "generator_path"):
             value = payload.get(key)
-            if not value or not root:
+            if not value:
                 continue
-            # `startswith` is a STRING test feeding a PATH operation, which is how the first
-            # version both raised and leaked: a sibling directory ("/opt/showdown-old" under root
-            # "/opt/showdown") passed the prefix test and then `relative_to` threw, on a function
-            # called once per believed mon per decision; and a symlinked build layout failed the
-            # prefix test and silently kept an absolute path.
             candidate = Path(value)
-            try:
-                if candidate.is_relative_to(root):
-                    payload[key] = str(candidate.relative_to(root))
-            except (ValueError, TypeError):  # malformed/legacy payloads must not break a serializer
-                pass
+            relative: str | None = None
+            if root:
+                # `startswith` was a STRING test feeding a PATH operation and failed both ways: it
+                # RAISED on a sibling directory ("/opt/showdown-old" under root "/opt/showdown"),
+                # and it LEAKED on a symlinked build layout whose real path is outside the root.
+                try:
+                    if candidate.is_relative_to(root):
+                        relative = str(candidate.relative_to(root))
+                except (ValueError, TypeError):
+                    relative = None
+            if relative is not None:
+                payload[key] = relative
+                continue
+            if not candidate.is_absolute() and not value.startswith("~"):
+                # ALREADY relative -- this is the re-serialization of a payload that has been
+                # through here once (the on-disk cache is written from `to_payload` and read back
+                # via `from_payload`, which yields root=None). Dropping it here would make the
+                # transform non-idempotent, so a source's provenance would depend on how many
+                # times it had been cached.
+                continue
+            # Not relative to the checkout => machine-specific WHATEVER ITS PREFIX. Testing
+            # `is_absolute()` here was wrong: `portable_path` collapses $HOME to "~", and
+            # `Path("~/workspace/...").is_absolute()` is False, so the one shape a real symlinked
+            # layout actually produces sailed through the guard it was written for.
+            #
+            # And this DROPS rather than raises. Raising turned a cosmetic provenance leak into
+            # total loss of function: a checkout under $HOME with data/ symlinked outside it could
+            # not be loaded at all, and since this runs once per believed mon per decision (via
+            # `summarize`), from the sidecar and from the attestation script, it could abort a
+            # collection run mid-battle. `source_hash` carries identity, so omitting the path
+            # costs a diagnostic string and nothing else.
+            payload[key] = None
         # The root itself is pure local filesystem layout: it names WHERE the checkout is, never
         # WHICH one it is. `source_hash` answers the latter, so dropping this loses nothing an
         # external consumer can act on (verified: nothing outside this module reads it).
         payload["showdown_root"] = None
-        # With the root dropped, a leftover ABSOLUTE path here would be unfalsifiable downstream --
-        # a consumer could not tell relative from absolute. Fail loudly instead.
-        for key in ("sets_path", "generator_path"):
-            value = payload.get(key)
-            if value and Path(value).is_absolute():
-                raise ValueError(
-                    f"randbats provenance {key}={value!r} is absolute and not under the checkout "
-                    f"root {root!r}; refusing to serialize a machine-specific path"
-                )
         return payload
 
 

@@ -59,32 +59,52 @@ class RandbatProvenancePortabilityTest(unittest.TestCase):
         self.assertEqual(payload["source_hash"], "deadbeef")
         self.assertEqual(payload["format_id"], "gen3randombattle")
 
-    def test_a_sibling_directory_does_not_raise(self) -> None:
+    def test_a_sibling_directory_is_dropped_rather_than_raising(self) -> None:
         """`/opt/showdown-old/...` passes a naive `startswith("/opt/showdown")` prefix test.
 
-        `to_payload` is called once per believed mon per decision, so a serializer that can throw on
-        a legacy or hand-edited payload is a live crash, not a theoretical one. The first version
-        raised `ValueError: ... is not in the subpath of ...` on exactly this input.
+        `to_payload` runs once per believed mon per decision, plus from the sidecar and the
+        attestation script, so a serializer that can throw is a live crash. An earlier version
+        raised here; the value is now dropped instead.
         """
-        meta = _metadata(sets_path="/opt/showdown-old/data/sets.json")
-        with self.assertRaises(ValueError) as caught:
-            meta.to_payload()
-        # It must fail as a REFUSAL naming the problem, not as a stray relative_to error.
-        self.assertIn("refusing to serialize", str(caught.exception))
+        payload = _metadata(sets_path="/opt/showdown-old/data/sets.json").to_payload()
+        self.assertIsNone(payload["sets_path"])
+        self.assertEqual(payload["generator_path"], "dist/data/random-battles/gen3/teams.js")
 
-    def test_an_unrelatable_path_is_refused_rather_than_leaked(self) -> None:
-        """A path outside the root must never be emitted as-is.
+    def test_a_home_collapsed_path_outside_the_root_is_dropped(self) -> None:
+        """The shape `portable_path` ACTUALLY emits, and the one an earlier guard missed.
 
-        With `showdown_root` dropped, a leftover absolute value is UNFALSIFIABLE downstream — a
-        consumer cannot tell relative from absolute. The first version kept it silently, which a
-        symlinked build layout reproduced.
+        `portable_path` collapses `$HOME` to `~`, and `Path("~/workspace/...").is_absolute()` is
+        **False** — so an `is_absolute()` guard let the real symlinked-build-layout leak straight
+        through, durably, surviving cache write and re-read. The predicate is "did relativization
+        succeed", not "does it start with a slash".
         """
-        for bad in ("/elsewhere/data/sets.json", "/private/var/tmp/sd/data/sets.json"):
+        payload = _metadata(
+            sets_path="~/workspace/pokerena/vendor/pokemon-showdown/data/sets.json"
+        ).to_payload()
+        self.assertIsNone(payload["sets_path"])
+
+    def test_serialization_never_raises_on_any_path_shape(self) -> None:
+        """Loss of function is worse than a cosmetic path. This is a serializer; it must not throw.
+
+        Raising here made a real layout — a checkout under `$HOME` with `data/` symlinked outside
+        it — impossible to LOAD AT ALL, because `from_showdown_root` writes the cache through this
+        method. That converted a provenance leak into a dead environment.
+        """
+        for bad in (
+            "/elsewhere/data/sets.json",
+            "~/somewhere/else/sets.json",
+            "../outside/sets.json",
+            "",
+        ):
             with self.subTest(path=bad):
-                with self.assertRaises(ValueError):
-                    _metadata(sets_path=bad).to_payload()
+                payload = _metadata(sets_path=bad).to_payload()
+                value = payload["sets_path"]
+                self.assertTrue(
+                    value is None or not Path(value).is_absolute(),
+                    f"leaked {value!r}",
+                )
 
-    def test_a_rootless_metadata_still_refuses_absolute_paths(self) -> None:
+    def test_a_rootless_metadata_drops_absolute_paths(self) -> None:
         """`from_payload` on an already-serialized cache yields `showdown_root=None`.
 
         Re-serializing that must not become a hole: with no root there is nothing to relativize
@@ -96,8 +116,8 @@ class RandbatProvenancePortabilityTest(unittest.TestCase):
             generator_path="dist/data/random-battles/gen3/teams.js",
         )
         self.assertIsNone(already_relative.to_payload()["showdown_root"])
-        with self.assertRaises(ValueError):
-            _metadata(showdown_root=None).to_payload()
+        # No root => nothing to relativize against => the machine-specific value is dropped.
+        self.assertIsNone(_metadata(showdown_root=None).to_payload()["sets_path"])
 
     def test_the_cache_round_trip_is_stable(self) -> None:
         """Serialize -> load -> serialize must be a fixed point.
