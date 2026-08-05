@@ -1041,7 +1041,8 @@ def generate_golden_corpus(
     ``observation_schema_version`` pins the encode contract. It defaults to the env's own default
     spec, which is how every corpus so far was written -- and why the committed sample is still
     v2.2-era rows. Regenerating at a newer schema needs the spec to be selectable rather than
-    implied, so a corpus's schema is a stated argument recorded in its manifest rather than a
+    implied, so a corpus's schema is a stated argument recorded in the corpus HEADER row (manifest.json carries only the corpus
+    schema and shapes) rather than a
     property of whenever it happened to be generated.
     """
 

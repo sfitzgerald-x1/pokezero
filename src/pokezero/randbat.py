@@ -156,20 +156,48 @@ class RandbatSourceMetadata:
         ``tests/test_public_invariant.py::_ALLOWED_FOR_RULE`` had to carve out an exception rather
         than the corpus simply being fixed.
 
-        The absolute paths stay on the in-memory object, where they are useful for diagnostics. What
-        gets SERIALIZED is relative to the checkout root, which is the part that actually identifies
-        the artifact -- and identity proper is ``source_hash``, which is unaffected.
+        Note this is NOT serialization-only in effect: the on-disk cache is written from
+        ``Gen3RandbatSource.to_payload()`` and read back through ``from_payload``, so after a cache
+        round-trip the in-memory ``showdown_root`` is ``None`` and the path fields are relative. An
+        earlier version of this docstring claimed the absolute paths "stay on the in-memory object
+        for diagnostics"; that is false on the default cached path, and saying so was the same
+        comment-outruns-code defect this whole effort exists to find.
+
+        On the shape actually being fixed: :func:`portable_path` already collapses ``$HOME`` to
+        ``~``, so a freshly computed metadata is ``~/workspace/...`` rather than an absolute home
+        path. The absolute form that reaches a tracked artifact comes from a cache file written
+        BEFORE that was added. Relativizing here makes the serialized form independent of both.
         """
         payload = asdict(self)
         root = self.showdown_root
         for key in ("sets_path", "generator_path"):
             value = payload.get(key)
-            if value and root and str(value).startswith(str(root)):
-                payload[key] = str(Path(value).relative_to(root))
+            if not value or not root:
+                continue
+            # `startswith` is a STRING test feeding a PATH operation, which is how the first
+            # version both raised and leaked: a sibling directory ("/opt/showdown-old" under root
+            # "/opt/showdown") passed the prefix test and then `relative_to` threw, on a function
+            # called once per believed mon per decision; and a symlinked build layout failed the
+            # prefix test and silently kept an absolute path.
+            candidate = Path(value)
+            try:
+                if candidate.is_relative_to(root):
+                    payload[key] = str(candidate.relative_to(root))
+            except (ValueError, TypeError):  # malformed/legacy payloads must not break a serializer
+                pass
         # The root itself is pure local filesystem layout: it names WHERE the checkout is, never
-        # WHICH one it is. `source_hash` answers the latter, so dropping this loses nothing a
-        # consumer can act on.
+        # WHICH one it is. `source_hash` answers the latter, so dropping this loses nothing an
+        # external consumer can act on (verified: nothing outside this module reads it).
         payload["showdown_root"] = None
+        # With the root dropped, a leftover ABSOLUTE path here would be unfalsifiable downstream --
+        # a consumer could not tell relative from absolute. Fail loudly instead.
+        for key in ("sets_path", "generator_path"):
+            value = payload.get(key)
+            if value and Path(value).is_absolute():
+                raise ValueError(
+                    f"randbats provenance {key}={value!r} is absolute and not under the checkout "
+                    f"root {root!r}; refusing to serialize a machine-specific path"
+                )
         return payload
 
 
