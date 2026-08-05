@@ -1294,3 +1294,12 @@ poke-engine-gen3-rest-sleep-pending-refund.patch
 # tests/test_rest_sleep_refund_boundary.py with a nonzero value rather than by the
 # compiler.
 poke-engine-gen3-rest-sleep-refund-binding.patch
+
+# Consumes rest_sleep_pending_refund: credits it to rest_turns on switch-in
+# (before Spikes -- Showdown resolves the sleep counter ahead of entry hazards),
+# and voids it whenever the sleep stint ends, so a stale refund cannot be spent
+# on an unrelated later switch-in. The clamp to rest_turns <= 3 is a crash guard:
+# the wake match panics with "Invalid rest_turns value" above that, confirmed by
+# running it. Still inert in production -- nothing sets the field nonzero until
+# the harness write-side lands.
+poke-engine-gen3-rest-sleep-refund-emission.patch

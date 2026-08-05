@@ -228,6 +228,24 @@ jobs:
             exit 1
           fi
 
+      # The ENGINE's own suite. Nothing ran it before this step: the only cargo
+      # test in any workflow targets rust/pokezero-search, so every test in
+      # third_party/poke-engine-src/tests/ was a pin nothing executed -- the
+      # defect this workflow's header forbids, and the same one that let the
+      # #1105 wheel break reach CI. The gen3 Rest-refund tests added alongside
+      # this step are worthless without it. Runs after the build, which is what
+      # materialises the patched source tree.
+      - name: Engine gen3 suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --test test_gen3 2>&1 \
+            | tee /tmp/gen3suite.log
+          if ! grep -qE 'test result: ok\. 21 passed' /tmp/gen3suite.log; then
+            echo "::error::expected 21 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+
       # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
       # #1105: adding a field to the engine's Pokemon broke the wheel build, and
       # nothing local caught it because `cargo test -p pokezero-search` never

@@ -36,7 +36,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "3e5d2b352dd43cd0db634486108663597c27580aa5d83256f176da3b553a0c2d",
+    "src/gen3/generate_instructions.rs": "59e9a1d8cc8849180fd45ba7b93f72ec825befe81a1929c16226ec7251868de0",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "88101a4e475b7f9a99e3780dde56b39c9dcc6eb66a9458d516fa468ba8a13dc5",
 }
@@ -119,11 +119,11 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 [entry.name for entry in applied[-5:]],
                 [
-                    "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
                     "poke-engine-gen3-weather-entry-truncation.patch",
                     "poke-engine-gen3-rest-sleep-pending-refund.patch",
                     "poke-engine-gen3-rest-sleep-refund-binding.patch",
+                    "poke-engine-gen3-rest-sleep-refund-emission.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
