@@ -67,6 +67,10 @@ jobs:
             # nonzero assertion touches only this file, so the gate that would
             # catch it never runs. Found by review of #1108.
             tests/test_rest_sleep_refund_boundary.py
+            # Pins the harness write side: the double-count guard and the
+            # capability probe's negative control. Same reason as the line above --
+            # a PR that weakens only this file must still trigger the gate.
+            tests/test_rest_sleep_refund_write_side.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -295,6 +299,37 @@ jobs:
             echo "::error::a binding boundary pin SKIPPED"
             exit 1
           fi
+
+      # Row 2 step 4. Two SILENT failure modes, neither visible without a test:
+      # folding the refund into rest_turns while also banking it double-counts and
+      # the engine clamps the result (mon sleeps too long, nothing errors), and a
+      # binding that drops the field builds a state with the refund simply gone.
+      # The dropping-binding negative control is what makes the probe more than
+      # decoration -- the same shape that let #1105's wheel break reach CI.
+      - name: Rest refund write-side pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_rest_sleep_refund_write_side -v 2>&1 \
+            | tee /tmp/writeside.log
+          if ! grep -qE 'Ran 5 tests' /tmp/writeside.log; then
+            echo "::error::expected 5 write-side pins; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/writeside.log; then
+            echo "::error::a write-side pin SKIPPED"
+            exit 1
+          fi
+          for pin in \
+            test_a_legal_split_survives_into_the_engine_pokemon \
+            test_an_unrepresentable_sum_fails_closed_rather_than_clamping \
+            test_the_boundary_sum_is_allowed \
+            test_the_installed_binding_round_trips_the_field \
+            test_a_binding_that_drops_the_field_is_rejected; do
+            grep -q "$pin" /tmp/writeside.log || {
+              echo "::error::write-side pin did not run: $pin"
+              exit 1
+            }
+          done
 
       # test_search_depth_tactics is deliberately NOT here. It is skipUnless a built
       # Showdown checkout (dist/sim/index.js) is present, which CI does not have, so it

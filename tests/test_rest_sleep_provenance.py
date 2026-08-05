@@ -340,23 +340,52 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         sleeper = self._sleeper(rest_attempts=3, refunded_time=3)
         self.assertEqual(sleeper.rest_turns, 3)
 
-    def test_pending_refund_refuses_even_when_approximate_sleep_is_enabled(self) -> None:
-        payload = _payload(self.dex, refund_pending=True, sleeper_active=True)
-        with self.assertRaises(EngineWorldUnsupported) as caught:
-            battle_spec_from_payload(
-                payload,
-                _override(),
-                dex=self.dex,
-                approximate_sleep_turns=True,
-            )
-        self.assertEqual(caught.exception.reason, "rest_sleep_active_refund_pending")
+    def test_pending_refund_now_builds_and_carries_the_bank_unfolded(self) -> None:
+        """Producer B no longer refuses -- the engine has somewhere to put the refund.
+
+        Was: assertRaises(rest_sleep_active_refund_pending). This is the class that
+        cost 781 decisions in era 58, 28.7% of all fallback.
+
+        The load-bearing assertion is that the refund is NOT folded into rest_turns.
+        Folding is right for a benched mon, whose next attempt is necessarily
+        preceded by a switch-in; for an active one it double-counts, because the
+        engine credits the bank again on switch-in.
+        """
+
+        # The attempt counts are part of the row now. Before this change
+        # local_showdown set the flag and `continue`d, so restSleepAttempts was
+        # never written for exactly these rows -- which is why deleting the refusal
+        # alone would have changed nothing: construction is gated on that key.
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=1,
+            skipped_time=1,
+        )
+        world = battle_spec_from_payload(
+            payload,
+            _override(),
+            dex=self.dex,
+            approximate_sleep_turns=True,
+        )
+        sleeper = world.spec.side_two.pokemon[0]
+        self.assertEqual(sleeper.status, "sleep")
+        self.assertEqual(sleeper.rest_sleep_pending_refund, 1)
+        # _payload writes one attempt and one skipped turn, so the unfolded counter
+        # is 3 - 1 = 2 and the folded one would have been 3. Asserting 2 is what
+        # distinguishes the two; asserting "non-zero" would pass either way.
+        self.assertEqual(sleeper.rest_turns, 2)
 
     def test_the_split_reason_codes_reach_world_construction_distinctly(self) -> None:
         # The flags are only useful if they survive into the refusal REASON, which is
         # what the fallback ledger counts. Both must refuse even with approximation on.
+        # restSleepActiveRefundPending is deliberately NOT in this list any more: it
+        # builds now rather than refusing, and its own test asserts that. The other
+        # two still refuse, for different owners -- one is a harness snapshot gap,
+        # one is a pre-split corpus row whose producer is unrecoverable.
         for flag, reason in (
             ("restSleepAttemptUnsettled", "rest_sleep_attempt_unsettled"),
-            ("restSleepActiveRefundPending", "rest_sleep_active_refund_pending"),
             ("restSleepRefundPending", "rest_sleep_refund_pending_unsplit_legacy"),
         ):
             with self.subTest(flag=flag):
@@ -385,9 +414,14 @@ class RestTurnsReconstructionTests(unittest.TestCase):
             "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
             "|upkeep", "|turn|2",
         ]
+        # Producer B's expectation is None: it BUILDS now instead of refusing. The
+        # ordering guard still holds, and is arguably sharper this way -- if the
+        # legacy check were moved ahead of the producer checks, a B row would refuse
+        # with the legacy code instead of building, so "builds" is a strictly
+        # stronger statement than "refuses with B's code" was.
         cases = (
             ("A", ["|cant|p2a: Skarmory|slp"], "rest_sleep_attempt_unsettled"),
-            ("B", talk, "rest_sleep_active_refund_pending"),
+            ("B", talk, None),
         )
         for producer, tail, expected in cases:
             with self.subTest(producer=producer):
@@ -409,11 +443,21 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                 # ordering load-bearing in the first place.
                 self.assertTrue(rows[0].get("restSleepRefundPending"), rows[0])
 
-                with self.assertRaises(EngineWorldUnsupported) as caught:
-                    battle_spec_from_payload(
+                if expected is None:
+                    world = battle_spec_from_payload(
                         payload, _override(), dex=self.dex, approximate_sleep_turns=True
                     )
-                self.assertEqual(caught.exception.reason, expected)
+                    sleeper = world.spec.side_two.pokemon[0]
+                    self.assertEqual(sleeper.status, "sleep")
+                    # The bank is what proves the PRODUCER branch ran rather than a
+                    # generic sleep path: only that branch sets it.
+                    self.assertEqual(sleeper.rest_sleep_pending_refund, 1)
+                else:
+                    with self.assertRaises(EngineWorldUnsupported) as caught:
+                        battle_spec_from_payload(
+                            payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                        )
+                    self.assertEqual(caught.exception.reason, expected)
 
     def test_the_retired_reason_code_is_gone_from_the_engine_world_source(self) -> None:
         # A grep-level guard, deliberately. The point of retiring the old name rather
@@ -602,11 +646,22 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
     def _annotate_active_sleeper(self, lines):
         return self._annotate_either(lines, active=True)
 
-    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+    def test_active_sleep_talk_row_now_carries_its_attempt_counts(self) -> None:
+        """Was: assertNotIn("restSleepAttempts").
+
+        Withholding the attempt counts was the bail-out that made producer B a
+        refusal, and it is the reason deleting the decline in engine_world would
+        have changed nothing on its own -- construction is gated on this key. The
+        flag still gets written, and still means "pending, not folded", so a
+        checkout predating the engine field keeps refusing rather than reading the
+        counts and silently dropping the refund.
+        """
+
         rows = self._annotate_active_sleeper(self._RESTED + [*self._ACTIVE_SLEEP_TALK])
-        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
         # Producer B: the Sleep Talk |move| classifies the attempt immediately, so this
-        # is the known-value/nowhere-to-put-it case, not an unsettled one.
+        # is the known-value case, not an unsettled one.
         self.assertTrue(rows[0]["restSleepActiveRefundPending"])
         self.assertNotIn("restSleepAttemptUnsettled", rows[0])
 

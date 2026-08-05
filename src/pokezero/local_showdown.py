@@ -2778,6 +2778,26 @@ def _apply_rest_sleep_provenance(
                 # third code rather than folding it into this one.
                 row["restSleepActiveRefundPending"] = True
                 _mark_legacy_rest_refund_pending(row)
+                # NO LONGER a bail-out. The flag now means "the refund is PENDING,
+                # not folded into rest_turns", and engine_world builds the world
+                # from it instead of refusing. That needs the attempt counts, and
+                # `continue` was withholding exactly them: restSleepAttempts was
+                # never written for these rows, so deleting the refusal alone would
+                # have changed nothing -- the row would still fall through to
+                # status_unsupported.
+                #
+                # Both older flags keep being set deliberately. A checkout predating
+                # the engine field replaying one of these rows must still REFUSE
+                # rather than silently read the attempts and drop the refund, which
+                # is the same protection `_mark_legacy_rest_refund_pending` gives
+                # across the producer split.
+                if count < 0 or refunded + skipped > count:
+                    row["restSleepProvenanceUnrepresentable"] = True
+                    continue
+                row["restSleepAttempts"] = count
+                if refunded:
+                    row["restSleepRefundedTime"] = refunded
+                row["restSleepSkippedTime"] = skipped
                 continue
         if count < 0 or refunded + skipped > count:
             # A malformed or incomplete public stream must not be coerced into a plausible
