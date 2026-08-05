@@ -60,21 +60,29 @@ def _sleeper(rest_turns: int, pending: int) -> PokemonSpec:
     )
 
 
-class _DroppingPokemon:
-    """A binding that accepts the keyword and silently discards it."""
+def _dropping_pokemon(**kwargs):
+    """A binding that accepts the keyword and silently discards it.
 
-    def __init__(self, **kwargs):
-        kwargs.pop("rest_sleep_pending_refund", None)
-        self._inner = poke_engine.Pokemon(**kwargs)
+    MUST return a real ``poke_engine.Pokemon``. The first version of this control
+    was a Python wrapper class, and it was VACUOUS: pyo3 rejects a foreign object
+    at ``Side(pokemon=[...])`` with ``TypeError: ... cannot be converted to
+    'Pokemon'``, the probe's blanket ``except Exception`` turned that into
+    ``False``, and the test passed for a reason unrelated to dropping the field.
+    Proof it asserted nothing: deleting the ``pop`` below, or deleting the
+    difference check inside the probe, both left the whole suite green.
 
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
+    ``poke_engine.Pokemon`` is not subclassable, so a factory is the only faithful
+    way to model ``impl Into<Pokemon>`` writing a literal 0.
+    """
+
+    kwargs.pop("rest_sleep_pending_refund", None)
+    return poke_engine.Pokemon(**kwargs)
 
 
 class _DroppingEngine:
     State = poke_engine.State
     Side = poke_engine.Side
-    Pokemon = _DroppingPokemon
+    Pokemon = staticmethod(_dropping_pokemon)
 
 
 class RefundReachesTheEngineTests(unittest.TestCase):

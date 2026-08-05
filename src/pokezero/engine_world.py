@@ -1678,6 +1678,19 @@ def _hp_and_status(
                 # its next attempt -- and wrong for an active one, which may never
                 # switch while search explores the stay-in branch. Doing both would
                 # credit the same turns twice.
+                if "restSleepAttempts" not in row:
+                    # A row written by the PRE-write-side harness: it set the flags
+                    # and withheld the counts. Fail closed, but under its OWN code --
+                    # falling through to `provenance_unrepresentable` would blame
+                    # malformed public data for what is really a stale corpus, and
+                    # silently inflate a different counted class in replay telemetry.
+                    # The legacy canary cannot catch it either: these rows carry the
+                    # producer flag and return before that check.
+                    raise EngineWorldUnsupported(
+                        "rest_sleep_refund_pending_precounts_legacy",
+                        f"{slot}: {species!r} carries a pending Rest refund with no "
+                        "attempt counts, so it predates the write side",
+                    )
                 skipped = row.get("restSleepSkippedTime", 0)
                 rest_turns = _rest_turns_from_row(
                     row, early_bird=rest_sleep_early_bird, fold_skipped=False
@@ -1843,8 +1856,12 @@ def _rest_turns_from_row(
         if not 1 <= rest_turns <= _REST_SLEEP_TURNS:
             return None
         # The SUM is what the engine holds once the refund lands, so it is the sum
-        # that has to fit -- this is the fail-closed check the engine cannot make,
-        # because at that point it can only clamp.
+        # that has to fit. A BACKSTOP, not the decisive check, and review proved it:
+        # the `refunded + skipped > attempts` rejection above already forces
+        # 3 - k*(1|2) + refunded + skipped <= 3, and an exhaustive sweep over
+        # (k, refunded, skipped) x Early Bird found zero inputs where this line is
+        # the one doing the rejecting. Kept because the fail-closed contract should
+        # not depend on that derivation staying true.
         return rest_turns if rest_turns + skipped <= _REST_SLEEP_TURNS else None
     return rest_turns if 1 <= rest_turns <= _REST_SLEEP_TURNS else None
 

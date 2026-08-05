@@ -52,13 +52,30 @@ def _stubbed_capability_probe():
 
     import pokezero.engine_world as engine_world
 
-    calls: list[int] = []
+    class _Calls(list):
+        """A list that can also carry the refund probe's own tally.
+
+        Existing tests treat this as a plain list (len / clear / == []), so it has
+        to stay one; a bare list cannot take an attribute.
+        """
+
+        refund_calls: list[int]
+
+    calls = _Calls()
+    refund_calls: list[int] = []
     original = engine_world.require_rest_turns_support
+    # The refund probe was NOT stubbed in the first version of the write side, so
+    # two building tests silently called the real one against the real wheel --
+    # exactly the undeclared wheel dependency this stub exists to prevent.
+    original_refund = engine_world.require_rest_sleep_refund_support
     engine_world.require_rest_turns_support = lambda *a, **k: calls.append(1)
+    engine_world.require_rest_sleep_refund_support = lambda *a, **k: refund_calls.append(1)
+    calls.refund_calls = refund_calls
     try:
         yield calls
     finally:
         engine_world.require_rest_turns_support = original
+        engine_world.require_rest_sleep_refund_support = original_refund
 
 
 # --- fixtures ---------------------------------------------------------------------
@@ -231,6 +248,77 @@ class RestTurnsReconstructionTests(unittest.TestCase):
             _payload(self.dex), _override(), dex=self.dex, approximate_sleep_turns=True
         )
         self.assertEqual(self.probe_calls, [])
+
+    def test_building_a_pending_refund_gates_on_its_own_capability(self) -> None:
+        """The refund probe's call site, which was unpinned.
+
+        Its sibling `require_rest_turns_support` has had this pin since it landed;
+        deleting the refund probe's call left every test green. The failures differ
+        in DIRECTION -- dropping rest_turns re-arms Sleep Clause, dropping the bank
+        wakes the mon early -- so each needs its own gate and its own pin.
+        """
+
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=1,
+            skipped_time=1,
+        )
+        battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_sleep_turns=True
+        )
+        self.assertEqual(len(self.probe_calls.refund_calls), 1)
+
+        # And an ordinary sleeper with no bank must NOT reach for it, or every
+        # sleep would start demanding a wheel capability it has no use for.
+        self.probe_calls.refund_calls.clear()
+        self._sleeper(rest_attempts=1)
+        self.assertEqual(self.probe_calls.refund_calls, [])
+
+    def test_a_pending_refund_leaving_no_counter_refuses_rather_than_building_zero(self) -> None:
+        """The floor-at-1 on the unfolded path, which was also unpinned.
+
+        rest_turns == 0 is not a representable Rest sleep: the engine reads 0 as
+        ORDINARY sleep and consults sleep_turns, and #1109's switch-in consumer is
+        guarded on rest_turns > 0. So a 0 counter would both re-arm the Sleep Clause
+        the Rest is exempt from AND hold a refund that can never land. Three
+        attempts with nothing refunded leaves 3 - 3 = 0, so this must refuse.
+        """
+
+        payload = _payload(
+            self.dex,
+            refund_pending=True,
+            sleeper_active=True,
+            rest_attempts=3,
+            skipped_time=1,
+        )
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_sleep_turns=True
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_a_pre_write_side_row_refuses_under_its_own_reason_code(self) -> None:
+        """A stored corpus row: both flags set, counts withheld by the old harness.
+
+        Fail-closed either way, but the code matters. Falling through to
+        `provenance_unrepresentable` blames malformed public data for a stale
+        corpus and inflates a different counted class in replay telemetry -- the
+        same misattribution the third legacy code was invented to prevent. The
+        legacy canary cannot catch these: they carry the producer flag and return
+        before that check.
+        """
+
+        payload = _payload(self.dex, refund_pending=True, sleeper_active=True)
+        self.assertNotIn("restSleepAttempts", payload["sides"]["p2"]["pokemon"][0])
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_sleep_turns=True
+            )
+        self.assertEqual(
+            caught.exception.reason, "rest_sleep_refund_pending_precounts_legacy"
+        )
 
     def test_each_attempt_count_maps_onto_the_engines_own_counter(self) -> None:
         # The engine sets rest_turns 3 on Rest and decrements once per move ATTEMPT,

@@ -315,8 +315,27 @@ jobs:
             echo "::error::expected 5 write-side pins; the suite shrank or grew"
             exit 1
           fi
-          if grep -q 'skipped' /tmp/writeside.log; then
+          # Anchored on the word boundary, not a bare grep for 'skipped': this
+          # domain is full of 'skippedTime' and a docstring first line would red
+          # the gate for nothing.
+          if grep -qE '(^|[^a-zA-Z])skipped=' /tmp/writeside.log; then
             echo "::error::a write-side pin SKIPPED"
+            exit 1
+          fi
+          # expectedFailure reads as OK to every check above. Review disarmed the
+          # negative control with @unittest.expectedFailure and all four
+          # assertions still passed -- count, no-skip, and a bare name grep.
+          if grep -qE 'expected failures|unexpected successes' /tmp/writeside.log; then
+            echo "::error::a write-side pin is marked expectedFailure"
+            exit 1
+          fi
+          # `unittest -v` prints the DOCSTRING line, not the test-name line, before
+          # '... ok' -- so a per-pin '... ok' match (the gen3 step's shape) silently
+          # matches nothing here for any test that has a docstring. Instead: require
+          # the run to end OK, which means all five passed, and require each name to
+          # be present, which means these five are the five that ran.
+          if ! grep -qE '^OK$' /tmp/writeside.log; then
+            echo "::error::the write-side suite did not end OK"
             exit 1
           fi
           for pin in \
@@ -325,7 +344,7 @@ jobs:
             test_the_boundary_sum_is_allowed \
             test_the_installed_binding_round_trips_the_field \
             test_a_binding_that_drops_the_field_is_rejected; do
-            grep -q "$pin" /tmp/writeside.log || {
+            grep -qE "^$pin \(" /tmp/writeside.log || {
               echo "::error::write-side pin did not run: $pin"
               exit 1
             }

@@ -1021,17 +1021,21 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
     if _require_non_negative_int(
         member.rest_sleep_pending_refund, f"{path}.rest_sleep_pending_refund"
     ):
-        # Fails closed on a sum the engine cannot represent. The engine clamps to 3
-        # because a wake match on rest_turns > 3 PANICS and search has no refusal
-        # channel at that point -- but the constructor does have one, and refusing
-        # a decision beats silently truncating a refund into a plausible counter.
-        total = int(member.rest_turns) + int(member.rest_sleep_pending_refund)
-        if total > _REST_SLEEP_TURNS_MAX:
-            raise ValueError(
-                f"{path}: rest_turns + rest_sleep_pending_refund must be "
-                f"<= {_REST_SLEEP_TURNS_MAX}, got {total}"
-            )
         kwargs["rest_sleep_pending_refund"] = member.rest_sleep_pending_refund
+    # Deliberately OUTSIDE the block above. A first version only ran this when the
+    # refund was nonzero, which left rest_turns=4/refund=0 building happily and then
+    # panicking the engine with "Invalid rest_turns value: 4" -- half the domain
+    # guarded while the constant and the refusal channel were both already in hand.
+    #
+    # The engine clamps because search has no refusal channel by then. The
+    # constructor has one, and refusing a decision beats truncating a refund into a
+    # plausible-looking counter.
+    total = int(member.rest_turns) + int(member.rest_sleep_pending_refund)
+    if total > _REST_SLEEP_TURNS_MAX:
+        raise ValueError(
+            f"{path}: rest_turns + rest_sleep_pending_refund must be "
+            f"<= {_REST_SLEEP_TURNS_MAX}, got {total}"
+        )
     if _require_non_negative_int(member.sleep_turns, f"{path}.sleep_turns"):
         kwargs["sleep_turns"] = member.sleep_turns
     if member.pre_transform is not None:

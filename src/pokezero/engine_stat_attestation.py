@@ -295,6 +295,10 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                 # Low Kick's Gen 3 base power depends on this value.
                 "weight_kg": _float32(member.weight_kg or 0.0),
                 "rest_turns": int(member.rest_turns),
+                # The refund is exactly the kind of field this instrument exists for:
+                # the binding can accept the keyword and drop the value, and nothing
+                # else in the pipeline would notice.
+                "rest_sleep_pending_refund": int(member.rest_sleep_pending_refund),
                 "sleep_turns": int(member.sleep_turns),
                 "pre_transform": _pre_transform_from_spec(member),
             }
@@ -323,6 +327,12 @@ def attest_battle_spec_transport(spec: BattleSpec, state: Any) -> BattleSpecTran
                 ),
                 "weight_kg": _float32(native_member.weight_kg),
                 "rest_turns": int(native_member.rest_turns),
+                # getattr, matching how `disabled` is read above: the test doubles are
+                # SimpleNamespaces. Defaulting to 0 still SURFACES a real drop -- an
+                # old binding reports 0 against a nonzero spec and mismatches.
+                "rest_sleep_pending_refund": int(
+                    getattr(native_member, "rest_sleep_pending_refund", 0)
+                ),
                 "sleep_turns": int(native_member.sleep_turns),
                 "pre_transform": _pre_transform_from_native(native_member.pre_transform),
             }
