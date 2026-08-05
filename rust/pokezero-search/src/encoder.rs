@@ -581,8 +581,13 @@ fn hidden_power_ivs(hp_type: &str) -> Option<&'static [(&'static str, i64)]> {
 
 /// `gen3_damage.hidden_power_type`: the type suffix of the set's Hidden Power move, if any.
 fn hidden_power_type_of(moves: &[String]) -> Option<&str> {
+    // LAST match wins, matching the generator (`teams.ts` loops every move assigning `hpType`
+    // with no `break`) and the Python twin `gen3_damage.hidden_power_type`. `find_map` took the
+    // first, which diverges from both when a set carries two Hidden Powers -- unreachable in the
+    // current pool, but the two implementations must not disagree on the rule.
     moves
         .iter()
+        .rev()
         .find_map(|m| m.strip_prefix("hiddenpower").filter(|rest| !rest.is_empty()))
 }
 
@@ -591,9 +596,38 @@ fn hidden_power_type_of(moves: &[String]) -> Option<&str> {
 const LEGAL_HP_EVS: [i64; 5] = [85, 81, 77, 73, 69];
 const LEGAL_ATK_EVS: [i64; 2] = [85, 0];
 const LEGAL_HP_IVS: [i64; 2] = [31, 30];
+// Def/SpA/SpD/Spe IVs are 31, or 30 where the Hidden Power type's `HPivs` entry lowers them.
+// Twin of `showdown._LEGAL_NON_HP_IVS`.
+const LEGAL_NON_HP_IVS: [i64; 2] = [31, 30];
 
-/// Native twin of `gen3_damage.randbats_spread_details`, narrowed to the two stats the encoder
-/// bands: `(hp, atk)`. Mirrors `data/random-battles/gen3/teams.ts` -- 85 EVs / 31 IVs / neutral
+/// One candidate variant's generator-exact stats. Twin of `gen3_damage.RandbatsSpread.stats`.
+///
+/// All six, deliberately: an earlier shape returned only `(hp, atk)`, which is why the Python
+/// fix for the Hidden Power IV override could land without the native side following.
+#[derive(Clone, Copy, Debug)]
+struct RandbatsSpread {
+    hp: i64,
+    atk: i64,
+    def: i64,
+    spa: i64,
+    spd: i64,
+    spe: i64,
+}
+
+impl RandbatsSpread {
+    fn non_hp(&self, stat: &str) -> i64 {
+        match stat {
+            "def" => self.def,
+            "spa" => self.spa,
+            "spd" => self.spd,
+            "spe" => self.spe,
+            _ => 0,
+        }
+    }
+}
+
+/// Native twin of `gen3_damage.randbats_spread_details`, returning all six stats the encoder
+/// bands, not just `(hp, atk)`. Mirrors `data/random-battles/gen3/teams.ts` -- 85 EVs / 31 IVs / neutral
 /// everywhere, then Hidden Power IV overrides, the first HP-trim loop, Atk zeroing, and the
 /// second HP-trim pass.
 ///
@@ -610,18 +644,25 @@ const LEGAL_HP_IVS: [i64; 2] = [31, 30];
 /// `Ok(None)` = not derivable, which the caller must treat as "abandon the whole band" rather
 /// than "skip this candidate": an unevaluable candidate could BE the true variant, so excluding
 /// it from a min/max would report a bound no real variant has.
-fn randbats_spread_hp_atk(
+fn randbats_spread_stats(
+    base_stats: &HashMap<String, i64>,
     hp_base: i64,
     atk_base: i64,
     level: i64,
     moves: &[String],
     item: &str,
     has_physical_attack: bool,
-) -> PyResult<Option<(i64, i64)>> {
+) -> PyResult<Option<RandbatsSpread>> {
     let mut hp_ev = 85i64;
     let mut atk_ev = 85i64;
     let mut hp_iv = 31i64;
     let mut atk_iv = 31i64;
+    // Def/SpA/SpD/Spe carry their own IVs, because the Hidden Power override lowers them too.
+    // Keeping them here rather than at the call site is what stops this function being a
+    // partial view of the generator's spread -- the shape that let the Python side get fixed
+    // while the native side kept the old flat iv=31 (the "Rust spread fork" defect).
+    let mut non_hp_ivs: [(&str, i64); 4] =
+        [("def", 31), ("spa", 31), ("spd", 31), ("spe", 31)];
     let hp_type = hidden_power_type_of(moves).map(|t| t.to_string());
     if let Some(hp_type) = hp_type.as_deref() {
         // `HIDDEN_POWER_IVS.get(hp_type, {})` -- an UNRECOGNIZED type takes the same branch as
@@ -640,7 +681,13 @@ fn randbats_spread_hp_atk(
             match *stat {
                 "hp" => hp_iv = *value,
                 "atk" => atk_iv = *value,
-                _ => {}
+                other => {
+                    for slot in non_hp_ivs.iter_mut() {
+                        if slot.0 == other {
+                            slot.1 = *value;
+                        }
+                    }
+                }
             }
         }
     }
@@ -708,13 +755,43 @@ fn randbats_spread_hp_atk(
              refusing to emit a plausible-but-wrong stat"
         )));
     }
+    for (stat, iv) in non_hp_ivs.iter() {
+        if !LEGAL_NON_HP_IVS.contains(iv) {
+            return Err(err(&format!(
+                "randbats spread outside the generator's legal set ({stat}_iv={iv}); the \
+                 generator has drifted or the spread core was mis-called -- refusing to emit a \
+                 plausible-but-wrong stat"
+            )));
+        }
+    }
     // Shedinja (the only base-1-HP species): the engine pins max HP to 1.
     let hp_stat = if hp_base == 1 {
         1
     } else {
         hp_value(hp_ev, hp_iv)
     };
-    Ok(Some((hp_stat, gen3_stat(atk_base, level, atk_ev, atk_iv, false))))
+    let non_hp = |stat: &str| {
+        let iv = non_hp_ivs
+            .iter()
+            .find(|(name, _)| *name == stat)
+            .map(|(_, iv)| *iv)
+            .unwrap_or(31);
+        gen3_stat(
+            base_stats.get(stat).copied().unwrap_or(0),
+            level,
+            85,
+            iv,
+            false,
+        )
+    };
+    Ok(Some(RandbatsSpread {
+        hp: hp_stat,
+        atk: gen3_stat(atk_base, level, atk_ev, atk_iv, false),
+        def: non_hp("def"),
+        spa: non_hp("spa"),
+        spd: non_hp("spd"),
+        spe: non_hp("spe"),
+    }))
 }
 
 // Sorted-by-normalized-key dedupe keeping the first-seen original string:
@@ -1609,7 +1686,7 @@ fn encode_expected_stats(
         return Ok(());
     }
 
-    // `showdown.py:6743-6745` does this fix in TWO halves and both are load bearing:
+    // `showdown.py:6778-6780` does this fix in TWO halves and both are load bearing:
     // `_level_from_details` returns 100 for a token-less details string, AND this caller
     // coerces a None level to 100 anyway -- "belt-and-suspenders ... rather than silently
     // zeroing this otherwise-deterministic block". Porting only the first half left
@@ -1621,12 +1698,82 @@ fn encode_expected_stats(
     // NUMERIC_LEVEL) and the one in the transformed-stats path mirrors `if level is None ...
     // return`. Only this one, matching `_encode_expected_stats`.
     let level = level_from_details(details).unwrap_or(100);
+    // SCOPE LIMIT, stated because the spread math below is now Python-equivalent and it would be
+    // easy to read that as closed equivalence for these columns. `Tables::species_info` is a bare
+    // normalized lookup with no twin of Python's `_species_info_base_fallback`, so a COSMETIC FORME
+    // (every `unown*` except the base) resolves here to None and this function returns early --
+    // leaving all ten NUMERIC_EXPECTED_* columns at zero while Python emits real values. Measured
+    // at 514 diverging cells over one 120-game replay. The divergence is one lookup EARLIER than
+    // the spread work, is pre-existing, and is tracked as its own fix; it is not introduced or
+    // closed here.
     let Some(battle_info) = tables.species_info(battle_species) else {
         return Ok(());
     };
     let Some(hp_info) = tables.species_info(base_species) else {
         return Ok(());
     };
+    let atk_base = battle_info.base_stats.get("atk").copied().unwrap_or(0);
+    let hp_base = hp_info.base_stats.get("hp").copied().unwrap_or(0);
+    let variants = belief
+        .map(|b| b.candidate_variants())
+        .filter(|v| !v.is_empty());
+    // Generator-exact spreads for every candidate, computed once and shared by the
+    // Def/SpA/SpD/Spe block below and the HP/Atk bands -- the twin of the Python pre-pass. These
+    // four are NOT spread-invariant: the generator overwrites IVs from the carried Hidden Power
+    // type's `HPivs` entry, lowering one or more of them to 30 on 716 of the 1682 real candidate
+    // variants (42.6%).
+    // Emitting the flat iv=31 value here while Python asked the spread core is precisely the
+    // "Rust spread fork" defect -- the native encoder keeping an approximation the Python side
+    // had already dropped.
+    let mut exact_variant_spreads: Vec<RandbatsSpread> = Vec::new();
+    if layout.is_v4() {
+        if let Some(variants) = variants {
+            for variant in variants {
+                // `_variant_spread_stats` returns None when `moves` is not a list, and the
+                // caller treats that as unevaluable. `as_array` flattens missing/null/scalar to
+                // an EMPTY Vec, which would instead be evaluated as a moveless set -- a real
+                // spread for a variant that does not exist. Check the raw value.
+                if !get(variant, "moves").is_array() {
+                    exact_variant_spreads.clear();
+                    break;
+                }
+                let moves: Vec<String> = as_array(get(variant, "moves"))
+                    .iter()
+                    .map(|m| normalize_identifier(&str_or_empty(m)))
+                    .collect();
+                let item = normalize_identifier(&str_or_empty(get(variant, "item")));
+                let has_physical = moves.iter().any(|move_id| {
+                    tables
+                        .move_info(move_id)
+                        .map(|info| info.gen3_category == "Physical" && info.base_power > 0)
+                        .unwrap_or(false)
+                });
+                match randbats_spread_stats(
+                    &battle_info.base_stats,
+                    // The BATTLE species' HP base, matching the Python twin, which hands the
+                    // spread core `battle_info.base_stats` whole while taking the BASELINE's hp
+                    // from `hp_info`. The two differ only on a forme change, and the transformed
+                    // path returns before reaching here.
+                    battle_info.base_stats.get("hp").copied().unwrap_or(0),
+                    atk_base,
+                    level,
+                    &moves,
+                    &item,
+                    has_physical,
+                )? {
+                    Some(spread) => exact_variant_spreads.push(spread),
+                    None => {
+                        // Unevaluable candidate: abandon the WHOLE set rather than skip this one.
+                        // A max over a strict subset can fall BELOW the true value if the skipped
+                        // candidate was the true variant, which is unsound in the one direction
+                        // this column claims to be safe in.
+                        exact_variant_spreads.clear();
+                        break;
+                    }
+                }
+            }
+        }
+    }
     for (stat, column_name) in [
         ("def", "NUMERIC_EXPECTED_DEF"),
         ("spa", "NUMERIC_EXPECTED_SPA"),
@@ -1635,15 +1782,22 @@ fn encode_expected_stats(
     ] {
         let value = battle_info.base_stats.get(stat).copied().unwrap_or(0);
         if value != 0 {
+            let emitted = if exact_variant_spreads.is_empty() {
+                gen3_stat(value, level, 85, 31, false)
+            } else {
+                exact_variant_spreads
+                    .iter()
+                    .map(|spread| spread.non_hp(stat))
+                    .max()
+                    .unwrap_or_else(|| gen3_stat(value, level, 85, 31, false))
+            };
             grid.set_num(
                 token,
                 layout.num_col(column_name)?,
-                (gen3_stat(value, level, 85, 31, false) as f64 / divisor).min(1.0),
+                (emitted as f64 / divisor).min(1.0),
             );
         }
     }
-    let atk_base = battle_info.base_stats.get("atk").copied().unwrap_or(0);
-    let hp_base = hp_info.base_stats.get("hp").copied().unwrap_or(0);
     if atk_base == 0 || hp_base == 0 {
         return Ok(());
     }
@@ -1651,14 +1805,11 @@ fn encode_expected_stats(
     let hp_baseline = gen3_stat(hp_base, level, 85, 31, true);
     let (mut atk_low, mut atk_high) = (atk_baseline, atk_baseline);
     let (mut hp_low, mut hp_high) = (hp_baseline, hp_baseline);
-    let variants = belief
-        .map(|b| b.candidate_variants())
-        .filter(|v| !v.is_empty());
     if let Some(variants) = variants {
         let mut atk_values: Vec<i64> = Vec::new();
         let mut hp_values: Vec<i64> = Vec::new();
         let pinch_berries = ["liechiberry", "petayaberry", "salacberry"];
-        for variant in variants {
+        for (index, variant) in variants.iter().enumerate() {
             let moves: Vec<String> = as_array(get(variant, "moves"))
                 .iter()
                 .map(|m| normalize_identifier(&str_or_empty(m)))
@@ -1671,40 +1822,19 @@ fn encode_expected_stats(
                     .unwrap_or(false)
             });
             if layout.is_v4() {
-                // `_variant_spread_stats` returns None when `moves` is not a list, and the
-                // caller treats that as unevaluable. `as_array` flattens missing/null/scalar
-                // to an EMPTY Vec, which would instead be evaluated here as a moveless set --
-                // a real spread for a variant that does not exist. Check the raw value.
-                if !get(variant, "moves").is_array() {
-                    atk_values.clear();
-                    hp_values.clear();
-                    break;
-                }
-                // V4 asks the generator's own spread core; see randbats_spread_hp_atk.
-                let Some((hp, atk)) = randbats_spread_hp_atk(
-                    // The BATTLE species' HP base, matching the Python twin, which hands the
-                    // spread core `battle_info.base_stats` whole while taking the BASELINE's
-                    // hp from `hp_info`. The two differ only on a forme change, and the
-                    // transformed path returns before reaching here.
-                    battle_info.base_stats.get("hp").copied().unwrap_or(0),
-                    atk_base,
-                    level,
-                    &moves,
-                    &item,
-                    has_physical,
-                )?
-                else {
-                    // Unevaluable candidate: abandon the whole band rather than exclude it.
-                    // Substituting the baseline would report a bound partly derived from a
-                    // value no real variant has, and the model reads that as confidently as
-                    // a true one. Falling back to low == high == baseline is an honest
-                    // "unknown"; a fabricated range is not.
+                // Already computed by the pre-pass above, which the Def/SpA/SpD/Spe block needs
+                // as well; an empty list there means some candidate was unevaluable, which lands
+                // on the identical fallback either way. Substituting the baseline for a missing
+                // candidate would report a bound partly derived from a value no real variant
+                // has, and the model reads that as confidently as a true one; low == high ==
+                // baseline is an honest "unknown", a fabricated range is not.
+                let Some(spread) = exact_variant_spreads.get(index) else {
                     atk_values.clear();
                     hp_values.clear();
                     break;
                 };
-                atk_values.push(atk);
-                hp_values.push(hp);
+                atk_values.push(spread.atk);
+                hp_values.push(spread.hp);
             } else {
                 atk_values.push(if has_physical {
                     atk_baseline
@@ -3261,7 +3391,17 @@ impl NativeEncoder {
 
 #[cfg(test)]
 mod spread_tests {
-    use super::randbats_spread_hp_atk;
+    use super::{randbats_spread_stats, RandbatsSpread};
+    use std::collections::HashMap;
+
+    /// Base stats for the four non-HP columns. The HP/Atk assertions in this module do not read
+    /// them, so a map carrying only what each case needs keeps the existing expectations intact.
+    fn bases(def: i64, spa: i64, spd: i64, spe: i64) -> HashMap<String, i64> {
+        [("def", def), ("spa", spa), ("spd", spd), ("spe", spe)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
 
     /// Every expected value here was produced by the PYTHON source of truth --
     /// `gen3_damage.randbats_spread_details` -- not by re-deriving the rules by hand. That is the
@@ -3277,7 +3417,17 @@ mod spread_tests {
         has_physical: bool,
     ) -> Option<(i64, i64)> {
         let moves: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
-        randbats_spread_hp_atk(hp_base, atk_base, level, &moves, item, has_physical).unwrap()
+        randbats_spread_stats(
+            &bases(100, 100, 100, 100),
+            hp_base,
+            atk_base,
+            level,
+            &moves,
+            item,
+            has_physical,
+        )
+        .unwrap()
+        .map(|s: RandbatsSpread| (s.hp, s.atk))
     }
 
     #[test]
@@ -3391,10 +3541,12 @@ mod spread_tests {
         // Verified against the Python core, which reaches the same illegal hp_ev=1 and whose
         // `_variant_spread_stats` raises on it.
         let moves: Vec<String> = ["bellydrum", "bodyslam"].iter().map(|m| m.to_string()).collect();
-        let refused = randbats_spread_hp_atk(160, 110, 1, &moves, "leftovers", true);
+        let refused = randbats_spread_stats(&bases(100, 100, 100, 100), 160, 110, 1, &moves, "leftovers", true);
         assert!(refused.is_err(), "an illegal spread was emitted: {refused:?}");
         // ...and the same set at its real level is fine, so the guard is not simply always-on.
-        assert!(randbats_spread_hp_atk(160, 110, 68, &moves, "leftovers", true).unwrap().is_some());
+        assert!(randbats_spread_stats(&bases(100, 100, 100, 100), 160, 110, 68, &moves, "leftovers", true)
+            .unwrap()
+            .is_some());
     }
 }
 
