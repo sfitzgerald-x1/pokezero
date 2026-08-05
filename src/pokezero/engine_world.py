@@ -1672,6 +1672,11 @@ def _hp_and_status(
             # HERE therefore means the row carries the old flag and NEITHER producer
             # flag -- i.e. it really was written before the split, and its producer is
             # not recoverable. Moving this check earlier would swallow every live row.
+            #
+            # CANARY: in a fresh post-split era this code must count exactly ZERO.
+            # Every live row carries a producer flag, so anything landing here came
+            # from a replayed pre-split corpus or a mixed-version fleet. A nonzero
+            # count in new telemetry is a signal to act on, not noise.
             if bool(row.get("restSleepRefundPending")):
                 raise EngineWorldUnsupported(
                     "rest_sleep_refund_pending_unsplit_legacy",

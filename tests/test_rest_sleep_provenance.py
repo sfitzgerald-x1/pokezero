@@ -368,6 +368,53 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                     )
                 self.assertEqual(caught.exception.reason, reason)
 
+    def test_a_real_annotated_row_reaches_its_PRODUCER_code_not_the_legacy_one(self) -> None:
+        """The legacy check must stay LAST, and this is what pins that.
+
+        Every other test in this file sets the flags by hand, one at a time, so none
+        of them exercises the thing the dual-write created: a live row carrying BOTH
+        its producer flag and the pre-split flag. With the checks in the wrong order
+        such a row is swallowed by the legacy branch and reported as un-attributable
+        — the split silently 100% undone — and review confirmed the whole suite stays
+        green when that happens. So: annotate a real stream, prove the row really does
+        carry the legacy key, then build it and demand the PRODUCER code.
+        """
+        talk = [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|upkeep", "|turn|2",
+        ]
+        cases = (
+            ("A", ["|cant|p2a: Skarmory|slp"], "rest_sleep_attempt_unsettled"),
+            ("B", talk, "rest_sleep_active_refund_pending"),
+        )
+        for producer, tail, expected in cases:
+            with self.subTest(producer=producer):
+                payload = _payload(self.dex, sleeper_active=True)
+                rows = payload["sides"]["p2"]["pokemon"]
+                lines = [
+                    "|player|p1|Alice|", "|player|p2|Bob|",
+                    "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+                    "|switch|p2a: Skarmory|Skarmory, L76|100/100",
+                    "|turn|1",
+                    "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+                    "|-status|p2a: Skarmory|slp|[from] move: Rest",
+                    *tail,
+                ]
+                _apply_rest_sleep_provenance(
+                    rows, parse_showdown_replay(lines, battle_id="order-guard"), "p2"
+                )
+                # The premise: this row carries BOTH keys, which is what makes the
+                # ordering load-bearing in the first place.
+                self.assertTrue(rows[0].get("restSleepRefundPending"), rows[0])
+
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_sleep_turns=True
+                    )
+                self.assertEqual(caught.exception.reason, expected)
+
     def test_the_retired_reason_code_is_gone_from_the_engine_world_source(self) -> None:
         # A grep-level guard, deliberately. The point of retiring the old name rather
         # than reusing it for producer B is that no historical count can be silently

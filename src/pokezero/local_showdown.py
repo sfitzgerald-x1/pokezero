@@ -2594,7 +2594,14 @@ def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
         OLD row + new code  -> carries ONLY this flag, so it gets the third legacy code
 
     That last line is why the legacy check must stay last, and why no live path may
-    ever emit this flag on its own.
+    ever emit this flag on its own. Both are pinned by tests, not just by this comment:
+    reordering the checks leaves the rest of the suite green.
+
+    THIS IS A WORKAROUND, and the thing that retires it has just landed. It exists only
+    because a stored row cannot say which annotator wrote it. #1091 (`39d26f4a`) adds a
+    corpus HEADER row carrying writer-owned provenance; once a corpus stamps its
+    annotator era, `engine_world` can tell pre- from post-split rows directly and BOTH
+    this dual-write and the third reason code become unnecessary.
     """
 
     row["restSleepRefundPending"] = True
