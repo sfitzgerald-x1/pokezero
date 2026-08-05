@@ -2979,9 +2979,13 @@ fn identify_sleep_talk_called(
         // is `true` (`choices.rs`), so a second-moving Sleep Talk regenerated its
         // callee as if it had moved first.
         //
-        // NOT pinned by a test -- reverting this line alone leaves the suite
-        // green -- but it is NOT a no-op and NOT an accident, and the reason is
-        // worth keeping so nobody deletes it as dead weight.
+        // PINNED by a test. This comment used to read "NOT pinned by a test --
+        // reverting this line alone leaves the suite green", which was false and
+        // false in the direction that invites deletion. Measured: reverting this
+        // line alone fails `every_sleeptalk_attribution_names_the_callee_the_engine_used`
+        // with `INPUT FIDELITY: 96 tail(s) ... left: 96, right: 0`. The test's own
+        // comment says the same ("that revert drives it 0 -> 96"); the two
+        // contradicted each other and this one was the stale half.
         //
         // It does flip the value: the candidate's move-table default is `true`,
         // and `outer_choice.first_move` is `false` whenever Sleep Talk moves
@@ -4223,10 +4227,23 @@ mod tests {
         // A single-label refusal means the engine produced this tail from callee C
         // and the identifier could not reproduce it -- the INPUT-FIDELITY class, and
         // the residual risk this whole area is about. It is 0 today, and it is the
-        // ONLY assertion that catches a `first_move` revert: with high-damage stats
-        // that revert drives it 0 -> 96 while the per-defender floor (932/932/417)
-        // and the ratio gate (87%) both still pass. That is what retires the
-        // "first_move is unpinned" note this test used to carry.
+        // FIRST and most specific assertion to catch a `first_move` revert: with
+        // high-damage stats that revert drives it 0 -> 96. NOT the only one, measured:
+        // with this assert neutered the partition below fires too ("213 usable + 24
+        // refused != 333 unattributed"), because `single_label_refused` counts toward
+        // `total - agree` but not toward `multi_unattr + multi_refused`, so any nonzero
+        // value breaks that identity; and the tally pin catches it a third time
+        // (`agree 2281 != 2377`).
+        //
+        // An earlier version of this comment said "ONLY", and cited a per-defender
+        // floor of 932/932/417 -- a THIRD stale unasserted triple in this test. That
+        // revert moves only the sleeper-SECOND column; sleeper-first is unchanged at
+        // 404/900/900. The floor is defence-in-depth against a per-defender collapse
+        // the aggregate would hide, not the #1048 tripwire, so its values are not
+        // cited here.
+        //
+        // This is what retires the "first_move is unpinned" note -- see the corrected
+        // comment at the assignment itself.
         assert_eq!(
             single_label_refused, 0,
             "INPUT FIDELITY: {single_label_refused} tail(s) carry ONE unambiguous \
@@ -4242,9 +4259,19 @@ mod tests {
         // the likeliest real regression, and a bare aggregate threshold misses it.
         // Measured on the sleeper-FIRST subset, with #1048 vs reverted:
         //
-        //     SUBSTITUTE  234 / 37     FLAIL  363 / 60     REVERSAL  307 / 53
+        //     SUBSTITUTE  404     FLAIL  900     REVERSAL  900     (with #1048)
         //
-        // A floor of 150 separates those with ~4x margin. Scoping matters: on the
+        // The reverted column is DELIBERATELY ABSENT. It read 37 / 60 / 53 here and
+        // 234 / 363 / 307 in the with-#1048 column; both were unasserted and both had
+        // drifted -- the exact failure the tally pin below closes. Replacing them with
+        // fresh unasserted numbers would just restart the clock, and the reverted
+        // column cannot be produced by this test at all: it needs a `defender_choice`
+        // revert (`&Choice::default()` at the `identify_sleep_talk_called` call site),
+        // which trips the WRONG-attribution assert long before this print. Reproduce it
+        // deliberately if you need it; do not transcribe it into a comment.
+        //
+        // What matters for the gate is the live column against the floor of 150, and
+        // that is measured every run by the print below. Scoping matters: on the
         // FULL matrix the revert leaves {FLAIL 142, REVERSAL 135, SUBSTITUTE 50},
         // an 8-branch margin, and it degrades predictably -- sleeper-second agrees
         // are INVARIANT under a `defender_choice` revert (the gate needs
@@ -4313,11 +4340,37 @@ mod tests {
             total_branches - agree
         );
 
+        // PRINT BEFORE THE PIN BELOW, deliberately. The pin's own message tells you to
+        // decide whether a change was intended, and that decision needs the
+        // per-defender map -- which an `assert_eq!` placed first would suppress,
+        // because a panic never reaches this line.
         println!(
             "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
              ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
              {multi_label_refused}  refused-single {single_label_refused}  \
              per-defender {agree_by_defender:?}"
+        );
+
+        // PIN THE TALLIES, not just their shape. Everything above asserts the partition
+        // is non-vacuous and exact -- and both hold for ANY split of the same total, so
+        // a vendored-engine or renderer change can move these numbers with the suite
+        // green. Demonstrated: narrowing the renderability allowlist so `Damage` stops
+        // qualifying gives 20 usable / 217 unrenderable, and every other assertion in
+        // this test still passes.
+        //
+        // They are quoted outside this repo -- the deploy campaign's fallback ledger
+        // states them as the measured effect of #1070 -- so drift is a reporting defect
+        // elsewhere, not merely a test update.
+        //
+        // If you are here because this failed: that is the signal working. The
+        // breakdown printed above says WHERE it moved. Decide whether the change was
+        // intended, then update these values AND the ledger's row-1 disposition
+        // together. Do not update one without the other.
+        assert_eq!(
+            (total_branches, agree, multi_label_unattributed, multi_label_refused),
+            (2614, 2377, 221, 16),
+            "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
+             printed above, and the comment here on what else must be updated."
         );
     }
 
