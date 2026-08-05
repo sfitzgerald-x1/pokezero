@@ -484,6 +484,12 @@ def run_gate(
         )
     )
 
+    # Reach is counted over the pack UNION whatever the caller required, so a valid
+    # `--require-columns` naming a non-pack layout column cannot report itself unreached.
+    numeric_reach_names = tuple(dict.fromkeys(V4_PACK_NUMERIC_COLUMNS + tuple(require_columns)))
+    categorical_reach_names = tuple(
+        dict.fromkeys(V4_PACK_CATEGORICAL_COLUMNS + tuple(require_categorical_columns))
+    )
     counts: Counter = Counter(
         {
             "games": 0,
@@ -542,12 +548,16 @@ def run_gate(
 
                     reference_numeric = numpy.asarray(want["numeric_features"])
                     native_numeric = numpy.asarray(got["numeric_features"])
-                    for name in V4_PACK_NUMERIC_COLUMNS:
+                    # Union with the REQUIRED set: reach was counted only over the pack, so a
+                    # `--require-columns` naming any other layout column reported it "never
+                    # reached" even when populated in essentially every state. Fail-closed, never
+                    # a false PASS -- but a spurious FAIL on a valid invocation.
+                    for name in numeric_reach_names:
                         index = numeric_columns.get(name)
                         if index is not None and reference_numeric[:, index].any():
                             column_reach[name] += 1
                     reference_categorical = numpy.asarray(want["categorical_ids"])
-                    for name in V4_PACK_CATEGORICAL_COLUMNS:
+                    for name in categorical_reach_names:
                         index = categorical_columns.get(name)
                         if index is not None and reference_categorical[:, index].any():
                             categorical_reach[name] += 1
@@ -560,6 +570,13 @@ def run_gate(
                     for key in ACCUMULATOR_METADATA_KEYS:
                         value = metadata.get(key)
                         if isinstance(value, (int, float)) and not isinstance(value, bool):
+                            # KNOWN GAP (review R1), deliberately not closed here: this pools both
+                            # perspectives, so a tracker dead for exactly ONE seat still counts as
+                            # varied from the other seat's rows. Keying by (key, player) makes it
+                            # visible -- verified: a 3-game sweep then reports
+                            # self_hazard_damage_suffered[p1] constant while [p2] varies -- but it
+                            # also raises the certification bar in a way that needs a 200-game
+                            # validation and test updates, so it is filed rather than rushed.
                             accumulator_values[key].add(float(value))
 
                     differing: list[tuple[str, Any, Any]] = []
