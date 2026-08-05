@@ -45,8 +45,24 @@ The branch masses give the mechanism exactly. Bonemerang is 90 % accurate:
 - `84.3750 = 90 × 15/16`
 - crit mass `3.8672 + 1.7578 = 5.6250 = 90 × 1/16`
 
-That is **one crit roll and no damage-roll fan at all**. The 85–100 roll fan lives behind the
-gate at `gen3/generate_instructions.rs:3117`:
+~~That is **one crit roll and no damage-roll fan at all**.~~
+
+> **Correction (review of #1098): my own masses refute that sentence.** The crit split
+> `3.8672 / 1.7578` is **11/16 and 5/16 of the crit mass** — that IS a 16-roll fan. It comes from
+> the Case B crit-kill partition at `gen3/generate_instructions.rs:3374-3400`, where
+> `compare_health_with_damage_multiples(max_crit_damage = 282, hp = 253)` returns `(244, 11)`:
+> kill mass `0.9 × 1/16 × 11/16 = 0.038671875`, survive mass `0.017578125`,
+> `average_non_kill_crit_damage = 244`. So **244 is roll variation** — the mean of crit rolls
+> 85–89 — not clamping. Those masses were printed in this very report and I did not read them.
+>
+> **The real reason no non-crit branch survives is better than the one I gave, and actionable:**
+> the KO partitions at `:3247` and `:3376` compare the **per-hit** maximum (140) against the
+> defender's **full** HP (253), with no `hit_count` scaling. `140 < 253`, so the non-crit arm
+> never partitions — though two hits reach 280. A hit-count-aware threshold (max 280, min 238,
+> straddling 253) yields exactly the 6/16 band computed in §2b, **with no gate change at all**.
+> That is a distinct, unfiled defect: **the KO partition threshold is hit-count-blind for
+> multi-hit moves.** The 85–100 roll fan lives behind the
+gate at `gen3/generate_instructions.rs:3137`:
 
 ```rust
 if branch_on_damage
@@ -58,7 +74,14 @@ if branch_on_damage
 Neither `seismictoss` nor `bonemerang` reads HP, so the gate is closed and the whole fan
 collapses to a single roll. That single roll deals **exactly 253** into exactly 253 max HP —
 the three damaged branches differ only in how the total is split across the two hits
-(`129+124`, `253`, `244+9`), which is per-hit clamping to remaining HP, not roll variation.
+(`129+124`, `253`, `244+9`) — and per the correction above, `244` is the crit-roll average,
+not a clamp.
+
+**The gate is also not closed by `pending_hp_reading_move`.** It has four clauses, and
+`choice.first_move` closes it here independently: Registeel (speed 123) outspeeds Marowak (122),
+confirmed by the protocol — `|cant|p1a: Registeel|slp` precedes `|move|p2a: Marowak|Bonemerang` —
+so side one moves first and Bonemerang's `first_move` is false. Measured: 4 branches with roll
+enumeration forced on, 4 with it off.
 
 Showdown's roll totalled 249. **The margin between the two worlds is 4 HP out of 253.**
 
@@ -94,18 +117,21 @@ recorded here rather than folded in.
 
 This matters for the Phase 2 decision specifically. `reports/c119_phase2_scoping.md` lists A9 as
 "**no** — a renderer omission" and that judgement is load-bearing in its 5 → 2 headline. On the
-measurement above it is a **yes**: widening the `pending_hp_reading_move` gate so the roll fan
-runs would create surviving branches, and the Wish and Leftovers heals follow from the ordinary
-residual walk with no further change.
+measurement above it is a **yes** — but NOT by the route this report first gave. Widening
+`pending_hp_reading_move` does **nothing** here: `choice.first_move` blocks the row regardless,
+measured at 4 branches either way. The route that would absorb it is the **hit-count-aware KO
+threshold** above, which needs no gate change. Filed as a separate defect, not folded into
+Phase 2.
 
 That also connects to the finding already recorded on #1088: the engine **already ships**
-enumerate-then-merge at `:3117`, enumerating `for random in 85..=100` through `run_move` per
+enumerate-then-merge at `:3137`, enumerating `for random in 85..=100` through `run_move` per
 roll and merging with `combine_duplicate_instructions`. Phase 2 is therefore not "build a
 mechanism" but "widen an existing gate", and this row is evidence about what widening buys.
 
 **No fix is proposed here and none should be inferred.** Widening that gate is a throughput
-decision — the engine's own comment at `:2911-2916` records a measured cost of "12 branches to
-144, ~8x slower per call" — and it belongs to the Phase 2 measurement, not to a row-by-row
+decision — the engine's own comment at `:2931-2936` records "12 branches to
+144, ~8x slower per call" — but that measures Sleep Talk used SECOND firing 32-way enumeration,
+not the cost of widening this gate, so it is not a Phase 2 price — and it belongs to the Phase 2 measurement, not to a row-by-row
 patch. This report changes an attribution, nothing else.
 
 ## 4. Note
