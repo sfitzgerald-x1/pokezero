@@ -186,6 +186,41 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
             "a resolved hit charges its REAL damage, not 1 -- charging 1 here is what made "
             "the bound depend on hit ordering",
         )
+        # THE INVARIANT that makes the exact and unknown paths independent, asserted rather
+        # than argued. `engine_world`'s `exact` branch reads `substituteDepletion` and its
+        # `unknown` branch reads `substituteMinDepletion`; the separation is safe only because
+        # while provenance is `exact` the two are EQUAL -- both accumulate the same resolved
+        # damage. Once one hit is unresolved, `substitute_depletion` goes `None` and can never
+        # return, so the two can never diverge while `state == "exact"`. Review measured this
+        # true (77/77 and 117/117) but only the consumer half was pinned by a test.
+        self.assertEqual(
+            replay.substitute_min_depletion.get("p1"),
+            replay.substitute_depletion.get("p1"),
+            "while provenance is `exact` the bound must equal the exact depletion",
+        )
+
+    def test_two_resolved_hits_keep_the_bound_and_the_exact_total_equal(self):
+        """The same invariant with accumulation, so a one-hit coincidence cannot satisfy it."""
+
+        replay = self._state(
+            "|move|p1a: Breloom|Substitute|p1a: Breloom",
+            "|-start|p1a: Breloom|Substitute",
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|2",
+            "|move|p2a: Blissey|Dragon Rage|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|3",
+        )
+
+        self.assertEqual(replay.substitute_health_state.get("p1"), "exact")
+        self.assertEqual(
+            replay.substitute_depletion.get("p1"), 117, "Seismic Toss 77 + Dragon Rage 40"
+        )
+        self.assertEqual(
+            replay.substitute_min_depletion.get("p1"),
+            replay.substitute_depletion.get("p1"),
+        )
 
     def test_switching_out_resets_the_count(self):
         """The SWITCH path, which is the one this shape actually exercises.
@@ -613,6 +648,27 @@ class SubstituteHealthSamplingTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.reason, "substitute_depletion_world_incompatible"
         )
+
+    def test_a_malformed_bound_is_treated_as_absent_rather_than_trusted(self):
+        """`True` is an `int` in Python, and a negative bound is not a bound.
+
+        Both are unreachable in-process -- the only producer is the parser, whose dicts always
+        carry `p1`/`p2` -- so these are input-validation guards rather than live paths. Pinned
+        because a `bool` slipping through would make `upper = initial - 1` from a flag, and a
+        negative one would WIDEN the range past `initial`, which is the opposite of a bound.
+        """
+
+        for bad in (True, False, -5, "3", 1.5, None):
+            with self.subTest(bad=bad):
+                payload = self._sub_payload()
+                payload["sides"]["p2"]["substituteMinDepletion"] = bad
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    self._build(payload)
+                self.assertEqual(
+                    caught.exception.reason,
+                    "substitute_health_unknown",
+                    "a malformed bound must fall back to the unchanged refusal, never be used",
+                )
 
     def test_more_hits_than_the_world_can_absorb_refuses_that_world_only(self):
         """A world whose sampled max HP cannot absorb the public hits is inconsistent.

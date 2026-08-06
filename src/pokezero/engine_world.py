@@ -1187,13 +1187,19 @@ def _build_side_spec(
             # not. Seismic Toss then Ice Beam and Ice Beam then Seismic Toss both give 78.
             # Two accumulators produced an ordering asymmetry that review measured twice.
             #
-            # HOW WIDE THAT ACTUALLY IS, measured rather than asserted: with a single unknown
-            # hit and nothing proven it is `[1, initial - 1]` -- 99.4% of the full
-            # `[1, initial]`, and review measured 75% of real cases at exactly one hit. So the
-            # unknown-hit term is a 1-HP tightening, not a narrow window. An earlier version
-            # called the range narrow and said it "tightens as more hits land", which oversold
-            # a 2-HP effect out of 96. What does real work is a RESOLVED hit, which can remove
-            # 100 HP at a stroke.
+            # HOW WIDE THAT ACTUALLY IS. With a single UNRESOLVED hit and nothing proven the
+            # range is `[1, initial - 1]` -- for the measured `initial = 162` case that is
+            # 161/162, and it is nearer 98% at a small `initial` like 50, so the figure is
+            # instance-specific rather than a constant. An earlier version called the range
+            # narrow and said it "tightens as more hits land", which oversold a per-hit effect
+            # of 1 HP. What does real work is a RESOLVED hit, which can remove 100 at a stroke.
+            #
+            # Review measured the HIT distribution on era 59's seed band at 75% one hit / 19.6%
+            # two / 5.4% three (n=56) -- but that was on the retired hit-COUNT field, so it does
+            # not by itself say how often `min_depletion` is 1. That needs one hit, unresolved,
+            # with nothing resolved before it, and the resolved/unresolved mix was not measured.
+            # Stated as the separate facts they are rather than fused into a claim about this
+            # bound.
             #
             # A ~10x TIGHTER BOUND IS AVAILABLE and is the obvious follow-up rather than a
             # hypothetical: `gen3_damage.gen3_damage_rolls()` is engine-exact and already used
@@ -1206,10 +1212,13 @@ def _build_side_spec(
             # search averages over them, the same treatment trapped and disabled received.
             # Committing to one value globally would be the guess.
             raw_min = side_payload.get("substituteMinDepletion")
+            # `bool` is excluded explicitly because `True` is an `int` in Python and would
+            # otherwise become a bound of 1 from a flag. No `> 0` clause: the `< 1` gate below
+            # already refuses zero and negatives, so adding one here was redundant rather than
+            # protective -- mutation showed removing it changed nothing, which is how a
+            # redundant guard reads as a tested one.
             min_depletion = (
-                raw_min
-                if isinstance(raw_min, int) and not isinstance(raw_min, bool) and raw_min > 0
-                else 0
+                raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
             )
             if min_depletion < 1:
                 # NO BOUND SUPPLIED -> refuse exactly as before, under the SAME reason code.
@@ -1226,8 +1235,12 @@ def _build_side_spec(
                 # and I had not: the `"unknown"` assignment and the accumulation are adjacent
                 # statements and all four reset paths zero the accumulator, so
                 # `state == "unknown"` implies `min_depletion >= 1`. Regenerating real protocol
-                # on era 59's own seed band gave 187/187 observations with a bound and none
-                # without. Defence in depth against a future producer, not a live path.
+                # on era 59's own seed band gave 187/187 observations with at least one hit and
+                # none with zero (n=187, a different and larger sample than the n=56 hit
+                # distribution cited above). "At least one hit implies a bound of at least 1" is
+                # then arithmetic, not a second measurement, since the bound sums
+                # `damage or 1` per hit. Defence in depth against a future producer, not a live
+                # path.
                 raise EngineWorldUnsupported(
                     "substitute_health_unknown",
                     f"side {slot!r} has explicit unknown Substitute health provenance "

@@ -1531,9 +1531,17 @@ class ShowdownReplayState:
     # Cumulative exact depletion since creation when public fixed-damage
     # chronology derives it. This invariant is portable across sampled max HP.
     substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
-    # Non-breaking Substitute hits whose damage the public record does NOT reveal. Each one
-    # removed at least 1 HP and the Substitute survived, which bounds its remaining health
-    # even when the exact value is unknowable -- see `engine_world`'s sampling of it.
+    # A LOWER BOUND, IN HP, on how much this side's Substitute has absorbed. Not a hit count:
+    # each non-breaking hit contributes its PROVEN damage when the public record resolves it
+    # (gen 3's four fixed-damage moves) and the minimum 1 HP when it does not. So one Seismic
+    # Toss plus one Ice Beam reads 78, and two Seismic Tosses read 117 -- reading either as a
+    # number of hits would be wrong by two orders of magnitude.
+    #
+    # Charged once per hit BEFORE the provenance decision, which is what makes it
+    # order-independent; `engine_world` samples remaining health from
+    # `[1, floor(maxhp/4) - this]`. While `substitute_health_state` is `"exact"` this equals
+    # `substitute_depletion`; once one hit is unresolved that field goes `None` and never
+    # returns, and only this bound survives.
     substitute_min_depletion: Mapping[str, int] = field(default_factory=dict)
     # Whether ``toxic_stage`` is known from the public protocol. A zero alone is
     # ambiguous: it can mean a fresh Toxic/Switch-in counter, or an incomplete
@@ -2855,15 +2863,15 @@ class _ReplayParser:
         if event_type == "-start":
             self.substitute_health_state[slot] = "full"
             self.substitute_depletion[slot] = 0
-            # A NEW Substitute: the old one's unknown hits describe an effect that no longer
-            # exists, so carrying them forward would bound the wrong Substitute.
+            # A NEW Substitute: the old one's absorbed damage describes an effect that no
+            # longer exists, so carrying that bound forward would constrain the wrong one.
             #
             # REDUNDANT TODAY, and labelled rather than left to look load-bearing. Every path
-            # into `-start` has already zeroed the count -- `-end` below, the switch and
+            # into `-start` has already zeroed the bound -- `-end` below, the switch and
             # Baton-Pass handler, the faint handler, or a never-subbed slot's initial 0 -- so
             # no test can distinguish deleting this line, and mutation confirms it. Kept as
-            # defence in depth because the failure it prevents is silent: a stale count would
-            # bound a Substitute that no longer exists.
+            # defence in depth because the failure it prevents is silent: a stale bound would
+            # constrain a Substitute that no longer exists.
             self.substitute_min_depletion[slot] = 0
             return
         if event_type == "-end":
