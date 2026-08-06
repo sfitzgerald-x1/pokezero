@@ -53,6 +53,10 @@ if _TESTS_DIR not in sys.path:
 #
 # And ``sys.path`` does NOT cross a subprocess boundary -- see ``tests/_subproc_env.py``
 # for the child-process half, which is the same hazard and needed its own fix.
+# Move-to-front, NOT insert-if-absent. A membership test is satisfied by the string
+# appearing anywhere on the path, including behind another checkout's ``src``
+# inherited via PYTHONPATH -- and then the wrong tree still wins. Collapsing this
+# back to ``if _SRC_DIR not in sys.path`` silently reopens that hole.
 _SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
 if _SRC_DIR in sys.path:
     sys.path.remove(_SRC_DIR)
