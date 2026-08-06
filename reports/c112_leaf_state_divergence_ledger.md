@@ -9,11 +9,12 @@
 > **every one of the 18 families / 138 rows** the fixed harness surfaces, with a cause and
 > a disposition each — no class is left open.
 >
-> v3 also closes the two classes v2 left open (encore, now P1; the action surface, now P5) rather than
+> v3 closes the two classes v2 left open (encore, now P1; the action surface, now P5) rather than
 > recording a next check, because the task's disposition vocabulary is
 > {encoder fix, harness fix, demonstrated-unreachable with a pool check} and "open" is not
-> in it. Seven of the eight dispositions are `harness fix` or `encoder fix`; P3 is the one
-> exception, named as a pointer to task 4 of this goal rather than as new vocabulary.
+> in it. Dispositions name the **owning file** instead, because `harness fix` / `encoder fix` was
+> applied inconsistently and read four production changes as test-only work. Five of six name a
+> file; P2 names none, because its mechanism is not established.
 
 ## v2's header, retained for traceability — NOT this ledger's claims
 
@@ -93,7 +94,8 @@ that INERT line being the only thing distinguishing it from a pass.
 **[CORRECTION]** v1 mixed two incompatible denominators. This ledger states coverage in
 **ROWS** throughout:
 
-- A **row** is one `(array, block, column)` family. The `state` families sum to
+- A **row** is one `(array, block, column)` family **at one boundary** — a family x boundary
+  incidence (`leaf_vs_reality.py:892-893`), which is why 18 families carry 138 rows. The `state` families sum to
   **119 rows** (`turn` contributes none) on golden-v2 and **10** on scenarios.
 - `class_rows.state` counts **BOUNDARIES**: **106** on golden-v2, **2** on scenarios.
 - **The mapping between them is not derivable from the artifact.** Families are
@@ -104,7 +106,13 @@ that INERT line being the only thing distinguishing it from a pass.
   to record per-boundary family sets first; that is a harness change and out of scope here.
 
 Coverage on the v4 corpus (`corpus/golden-v4`): **138 of 138 rows attributed** across 18
-families, no class open — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = 138.
+families — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = 138.
+
+**Not every class has a source-level cause.** P2 (28 rows, toxic) has a measured rate and an
+excluded mechanism but no established cause; naming one would be the fourth attribution in this
+ledger asserted ahead of its evidence. So: **110 of 138 rows carry a cause and a disposition, 28
+carry a measurement and an open mechanism.** The task asks for a cause per class, and this is the
+one place it is not delivered — stated here rather than left for a reader to find.
 
 **124 source-verified, 14 resting on side-symmetry** — P2's opponent half only. Two earlier
 revisions of this sentence were wrong in different ways: the first said "110 and 28 (14 rows, and
@@ -116,7 +124,7 @@ the same mon from two seats — one directly-checked event, not an inference.
 per-family boundary incidences, which this document calls rows. They are different units and
 the Units section forbids juxtaposing them, so the coverage claim is stated over rows only.
 
-On `golden-v2`: **119 of 119 rows** — P1 (94), P2 (24) and P5 (5). P3, P4 and P6 do not surface
+On `golden-v2`: **119 of 119 rows** — P1 (**90** = 17+17+4+4+23+23+2), P2 (24) and P5 (5). P3, P4 and P6 do not surface
 there. Scenarios: **10 of 10**, all **P5**, the same recharge-request Choice lock, corroborated on
 its own boundary.
 
@@ -147,7 +155,24 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 | `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | encoder fix |
 | `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | encoder fix |
 
-P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = **138**. `legal_action_mask action2` is
+P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = **138**.
+
+**Dispositions name the owning FILE, not a `harness fix` / `encoder fix` label.** Those two words
+were applied inconsistently in an earlier revision — P1 and P6 are the same file with different
+labels, and P5's fix is in production world construction while reading as test-only work. Someone
+scheduling off this table would have read four rows as harness work that in fact change the leaf
+encoding search uses:
+
+| cause | the fix lands in | production or harness |
+|---|---|---|
+| P1 | `rust/pokezero-search/src/leaf.rs` (write the md keys) | **production** |
+| P2 | not established — see the section | unknown |
+| P3 | `engine_search.py::_recharging_slots` + the four gates | **production**, = task 4 |
+| P4 | `scripts/leaf_vs_reality.py:430-439` | harness |
+| P5 | `engine_world.py` world construction / the leaf's request-shape handling | **production** |
+| P6 | `rust/pokezero-search/src/leaf.rs` (`LeafMeta.sleep`) | **production** |
+
+Only P4 is harness-only. Four of the six touch the leaf encoding or the world production shares. `legal_action_mask action2` is
 scenarios-only (2 rows) and belongs to P5; scenarios' locked-out set is `action1/2/3` rather
 than `action0/1/3` because Hyper Beam sits at a different index there.
 
@@ -209,8 +234,50 @@ value: the `encore` tag is a literal `"|Encore"` line match (`leaf_vs_reality.py
 routed at `:355`, so a mon already under Encore before the replayed window gets no tag and
 falls to the `state` fallback at `:383`.
 
-**Disposition: harness fix** — write the four md keys at the leaf from the state the leaf
-already has. All four values are available: the wish counter is `side.wish.0`
+### The class is decidable, and it has three latent members
+
+`get(md, …)` occurs only in `encoder.rs` (43 sites, no other file), so the enumeration is closed:
+diff the md keys `encoder.rs` reads against the keys `leaf.rs` rewrites, and the remainder is
+root-frozen by construction. That is a decision procedure, not four instances.
+
+| md key | column | on golden-v4 |
+|---|---|---|
+| `*_wish_turns` | `NUMERIC_{SELF,OPP}_WISH_TURNS` | diverges 17/17 |
+| `*_sleep_clause_blocks` | `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` | diverges 6/6 |
+| `{prefix}_stall_counter` | `NUMERIC_STALL_COUNTER` | diverges 26/26 |
+| `{prefix}_encore_elapsed` | `NUMERIC_ENCORE_TURNS` | diverges 2 |
+| `{prefix}_confusion_elapsed` | `NUMERIC_CONFUSION_TURNS` | **latent** — never nonzero in 1271 rows |
+| `{prefix}_wrap_trap_elapsed` | `NUMERIC_WRAP_TRAP_TURNS` | **latent** |
+| `{prefix}_meanlook_trap` (`encoder.rs:2174`) | `NUMERIC_MEANLOOK_TRAP` | **latent** |
+
+**P1 is the undeclared half of a class the harness already names.** The declared half is the same
+mechanism with a rationale attached and its own class, which is why it never reaches `state`:
+`self_must_recharge` (that is P3) and the `root_frozen_pack` set — `{prefix}_{truant_loaf,
+choice_locked, item_swapped, last_damage_dealt, last_damage_taken, last_used_move,
+arrived_by_baton_pass, traced_ability}` plus the v4 credit block (`encoder.rs:1311-1317`), the
+910-boundary `root_frozen_pack` class in the artifact.
+
+`opponent_matchup_switch_evidence` (`encoder.rs:2234`) is also never written in `leaf.rs`, but it
+is **not** a P1 member: the matchup pair is fold-written through `ProductsData` since #1118 and
+carries its own `matchup_fold` class and allowance.
+
+**Passthrough signature, measured.** A pure passthrough must diverge on exactly the boundaries
+where reality's value changes across the pair:
+
+| key | boundaries where reality changes | rows in the artifact |
+|---|---|---|
+| `stall_counter` (per side) | 27 | 26 `state` + 1 `engine_model` = **27** |
+| `wish_turns` (per side) | 18 | 17 (1 skipped) |
+| `sleep_clause_blocks` (per side) | 8 | 6 |
+| `encore_elapsed` | 7 | 4, plus 6 `encore_move_unknown` skips |
+| confusion / wrap-trap / mean-look | 0 | 0 |
+
+Stall matches to the row. The latent three are latent because the corpus never exercises them,
+not because the mechanism differs.
+
+**Disposition: write the md keys at the leaf — all SEVEN key families, in
+`rust/pokezero-search/src/leaf.rs`.** Fixing only the four that currently diverge leaves the bug to
+return the first time a Confusion, Wrap or Mean Look game enters a corpus. All four values are available: the wish counter is `side.wish.0`
 (`state.rs:1208`), the stall counter is `side_conditions.protect` (`state.rs:699`), and the
 sleep-clause predicate is derivable from the same sleeper bookkeeping `leaf.rs:1254-1261`
 already computes for `*_sleep_clause_used`.
@@ -219,7 +286,41 @@ already computes for `*_sleep_clause_used`.
 does not reset on switch-out the way the parser's per-active counter does, so writing it is
 exact only within a stint.
 
-## P2 — the toxic line replay did not escalate (28 rows on v4, 24 on gv2)
+## P2 — the toxic write is live and 91% correct; the residual mechanism is NOT established (28 rows on v4, 24 on gv2)
+
+**[CORRECTION] — earlier revisions titled this "the line replay did not escalate" and gave a
+disposition. Neither is earned, and the measurement that proves the write works also refutes the
+headline.**
+
+The parser's toxic stage **changes across 153 (self) / 155 (opponent) boundaries** on golden-v4,
+and only **14 / 14** diverge. A root-frozen passthrough diverges on all of them — P1's stall
+counter does, 27 of 27 — so the leaf's line-driven write is live and correct on ~91% of the
+boundaries where it must move. That is a positive measurement of a moving instrument, which is
+what this ledger keeps demanding of itself, and it is why P2 is **not** a P1 member.
+
+But 14 of 153 is not "did not escalate"; it is "fails on 9% of them", and that needs its own
+mechanism. **I do not have one.** Two candidate leads, one already refuted:
+
+- *Refuted:* that the synthesized line set lacks the `\|turn\|` boundary the parser escalates on.
+  `synthesized` is `branch["events"]` rendered by **production's** event renderer
+  (`leaf_vs_reality.py:558` → `envstep.rs:198` → `events.rs`), and `events.rs:1088,1112` **does**
+  emit `\|turn\|N+1` — though only when the ply completes the battle turn (`:1065-1072`). An
+  earlier revision asserted this as the cause; it is production's stream either way, so the
+  mechanism could not have been harness-confined.
+- *Refuted by measurement:* that the failures sit on boundaries whose round pair is non-adjacent
+  (a faint/force-switch ply that does not complete the turn). Traced every toxic-column divergence
+  on golden-v4: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones. (33 = the 28
+  `state` rows plus the 5 `epistemic` opponent rows, which the column-name trace cannot separate.)
+  So non-adjacency does not explain it.
+
+**Disposition: undetermined.** The guard is excluded (below) and the write is live, so the residual
+is inside the escalation path itself, but naming a fix here would be the fourth attribution in this
+ledger asserted ahead of its evidence. **Task acceptance note: this is the one class of the six
+without a source-level cause — 28 of 138 rows.**
+
+### The guard is excluded
+
+
 
 The leaf's toxic stage is deliberately line-driven, not engine-derived (`leaf.rs:298-302`), and
 the parser escalates on `\|turn\|` lines only. Two candidate mechanisms: the replay never
@@ -373,7 +474,7 @@ moved.
 
 Meanwhile the contents did change: the regenerated corpus is v3, and `--observation-schema`
 only reached `golden_corpus` on 2026-08-04, while the published row is stamped 2026-07-19.
-Four of the five `state` families are columns that did not exist then —
+Four of the `state` families as they stood in v2's framing are columns that did not exist then —
 `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` (2026-07-20), `NUMERIC_STALL_COUNTER` and
 `NUMERIC_SELF_WISH_TURNS` and `NUMERIC_ENCORE_TURNS` (2026-07-21).
 
@@ -391,11 +492,10 @@ Four of the five `state` families are columns that did not exist then —
 ## What this ledger does not claim
 
 - Coverage is in **rows**, and the row→boundary mapping is not derivable from the artifact.
-- **No class is open.** Every one of the 18 families the fixed harness surfaces on the 124 has
-  a cause and a disposition, and seven of the eight are `harness fix` or `encoder fix`. **One
-  points elsewhere:** P3 is task 4 of this goal. No disposition is a `classify()` change — an
-  earlier revision proposed one for encore and it was withdrawn when that cause turned out to
-  be P1. `demonstrated-unreachable` is used nowhere; the one place v2 claimed it, it was false.
+- **One class has no cause: P2, 28 rows.** The other five do, with the owning file named.
+  P3 points at task 4 of this goal. No disposition is a `classify()` change — an earlier revision
+  proposed one for encore and it was withdrawn when that cause turned out to be P1.
+  `demonstrated-unreachable` is used nowhere; the one place v2 claimed it, it was false.
 - **One** disposition rests on side-symmetry: P2's opponent half, 14 rows. Counted separately in
   Units and marked in the table. Two earlier revisions said "three … " and then listed two.
 - Documentation only: no classifier, encoder or harness change.
