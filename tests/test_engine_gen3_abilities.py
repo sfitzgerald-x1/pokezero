@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -621,6 +622,294 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertIn("Boost SideOne Attack: -1", text)
         self.assertIn("Boost SideOne Attack: 1", text)
         self.assertIn("ChangeItem SideOne: WHITEHERB -> NONE", text)
+
+    def test_a_multi_hit_move_partitions_on_its_TOTAL_not_its_per_hit_damage(self) -> None:
+        # The KO partitions compared a PER-HIT maximum against the defender's
+        # FULL HP with no hit_count scaling, so a two-hit move never partitioned
+        # on a threshold only its TOTAL can straddle. Holdout row 19100113/62's
+        # shape: per-hit max 140 against 253 HP while two hits reach 280.
+        #
+        # Sizing matters and a first draft of this pin got it wrong. Bonemerang
+        # here has per-hit max 87, so the straddle band is
+        # 2*0.85*87 = 148 < hp <= 2*87 = 174. At hp=120 EVERY roll kills either
+        # way and the pin passed against the unfixed engine -- vacuous. 165 sits
+        # inside the band: the collapsed average (80+80 = 160) survives, while
+        # the top rolls (2*87 = 174) kill.
+        attacker = self._mon("marowak", "rockhead", "bonemerang", attack=200, speed=200)
+        defender = self._mon("registeel", "clearbody", "splash", hp=165, maxhp=165, defense=80)
+        state = self._state(attacker, defender)
+
+        per_hit_max = poke_engine.calculate_damage(state, "bonemerang", "splash", False)[0][0]
+        per_hit_min = int(per_hit_max * 0.85)
+        self.assertLess(per_hit_max, 165, "one hit must not KO, or there is nothing to fix")
+        self.assertGreaterEqual(2 * per_hit_max, 165, "two hits must be able to KO")
+        self.assertLess(2 * per_hit_min, 165, "the TOTAL must straddle, not merely exceed")
+
+        branches = poke_engine.generate_instructions(state, "bonemerang", "splash")
+        # Non-crit arms only: the crit arm partitions separately and already did.
+        non_crit = [
+            b for b in branches
+            if "Damage SideTwo" in self._text(b) and float(b.percentage) > 10.0
+        ]
+        self.assertTrue(non_crit, "expected a non-crit damaging arm")
+
+        def total(branch) -> int:
+            return sum(
+                int(m) for m in re.findall(r"Damage SideTwo: (\d+)", self._text(branch))
+            )
+
+        totals = sorted({total(b) for b in non_crit})
+        # Before the fix the whole non-crit mass collapses to ONE total (160,
+        # surviving). After it, the fan straddles 165 and both outcomes appear.
+        self.assertGreater(
+            len(totals), 1,
+            f"non-crit mass did not partition: totals={totals}, "
+            f"branches={[self._text(b)[:70] for b in branches]}",
+        )
+        self.assertTrue(any(t >= 165 for t in totals), f"no killing roll: {totals}")
+        self.assertTrue(any(t < 165 for t in totals), f"no surviving roll: {totals}")
+
+    def test_the_multi_hit_ko_gate_never_divides_by_zero(self) -> None:
+        # Scaling the KO gate by hit_count introduced a REACHABLE PANIC, found by
+        # the independent review of #1116 and reproduced before this pin existed.
+        #
+        # The gate floored THEN multiplied -- floor(0.85*max)*h -- while
+        # `compare_health_with_damage_multiples` multiplies THEN scales,
+        # (max*h)*0.85. So the gate's lowest total sat up to h*frac(0.85*max)
+        # BELOW the comparator's lowest roll. When hp landed in that window the
+        # gate fired but all 16 of the comparator's rolls were >= health, leaving
+        # num_less_than == 0 and executing `total_less_than / num_less_than` =
+        # 0/0 on i16: an integer-division panic.
+        #
+        # Unscaled the mismatch was impossible: for integer t, floor(x) < t
+        # implies x < t. Multiplying by hit_count breaks exactly that proof.
+        #
+        # RED RUN, on the engine as #1116 first shipped it:
+        #   bonemerang  hp=147 -> PanicException (146 and 148 were fine)
+        #   bonerush    hp=112 -> PanicException
+        #   furyswipes  hp=121 -> PanicException
+        #   spikecannon hp=136 -> PanicException
+        # A 400-game differential sweep reported engine_errors: 0 the whole time,
+        # because the window is one or two HP values per matchup. That sweep was
+        # sample size, not safety -- which is the reason this pin sweeps an axis
+        # rather than asserting one state.
+        multi_hit = [
+            "bonemerang", "bonerush", "doublekick", "doubleslap", "furyattack",
+            "furyswipes", "pinmissile", "spikecannon", "twineedle", "barrage",
+            "cometpunch",
+        ]
+        panics: list[tuple[str, int, str]] = []
+        for move in multi_hit:
+            attacker = self._mon("marowak", "rockhead", move, attack=200, speed=200)
+            for hp in range(1, 301):
+                defender = self._mon(
+                    "registeel", "clearbody", "splash", hp=hp, maxhp=hp, defense=80
+                )
+                try:
+                    poke_engine.generate_instructions(
+                        self._state(attacker, defender), move, "splash"
+                    )
+                except BaseException as exc:  # noqa: BLE001 - a panic is the bug
+                    panics.append((move, hp, type(exc).__name__))
+        self.assertEqual(panics, [], f"multi-hit KO gate panicked: {panics[:12]}")
+
+        # Anti-vacuity: the sweep must actually cross the straddle band, or it
+        # would pass on an axis that never reaches the partition at all.
+        attacker = self._mon("marowak", "rockhead", "bonemerang", attack=200, speed=200)
+        probe = self._mon("registeel", "clearbody", "splash", hp=165, maxhp=165, defense=80)
+        per_hit_max = poke_engine.calculate_damage(
+            self._state(attacker, probe), "bonemerang", "splash", False
+        )[0][0]
+        self.assertLess(int(per_hit_max * 0.85) * 2, 300, "band must lie inside the swept axis")
+        self.assertGreater(per_hit_max * 2, 1, "band must be non-empty")
+
+    def test_hit_count_scaling_does_not_kill_the_residual_third_arm(self) -> None:
+        # Third blocking finding of #1116's review. The residual arm counts the
+        # rolls that SURVIVE the move but die to residuals, and it gets that count
+        # by SUBTRACTING num_kill_rolls -- so both counts must share a basis.
+        # Scaling the KO partition made num_kill_rolls TOTAL while this arm still
+        # compared a PER-HIT max against the threshold. For a multi-hit move the
+        # total clears hp on more rolls than the per-hit damage clears the LOWER
+        # threshold, so num_at_or_above - num_kill_rolls went NEGATIVE, failed
+        # `> 0`, and the arm silently vanished for exactly the population #1116 is
+        # about. These are i16, so it underflowed to a skip rather than panicking,
+        # which is why no gate caught it and why this pin exists.
+        #
+        # THE FIRST VERSION OF THIS PIN WAS VACUOUS AND IS RECORDED BECAUSE IT
+        # PASSED. It used hp=164 / maxhp=200 and matched "two hits plus a third
+        # smaller chunk that finishes it" -- but that shape is also what the
+        # ORDINARY survive arm looks like once residuals are applied downstream, so
+        # it passed against the unfixed engine. Matching the residual arm's SHAPE
+        # cannot distinguish it; only the MASS SPLIT it introduces can.
+        #
+        # What the arm actually does is separate "survives the move, dies to the
+        # residual" from "survives both". So the discriminator needs all THREE
+        # outcome classes to be simultaneously reachable, which requires the roll
+        # spread to exceed the residual chunk:
+        #     0.3 * per_hit_max > maxhp / 8
+        # At attack=400 / level=100 / defense=85, per_hit_max is 199, so the total
+        # band is 338..398 and poison is 50; hp=395 puts pure survival (338..344),
+        # residual death (345..394) and direct death (395..398) all in range.
+        #
+        # RED RUN on the engine as #1116 shipped it -- the surviving mass was ONE
+        # undifferentiated arm that always died to poison:
+        #     hp=395 buggy: [(10.0, [50]), (79.1, [183, 183, 29]), (10.9, [395])]
+        #     hp=395 fixed: [(10.0, [50]), (10.55, [170, 170, 50]),
+        #                    (10.9, [395]), (64.27, [173, 173, 49])]
+        # 10.55% of the mass is priced as a survival by the fix and as a death by
+        # the bug. That is the regression this pin exists to catch.
+        #
+        # An earlier revision of this comment recorded the fixed output's last arm
+        # as `(68.55, [345, 50])` and called that correct. IT WAS THE SECOND BUG,
+        # baked into the test record as expected behaviour -- see
+        # `test_the_residual_arm_lets_the_defender_take_its_turn` below.
+        attacker = self._mon(
+            "marowak", "rockhead", "bonemerang", attack=400, speed=200, level=100
+        )
+        defender = self._mon(
+            "registeel", "clearbody", "splash",
+            hp=395, maxhp=400, defense=85, status="poison",
+        )
+        state = self._state(attacker, defender)
+
+        per_hit_max = poke_engine.calculate_damage(state, "bonemerang", "splash", False)[0][0]
+        residual = 400 // 8
+        self.assertLess(per_hit_max, 395, "one hit must not KO, or there is no partition")
+        self.assertGreaterEqual(2 * per_hit_max, 395, "two hits must be able to KO")
+        self.assertLess(2 * int(per_hit_max * 0.85), 395, "the TOTAL must straddle 395")
+        # The band must be wide enough for a PURE survival to exist, or the pin
+        # degenerates back into the vacuous version above.
+        self.assertLess(
+            2 * int(per_hit_max * 0.85) + residual, 395,
+            "lowest total plus the residual must still survive, or there is no third class",
+        )
+
+        # SECOND VACUITY, ALSO RECORDED. "sum(hits) < hp" alone is satisfied by the
+        # 10% MISS arm, which on this state is a bare [50] of poison -- so that
+        # predicate passed on the buggy engine too. The arm being looked for must
+        # contain BOTH of the move's hits as well as the residual chunk, hence
+        # len(hits) >= 3. Against the recorded runs above that separates them
+        # exactly: buggy [183, 183, 29] totals 395 and is lethal, fixed
+        # [170, 170, 50] totals 390 and is not.
+        branches = poke_engine.generate_instructions(state, "bonemerang", "splash")
+        survives_everything = []
+        missed = []
+        for branch in branches:
+            hits = [
+                int(m) for m in re.findall(r"Damage SideTwo: (\d+)", self._text(branch))
+            ]
+            if float(branch.percentage) <= 1.0:
+                continue
+            if len(hits) < 3:
+                missed.append((float(branch.percentage), hits))
+                continue
+            if sum(hits) < 395:
+                survives_everything.append((float(branch.percentage), hits))
+
+        self.assertTrue(
+            survives_everything,
+            "no arm lands both hits and still survives the residual, so the residual "
+            "third arm collapsed for a multi-hit move: "
+            f"{[(round(float(b.percentage), 2), self._text(b)[:60]) for b in branches]}",
+        )
+        # Anti-vacuity on the exclusion itself: the miss arm must really have been
+        # filtered out, not absent, or len(hits) >= 3 is doing nothing.
+        self.assertTrue(
+            any(h == [residual] for _, h in missed),
+            f"expected the miss arm to be excluded by the hit-count filter: {missed}",
+        )
+
+    def test_the_residual_arm_lets_the_defender_take_its_turn(self) -> None:
+        # Second review of #1116, BLOCK 1. `run_move` applies `damage_amount` ONCE
+        # PER HIT, so the residual arm's threshold has to be per-hit like every
+        # other arm this patch touches. Pushing the TOTAL made the arm deal
+        # `hit_count * residual_threshold`, clamped at HP -- so the arm meaning
+        # "survives the move, dies to the residual" killed on the MOVE and deleted
+        # the defender's turn.
+        #
+        # THE RENDERING IS WHAT FOOLED ME. The arm came out as `[345, 50]`, which
+        # reads naturally as "345 from the move, then 50 from poison" -- and poison
+        # on a 400 maxhp defender really is 50, so the numbers corroborated the
+        # wrong story. It was hit one for 345 and hit two clamped to the remaining
+        # 50. I called it cosmetic in the PR body on that reading. It was a
+        # 68.55pp fidelity regression against main.
+        #
+        # The tell is structural, not numeric: 345 alone cannot kill a 395 HP
+        # defender, so if the defender never acts the damage must have been applied
+        # more than once. This pin gives the defender a damaging move and makes it
+        # SLOWER, then asserts it acts -- which no amount of reading damage
+        # magnitudes would have caught.
+        attacker = self._mon(
+            "marowak", "rockhead", "bonemerang", attack=400, speed=200, level=100
+        )
+        defender = self._mon(
+            "registeel", "clearbody", "tackle",
+            hp=395, maxhp=400, defense=85, status="poison", speed=10,
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "bonemerang", "tackle"
+        )
+
+        offenders = []
+        for branch in branches:
+            text = self._text(branch)
+            hits = [int(m) for m in re.findall(r"Damage SideTwo: (\d+)", text)]
+            if len(hits) < 3 or float(branch.percentage) <= 1.0:
+                continue
+            # A multi-hit arm that keeps the defender below its HP must leave it
+            # alive to move. Only the genuine KO arm may skip the defender's turn.
+            if sum(hits[:2]) < 395 and "Damage SideOne" not in text:
+                offenders.append((float(branch.percentage), hits, text[:90]))
+
+        self.assertEqual(
+            offenders, [],
+            "a residual arm killed on the move and deleted the defender's turn: "
+            f"{offenders}",
+        )
+
+        # THE LOOP ABOVE IS NOT LOAD-BEARING AND IS KEPT ONLY AS A CHEAP SCAN.
+        # Round 3's review proved it is structurally dead for the bug it names:
+        # `len(hits) < 3` skips every arm with two damage entries, and an arm that
+        # kills on a TWO-hit move has at most two by construction -- the pre-fix
+        # arm was `[345, 50]`. The pre-fix failure came from the clause below, not
+        # from `offenders`. So the real assertions are stated directly, on the arm
+        # that actually carries the mass.
+        residual_arm = max(
+            branches,
+            key=lambda b: (
+                float(b.percentage)
+                if len(re.findall(r"Damage SideTwo: (\d+)", self._text(b))) >= 3
+                else -1.0
+            ),
+        )
+        arm_text = self._text(residual_arm)
+        arm_hits = [int(m) for m in re.findall(r"Damage SideTwo: (\d+)", arm_text)]
+        self.assertGreaterEqual(
+            len(arm_hits), 3,
+            f"no multi-hit residual arm present at all: {arm_text[:120]}",
+        )
+        self.assertGreater(
+            float(residual_arm.percentage), 50.0,
+            f"the residual arm should carry the majority of the mass: {arm_text[:120]}",
+        )
+
+        # (1) The defender must SURVIVE the move and act. Catches BLOCK 1, where
+        #     the arm dealt `hit_count * threshold` and killed on the move.
+        self.assertIn(
+            "Damage SideOne", arm_text,
+            "the residual arm killed on the move and deleted the defender's turn: "
+            f"{arm_text[:120]}",
+        )
+        # (2) The defender must still DIE to the residual. Catches the opposite
+        #     wrong fix -- TRUNCATING instead of ceiling division, which round 3
+        #     built and found passes every other pin, suite and probe in the repo.
+        #     Truncating gives 172+172 = 344, leaving 51 against a 50 tick, so the
+        #     defender lives and the arm's total falls one short of its own HP.
+        self.assertGreaterEqual(
+            sum(arm_hits), 395,
+            "the residual arm no longer kills via the residual -- truncating "
+            f"division rather than ceiling? total={sum(arm_hits)} arm={arm_text[:120]}",
+        )
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")

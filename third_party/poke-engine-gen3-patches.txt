@@ -1329,3 +1329,12 @@ poke-engine-gen3-rest-sleep-refund-emission.patch
 # rows and both were Pain Split, so the one missing arm gets the same two
 # without enumerating anywhere else. Decision and numbers: reports/c128.
 poke-engine-gen3-painsplit-hp-reading.patch
+
+# Scale the KO partition threshold by hit_count. Both partitions compared a
+# PER-HIT maximum against the defender's FULL HP, so a multi-hit move whose
+# single hit cannot KO never partitioned even when its hits together can.
+# Bonemerang on 19100113/62: per-hit max 140 vs 253 HP, so the non-crit arm
+# collapsed to one roll -- but two hits reach 280, and rolls 85..90 total
+# 238..252 and SURVIVE while 91..100 total 254..280 and kill. Gated on
+# hit_count > 1, so single-hit moves are bit-identical. reports/c129.
+poke-engine-gen3-hitcount-ko-threshold.patch
