@@ -121,21 +121,36 @@ could therefore only ever fix whichever of Cacturne's two heals happened to be t
 
 **ATTRIBUTION, CORRECTED: this exemption closes ONE row, not two.** Earlier revisions of this
 report, the pin docstring and the PR body all said two. Refuted by this branch's own committed
-artifact at the reorder-only revision `87bcf351`, whose tree contains **zero** `SANDVEIL`
-occurrences and whose holdout sweep records **4 diverged with `19100193/46` already closed** (the
+artifact at the reorder-only revision `87bcf351`, whose **`events.rs`** contains **zero**
+`SANDVEIL` occurrences (28 other tracked files do match the string, including the engine patch that
+carries the exemption — "zero occurrences" unqualified was a scope slip) and whose holdout sweep
+records **4 diverged with `19100193/46` already closed** (the
 `component_mismatch:itemleftovers|leechseed` class absent). So the split is:
 
 | change | closes | holdout |
 |---|---|---|
-| fallback reorder + `[silent]` | `19100193/46` | 5 → 4 |
-| Sand Veil exemption | `19100014/35` (both arms) | 4 → 3 |
+| fallback reorder **alone** | `19100193/46` | 5 → 4 |
+| Sand Veil exemption | `19100014/35`, via its **90 % arm** | 4 → 3 |
+
+Two further corrections to my own first attempt at this table:
+
+- **The reorder closes `19100193/46` unaided; `[silent]` gets no credit for it.** `87bcf351` predates
+  the `[silent]` change, which entered at `c9f6839b` — so the artifact I cited as proof is itself
+  proof that `[silent]` was not involved. On that row Cacturne holds Leftovers, so the Leftovers
+  branch returns before the drain branch is ever reached.
+- **The exemption closes `19100014/35` through the 90 % arm only, not "both arms".** The 10 % arm is
+  the engine's Leech-Seed-**missed** branch against a Showdown hit
+  (`observed_only=[('leechseed', -33)] engine_only=[]`), and no harness *rendering* change can make a
+  miss branch reproduce a hit. The row closes regardless because **one matching branch closes a
+  boundary** — `engine_transition_differential.py` returns `"matched"` on the first fully matching
+  branch — which is exactly what §7 says, and what my own `87bcf351` commit message said.
 
 That also **partly rehabilitates the reorder**, which §5's first revision called "half a fix, kept
 because it is monotone". It is not merely monotone — it closes a row on its own. What was true is
 narrower: the reorder alone could not close `19100014/35`, because the fallback is a constant
 function of state and that row needs *two* heals on one side labelled differently.
 
-The gate is one line, and with it both arms of `19100014/35` close:
+The gate is one line, and with it the 90 % arm of `19100014/35` matches, which closes the row:
 
 ```rust
 || active.ability == Abilities::SANDVEIL

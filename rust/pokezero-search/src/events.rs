@@ -3488,8 +3488,14 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
         // Cacturne has Sand Veil, so the plan reserved a chip it never emitted,
         // `plan.usable` went false, and both of Cacturne's heals fell through.
         // Reordering the fallback only fixed whichever of the two happened to be
-        // the Leftovers tick; the drain stayed mislabelled. With this gate the
-        // plan reconciles and BOTH arms of the row close.
+        // the Leftovers tick; the drain stayed mislabelled. With this gate the plan
+        // reconciles, the row's 90% arm matches, and the row closes.
+        //
+        // NOT "both arms" -- an earlier version of this comment said that. The 10%
+        // arm is the engine's Leech-Seed-MISSED branch against a Showdown hit
+        // (`observed_only=[('leechseed', -33)] engine_only=[]`), and no harness
+        // RENDERING change can make a miss branch reproduce a hit. It closes anyway
+        // because one matching branch closes a boundary.
         if active.has_type(&PokemonType::ROCK)
             || active.has_type(&PokemonType::GROUND)
             || active.has_type(&PokemonType::STEEL)
@@ -5397,11 +5403,21 @@ mod tests {
     /// failed. The line was pinned by nothing, while the LIQUID OOZE guard worth zero
     /// measured rows got a pin the round before.
     ///
-    /// WORTH ONE ROW, NOT TWO. An earlier version of this docstring said two. The
-    /// branch's own artifact at the reorder-only revision (`87bcf351`, whose tree has
-    /// zero `SANDVEIL` occurrences) records holdout **4** with `19100193/46` already
-    /// closed -- so the fallback reorder plus `[silent]` closes that row unaided, and
-    /// this exemption closes `19100014/35` (both of its arms), 4 -> 3.
+    /// WORTH ONE ROW, NOT TWO, AND VIA ONE ARM, NOT BOTH. Earlier versions of this
+    /// docstring said two rows, then said "both arms". Both were wrong.
+    ///
+    /// The branch's own artifact at the reorder-only revision `87bcf351` -- whose
+    /// `events.rs` has zero `SANDVEIL` occurrences, and which predates the `[silent]`
+    /// change (that entered at `c9f6839b`) -- records holdout **4** with
+    /// `19100193/46` already closed. So the FALLBACK REORDER ALONE closes that row;
+    /// this exemption closes `19100014/35`, 4 -> 3.
+    ///
+    /// And it closes it through the 90% arm only. The 10% arm is the engine's
+    /// Leech-Seed-MISSED branch against a Showdown hit
+    /// (`observed_only=[('leechseed', -33)] engine_only=[]`); no harness RENDERING
+    /// change can make a miss branch reproduce a hit. One matching branch closes a
+    /// boundary (`engine_transition_differential.py` returns "matched" on the first
+    /// fully matching branch), which is why the row closes anyway.
     ///
     /// MY FIRST VERSION OF THIS PIN WAS ALSO VACUOUS, and I wrote it in the same
     /// commit as an expiry pin with the identical flaw. It asserted on DAMAGE tags
