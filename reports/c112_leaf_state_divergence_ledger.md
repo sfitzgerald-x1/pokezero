@@ -124,8 +124,8 @@ cause exists.
 side-symmetry". All three are withdrawn. The last was the worst: it counted P2's self-side 14 as
 verified two paragraphs after declaring P2 unattributed, and described the other 14 as an inference
 from a cause that does not exist. **No split is stated over unattributed rows**, and no row count
-of 124 appears anywhere — that numeral is the BOUNDARY count, and 110 + 14 colliding with it was a
-coincidence, not a measurement. Four consecutive edits to this paragraph each fixed the wrong
+of 124 is **asserted** anywhere — the numeral appears only in this withdrawal and as the corpus's
+BOUNDARY count. 110 + 14 colliding with it was a coincidence, not a measurement. Four consecutive edits to this paragraph each fixed the wrong
 sentence and left the composition unread.
 
 **Note on "the 124".** 124 is `class_rows.state`, a count of BOUNDARIES; 138 is the sum of
