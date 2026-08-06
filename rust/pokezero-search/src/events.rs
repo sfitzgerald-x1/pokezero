@@ -3182,6 +3182,20 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// the same tail by a same-side `DamageSubstitute`, because that is how the engine builds
 /// one. A switch-out removal has no such predecessor and stays in the `volatile` family.
 ///
+/// # The one hypothetical this rule does not close by itself
+///
+/// A hit that does NOT break, followed later by a switch-out clear of the same still-standing
+/// substitute, would pair spuriously and re-emit the phantom. That needs a single move which
+/// both damages a substitute and phazes, and the ENGINE closes it, not this predicate:
+/// `generate_instructions.rs` clears `choice.flags.drag` whenever the target holds a
+/// Substitute and the move is not a status move, so the only damaging drag moves can never
+/// reach the drag path against a sub (and both are post-gen3 regardless).
+///
+/// Recorded because it is a dependency on upstream behaviour that the engine itself marks
+/// TODO, and it is the only thing standing between this pairing rule and a repeat of the
+/// phantom-line defect. If that block ever moves, this predicate needs a same-tail "and no
+/// later same-side Switch" clause too.
+///
 /// Deliberately reusable: `Boost` has the identical two-producer problem (a switch-out
 /// pushes a boost RESET that Showdown does not narrate), so that fix wants this same
 /// tail-and-index shape rather than a second bespoke rule.
@@ -3214,7 +3228,15 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
 fn unrenderable_family_at(tail: &[Instruction], index: usize) -> Option<&'static str> {
-    let instruction = &tail[index];
+    // `get`, not `tail[index]`. Every caller is in bounds today, but an out-of-bounds index
+    // would PANIC, and this file spends a long comment below on why that specific outcome is
+    // the worst one available: pyo3 maps a Rust panic to `PanicException`, which derives from
+    // `BaseException` so it propagates past `engine_search.py`'s `except Exception`, killing
+    // the campaign worker instead of producing a measurable key. `None` here means "nothing
+    // blocks", which is the wrong answer to give for a nonexistent instruction -- so it is
+    // deliberately paired with the sibling predicate's `tail.get(index)?`, and both are
+    // unreachable rather than merely harmless.
+    let instruction = tail.get(index)?;
     match instruction {
         // --- rendered, or provably nothing to render -------------------------------
         //
