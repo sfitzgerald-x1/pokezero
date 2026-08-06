@@ -648,6 +648,28 @@ class TransformerTrainingConfig:
             raise ValueError(f"learning_rate_schedule must be one of: {', '.join(LEARNING_RATE_SCHEDULES)}.")
         if self.learning_rate_schedule_total_games is not None and self.learning_rate_schedule_total_games <= 0:
             raise ValueError("learning_rate_schedule_total_games must be positive when set.")
+        resume_triple = (
+            self.learning_rate_resume_warmup_start_progress,
+            self.learning_rate_resume_warmup_end_progress,
+            self.learning_rate_resume_warmup_start_lr,
+        )
+        if any(v is not None for v in resume_triple):
+            # The two most likely OPERATOR TYPOS, moved to config time: a partly-specified
+            # triple, and cold+warm together. Deliberately a subset -- a malformed WINDOW
+            # (backwards, empty, out-of-range progress, non-positive start rate) still fails at
+            # the top of epoch 1, in learning_rate_for_progress. That is fail-late, never
+            # fail-silent, so the cost is a cluster round-trip rather than a wrong rate.
+            if any(v is None for v in resume_triple):
+                raise ValueError(
+                    "learning_rate_resume_warmup_start_progress, "
+                    "learning_rate_resume_warmup_end_progress and "
+                    "learning_rate_resume_warmup_start_lr must be set together."
+                )
+            if self.learning_rate_warmup_progress > 0.0:
+                raise ValueError(
+                    "learning_rate_warmup_progress (cold start) and the "
+                    "learning_rate_resume_warmup_* triple (warm resume) are mutually exclusive."
+                )
         if not math.isfinite(self.learning_rate_progress_start):
             raise ValueError("learning_rate_progress_start must be finite.")
         if not math.isfinite(self.learning_rate_progress_end):
@@ -2963,6 +2985,13 @@ def learning_rate_for_progress(
     The resume ramp interpolates linearly from `resume_warmup_start_lr` -- the rate the
     checkpoint was actually last trained at, typically the OLD schedule's floor -- to the new
     schedule's value at `resume_warmup_end_progress`, and is continuous there by construction.
+
+    A `progress` BELOW the window start RAISES rather than falling through to the schedule.
+    Falling through would take the full cold step silently, which is the failure this mechanism
+    exists to remove; and a resumed run's progress only advances from where the window was
+    derived, so being below it means the window does not describe this run. Note the direction
+    of that change: the condition used to yield a running job at the wrong rate, and now yields
+    a job that refuses to start.
     """
     if base_learning_rate <= 0.0 or not math.isfinite(base_learning_rate):
         raise ValueError("base_learning_rate must be positive and finite.")
@@ -3003,6 +3032,18 @@ def learning_rate_for_progress(
             )
         if not math.isfinite(resume_warmup_start_lr) or resume_warmup_start_lr <= 0.0:
             raise ValueError("resume_warmup_start_lr must be positive and finite.")
+        if progress < resume_warmup_start_progress:
+            # Falling through here would take the FULL cold step, silently -- the exact class
+            # this ramp exists to remove, reintroduced one branch over. A resumed run's progress
+            # only advances from the point the window was derived at, so being below the window
+            # means the window and the run disagree about where the lineage is (a rolled-back
+            # checkpoint, or a window re-derived from an earlier iteration). There is no
+            # legitimate case for it.
+            raise ValueError(
+                f"progress {progress!r} is below resume_warmup_start_progress "
+                f"{resume_warmup_start_progress!r}: the warm-resume window does not describe "
+                "this run's position."
+            )
         if resume_warmup_start_progress <= progress < resume_warmup_end_progress:
             target = _decayed_learning_rate(
                 base_learning_rate, schedule, resume_warmup_end_progress

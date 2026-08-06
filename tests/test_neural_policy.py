@@ -8595,10 +8595,68 @@ class ResumeAwareWarmupTest(unittest.TestCase):
         self.assertEqual(values, sorted(values))
         self.assertGreater(values[-1], values[0] * 2)  # the 2.4x step, taken gradually
 
-    def test_outside_the_window_the_schedule_is_untouched(self) -> None:
-        for progress in (0.0, 0.25, 0.49, 0.52, 0.75, 1.0):
+    def test_after_the_window_the_schedule_is_untouched(self) -> None:
+        """AFTER, not "outside". Below the window is an error, not a passthrough -- see
+        test_below_the_window_is_refused_rather_than_silently_cold."""
+        for progress in (self.END, 0.52, 0.75, 1.0):
             with self.subTest(progress=progress):
                 self.assertEqual(self._ramp(progress), self._lr(progress))
+
+    def test_the_config_refuses_the_two_likeliest_typos_at_construction(self) -> None:
+        """The fail-fast guard, which arrived with no test -- the same "guard nobody tests"
+        shape as the two mutations this class just closed. Deleting either check left the whole
+        suite green.
+
+        Config time matters because the alternative is failing at the top of epoch 1, after
+        model construction and DDP init: a cluster round-trip for a typo.
+        """
+        from pokezero.neural_policy import TransformerTrainingConfig
+
+        base = dict(learning_rate=self.BASE, learning_rate_schedule=self.SCHEDULE, epochs=5)
+        with self.assertRaisesRegex(ValueError, "must be set together"):
+            TransformerTrainingConfig(
+                **base, learning_rate_resume_warmup_start_progress=self.START
+            )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            TransformerTrainingConfig(
+                **base,
+                learning_rate_warmup_progress=0.01,
+                learning_rate_resume_warmup_start_progress=self.START,
+                learning_rate_resume_warmup_end_progress=self.END,
+                learning_rate_resume_warmup_start_lr=self.FLOOR,
+            )
+        # ...and a well-formed triple still constructs.
+        TransformerTrainingConfig(
+            **base,
+            learning_rate_resume_warmup_start_progress=self.START,
+            learning_rate_resume_warmup_end_progress=self.END,
+            learning_rate_resume_warmup_start_lr=self.FLOOR,
+        )
+
+    def test_below_the_window_is_refused_rather_than_silently_cold(self) -> None:
+        """Falling through below the window takes the FULL cold step, silently -- the exact
+        class this ramp exists to remove, one branch over. A review mutation showed one ULP
+        below the start yields a 2.4x jump with nothing reported.
+
+        A resumed run's progress only advances from where the window was derived, so being
+        below it means the window and the run disagree about the lineage's position.
+        """
+        for progress in (0.0, 0.25, 0.49, 0.5 - 1e-12):
+            with self.subTest(progress=progress), self.assertRaisesRegex(ValueError, "below"):
+                self._ramp(progress)
+
+    def test_the_ramp_interpolates_toward_the_WINDOW_END_not_the_current_point(self) -> None:
+        """Pins the interior shape. Computing the target at `progress` instead of at the window
+        end preserves BOTH endpoints -- fraction 0 at the start, fraction 1 at the end -- so
+        every other test in this class passes under that mutation while the interior bends by
+        up to 0.9%. Checked against an independently written closed form.
+        """
+        target = self.BASE / (((8.0 * self.END) + 1.0) ** 1.5)
+        for k in (1, 3, 5, 7, 9):
+            progress = self.START + (self.END - self.START) * k / 10
+            expected = self.FLOOR + (k / 10) * (target - self.FLOOR)
+            with self.subTest(k=k):
+                self.assertAlmostEqual(self._ramp(progress), expected, places=15)
 
     def test_a_cold_start_and_a_warm_resume_are_mutually_exclusive(self) -> None:
         """A run is one or the other. Silently applying one while the operator configured the
@@ -8625,6 +8683,19 @@ class ResumeAwareWarmupTest(unittest.TestCase):
             kw.pop(omit)
             with self.subTest(omitted=omit), self.assertRaisesRegex(ValueError, "together"):
                 self._lr(0.5, **kw)
+
+    def test_a_nonpositive_or_nonfinite_start_rate_is_refused(self) -> None:
+        """A zero/negative/NaN start rate would ramp FROM nonsense and the run would train on
+        it. No test covered this guard until a review mutation deleted it and the suite stayed
+        green."""
+        for bad in (0.0, -1e-6, float("nan"), float("inf")):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "positive and finite"):
+                self._lr(
+                    0.5,
+                    resume_warmup_start_progress=self.START,
+                    resume_warmup_end_progress=self.END,
+                    resume_warmup_start_lr=bad,
+                )
 
     def test_a_backwards_or_empty_window_is_refused(self) -> None:
         for start, end in ((0.51, 0.5), (0.5, 0.5)):
