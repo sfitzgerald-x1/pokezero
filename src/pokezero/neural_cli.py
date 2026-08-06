@@ -596,6 +596,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "Compares against absolute global progress, so on a resumed run whose progress already starts "
         "past this fraction it never fires.",
     )
+    train.add_argument(
+        "--learning-rate-resume-warmup-start-progress",
+        type=float,
+        default=None,
+        help="WARM-RESUME ramp (all three resume-warmup flags together, and mutually exclusive "
+        "with --learning-rate-warmup-progress). Global progress where the ramp begins -- the "
+        "resume point. Use this, NOT --learning-rate-warmup-progress, when continuing a run "
+        "against a widened denominator: the cold-start flag compares against absolute progress "
+        "and so never fires on a resume.",
+    )
+    train.add_argument(
+        "--learning-rate-resume-warmup-end-progress",
+        type=float,
+        default=None,
+        help="Global progress where the warm-resume ramp completes and rejoins the schedule.",
+    )
+    train.add_argument(
+        "--learning-rate-resume-warmup-start-lr",
+        type=float,
+        default=None,
+        help="The learning rate the resumed checkpoint was last trained at -- typically the OLD "
+        "schedule's floor. The ramp interpolates from here to the new schedule's value at the "
+        "end progress.",
+    )
     train.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -1727,6 +1751,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale. "
         "Compares against absolute global progress, so on a resumed run whose progress already starts "
         "past this fraction it never fires.",
+    )
+    iterate.add_argument(
+        "--learning-rate-resume-warmup-start-progress",
+        type=float,
+        default=None,
+        help="WARM-RESUME ramp (all three together; mutually exclusive with "
+        "--learning-rate-warmup-progress). Global progress where the ramp begins.",
+    )
+    iterate.add_argument(
+        "--learning-rate-resume-warmup-end-progress",
+        type=float,
+        default=None,
+        help="Global progress where the warm-resume ramp completes and rejoins the schedule.",
+    )
+    iterate.add_argument(
+        "--learning-rate-resume-warmup-start-lr",
+        type=float,
+        default=None,
+        help="The learning rate the resumed checkpoint was last trained at (typically the OLD "
+        "schedule's floor); the ramp interpolates from here.",
     )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
@@ -2926,6 +2970,9 @@ def _train(args: argparse.Namespace) -> int:
         learning_rate_progress_start=args.learning_rate_progress_start,
         learning_rate_progress_end=args.learning_rate_progress_end,
         learning_rate_warmup_progress=args.learning_rate_warmup_progress,
+        learning_rate_resume_warmup_start_progress=args.learning_rate_resume_warmup_start_progress,
+        learning_rate_resume_warmup_end_progress=args.learning_rate_resume_warmup_end_progress,
+        learning_rate_resume_warmup_start_lr=args.learning_rate_resume_warmup_start_lr,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
@@ -5573,6 +5620,9 @@ def _iterate(args: argparse.Namespace) -> int:
         learning_rate_schedule=args.learning_rate_schedule,
         learning_rate_schedule_total_games=args.learning_rate_schedule_total_games,
         learning_rate_warmup_progress=args.learning_rate_warmup_progress,
+        learning_rate_resume_warmup_start_progress=args.learning_rate_resume_warmup_start_progress,
+        learning_rate_resume_warmup_end_progress=args.learning_rate_resume_warmup_end_progress,
+        learning_rate_resume_warmup_start_lr=args.learning_rate_resume_warmup_start_lr,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
