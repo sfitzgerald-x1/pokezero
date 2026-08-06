@@ -1413,11 +1413,11 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M1, Choices::RECOVER);
+        .replace_move(PokemonMoveIndex::M1, Choices::MEANLOOK);
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M2, Choices::SOFTBOILED);
+        .replace_move(PokemonMoveIndex::M2, Choices::SPIDERWEB);
 
     let branches = generate(&mut state);
     let mut saw_subcase = false;
@@ -1458,7 +1458,7 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // above -- accepting a prefix would restore the tautology that review
                 // caught here, since every refusing arm shares the prefix.
                 assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:heal",
+                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:volatile",
                     "byte-identical callees whose tail carries an effect the walk \
                      cannot render must refuse, and name that arm: {:?}",
                     r.attribution_unsafe
