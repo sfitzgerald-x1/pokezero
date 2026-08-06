@@ -27,5 +27,6 @@ if _TESTS_DIR not in sys.path:
 # Same reason as tests/__init__.py: pin ``pokezero`` to this checkout ahead of the
 # editable install, so a pytest run from a scratch clone tests the clone's tree.
 _SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
+if _SRC_DIR in sys.path:
+    sys.path.remove(_SRC_DIR)
+sys.path.insert(0, _SRC_DIR)

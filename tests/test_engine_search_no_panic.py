@@ -48,6 +48,7 @@ import pathlib
 import subprocess
 import sys
 import unittest
+from _subproc_env import subproc_env
 from _showdown_root import showdown_root_str
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -97,6 +98,10 @@ class EngineSearchDoesNotPanicTest(unittest.TestCase):
                 "--out", os.devnull,
             ],
             cwd=ROOT,
+            # Without this the child imports pokezero through the editable install,
+            # NOT this checkout -- so the gate can pass against a tree that still
+            # panics. sys.path does not cross a subprocess boundary.
+            env=subproc_env(),
             capture_output=True,
             text=True,
             timeout=1800,
