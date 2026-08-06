@@ -76,6 +76,18 @@ def _request(active_moves, team_rows):
     }
 
 
+def _first(requests):
+    """The battle-start request, which the function now REQUIRES.
+
+    It is a required keyword argument rather than a defaulted one on purpose: an earlier
+    version defaulted to `requests[0]`, and a truncated history then INVERTED the fix.
+    Passing it explicitly in every test is the point -- a default would let a caller
+    silently reacquire the assumption.
+    """
+
+    return requests[0]
+
+
 def _ids(states):
     return {identity: [row["id"] for row in rows] for identity, rows in states.items()}
 
@@ -90,7 +102,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             DITTO_TEAM_WHILE_TRANSFORMED,
         )
 
-        states = actor_move_states_from_request_history([clean, transformed])
+        states = actor_move_states_from_request_history(
+            [clean, transformed], initial_request=_first([clean, transformed])
+        )
 
         self.assertEqual(
             _ids(states),
@@ -112,7 +126,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             [("bodyslam", 30), ("curse", 10)], DITTO_TEAM_WHILE_TRANSFORMED
         )
 
-        states = actor_move_states_from_request_history([clean, transformed])
+        states = actor_move_states_from_request_history(
+            [clean, transformed], initial_request=_first([clean, transformed])
+        )
 
         self.assertIn("ditto", states, "erasing the identity strands it with no PP at all")
         self.assertEqual(states["ditto"][0]["pp"], 7, "the clean PP must survive")
@@ -136,40 +152,61 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             ),
         )
 
-        states = actor_move_states_from_request_history([opener, transformed])
+        states = actor_move_states_from_request_history(
+            [opener, transformed], initial_request=_first([opener, transformed])
+        )
 
         self.assertNotIn("ditto", states)
         self.assertIn("swampert", states, "the unaffected Pokemon must be unchanged")
 
     def test_resolved_power_spellings_are_not_read_as_a_copy(self):
-        """Failure mode 3. `hiddenpowerice` vs `hiddenpower`, `return102` vs `return`."""
+        """Failure mode 3. `hiddenpowerice` vs `hiddenpower`, `return102` vs `return`.
 
-        states = actor_move_states_from_request_history(
-            [
-                _request(
-                    [
-                        ("hiddenpower", 24),
-                        ("return", 32),
-                        ("thunderbolt", 15),
-                        ("roar", 20),
-                    ],
-                    (
-                        (
-                            "p1: Zapdos",
-                            True,
-                            # GEN 3 spellings: `hiddenpowerice` with no BP suffix, and
-                            # `return102` with one. Using `hiddenpowerice70` here would
-                            # test a shape gen 3 never emits.
-                            ["hiddenpowerice", "return102", "thunderbolt", "roar"],
-                        ),
-                    ),
-                )
-            ]
+        NOT covered by the live gate: review showed that dropping the Hidden Power collapse
+        SURVIVES the scenario sweep, because no p1 Pokemon in the four chosen scenarios
+        carries Hidden Power. The evidence here is this fixture plus Showdown's source plus
+        the era-59 reproduction (4,211 Hidden Power events, all spelled `hiddenpowerice`).
+        Adding a Hidden Power carrier to a scenario's p1 team would close that gap live, and
+        is deliberately left as a follow-up rather than done here: those teams are a
+        certified corpus and changing one is not a test-only edit.
+        """
+
+        zapdos = _request(
+            [("hiddenpower", 24), ("return", 32), ("thunderbolt", 15), ("roar", 20)],
+            (
+                (
+                    "p1: Zapdos",
+                    True,
+                    # GEN 3 spellings: `hiddenpowerice` with NO BP suffix (Showdown appends
+                    # the power only for gen >= 6), and `return102` with one. A
+                    # `hiddenpowerice70` fixture would test a shape gen 3 never emits.
+                    ["hiddenpowerice", "return102", "thunderbolt", "roar"],
+                ),
+            ),
         )
+
+        states = actor_move_states_from_request_history([zapdos], initial_request=zapdos)
 
         self.assertEqual(
             _ids(states), {"zapdos": ["hiddenpower", "return", "thunderbolt", "roar"]}
         )
+
+    def test_the_digit_strip_is_narrowed_to_bp_suffixed_prefixes(self):
+        """`conversion2` must not collapse onto `conversion`.
+
+        Both are real gen 3 moves and the only such collision in the 954-id gen 3 dex. The
+        strip itself is pinned by the test above, but the NARROWING -- which was the stated
+        reason for building on `tier2.canonical_move_id` instead of a bare
+        `rstrip("0123456789")` -- was unpinned, and review showed reverting to the crude
+        strip passes both the unit file and the live gate.
+        """
+
+        from pokezero.local_showdown import _base_move_id
+
+        self.assertEqual(_base_move_id("conversion2"), "conversion2")
+        self.assertEqual(_base_move_id("conversion"), "conversion")
+        self.assertEqual(_base_move_id("return102"), "return")
+        self.assertEqual(_base_move_id("hiddenpowerice"), "hiddenpower")
 
     def test_subset_not_intersection_so_mew_is_not_reopened(self):
         """A partially-overlapping own set is what separates SUBSET from INTERSECTION.
@@ -208,7 +245,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             ),
         )
 
-        states = actor_move_states_from_request_history([clean, transformed])
+        states = actor_move_states_from_request_history(
+            [clean, transformed], initial_request=_first([clean, transformed])
+        )
 
         self.assertEqual(
             _ids(states),
@@ -246,7 +285,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             },
         }
 
-        states = actor_move_states_from_request_history([clean, force_switch])
+        states = actor_move_states_from_request_history(
+            [clean, force_switch], initial_request=_first([clean, force_switch])
+        )
 
         self.assertEqual(states["snorlax"][0]["pp"], 21, "the real PP must survive")
         self.assertEqual(len(states["snorlax"]), 4)
@@ -266,9 +307,53 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            _ids(actor_move_states_from_request_history([no_moves_listed])),
+            _ids(actor_move_states_from_request_history(
+            [no_moves_listed], initial_request=_first([no_moves_listed])
+        )),
             {"snorlax": ["bodyslam"]},
         )
+
+    def test_duplicate_idents_union_rather_than_overwrite(self):
+        """A duplicate-ident team must not have its active member read as another's set.
+
+        Review observed this live: `attract_snorlax` puts two Blisseys on p2, both with ident
+        `p2: Blissey`, and a dict overwrite kept the LAST battle-start row -- so the active
+        Blissey's own moveset read as the other one's and its PP snapshot was dropped on the
+        very first request. Species Clause bars this in randbats, but it exists in the
+        corpus today, and it converts a pre-existing "wrong PP" into "no PP" ->
+        `self_pp_unknown` for any Custom Game search seat.
+
+        The behaviour added in response to that finding had no test, so the
+        union-to-overwrite mutant survived everything.
+
+        THE HONEST LIMIT, which review proved and this test does not hide: union is NOT
+        lossless. Those two rows union to six moves, so a mirror-match Blissey's copied
+        4-set is drawn entirely from that union and the transform is MASKED. Union is still
+        right because it trades a false positive (dropping known-good PP where nothing is
+        wrong) for a false negative that needs a Custom Game mirror-match Ditto and lands
+        back in the pre-PR state, which `engine_world` still fails closed on.
+        """
+
+        duplicate_team = (
+            ("p2: Blissey", True, ["seismictoss", "softboiled", "toxic", "icebeam"]),
+            ("p2: Blissey", False, ["attract", "seismictoss", "softboiled", "thunderwave"]),
+        )
+        battle_start = _request(
+            [("seismictoss", 32), ("softboiled", 16), ("toxic", 16), ("icebeam", 16)],
+            duplicate_team,
+        )
+
+        states = actor_move_states_from_request_history(
+            [battle_start], initial_request=battle_start
+        )
+
+        self.assertIn(
+            "blissey",
+            states,
+            "overwriting keeps only the LAST row, so the active Blissey's own moves read as "
+            "the other's and its snapshot is dropped on the first request",
+        )
+        self.assertEqual(states["blissey"][0]["pp"], 32)
 
     def test_a_truncated_history_does_not_invert_the_fix(self):
         """The reference must be the PASSED battle-start request, not `requests[0]`.
@@ -327,7 +412,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
             ),
         )
 
-        states = actor_move_states_from_request_history([first, second])
+        states = actor_move_states_from_request_history(
+            [first, second], initial_request=_first([first, second])
+        )
 
         self.assertEqual(sorted(states), ["snorlax", "swampert"])
         self.assertEqual(
@@ -344,7 +431,9 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
         early = _request([("bodyslam", 30), ("curse", 10)], team)
         later = _request([("bodyslam", 28), ("curse", 7)], team)
 
-        states = actor_move_states_from_request_history([early, later])
+        states = actor_move_states_from_request_history(
+            [early, later], initial_request=_first([early, later])
+        )
 
         self.assertEqual([row["pp"] for row in states["snorlax"]], [28, 7])
 
