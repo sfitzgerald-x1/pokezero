@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import tempfile
 from typing import Any
 import unittest
+
+from _subproc_env import subproc_env
 from urllib.parse import urlencode
 from unittest.mock import call, patch
 
@@ -2414,11 +2416,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 "assert torch.get_num_interop_threads() == 1, torch.get_num_interop_threads()",
             ]
         )
-        env = {
-            **os.environ,
-            "POKEZERO_TORCH_NUM_THREADS": "1",
-            "POKEZERO_TORCH_NUM_INTEROP_THREADS": "1",
-        }
+        # subproc_env keeps this checkout's src on the child's PYTHONPATH. Without it
+        # the child imported the editable install's tree: mutating require_torch to
+        # raise unconditionally still left this test GREEN.
+        env = subproc_env(
+            {
+                **os.environ,
+                "POKEZERO_TORCH_NUM_THREADS": "1",
+                "POKEZERO_TORCH_NUM_INTEROP_THREADS": "1",
+            }
+        )
         result = subprocess.run(
             [sys.executable, "-c", script],
             check=False,
