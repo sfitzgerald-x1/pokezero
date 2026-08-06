@@ -1164,7 +1164,7 @@ pub(crate) fn encode_row_value(
         // v4 has NO transition region, but the products still carry the tendency counters and
         // the pinned Tier-2 conclusions, which are current-state surfaces on the mon tokens.
         // write_history_cells owns both, and skips the transition rows itself at v4.
-        write_history_cells(tables, &mut grid, products, md, &opponent_mons)?;
+        write_history_cells(tables, &mut grid, products, md, &self_mons, &opponent_mons)?;
     }
 
     let (categorical, numeric) = grid.finish();
@@ -2875,6 +2875,7 @@ fn write_history_cells(
     grid: &mut Grid,
     products: &ProductsData,
     md: &Value,
+    self_mons: &[MonToken],
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;
@@ -2889,7 +2890,7 @@ fn write_history_cells(
     if layout.stats_block {
         write_stats_token(tables, grid, products)?;
     }
-    write_opponent_mon_history(tables, grid, products, opponent_mons)?;
+    write_opponent_mon_history(tables, grid, products, self_mons, opponent_mons)?;
     Ok(())
 }
 
@@ -3281,6 +3282,7 @@ fn write_opponent_mon_history(
     tables: &Tables,
     grid: &mut Grid,
     products: &ProductsData,
+    self_mons: &[MonToken],
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;
@@ -3292,6 +3294,49 @@ fn write_opponent_mon_history(
         .iter()
         .map(|s| normalize_identifier(s))
         .collect();
+    // Hoisted for the same reason `cb_pinned` is: both are loop-invariant, and the matchup table
+    // is (their mon x our mon), so a per-token `.find()` that normalized as it went would
+    // allocate two Strings per candidate cell per token -- up to ~36 cells against the tendency
+    // lookup's <=6, inside the MCTS leaf-pricing closure that ROW_WRITE_NANOS times.
+    //
+    // Gated on the SAME condition as the consuming block below, not just hoisted. The fold
+    // populates `opponent_mon_matchups` at every schema, so an ungated hoist made v2.2 and v3 --
+    // where the consumer never runs and the cost used to be exactly zero -- pay up to ~72 String
+    // allocations per encode for a value that is discarded. Three lineages are training against
+    // those layouts right now.
+    let matchup_write = layout.is_v4() && layout.stats_block;
+    let our_active = matchup_write
+        .then(|| {
+            self_mons
+                .iter()
+                .find(|mon| mon.active())
+                .map(|mon| normalize_identifier(&mon.species()))
+                .filter(|species| !species.is_empty())
+        })
+        .flatten();
+    let matchup_keys: Vec<(String, String)> = if matchup_write {
+        products
+            .tendency_stats
+            .opponent_mon_matchups
+            .iter()
+            .map(|cell| {
+                (
+                    normalize_identifier(&cell.species),
+                    normalize_identifier(&cell.opposing_species),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // `.rev()` on the zip below pairs cell i with key i ONLY while the lengths match. They do by
+    // construction (`.map()` over the same Vec), but a later `filter_map` here would silently
+    // misalign the pairing under `.rev()` and write wrong values without panicking.
+    debug_assert!(
+        !matchup_write
+            || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
+        "matchup_keys must stay 1:1 with opponent_mon_matchups for the zip+rev lookup"
+    );
     for (slot, mon) in opponent_mons.iter().take(limit).enumerate() {
         let token = opponent_offset + slot;
         let species_key = normalize_identifier(&mon.species());
@@ -3323,6 +3368,57 @@ fn write_opponent_mon_history(
                             (count as f64 / layout.stat_count_divisor).min(1.0),
                         );
                     }
+                }
+            }
+            // The matchup-conditional pair, written from the FOLD rather than the metadata.
+            //
+            // `encode_pokemon_tokens` already wrote these two columns from
+            // `md["opponent_matchup_switch_evidence"]`, which is correct on the root/boundary
+            // encode (no products) but FROZEN at the leaf: leaf.rs rebuilds the team rows from
+            // live engine state and never rebuilds that fold-derived key, so a search line saw
+            // the root's counts against the root's active. That mattered more than ordinary
+            // staleness because this column's divisor is 8, not 64 -- one event moves it 12.5%
+            // against the tendency triple's 1.6% -- so the 8x more sensitive column sat still
+            // while the insensitive one advanced live, an off-distribution (matchup, tendency)
+            // pair the model never trained on. Measured movement: 0.191 cell changes per ply,
+            // 55.9% of 4-ply windows and 79.8% of 8-ply windows containing at least one.
+            //
+            // Runs AFTER the metadata write (write_history_cells is called after
+            // encode_pokemon_tokens) and writes unconditionally, zero included, so it fully
+            // overrides the stale pair instead of leaving it standing when the live cell is
+            // empty. Mirrors `_matchup_switch_evidence` (showdown.py:3959): select the column
+            // of the (their mon x our mon) table whose `opposing_species` is OUR CURRENT
+            // active, absent active or absent cell meaning an honest (0, 0).
+            if matchup_write {
+                // Later entries win, as in the tendency lookup above: production keys a dict by
+                // normalized species and Python's builder assigns in iteration order.
+                let cell = our_active.as_ref().and_then(|ours| {
+                    products
+                        .tendency_stats
+                        .opponent_mon_matchups
+                        .iter()
+                        .zip(matchup_keys.iter())
+                        .rev()
+                        .find(|(_, (species, opposing))| {
+                            *species == species_key && opposing == ours
+                        })
+                        .map(|(cell, _)| cell)
+                });
+                for (column, count) in [
+                    (
+                        "NUMERIC_MON_SWITCHED_VS_ACTIVE",
+                        cell.map(|c| c.switched_out_before_attacking).unwrap_or(0),
+                    ),
+                    (
+                        "NUMERIC_MON_STAYED_VS_ACTIVE",
+                        cell.map(|c| c.stayed_and_attacked).unwrap_or(0),
+                    ),
+                ] {
+                    grid.set_num(
+                        token,
+                        layout.num_col(column)?,
+                        (count as f64 / layout.matchup_count_divisor).min(1.0),
+                    );
                 }
             }
         }

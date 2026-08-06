@@ -191,6 +191,106 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # the recorded chosen candidate. That is NOT what production builds, so these gates would ratify
 # a symmetric self-side write rather than catch it. Verify against engine_search's world, not
 # the gate's.
+# The matchup pair, written from the fold since `matchup_counters` reached `ProductsData`. It used
+# to sit in V4_ROOT_FROZEN_PACK_COLUMNS below, which was never a designed freeze -- the counters
+# lived in the fold but were not carried on ProductsData, so the leaf fell through to the root
+# row's `opponent_matchup_switch_evidence`.
+#
+# It is NOT in an excuse class and it is NOT gated by raw count either: a leaf fold advanced over
+# synthesized lines can legitimately count an event reality did not, which is the documented `fold`
+# class. What is gated is the RELATIONSHIP that made surfacing correct -- measured over a 12-game
+# v4 corpus at 1271 boundaries, every boundary where the matchup pair diverges is also one where
+# the ALREADY-live tendency triple diverges (4 and 4, a 1:1 set match). A regression to the frozen
+# behaviour breaks that instantly: the pair went to 380 + 194 divergent boundaries while the
+# tendency columns stayed at 4. So `matchup_excess` = boundaries where the pair diverges and no
+# live tendency column does, and that gates the exit code.
+#
+# KNOWN false-positive class, and the reason the gate has an ALLOWANCE rather than a zero
+# threshold. The matchup table is strictly finer-grained than the marginal that excuses it, so a
+# marginal can agree while a facing-level cell disagrees: if reality switches our active BEFORE
+# their attack and the synthesized branch orders it after -- the ordering ambiguity this harness
+# already classes as `fold` -- then `stayed_and_attacked` is +1 in both while the cell moves from
+# (theirs, old active) to (theirs, new active). The unit test
+# `test_the_pair_is_conditioned_on_which_of_OUR_mons_is_active` is that exact shape. It did not
+# fire on 12 games; it is not structurally impossible.
+#
+# An earlier revision documented that class as expected AND hard-failed on excess > 0. Independent
+# review pointed out those are incompatible: the first legitimate facing-ordering divergence turns
+# the harness red with the committed docs saying "expected", which is how a gate ends up disabled.
+# So the discriminator this prose names -- MAGNITUDE, ones against hundreds -- is what gates; see
+# `matchup_excess_allowance` below.
+#
+# Deliberately keyed per BOUNDARY, not per (boundary, token): the looser excuse is the right side
+# to err on given the false-positive class above, and a regression is not remotely close to the
+# margin either way.
+V4_MATCHUP_PAIR_COLUMNS = frozenset(
+    {"NUMERIC_MON_SWITCHED_VS_ACTIVE", "NUMERIC_MON_STAYED_VS_ACTIVE"}
+)
+
+# ONE chosen RATE: 1.25% of the boundaries actually compared, floored at 1 and capped at 16.
+#
+# Only the upper bound is measured. A desurfacing regression puts excess at 425 of 1271 boundaries,
+# i.e. 33%, so 1.25% sits 26x under the signal it must catch. The lower bound is UNCONSTRAINED:
+# observed noise is 0, so any positive rate is trivially "above the noise" and 1.25% has exactly as
+# much evidence behind it as 0.3% or 3%.
+#
+# Stated as a rate rather than as two constants because the earlier two-constant framing was
+# circular -- 80 was picked so the 12-game corpus landed just under the ceiling, and the ceiling was
+# then cited as the reason 80 was safe. The ceiling does not bind below 1280 compared boundaries, so
+# on every corpus in use today the two collapse to one; it exists only to stop the rate running away
+# on a very large corpus.
+#
+# Why a rate at all: `excess <= matchup_divergent_boundaries <= compared`, so a FIXED allowance makes
+# the arm structurally incapable of firing on a small corpus -- point the harness at the 3-boundary
+# committed sample with the surface fully reverted and a flat 16 returns a pass for a totally
+# desurfaced encoder. Taking `max` over corpora stops sum-dilution but not SHARD-dilution: split one
+# corpus into 40 pieces and a flat allowance is dead on every piece.
+MATCHUP_EXCESS_ALLOWANCE = 16
+MATCHUP_EXCESS_BOUNDARIES_PER_UNIT = 80
+
+
+def matchup_excess_allowance(compared_boundaries: int) -> int:
+    """Tolerated excess for a run that COMPARED `compared_boundaries` boundaries.
+
+    952 compared -> 11 (against a measured 425 when regressed); 3 -> 1, so a total regression on the
+    committed sample still fires. Never 0: that would re-create the zero-threshold incoherence this
+    allowance exists to remove.
+
+    Takes boundaries COMPARED rather than boundaries contained, because a skipped boundary cannot
+    contribute to excess and sizing the allowance by corpus size would credit capacity that does not
+    exist.
+    """
+    return max(
+        1,
+        min(
+            MATCHUP_EXCESS_ALLOWANCE,
+            compared_boundaries // MATCHUP_EXCESS_BOUNDARIES_PER_UNIT,
+        ),
+    )
+
+# The already-live twin on the same tokens, from the same fold, 1/64 instead of 1/8.
+#
+# All THREE members of the triple, including NUMERIC_MON_TURNS_ACTIVE_TOTAL. An earlier revision
+# excluded it on the stated grounds that including it "would loosen the subset from 4 to 95 and let
+# most of a full regression through". That arithmetic is wrong, and independent review caught it:
+# the frozen build puts 471 boundaries in the matchup set, so widening the excuse set to 95 cannot
+# take excess below ~376. Measured rather than bounded: frozen excess is 470 with the two paired
+# counters and 425 with all three -- both enormous against a surfaced excess of 0, which is
+# unchanged either way because the surfaced 4 is a subset of both excuse sets.
+#
+# So the exclusion bought no detection and cost false-alarm headroom on the sibling MOST likely to
+# co-occur with a real false positive: TURNS_ACTIVE_TOTAL diverges on 91 of 1271 boundaries (7%),
+# which is direct evidence that the leaf fold's per-mon occupant attribution is routinely off
+# against reality here -- and occupant attribution is what the matchup cell's `facing` key is
+# derived from.
+V4_LIVE_TENDENCY_COLUMNS = frozenset(
+    {
+        "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+        "NUMERIC_MON_STAYED_AND_ATTACKED",
+        "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+    }
+)
+
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
     {
         "NUMERIC_TRUANT_LOAF",
@@ -204,8 +304,6 @@ V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
         "NUMERIC_OPP_ITEMS_REMOVED_CREDIT",
         "NUMERIC_CHOICE_LOCKED",
         "NUMERIC_ITEM_SWAPPED",
-        "NUMERIC_MON_SWITCHED_VS_ACTIVE",
-        "NUMERIC_MON_STAYED_VS_ACTIVE",
         "CATEGORY_LAST_USED_MOVE",
         "CATEGORY_TRACED_ABILITY",
     }
@@ -220,10 +318,13 @@ def classify(
     tags: set[str],
     reveal_pp: bool = False,
 ) -> str:
-    # BEFORE the fold prefix rule on purpose. The matchup pair is named NUMERIC_MON_*, so the
-    # prefix would sweep it into `fold` — an accepted class, but the wrong reason: nothing about
-    # it is fold-derived at the leaf today. Being accidentally accepted by a name coincidence is
-    # how a divergence stops being reviewed.
+    # BEFORE the fold prefix rule on purpose, and it still is, for the reason the rule was
+    # written: the matchup pair is named NUMERIC_MON_*, so the prefix would sweep it into `fold`
+    # by name coincidence, and being accidentally accepted is how a divergence stops being
+    # reviewed. It IS fold-derived at the leaf now, so `fold` would be the right class for the
+    # wrong reason -- it gets its own label instead, and `matchup_excess` below gates it.
+    if column in V4_MATCHUP_PAIR_COLUMNS:
+        return "matchup_fold"
     if column in V4_ROOT_FROZEN_PACK_COLUMNS:
         return "root_frozen_pack"
     if block == "transition" or column.startswith(
@@ -302,6 +403,7 @@ def drive_pair(
     dex,
     history_lines: list[str],
     tables_json: str,
+    observation_schema_version: str,
 ) -> tuple[str, Any]:
     """Returns (status, payload). status='ok' payload=(buffers, turn); else a
     skip reason string."""
@@ -469,7 +571,7 @@ def drive_pair(
         "battle_seed": anchor.get("battle_seed"),
         "format_id": anchor.get("format_id"),
         "player_id": anchor.get("player_id"),
-        "observation_schema_version": anchor.get("observation_schema_version"),
+        "observation_schema_version": observation_schema_version,
         "observation_metadata": anchor.get("observation_metadata"),
         "public_materialization": payload,
     }
@@ -574,6 +676,44 @@ def drive_pair(
     return "ok", (buffers, turn, tags)
 
 
+def anchor_observation_schema(golden_rows, battle_id: str, row_n, seat: str) -> str:
+    """The OBSERVATION schema the anchor row was encoded at.
+
+    Deliberately not defaulted to the tables' own schema version: the encoder compares this
+    against the table layout and a self-derived value would make that guard vacuous. Missing
+    means "", which the guard rejects — the honest outcome, and now a visible one.
+    """
+    golden = golden_rows.get((battle_id, row_n["decision_round_index"], seat))
+    return "" if golden is None else str(golden.observation_schema_version or "")
+
+
+def gate_exit_code(
+    defect_rows: int, matchup_excess_rows: int, allowance: int = MATCHUP_EXCESS_ALLOWANCE
+) -> int:
+    """The exit gate, extracted so the matchup arm is testable without a corpus.
+
+    On any corpus that exercises the matchup columns, `defect_rows` is already nonzero from
+    pre-existing state-class divergences (124 on the 12-game v4 corpus), so the matchup arm's
+    contribution to the EXIT CODE cannot be observed end-to-end -- only its printed count can.
+    Independent review flagged exactly that gap. This function is the whole decision, so
+    `tests/test_leaf_vs_reality_gate.py` can pin it directly.
+
+    `state`/`turn` keep a ZERO threshold: any member is a defect. The matchup arm gets an allowance,
+    because its documented false-positive class produces excess in the ones while a desurfacing
+    regression produces it in the hundreds -- measured 0 surfaced against 425 frozen. The allowance
+    is passed in rather than read from the module constant because it scales with the boundaries a
+    run actually COMPARED; see `matchup_excess_allowance`.
+
+    Called once PER CORPUS, with that corpus's own excess and allowance, and the verdicts OR'd. An
+    earlier revision passed the worst corpus's excess against the tightest corpus's allowance, which
+    gates on a cross-product whose halves can come from different corpora and can therefore fail a
+    run in which every corpus passed its own threshold.
+    """
+    if defect_rows != 0:
+        return 1
+    return 1 if matchup_excess_rows > allowance else 0
+
+
 def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) -> dict[str, Any]:
     raw = load_corpus(corpus_dir)
     golden = load_golden_corpus(corpus_dir)
@@ -597,6 +737,9 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
 
     counts: Counter[str] = Counter()
     class_rows: Counter[str] = Counter()
+    # Gate state for the matchup pair; see V4_MATCHUP_PAIR_COLUMNS.
+    matchup_boundaries: set[tuple[str, str, int]] = set()
+    tendency_boundaries: set[tuple[str, str, int]] = set()
     families: Counter[tuple[str, str, str, str]] = Counter()
     family_examples: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
@@ -612,6 +755,9 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                 dex=dex,
                 history_lines=list(history),
                 tables_json=tables_json,
+                observation_schema_version=anchor_observation_schema(
+                    golden_rows, battle_id, row_n, seat
+                ),
             )
             history.extend(row_next.get("event_slice") or ())
             if status != "ok":
@@ -681,7 +827,11 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                         if name == "legal_action_mask":
                             token, column = -1, int(position[0])
                             colname = f"action{column}"
-                    block = block_of(token) if token >= 0 else name
+                    block = (
+                        block_of(token, tables["layout"]["token_count"])
+                        if token >= 0
+                        else name
+                    )
                     opp_membership = (
                         isinstance(token, int) and token in membership_tokens
                     )
@@ -741,10 +891,22 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                     class_rows[klass] += 1
                 for family in row_families:
                     families[family] += 1
+                boundary = (battle_id, seat, row_n["decision_round_index"])
+                for family in row_families:
+                    if family[3] in V4_MATCHUP_PAIR_COLUMNS:
+                        matchup_boundaries.add(boundary)
+                    elif family[3] in V4_LIVE_TENDENCY_COLUMNS:
+                        tendency_boundaries.add(boundary)
 
+    # Boundaries where the fold-driven matchup pair diverges but NO live tendency column does.
+    # Sorted for a stable report; the count is what gates.
+    matchup_excess = sorted(matchup_boundaries - tendency_boundaries)
     return {
         "corpus": str(corpus_dir),
         "boundaries": sum(len(c) - 1 for c in raw["fold_chains"].values() if len(c) > 1),
+        "matchup_divergent_boundaries": len(matchup_boundaries),
+        "live_tendency_divergent_boundaries": len(tendency_boundaries),
+        "matchup_excess": [list(entry) for entry in matchup_excess],
         "counts": dict(sorted(counts.items())),
         "class_rows": dict(sorted(class_rows.items())),
         "families": [
@@ -774,6 +936,10 @@ def main(argv=None) -> int:
     tables = json.loads(tables_json)
     reports = []
     defect_rows = 0
+    matchup_excess_rows = 0
+    matchup_excess_rows_max = 0
+    matchup_allowance_min = MATCHUP_EXCESS_ALLOWANCE
+    matchup_arm_failed = False
     for corpus_dir in args.corpus:
         report = run_corpus(corpus_dir, tables_json, tables)
         reports.append(report)
@@ -796,10 +962,69 @@ def main(argv=None) -> int:
         defect_rows += report["class_rows"].get("state", 0) + report["class_rows"].get(
             "turn", 0
         )
+        excess = report.get("matchup_excess") or []
+        # #2: calibrate on boundaries actually COMPARED, not on what the corpus contains. Skipped
+        # boundaries cannot contribute to excess, so sizing the allowance by corpus size credits
+        # capacity that does not exist -- and the worst case is this harness's own history: with the
+        # schema-guard break skipping 100% of boundaries, a corpus-sized allowance printed no INERT
+        # line (1271 > 15) and exited 0, which is precisely the "pass the gate was never able to
+        # withhold" that the line exists to announce.
+        compared = report["counts"].get("exact", 0) + report["counts"].get("divergent", 0)
+        allowance = matchup_excess_allowance(compared)
+        print(
+            f"   matchup pair: {report['matchup_divergent_boundaries']} divergent boundaries, "
+            f"live tendency {report['live_tendency_divergent_boundaries']}, "
+            f"excess {len(excess)} (allowance {allowance})"
+        )
+        # Say so when the corpus CANNOT produce a failing excess, rather than reporting a pass the
+        # gate was never able to withhold -- silent inertness is this harness's recurring bug (the
+        # schema-guard skip printed "divergent boundaries: 0" for a 100%-skipped run, and the
+        # NUMERIC_MON_* prefix put these columns in an un-gated class while a comment claimed
+        # otherwise).
+        #
+        # The predicate is the RUN's capacity, not what it happened to observe. Excess is keyed per
+        # boundary, so it cannot exceed the number compared; comparing the OBSERVED divergence count
+        # instead would fire on every healthy run -- 4 divergences against an allowance of 11 on the
+        # 12-game corpus -- while asserting the false claim that no regression could fail here, when
+        # a regression on that same corpus produces 471.
+        if compared <= allowance:
+            print(
+                f"     matchup gate INERT on this corpus: only {compared} of "
+                f"{report['boundaries']} same-seat boundaries were compared, which cannot exceed "
+                f"an allowance of {allowance}, so no regression can fail this arm here"
+            )
+        for entry in excess[:5]:
+            print(f"     excess boundary {entry}")
+        # Dedented out of the display loop above on purpose: it was correct only because `max` is
+        # idempotent, so trimming or gating that print would have silently pinned the gate at 0.
+        #
+        # The VERDICT is taken per corpus. Maximising excess and minimising the allowance
+        # independently, as an earlier revision did, gates on a cross-product whose two halves can
+        # come from different corpora: golden-v2 at 1271 boundaries/allowance 15 with 5 legitimate
+        # divergences, plus a 300-boundary scenarios corpus at allowance 3 with none, yields
+        # 5 > 3 and fails a run in which every corpus passed its own threshold. That is the round-3
+        # incoherence returning through the aggregation instead of the threshold -- red on the
+        # documented false-positive class, which is the scenario where someone disables the arm.
+        matchup_arm_failed = (
+            matchup_arm_failed or gate_exit_code(0, len(excess), allowance) == 1
+        )
+        matchup_excess_rows_max = max(matchup_excess_rows_max, len(excess))
+        matchup_allowance_min = min(matchup_allowance_min, allowance)
+        matchup_excess_rows += len(excess)
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
     print(f"\nDEFECT-CLASS (state+turn) divergent boundaries: {defect_rows}")
-    return 0 if defect_rows == 0 else 1
+    # Gated alongside state+turn rather than folded into them: it is a different KIND of finding
+    # (a broken relationship, not a wrong cell) and collapsing it would hide which one fired.
+    print(
+        f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): "
+        f"{matchup_excess_rows} (worst corpus {matchup_excess_rows_max}, "
+        f"tightest allowance {matchup_allowance_min}) -- "
+        f"arm {'FAILED' if matchup_arm_failed else 'passed'} per corpus"
+    )
+    # Worst-excess and tightest-allowance are printed as DIAGNOSTICS only; the verdict above is the
+    # per-corpus one.
+    return 1 if defect_rows != 0 or matchup_arm_failed else 0
 
 
 if __name__ == "__main__":
