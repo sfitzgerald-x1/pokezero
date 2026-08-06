@@ -1338,3 +1338,8 @@ poke-engine-gen3-painsplit-hp-reading.patch
 # 238..252 and SURVIVE while 91..100 total 254..280 and kill. Gated on
 # hit_count > 1, so single-hit moves are bit-identical. reports/c129.
 poke-engine-gen3-hitcount-ko-threshold.patch
+
+# A11: Belly Drum must fail at +6 Attack (and at maxhp 1). Showdown
+# data/moves.ts:1222-1228, no gen3/gen4 override. Closes holdout rows
+# 19100072/17 and 19100072/19.
+poke-engine-gen3-a11-bellydrum-fail-clauses.patch

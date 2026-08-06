@@ -126,6 +126,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         attacker_spikes: int = 0,
         attacker_yawn_duration: int = 0,
         attacker_speed_boost: int = 0,
+        attacker_attack_boost: int = 0,
     ):
         dummy = poke_engine.Pokemon(id="pikachu", level=1, hp=0)
         p1 = [attacker, *attacker_party]
@@ -136,6 +137,7 @@ class AbilityMechanicsTests(unittest.TestCase):
             side_one=poke_engine.Side(
                 active_index="0",
                 speed_boost=attacker_speed_boost,
+                attack_boost=attacker_attack_boost,
                 pokemon=p1,
                 volatile_statuses=set(attacker_volatiles),
                 volatile_status_durations=poke_engine.VolatileStatusDurations(
@@ -910,6 +912,101 @@ class AbilityMechanicsTests(unittest.TestCase):
             "the residual arm no longer kills via the residual -- truncating "
             f"division rather than ceiling? total={sum(arm_hits)} arm={arm_text[:120]}",
         )
+
+    def test_belly_drum_fails_at_plus_six_attack(self) -> None:
+        # Cause A11. `gen3/choice_effects.rs` `Choices::BELLYDRUM` gated ONLY on
+        # `attacker.hp > attacker.maxhp / 2`. Showdown fails the move on three
+        # conditions -- `data/moves.ts:1222-1228`, and there is NO gen3 or gen4
+        # override, so base is the effective handler:
+        #
+        #   if (target.hp <= target.maxhp / 2      // present in the engine
+        #       || target.boosts.atk >= 6          // MISSING
+        #       || target.maxhp === 1)             // MISSING (Shedinja clause)
+        #     return false;
+        #
+        # So at +6 Attack the engine still halved the user's HP and pushed a
+        # `6 - 6 = 0` boost: a second Belly Drum cost half the remaining HP for
+        # nothing.
+        #
+        # Holdout rows 19100072/17 and 19100072/19 are exactly this. Linoone at
+        # 131/261 has already drummed once (131 = 261 - 130) and is already +6;
+        # Showdown emits `|-fail|p2a: Linoone` and applies nothing, the engine
+        # applies -130. Note 131 * 2 = 262 > 261, so the HP clause does NOT explain
+        # Showdown's failure -- the +6 clause is the only one that does. maxhp / 2 =
+        # 130 is exactly the magnitude the engine applied.
+        attacker = self._mon("linoone", "pickup", "bellydrum", hp=131, maxhp=261, speed=200)
+        defender = self._mon("miltank", "thickfat", "splash", hp=273, maxhp=273)
+
+        at_plus_six = poke_engine.generate_instructions(
+            self._state(attacker, defender, attacker_attack_boost=6),
+            "bellydrum", "splash",
+        )
+        text = " || ".join(self._text(b) for b in at_plus_six)
+        self.assertNotIn(
+            "Damage SideOne: 130", text,
+            f"Belly Drum halved HP at +6 Attack instead of failing: {text[:200]}",
+        )
+        self.assertNotIn("Damage SideOne", text, f"no HP should be lost at all: {text[:200]}")
+
+        # Above +6 must fail too. The Python `State` API accepts an unclamped
+        # `attack_boost`, and writing this gate as `attack_boost != 6` rather than
+        # `>= 6` passes every other assertion in this file -- round 3's review built
+        # that mutant and it escaped. On it, `attack_boost=7` yields
+        # `Damage SideOne: 130 | Boost SideOne Attack: -1`: half the user's HP spent
+        # to LOWER its own Attack. Real play clamps to +6 so this is unreachable,
+        # but the shipped `>= 6` handles it and one assertion makes that a fact of
+        # record rather than a happy accident.
+        for boost in (7, 12):
+            above = poke_engine.generate_instructions(
+                self._state(attacker, defender, attacker_attack_boost=boost),
+                "bellydrum", "splash",
+            )
+            above_text = " || ".join(self._text(b) for b in above)
+            self.assertNotIn(
+                "Damage SideOne", above_text,
+                f"Belly Drum acted at +{boost} Attack: {above_text[:200]}",
+            )
+
+    def test_belly_drum_still_works_from_plus_zero(self) -> None:
+        # CONTROL, and it is its own test method on purpose. Round 3's review noted
+        # that while this lived inside the +6 test, the whole method was RED
+        # pre-patch -- so the control's "green in both eras" claim was not
+        # observable from a test run and had to be checked by hand-probing. As a
+        # separate method it evidences itself: green at main AND on the branch.
+        #
+        # It is what distinguishes a fail-clause from a blanket disable. HP is
+        # identical to the +6 case (131/261); the ONLY difference is the boost.
+        attacker = self._mon("linoone", "pickup", "bellydrum", hp=131, maxhp=261, speed=200)
+        defender = self._mon("miltank", "thickfat", "splash", hp=273, maxhp=273)
+        text = " || ".join(
+            self._text(b) for b in poke_engine.generate_instructions(
+                self._state(attacker, defender, attacker_attack_boost=0),
+                "bellydrum", "splash",
+            )
+        )
+        self.assertIn(
+            "Damage SideOne: 130", text,
+            f"Belly Drum must still halve HP from +0: {text[:200]}",
+        )
+        self.assertIn(
+            "Boost SideOne Attack: 6", text,
+            f"Belly Drum must still grant +6 from +0: {text[:200]}",
+        )
+
+    def test_belly_drum_still_fails_below_half_hp(self) -> None:
+        # The pre-existing clause must survive the new ones. At exactly half HP
+        # (`hp <= maxhp / 2`) the move fails regardless of boost, so this pins that
+        # the added conditions were ANDed into the existing gate rather than
+        # replacing it.
+        attacker = self._mon("linoone", "pickup", "bellydrum", hp=130, maxhp=261, speed=200)
+        defender = self._mon("miltank", "thickfat", "splash", hp=273, maxhp=273)
+        text = " || ".join(
+            self._text(b) for b in poke_engine.generate_instructions(
+                self._state(attacker, defender, attacker_attack_boost=0),
+                "bellydrum", "splash",
+            )
+        )
+        self.assertNotIn("Damage SideOne", text, f"half HP must still fail: {text[:200]}")
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
         defender = self._mon("breloom", "effectspore", "splash")
