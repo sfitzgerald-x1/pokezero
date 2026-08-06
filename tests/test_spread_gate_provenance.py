@@ -1,7 +1,10 @@
 """The exact-spread fork rides CHECKPOINT provenance, in both directions.
 
-``_encode_expected_stats(..., exact_spreads=schema_v4)`` corrects Def/SpA/SpD/Spe for the Hidden
-Power ``HPivs`` override on 716 of 1682 real candidate variants (42.6%). v4 takes the corrected
+``_encode_expected_stats(..., exact_spreads=schema_v4)`` has TWO independent branches, and both
+matter: it corrects Def/SpA/SpD/Spe for the Hidden Power ``HPivs`` override on 716 of 1682 real
+candidate variants (42.6%), AND it corrects the Atk/HP band, whose legacy trim under-estimated by
++14..+17. An earlier revision of this file described only the first and left the second uncovered,
+so the band could be reverted with every test green. v4 takes the corrected
 values; v2.1/v2.2/v3 keep the legacy iv=31 approximation on purpose, because three lineages are
 training against those encodes and shifting their input distribution mid-run is worse than a
 known one-point error.
@@ -29,7 +32,11 @@ What this file adds over ``test_observation_spec_v4.py``'s coverage, which pins 
   encode, which this harness does not build."* This builds it. The chain exercised end to end is
   checkpoint file -> ``load_transformer_model_config`` -> ``observation_spec_from_model_config``
   -> ``spec.schema_version`` -> ``schema_v4`` -> ``exact_spreads``, plus
-  ``resolve_checkpoint_contract`` and the encoder-tables latch on the artifact-export side.
+  ``resolve_checkpoint_contract`` and the encoder-tables latch on the artifact-export side. The
+  first arrow is driven through a REAL consumer (``collection.env_config_with_policy_spec_masks``,
+  which takes only a ``neural:<path>`` string), and the derived schema is checked against a raw
+  payload read rather than against the derivation itself -- two earlier revisions compared a
+  derivation with itself and were inert.
   This file is ADD-ONLY: that assertion is still present and is left in place deliberately, since
   it is nearly free and fails on a call-site edit even in an environment with no Showdown checkout,
   where everything here skips. What changes is that it is no longer the only thing pinning the gate.
@@ -63,59 +70,61 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V4,
 )
 
-#: Real gen3 randbats species whose POOL makes the fork observable in a full encode, with the
-#: columns that move. Found by sweeping the pool, not chosen: most species' candidate sets agree
-#: on all four stats, so an arbitrary fixture would compare equal values under both schemas and
-#: pass no matter which spreads the checkpoint received.
+#: (level, {column: direction}) per species, MEASURED at each species' REAL generator level.
 #:
-#: Salamence is the primary because TWO columns move, so a write that corrects one and not the
-#: other cannot pass. The others are kept as a breadth check: if a randbats change ever takes
-#: Hidden Power off Salamence's pool the primary would silently stop discriminating, and the
-#: breadth assertion below is what notices.
+#: The level matters, and an earlier revision got it wrong: it probed every species at L79, but
+#: `sets.json` gives Salamence 73, Raikou 74, Magneton 85 -- only Charizard is 79. Which columns
+#: move is level-dependent (at L79 Salamence moves DEF/SPD; at its real L73 it moves SPA instead),
+#: so the old fixture covered the Def/SpA/SpD loop only at a level the generator never produces for
+#: that species. The DIRECTIONS are level-robust -- independent review swept L50..L100 and found no
+#: sign flips -- it is the discriminating POWER that varies with level.
+#:
+#: Two things must stay covered. Both BRANCHES, because `exact_spreads` gates them independently
+#: (the Def/SpA/SpD/Spe loop and the Atk/HP band are separate `if exact_spreads:` blocks) and
+#: either can be reverted alone. And both DIRECTIONS: the loop lowers stats (HPivs drops an IV to
+#: 30) while the band corrects a legacy trim that UNDER-estimated by +14..+17, so it moves up.
+#: Charizard's HP_LOW (+0.021, ~15x the Def/SpA deltas) is the gate's largest single effect and is
+#: in the direction an earlier revision asserted was impossible.
 DISCRIMINATING = {
-    # MEASURED, per column, including the DIRECTION. An earlier revision listed four columns and
-    # asserted a blanket "corrected is always lower, since HPivs drops an IV to 30". Independent
-    # review showed both halves wrong: the gate has a SECOND, independent branch for the Atk/HP
-    # band (showdown.py:6864 -- separate from the Def/SpA/SpD/Spe loop above it), so six columns
-    # move on Salamence, not two; and the band moves UP on several species, because the legacy
-    # HP-trim approximation was wrong by +14..+17 in the low direction. The largest single effect
-    # of the gate -- Charizard's HP_LOW, +0.021, about 15x the Def/SpA deltas -- is in the
-    # direction the old assertion declared impossible.
-    #
-    # Listing only the Def/SpA/SpD columns also left the band branch UNCOVERED: setting
-    # `if exact_spreads:` to `if False:` at showdown.py:6864 half-reverted the gate with the whole
-    # file green.
-    "Salamence": {
-        "NUMERIC_EXPECTED_ATK_HIGH": "lower",
-        "NUMERIC_EXPECTED_ATK_LOW": "lower",
-        "NUMERIC_EXPECTED_DEF": "lower",
-        "NUMERIC_EXPECTED_HP_HIGH": "lower",
-        "NUMERIC_EXPECTED_HP_LOW": "lower",
-        "NUMERIC_EXPECTED_SPD": "lower",
-    },
-    # The primary for DIRECTION, because it moves BOTH ways: a sign flip anywhere in the gate
-    # cannot satisfy it, and it is the only fixture here that covers the band's upward correction.
-    "Charizard": {
-        "NUMERIC_EXPECTED_ATK_LOW": "higher",
-        "NUMERIC_EXPECTED_HP_HIGH": "lower",
-        "NUMERIC_EXPECTED_HP_LOW": "higher",
-        "NUMERIC_EXPECTED_SPA": "lower",
-    },
-    "Raikou": {
-        "NUMERIC_EXPECTED_ATK_HIGH": "higher",
-        "NUMERIC_EXPECTED_ATK_LOW": "higher",
-        "NUMERIC_EXPECTED_DEF": "lower",
-    },
-    "Magneton": {
-        "NUMERIC_EXPECTED_ATK_HIGH": "higher",
-        "NUMERIC_EXPECTED_ATK_LOW": "higher",
-        "NUMERIC_EXPECTED_DEF": "lower",
-    },
+    "Salamence": (
+        73,
+        {
+            "NUMERIC_EXPECTED_ATK_HIGH": "lower",
+            "NUMERIC_EXPECTED_ATK_LOW": "lower",
+            "NUMERIC_EXPECTED_HP_HIGH": "lower",
+            "NUMERIC_EXPECTED_HP_LOW": "lower",
+            "NUMERIC_EXPECTED_SPA": "lower",
+        },
+    ),
+    "Charizard": (
+        79,
+        {
+            "NUMERIC_EXPECTED_ATK_LOW": "higher",
+            "NUMERIC_EXPECTED_HP_HIGH": "lower",
+            "NUMERIC_EXPECTED_HP_LOW": "higher",
+            "NUMERIC_EXPECTED_SPA": "lower",
+        },
+    ),
+    "Raikou": (
+        74,
+        {
+            "NUMERIC_EXPECTED_ATK_HIGH": "higher",
+            "NUMERIC_EXPECTED_ATK_LOW": "higher",
+            "NUMERIC_EXPECTED_DEF": "lower",
+        },
+    ),
+    "Magneton": (
+        85,
+        {
+            "NUMERIC_EXPECTED_ATK_HIGH": "higher",
+            "NUMERIC_EXPECTED_ATK_LOW": "higher",
+            "NUMERIC_EXPECTED_DEF": "lower",
+        },
+    ),
 }
 
-#: The species carrying the widest column set and the one carrying both directions. Both are
-#: exercised by the directional tests, so neither the Def/SpA/SpD loop nor the Atk/HP band can be
-#: reverted alone.
+#: Salamence for column breadth, Charizard because it is the only fixture carrying BOTH correction
+#: directions, so a sign error anywhere in the gate cannot pass.
 PRIMARY_SPECIES = ("Salamence", "Charizard")
 
 #: Widths per schema, so the checkpoint stamps a self-consistent contract. Taken from the specs
@@ -130,6 +139,19 @@ def _torch():
     except ImportError:  # pragma: no cover - optional dependency
         return None
     return torch
+
+
+def _stamped_schema(path: Path) -> str:
+    """The schema stamped in a checkpoint, read RAW from the payload dict.
+
+    Deliberately not `observation_spec_from_model_config` / `load_transformer_model_config`: those
+    are the derivation under test, and comparing a derivation against itself is the tautology two
+    revisions of this file shipped. A raw `torch.load` + dict lookup is an independent source, so a
+    consumer that ignores the file and returns a default spec fails the comparison instead of
+    satisfying it.
+    """
+    payload = _torch().load(path, map_location="cpu", weights_only=True)
+    return str(payload["model_config"]["observation_schema_version"])
 
 
 def _registry_spec(schema_version: str):
@@ -201,7 +223,7 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
             for schema in SCHEMAS
         }
 
-    def _state(self, species: str, level: int = 79):
+    def _state(self, species: str, level: int):
         """A state whose opponent belief carries REAL candidate variants.
 
         Built through `normalize_for_player` with the set source, which is the production
@@ -273,7 +295,7 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
             out[name] = float(grid[opponent_token, physical])
         return out
 
-    def _reference(self, species: str, names, *, exact: bool) -> dict[str, float]:
+    def _reference(self, species: str, level: int, names, *, exact: bool) -> dict[str, float]:
         """The absolute value each column MUST hold, from a direct call with the flag set.
 
         Computed independently of the call-site gate, which is the point: comparing the v3 encode
@@ -285,7 +307,7 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         Read at the LEGACY index because this is the writer's own row, before the grouped-layout
         projection; the projection relocates the column without changing its value.
         """
-        state = self._state(species)
+        state = self._state(species, level)
         # Exactly ONE revealed opponent, asserted rather than assumed: `_expected_stats` reads the
         # first opponent token (`OPPONENT_POKEMON_TOKEN_OFFSET`) while this picks the first belief
         # carrying variants, and those coincide only while the fixture reveals a single mon. With
@@ -299,7 +321,7 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         belief = next(
             mon for mon in state.belief_view.opponent_pokemon if mon.candidate_variants
         )
-        details = f"{species}, L79"
+        details = f"{species}, L{level}"
         row = [0.0] * 512
         showdown._encode_expected_stats(
             row,
@@ -312,79 +334,58 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         )
         return {name: float(row[getattr(showdown, name)]) for name in names}
 
-    def _spec_from_checkpoint(self, schema_version: str, tmp: Path):
-        """checkpoint file -> CONSUMER latch -> the spec object an encode actually receives.
+    def _latched_from_checkpoint(self, path: Path):
+        """Hand a real CONSUMER nothing but a PATH; return the spec it derives.
 
-        Deliberately routed through `env_config_from_checkpoint_provenance`, the latch every
-        real consumer uses (`local_showdown`, `collection`, the probes), and the returned spec
-        OBJECT is handed to `observation_from_player_state` verbatim.
+        Takes no schema argument ON PURPOSE. Three revisions of this helper were circular, and the
+        third was circular in a way that survived the reviewer's own stub:
 
-        The first version of this helper returned a spec and the callers used only
-        `spec.schema_version`, re-looking the spec back up out of the module registry via
-        `observation_spec_for_schema`. Independent review showed that made the whole chain
-        decorative: `resolve_checkpoint_contract` derives `contract.schema_version` by calling the
-        same two functions the helper then called itself, so the `assertEqual` fully determined the
-        string and nothing downstream could observe the checkpoint. Proved by stubbing this method
-        out entirely -- no file, no torch, no resolver -- with both directional tests still green.
+        1. Returned a spec whose only used field was `schema_version`, which callers then fed back
+           into `observation_spec_for_schema` -- the checkpoint contributed one string the test had
+           already asserted.
+        2. Passed `required_specs=...` into `env_config_from_checkpoint_provenance` and read the
+           spec back out. That latch does `replace(resolved, observation_spec=required_spec)`
+           (local_showdown.py:232), i.e. returns the same object, so it was "assert the object I
+           supplied"; the widths check beside it was a tautology, since
+           `contract.numeric_feature_count` is built by the identical expression the test evaluated
+           (resolver.py:236-237).
+        3. Took `schema_version` and asserted the derived spec equalled it. Still circular: any
+           spec source keyed on the requested schema satisfies it, including a stub that never
+           opens the file.
 
-        Now the checkpoint's own widths are load-bearing (the spec object carries
-        `numeric_feature_count` / `token_count` / `transition_token_count` from the stamped
-        config), and a consumer that drops the checkpoint spec in favour of the env default turns
-        these tests red rather than leaving them green.
+        Now the only input is a path, and the assertion is against `_stamped_schema`, a RAW payload
+        read that shares no code with the derivation. A consumer that ignores the checkpoint and
+        returns a default spec fails here rather than passing.
+
+        What this still does NOT establish, stated so nobody over-reads it: that the *encoder*
+        consults the checkpoint. It cannot -- the encoder legitimately consults only the spec. The
+        chain proven is `checkpoint file -> consumer -> spec -> schema_v4 -> exact_spreads`, with
+        the first arrow now load-bearing.
         """
-        from pokezero.local_showdown import (
-            LocalShowdownConfig,
-            env_config_from_checkpoint_provenance,
-        )
-        from pokezero.mcts_eval.resolver import resolve_checkpoint_contract
-        from pokezero.neural_policy import (
-            feature_masks_from_model_config,
-            load_transformer_model_config,
-            observation_spec_from_model_config,
-        )
+        from pokezero.collection import env_config_with_policy_spec_masks
+        from pokezero.local_showdown import LocalShowdownConfig
 
-        path = _write_checkpoint(
-            tmp / f"{schema_version.replace('.', '_')}.pt",
-            schema_version,
-            tuple(self.vocabs[schema_version].tokens),
-        )
-        contract = resolve_checkpoint_contract(path)
-        self.assertEqual(
-            contract.schema_version,
-            schema_version,
-            "the contract did not adopt the checkpoint's stamped schema",
-        )
-        config = load_transformer_model_config(path)
-        env_config = env_config_from_checkpoint_provenance(
-            LocalShowdownConfig(),
-            feature_masks_from_model_config(config),
+        env_config = env_config_with_policy_spec_masks(
+            LocalShowdownConfig(showdown_root=self.root),
+            [f"neural:{path}"],
             context="spread-gate-provenance",
-            required_specs=observation_spec_from_model_config(config),
-            required_vocabs=self.vocabs[schema_version],
         )
         spec = env_config.observation_spec
-        # The latch must have ADOPTED the checkpoint's spec, not kept the env default. Without
-        # this the helper could hand back `DEFAULT_REPLAY_OBSERVATION_SPEC` and the directional
-        # tests would report the default schema's spreads as the checkpoint's.
         self.assertEqual(
             spec.schema_version,
-            schema_version,
-            "the env latch did not adopt the checkpoint's spec",
+            _stamped_schema(path),
+            "the consumer's spec disagrees with the schema stamped in the checkpoint -- it did "
+            "not derive it from the file",
         )
-        self.assertEqual(
-            (spec.numeric_feature_count, spec.token_count),
-            (contract.numeric_feature_count, contract.token_count),
-            "the latched spec's widths disagree with the checkpoint contract",
-        )
-        return contract, spec
+        return env_config, spec
 
     def test_the_fork_is_observable_at_all_on_this_fixture(self) -> None:
         """Reachability FIRST. Without this the two directional tests can both pass on a fixture
         where the corrected and legacy values coincide, which is true for most of the pool."""
         for species in PRIMARY_SPECIES:
-            directions = DISCRIMINATING[species]
+            level, directions = DISCRIMINATING[species]
             names = tuple(directions)
-            state = self._state(species)
+            state = self._state(species, level)
             legacy = self._expected_stats(
                 state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V3), names
             )
@@ -396,8 +397,10 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     self.assertNotEqual(
                         legacy[name],
                         corrected[name],
-                        f"{species}/{name} is equal under both schemas, so this fixture cannot "
-                        "distinguish which spreads a checkpoint received",
+                            f"exact_spreads has NO EFFECT on {species}/{name}: either the gate's "
+                        "branch for this column was reverted (the Def/SpA/SpD/Spe loop or the "
+                        "Atk/HP band) or the fixture stopped discriminating. Check the diff "
+                        "before the randbats data.",
                     )
                     # Direction PER COLUMN, from the measured map. A blanket "corrected is lower"
                     # is false: the Def/SpA/SpD/Spe loop lowers stats (HPivs drops an IV to 30)
@@ -420,17 +423,27 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
 
     def test_a_v3_checkpoint_can_never_receive_v4_spreads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            _, spec = self._spec_from_checkpoint(OBSERVATION_SCHEMA_VERSION_V3, Path(tmp))
+            path = _write_checkpoint(
+                Path(tmp) / "v3.pt",
+                OBSERVATION_SCHEMA_VERSION_V3,
+                tuple(self.vocabs[OBSERVATION_SCHEMA_VERSION_V3].tokens),
+            )
+            _, spec = self._latched_from_checkpoint(path)
         for species in PRIMARY_SPECIES:
-            names = tuple(DISCRIMINATING[species])
-            state = self._state(species)
-            legacy = self._reference(species, names, exact=False)
-            corrected = self._reference(species, names, exact=True)
+            level, directions = DISCRIMINATING[species]
+            names = tuple(directions)
+            state = self._state(species, level)
+            legacy = self._reference(species, level, names, exact=False)
+            corrected = self._reference(species, level, names, exact=True)
             got = self._expected_stats(state, spec, names)
             for name in names:
                 with self.subTest(species=species, column=name):
                     self.assertNotEqual(
-                        legacy[name], corrected[name], f"{name}: references coincide; vacuous"
+                        legacy[name],
+                        corrected[name],
+                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate's branch for "
+                        "this column was reverted, or the fixture stopped discriminating. Check "
+                        "the diff before the randbats data.",
                     )
                     self.assertEqual(
                         got[name],
@@ -444,17 +457,27 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
 
     def test_a_v4_checkpoint_can_never_receive_v3_spreads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            _, spec = self._spec_from_checkpoint(OBSERVATION_SCHEMA_VERSION_V4, Path(tmp))
+            path = _write_checkpoint(
+                Path(tmp) / "v4.pt",
+                OBSERVATION_SCHEMA_VERSION_V4,
+                tuple(self.vocabs[OBSERVATION_SCHEMA_VERSION_V4].tokens),
+            )
+            _, spec = self._latched_from_checkpoint(path)
         for species in PRIMARY_SPECIES:
-            names = tuple(DISCRIMINATING[species])
-            state = self._state(species)
-            legacy = self._reference(species, names, exact=False)
-            corrected = self._reference(species, names, exact=True)
+            level, directions = DISCRIMINATING[species]
+            names = tuple(directions)
+            state = self._state(species, level)
+            legacy = self._reference(species, level, names, exact=False)
+            corrected = self._reference(species, level, names, exact=True)
             got = self._expected_stats(state, spec, names)
             for name in names:
                 with self.subTest(species=species, column=name):
                     self.assertNotEqual(
-                        legacy[name], corrected[name], f"{name}: references coincide; vacuous"
+                        legacy[name],
+                        corrected[name],
+                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate's branch for "
+                        "this column was reverted, or the fixture stopped discriminating. Check "
+                        "the diff before the randbats data.",
                     )
                     self.assertEqual(
                         got[name],
@@ -465,16 +488,25 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     )
 
     def test_more_than_one_species_discriminates(self) -> None:
-        """Breadth, so the primary fixture cannot silently stop discriminating.
+        """Breadth across pools AND levels, at each species' own generator level.
 
-        If a randbats change takes Hidden Power off Salamence's pool, the three tests above go
-        green while measuring nothing. This asserts the fork is visible across several pools.
+        The original justification -- "if a randbats change takes Hidden Power off Salamence's pool
+        the tests above go green while measuring nothing" -- turned out to be FALSE, and review
+        demonstrated it: the directional tests carry their own reachability guards, so removing the
+        fork's effect turns them red rather than green (a half-revert of the Atk/HP band produced 25
+        failed subtests, every one from a guard).
+
+        So this test's real value is narrower and worth stating honestly: it exercises two species
+        the primaries do not (Raikou, Magneton) and, more importantly, exercises every fixture at
+        its REAL generator level, which is where discriminating power actually varies. Salamence at
+        L79 moves DEF/SPD; at its real L73 it moves SPA instead. A fixture pinned to the wrong level
+        tests a state the generator never produces.
         """
         observed = []
-        for species, directions in sorted(DISCRIMINATING.items()):
+        for species, (level, directions) in sorted(DISCRIMINATING.items()):
             names = tuple(directions)
             with self.subTest(species=species):
-                state = self._state(species)
+                state = self._state(species, level)
                 legacy = self._expected_stats(
                     state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V3), names
                 )
@@ -488,14 +520,19 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     f"{species}: expected {names} to move and only {moved} did",
                 )
                 observed.append(species)
-        # NOT a count of the literal's length -- that can only fail after a subTest already has,
-        # which review flagged as dead. Assert the properties the breadth exists for: both gate
-        # BRANCHES and both correction DIRECTIONS stay covered, so neither branch can be reverted
-        # alone and a sign error cannot pass.
-        covered = {name for d in DISCRIMINATING.values() for name in d}
+
+    def test_the_fixture_literal_still_covers_both_branches_and_directions(self) -> None:
+        """A LINT on the fixture literal. Touches no encoder, deliberately separate.
+
+        This used to be tacked onto the end of the breadth test, where it read as coverage; review
+        pointed out it cannot fail on any code change, only on a fixture edit. It replaces a dead
+        `assertGreaterEqual(len(observed), 3)`, which could only fire after a subTest already had.
+        """
+        covered = {name for _, directions in DISCRIMINATING.values() for name in directions}
         self.assertTrue(
-            any(name.startswith("NUMERIC_EXPECTED_HP") for name in covered),
-            "no HP-band column is covered, so the Atk/HP branch could be reverted alone",
+            any(name.startswith("NUMERIC_EXPECTED_HP") for name in covered)
+            or any(name.startswith("NUMERIC_EXPECTED_ATK") for name in covered),
+            "no Atk/HP-band column is covered, so that branch could be reverted alone",
         )
         self.assertTrue(
             covered & {"NUMERIC_EXPECTED_DEF", "NUMERIC_EXPECTED_SPA", "NUMERIC_EXPECTED_SPD"},
@@ -503,7 +540,11 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         )
         self.assertEqual(
             {"lower", "higher"},
-            {value for d in DISCRIMINATING.values() for value in d.values()},
+            {
+                value
+                for _, directions in DISCRIMINATING.values()
+                for value in directions.values()
+            },
             "the fixture no longer covers both correction directions, so a sign error passes",
         )
 
