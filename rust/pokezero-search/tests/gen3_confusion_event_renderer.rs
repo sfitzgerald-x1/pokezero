@@ -1397,18 +1397,27 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         .remove(&PokemonVolatileStatus::CONFUSION);
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().rest_turns = 0;
-    // Two callees whose instruction lists are BYTE-IDENTICAL: Harden and
-    // Withdraw are both +1 Defense on the user. Splash and Harden do NOT work --
-    // Harden emits a boost and Splash emits nothing, so the tails differ and the
-    // engine identifies each correctly. Ambiguity needs genuinely equal effects.
+    // Two callees whose instruction lists are BYTE-IDENTICAL and whose tail the walk
+    // still CANNOT render: Recover and Soft-Boiled both heal 50% of max HP.
+    //
+    // This fixture used Harden/Withdraw (+1 Defense each) until the walk learned to emit
+    // `|-boost|`. That pair is now USABLE, not refused, so it can no longer reach the
+    // refusal arm -- it moved to
+    // `byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line` below.
+    // A heal is the next family in line: the walk emits HP DECREASES only, so a rise is
+    // still dropped and the branch must still refuse.
+    //
+    // The user must be BELOW max HP or the heal is a no-op, both tails are empty, and the
+    // fixture would silently test the empty-tail arm instead.
+    state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+        .replace_move(PokemonMoveIndex::M1, Choices::RECOVER);
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+        .replace_move(PokemonMoveIndex::M2, Choices::SOFTBOILED);
 
     let branches = generate(&mut state);
     let mut saw_subcase = false;
@@ -1449,7 +1458,7 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // above -- accepting a prefix would restore the tautology that review
                 // caught here, since every refusing arm shares the prefix.
                 assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:boost",
+                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:heal",
                     "byte-identical callees whose tail carries an effect the walk \
                      cannot render must refuse, and name that arm: {:?}",
                     r.attribution_unsafe
@@ -1478,6 +1487,83 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         }
     }
     assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+}
+
+/// A BOOST tail is now rendered, so the branch is usable AND the line is emitted.
+///
+/// This is the case the refusal fixture above used to cover. `ambiguous_unrenderable` was
+/// 8,149 world failures in era 59 -- 51.6% of the abort channel and the largest single
+/// world-level refusal in the era -- and #1124's family split existed to scope exactly this.
+/// The oracle corpus put 10 of its 16 refused tails on a bare `[Boost]`, from
+/// identical-boost pairs like Harden/Withdraw where the callee cannot be named but the
+/// transition is proven.
+///
+/// TWO assertions, because either alone is satisfiable by a broken change: the branch must
+/// stop refusing, AND the walk must actually emit the `|-boost|` line. Admitting the family
+/// without rendering it would silently drop a boost into the fold -- precisely the
+/// C52-mirror defect `ambiguous_tail_is_fully_renderable` exists to prevent -- and rendering
+/// without admitting would leave the world refused for nothing.
+#[test]
+fn byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+
+    let branches = generate(&mut state);
+    let mut saw_boost_line = false;
+    let mut saw_lossy_subcase = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a boost tail is fully renderable now and must not refuse: {:?}",
+            r.attribution_unsafe
+        );
+
+        if r.lossy
+            .iter()
+            .any(|x| x == "sleeptalk_called_unidentified")
+        {
+            saw_lossy_subcase = true;
+            // The CONTRACT tag stays bare so the differential still accepts the branch.
+            assert!(
+                !r.lossy
+                    .iter()
+                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+                "the lossy contract tag must stay unsplit: {:?}",
+                r.lossy
+            );
+        }
+        if r.lines.iter().any(|line| line.starts_with("|-boost|")) {
+            saw_boost_line = true;
+        }
+    }
+
+    assert!(
+        saw_lossy_subcase,
+        "the ambiguity must still be COUNTED as lossy -- a class that stops refusing must \
+         not stop being measured"
+    );
+    assert!(
+        saw_boost_line,
+        "the walk must EMIT the boost line, not merely stop refusing: admitting the family \
+         without rendering it drops the boost into the fold silently"
+    );
 }
 
 /// The OTHER arm: byte-identical callees whose tail the walk CAN render are USABLE.
