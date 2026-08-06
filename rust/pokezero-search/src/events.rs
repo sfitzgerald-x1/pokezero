@@ -1876,6 +1876,15 @@ fn render_move_phase(
                             SLEEPTALK_LOSSY_TAG,
                             &ambiguous_unrenderable_slug(&called_tail, side),
                         );
+                    } else if let SleepTalkIdent::NoneMatched(shapes) = ident {
+                        // ONE SLUG PER OBSERVED SHAPE. `attribution_unsafe_label` sorts and
+                        // joins, so the set composes into a single deterministic key -- and
+                        // `same_variants_and_sides` alone is a different diagnosis from
+                        // `same_variants_and_sides + structure`, which a reduction to one shape
+                        // could not express.
+                        for slug in none_matched_slugs(shapes) {
+                            out.mark_attribution_unsafe_subcase(SLEEPTALK_LOSSY_TAG, slug);
+                        }
                     } else {
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
@@ -3748,7 +3757,7 @@ fn ambiguous_unrenderable_slug(tail: &[Instruction], attacker: SideReference) ->
 enum SleepTalkIdent {
     Matched(Box<Choice>),
     /// No candidate regenerated the observed tail.
-    NoneMatched(NoneMatchedShape),
+    NoneMatched(NoneMatchedShapes),
     /// Two or more candidates regenerate the SAME tail.
     Ambiguous,
 }
@@ -3773,26 +3782,14 @@ const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
 fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
     match ident {
         SleepTalkIdent::Ambiguous => "sleeptalk_called_unidentified:ambiguous",
-        // Sub-cased, so era 61 can rank the causes instead of reading one opaque 3,595.
-        //
-        // Pre-built literals rather than a `format!`, because this function returns
-        // `&'static str` and the sub-case vocabulary is a closed set of static strings -- the
-        // same discipline `SUBCASE_VOCABULARY` enforces. A formatted key would also be
-        // ungreppable, which is how a class stops being rankable.
-        SleepTalkIdent::NoneMatched(NoneMatchedShape::ValuesOnly) => {
-            "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
-        }
-        SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure) => {
-            "sleeptalk_called_unidentified:none_matched:shape_structure"
-        }
-        SleepTalkIdent::NoneMatched(NoneMatchedShape::Length) => {
-            "sleeptalk_called_unidentified:none_matched:shape_length"
-        }
-        SleepTalkIdent::NoneMatched(NoneMatchedShape::Empty) => {
-            "sleeptalk_called_unidentified:none_matched:shape_empty"
-        }
-        SleepTalkIdent::NoneMatched(NoneMatchedShape::NoCandidates) => {
-            "sleeptalk_called_unidentified:none_matched:shape_no_candidates"
+        // A SET cannot be one static string, so `NoneMatched` is emitted by
+        // `none_matched_slugs` at the marking site -- one slug per observed shape, which the
+        // existing sort-and-join in `attribution_unsafe_label` composes into one deterministic
+        // key. Routing it through here would force either a `format!` (ungreppable, and this
+        // returns `&'static str`) or a lossy reduction back to a single shape, which is exactly
+        // what the set replaced.
+        SleepTalkIdent::NoneMatched(_) => {
+            unreachable!("NoneMatched is emitted per shape by `none_matched_slugs`")
         }
         // Exhaustive on purpose. A `_` arm would send a future variant into
         // `none_matched` with no compiler error -- a silent MIS-DIAGNOSIS of the
@@ -3831,7 +3828,8 @@ fn identify_sleep_talk_called(
     // The CLOSEST miss across all candidates. Seeded at the least informative shape so a
     // candidate list that produces nothing still yields a token rather than a default that
     // reads as a diagnosis.
-    let mut nearest = NoneMatchedShape::NoCandidates;
+    // EVERY shape observed, not the closest one. See `NoneMatchedShapes`.
+    let mut shapes = NoneMatchedShapes::default();
     for candidate in candidates {
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
@@ -3899,15 +3897,22 @@ fn identify_sleep_talk_called(
             // era-60 measurement says in as many words that it "must be classified before it
             // can be fixed". This is that classification, and it is the same move that turned
             // `ambiguous_unrenderable` from one opaque key into a ranked family list.
-            nearest = nearest.min(nearest_divergence(
-                generated.iter().map(|b| b.instruction_list.as_slice()),
-                tail,
-            ));
+            for branch in &generated {
+                shapes.insert(divergence_shape(branch.instruction_list.as_slice(), tail));
+            }
         }
     }
     match matched {
         Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
-        None => SleepTalkIdent::NoneMatched(nearest),
+        None => SleepTalkIdent::NoneMatched(if shapes.is_empty() {
+            // No candidate produced ANY branch to classify, which is the empty-candidate-list
+            // case. `NoCandidates` is reachable only from here.
+            let mut only = NoneMatchedShapes::default();
+            only.insert(NoneMatchedShape::NoCandidates);
+            only
+        } else {
+            shapes
+        }),
     }
 }
 
@@ -3963,6 +3968,74 @@ pub enum NoneMatchedShape {
     NoCandidates,
 }
 
+/// The SET of divergence shapes observed across a decision's candidates.
+///
+/// A `min` was the first design and review argued it out on three grounds:
+///
+///   1. It costs nothing to carry the set. `attribution_unsafe` is already a `Vec<String>`
+///      that `attribution_unsafe_label` sorts and joins, so emitting one `&'static str` per
+///      observed shape composes into a single deterministic key -- no counter, and no change to
+///      the Python seam, which counts `f"crate_search: {reason}"` verbatim. That is the
+///      mechanism `ambiguous_unrenderable` already uses via `unrenderable_tail_families`'
+///      fixed-order dedupe: this file's own precedent, not a new pattern.
+///   2. **It DELETES the one defect nothing could pin.** Inverting the cross-candidate `min`
+///      to `max` survived the entire suite, reporting the FARTHEST miss -- near-universally the
+///      least informative bucket. A union has no "closest" semantics to get backwards, so the
+///      failure mode stops existing rather than being tested around. Strictly less code and
+///      strictly less risk.
+///   3. A min is a lossy projection of a distribution collectable ONCE per campaign.
+///      `same_variants_and_sides` alone and `same_variants_and_sides + structure` are different
+///      diagnoses, and only the set separates them. The min is recoverable from the set, so the
+///      set strictly dominates.
+///
+/// Cardinality is bounded at 2^5 - 1 = 31, inside the discipline attract already accepts.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct NoneMatchedShapes(u8);
+
+impl NoneMatchedShapes {
+    fn insert(&mut self, shape: NoneMatchedShape) {
+        self.0 |= 1u8 << shape.bit();
+    }
+
+    fn contains(self, shape: NoneMatchedShape) -> bool {
+        self.0 & (1u8 << shape.bit()) != 0
+    }
+
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// In declaration order, so the emitted slug set is deterministic across runs -- the same
+    /// requirement `UNRENDERABLE_FAMILY_ORDER` exists for.
+    fn iter(self) -> impl Iterator<Item = NoneMatchedShape> {
+        NoneMatchedShape::ALL
+            .into_iter()
+            .filter(move |shape| self.contains(*shape))
+    }
+}
+
+impl NoneMatchedShape {
+    /// EVERY variant, in declaration order. The `iter` above and the vocabulary test both walk
+    /// this, so a new variant that is not added here is invisible to both.
+    const ALL: [NoneMatchedShape; 5] = [
+        NoneMatchedShape::ValuesOnly,
+        NoneMatchedShape::Structure,
+        NoneMatchedShape::Length,
+        NoneMatchedShape::Empty,
+        NoneMatchedShape::NoCandidates,
+    ];
+
+    fn bit(self) -> u8 {
+        match self {
+            NoneMatchedShape::ValuesOnly => 0,
+            NoneMatchedShape::Structure => 1,
+            NoneMatchedShape::Length => 2,
+            NoneMatchedShape::Empty => 3,
+            NoneMatchedShape::NoCandidates => 4,
+        }
+    }
+}
+
 impl NoneMatchedShape {
     /// The sub-case token. Closed and greppable, like the renderer's family order.
     pub fn token(self) -> &'static str {
@@ -3974,6 +4047,24 @@ impl NoneMatchedShape {
             NoneMatchedShape::NoCandidates => "shape_no_candidates",
         }
     }
+}
+
+/// One registered slug per observed shape.
+///
+/// Static literals rather than a `format!`, for the same reason the rest of this vocabulary is:
+/// a formatted key is ungreppable, which is how a class stops being rankable.
+fn none_matched_slugs(shapes: NoneMatchedShapes) -> impl Iterator<Item = &'static str> {
+    shapes.iter().map(|shape| match shape {
+        NoneMatchedShape::ValuesOnly => {
+            "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
+        }
+        NoneMatchedShape::Structure => "sleeptalk_called_unidentified:none_matched:shape_structure",
+        NoneMatchedShape::Length => "sleeptalk_called_unidentified:none_matched:shape_length",
+        NoneMatchedShape::Empty => "sleeptalk_called_unidentified:none_matched:shape_empty",
+        NoneMatchedShape::NoCandidates => {
+            "sleeptalk_called_unidentified:none_matched:shape_no_candidates"
+        }
+    })
 }
 
 /// The CLOSEST divergence across a candidate's regenerated branches.
@@ -6317,7 +6408,7 @@ mod tests {
     fn the_live_subcase_slugs_are_all_in_vocabulary() {
         for slug in [
             sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure)),
+            none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap(),
         ] {
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
@@ -6394,14 +6485,14 @@ mod tests {
 
         // NoneMatched: unsafe either way. A renderable tail must NOT rescue it.
         assert!(
-            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure), &renderable, SideReference::SideOne),
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &renderable, SideReference::SideOne),
             "none_matched with a renderable tail must STILL refuse -- the tail is not the \
              defect, the renderer's failure to reproduce it is"
         );
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure), &unrenderable, SideReference::SideOne));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &unrenderable, SideReference::SideOne));
 
         // An empty tail is renderable by construction, so it must not rescue it either.
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure), &[], SideReference::SideOne));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &[], SideReference::SideOne));
         assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[], SideReference::SideOne));
     }
 
@@ -6441,7 +6532,7 @@ mod tests {
             turn_completed: false,
             lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
             attribution_unsafe: vec![
-                sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure)).to_string(),
+                none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap().to_string(),
             ],
             lossy_subcases: Vec::new(),
             active_status_transitions: Vec::new(),
@@ -6457,7 +6548,7 @@ mod tests {
         // And the two slugs must not be the same string, or the split is cosmetic.
         assert_ne!(
             sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure))
+            none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap()
         );
     }
 
@@ -6485,7 +6576,9 @@ mod tests {
             "sleeptalk_called_unidentified:ambiguous"
         );
         assert_eq!(
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure)),
+            none_matched_slugs(one_shape(NoneMatchedShape::Structure))
+                .next()
+                .unwrap(),
             "sleeptalk_called_unidentified:none_matched:shape_structure"
         );
     }
@@ -6495,8 +6588,13 @@ mod tests {
     /// differential starts seeing a tag it does not recognise.
     #[test]
     fn every_sleeptalk_subcase_belongs_to_the_lossy_contract_tag() {
-        for ident in [SleepTalkIdent::Ambiguous, SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure)] {
-            let slug = sleeptalk_subcase_slug(&ident);
+        // Ambiguous through the slug fn; every NoneMatched shape through the set emitter,
+        // which is where they are produced now. Both must stay inside the contract tag.
+        let mut slugs: Vec<&'static str> = vec![sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous)];
+        for shape in NoneMatchedShape::ALL {
+            slugs.extend(none_matched_slugs(one_shape(shape)));
+        }
+        for slug in slugs {
             assert!(
                 slug.starts_with(SLEEPTALK_LOSSY_TAG),
                 "{slug} escapes the contract tag {SLEEPTALK_LOSSY_TAG}"
@@ -8318,7 +8416,7 @@ mod none_matched_shape_tests {
                 shape.token()
             );
             // ...and the composed slug must carry it, since that is what reaches the era report.
-            let slug = sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(shape));
+            let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
             assert!(
                 slug.ends_with(shape.token()),
                 "slug {slug:?} does not name {:?}",
@@ -8395,4 +8493,11 @@ mod nearest_divergence_tests {
         );
         assert_ne!(NoneMatchedShape::Empty, NoneMatchedShape::NoCandidates);
     }
+}
+
+#[cfg(test)]
+fn one_shape(shape: NoneMatchedShape) -> NoneMatchedShapes {
+    let mut set = NoneMatchedShapes::default();
+    set.insert(shape);
+    set
 }
