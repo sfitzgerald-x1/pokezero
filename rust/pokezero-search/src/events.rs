@@ -1931,7 +1931,11 @@ fn render_move_phase(
                             }
                         };
                     }
-                    for instruction in &called_tail {
+                    // ENUMERATED, because renderability is a property of the tail and not of
+                    // a lone instruction -- see `substitute_break_side`, where the same
+                    // engine variant is a narrated break in one position and a silent
+                    // switch-out cleanup in another.
+                    for (index, instruction) in called_tail.iter().enumerate() {
                         if let Instruction::Boost(boost) = instruction {
                             // RENDER the boost, which is what lets an ambiguous
                             // Harden/Withdraw tail be searched instead of thrown away.
@@ -1999,7 +2003,7 @@ fn render_move_phase(
                             let ident = ctx.active_ident(sim.state, dmg.side_ref);
                             out.lines
                                 .push(format!("|-activate|{ident}|Substitute|[damage]"));
-                        } else if let Some(break_side) = substitute_break_side(instruction) {
+                        } else if let Some(break_side) = substitute_break_side(&called_tail, index) {
                             // SUBSTITUTE ONLY, matched through a helper rather than by
                             // destructuring the variant here ON PURPOSE. Every other volatile is
                             // still unexpressible by this walk and stays in the `volatile`
@@ -2025,11 +2029,15 @@ fn render_move_phase(
                             // lowercased keyword, admission widened to every volatile) but
                             // DELETING the `emit_residuals!()` below SURVIVES the whole suite.
                             //
-                            // It survives because the sibling `DamageSubstitute` arm flushes
-                            // first and re-baselines, and in every tail this corpus produces the
-                            // hit immediately precedes the break -- so nothing is ever pending
-                            // here. I could not construct a reachable gen3 tail that puts an
-                            // HP change BETWEEN the two, which is why there is no test.
+                            // The first version of this note claimed it survives because "the
+                            // sibling `DamageSubstitute` arm flushes first, in every tail this
+                            // corpus produces". Review FALSIFIED that: it built a phaze tail
+                            // reaching this arm with no `DamageSubstitute` present at all. The
+                            // tail-pairing guard now makes the claim true by CONSTRUCTION rather
+                            // than by assertion -- a break is admitted only when a same-side
+                            // `DamageSubstitute` precedes it, so the flush has always happened.
+                            // The mutant still survives because nothing can be pending between
+                            // the two, which is now a property of the predicate.
                             //
                             // The call stays anyway. #1131 shipped precisely this omission for
                             // `[Damage, Boost..]`, the suite was green with AND without the fix,
@@ -3148,15 +3156,54 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// silent in the direction that matters -- admit a tail the walk cannot express and the
 /// world is searched against a protocol log missing a line, which is a wrong world rather
 /// than a refused one.
-fn substitute_break_side(instruction: &Instruction) -> Option<SideReference> {
-    match instruction {
+///
+/// # Why this takes the TAIL and an INDEX rather than one instruction
+///
+/// Because `RemoveVolatileStatus(SUBSTITUTE)` has TWO producers in the engine and only one
+/// of them is a break that Showdown narrates:
+///
+///   * `generate_instructions.rs` emits it directly after a same-side `DamageSubstitute`.
+///     That is the real break, and Showdown's `onEnd` fires: `|-end|<ident>|Substitute`.
+///   * `state.rs`'s `remove_volatile_statuses_on_switch` emits it on EVERY non-Baton-Pass
+///     switch-out, including a phazing drag. Showdown clears volatiles there with
+///     `this.volatiles = {}` and does NOT run `onEnd`, so it emits NOTHING.
+///
+/// The first version of this predicate keyed on the volatile identity alone and therefore
+/// admitted the second case, making a `[RemoveVolatileStatus(SUBSTITUTE), Switch]` phaze
+/// tail render a PHANTOM `|-end|` and be SEARCHED where it used to refuse. Review
+/// reproduced that end to end through `render_branch_events`. An extra line is the same
+/// defect class as a missing one: a wrong world instead of a refused one.
+///
+/// That is the mistake this file already warns about ~70 lines above -- "fail-closed
+/// against unknown INSTRUCTIONS is not the same as fail-closed against unknown USES of a
+/// known one" -- committed against the very sentence that names it.
+///
+/// So the test is CONSTRUCTIONAL, not nominal: a break is a substitute removal preceded in
+/// the same tail by a same-side `DamageSubstitute`, because that is how the engine builds
+/// one. A switch-out removal has no such predecessor and stays in the `volatile` family.
+///
+/// Deliberately reusable: `Boost` has the identical two-producer problem (a switch-out
+/// pushes a boost RESET that Showdown does not narrate), so that fix wants this same
+/// tail-and-index shape rather than a second bespoke rule.
+fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideReference> {
+    let remove = match tail.get(index)? {
         Instruction::RemoveVolatileStatus(remove)
             if remove.volatile_status == PokemonVolatileStatus::SUBSTITUTE =>
         {
-            Some(remove.side_ref)
+            remove
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    // A same-side `DamageSubstitute` EARLIER in this tail. Same-side matters: a double
+    // battle is out of scope for gen3 singles, but the sides are still distinct objects and
+    // pairing across them would be a phantom in the other direction.
+    tail[..index]
+        .iter()
+        .any(|earlier| match earlier {
+            Instruction::DamageSubstitute(dmg) => dmg.side_ref == remove.side_ref,
+            _ => false,
+        })
+        .then_some(remove.side_ref)
 }
 
 /// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
@@ -3166,7 +3213,8 @@ fn substitute_break_side(instruction: &Instruction) -> Option<SideReference> {
 /// here instead of silently classifying as one more `unclassified`, which on the largest
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
-fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
+fn unrenderable_family_at(tail: &[Instruction], index: usize) -> Option<&'static str> {
+    let instruction = &tail[index];
     match instruction {
         // --- rendered, or provably nothing to render -------------------------------
         //
@@ -3245,8 +3293,13 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         // `RemoveVolatileStatus` wholesale would be the C52-mirror defect, because the walk has
         // no line for Leech Seed, Confusion, Encore or the rest -- so the guard is on the
         // volatile IDENTITY, not on the variant.
-        // Same predicate the walk matches on -- see `substitute_break_side`.
-        _ if substitute_break_side(instruction).is_some() => None,
+        // Same predicate the walk matches on -- see `substitute_break_side`. Written as a
+        // concrete pattern with a guard rather than a bare `_`, so the "EXHAUSTIVE on
+        // purpose -- no `_` arm" claim above stays literally true and a NEW engine variant
+        // is still a compile error rather than falling into this arm.
+        Instruction::RemoveVolatileStatus(_) if substitute_break_side(tail, index).is_some() => {
+            None
+        }
         Instruction::ApplyVolatileStatus(_)
         | Instruction::RemoveVolatileStatus(_)
         | Instruction::ChangeVolatileStatusDuration(_) => Some("volatile"),
@@ -3347,7 +3400,7 @@ fn registered_family_or_unclassified(family: &'static str, order: &[&str]) -> &'
 
 fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
     let mut families: Vec<&'static str> = Vec::new();
-    for instruction in tail {
+    for index in 0..tail.len() {
         // An UNREGISTERED token degrades to `unclassified` here, which is in both the
         // order list and the vocabulary. That makes `assert_subcase_vocabulary`
         // UNREACHABLE from this path by construction, and the difference is not
@@ -3363,7 +3416,7 @@ fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
         // forgets `UNRENDERABLE_FAMILY_ORDER`, and the release wheel aborts mid-campaign.
         // Now that path yields a measurable `unclassified` bucket instead, and the test
         // below still fails in CI so the omission is caught before it ships.
-        if let Some(family) = unrenderable_family(instruction) {
+        if let Some(family) = unrenderable_family_at(tail, index) {
             let family = registered_family_or_unclassified(family, UNRENDERABLE_FAMILY_ORDER);
             if !families.contains(&family) {
                 families.push(family);
@@ -5092,14 +5145,16 @@ mod tests {
                 side_ref: SideReference::SideOne,
                 damage_amount: 20,
             }),
-            Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
-                side_ref: SideReference::SideOne,
-                volatile_status: PokemonVolatileStatus::SUBSTITUTE,
-            }),
+            // `RemoveVolatileStatus(SUBSTITUTE)` is deliberately NOT in this list. It is
+            // admitted only when a same-side `DamageSubstitute` precedes it in the tail, so it
+            // is not an unconditionally-renderable INSTRUCTION and belongs in the tail-level
+            // pin below rather than here. Review found the first version of this change
+            // admitting it unconditionally, which made a switch-out volatile cleanup render a
+            // phantom `|-end|` and be searched where it used to refuse.
         ];
-        for instruction in &admitted {
+        for (index, instruction) in admitted.iter().enumerate() {
             assert_eq!(
-                unrenderable_family(instruction),
+                unrenderable_family_at(&admitted, index),
                 None,
                 "{instruction:?} was admitted by the previous allowlist and must stay \
                  admitted -- widening or narrowing this set changes which worlds refuse"
@@ -5108,6 +5163,67 @@ mod tests {
         assert!(
             ambiguous_tail_is_fully_renderable(&admitted),
             "a tail built only from admitted instructions must be fully renderable"
+        );
+
+        // THE TAIL-PAIRING GUARD, pinned in both directions. `RemoveVolatileStatus(SUBSTITUTE)`
+        // is a narrated break in one position and a silent switch-out cleanup in another, and
+        // the first version of this change could not tell them apart.
+        let hit = Instruction::DamageSubstitute(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 20,
+        });
+        let removal = Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
+            side_ref: SideReference::SideOne,
+            volatile_status: PokemonVolatileStatus::SUBSTITUTE,
+        });
+        let switch = Instruction::Switch(SwitchInstruction {
+            side_ref: SideReference::SideOne,
+            previous_index: PokemonIndex::P0,
+            next_index: PokemonIndex::P1,
+        });
+
+        // A real break: hit then removal. Showdown narrates `|-end|`, so this is renderable.
+        assert!(
+            ambiguous_tail_is_fully_renderable(&[hit.clone(), removal.clone()]),
+            "a `DamageSubstitute` followed by the substitute removal IS a break and must be \
+             renderable -- this is the whole point of the change"
+        );
+
+        // A PHAZE: removal then switch, no hit. `remove_volatile_statuses_on_switch` emits this
+        // on every non-Baton-Pass switch-out and Showdown clears volatiles with
+        // `this.volatiles = {}` WITHOUT running `onEnd`, so it emits no line at all. Rendering
+        // `|-end|` here is a phantom, and searching the world against a protocol log with an
+        // extra line is the same defect class as one missing a line.
+        assert_eq!(
+            unrenderable_family_at(&[removal.clone(), switch.clone()], 0),
+            Some("volatile"),
+            "a substitute removal with NO preceding same-side `DamageSubstitute` is a \
+             switch-out cleanup, not a break, and must stay blocked"
+        );
+        assert!(
+            !ambiguous_tail_is_fully_renderable(&[removal.clone(), switch]),
+            "a phaze tail must keep REFUSING -- review reproduced this rendering a phantom \
+             `|-end|` end to end through `render_branch_events`"
+        );
+
+        // ORDER is load-bearing, not just presence: the hit must come BEFORE the removal.
+        assert_eq!(
+            unrenderable_family_at(&[removal.clone(), hit.clone()], 0),
+            Some("volatile"),
+            "a removal that PRECEDES the hit is not a break that hit caused"
+        );
+
+        // SIDE is load-bearing too: the sub that broke must belong to the mon whose volatile
+        // is being removed, or the pairing invents a break across sides.
+        let other_side_hit = Instruction::DamageSubstitute(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 20,
+        });
+        assert_eq!(
+            // index 1: the REMOVAL is the instruction under test here, not the hit.
+            unrenderable_family_at(&[other_side_hit, removal], 1),
+            Some("volatile"),
+            "a `DamageSubstitute` on the OTHER side does not make this removal a break"
         );
 
         // ONE REPRESENTATIVE PER BLOCKED FAMILY, all sixteen. `Heal` is first because it
@@ -5288,7 +5404,7 @@ mod tests {
         ];
         for (instruction, family) in &blocked {
             assert_eq!(
-                unrenderable_family(instruction),
+                unrenderable_family_at(std::slice::from_ref(instruction), 0),
                 Some(*family),
                 "{instruction:?} must be blocked and classified as {family:?}"
             );
@@ -5415,7 +5531,7 @@ mod tests {
             }),
         ];
         for instruction in &reachable {
-            let family = unrenderable_family(instruction)
+            let family = unrenderable_family_at(std::slice::from_ref(instruction), 0)
                 .expect("these representatives are all blocked families");
             assert!(
                 UNRENDERABLE_FAMILY_ORDER.contains(&family),
