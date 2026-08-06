@@ -31,6 +31,7 @@ pytest.importorskip(
 
 from leaf_vs_reality import (  # noqa: E402
     MATCHUP_EXCESS_ALLOWANCE,
+    matchup_excess_allowance,
     V4_LIVE_TENDENCY_COLUMNS,
     V4_MATCHUP_PAIR_COLUMNS,
     V4_ROOT_FROZEN_PACK_COLUMNS,
@@ -55,11 +56,54 @@ class GateExitCodeTest(unittest.TestCase):
         self.assertEqual(gate_exit_code(0, 1), 0)
         self.assertEqual(gate_exit_code(0, MATCHUP_EXCESS_ALLOWANCE), 0)
 
-    def test_the_allowance_sits_between_the_noise_and_the_signal(self) -> None:
-        """Both bounds. An allowance above the measured regression would be decorative, and one at
-        zero would re-create the incoherence."""
+    def test_the_allowance_ceiling_sits_below_the_measured_regression(self) -> None:
+        """One bound, not two. The upper bound is measured -- a desurfacing regression puts excess
+        at 425 -- but the lower bound is UNCONSTRAINED, because measured noise is 0 and so every
+        positive allowance is trivially "above the noise". 16 is chosen, not derived."""
         self.assertGreater(MATCHUP_EXCESS_ALLOWANCE, 0)
         self.assertLess(MATCHUP_EXCESS_ALLOWANCE, 425)
+
+
+class AllowanceScalesWithCorpusSizeTest(unittest.TestCase):
+    """A FIXED allowance makes the arm structurally unable to fire on a small corpus.
+
+    `excess <= matchup_divergent_boundaries <= boundaries`, so a flat 16 means any corpus with
+    fewer than 16 boundaries returns a pass for a totally desurfaced encoder. Taking `max` over
+    corpora stops sum-dilution but not shard-dilution: split one corpus into 40 pieces and a flat
+    allowance is dead on every piece. Independent review found this; it is the third form of silent
+    inertness in this harness, after the schema-guard skip and the un-gated prefix class.
+    """
+
+    def test_a_tiny_corpus_can_still_fail(self) -> None:
+        """The committed sample is 3 boundaries. A total regression there must not pass."""
+        allowance = matchup_excess_allowance(3)
+        self.assertEqual(allowance, 1)
+        self.assertEqual(gate_exit_code(0, 3, allowance), 1)
+        self.assertEqual(gate_exit_code(0, 2, allowance), 1)
+
+    def test_it_never_reaches_zero(self) -> None:
+        """Zero would re-create the incoherence the allowance exists to remove."""
+        for boundaries in (0, 1, 2, 79, 80):
+            with self.subTest(boundaries=boundaries):
+                self.assertGreaterEqual(matchup_excess_allowance(boundaries), 1)
+
+    def test_it_is_capped_at_the_ceiling(self) -> None:
+        self.assertEqual(matchup_excess_allowance(10_000_000), MATCHUP_EXCESS_ALLOWANCE)
+
+    def test_the_measured_corpus_lands_under_the_ceiling_and_over_the_noise(self) -> None:
+        """1271 boundaries -> 15, against a measured excess of 0 surfaced and 425 frozen."""
+        allowance = matchup_excess_allowance(1271)
+        self.assertEqual(allowance, 15)
+        self.assertEqual(gate_exit_code(0, 0, allowance), 0)
+        self.assertEqual(gate_exit_code(0, 425, allowance), 1)
+
+    def test_sharding_the_corpus_cannot_kill_the_gate(self) -> None:
+        """The dilution attack a flat allowance loses to: 1271 boundaries split 40 ways is ~31
+        each, and a proportional share of a 425-excess regression is ~10 -- which must still fire
+        against the scaled allowance of 1, and would NOT against a flat 16."""
+        allowance = matchup_excess_allowance(1271 // 40)
+        self.assertEqual(gate_exit_code(0, 425 // 40, allowance), 1)
+        self.assertEqual(gate_exit_code(0, 425 // 40, MATCHUP_EXCESS_ALLOWANCE), 0)
 
     def test_state_defects_alone_still_fail_the_run(self) -> None:
         """Guard the narrowness: `state`/`turn` keep a ZERO threshold. The allowance is the matchup

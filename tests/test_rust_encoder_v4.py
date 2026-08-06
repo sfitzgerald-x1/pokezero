@@ -779,48 +779,37 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             cls.tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         )
         sys.path.remove(str(SCRIPTS))
-        # ONE loud check for what the fixture must contain, because the tests below have four
-        # independent skip paths between them and a fixture regression would otherwise vanish as
-        # four silent skips rather than one legible failure.
-        rows = [
-            row.observation_metadata
-            for row in load_golden_corpus(SAMPLE_DIR).decision_rows
-            if row.player_id == "p1"
-        ]
-        missing = [
-            name
-            for name, ok in (
-                (
-                    "a p1 row with EMPTY matchup evidence",
-                    any(not (md.get("opponent_matchup_switch_evidence") or {}) for md in rows),
-                ),
-                (
-                    "a p1 row with NONEMPTY matchup evidence",
-                    any(md.get("opponent_matchup_switch_evidence") for md in rows),
-                ),
-                (
-                    "a p1 row with >=2 opponent tokens",
-                    any(len(md.get("opponent_team") or ()) >= 2 for md in rows),
-                ),
-                (
-                    "a p1 row whose active mon has a benched teammate",
-                    any(
-                        any(e.get("active") for e in md.get("self_team") or ())
-                        and sum(1 for e in md.get("self_team") or () if not e.get("active")) > 0
-                        for md in rows
-                    ),
-                ),
-            )
-            if not ok
-        ]
-        if missing:
-            raise AssertionError(
-                "the committed v4 sample no longer supports this class; regenerate it or "
-                "re-point the tests. Missing: " + "; ".join(missing)
-            )
+        # See `_check_fixture_supports_this_class`, called from setUp so it can use assertion
+        # machinery and skipTest. It drives the REAL selector rather than re-deriving predicates,
+        # which is what makes it cover engine-world buildability and fold presence too.
+
+    #: The selector predicates every test in this class depends on. Checked as a set in `setUp` so
+    #: a fixture regression fails once and legibly instead of turning into N silent skips.
+    REQUIRED_SELECTIONS = (
+        {"evidence": "empty"},
+        {"evidence": "nonempty"},
+        {"min_opponent_tokens": 2},
+    )
+
+    def setUp(self) -> None:
+        """Assert the fixture still supports the whole class, by DRIVING the real selector.
+
+        An earlier revision re-derived four predicates by hand over the row metadata. That missed
+        three things the selector also requires -- the row must build an engine world, it must have
+        a recorded fold, and the properties must hold on the SAME row rather than across different
+        ones -- so a fixture regression could still vanish as a silent skip. Driving the selector
+        cannot drift from what the tests use, because it is what the tests use.
+        """
+        for predicates in self.REQUIRED_SELECTIONS:
+            with self.subTest(selection=predicates):
+                self._driveable_row(required=True, **predicates)
 
     def _driveable_row(
-        self, *, evidence: str = "any", min_opponent_tokens: int = 1
+        self,
+        *,
+        evidence: str = "any",
+        min_opponent_tokens: int = 1,
+        required: bool = False,
     ):
         """The first p1 row matching the predicates, with its fold state and encoder.
 
@@ -918,10 +907,17 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
                 theirs,
                 int(metadata.get("turn_number") or 0),
             )
-        self.skipTest(
+        message = (
             f"no committed-sample p1 row with evidence={evidence} and "
             f">={min_opponent_tokens} opponent tokens could be driven into an engine world"
         )
+        if required:
+            raise AssertionError(
+                message
+                + " -- the committed v4 sample no longer supports this test class; regenerate it "
+                "or re-point the tests"
+            )
+        self.skipTest(message)
 
     def _matchup_columns(self, encoder, state_str, fold, turn):
         layout = self.tables["layout"]
@@ -973,10 +969,11 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             before[0],
             "a stay-and-attack must not touch the SWITCHED column (transposed write)",
         )
+        step = 1.0 / float(self.tables["layout"]["constants"]["matchup_count_divisor"])
         self.assertEqual(
             max(after[1]),
-            0.125,
-            "stayed-vs-active did not reach the fold's single-event value (1/8)",
+            step,
+            "stayed-vs-active did not reach the fold's single-event value (1/divisor)",
         )
         self.assertEqual(
             sum(1 for value in after[1] if value != 0.0),
@@ -1044,7 +1041,7 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         control_pair = self._matchup_columns(encoder, state_str, control, turn)
         self.assertEqual(
             max(control_pair[1]),
-            0.125,
+            1.0 / float(self.tables["layout"]["constants"]["matchup_count_divisor"]),
             "control advance did not move the column, so 'stayed zero' below proves nothing",
         )
         self.assertEqual(
@@ -1193,6 +1190,11 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         )
         if target is None or other is None:
             self.skipTest("row has no active opponent plus a distinct second token")
+        # The target must hold NO prior cell against our active. Otherwise the once-per-episode
+        # semantics mean the advance moves nothing, `after[target] == pair[target]`, and the vector
+        # assertion fails with the species message -- a false accusation for a fixture property.
+        if (pair[0][target], pair[1][target]) != (0.0, 0.0):
+            self.skipTest("the active opponent already holds a cell against our active")
         moved = pokezero_search.FoldState.from_payload(fold_payload)
         moved.advance_in_place(
             [
@@ -1216,8 +1218,15 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         # diff names it and the message is right. It also subsumes the non-vacuity check, since
         # requiring the target to hold the post-advance value IS the claim that the advance moved
         # it.
+        # Derived from the EXPORTED constant, not a third copy of 8. `encoder.rs` refuses to
+        # default this divisor on purpose -- "exported precisely so the two encoders cannot disagree
+        # about it, and a silent default would reintroduce the drift it exists to prevent" -- and a
+        # literal 0.125 here is that same drift: retuning `_MATCHUP_COUNT_DIVISOR` to 12 would fail
+        # this test with "the cell lookup is not filtered by species", the exact false accusation
+        # the vector assertion was introduced to remove.
+        step = 1.0 / float(self.tables["layout"]["constants"]["matchup_count_divisor"])
         expected = {
-            target: (0.0, 0.125),
+            target: (0.0, step),
             other: (pair[0][other], pair[1][other]),
         }
         got = {index: (after[0][index], after[1][index]) for index in (target, other)}

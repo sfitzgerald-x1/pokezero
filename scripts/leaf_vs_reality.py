@@ -217,8 +217,8 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # An earlier revision documented that class as expected AND hard-failed on excess > 0. Independent
 # review pointed out those are incompatible: the first legitimate facing-ordering divergence turns
 # the harness red with the committed docs saying "expected", which is how a gate ends up disabled.
-# So the discriminator this prose names -- MAGNITUDE, ones against hundreds -- is what gates.
-MATCHUP_EXCESS_ALLOWANCE = 16
+# So the discriminator this prose names -- MAGNITUDE, ones against hundreds -- is what gates; see
+# `matchup_excess_allowance` below.
 #
 # Deliberately keyed per BOUNDARY, not per (boundary, token): the looser excuse is the right side
 # to err on given the false-positive class above, and a regression is not remotely close to the
@@ -226,6 +226,32 @@ MATCHUP_EXCESS_ALLOWANCE = 16
 V4_MATCHUP_PAIR_COLUMNS = frozenset(
     {"NUMERIC_MON_SWITCHED_VS_ACTIVE", "NUMERIC_MON_STAYED_VS_ACTIVE"}
 )
+
+# Ceiling on the tolerated excess. CHOSEN, not derived: the upper bound is measured (a desurfacing
+# regression puts excess at 425 on the 12-game corpus, so 16 sits 26x under the signal it must
+# catch) but the lower bound is unconstrained, because no false positive has ever been observed --
+# measured noise is 0, so any positive allowance is "above the noise" and 16 has exactly as much
+# evidence behind it as 4 or 40.
+MATCHUP_EXCESS_ALLOWANCE = 16
+
+# Boundaries per unit of allowance. `excess <= matchup_divergent_boundaries` by construction, so a
+# FIXED allowance makes the arm structurally incapable of firing on any corpus with fewer than that
+# many divergent boundaries -- point the harness at the 3-boundary committed sample with the surface
+# fully reverted and a flat 16 returns 0 for a totally desurfaced encoder. Taking `max` over corpora
+# stops sum-dilution but not SHARD-dilution: split one corpus into 40 pieces and a flat allowance is
+# dead on every piece. Scaling ties the threshold to the signal's own scale, which is what the
+# absolute number was silently assuming.
+MATCHUP_EXCESS_BOUNDARIES_PER_UNIT = 80
+
+
+def matchup_excess_allowance(boundaries: int) -> int:
+    """Tolerated excess for a corpus of `boundaries` same-seat boundaries.
+
+    1271 boundaries -> 15 (against a measured 425 when regressed); 3 boundaries -> 1, so a total
+    regression on the committed sample still fires. Never 0: that would re-create the zero-threshold
+    incoherence this allowance exists to remove.
+    """
+    return max(1, min(MATCHUP_EXCESS_ALLOWANCE, boundaries // MATCHUP_EXCESS_BOUNDARIES_PER_UNIT))
 
 # The already-live twin on the same tokens, from the same fold, 1/64 instead of 1/8.
 #
@@ -646,7 +672,9 @@ def anchor_observation_schema(golden_rows, battle_id: str, row_n, seat: str) -> 
     return "" if golden is None else str(golden.observation_schema_version or "")
 
 
-def gate_exit_code(defect_rows: int, matchup_excess_rows: int) -> int:
+def gate_exit_code(
+    defect_rows: int, matchup_excess_rows: int, allowance: int = MATCHUP_EXCESS_ALLOWANCE
+) -> int:
     """The exit gate, extracted so the matchup arm is testable without a corpus.
 
     On any corpus that exercises the matchup columns, `defect_rows` is already nonzero from
@@ -655,16 +683,16 @@ def gate_exit_code(defect_rows: int, matchup_excess_rows: int) -> int:
     Independent review flagged exactly that gap. This function is the whole decision, so
     `tests/test_leaf_vs_reality_gate.py` can pin it directly.
 
-    `state`/`turn` keep a ZERO threshold: any member is a defect. The matchup arm gets
-    MATCHUP_EXCESS_ALLOWANCE, because its documented false-positive class produces excess in the
-    ones while a desurfacing regression produces it in the hundreds -- measured 0 surfaced against
-    425 frozen, so the allowance sits 26x below the signal it must catch and above the noise it
-    must not. Taking the WORST corpus rather than the sum keeps the allowance per-corpus, so
-    passing more corpora cannot accumulate its way past the gate.
+    `state`/`turn` keep a ZERO threshold: any member is a defect. The matchup arm gets an allowance,
+    because its documented false-positive class produces excess in the ones while a desurfacing
+    regression produces it in the hundreds -- measured 0 surfaced against 425 frozen. The allowance
+    is passed in rather than read from the module constant because it SCALES with corpus size; see
+    `matchup_excess_allowance`. Callers pass the WORST corpus's excess rather than the sum, so
+    adding passing corpora cannot dilute the gate.
     """
     if defect_rows != 0:
         return 1
-    return 1 if matchup_excess_rows > MATCHUP_EXCESS_ALLOWANCE else 0
+    return 1 if matchup_excess_rows > allowance else 0
 
 
 def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) -> dict[str, Any]:
@@ -891,6 +919,7 @@ def main(argv=None) -> int:
     defect_rows = 0
     matchup_excess_rows = 0
     matchup_excess_rows_max = 0
+    matchup_allowance_min = MATCHUP_EXCESS_ALLOWANCE
     for corpus_dir in args.corpus:
         report = run_corpus(corpus_dir, tables_json, tables)
         reports.append(report)
@@ -914,14 +943,35 @@ def main(argv=None) -> int:
             "turn", 0
         )
         excess = report.get("matchup_excess") or []
+        allowance = matchup_excess_allowance(report["boundaries"])
         print(
             f"   matchup pair: {report['matchup_divergent_boundaries']} divergent boundaries, "
             f"live tendency {report['live_tendency_divergent_boundaries']}, "
-            f"excess {len(excess)}"
+            f"excess {len(excess)} (allowance {allowance})"
         )
+        # Say so when the corpus CANNOT produce a failing excess, rather than reporting a pass the
+        # gate was never able to withhold -- silent inertness is this harness's recurring bug (the
+        # schema-guard skip printed "divergent boundaries: 0" for a 100%-skipped run, and the
+        # NUMERIC_MON_* prefix put these columns in an un-gated class while a comment claimed
+        # otherwise).
+        #
+        # The predicate is the corpus's CAPACITY, not what this run happened to observe. Excess is
+        # keyed per boundary, so it cannot exceed `boundaries`; comparing the OBSERVED divergence
+        # count instead would fire on every healthy run -- 4 divergences against an allowance of 15
+        # on the 12-game corpus -- while asserting the false claim that no regression could fail
+        # here, when a regression on that same corpus produces 471.
+        if report["boundaries"] <= allowance:
+            print(
+                f"     matchup gate INERT on this corpus: {report['boundaries']} same-seat "
+                f"boundaries cannot exceed an allowance of {allowance}, so no regression can fail "
+                "this arm here"
+            )
         for entry in excess[:5]:
             print(f"     excess boundary {entry}")
-            matchup_excess_rows_max = max(matchup_excess_rows_max, len(excess))
+        # Dedented out of the display loop above on purpose: it was correct only because `max` is
+        # idempotent, so trimming or gating that print would have silently pinned the gate at 0.
+        matchup_excess_rows_max = max(matchup_excess_rows_max, len(excess))
+        matchup_allowance_min = min(matchup_allowance_min, allowance)
         matchup_excess_rows += len(excess)
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
@@ -931,9 +981,9 @@ def main(argv=None) -> int:
     print(
         f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): "
         f"{matchup_excess_rows} (worst corpus {matchup_excess_rows_max}, "
-        f"allowance {MATCHUP_EXCESS_ALLOWANCE})"
+        f"tightest allowance {matchup_allowance_min})"
     )
-    return gate_exit_code(defect_rows, matchup_excess_rows_max)
+    return gate_exit_code(defect_rows, matchup_excess_rows_max, matchup_allowance_min)
 
 
 if __name__ == "__main__":
