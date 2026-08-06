@@ -2298,6 +2298,14 @@ import json
 from pathlib import Path
 import sys
 
+# This child really is spawned, and its `compare` branch imports pokezero.eval_cli.
+# Without this it resolves that through the editable install -- i.e. whatever tree the
+# .pth points at, not the checkout under test -- so a test named "composes real
+# subprocesses" could pass while exercising a different tree entirely. Verified: it did.
+# tests/_subproc_env.py cannot help here because the TEST is not the spawner; eval_cli
+# is. The only lever is this generated source, which the test controls.
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / "src")!r})
+
 
 def value_after(argv, flag, default=None):
     if flag not in argv:
