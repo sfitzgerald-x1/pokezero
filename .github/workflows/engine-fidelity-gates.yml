@@ -335,7 +335,6 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
-
       - name: Final-holdout guard pins
         run: |
           set -o pipefail
@@ -379,6 +378,7 @@ jobs:
             echo "::error::coverage-bound pins did not report a clean OK"
             exit 1
           fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
