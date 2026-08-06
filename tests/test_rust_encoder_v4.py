@@ -1190,10 +1190,20 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         )
         if target is None or other is None:
             self.skipTest("row has no active opponent plus a distinct second token")
-        # The target must hold NO prior cell against our active. Otherwise the once-per-episode
-        # semantics mean the advance moves nothing, `after[target] == pair[target]`, and the vector
-        # assertion fails with the species message -- a false accusation for a fixture property.
-        if (pair[0][target], pair[1][target]) != (0.0, 0.0):
+        # The target must hold NO prior cell against our active, or the once-per-episode semantics
+        # mean the advance moves nothing and the vector assertion blames the species filter for a
+        # fixture property.
+        #
+        # Read off the FOLD's own payload, NOT off `pair`. An earlier revision tested
+        # `pair[target] == (0, 0)` -- the encoder's own output -- which the species-blind mutant
+        # SATISFIES, because a blind lookup lights the target token from another mon's cell. The
+        # test then skipped instead of failing, turning a caught defect back into a silent skip.
+        # Preconditions must not be readable from the surface under test.
+        cells = pokezero_search.FoldState.from_payload(fold_payload).to_payload().get(
+            "matchup_counters"
+        ) or {}
+        prior = f"p2|{team[target]['species']}|{ours}"
+        if any(normalize_id(key) == normalize_id(prior) for key in cells):
             self.skipTest("the active opponent already holds a cell against our active")
         moved = pokezero_search.FoldState.from_payload(fold_payload)
         moved.advance_in_place(

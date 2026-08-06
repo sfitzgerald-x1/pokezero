@@ -227,31 +227,46 @@ V4_MATCHUP_PAIR_COLUMNS = frozenset(
     {"NUMERIC_MON_SWITCHED_VS_ACTIVE", "NUMERIC_MON_STAYED_VS_ACTIVE"}
 )
 
-# Ceiling on the tolerated excess. CHOSEN, not derived: the upper bound is measured (a desurfacing
-# regression puts excess at 425 on the 12-game corpus, so 16 sits 26x under the signal it must
-# catch) but the lower bound is unconstrained, because no false positive has ever been observed --
-# measured noise is 0, so any positive allowance is "above the noise" and 16 has exactly as much
-# evidence behind it as 4 or 40.
+# ONE chosen RATE: 1.25% of the boundaries actually compared, floored at 1 and capped at 16.
+#
+# Only the upper bound is measured. A desurfacing regression puts excess at 425 of 1271 boundaries,
+# i.e. 33%, so 1.25% sits 26x under the signal it must catch. The lower bound is UNCONSTRAINED:
+# observed noise is 0, so any positive rate is trivially "above the noise" and 1.25% has exactly as
+# much evidence behind it as 0.3% or 3%.
+#
+# Stated as a rate rather than as two constants because the earlier two-constant framing was
+# circular -- 80 was picked so the 12-game corpus landed just under the ceiling, and the ceiling was
+# then cited as the reason 80 was safe. The ceiling does not bind below 1280 compared boundaries, so
+# on every corpus in use today the two collapse to one; it exists only to stop the rate running away
+# on a very large corpus.
+#
+# Why a rate at all: `excess <= matchup_divergent_boundaries <= compared`, so a FIXED allowance makes
+# the arm structurally incapable of firing on a small corpus -- point the harness at the 3-boundary
+# committed sample with the surface fully reverted and a flat 16 returns a pass for a totally
+# desurfaced encoder. Taking `max` over corpora stops sum-dilution but not SHARD-dilution: split one
+# corpus into 40 pieces and a flat allowance is dead on every piece.
 MATCHUP_EXCESS_ALLOWANCE = 16
-
-# Boundaries per unit of allowance. `excess <= matchup_divergent_boundaries` by construction, so a
-# FIXED allowance makes the arm structurally incapable of firing on any corpus with fewer than that
-# many divergent boundaries -- point the harness at the 3-boundary committed sample with the surface
-# fully reverted and a flat 16 returns 0 for a totally desurfaced encoder. Taking `max` over corpora
-# stops sum-dilution but not SHARD-dilution: split one corpus into 40 pieces and a flat allowance is
-# dead on every piece. Scaling ties the threshold to the signal's own scale, which is what the
-# absolute number was silently assuming.
 MATCHUP_EXCESS_BOUNDARIES_PER_UNIT = 80
 
 
-def matchup_excess_allowance(boundaries: int) -> int:
-    """Tolerated excess for a corpus of `boundaries` same-seat boundaries.
+def matchup_excess_allowance(compared_boundaries: int) -> int:
+    """Tolerated excess for a run that COMPARED `compared_boundaries` boundaries.
 
-    1271 boundaries -> 15 (against a measured 425 when regressed); 3 boundaries -> 1, so a total
-    regression on the committed sample still fires. Never 0: that would re-create the zero-threshold
-    incoherence this allowance exists to remove.
+    952 compared -> 11 (against a measured 425 when regressed); 3 -> 1, so a total regression on the
+    committed sample still fires. Never 0: that would re-create the zero-threshold incoherence this
+    allowance exists to remove.
+
+    Takes boundaries COMPARED rather than boundaries contained, because a skipped boundary cannot
+    contribute to excess and sizing the allowance by corpus size would credit capacity that does not
+    exist.
     """
-    return max(1, min(MATCHUP_EXCESS_ALLOWANCE, boundaries // MATCHUP_EXCESS_BOUNDARIES_PER_UNIT))
+    return max(
+        1,
+        min(
+            MATCHUP_EXCESS_ALLOWANCE,
+            compared_boundaries // MATCHUP_EXCESS_BOUNDARIES_PER_UNIT,
+        ),
+    )
 
 # The already-live twin on the same tokens, from the same fold, 1/64 instead of 1/8.
 #
@@ -920,6 +935,7 @@ def main(argv=None) -> int:
     matchup_excess_rows = 0
     matchup_excess_rows_max = 0
     matchup_allowance_min = MATCHUP_EXCESS_ALLOWANCE
+    matchup_arm_failed = False
     for corpus_dir in args.corpus:
         report = run_corpus(corpus_dir, tables_json, tables)
         reports.append(report)
@@ -943,7 +959,14 @@ def main(argv=None) -> int:
             "turn", 0
         )
         excess = report.get("matchup_excess") or []
-        allowance = matchup_excess_allowance(report["boundaries"])
+        # #2: calibrate on boundaries actually COMPARED, not on what the corpus contains. Skipped
+        # boundaries cannot contribute to excess, so sizing the allowance by corpus size credits
+        # capacity that does not exist -- and the worst case is this harness's own history: with the
+        # schema-guard break skipping 100% of boundaries, a corpus-sized allowance printed no INERT
+        # line (1271 > 15) and exited 0, which is precisely the "pass the gate was never able to
+        # withhold" that the line exists to announce.
+        compared = report["counts"].get("exact", 0) + report["counts"].get("divergent", 0)
+        allowance = matchup_excess_allowance(compared)
         print(
             f"   matchup pair: {report['matchup_divergent_boundaries']} divergent boundaries, "
             f"live tendency {report['live_tendency_divergent_boundaries']}, "
@@ -960,16 +983,27 @@ def main(argv=None) -> int:
         # count instead would fire on every healthy run -- 4 divergences against an allowance of 15
         # on the 12-game corpus -- while asserting the false claim that no regression could fail
         # here, when a regression on that same corpus produces 471.
-        if report["boundaries"] <= allowance:
+        if compared <= allowance:
             print(
-                f"     matchup gate INERT on this corpus: {report['boundaries']} same-seat "
-                f"boundaries cannot exceed an allowance of {allowance}, so no regression can fail "
-                "this arm here"
+                f"     matchup gate INERT on this corpus: only {compared} of "
+                f"{report['boundaries']} same-seat boundaries were compared, which cannot exceed "
+                f"an allowance of {allowance}, so no regression can fail this arm here"
             )
         for entry in excess[:5]:
             print(f"     excess boundary {entry}")
         # Dedented out of the display loop above on purpose: it was correct only because `max` is
         # idempotent, so trimming or gating that print would have silently pinned the gate at 0.
+        #
+        # The VERDICT is taken per corpus. Maximising excess and minimising the allowance
+        # independently, as an earlier revision did, gates on a cross-product whose two halves can
+        # come from different corpora: golden-v2 at 1271 boundaries/allowance 15 with 5 legitimate
+        # divergences, plus a 300-boundary scenarios corpus at allowance 3 with none, yields
+        # 5 > 3 and fails a run in which every corpus passed its own threshold. That is the round-3
+        # incoherence returning through the aggregation instead of the threshold -- red on the
+        # documented false-positive class, which is the scenario where someone disables the arm.
+        matchup_arm_failed = (
+            matchup_arm_failed or gate_exit_code(0, len(excess), allowance) == 1
+        )
         matchup_excess_rows_max = max(matchup_excess_rows_max, len(excess))
         matchup_allowance_min = min(matchup_allowance_min, allowance)
         matchup_excess_rows += len(excess)
@@ -981,9 +1015,12 @@ def main(argv=None) -> int:
     print(
         f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): "
         f"{matchup_excess_rows} (worst corpus {matchup_excess_rows_max}, "
-        f"tightest allowance {matchup_allowance_min})"
+        f"tightest allowance {matchup_allowance_min}) -- "
+        f"arm {'FAILED' if matchup_arm_failed else 'passed'} per corpus"
     )
-    return gate_exit_code(defect_rows, matchup_excess_rows_max, matchup_allowance_min)
+    # Worst-excess and tightest-allowance are printed as DIAGNOSTICS only; the verdict above is the
+    # per-corpus one.
+    return 1 if defect_rows != 0 or matchup_arm_failed else 0
 
 
 if __name__ == "__main__":

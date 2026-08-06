@@ -56,6 +56,13 @@ class GateExitCodeTest(unittest.TestCase):
         self.assertEqual(gate_exit_code(0, 1), 0)
         self.assertEqual(gate_exit_code(0, MATCHUP_EXCESS_ALLOWANCE), 0)
 
+    def test_the_ceiling_does_not_bind_on_any_corpus_in_use(self) -> None:
+        """Recorded rather than hidden: the rate and the ceiling collapse to one constant below
+        1280 compared boundaries, which is every corpus this runs on today. Citing the ceiling as
+        the reason the rate is safe was the circular framing review caught."""
+        self.assertEqual(matchup_excess_allowance(1279), 15)
+        self.assertEqual(matchup_excess_allowance(1280), MATCHUP_EXCESS_ALLOWANCE)
+
     def test_the_allowance_ceiling_sits_below_the_measured_regression(self) -> None:
         """One bound, not two. The upper bound is measured -- a desurfacing regression puts excess
         at 425 -- but the lower bound is UNCONSTRAINED, because measured noise is 0 and so every
@@ -91,9 +98,12 @@ class AllowanceScalesWithCorpusSizeTest(unittest.TestCase):
         self.assertEqual(matchup_excess_allowance(10_000_000), MATCHUP_EXCESS_ALLOWANCE)
 
     def test_the_measured_corpus_lands_under_the_ceiling_and_over_the_noise(self) -> None:
-        """1271 boundaries -> 15, against a measured excess of 0 surfaced and 425 frozen."""
-        allowance = matchup_excess_allowance(1271)
-        self.assertEqual(allowance, 15)
+        """952 COMPARED boundaries -> 11, against a measured excess of 0 surfaced and 425 frozen.
+
+        Compared, not contained: the 12-game corpus holds 1271 boundaries but 319 skip.
+        """
+        allowance = matchup_excess_allowance(952)
+        self.assertEqual(allowance, 11)
         self.assertEqual(gate_exit_code(0, 0, allowance), 0)
         self.assertEqual(gate_exit_code(0, 425, allowance), 1)
 
