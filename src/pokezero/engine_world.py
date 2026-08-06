@@ -1897,10 +1897,42 @@ def _move_specs(
                 continue
             if request_move.startswith("hiddenpower") and sampled_has_hp:
                 continue
+            # Scalars FIRST, list LAST, AND the prose kept short enough that both
+            # scalars fit. deployment/mcts/analyze_probe.py collapses each reason on
+            # `split(": ")[-1]` and then prints only `reason[:88]`, so anything past that
+            # is cut off entirely. Two earlier versions of this message failed here: one
+            # put a flag after the moveset, and the reorder alone was still too long for
+            # `has_transform` to survive. Verified against the real truncation rather than
+            # assumed -- the one case that had looked legible was Ditto, whose set is a
+            # single move and happened to fit.
+            #
+            # WHAT THESE THREE FIELDS SEPARATE, and what an earlier version got wrong:
+            #
+            # There is NO belief-sampling step for our own moveset. `mon.moves` here is
+            # the battle-START request-known team, taken verbatim from the root snapshot
+            # (`determinization._self_team_from_metadata_result` canonicalises
+            # `request_moves` and nothing else). So "our sample is wrong" was never the
+            # alternative hypothesis, and a `mimic` flag was dead on arrival: gen 3
+            # randbats has no Mimic in its sets at all, and our own team could not
+            # contain one even if it did. That field could only ever read False.
+            #
+            # The live causes, which these fields do separate:
+            #   * `active` -- a mismatch on a BENCHED mon cannot be in-flight Transform
+            #     or Mimic, because both revert on switch-out. It is root-snapshot vs
+            #     current-request divergence, and failing closed is correct.
+            #   * `sampled_has_transform` -- transform really is in gen 3 randbats, on
+            #     ditto and mew only, so this names the population the guard at
+            #     `is_transformed_active` is supposed to have suppressed. If it is True
+            #     AND active is True, that suppression missed.
+            #   * `species` -- sibling refusals in this same function already carry it;
+            #     `slot` is only the side, so the old message never named the mon.
+            sampled_sorted = ",".join(sorted(sampled_ids))
             raise EngineWorldUnsupported(
                 "self_moveset_mismatch",
-                f"{slot}: request-known move {request_move!r} is absent from the sampled "
-                f"moveset (Transform/Mimic-class desync)",
+                f"{slot}: {mon.species!r} "
+                f"active={bool((row or {}).get('active'))} "
+                f"has_transform={'transform' in sampled_ids} "
+                f"move {request_move!r} absent from root self_team [{sampled_sorted}]",
             )
 
     specs: list[MoveSpec] = []
