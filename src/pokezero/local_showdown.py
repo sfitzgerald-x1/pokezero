@@ -3001,21 +3001,37 @@ def actor_move_states_from_request_history(
                 for move in moves
                 if isinstance(move.get("id"), str)
             }
-            # SUBSET, not equality -- but NOT for the reason an earlier version of this
-            # comment gave. It claimed Disable/Encore/Choice-locked requests list fewer
-            # moves; they do not. `active[0].moves` is always the full current moveSlots
-            # list with `disabled` flags.
+            # SUBSET, and under the union above it is REQUIRED rather than merely safer.
+            # This comment has been wrong twice, so here is the whole reasoning:
             #
-            # Provenance kept separate, because the first version of this comment blended
-            # one measurement with two source reads. MEASURED live: zero strict-subset
-            # pp-bearing requests in 2,219 real actor requests, and `recharge` appearing 6
-            # times carrying no `pp` (so `_request_active_moves` drops it). READ ONLY, from
-            # Showdown's `sim/pokemon.ts`: that Struggle and Encore-locked requests likewise
-            # carry no `pp` -- an attempt to produce a live Struggle request failed on
-            # packed-team format, so that half is unverified by measurement.
+            # Wrong v1: "Disable/Encore/Choice-locked requests list fewer moves." They do
+            # not. `active[0].moves` is always the full current moveSlots list with
+            # `disabled` flags.
             #
-            # Both an equality mutant and a reversed-subset mutant pass the live gate, so
-            # the three are indistinguishable on real input.
+            # Wrong v2: "subset is the weaker, safer claim that nothing here needs, and
+            # equality is indistinguishable on real input." That cited a live measurement of
+            # ZERO strict-subset pp-bearing requests across 2,219 real actor requests -- but
+            # that measurement was taken against a SINGLE ROW's moveSlots, before
+            # `_own_move_ids_by_identity` began unioning duplicate idents. Union makes `own`
+            # a superset by construction whenever idents collide, so a strict subset is the
+            # NORMAL case there: measured, 4 usable moves against a 6-move union.
+            #
+            # So equality would reject every duplicate-ident team, and the design is on
+            # firmer ground than its old justification claimed. Equality and reversed-subset
+            # mutants now die at the unit level; they survive only the LIVE gate, and only
+            # because p2 is not the search seat there.
+            #
+            # PROVENANCE, in three tiers rather than two, since one of these is stronger
+            # than "read only":
+            #   * MEASURED live -- the 2,219-request scan (scope: per-row movesets,
+            #     pre-union), and `recharge` appearing 6 times with no `pp`, so
+            #     `_request_active_moves` drops it.
+            #   * SAME CODE PATH as a measured case -- Encore/moveSlot-locked shares the one
+            #     `if (lockedMove)` block with recharge in Showdown's `sim/pokemon.ts`,
+            #     sibling branches both returning pp-less dicts.
+            #   * SOURCE ONLY -- Struggle is a genuinely separate branch and is unverified by
+            #     measurement; an attempt to produce a live Struggle request failed on
+            #     packed-team format.
             #
             # Subset is kept because it is the weaker, safer claim: it says "every move the
             # player may pick is one this Pokemon knows", which is what makes the moveset
@@ -3118,9 +3134,14 @@ def _base_move_id(move_id: str) -> str:
     uses to build the root self_team, which is the exact reference `_move_specs` compares
     the retained moveset against; two normalizers for one comparison is how they drift.
 
-    Hidden Power still needs its own collapse: gen 3 emits `hiddenpowerice` on the team
-    side (no BP suffix -- `sim/pokemon.ts` appends power only for gen >= 6) against a bare
-    `hiddenpower` id, so canonicalisation alone leaves them unequal.
+    Hidden Power still needs its own collapse: gen 3 emits `hiddenpower<type>` on the team
+    side against a bare `hiddenpower` id, so canonicalisation alone leaves them unequal. The
+    types are what vary, NOT a BP suffix -- measured over the gen 3 randbats sets, all 1,682
+    carry ZERO BP-suffixed Hidden Power across 13 distinct spellings (`hiddenpowergrass` 130
+    sets, `fire` 108, `ground` 97, `ghost` 92, `flying` 84, `ice` 72, `bug` 37, `rock` 28,
+    `fighting` 25, `electric` 24, `steel` 18, `dark` 11, `psychic` 1). An earlier version of
+    this said "all spelled `hiddenpowerice`", which is one spelling of thirteen and the sixth
+    most common.
     """
 
     canonical = canonical_move_id(move_id)

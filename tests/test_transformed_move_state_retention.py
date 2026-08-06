@@ -165,10 +165,14 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
         NOT covered by the live gate: review showed that dropping the Hidden Power collapse
         SURVIVES the scenario sweep, because no p1 Pokemon in the four chosen scenarios
         carries Hidden Power. The evidence here is this fixture plus Showdown's source plus
-        the era-59 reproduction (4,211 Hidden Power events, all spelled `hiddenpowerice`).
-        Adding a Hidden Power carrier to a scenario's p1 team would close that gap live, and
-        is deliberately left as a follow-up rather than done here: those teams are a
-        certified corpus and changing one is not a test-only edit.
+        the gen 3 randbats sets. NOT "all spelled `hiddenpowerice`", which an earlier version
+        of this said: measured over all 1,682 sets there are 13 distinct spellings and ZERO
+        carry a BP suffix, and `hiddenpowerice` is the sixth most common at 72.
+
+        Adding a Hidden Power carrier to a scenario's p1 team would close the live gap, and is
+        deliberately NOT done: those teams are a certified corpus, and adding a new scenario
+        moves the corpus manifests and fold-closure counts. Asserting all 13 spellings below
+        closes more of the real risk at no corpus cost.
         """
 
         zapdos = _request(
@@ -206,7 +210,30 @@ class TransformedMoveStateRetentionTests(unittest.TestCase):
         self.assertEqual(_base_move_id("conversion2"), "conversion2")
         self.assertEqual(_base_move_id("conversion"), "conversion")
         self.assertEqual(_base_move_id("return102"), "return")
-        self.assertEqual(_base_move_id("hiddenpowerice"), "hiddenpower")
+
+        # ALL THIRTEEN Hidden Power spellings the gen 3 randbats sets actually carry, not
+        # just the one the fixture above happens to use. Measured over 1,682 sets; none
+        # carries a BP suffix, so the types are what vary and every one must collapse.
+        for hp_type in (
+            "bug",
+            "dark",
+            "electric",
+            "fighting",
+            "fire",
+            "flying",
+            "ghost",
+            "grass",
+            "ground",
+            "ice",
+            "psychic",
+            "rock",
+            "steel",
+        ):
+            self.assertEqual(
+                _base_move_id(f"hiddenpower{hp_type}"),
+                "hiddenpower",
+                f"hiddenpower{hp_type} must collapse; the fixture above covers only one of 13",
+            )
 
     def test_subset_not_intersection_so_mew_is_not_reopened(self):
         """A partially-overlapping own set is what separates SUBSET from INTERSECTION.
