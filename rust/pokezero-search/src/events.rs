@@ -3449,9 +3449,23 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
         return Some("Hail");
     }
     if state.weather_is_active(&Weather::SAND) {
+        // SAND VEIL. The engine exempts it at
+        // `gen3/generate_instructions.rs:4223`, and this function did not, so it
+        // booked a sandstorm chip that never fired. One unfilled slot makes the
+        // whole side's plan unusable, which drops EVERY heal on that side into
+        // `residual_heal_cause`'s fallback -- and the fallback is a constant
+        // function of state, so it cannot label two different heals differently.
+        //
+        // That is the root cause of `19100014/35`, not the fallback ordering.
+        // Cacturne has Sand Veil, so the plan reserved a chip it never emitted,
+        // `plan.usable` went false, and both of Cacturne's heals fell through.
+        // Reordering the fallback only fixed whichever of the two happened to be
+        // the Leftovers tick; the drain stayed mislabelled. With this gate the
+        // plan reconciles and BOTH arms of the row close.
         if active.has_type(&PokemonType::ROCK)
             || active.has_type(&PokemonType::GROUND)
             || active.has_type(&PokemonType::STEEL)
+            || active.ability == Abilities::SANDVEIL
         {
             return None;
         }
@@ -3704,11 +3718,26 @@ fn residual_heal_cause(
     // without the guard it re-arms exactly the H.1 mislabel the plan exists to
     // prevent.
     //
-    // ORDER MATTERS HERE, and it used to be wrong. Leftovers is residual phase
-    // 10.4 and the seeder's drain is 10.5, so when a side could produce BOTH the
-    // first heal is the Leftovers tick and only a later one can be the drain.
-    // This fallback sees one heal with no ordering context, so it must answer
-    // with the earlier phase.
+    // WHY LEFTOVERS FIRST, stated correctly this time. An earlier version of this
+    // comment claimed the rule was "answer with the earlier residual phase",
+    // Leftovers being 10.4 and the drain 10.5. That reasoning is wrong twice and
+    // a review caught both:
+    //
+    //   1. This function cannot implement it. It takes `(state, side, next_ins)`
+    //      and no heal index, so it is a CONSTANT FUNCTION OF STATE -- it returns
+    //      the same answer for every heal on the side. It has no notion of
+    //      "first" to reason about.
+    //   2. The premise is false in general. The drain is emitted at the VICTIM's
+    //      10.5 slot inside the speed-major loop, so when the victim is faster the
+    //      drain heal PRECEDES the seeder's own Leftovers tick. See the note at
+    //      the top of `ResidualPlan`, which says exactly this and is why the plan
+    //      needs the speed order to label heals at all.
+    //
+    // The real reason Leftovers wins is narrower and does not depend on ordering:
+    // since the drain is rendered SILENTLY (see below), `"Leech Seed"` is never a
+    // correct answer for a `[from]`-tagged heal, so nothing is displaced by
+    // preferring Leftovers. Ordering is the plan's job; this fallback only has to
+    // avoid asserting a label that cannot be right.
     //
     // Measured on holdout `19100193/46`. The engine state has the opponent
     // seeded and both actives alive when the plan is built, so a drain slot is
@@ -3725,7 +3754,17 @@ fn residual_heal_cause(
         .contains(&PokemonVolatileStatus::LEECHSEED)
         && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
     {
-        return "Leech Seed".to_string();
+        // EMPTY, not "Leech Seed". Showdown renders the drain heal SILENTLY:
+        // `sim/battle.ts:2293-2296` switches on `effect.id` and
+        // `case 'leechseed'` emits `('-heal', target, getHealth, '[silent]')`,
+        // reached from the move's own handler at `data/moves.ts:10218-10221`.
+        // There is no `[from] Leech Seed` heal line anywhere in Showdown, so the
+        // string this used to return was never a correct answer for any state --
+        // it could only ever trade one wrong label for another.
+        //
+        // `ResidualPlan` already knew this: it inserts `String::new()` for its
+        // own drain slot. This makes the fallback agree with the plan.
+        return String::new();
     }
     "item: Leftovers".to_string()
 }
@@ -5486,9 +5525,55 @@ mod tests {
         let mut plan = ResidualPlan::default();
         render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
         sim.finish();
+        // `[silent]`, NOT `[from] Leech Seed`. This assertion used to demand the
+        // latter, which Showdown never emits for a drain heal
+        // (`sim/battle.ts:2293-2296`, `case 'leechseed'` renders
+        // `('-heal', target, getHealth, '[silent]')`). A review built the correct
+        // fix and found this pin was the only thing failing -- so the pin was
+        // enshrining a wrong label and blocking the right one at zero measured
+        // cost. Its purpose stands: a seeded opponent WITHOUT Leftovers must not
+        // have its drain heal attributed to Leftovers.
         assert!(
-            rendered.lines[0].contains("[from] Leech Seed"),
-            "the drain label was lost entirely: {:?}",
+            rendered.lines[0].contains("[silent]"),
+            "a drain heal must render silently, not with a [from] tag: {:?}",
+            rendered.lines
+        );
+        assert!(
+            !rendered.lines[0].contains("item: Leftovers"),
+            "the drain heal was attributed to Leftovers: {:?}",
+            rendered.lines
+        );
+    }
+
+    /// NB-3 from the review of #1120: deleting the LIQUID OOZE guard from
+    /// `residual_heal_cause` left the ENTIRE crate suite green, so the guard was
+    /// unpinned. Liquid Ooze reverses the drain, so a seeded opponent carrying it
+    /// produces no drain heal on this side at all -- any positive heal must be
+    /// something else, and with the reorder that something else is Leftovers.
+    #[test]
+    fn liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::NONE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        state.side_two.get_active().ability = Abilities::LIQUIDOOZE;
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        // With Liquid Ooze there is no drain to attribute, so this must NOT go
+        // silent -- going silent is what dropping the guard would cause.
+        assert!(
+            !rendered.lines[0].contains("[silent]"),
+            "a heal that cannot be the drain was rendered as one: {:?}",
             rendered.lines
         );
     }
