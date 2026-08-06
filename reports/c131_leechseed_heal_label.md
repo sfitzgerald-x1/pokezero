@@ -54,7 +54,7 @@ discarded, and the fallback then mislabelled the tick.
 So this row was never an engine defect: the engine's HP arithmetic was right and its **attribution
 string** was wrong.
 
-## 3. Pins, and which one is the control
+## 3. Pins, and the revert check
 
 | pin | on `main`'s ordering | on this branch |
 |---|---|---|
@@ -132,7 +132,7 @@ Two further corrections the review forced, both verified:
   `('-heal', target, getHealth, '[silent]')`, reached from `data/moves.ts:10218-10221`. There is no
   `[from] Leech Seed` heal line anywhere in Showdown. The fallback now returns `String::new()`,
   agreeing with what `ResidualPlan` already did for its own drain slot.
-- **§3's control pin was asserting that non-existent label**, so it enshrined a wrong output and
+- **§3's second pin was asserting that non-existent label**, so it enshrined a wrong output and
   blocked the right one. The review built the correct fix and found this pin was the *only* thing
   failing, at zero measured cost. It now asserts `[silent]`.
 
@@ -146,7 +146,24 @@ Herb, Salac/Liechi/Petaya Berry or Leftovers — **Sitrus Berry cannot be held**
 applies exactly this test to DRYSKIN at `gen3/generate_instructions.rs:1567`, so the instrument was
 available and I skipped it.
 
-**The reachable member of the same class is weather EXPIRY, and it is fixed here.**
+**Weather EXPIRY is the same class, and it is fixed here for FIDELITY, not for a row — it is NOT
+reachable in the current pool.** An earlier revision of this line called it "the reachable member of
+the same class". That was false, and it was false two paragraphs below my own use of the instrument
+that settles it, in a sentence where I criticised myself for having skipped that instrument. Running
+it *once* and then not reaching for it again is the whole pattern this report keeps documenting.
+
+Measured: `weather_chips` can only return `Some` for SAND or HAIL, and
+`data/random-battles/gen3/sets.json` has **0 of 220** species carrying `sandstorm` or `hail`
+(`raindance` 7 and `sunnyday` 4 do exist and neither chips; Snow Warning does not exist in gen3). So
+sand only ever comes from **Sand Stream**, which writes `WEATHER_ABILITY_TURNS = -1`, and
+`generate_instructions.rs:4144` never decrements a non-positive value — `turns_remaining == 1` cannot
+occur. Same status as the Liquid Ooze guard in §7b, and it is filed that way rather than promoted.
+
+The two facts above — the `sets.json` scan and `WEATHER_ABILITY_TURNS = -1` — are ones I ran myself.
+A review also corroborated this by instrumenting the world builder over both windows; **that figure
+is deliberately not quoted here**, because I could not reproduce the instrumentation on my own and a
+number I did not measure has no business appearing in this report as evidence. The first-principles
+argument is sufficient and is entirely checkable from the two citations.
 `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`) while the engine decrements
 and clears the weather at `generate_instructions.rs:4144-4163` *before* its chip loop at `:4193`. So
 on the turn sand or hail expires the engine emits no chip, the plan books one, and the side drops to
@@ -164,10 +181,16 @@ pool, and **row `19100014/35` — one of the two rows this change closes — is 
 its own sand.** Right conclusion, wrong stated reason, which is exactly what §7 is about.
 
 And the boundary is now **pinned**, not merely argued. A review changed `==` to `<=` and all 375
-tests stayed green, while that mutation disagrees with the engine in 60 of 1,200 enumerated
-weather states — every one in the permanent region — reintroducing the `19100193/46` mislabel
-wholesale. The expiry pin's second arm asserts that `turns_remaining == -1` still books its chip.
-Verified red against both `<= 1` and `!= 0`.
+tests stayed green, and that mutation disagrees with the engine across the whole **non-decrementing
+region** (`turns_remaining <= 0`, of which permanent `-1` is one value), reintroducing the
+`19100193/46` mislabel wholesale. The expiry pin now has three arms: `turns_remaining == 1` books no
+chip, `== -1` still books one, and expiring **hail** books none either — the last because the gate
+sits above both weather branches, and scoping it to SAND left all 375 tests green.
+
+Verified red, by me, against `<= 1`, `< 2`, `!= 0`, `>= 1`, `== 2`, `== 0`, inverting to `== -1`,
+deleting the gate, and scoping it to SAND. (A count of disagreeing states across an enumerated grid
+appeared here in an earlier revision; it was a reviewer's measurement, not mine, and is dropped
+rather than cited as if I had run it.)
 
 ## 6. Sweep
 
@@ -217,9 +240,10 @@ is exactly where that distinction bites — it is the clause that *looks* like r
 
 Both from round 3's review, both verified.
 
-**The three sibling exemptions in the same condition are unpinned.** Deleting
+**The four sibling exemptions in the same condition are unpinned.** Deleting `|| has_type(ROCK)`,
 `|| has_type(GROUND)` or `|| has_type(STEEL)` from `weather_chips`'s sand branch, or the hail `ICE`
-exemption, or the `hp <= 0` gate at the top, each leaves the whole suite green. Pre-existing — but
+exemption, or the `hp <= 0` gate at the top, each leaves the whole suite green. (An earlier revision
+said "three" and omitted ROCK.) Pre-existing — but
 this change added a **fourth** disjunct to that exact condition and pinned only its own, so the
 asymmetry is now this PR's to name. Cheap to close and deliberately not bundled here.
 

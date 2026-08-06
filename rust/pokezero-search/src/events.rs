@@ -5459,7 +5459,19 @@ mod tests {
         );
     }
 
-    /// WEATHER EXPIRY, the same class as Sand Veil and REACHABLE in the pool.
+    /// WEATHER EXPIRY, the same class as Sand Veil -- and NOT reachable in the
+    /// current pool, which an earlier version of this docstring claimed it was.
+    ///
+    /// Measured rather than assumed this time: `weather_chips` can only return `Some`
+    /// for SAND or HAIL, and `data/random-battles/gen3/sets.json` has **0 of 220**
+    /// species carrying `sandstorm` or `hail` (`raindance` 7 and `sunnyday` 4 exist,
+    /// and neither chips; Snow Warning does not exist in gen3). So sand only ever
+    /// comes from Sand Stream, which writes `WEATHER_ABILITY_TURNS = -1`, and
+    /// `generate_instructions.rs:4144` never decrements a non-positive value --
+    /// `turns_remaining == 1` cannot occur. The same status as the Liquid Ooze guard.
+    ///
+    /// It is fixed for FIDELITY, not for a row. The `== 1` boundary still matters,
+    /// because the permanent region IS reachable and `<= 1` breaks it across all of it.
     ///
     /// `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`)
     /// and this function reads the PRE-residual state, but the engine decrements
@@ -5536,6 +5548,30 @@ mod tests {
             vec!["Sandstorm".to_string(), "item: Leftovers".to_string()],
             "permanent weather (turns_remaining -1) never expires, so its chip MUST \
              still be booked; skipping it re-arms the 19100193/46 mislabel"
+        );
+
+        // HAIL, because the gate sits above BOTH weather branches and the property is
+        // claimed for both. Scoping the gate to `weather_type == Weather::SAND`, or
+        // moving it below the hail branch, leaves all 375 tests green while making
+        // hail-expiry book a phantom chip. Pinned even though hail is unreachable in
+        // the current pool (0 of 220 sets carry it), because the gate's placement --
+        // above the branches rather than inside one -- is the thing worth keeping.
+        let mut hail = parse_state(MINIMAL.trim()).expect("fixture parses");
+        hail.weather.weather_type = Weather::HAIL;
+        hail.weather.turns_remaining = 1;
+        {
+            let active = hail.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        hail.side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        assert_eq!(
+            residual_tags(&mut hail, &vec![heal_one(20), heal_one(40)], "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "expiring HAIL must book no chip either; the gate is above both branches"
         );
     }
 
