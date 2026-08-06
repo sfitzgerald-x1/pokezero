@@ -125,9 +125,21 @@ one arm each, **not the minimum.**
 > all, and the 160 arm vanishes. That is a regression, and its shape — a sand or Leech Seed
 > residual-kill arm — appears in the **dev** sweep's divergence classes
 > (`component_missing_in_engine:sandstorm`, `component_missing_in_engine:itemleftovers,leechseed`), so
-> it is not hypothetical. An earlier revision said "both committed sweeps"; the holdout sweep's classes
-> show neither, and since the retained repros are capped at 25 out of ~15.5 k measured boundaries their
-> absence there is not evidence either way.
+> it is not hypothetical. An earlier revision said "both committed sweeps"; the holdout
+> sweep's classes show neither.
+>
+> **That absence is real, and a further revision wrongly explained it away.** I wrote that the
+> retained repros are "capped at 25 out of ~15.5 k measured boundaries" so the absence proved nothing.
+> Two errors: the cap is on `repros` out of the window's **40 divergences**, not out of 15,432
+> boundaries; and `divergence_classes` is **not capped at all** — it is built from the full `totals`
+> counter, and its counts sum exactly to `transitions_diverged` (40/40 dev, 42/42 holdout). The class
+> census is a complete enumeration. That caveat also contradicted §7, which relies on differencing
+> `divergence_classes` *because* the repros list is capped; both cannot be true.
+>
+> What the absence is worth: dev saw the shape twice in 15,432 boundaries, so a window of comparable
+> size would miss it by chance about **13 %** of the time (`λ = 2 × 15,551 / 15,432 = 2.02`,
+> `e^−2.02 = 0.13`), and the two windows differ in composition. Weak evidence of rarity, not of
+> impossibility.
 
 **And the mass rule is disjoint bands, not `P(roll ≥ t)` per arm** — a third correction to this
 paragraph, because my first union recipe double-counted. The thresholds are **nested**: a status only
@@ -140,7 +152,12 @@ sub-branch renders a *survival* — so the excess mass lands on the wrong outcom
 
 The correct rule: sort the distinct thresholds `t₁ < … < t_k`; arm `i` carries the **disjoint band**
 `#{rolls ∈ [tᵢ, tᵢ₊₁)}/16`, the top arm carries `#{rolls ≥ t_k}/16`, and the survive arm keeps
-`#{rolls < t₁}/16`. On that fan: `145 → 14/16`, `169 → 1/16`, survive `→ 1/16`, totalling exactly
+`#{rolls < t₁}/16`. Each kill arm is priced at its own `tᵢ`, and the survive arm keeps
+`average_surviving_damage` over the rolls below `t₁` — which is the engine's existing convention and
+what §7's `157 → 150` re-pricing depends on. **This is a generalisation of a subtraction the engine
+already performs**: `num_residual_only = num_at_or_above − num_kill_rolls` is exactly the band between
+the residual threshold and the KO threshold. And it applies at all three partition sites, the crit
+path included, since a status-aware threshold nests there too. On that fan: `145 → 14/16`, `169 → 1/16`, survive `→ 1/16`, totalling exactly
 `16/16`.
 
 The status-independence of `P(roll ≥ t)` is true, and it is what makes the *structure* sound; it is not
