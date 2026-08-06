@@ -18,8 +18,8 @@
   },
   "gating_exact": 14085,
   "gating_support_based": 1347,
-  "elapsed_seconds": 482.32,
-  "games_per_hour": 1492.8,
+  "elapsed_seconds": 591.08,
+  "games_per_hour": 1218.1,
   "boundaries_full_round": 15968,
   "boundaries_measured": 15432,
   "transitions_matched": 15430,
@@ -139,7 +139,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785986180",
+        "|t:|1785991882",
         "|switch|p2a: Rapidash|Rapidash, L83, F|244/244",
         "|move|p1a: Furret|Return|p2a: Rapidash",
         "|-crit|p2a: Rapidash",
@@ -244,7 +244,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785986455",
+        "|t:|1785992198",
         "|move|p1a: Raichu|Thunderbolt|p2a: Tangela",
         "|-resisted|p2a: Tangela",
         "|-damage|p2a: Tangela|201/277",
@@ -267,7 +267,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"f6c676ea90962ae6e53dfaf7696d2c073fa62b07c1ec4e94de011f6806f6dbf5\", \"image_commit\": null, \"source_commit\": \"0fc94e048683fd3f4d81368a84e03dfd99d6711a\"}"
+      "{\"engine_fingerprint\": \"e919d2b7907e5975133795a7651e88168b0ac34adf6b5aed36ab652735c72bc0\", \"image_commit\": null, \"source_commit\": \"ceb911f38fbb503a29d1284fa53b1f2166dd52f6\"}"
     ]
   }
 }
