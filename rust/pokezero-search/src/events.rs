@@ -1937,10 +1937,21 @@ fn render_move_phase(
                     // switch-out cleanup in another.
                     for (index, instruction) in called_tail.iter().enumerate() {
                         if boost_may_be_a_switch_out_reset(&called_tail, index) {
-                            // Unreachable while the classifier refuses these tails, and here
-                            // anyway so the walk cannot render what the classifier does not
-                            // admit. That pairing is the invariant; its reachability is not,
-                            // which is the whole lesson of the substitute-break correction.
+                            // LOAD-BEARING. Do not delete this as dead code.
+                            //
+                            // The first version of this comment said it was "unreachable while
+                            // the classifier refuses these tails". That is FALSE, and review
+                            // proved it by deleting the arm and keeping the classifier: the
+                            // phantom `|-unboost|p1a: Lead|atk|2` came straight back. Refusal
+                            // goes through `mark_attribution_unsafe_subcase`, which records a
+                            // reason and does NOT short-circuit the walk -- the walk runs on
+                            // refused branches too, which the sibling test's own docstring
+                            // says out loud. So this arm is the only thing suppressing the
+                            // line, not a second layer behind the classifier.
+                            //
+                            // KNOWN UNTESTED, same as the substitute break's arm: deleting the
+                            // `emit_residuals!()` below survives the suite, because nothing can
+                            // be pending at this point in any tail the corpus produces.
                             emit_residuals!();
                             sim.apply(instruction);
                         } else if let Instruction::Boost(boost) = instruction {
@@ -3138,7 +3149,14 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     // bucket a KNOWN cause as `unclassified`.
     //
     // Position is unchanged from before #1131 removed it, and no slug emitted in the interval
-    // could contain it, so no era-over-era key moves.
+    // could contain the BARE token.
+    //
+    // "So no era-over-era key moves" was the first version of that sentence, and it is
+    // OVERSTATED: COMPOSITE keys do move, for any tail already refused under another family.
+    // Review demonstrated `[RemoveVolatileStatus(CONFUSION, S1), Boost(S1), Switch(S1)]`
+    // keying `…:volatile` before this change and `…:boost+volatile` after. The reason there is
+    // no practical drift is NOT the token position -- it is that the whole family is
+    // unreachable in the current randbat pool, so the volume is zero.
     "boost",
     "statrecalc",
     "status",
@@ -3210,50 +3228,6 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// Deliberately reusable: `Boost` has the identical two-producer problem (a switch-out
 /// pushes a boost RESET that Showdown does not narrate), so that fix wants this same
 /// tail-and-index shape rather than a second bespoke rule.
-/// Is this `Boost` possibly a switch-out RESET rather than a narrated stat change?
-///
-/// `Boost` has the same two-producer problem the substitute break has, and #1131 admitted it
-/// unconditionally:
-///
-///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
-///   * `generate_instructions.rs`'s switch path calls `state.reset_boosts(&switching_side_ref,
-///     ..)` when `!baton_passing`, in the pre-switch block beside the volatile clears and the
-///     toxic reset. Showdown drops boosts inside `clearVolatile()` and narrates NOTHING. This
-///     crate's own `render_switch_phase` already gets that right: it renders only the
-///     `switched && boost.side_ref != side` Intimidate case and sends everything else through
-///     `_ => sim.apply(ins)`, commented "Pre-switch bookkeeping (volatile clears, boost
-///     resets, ...): no lines."
-///
-/// So the unnamed-callee walk contradicted sibling code in the same file, and a phaze tail
-/// rendered a phantom `|-unboost|`.
-///
-/// # Why this REFUSES rather than rendering nothing
-///
-/// Rendering nothing would also remove the phantom, and it is what `render_switch_phase`
-/// does. But it needs one more premise: that a legitimate boost and a same-side switch cannot
-/// co-occur in ONE callee tail. That looks true in gen3 -- the only damaging drag moves are
-/// post-gen3, and no gen3 status move both boosts and phazes -- but it is a REACHABILITY
-/// argument, and this exact arm has already been burned once for accepting one. Get it wrong
-/// and a real boost renders as SILENCE, which is a wrong world; refusing only loses one.
-///
-/// So: fail closed. A `Boost` with a same-side `Switch` later in the tail is not renderable,
-/// and the tail refuses under a reopened `boost` family. Measured cost on the attribution
-/// oracle: ZERO searchable worlds -- the tally is unchanged at (2614, 2377, 237, 0), because
-/// no corpus tail pairs the two. If production ever shows this family carrying real volume,
-/// the follow-up is to render nothing for the contiguous pre-switch run specifically, with
-/// its own pin. A family that reports its own size is how we would learn that is worth
-/// writing; a family silently folded into `None` is how we would not.
-fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
-    let boost = match tail.get(index) {
-        Some(Instruction::Boost(boost)) => boost,
-        _ => return false,
-    };
-    tail[index + 1..].iter().any(|later| match later {
-        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
-        _ => false,
-    })
-}
-
 fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideReference> {
     let remove = match tail.get(index)? {
         Instruction::RemoveVolatileStatus(remove)
@@ -3273,6 +3247,88 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
             _ => false,
         })
         .then_some(remove.side_ref)
+}
+
+/// Is this `Boost` possibly a switch-out RESET rather than a narrated stat change?
+///
+/// `Boost` has the same two-producer problem the substitute break has, and #1131 admitted it
+/// unconditionally:
+///
+///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
+///   * `generate_instructions.rs`'s switch path calls `state.reset_boosts(&switching_side_ref,
+///     ..)` when `!baton_passing`, in the pre-switch block beside the volatile clears and the
+///     toxic reset. Showdown drops boosts inside `clearVolatile()` and narrates NOTHING. This
+///     crate's own `render_switch_phase` already gets that right: it renders only the
+///     `switched && boost.side_ref != side` Intimidate case and sends everything else through
+///     `_ => sim.apply(ins)`, commented "Pre-switch bookkeeping (volatile clears, boost
+///     resets, ...): no lines."
+///
+/// So the unnamed-callee walk contradicted sibling code in the same file, and a phaze tail
+/// rendered a phantom `|-unboost|`.
+///
+/// # FIVE producers, not two -- this predicate closes ONE of the three open ones
+///
+/// The first version of this doc called it "the two-producer problem". Review enumerated the
+/// gen3 construction sites and there are five, three of which Showdown narrates as something
+/// other than `-boost`/`-unboost`:
+///
+///   * move's own stat change -- `-boost`/`-unboost`. Correctly rendered.
+///   * switch-out reset -- no line. CLOSED by this predicate.
+///   * **Haze** (`choice_effects.rs`) -- Showdown emits `|-clearallboost|`. STILL ADMITTED, and
+///     reproduced end to end: a Haze/Charm ambiguity renders the Charm line and is SEARCHED,
+///     so if the callee was Haze the world is silently wrong. No `clearallboost` exists
+///     anywhere in this crate, so the NAMED path is wrong for Haze too.
+///   * **Psych Up** (`choice_effects.rs`) -- `|-copyboost|`. STILL ADMITTED, same shape.
+///   * **White Herb** (`items.rs`) -- `|-clearnegativeboost|[silent]`. Self-closing, because
+///     its tail also carries `ChangeItem`, which is the `item` family.
+///
+/// Haze and Psych Up are PRE-EXISTING from #1131 and not widened here, and unreachable on
+/// today's data (of 350 Sleep Talk sets across three cached randbat universes, zero pair it
+/// with Roar, Whirlwind, Haze, Psych Up or Baton Pass). They are named rather than left
+/// implied because this file's rule is that reachability is not an invariant, and an
+/// enumeration that says "two" when it is five is the kind of claim the next author builds on.
+///
+/// # What this actually does, stated precisely because the first version overclaimed
+///
+/// A `Boost` with a same-side `Switch` later in the tail is classified `boost` and the walk
+/// emits no line for it. Measured cost on the attribution oracle: ZERO searchable worlds --
+/// the tally is unchanged at (2614, 2377, 237, 0), because no corpus tail pairs the two.
+///
+/// The first version of this block called that "failing closed", and argued that refusing is
+/// safe where rendering nothing would need a reachability premise. **Review showed that
+/// framing is wrong for one of the two consumers**, so it is corrected here rather than
+/// quoted forward:
+///
+///   * The SEARCH consumer does refuse. `mark_attribution_unsafe_subcase` populates
+///     `attribution_unsafe`, and a branch with a Sleep-Talk-shaped entry there is discarded.
+///   * The TRANSITION DIFFERENTIAL does NOT. It gates usability on the `lossy` set alone, and
+///     this path leaves `lossy` at exactly the bare marker, which is in the
+///     telemetry-only allowlist. So the differential accepts these branches and reads their
+///     rendered events -- meaning for that consumer this ships EXACTLY the render-nothing
+///     behaviour the first version declined to commit to, resting on EXACTLY the reachability
+///     premise it said it would not accept. The two consumers disagreeing is documented
+///     elsewhere in this file; it is not new here, but it does invalidate the old argument.
+///
+/// The reachability premise, for the record, since half the behaviour now depends on it: no
+/// gen3 move both boosts and phazes (the four `drag: true` moves -- Circle Throw, Dragon Tail,
+/// Roar, Whirlwind -- carry no `boost`), and Baton Pass is the only other `Switch` producer in
+/// a callee tail and is excluded from the reset by `!baton_passing`. So a legitimate boost and
+/// a same-side switch cannot co-occur, and rendering nothing is correct for the tails that
+/// reach it.
+///
+/// What the classification still buys, given that: the family REPORTS ITS OWN SIZE. Folding
+/// these tails into `None` would make them silently indistinguishable from a rendered boost,
+/// and a family that reports its size is how we would learn whether the contiguous-pre-switch
+/// refinement is worth writing.
+fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
+    let boost = match tail.get(index) {
+        Some(Instruction::Boost(boost)) => boost,
+        _ => return false,
+    };
+    tail[index + 1..].iter().any(|later| match later {
+        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
+        _ => false,
+    })
 }
 
 /// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
@@ -5522,6 +5578,29 @@ mod tests {
             0,
             "boost",
         )];
+        // CROSS-SIDE control. Review's mutation replaced the predicate's
+        // `switch.side_ref == boost.side_ref` with `true` and SURVIVED the whole suite, because
+        // every fixture above pairs SideOne with SideOne. A cross-side pair must stay ADMITTED:
+        // side two switching out does not reset side one's boosts.
+        let cross_side = vec![
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideOne,
+                stat: PokemonBoostableStat::Attack,
+                amount: -2,
+            }),
+            Instruction::Switch(SwitchInstruction {
+                side_ref: SideReference::SideTwo,
+                previous_index: PokemonIndex::P0,
+                next_index: PokemonIndex::P1,
+            }),
+        ];
+        assert_eq!(
+            unrenderable_family_at(&cross_side, 0),
+            None,
+            "a `Switch` on the OTHER side does not reset this side's boosts, so the boost \
+             stays renderable"
+        );
+
         for (tail, index, family) in &blocked_in_tail {
             assert_eq!(
                 unrenderable_family_at(tail, *index),
@@ -5539,6 +5618,18 @@ mod tests {
                 None,
                 "{:?} alone is a move's own stat change and must stay renderable",
                 tail[*index]
+            );
+            // ...and the COMPOSED SLUG must name the family, not just the raw classifier.
+            // Review's mutation dropped `"boost"` from UNRENDERABLE_FAMILY_ORDER *and* from
+            // the order pin together, and SURVIVED: the family then degrades to
+            // `unclassified` through `registered_family_or_unclassified`, which is exactly the
+            // outcome reinstating the token is supposed to prevent. Asserting the raw family
+            // cannot see that, because the degradation happens one layer up.
+            assert!(
+                ambiguous_unrenderable_slug(tail).ends_with(&format!(":{family}")),
+                "the composed slug must name {family:?} rather than degrade to \
+                 `unclassified`: {}",
+                ambiguous_unrenderable_slug(tail)
             );
         }
 
