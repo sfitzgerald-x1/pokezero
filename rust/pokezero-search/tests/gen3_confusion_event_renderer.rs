@@ -1397,31 +1397,31 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         .remove(&PokemonVolatileStatus::CONFUSION);
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().rest_turns = 0;
-    // Two callees whose instruction lists are BYTE-IDENTICAL and whose tail the walk
-    // still CANNOT render: Mean Look and Spider Web both apply TRAPPED and nothing else.
+    // Two callees whose instruction lists are BYTE-IDENTICAL and whose tail the walk still
+    // CANNOT render: Mean Look and Spider Web both apply TRAPPED and nothing else. So the
+    // branch is genuinely Ambiguous -- no candidate can be named -- and it reaches the
+    // unnamed-callee walk, which has no line for a trapping volatile.
     //
-    // This fixture used Harden/Withdraw (+1 Defense each) until the walk learned to emit
-    // `|-boost|`. That pair is now USABLE, not refused, so it can no longer reach the
-    // refusal arm -- it moved to
-    // `byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line` below.
-    // THIS FIXTURE HAS NOW MIGRATED TWICE, for the same reason each time: the family it used
-    // stopped refusing. Harden/Withdraw (+1 Defense) went first, when the walk learned
-    // `|-boost|`. Recover/Soft-Boiled went second, when it learned the direct self-heal --
-    // that pair is now pinned POSITIVELY by
-    // `a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side`, which is what this
-    // fixture should have become rather than being retargeted away from.
+    // THIS FIXTURE HAS MIGRATED TWICE, for the same reason each time: the family it used
+    // stopped refusing, and a fail-closed guard has to live on a family that still blocks.
     //
-    // Mean Look/Spider Web is the current choice because `volatile` is still blocked: the walk
-    // has no line for a trapping volatile, and admitting `RemoveVolatileStatus` wholesale is
-    // the defect #1133's substitute-break guard exists to prevent. The pair is byte-identical
-    // -- same accuracy, same target, both producing exactly
-    // `[ApplyVolatileStatus(TRAPPED)]` -- so the branch is genuinely Ambiguous and reaches
-    // the unnamed-callee walk.
-    // still dropped and the branch must still refuse.
+    //   1. Harden/Withdraw (+1 Defense each) went first, when the walk learned `|-boost|`.
+    //      That pair is now pinned positively by
+    //      `byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line`.
+    //   2. Recover/Soft-Boiled went second, when the walk learned the direct self-heal. That
+    //      pair is now pinned positively by
+    //      `a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side` -- which is what
+    //      this fixture should have BECOME rather than being retargeted away from, and review
+    //      said so.
     //
-    // The half-HP line below is VESTIGIAL, kept only because it is harmless: it existed so
-    // Recover was not a no-op. A trapping move does not care about HP.
-    // fixture would silently test the empty-tail arm instead.
+    // `volatile` is the right family for the third home because it is still blocked, and
+    // deliberately so: admitting `RemoveVolatileStatus` wholesale is the defect #1133's
+    // substitute-break guard exists to prevent, so the walk renders the SUBSTITUTE volatile
+    // and nothing else.
+    //
+    // The half-HP line below is VESTIGIAL. It existed so Recover was not a no-op; a trapping
+    // move does not care about HP. Kept only because it is harmless, and labelled so nobody
+    // reads it as load-bearing.
     state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
     state
         .side_two
@@ -1444,31 +1444,24 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                     "the bare slug carries no cause and cannot be measured: {:?}",
                     r.attribution_unsafe
                 );
-                // Pin WHICH sub-case, not merely that one of the two appeared.
-                // Accepting either is a tautology over the implementation's only
-                // two outputs: independent review swapped the literals and the
-                // whole 336-test suite stayed green. Harden and Withdraw
-                // regenerate byte-identical tails, so the cause is `ambiguous`
-                // by construction -- and `ambiguous` is the arm the PR's own
-                // table says is fixable ONLY by an engine change, so reading it
-                // as `none_matched` would send the next phase at the renderer
-                // and waste the cycle.
-                // Mean Look and Spider Web both apply TRAPPED, so the tail carries a
-                // decreases, drags and faints only). So this fixture is the
-                // UNRENDERABLE arm: it must still refuse, and it must say which arm.
+                // Pin WHICH sub-case, not merely that one of the two appeared. Accepting
+                // either is a tautology over the implementation's only two outputs:
+                // independent review swapped the literals and the whole suite stayed green.
                 //
-                // This assertion read `:ambiguous` before the three-way split, and
-                // that is now the arm that does NOT refuse -- so leaving it would have
-                // pinned the opposite of the intended behaviour.
+                // Mean Look and Spider Web regenerate byte-identical tails, so the
+                // identification is `ambiguous` BY CONSTRUCTION rather than by luck of the
+                // fixture. And an ambiguous tail of `[ApplyVolatileStatus(TRAPPED)]` is
+                // unrenderable, because the walk emits HP decreases, drags, faints, boosts,
+                // the substitute hit and break, and the direct self-heal -- not a trapping
+                // volatile. So this fixture is the UNRENDERABLE arm: it must still refuse, and
+                // it must say WHICH family blocked it.
                 //
-                // `:volatile`, because the slug names the family that blocked the
-                // render. This fixture is the END-TO-END proof of that classifier: the
-                // comment above already reasoned "both +1 Defense, so the tail carries a
-                // BOOST", and the value is now derived from the tail through the real
-                // production render path rather than asserted in prose beside a coarser
-                // literal. It is still pinned to ONE exact string for the reason recorded
-                // above -- accepting a prefix would restore the tautology that review
-                // caught here, since every refusing arm shares the prefix.
+                // The literal is `:volatile`, and it is derived from the tail through the real
+                // production render path rather than asserted in prose beside a coarser one.
+                // It stays pinned to ONE exact string: accepting a prefix would restore the
+                // tautology review caught. Before the three-way split this assertion read
+                // `:ambiguous`, which is now the arm that does NOT refuse, so leaving it would
+                // have pinned the opposite of the intended behaviour.
                 assert_eq!(
                     reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:volatile",
                     "byte-identical callees whose tail carries an effect the walk \
@@ -2338,6 +2331,11 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
     state.side_two.get_active().rest_turns = 0;
     state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
     // The OPPONENT sits at a DIFFERENT HP from the healer's post-heal total, deliberately.
+    // SAME FAILURE MODE as the `cross_side` control in
+    // `the_renderable_allowlist_is_exactly_what_it_was`, one screen away in events.rs: there,
+    // every fixture paired SideOne with SideOne, so replacing the predicate's
+    // `switch.side_ref == boost.side_ref` with `true` survived the whole suite. An assertion
+    // whose two sides COINCIDE in the fixture cannot see a mutant that swaps them.
     // With both sides at 100/100 the condition string is identical either way, so a mutant
     // reading `hp_condition(other_side(side))` renders a correct-looking line and survives --
     // review found exactly that. 70 against 100 makes the wrong side observable.
