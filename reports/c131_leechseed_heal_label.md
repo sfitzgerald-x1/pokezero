@@ -1,303 +1,144 @@
-# C131 — Sand Veil was the plan's real failure; the fallback reorder was half a fix
+# C131 — four residual-attribution fixes in the event renderer
 
-> **This report's first revision named the wrong mechanism and claimed a row was fixed that its own
-> committed artifact showed was not. Both are corrected below rather than quietly amended.** The
-> reorder is kept — it is correct and monotone — but the row `19100014/35` closes because of a
-> **missing Sand Veil gate**, found by the review of #1120, not because of the ordering.
+C116 Phase 4 item 12. Branch `harness-leechseed-heal-label` off `main` `5a44c04e`. All four changes
+are in `rust/pokezero-search/src/events.rs`. **The engine's HP arithmetic was already correct in
+every case; only attribution was wrong.**
 
-C116 Phase 4 item 12: one more row disposed of, as a **harness fix**. Era: branch
-`harness-leechseed-heal-label` off `main` `5a44c04e`; engine+crate fingerprint `6caef725b2…` →
-`683715808ca…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
-patch stack does not).
+> **This report was rewritten at round 7, and the rewrite is the point.** Seven review rounds found
+> errors in this document while the code was verified correct from round 2. The previous revision had
+> grown to 303 lines carrying ~35 quantitative claims and **15 inline retractions** — more retraction
+> than content, and each retraction was itself a new claim that could be wrong. Six of the seven
+> BLOCKs were the same shape: a correction applied to the instance a reviewer named, while the same
+> defect stood one surface over. The remedy is fewer claims, not more careful prose. Every number
+> below is one I can point at an artifact for; the errors are listed once, in §6, rather than
+> re-litigated where each occurred.
 
 > **On the C116 citation.** The plan lives outside this repository at the owner's instruction and is
 > not verifiable by a future reader. Read "Phase 4 item 12" as provenance for *why this was queued*,
 > never as evidence for a claim about the engine.
 
-## 1. The defect is a LABEL, not an HP value
+## 1. The four changes
 
-`rust/pokezero-search/src/events.rs` `residual_heal_cause` is the fallback used when
-`ResidualPlan` — the structure that knows the speed order and can therefore attribute a cross-side
-drain heal — has been discarded. The fallback tested the **Leech Seed drain before Leftovers**, so
-an ordinary Leftovers tick on a side whose opponent happened to be seeded came back labelled
-`leechseed`. That is the H.1 fall-through the plan exists to prevent.
-
-The fallback now tests Leftovers first. **The phase-order reasoning an earlier revision of this
-section gave for that is retracted — see §5.** `residual_heal_cause` takes no heal index, so it is a
-constant function of state and cannot implement "answer with the earlier phase" at all; and the
-premise is false anyway, because a faster victim's drain precedes the seeder's Leftovers tick. The
-narrow true reason is that the drain is rendered *silently*, so `"Leech Seed"` is never a correct
-answer for a `[from]`-tagged heal and nothing is displaced by preferring Leftovers.
-
-```rust
-if s.get_active_immutable().item == Items::LEFTOVERS { return "item: Leftovers".to_string(); }
-if opponent.volatile_statuses.contains(&PokemonVolatileStatus::LEECHSEED)
-    && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
-{ return String::new(); }   // renders `[silent]`, which is what Showdown emits
-```
-
-## 2. The row, and why it is only a label
-
-`19100193/46`, `component_mismatch:itemleftovers|leechseed`, 100 % mass:
-
-```
-observed_only=[('itemleftovers', 18)]   engine_only=[('leechseed', 18)]
-```
-
-Cacturne has 290 maxhp, and `290 / 16 = 18` — a Leftovers tick. A *real* drain from Miltank would
-be `273 / 8 = 34`, a different number. Walked step by step from the recorded protocol: Cacturne is
-the seeder, and it **dies to poison at phase 10.6 before Miltank's 10.5 sap**, so no drain occurs
-at all and both sides agree on every HP value. `ResidualPlan` had nonetheless reserved a drain slot
-(the opponent was seeded and both were alive when the plan was built), came up one heal short, was
-discarded, and the fallback then mislabelled the tick.
-
-So this row was never an engine defect: the engine's HP arithmetic was right and its **attribution
-string** was wrong.
-
-## 3. Pins, and the revert check
-
-| pin | on `main`'s ordering | on this branch |
+| # | change | why |
 |---|---|---|
-| `a_seeded_opponent_does_not_steal_the_leftovers_tag` | **RED** | green |
-| `without_leftovers_a_seeded_opponent_still_yields_the_drain_label` | **RED** | green |
-| `liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain` | n/a (new) | green; red when the guard is deleted |
-| `sand_veil_is_exempt_so_the_plan_does_not_book_a_chip_that_never_fires` | n/a (new) | green; **red** when the exemption is deleted |
-| `expiring_weather_books_no_chip_so_the_drain_keeps_its_label` | n/a (new) | green; **red** when the expiry gate is deleted |
+| 1 | `weather_chips` gains the Sand Veil exemption | the engine skips the sand chip for `SANDVEIL` (`gen3/generate_instructions.rs:4223`); `events.rs` did not, so the plan booked a chip that never fired |
+| 2 | `weather_chips` books no chip when weather expires | `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`), but the engine decrements and clears the weather (`:4144-4163`) **before** its chip loop (`:4193`) |
+| 3 | `residual_heal_cause` tests Leftovers before the drain | a Leftovers tick on a side whose opponent was seeded came back labelled `leechseed` |
+| 4 | the drain returns `String::new()`, rendering `[silent]` | Showdown renders it silently: `sim/battle.ts:2293-2296`, `case 'leechseed'`, reached from `data/moves.ts:10218-10221`. There is no `[from] Leech Seed` heal line in Showdown |
 
-> **`without_leftovers_…` is NOT a control, and calling it one was wrong.** Once its assertion was
-> flipped to `[silent]` it became a second *regression* pin: on `main` the fallback returns
-> `"Leech Seed"`, so the line has no `[silent]` and the pin is **RED**. An earlier revision of this
-> table recorded it as green in both eras — I flipped the assertion and did not re-run the revert
-> check, then reported a result that no longer held. Verified by restoring `main`'s drain return:
-> that pin, and only that pin, fails.
->
-> The LIQUID OOZE guard was **unpinned** — the review deleted it and the whole crate suite stayed
-> green — and so was the **Sand Veil exemption**, which is worth **one** row -- see the correction below.
->
-> **Both of my first Sand Veil and expiry pins were vacuous, in the same commit, for the same
-> reason.** They asserted on DAMAGE tags, and an unfilled chip slot does not corrupt damage
-> attribution — it corrupts the HEAL labels, because that is where the fallback has to guess between
-> Leftovers and the cross-side drain. Deleting the exemption left both green. Rewritten on heal
-> labels, both are now verified red against deleting their own line.
+**Why one unfilled slot matters (changes 1 and 2).** `ResidualPlan` reconciles what it booked against
+what was emitted; if it comes up short, the whole side falls back to `residual_heal_cause`, which
+takes no heal index and is therefore a *constant function of state* — it cannot label two heals on
+one side differently.
 
-The revert check was run properly rather than assumed: `events.rs` was restored to `main` and the
-pin functions **grafted back on**, so they ran against the old code with nothing else changed.
-**Both failed.** Reverting the whole file would have deleted the pins along with the fix and
-"passed" vacuously — the same shape that has cost this program a red gate before.
-
-> **"One failed, one passed" is what this paragraph said for two revisions, and it was false.** It
-> was true of the *original* pin pair, before the second pin's assertion was flipped from
-> `[from] Leech Seed` to `[silent]`; after the flip, restoring `main`'s fallback fails **both**, and
-> reverting either half in isolation fails the corresponding one. I edited the assertion and left the
-> sentence describing the old measurement — the same substitution §7 is about, inside the very
-> section added to correct it. Verified by running each revert shape: whole fallback → 2 failures;
-> reorder only → `a_seeded_opponent_does_not_steal_the_leftovers_tag`; `String::new()` → `"Leech
-> Seed"` only → `without_leftovers_…`.
-
-The second pin is a **regression pin, not a control** — see the blockquote above; an earlier revision
-of this paragraph argued it was the latter and that framing is withdrawn, not just its table cell.
-What it constrains is real and worth stating plainly: a seeded opponent **without** Leftovers must
-still have its drain heal rendered `[silent]` rather than attributed to Leftovers, so the reorder
-cannot be "test Leftovers first and stop".
-
-## 4. Gates
-
-| gate | result |
-|---|---|
-| crate suite, `RUSTFLAGS="-C debug-assertions=yes"` | 0 failed, 32 test groups ok |
-| the new pins | 5, all OK; each verified red against deleting the line it covers |
-
-## 5. The mechanism I got wrong, and the one that was actually load-bearing
-
-`events.rs` `weather_chips` did not model the engine's **Sand Veil** exemption
-(`gen3/generate_instructions.rs:4223` skips the sand chip for `Abilities::SANDVEIL`). `SANDVEIL`
-appeared **zero times** in `events.rs`.
-
-Cacturne has Sand Veil. So `ResidualPlan` booked a sandstorm chip that never fired; **one unfilled
-slot makes the whole side's plan unusable**; and every heal on that side then fell through to
-`residual_heal_cause`. That fallback takes `(state, side, next_ins)` and **no heal index**, so it is
-a *constant function of state* — it cannot label two heals on one side differently. Reordering it
-could therefore only ever fix whichever of Cacturne's two heals happened to be the Leftovers tick.
-
-**ATTRIBUTION, CORRECTED: this exemption closes ONE row, not two.** Earlier revisions of this
-report, the pin docstring and the PR body all said two. Refuted by this branch's own committed
-artifact at the reorder-only revision `87bcf351`, whose **`events.rs`** contains **zero**
-`SANDVEIL` occurrences (28 other tracked files do match the string, including the engine patch that
-carries the exemption — "zero occurrences" unqualified was a scope slip) and whose holdout sweep
-records **4 diverged with `19100193/46` already closed** (the
-`component_mismatch:itemleftovers|leechseed` class absent). So the split is:
+## 2. What closes what
 
 | change | closes | holdout |
 |---|---|---|
-| fallback reorder **alone** | `19100193/46` | 5 → 4 |
-| Sand Veil exemption | `19100014/35`, via its **90 % arm** | 4 → 3 |
+| change 3 (the reorder), alone | `19100193/46` | 5 → 4 |
+| change 1 (Sand Veil), via that row's 90 % arm | `19100014/35` | 4 → 3 |
+| changes 2 and 4 | nothing measured | — |
 
-Two further corrections to my own first attempt at this table:
+Evidence: the artifact committed at `87bcf351`, whose `events.rs` contains **zero** `SANDVEIL`
+occurrences and which predates change 4 (that entered at `c9f6839b`), records holdout **4** with
+`19100193/46` already closed.
 
-- **The reorder closes `19100193/46` unaided; `[silent]` gets no credit for it.** `87bcf351` predates
-  the `[silent]` change, which entered at `c9f6839b` — so the artifact I cited as proof is itself
-  proof that `[silent]` was not involved. On that row Cacturne holds Leftovers, so the Leftovers
-  branch returns before the drain branch is ever reached.
-- **The exemption closes `19100014/35` through the 90 % arm only, not "both arms".** The 10 % arm is
-  the engine's Leech-Seed-**missed** branch against a Showdown hit
-  (`observed_only=[('leechseed', -33)] engine_only=[]`), and no harness *rendering* change can make a
-  miss branch reproduce a hit. The row closes regardless because **one matching branch closes a
-  boundary** — `engine_transition_differential.py` returns `"matched"` on the first fully matching
-  branch — which is exactly what §7 says, and what my own `87bcf351` commit message said.
+- `19100193/46` is label-only. Cacturne has 290 maxhp and `290/16 = 18` is a Leftovers tick; a real
+  drain from Miltank would be `273/8 = 34`. Cacturne dies to poison before Miltank's sap, so no drain
+  occurs and both sides agree on every HP value.
+- `19100014/35` closes through its **90 % arm**. The 10 % arm is the engine's Leech-Seed-*missed*
+  branch against a Showdown hit (`observed_only=[('leechseed', -33)] engine_only=[]`); no rendering
+  change can make a miss branch reproduce a hit. One matching branch closes a boundary.
+- **Change 2 is worth zero rows: its trigger is unreachable here.** `weather_chips` returns `Some`
+  only for sand or hail, and `data/random-battles/gen3/sets.json` has **0 of 220** species carrying
+  `sandstorm` or `hail` (Snow Warning does not exist in gen3). Sand therefore always comes from Sand
+  Stream, which writes `WEATHER_ABILITY_TURNS = -1` (`gen3/abilities.rs:20`), and the engine never
+  decrements a non-positive value. It ships for fidelity, like the Liquid Ooze guard in §5.
 
-That also **partly rehabilitates the reorder**, which §5's first revision called "half a fix, kept
-because it is monotone". It is not merely monotone — it closes a row on its own. What was true is
-narrower: the reorder alone could not close `19100014/35`, because the fallback is a constant
-function of state and that row needs *two* heals on one side labelled differently.
+The `== 1` boundary still matters: the **permanent** region *is* reachable (Tyranitar, Kyogre and
+Groudon are all in the pool), and `<= 1` breaks it across all of it.
 
-The gate is one line, and with it the 90 % arm of `19100014/35` matches, which closes the row:
+## 3. Pins
 
-```rust
-|| active.ability == Abilities::SANDVEIL
-```
+Five, all green on the branch, each verified red against deleting the line it covers.
 
-Two further corrections the review forced, both verified:
+| pin | on `main` |
+|---|---|
+| `a_seeded_opponent_does_not_steal_the_leftovers_tag` | **RED** |
+| `without_leftovers_a_seeded_opponent_still_yields_the_drain_label` | **RED** |
+| `liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain` | n/a (new) |
+| `sand_veil_is_exempt_so_the_plan_does_not_book_a_chip_that_never_fires` | n/a (new) |
+| `expiring_weather_books_no_chip_so_the_drain_keeps_its_label` (3 arms) | n/a (new) |
 
-- **`"Leech Seed"` was never a legal answer.** Showdown renders the drain heal silently:
-  `sim/battle.ts:2293-2296` switches on `effect.id`, and `case 'leechseed'` emits
-  `('-heal', target, getHealth, '[silent]')`, reached from `data/moves.ts:10218-10221`. There is no
-  `[from] Leech Seed` heal line anywhere in Showdown. The fallback now returns `String::new()`,
-  agreeing with what `ResidualPlan` already did for its own drain slot.
-- **§3's second pin was asserting that non-existent label**, so it enshrined a wrong output and
-  blocked the right one. The review built the correct fix and found this pin was the *only* thing
-  failing, at zero measured cost. It now asserts `[silent]`.
+Neither of the first two is a *control*: both are regression pins, and restoring `main`'s fallback
+fails both. Revert shapes, each run: whole fallback → 2 failures; reorder only → the first;
+`String::new()` → `"Leech Seed"` only → the second.
 
-`ResidualPlan` books no slot for **Rain Dish** or **Sitrus** either (`RAINDISH`/`SITRUS` also grep to
-zero in `events.rs`) — but **both are UNREACHABLE in the gen3 randbats pool**, so neither can cost a
-row, and an earlier revision of this line overstated them by omitting that check. Verified against
-the live checkout: `data/random-battles/gen3/sets.json` has **zero** sets with Rain Dish (or Dry
-Skin, Overcoat, Ice Body) across its 220 species, and `teams.ts:452-513` `getItem` can only return
-Stick, Soul Dew, Silk Scarf, Thick Club, Light Ball, Lum Berry, Choice Band, Twisted Spoon, White
-Herb, Salac/Liechi/Petaya Berry or Leftovers — **Sitrus Berry cannot be held**. The repo already
-applies exactly this test to DRYSKIN at `gen3/generate_instructions.rs:1567`, so the instrument was
-available and I skipped it.
+Boundary mutations, all red: `<= 1`, `< 2`, `!= 0`, `>= 1`, `== 2`, `== 0`, `== -1`, gate deleted,
+gate scoped to SAND, gate scoped to HAIL, gate moved below the hail branch.
 
-**Weather EXPIRY is the same class, and it is fixed here for FIDELITY, not for a row — it is NOT
-reachable in the current pool.** An earlier revision of this line called it "the reachable member of
-the same class". That was false, and it was false two paragraphs below my own use of the instrument
-that settles it, in a sentence where I criticised myself for having skipped that instrument. Running
-it *once* and then not reaching for it again is the whole pattern this report keeps documenting.
+## 4. Gates and sweep
 
-Measured: `weather_chips` can only return `Some` for SAND or HAIL, and
-`data/random-battles/gen3/sets.json` has **0 of 220** species carrying `sandstorm` or `hail`
-(`raindance` 7 and `sunnyday` 4 do exist and neither chips; Snow Warning does not exist in gen3). So
-sand only ever comes from **Sand Stream**, which writes `WEATHER_ABILITY_TURNS = -1`, and
-`generate_instructions.rs:4144` never decrements a non-positive value — `turns_remaining == 1` cannot
-occur. Same status as the Liquid Ooze guard in §7b, and it is filed that way rather than promoted.
-
-The two facts above — the `sets.json` scan and `WEATHER_ABILITY_TURNS = -1` — are ones I ran myself.
-A review also corroborated this by instrumenting the world builder over both windows; **that figure
-is deliberately not quoted here**, because I could not reproduce the instrumentation on my own and a
-number I did not measure has no business appearing in this report as evidence. The first-principles
-argument is sufficient and is entirely checkable from the two citations.
-`weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`) while the engine decrements
-and clears the weather at `generate_instructions.rs:4144-4163` *before* its chip loop at `:4193`. So
-on the turn sand or hail expires the engine emits no chip, the plan books one, and the side drops to
-the constant fallback — the `19100193/46` signature. Measured: without the gate that state yields
-`["item: Leftovers", "item: Leftovers"]`, the genuine drain mislabelled as a second Leftovers tick;
-with it the drain renders `[silent]`. Exactly `== 1`, not `<= 1`: the engine's decrement is gated on
-`turns_remaining > 0`, so any value at or below 0 skips the decrement, keeps its type, and keeps
-chipping.
-
-**Permanent gen3 weather is `-1`, not `0`** — `gen3/abilities.rs:20`
-`WEATHER_ABILITY_TURNS: i8 = -1`, what Sand Stream / Drizzle / Drought write. An earlier revision of
-this line said `0`, naming a value that is merely *also* non-decrementing while missing the one the
-pool actually produces. That matters here specifically: Tyranitar, Kyogre and Groudon are all in the
-pool, and **row `19100014/35` — one of the two rows this change closes — is Tyranitar switching into
-its own sand.** Right conclusion, wrong stated reason, which is exactly what §7 is about.
-
-And the boundary is now **pinned**, not merely argued. A review changed `==` to `<=` and all 375
-tests stayed green, and that mutation disagrees with the engine across the whole **non-decrementing
-region** (`turns_remaining <= 0`, of which permanent `-1` is one value), reintroducing the
-`19100193/46` mislabel wholesale. The expiry pin now has three arms: `turns_remaining == 1` books no
-chip, `== -1` still books one, and expiring **hail** books none either — the last because the gate
-sits above both weather branches, and scoping it to SAND left all 375 tests green.
-
-Verified red, by me, against `<= 1`, `< 2`, `!= 0`, `>= 1`, `== 2`, `== 0`, inverting to `== -1`,
-deleting the gate, and scoping it to SAND. (A count of disagreeing states across an enumerated grid
-appeared here in an earlier revision; it was a reviewer's measurement, not mine, and is dropped
-rather than cited as if I had run it.)
-
-## 6. Sweep
+Crate suite under `-C debug-assertions=yes`: **375 passed, 0 failed**. Patch stack `Ran 4, OK`; mass
+gate `Ran 5, OK`; `test_final_holdout_guard` `Ran 14, OK`. The wider Python suite's FAIL/ERROR set is
+unchanged from `main`.
 
 | window | engine | measured | full_round | matched | diverged |
 |---|---|---|---|---|---|
-| dev `19,000,000–19,000,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,432 | 15,968 | 15,430 | 2 |
-| dev | branch, fp `683715808ca…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
-| validation holdout `19,100,000–19,100,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,551 | 16,155 | 15,546 | 5 |
-| validation holdout | branch, fp `683715808ca…` | 15,551 | 16,155 | **15,548** | **3** |
+| dev `19,000,000–199` | `main` `5a44c04e` | 15,432 | 15,968 | 15,430 | 2 |
+| dev | branch | 15,432 | 15,968 | 15,430 | 2 |
+| holdout `19,100,000–199` | `main` `5a44c04e` | 15,551 | 16,155 | 15,546 | 5 |
+| holdout | branch | 15,551 | 16,155 | **15,548** | **3** |
 
-**Closed `19100014/35` and `19100193/46`. Nothing opened.** `boundaries_measured` and
-`boundaries_full_round` identical, identity holds on all four, `engine_errors` 0 in all four.
+Nothing opened; identity holds on all four; `engine_errors: 0`. Artifacts:
+`reports/artifacts/c131_leechseed_{main,fix}_{dev,holdout}_sweep.json`, each stamping a
+`source_commit` whose tree produced the run. Re-measured after the rebase onto `5a44c04e` and again
+after every code change — "the numbers probably did not move" is a prediction, not a measurement.
 
-> **The baseline artifacts were re-run twice for provenance, and the reason is worth recording.** The
-> first pair stamped `source_commit: 7762a81d` (66 patches, fingerprint `599c68a31e…`) against
-> `engine_fingerprint: 12e05f6e8a…` (67 patches, `a4132d16`) — a **false machine-readable pin**, since
-> the recorded commit did not describe the tree that produced the run. A second attempt, reverting
-> only `events.rs` in the worktree, stamped the *branch* commit against main's fingerprint: consistent
-> numbers, still a mismatched pin. The committed baselines are now taken from a **clean `main`
-> checkout**, so `source_commit` and `engine_fingerprint` agree. Prose explaining a wrong pin does not
-> fix it; validation reads the field.
->
-> **Re-measured a third time after rebasing onto `main` `5a44c04e`**, which had advanced by four
-> commits (#1118, #1121, #1123, #1122) — two of them touching the harness and the gates, so the
-> earlier baseline no longer described the base. The numbers came out identical: `main` dev 2 /
-> holdout 5, branch dev 2 / holdout 3, the same two rows closed. Re-running was still the right call:
-> "the numbers probably did not move" is a prediction, not a measurement.
+## 5. Filed, not fixed
 
-## 7. What the prediction got right, and what it got wrong
+- **Five unpinned exemptions in `weather_chips`**: ROCK, GROUND, STEEL (sand condition), ICE (hail
+  branch), and the `hp <= 0` gate. Each verified to leave the suite green when deleted. Pre-existing,
+  but this change added a fourth disjunct to that condition and pinned only its own.
+- **The Liquid Ooze guard is dead code.** Liquid Ooze is emitted as a *negative* heal, which
+  `events.rs:3261` routes to the damage renderer, so it never reaches `residual_heal_cause`. Its pin
+  is real against deleting the guard; the guard protects nothing reachable.
+- **Rain Dish and Sitrus book no plan slot either**, and both are unreachable: 0 Rain Dish sets in
+  `sets.json`, and `teams.ts:452-513` `getItem` cannot return Sitrus Berry.
+- A pre-existing red in `tests/test_engine_terminal_residual_roll_limit` that fails identically on
+  `main`.
 
-The registered prediction said `19100014/35` would **not** close, and under that patch it did not.
-**But its stated reason was wrong, so it does not count as holding.** It said the surviving miss was
-"a different mechanism this fix does not touch". In fact one matching branch suffices for the
-transition, the 90 % arm was closable all along, and closing it closes the row — which a one-line
-Sand Veil gate then did.
+## 6. Errors this report made, listed once
 
-The earlier revision of this report also asserted that the 90 % arm was "now fixed". **Its own
-committed artifact contradicted that**: two misses survived, the 90 % arm having merely traded
-`engine_only=[('leechseed', 33)]` for `engine_only=[('itemleftovers', 33)]` — two wrong components
-became one wrong component. I wrote "fixed" without reading the file I had just committed, which is
-the same failure as the baseline error two reports earlier: the artifact was sitting there.
+Every one was caught by review, and every one was in this document rather than in the code.
 
-Being right about an outcome for the wrong reason is not a prediction holding, and a negative clause
-is exactly where that distinction bites — it is the clause that *looks* like rigour.
+1. **Named the wrong mechanism.** v1 credited the reorder with `19100014/35`; the cause is the
+   missing Sand Veil gate, which the reorder cannot substitute for.
+2. **Claimed a row was fixed that the committed artifact showed was not** (`19100014/35`'s 90 % arm),
+   without opening the file I had just committed.
+3. **Asserted `"Leech Seed"` as a heal label** Showdown never emits — and wrote a pin asserting it.
+4. **Left the load-bearing line unpinned**, then wrote two vacuous pins for it in a single commit,
+   both asserting on *damage* tags when the defect corrupts *heal* labels.
+5. **Called the expiry gate "the reachable member"** of its class, two paragraphs below my own use of
+   the reachability instrument, in a sentence criticising myself for having skipped it.
+6. **Argued the `== 1` boundary instead of pinning it**, and named `0` as the permanent-weather
+   sentinel when it is `-1`.
+7. **Left false provenance pins** on the fix artifacts after fixing them on the baselines.
+8. **Cited two measurements I had not made** — one of them in the same edit that removed the other.
+9. **Over-credited Sand Veil with two rows**, then while correcting that over-credited `[silent]` and
+   claimed "both arms", using as proof an artifact predating the change I was crediting.
 
-## 7b. Filed, not fixed: what remains unpinned around these fixes
+The through-line: I corrected the instance a reviewer named and left the same defect one surface
+over — baselines but not fix artifacts, paragraph but not heading, report but not PR body, one row
+count but not the next.
 
-Both from round 3's review, both verified.
+## 7. Residue after this
 
-**Four sibling exemptions and the fainted-active gate are unpinned.** (Three sit in the sand
-condition; the ICE one is in the hail branch, so "the same condition" in an earlier revision was
-loose.) Deleting `|| has_type(ROCK)`,
-`|| has_type(GROUND)` or `|| has_type(STEEL)` from `weather_chips`'s sand branch, or the hail `ICE`
-exemption, or the `hp <= 0` gate at the top, each leaves the whole suite green. (An earlier revision
-said "three" and omitted ROCK.) Pre-existing — but
-this change added a **fourth** disjunct to that exact condition and pinned only its own, so the
-asymmetry is now this PR's to name. Cheap to close and deliberately not bundled here.
-
-**`liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain` pins an engine-unreachable shape.**
-It feeds a *positive* `Heal` to a side with no Leftovers whose seeded opponent has Liquid Ooze. The
-engine cannot produce that: `generate_instructions.rs:4299-4308` emits Liquid Ooze as
-`Heal{heal_amount: -ooze}`, which `events.rs:3261` routes to the Liquid Ooze **damage** renderer and
-never to `residual_heal_cause`. The pin is genuinely red against deleting the guard it covers, but
-the guard is effectively dead code — consistent with this report's own "worth zero measured rows",
-and worth saying outright rather than leaving it to look like coverage of something live.
-
-## 8. Residue after this
-
-**dev 2 / holdout 3 — five rows:**
+**dev 2 / holdout 3.**
 
 | row | cause | disposition |
 |---|---|---|
-| `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | **already classed as limits by the harness** |
+| `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | already classed as limits by the harness |
 | `19100180/24` | hazard applied to the non-replacing side on a forced-replacement ply (B1) | open |
-| `19000191/63` | collapsed roll. The heal delta (28 vs 29) is **downstream and verified**: after a 109-vs-101 move roll Raichu sits at 14 vs 22, so `min(29, 14+14)=28` and `min(29, 22+14)=29` are both correct given their own HP | open |
-| `19000074/27` | collapsed roll on the crit magnitude (93.75 % + 4.69 %), plus a 1.56 % crit-kill arm omitting the attacker's own sandstorm chip | open; the 1.56 % component is candidate **A12** — the engine skips the *whole* residual phase on a move-caused faint, which is measured, while whether Showdown agrees is **not** |
-
-Also filed, not fixed: `ResidualPlan` books no Rain Dish or Sitrus slot; a pre-existing red in
-`tests/test_engine_terminal_residual_roll_limit` that fails identically on `main`.
+| `19000191/63` | collapsed roll; the heal delta (28 vs 29) is downstream and verified — after a 109-vs-101 move roll Raichu sits at 14 vs 22, so `min(29, 14+14)=28` and `min(29, 22+14)=29` are each correct given their own HP | open |
+| `19000074/27` | collapsed roll on the crit magnitude, plus a 1.56 % crit-kill arm omitting the attacker's own sandstorm chip | open; that component is candidate **A12** — the engine skips the whole residual phase on a move-caused faint, which is measured, while whether Showdown agrees is **not** |
