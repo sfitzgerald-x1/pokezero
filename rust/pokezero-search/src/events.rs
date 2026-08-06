@@ -3780,6 +3780,34 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
     if active.hp <= 0 {
         return None;
     }
+    // WEATHER EXPIRY, the same class of defect as the Sand Veil gate below and
+    // found by the same review. `weather_is_active` does NOT read
+    // `turns_remaining` (`gen3/state.rs:1050-1060`), and this function reads the
+    // PRE-residual state -- but the engine decrements and clears the weather at
+    // `generate_instructions.rs:4144-4163`, BEFORE its chip loop at `:4193`. So on
+    // the turn the weather expires the engine emits NO chip while the plan books
+    // one, the side's plan goes unusable, and every label on it drops to the
+    // constant fallback.
+    //
+    // Exactly `== 1`, never `<= 1`. The engine's decrement is gated on
+    // `turns_remaining > 0`, so any value at or below 0 skips the decrement, keeps
+    // its `weather_type`, and therefore KEEPS CHIPPING.
+    //
+    // PERMANENT gen3 weather is `-1`, not `0`: `gen3/abilities.rs:20`
+    // `WEATHER_ABILITY_TURNS: i8 = -1`, which is what Sand Stream, Drizzle and
+    // Drought write. An earlier version of this comment said `0`, naming a value
+    // that is merely also non-decrementing while missing the one the pool actually
+    // produces -- and Tyranitar, Kyogre and Groudon are all in the pool. Row
+    // `19100014/35`, one of the two rows this change closes, is Tyranitar switching
+    // into its own sand.
+    //
+    // So `<= 1` is not a stylistic variant, it is a regression that reintroduces the
+    // `19100193/46` mislabel across the whole permanent-weather region. Pinned by
+    // `expiring_weather_books_no_chip_so_the_drain_keeps_its_label`'s second arm,
+    // because a review changed `==` to `<=` and all 375 tests stayed green.
+    if state.weather.turns_remaining == 1 {
+        return None;
+    }
     if state.weather_is_active(&Weather::HAIL) {
         if active.has_type(&PokemonType::ICE) {
             return None;
@@ -3787,9 +3815,29 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
         return Some("Hail");
     }
     if state.weather_is_active(&Weather::SAND) {
+        // SAND VEIL. The engine exempts it at
+        // `gen3/generate_instructions.rs:4223`, and this function did not, so it
+        // booked a sandstorm chip that never fired. One unfilled slot makes the
+        // whole side's plan unusable, which drops EVERY heal on that side into
+        // `residual_heal_cause`'s fallback -- and the fallback is a constant
+        // function of state, so it cannot label two different heals differently.
+        //
+        // That is the root cause of `19100014/35`, not the fallback ordering.
+        // Cacturne has Sand Veil, so the plan reserved a chip it never emitted,
+        // `plan.usable` went false, and both of Cacturne's heals fell through.
+        // Reordering the fallback only fixed whichever of the two happened to be
+        // the Leftovers tick; the drain stayed mislabelled. With this gate the plan
+        // reconciles, the row's 90% arm matches, and the row closes.
+        //
+        // NOT "both arms" -- an earlier version of this comment said that. The 10%
+        // arm is the engine's Leech-Seed-MISSED branch against a Showdown hit
+        // (`observed_only=[('leechseed', -33)] engine_only=[]`), and no harness
+        // RENDERING change can make a miss branch reproduce a hit. It closes anyway
+        // because one matching branch closes a boundary.
         if active.has_type(&PokemonType::ROCK)
             || active.has_type(&PokemonType::GROUND)
             || active.has_type(&PokemonType::STEEL)
+            || active.ability == Abilities::SANDVEIL
         {
             return None;
         }
@@ -4041,15 +4089,54 @@ fn residual_heal_cause(
     // whenever the plan fails reconciliation for an unrelated reason, and
     // without the guard it re-arms exactly the H.1 mislabel the plan exists to
     // prevent.
+    //
+    // WHY LEFTOVERS FIRST, stated correctly this time. An earlier version of this
+    // comment claimed the rule was "answer with the earlier residual phase",
+    // Leftovers being 10.4 and the drain 10.5. That reasoning is wrong twice and
+    // a review caught both:
+    //
+    //   1. This function cannot implement it. It takes `(state, side, next_ins)`
+    //      and no heal index, so it is a CONSTANT FUNCTION OF STATE -- it returns
+    //      the same answer for every heal on the side. It has no notion of
+    //      "first" to reason about.
+    //   2. The premise is false in general. The drain is emitted at the VICTIM's
+    //      10.5 slot inside the speed-major loop, so when the victim is faster the
+    //      drain heal PRECEDES the seeder's own Leftovers tick. See the note at
+    //      the top of `ResidualPlan`, which says exactly this and is why the plan
+    //      needs the speed order to label heals at all.
+    //
+    // The real reason Leftovers wins is narrower and does not depend on ordering:
+    // since the drain is rendered SILENTLY (see below), `"Leech Seed"` is never a
+    // correct answer for a `[from]`-tagged heal, so nothing is displaced by
+    // preferring Leftovers. Ordering is the plan's job; this fallback only has to
+    // avoid asserting a label that cannot be right.
+    //
+    // Measured on holdout `19100193/46`. The engine state has the opponent
+    // seeded and both actives alive when the plan is built, so a drain slot is
+    // reserved — but the SEEDER dies to poison at 10.6 before the 10.5 sap can
+    // run, `emitted_heal` is one short of `plan.heal`, reconciliation fails, and
+    // this fallback is reached. Checking Leech Seed first labelled Cacturne's
+    // Leftovers tick `[from] Leech Seed`: magnitude right (18 = 290/16), source
+    // wrong. A real drain from Miltank would have been 273/8 = 34.
+    if s.get_active_immutable().item == Items::LEFTOVERS {
+        return "item: Leftovers".to_string();
+    }
     if opponent
         .volatile_statuses
         .contains(&PokemonVolatileStatus::LEECHSEED)
         && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
     {
-        return "Leech Seed".to_string();
-    }
-    if s.get_active_immutable().item == Items::LEFTOVERS {
-        return "item: Leftovers".to_string();
+        // EMPTY, not "Leech Seed". Showdown renders the drain heal SILENTLY:
+        // `sim/battle.ts:2293-2296` switches on `effect.id` and
+        // `case 'leechseed'` emits `('-heal', target, getHealth, '[silent]')`,
+        // reached from the move's own handler at `data/moves.ts:10218-10221`.
+        // There is no `[from] Leech Seed` heal line anywhere in Showdown, so the
+        // string this used to return was never a correct answer for any state --
+        // it could only ever trade one wrong label for another.
+        //
+        // `ResidualPlan` already knew this: it inserts `String::new()` for its
+        // own drain slot. This makes the fallback agree with the plan.
+        return String::new();
     }
     "item: Leftovers".to_string()
 }
@@ -6266,6 +6353,206 @@ mod tests {
         );
     }
 
+    /// SAND VEIL, and this pin is the whole point of the change.
+    ///
+    /// Round 2's review deleted `|| active.ability == Abilities::SANDVEIL` from
+    /// `weather_chips` and the ENTIRE crate suite stayed green: 373 passed, 0
+    /// failed. The line was pinned by nothing, while the LIQUID OOZE guard worth zero
+    /// measured rows got a pin the round before.
+    ///
+    /// WORTH ONE ROW, NOT TWO, AND VIA ONE ARM, NOT BOTH. Earlier versions of this
+    /// docstring said two rows, then said "both arms". Both were wrong.
+    ///
+    /// The branch's own artifact at the reorder-only revision `87bcf351` -- whose
+    /// `events.rs` has zero `SANDVEIL` occurrences, and which predates the `[silent]`
+    /// change (that entered at `c9f6839b`) -- records holdout **4** with
+    /// `19100193/46` already closed. So the FALLBACK REORDER ALONE closes that row;
+    /// this exemption closes `19100014/35`, 4 -> 3.
+    ///
+    /// And it closes it through the 90% arm only. The 10% arm is the engine's
+    /// Leech-Seed-MISSED branch against a Showdown hit
+    /// (`observed_only=[('leechseed', -33)] engine_only=[]`); no harness RENDERING
+    /// change can make a miss branch reproduce a hit. One matching branch closes a
+    /// boundary (`engine_transition_differential.py` returns "matched" on the first
+    /// fully matching branch), which is why the row closes anyway.
+    ///
+    /// MY FIRST VERSION OF THIS PIN WAS ALSO VACUOUS, and I wrote it in the same
+    /// commit as an expiry pin with the identical flaw. It asserted on DAMAGE tags
+    /// with a poison-only segment, and deleting the exemption still left it green.
+    /// An unfilled chip slot does not corrupt damage attribution -- it corrupts the
+    /// HEAL labels, because that is where the fallback has to guess between
+    /// Leftovers and the cross-side drain. Twice in one commit I asserted on the
+    /// wrong side of the mechanism and called it a pin.
+    ///
+    /// Measured: without the exemption this state yields
+    /// `["item: Leftovers", "item: Leftovers"]` -- the genuine drain mislabelled as
+    /// a second Leftovers tick, which is the `19100193/46` signature.
+    #[test]
+    fn sand_veil_is_exempt_so_the_plan_does_not_book_a_chip_that_never_fires() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+            active.ability = Abilities::SANDVEIL;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+
+        // Sand is active with turns to spare, but this mon is EXEMPT, so the engine
+        // emits no chip for it: the segment is the Leftovers tick plus the drain.
+        let segment = vec![heal_one(20), heal_one(40)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "the drain heal must stay silent; a second `item: Leftovers` means the \
+             plan booked a sandstorm chip for a Sand Veil mon"
+        );
+
+        // Anti-vacuity: the same state WITHOUT Sand Veil really does book a chip,
+        // so the fixture is exercising the exemption and not an empty plan.
+        let mut control = parse_state(MINIMAL.trim()).expect("fixture parses");
+        control.weather.weather_type = Weather::SAND;
+        control.weather.turns_remaining = 5;
+        {
+            let active = control.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        control
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let with_chip = vec![damage_one(20), heal_one(20), heal_one(40)];
+        assert_eq!(
+            residual_tags(&mut control, &with_chip, "p1a"),
+            vec!["Sandstorm".to_string(), "item: Leftovers".to_string()],
+            "without Sand Veil the chip is booked and the plan reconciles"
+        );
+    }
+
+    /// WEATHER EXPIRY, the same class as Sand Veil -- and NOT reachable in the
+    /// current pool, which an earlier version of this docstring claimed it was.
+    ///
+    /// Measured rather than assumed this time: `weather_chips` can only return `Some`
+    /// for SAND or HAIL, and `data/random-battles/gen3/sets.json` has **0 of 220**
+    /// species carrying `sandstorm` or `hail` (`raindance` 7 and `sunnyday` 4 exist,
+    /// and neither chips; Snow Warning does not exist in gen3). So sand only ever
+    /// comes from Sand Stream, which writes `WEATHER_ABILITY_TURNS = -1`, and
+    /// `generate_instructions.rs:4144` never decrements a non-positive value --
+    /// `turns_remaining == 1` cannot occur. The same status as the Liquid Ooze guard.
+    ///
+    /// It is fixed for FIDELITY, not for a row. The `== 1` boundary still matters,
+    /// because the permanent region IS reachable and `<= 1` breaks it across all of it.
+    ///
+    /// `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`)
+    /// and this function reads the PRE-residual state, but the engine decrements
+    /// and clears the weather at `generate_instructions.rs:4144-4163` BEFORE its
+    /// chip loop at `:4193`. So on the expiring turn the engine emits no chip while
+    /// the plan books one, and the side falls to the constant fallback.
+    ///
+    /// MY FIRST VERSION OF THIS PIN WAS VACUOUS AND PASSED WITHOUT THE FIX. It
+    /// asserted on DAMAGE tags, and the defect does not show there -- an unfilled
+    /// chip slot corrupts the HEAL labels, because that is where the fallback has
+    /// to guess between Leftovers and the drain. Asserting on the wrong side of the
+    /// mechanism looked like a test and constrained nothing.
+    ///
+    /// Measured: without the `turns_remaining == 1` gate this state yields
+    /// `["item: Leftovers", "item: Leftovers"]` -- the genuine drain mislabelled as
+    /// a second Leftovers tick, the `19100193/46` signature. With it, the drain
+    /// renders `[silent]` as Showdown does.
+    #[test]
+    fn expiring_weather_books_no_chip_so_the_drain_keeps_its_label() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 1;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+
+        // The engine cleared the weather first, so the segment carries NO chip:
+        // just the Leftovers tick and the cross-side drain heal.
+        let segment = vec![heal_one(20), heal_one(40)];
+        let tags = residual_tags(&mut state, &segment, "p1a");
+        assert_eq!(
+            tags,
+            vec!["item: Leftovers".to_string()],
+            "the drain heal must stay silent; a second `item: Leftovers` means the \
+             plan was disabled by a chip the engine never emitted"
+        );
+
+        // THE BOUNDARY, and it was unpinned until a review broke it: `== 1` and not
+        // `<= 1`. PERMANENT weather is `turns_remaining == -1`
+        // (`gen3/abilities.rs:20` `WEATHER_ABILITY_TURNS`), written by Sand Stream,
+        // Drizzle and Drought. The engine's decrement is gated on
+        // `turns_remaining > 0`, so permanent weather never clears and DOES chip --
+        // the plan must book it. Under `<= 1` the chip is skipped, the plan comes up
+        // one short, and the drain is mislabelled as a second Leftovers tick across
+        // the entire permanent-weather region. That region is reachable: Tyranitar,
+        // Kyogre and Groudon are all in the pool, and row `19100014/35` is Tyranitar
+        // switching into its own sand.
+        let mut permanent = parse_state(MINIMAL.trim()).expect("fixture parses");
+        permanent.weather.weather_type = Weather::SAND;
+        permanent.weather.turns_remaining = -1;
+        {
+            let active = permanent.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        permanent
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        assert_eq!(
+            residual_tags(
+                &mut permanent,
+                &vec![damage_one(20), heal_one(20), heal_one(40)],
+                "p1a",
+            ),
+            vec!["Sandstorm".to_string(), "item: Leftovers".to_string()],
+            "permanent weather (turns_remaining -1) never expires, so its chip MUST \
+             still be booked; skipping it re-arms the 19100193/46 mislabel"
+        );
+
+        // HAIL, because the gate sits above BOTH weather branches and the property is
+        // claimed for both. Scoping the gate to `weather_type == Weather::SAND`, or
+        // moving it below the hail branch, leaves all 375 tests green while making
+        // hail-expiry book a phantom chip. Pinned even though hail is unreachable in
+        // the current pool (0 of 220 sets carry it), because the gate's placement --
+        // above the branches rather than inside one -- is the thing worth keeping.
+        let mut hail = parse_state(MINIMAL.trim()).expect("fixture parses");
+        hail.weather.weather_type = Weather::HAIL;
+        hail.weather.turns_remaining = 1;
+        {
+            let active = hail.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        hail.side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        assert_eq!(
+            residual_tags(&mut hail, &vec![heal_one(20), heal_one(40)], "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "expiring HAIL must book no chip either; the gate is above both branches"
+        );
+    }
+
     /// THE COUNTEREXAMPLE TO AMOUNT MATCHING, pinned on purpose.
     ///
     /// The sandstorm chip and the partial-trap tick are BOTH `maxhp/16`, so on a
@@ -6365,6 +6652,129 @@ mod tests {
         assert!(
             tags.iter().all(|t| t == "psn"),
             "a desynced plan must not invent labels; got {tags:?}"
+        );
+    }
+
+    /// A side whose OPPONENT is seeded must not have its Leftovers tick
+    /// attributed to the Leech Seed drain. Regression for holdout row
+    /// `19100193/46`.
+    ///
+    /// `residual_heal_cause` is the fallback reached when the residual plan fails
+    /// reconciliation, and it used to test Leech Seed BEFORE Leftovers.
+    ///
+    /// NOTE: an earlier version of this docstring justified the order by residual
+    /// PHASE -- Leftovers 10.4 before the drain 10.5 -- and that reasoning is
+    /// RETRACTED where the function is defined, ~2,100 lines up. This function
+    /// receives no heal index, so it is a constant function of state and has no
+    /// notion of "first"; and a faster victim's drain is emitted BEFORE the
+    /// seeder's Leftovers tick, so the premise is false regardless. The real reason
+    /// Leftovers wins is that the drain renders silently, so `"Leech Seed"` is
+    /// never a correct answer for a `[from]`-tagged heal.
+    ///
+    /// On that row the
+    /// plan reserved a drain slot — opponent seeded, both actives alive when it
+    /// was built — but the seeder died to poison at 10.6 before the 10.5 sap
+    /// could run, so `emitted_heal` came up one short, the plan was discarded,
+    /// and this fallback tagged an 18-point Leftovers tick (290/16) as
+    /// `[from] Leech Seed`. A real drain would have been 273/8 = 34.
+    #[test]
+    fn a_seeded_opponent_does_not_steal_the_leftovers_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::LEFTOVERS;
+        // The opponent is seeded, so a drain heal on side one is POSSIBLE — which
+        // is exactly the condition that used to win the fallback outright.
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] item: Leftovers"),
+            "a seeded opponent stole the Leftovers tag: {:?}",
+            rendered.lines
+        );
+    }
+
+    /// The converse, so the reorder cannot pass by always answering Leftovers:
+    /// a side WITHOUT Leftovers whose opponent is seeded still gets the drain
+    /// label.
+    #[test]
+    fn without_leftovers_a_seeded_opponent_still_yields_the_drain_label() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::NONE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        // `[silent]`, NOT `[from] Leech Seed`. This assertion used to demand the
+        // latter, which Showdown never emits for a drain heal
+        // (`sim/battle.ts:2293-2296`, `case 'leechseed'` renders
+        // `('-heal', target, getHealth, '[silent]')`). A review built the correct
+        // fix and found this pin was the only thing failing -- so the pin was
+        // enshrining a wrong label and blocking the right one at zero measured
+        // cost. Its purpose stands: a seeded opponent WITHOUT Leftovers must not
+        // have its drain heal attributed to Leftovers.
+        assert!(
+            rendered.lines[0].contains("[silent]"),
+            "a drain heal must render silently, not with a [from] tag: {:?}",
+            rendered.lines
+        );
+        assert!(
+            !rendered.lines[0].contains("item: Leftovers"),
+            "the drain heal was attributed to Leftovers: {:?}",
+            rendered.lines
+        );
+    }
+
+    /// NB-3 from the review of #1120: deleting the LIQUID OOZE guard from
+    /// `residual_heal_cause` left the ENTIRE crate suite green, so the guard was
+    /// unpinned. Liquid Ooze reverses the drain, so a seeded opponent carrying it
+    /// produces no drain heal on this side at all -- any positive heal must be
+    /// something else, and with the reorder that something else is Leftovers.
+    #[test]
+    fn liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::NONE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        state.side_two.get_active().ability = Abilities::LIQUIDOOZE;
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered);
+        sim.finish();
+        // With Liquid Ooze there is no drain to attribute, so this must NOT go
+        // silent -- going silent is what dropping the guard would cause.
+        assert!(
+            !rendered.lines[0].contains("[silent]"),
+            "a heal that cannot be the drain was rendered as one: {:?}",
+            rendered.lines
         );
     }
 
