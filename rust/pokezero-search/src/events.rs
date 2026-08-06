@@ -382,7 +382,7 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // bare words `structure`, `length` and `empty` would weaken the gate for unrelated
     // families -- a mis-composed attract or `ambiguous_unrenderable` slug containing "length"
     // would start passing. That gate is a PRODUCTION assert, so this reaches past tests.
-    "shape_values_only",
+    "shape_same_variants_and_sides",
     "shape_structure",
     "shape_length",
     "shape_empty",
@@ -3780,7 +3780,7 @@ fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
         // same discipline `SUBCASE_VOCABULARY` enforces. A formatted key would also be
         // ungreppable, which is how a class stops being rankable.
         SleepTalkIdent::NoneMatched(NoneMatchedShape::ValuesOnly) => {
-            "sleeptalk_called_unidentified:none_matched:shape_values_only"
+            "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
         }
         SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure) => {
             "sleeptalk_called_unidentified:none_matched:shape_structure"
@@ -3931,9 +3931,15 @@ fn identify_sleep_talk_called(
 /// enumeration mismatch, and every such world refused as `none_matched`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum NoneMatchedShape {
-    /// Same variant sequence, same sides, at least one NUMERIC field differs.
+    /// Same variant sequence and same sides; something in the payload differs.
     ///
-    /// **This does NOT mean the engine owns it, and an earlier version of this doc said it
+    /// **Named for the PREDICATE, not a cause — twice corrected to get here.** The first
+    /// version claimed "numeric field differs", which review measured false a second time even
+    /// after sides were added: `Boost(Attack)` vs `Boost(Speed)`, `ChangeStatus(→SLEEP)` vs
+    /// `(→BURN)`, and `Switch(→P1)` vs `(→P4)` all land here. Those are a wrong stat, a wrong
+    /// status and a wrong Pokémon — categorical, not numeric, and renderer-side.
+    ///
+    /// **It also does NOT mean the engine owns it, and an earlier version of this doc said it
     /// did.** Review measured the one `none_matched` population this repo can reproduce -- the
     /// C31 bug, where `Choice::default()` was passed instead of the real defender choice, so
     /// the engine's 32-roll damage enumeration did not match -- and it lands here **132 of
@@ -3961,7 +3967,7 @@ impl NoneMatchedShape {
     /// The sub-case token. Closed and greppable, like the renderer's family order.
     pub fn token(self) -> &'static str {
         match self {
-            NoneMatchedShape::ValuesOnly => "shape_values_only",
+            NoneMatchedShape::ValuesOnly => "shape_same_variants_and_sides",
             NoneMatchedShape::Structure => "shape_structure",
             NoneMatchedShape::Length => "shape_length",
             NoneMatchedShape::Empty => "shape_empty",
@@ -3989,7 +3995,12 @@ fn nearest_divergence<'a>(
     branches
         .map(|branch| divergence_shape(branch, tail))
         .min()
-        .unwrap_or(NoneMatchedShape::NoCandidates)
+        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist generated
+        // zero branches, which is "the candidate produced nothing" -- exactly what `Empty`
+        // means. Returning `NoCandidates` here reintroduced the very conflation that variant
+        // was split out to remove, so `NoCandidates` is now reachable ONLY from the seed, where
+        // it means the candidate list itself was empty.
+        .unwrap_or(NoneMatchedShape::Empty)
 }
 
 /// Classify one candidate branch against the observed tail.
@@ -8368,14 +8379,20 @@ mod nearest_divergence_tests {
         );
     }
 
-    /// No branches at all is `NoCandidates`, not a silent default that reads as a diagnosis.
+    /// A candidate that generated NO branches is `Empty`, not `NoCandidates`.
+    ///
+    /// Those are different facts: the candidate existed and produced nothing, versus there
+    /// being no candidate to regenerate. An earlier version returned `NoCandidates` here,
+    /// reintroducing the exact conflation that variant was split out to remove. `NoCandidates`
+    /// is now reachable only from the seed.
     #[test]
-    fn no_branches_reports_no_candidates() {
+    fn a_candidate_with_no_branches_is_empty_not_no_candidates() {
         let tail = [dmg(SideReference::SideOne, 30)];
         let branches: Vec<&[Instruction]> = vec![];
         assert_eq!(
             nearest_divergence(branches.into_iter(), &tail),
-            NoneMatchedShape::NoCandidates
+            NoneMatchedShape::Empty
         );
+        assert_ne!(NoneMatchedShape::Empty, NoneMatchedShape::NoCandidates);
     }
 }
