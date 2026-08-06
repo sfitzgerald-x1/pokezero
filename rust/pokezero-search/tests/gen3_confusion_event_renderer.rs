@@ -2011,3 +2011,217 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
     }
     }
 }
+
+/// The SUBSTITUTE BREAK, the other half of `ambiguous_unrenderable` and the last family the
+/// unnamed-callee walk could not express.
+///
+/// #1131 rendered `[Boost]` and took the attribution oracle from 16 unrenderable to 6. All six
+/// survivors were the same shape -- `[DamageSubstitute, RemoveVolatileStatus]`, classified
+/// `substitute+volatile` -- so the walk now emits `|-activate|...|Substitute|[damage]` and, for
+/// the SUBSTITUTE volatile only, `|-end|...|Substitute`. Oracle: usable 231 -> 237,
+/// unrenderable 6 -> 0, with `branches`, `agree` and WRONG unmoved.
+///
+/// The lines are asserted EXACTLY, not by prefix. The boost sibling shipped
+/// `starts_with("|-boost|")` and review showed it admitting a wrong ident, a wrong stat, and a
+/// spurious `[from]` tag -- the last of which makes the fold ignore the event entirely. The
+/// break has the same exposure: `|-end|p1a: X|Substitute` differs from `|-end|p1a: X|move: Taunt`
+/// only past the prefix, and crediting the break to the WRONG SIDE is exactly the C52-shaped
+/// defect this walk exists to avoid.
+#[test]
+fn byte_identical_callees_that_break_a_substitute_render_both_exact_lines() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    // Byte-identical callees, so identification is genuinely Ambiguous: same type, power and
+    // category means the two branches differ in no observable byte.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    // A substitute thin enough that either callee BREAKS it, which is what pairs
+    // `DamageSubstitute` with `RemoveVolatileStatus(SUBSTITUTE)` in one tail. A fat
+    // substitute yields a HIT only, which was already renderable and would make this test
+    // pass without exercising the break arm at all.
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::SUBSTITUTE);
+    state.side_one.substitute_health = 1;
+
+    let branches = generate(&mut state);
+    let mut saw_break = false;
+    let mut saw_ambiguous = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        if !r
+            .lossy_subcases
+            .iter()
+            .any(|x| x == "sleeptalk_called_unidentified:ambiguous")
+        {
+            continue;
+        }
+        saw_ambiguous = true;
+        // NOT refused. This is the whole point: before this change these branches landed in
+        // `attribution_unsafe` as `:ambiguous_unrenderable` and every world using them was
+        // thrown away.
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a substitute-break tail is renderable now and must not refuse: {:?}",
+            r.attribution_unsafe
+        );
+        // The differential's contract tag stays bare AND alone -- it gates usability on exact
+        // set equality, so one extra entry silently deletes this change's entire benefit.
+        assert!(
+            r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
+            "the usable arm must still carry the bare lossy tag: {:?}",
+            r.lossy
+        );
+        assert!(
+            !r.lossy
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+            "a sub-cased lossy tag on the USABLE arm changes which branches the \
+             differential accepts: {:?}",
+            r.lossy
+        );
+        // Neither candidate may be NAMED, or the render invents evidence it does not have.
+        for callee in ["tackle", "scratch"] {
+            assert!(
+                !r.lines
+                    .iter()
+                    .any(|line| line.starts_with("|move|p2a:") && line.contains(callee)),
+                "an ambiguous callee must stay unnamed, saw {callee}: {:?}",
+                r.lines
+            );
+        }
+        if r.lines
+            .iter()
+            .any(|line| line == "|-end|p1a: Lead|Substitute")
+        {
+            saw_break = true;
+            // ORDER, which is why both arms call `emit_residuals!()` first and why the hit
+            // arm sits ahead of the break arm in the chain. Showdown reports the damage
+            // before the substitute falls; emitting `-end` first is a protocol log no real
+            // battle produces, and #1131 shipped exactly this defect for `[Damage, Boost..]`
+            // with the whole suite green.
+            let hit = r
+                .lines
+                .iter()
+                .position(|line| line == "|-activate|p1a: Lead|Substitute|[damage]")
+                .expect("a break must be preceded by the hit that caused it");
+            let end = r
+                .lines
+                .iter()
+                .position(|line| line == "|-end|p1a: Lead|Substitute")
+                .unwrap();
+            assert!(
+                hit < end,
+                "the substitute hit must precede the break: {:?}",
+                r.lines
+            );
+            // The break belongs to the DEFENDER. Crediting it to the sleeping attacker is the
+            // single most likely wiring error here -- `side_ref` versus `defender` -- and it
+            // survives any prefix assertion.
+            assert!(
+                !r.lines
+                    .iter()
+                    .any(|line| line == "|-end|p2a: Opponent|Substitute"),
+                "the break was credited to the wrong side: {:?}",
+                r.lines
+            );
+        }
+    }
+    assert!(
+        saw_ambiguous,
+        "VACUOUS: no branch was ambiguous, so nothing here exercised the walk"
+    );
+    assert!(
+        saw_break,
+        "VACUOUS: no branch rendered the substitute break, so the new arm never ran \
+         and this test would pass with it deleted"
+    );
+}
+
+/// A PHAZE must keep refusing: `RemoveVolatileStatus(SUBSTITUTE)` has two producers and only
+/// one of them is a break Showdown narrates.
+///
+/// This is review's reproduction of a defect in the first version of the substitute-break
+/// change, kept as a test because the defect is invisible from the instruction alone:
+///
+///   * `generate_instructions.rs` emits the removal right after a same-side
+///     `DamageSubstitute`. That is a real break and Showdown runs `onEnd`, emitting
+///     `|-end|<ident>|Substitute`.
+///   * `state.rs`'s `remove_volatile_statuses_on_switch` emits the SAME variant on every
+///     non-Baton-Pass switch-out, phazing drags included. Showdown clears volatiles there with
+///     `this.volatiles = {}` and never runs `onEnd`, so it emits NOTHING. (`gen3_phaze_fidelity`
+///     separately pins that a Substitute does not block a phaze at all, via `bypasssub`.)
+///
+/// Keying admission on the volatile identity alone therefore rendered a PHANTOM `|-end|` on a
+/// `[RemoveVolatileStatus(SUBSTITUTE), Switch]` tail and SEARCHED a world that used to refuse.
+/// An extra line is the same defect class as a missing one -- a wrong world, not a refused one
+/// -- which is the exact harm the change was written to avoid.
+///
+/// Not reachable in today's gen3 randbats: review checked all three cached universes (6,364
+/// variants) and ZERO sets pair Sleep Talk with Roar or Whirlwind. The test exists anyway,
+/// because the file's own rule is that "the predicate blocks those anyway" is a reachability
+/// argument and not an invariant, and because the set list is data that can change under us.
+#[test]
+fn a_phaze_that_clears_a_substitute_keeps_refusing_and_renders_no_end_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    // Two phazing callees, so identification is Ambiguous and the unnamed walk is reached.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::ROAR);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WHIRLWIND);
+    // The phazed side holds a Substitute, so its switch-out pushes the removal with NO
+    // `DamageSubstitute` anywhere in the tail.
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::SUBSTITUTE);
+    state.side_one.substitute_health = 40;
+
+    let branches = generate(&mut state);
+    let mut saw_refusal = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        // NO `|-end|Substitute` on ANY branch, refused or not. Showdown emits nothing for a
+        // switch-out volatile clear, so this line is a phantom wherever it appears.
+        assert!(
+            !r.lines.iter().any(|line| line.contains("|Substitute")),
+            "a switch-out substitute clear must render NO substitute line: {:?}",
+            r.lines
+        );
+        if r.attribution_unsafe
+            .iter()
+            .any(|x| x == "sleeptalk_called_unidentified:ambiguous_unrenderable:volatile")
+        {
+            saw_refusal = true;
+        }
+    }
+    assert!(
+        saw_refusal,
+        "VACUOUS: no branch refused under `volatile`, so this fixture no longer exercises \
+         the phaze case and the phantom-line guard above is unexercised"
+    );
+}
