@@ -510,6 +510,7 @@ _CAUSE_SWITCH_ONLY = "all_unmapped_switch_only"
 _CAUSE_LEGALITY_MISMATCH = "all_unmapped_legality_mismatch"
 _CAUSE_NO_LEGAL_ACTION = "no_legal_action_offered"
 _CAUSE_NO_POSITIVE_WEIGHT = "mapped_but_no_positive_weight"
+_CAUSE_UNCLASSIFIED = "unclassified_cause"
 
 _CHOICES_UNMAPPED_CAUSES = (
     # The request carried no `action_candidates` at all. Not a legality mismatch -- the
@@ -545,6 +546,15 @@ _CHOICES_UNMAPPED_CAUSES = (
     # candidate list, all-illegal candidates, an out-of-range mask, and an all-False mask.
     # None of those is a game state; all are plumbing or mask bugs.
     _CAUSE_NO_LEGAL_ACTION,
+    # LAST, and emitted by no branch of `_classify_unmapped` -- reachable only through
+    # `_registered_cause_or_unclassified`. Registered anyway, because the first version left
+    # it OUT and that made the function whose job is keeping this vocabulary closed the one
+    # thing able to emit a key outside it: an era aggregator iterating this tuple would drop
+    # the bucket, silently losing the very class the degradation exists to keep measurable.
+    # The Rust precedent this mirrors does the same and reasons about it explicitly --
+    # `UNRENDERABLE_FAMILY_ORDER` has 14 entries where 13 arms can emit, and its comment
+    # spells out that the 14th is reachable only through the degradation.
+    _CAUSE_UNCLASSIFIED,
 )
 
 
@@ -563,7 +573,7 @@ def _registered_cause_or_unclassified(cause: str) -> str:
     silent.
     """
 
-    return cause if cause in _CHOICES_UNMAPPED_CAUSES else "unclassified_cause"
+    return cause if cause in _CHOICES_UNMAPPED_CAUSES else _CAUSE_UNCLASSIFIED
 
 
 def _classify_unmapped(

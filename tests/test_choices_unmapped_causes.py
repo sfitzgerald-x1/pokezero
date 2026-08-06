@@ -183,12 +183,16 @@ class VocabularyTests(unittest.TestCase):
                                 any_legal_switch=any_legal_switch,
                             )
                         )
-        dead = set(_CHOICES_UNMAPPED_CAUSES) - reachable - {"no_action_candidates"}
+        # Two legitimate exemptions, both emitted OUTSIDE the classifier: the plumbing token
+        # at `_map_choices`'s early return, and the degradation token, which by design no
+        # branch produces.
+        dead = (
+            set(_CHOICES_UNMAPPED_CAUSES)
+            - reachable
+            - {"no_action_candidates", "unclassified_cause"}
+        )
         self.assertEqual(dead, set(), f"vocabulary has unreachable token(s) {dead}")
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class MapChoicesWiringTests(unittest.TestCase):
@@ -323,3 +327,6 @@ class _StatsStub:
     def __init__(self) -> None:
         self.unmapped_choices: Counter = Counter()
         self.choices_unmapped_causes: Counter = Counter()
+
+if __name__ == "__main__":
+    unittest.main()
