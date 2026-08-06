@@ -156,8 +156,9 @@ The correct rule: sort the distinct thresholds `t₁ < … < t_k`; arm `i` carri
 `average_surviving_damage` over the rolls below `t₁` — which is the engine's existing convention and
 what §7's `157 → 150` re-pricing depends on. **This is a generalisation of a subtraction the engine
 already performs**: `num_residual_only = num_at_or_above − num_kill_rolls` is exactly the band between
-the residual threshold and the KO threshold. And it applies at all three partition sites, the crit
-path included, since a status-aware threshold nests there too. On that fan: `145 → 14/16`, `169 → 1/16`, survive `→ 1/16`, totalling exactly
+the residual threshold and the KO threshold (that subtraction lives at the Case A site only). **The
+new rule** applies at all three partition sites, the crit path included, since a status-aware
+threshold nests there too. On that fan: `145 → 14/16`, `169 → 1/16`, survive `→ 1/16`, totalling exactly
 `16/16`.
 
 The status-independence of `P(roll ≥ t)` is true, and it is what makes the *structure* sound; it is not
