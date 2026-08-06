@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 64-patch stack. The Rest-refund emission patch
+# Post-patch content pins for the 67-patch stack. The Rest-refund emission patch
 # moves generate_instructions.rs (switch path plus the wake arms) and
 # choice_effects.rs (the Rest arm); white-herb already moved
 # generate_instructions.rs and items.rs. So two of the four digests below changed

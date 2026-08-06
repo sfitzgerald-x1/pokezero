@@ -948,21 +948,49 @@ class AbilityMechanicsTests(unittest.TestCase):
         )
         self.assertNotIn("Damage SideOne", text, f"no HP should be lost at all: {text[:200]}")
 
-        # Control: from +0 the move must still work, or the fix is a blanket
-        # disable rather than a fail-clause. HP is unchanged from the case above,
-        # so the ONLY difference is the boost -- single-variable.
-        at_zero = poke_engine.generate_instructions(
-            self._state(attacker, defender, attacker_attack_boost=0),
-            "bellydrum", "splash",
+        # Above +6 must fail too. The Python `State` API accepts an unclamped
+        # `attack_boost`, and writing this gate as `attack_boost != 6` rather than
+        # `>= 6` passes every other assertion in this file -- round 3's review built
+        # that mutant and it escaped. On it, `attack_boost=7` yields
+        # `Damage SideOne: 130 | Boost SideOne Attack: -1`: half the user's HP spent
+        # to LOWER its own Attack. Real play clamps to +6 so this is unreachable,
+        # but the shipped `>= 6` handles it and one assertion makes that a fact of
+        # record rather than a happy accident.
+        for boost in (7, 12):
+            above = poke_engine.generate_instructions(
+                self._state(attacker, defender, attacker_attack_boost=boost),
+                "bellydrum", "splash",
+            )
+            above_text = " || ".join(self._text(b) for b in above)
+            self.assertNotIn(
+                "Damage SideOne", above_text,
+                f"Belly Drum acted at +{boost} Attack: {above_text[:200]}",
+            )
+
+    def test_belly_drum_still_works_from_plus_zero(self) -> None:
+        # CONTROL, and it is its own test method on purpose. Round 3's review noted
+        # that while this lived inside the +6 test, the whole method was RED
+        # pre-patch -- so the control's "green in both eras" claim was not
+        # observable from a test run and had to be checked by hand-probing. As a
+        # separate method it evidences itself: green at main AND on the branch.
+        #
+        # It is what distinguishes a fail-clause from a blanket disable. HP is
+        # identical to the +6 case (131/261); the ONLY difference is the boost.
+        attacker = self._mon("linoone", "pickup", "bellydrum", hp=131, maxhp=261, speed=200)
+        defender = self._mon("miltank", "thickfat", "splash", hp=273, maxhp=273)
+        text = " || ".join(
+            self._text(b) for b in poke_engine.generate_instructions(
+                self._state(attacker, defender, attacker_attack_boost=0),
+                "bellydrum", "splash",
+            )
         )
-        zero_text = " || ".join(self._text(b) for b in at_zero)
         self.assertIn(
-            "Damage SideOne: 130", zero_text,
-            f"Belly Drum must still halve HP from +0: {zero_text[:200]}",
+            "Damage SideOne: 130", text,
+            f"Belly Drum must still halve HP from +0: {text[:200]}",
         )
         self.assertIn(
-            "Boost SideOne Attack: 6", zero_text,
-            f"Belly Drum must still grant +6 from +0: {zero_text[:200]}",
+            "Boost SideOne Attack: 6", text,
+            f"Belly Drum must still grant +6 from +0: {text[:200]}",
         )
 
     def test_belly_drum_still_fails_below_half_hp(self) -> None:

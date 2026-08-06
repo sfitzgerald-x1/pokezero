@@ -73,14 +73,26 @@ with fixing anything**. Were it reachable it would matter: at `maxhp == 1`, `hp 
 
 | pin | pre-patch | post-patch |
 |---|---|---|
-| Belly Drum at +6 does not halve HP | **RED** (`Damage SideOne: 130 \| Boost SideOne Attack: 0`) | green |
-| control: from +0 it still halves and still grants +6 | green | green |
-| control: at exactly half HP it still fails | green | green |
+| `..._fails_at_plus_six_attack` — no halving at +6, and none above +6 | **RED** (`Damage SideOne: 130 \| Boost SideOne Attack: 0`) | green |
+| control: `..._still_works_from_plus_zero` | green | green |
+| control: `..._still_fails_below_half_hp` | green | green |
 
 The +0 control is **single-variable** — identical HP (131/261), only `attack_boost` differs — which
 is what makes it evidence that this is a fail-clause and not a blanket disable. The half-HP control
 pins that the new conditions were **ANDed into** the existing gate rather than replacing it. Both
 controls are green in both eras; that is what makes them controls rather than pins.
+
+> **The +0 control is its own test method because a review showed it otherwise proved nothing
+> observable.** While it lived inside the +6 test, that whole method was RED pre-patch, so the
+> "green in both eras" claim in this table could not be read off a test run at all — the reviewer had
+> to hand-probe the engine to check it. A control folded into a failing test is not a control.
+>
+> The same review built a mutant writing the gate as `attack_boost != 6` instead of `>= 6`, and it
+> **escaped every pin in the file**. Since the Python `State` API accepts an unclamped boost, that
+> mutant spends half the user's HP to *lower* its own Attack (`attack_boost=7` →
+> `Damage SideOne: 130 | Boost SideOne Attack: -1`). Real play clamps to +6, so it is unreachable and
+> the shipped `>= 6` already handles it; the pin now asserts at +7 and +12 so that is a fact of
+> record rather than a happy accident.
 
 `attack_boost` is read **before** `get_active()` takes its mutable borrow, or the arm is `E0503`.
 The first version of the patch did not, and did not compile.
@@ -95,7 +107,13 @@ The first version of the patch did not, and did not compile.
 | `tests/test_crit_kill_split_patch` | Ran 8, OK |
 | `tests/test_a1_residuals_already_ran` | Ran 13, OK |
 | `tests/test_drag_limit_is_a_last_resort` | Ran 3, OK |
-| `scripts/engine_behavioral_probes.py` | exit 0, 39 PASS, 0 FAIL |
+| `scripts/engine_behavioral_probes.py` | exit 0, **38** named probes PASS, 0 FAIL |
+
+> The probe count is 38, not the 39 an earlier revision of this line claimed. `grep -c PASS`
+> counts the trailing `all behavioral probes PASS` summary line as a 39th probe. The correct
+> count comes from `grep -cE '^\[[^]]+\] PASS'`. Same class of error as reading a result off a
+> log tail: the number came from the shape of the output rather than from the thing being
+> counted.
 
 Digests were re-derived **two independent ways that agree** — from my own edited scratch tree and
 from a fresh `git apply` of the patch onto a replayed tree — both giving `choice_effects.rs` →
