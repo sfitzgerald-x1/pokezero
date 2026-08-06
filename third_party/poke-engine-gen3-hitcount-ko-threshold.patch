@@ -111,11 +111,39 @@
                      let num_residual_only = num_at_or_above - num_kill_rolls;
                      if num_residual_only > 0 {
                          residual_kill_chance =
-@@ -3475,7 +3550,12 @@
+@@ -3474,8 +3549,39 @@
+                         // the single reduction below is the only one applied.
                          let mut residual_ins = incoming_instructions.clone();
                          residual_ins.update_percentage(residual_kill_chance);
-                         extra_branches.push((residual_ins, residual_threshold));
+-                        extra_branches.push((residual_ins, residual_threshold));
 -                        survive_representative = average_surviving_damage;
++                        // `run_move` applies `damage_amount` ONCE PER HIT, so this
++                        // threshold has to be per-hit like every other arm in this
++                        // patch. Pushing the total made the arm deal
++                        // `hit_count * residual_threshold`, clamped at HP -- so the
++                        // arm that means "survives the move, dies to the residual"
++                        // KILLED ON THE MOVE, and the defender never got its turn.
++                        //
++                        // At hp=395 / maxhp=400 / poison the arm rendered as
++                        // `[345, 50]`, which reads like "345 from the move, 50 from
++                        // poison". It is not: it is hit one for 345 and hit two
++                        // clamped to the remaining 50. The tell is that the arm
++                        // contains no `Damage SideOne` at all even when the defender
++                        // is slower and holds a damaging move -- 345 alone cannot
++                        // kill a 395 HP defender, so the damage was applied twice.
++                        //
++                        // CEILING division, not truncating. Truncating gives
++                        // 345/2 = 172 -> 344 total, one short of the threshold, so
++                        // the defender survives the residual and the arm loses its
++                        // meaning in the other direction. Ceiling gives 173 -> 346,
++                        // which still clears the threshold: survives the move at 49,
++                        // dies to poison.
++                        let residual_per_hit = if hit_count > 1 {
++                            (residual_threshold + hit_count as i16 - 1) / hit_count as i16
++                        } else {
++                            residual_threshold
++                        };
++                        extra_branches.push((residual_ins, residual_per_hit));
 +                        // Now a TOTAL, for the same reason as the KO arm above.
 +                        survive_representative = if hit_count > 1 {
 +                            average_surviving_damage / hit_count as i16
@@ -125,7 +153,7 @@
                      }
                  }
              }
-@@ -3543,9 +3623,21 @@
+@@ -3543,9 +3649,21 @@
                  }
              }
              let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
@@ -149,7 +177,7 @@
              {
                  // The CRIT roll range straddles the KO threshold while the
                  // non-crit range does not. Collapsing this arm to its average
-@@ -3555,7 +3647,7 @@
+@@ -3555,7 +3673,7 @@
                  // have scored, or the reverse. Partition it with the identity
                  // Case A already uses; do not introduce a second one.
                  let (average_non_kill_crit_damage, num_crit_kill_rolls) =
@@ -158,7 +186,7 @@
                  let crit_kill_chance = crit_rate * (num_crit_kill_rolls as f32 / 16.0);
                  let crit_survive_chance = crit_rate - crit_kill_chance;
                  if crit_kill_chance > 0.0 {
-@@ -3566,7 +3658,13 @@
+@@ -3566,7 +3684,13 @@
                  if crit_survive_chance > 0.0 {
                      let mut survive_ins = incoming_instructions.clone();
                      survive_ins.update_percentage(crit_survive_chance);

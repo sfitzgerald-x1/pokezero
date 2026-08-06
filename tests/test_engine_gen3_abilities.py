@@ -755,9 +755,14 @@ class AbilityMechanicsTests(unittest.TestCase):
         # undifferentiated arm that always died to poison:
         #     hp=395 buggy: [(10.0, [50]), (79.1, [183, 183, 29]), (10.9, [395])]
         #     hp=395 fixed: [(10.0, [50]), (10.55, [170, 170, 50]),
-        #                    (10.9, [395]), (68.55, [345, 50])]
+        #                    (10.9, [395]), (64.27, [173, 173, 49])]
         # 10.55% of the mass is priced as a survival by the fix and as a death by
         # the bug. That is the regression this pin exists to catch.
+        #
+        # An earlier revision of this comment recorded the fixed output's last arm
+        # as `(68.55, [345, 50])` and called that correct. IT WAS THE SECOND BUG,
+        # baked into the test record as expected behaviour -- see
+        # `test_the_residual_arm_lets_the_defender_take_its_turn` below.
         attacker = self._mon(
             "marowak", "rockhead", "bonemerang", attack=400, speed=200, level=100
         )
@@ -812,6 +817,69 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertTrue(
             any(h == [residual] for _, h in missed),
             f"expected the miss arm to be excluded by the hit-count filter: {missed}",
+        )
+
+    def test_the_residual_arm_lets_the_defender_take_its_turn(self) -> None:
+        # Second review of #1116, BLOCK 1. `run_move` applies `damage_amount` ONCE
+        # PER HIT, so the residual arm's threshold has to be per-hit like every
+        # other arm this patch touches. Pushing the TOTAL made the arm deal
+        # `hit_count * residual_threshold`, clamped at HP -- so the arm meaning
+        # "survives the move, dies to the residual" killed on the MOVE and deleted
+        # the defender's turn.
+        #
+        # THE RENDERING IS WHAT FOOLED ME. The arm came out as `[345, 50]`, which
+        # reads naturally as "345 from the move, then 50 from poison" -- and poison
+        # on a 400 maxhp defender really is 50, so the numbers corroborated the
+        # wrong story. It was hit one for 345 and hit two clamped to the remaining
+        # 50. I called it cosmetic in the PR body on that reading. It was a
+        # 68.55pp fidelity regression against main.
+        #
+        # The tell is structural, not numeric: 345 alone cannot kill a 395 HP
+        # defender, so if the defender never acts the damage must have been applied
+        # more than once. This pin gives the defender a damaging move and makes it
+        # SLOWER, then asserts it acts -- which no amount of reading damage
+        # magnitudes would have caught.
+        attacker = self._mon(
+            "marowak", "rockhead", "bonemerang", attack=400, speed=200, level=100
+        )
+        defender = self._mon(
+            "registeel", "clearbody", "tackle",
+            hp=395, maxhp=400, defense=85, status="poison", speed=10,
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "bonemerang", "tackle"
+        )
+
+        offenders = []
+        for branch in branches:
+            text = self._text(branch)
+            hits = [int(m) for m in re.findall(r"Damage SideTwo: (\d+)", text)]
+            if len(hits) < 3 or float(branch.percentage) <= 1.0:
+                continue
+            # A multi-hit arm that keeps the defender below its HP must leave it
+            # alive to move. Only the genuine KO arm may skip the defender's turn.
+            if sum(hits[:2]) < 395 and "Damage SideOne" not in text:
+                offenders.append((float(branch.percentage), hits, text[:90]))
+
+        self.assertEqual(
+            offenders, [],
+            "a residual arm killed on the move and deleted the defender's turn: "
+            f"{offenders}",
+        )
+
+        # Anti-vacuity: the residual arm must actually be present and carry mass,
+        # or the assertion above is trivially satisfied by its absence.
+        acting = [
+            (float(b.percentage), self._text(b))
+            for b in branches
+            if len(re.findall(r"Damage SideTwo: (\d+)", self._text(b))) >= 3
+            and "Damage SideOne" in self._text(b)
+            and float(b.percentage) > 50.0
+        ]
+        self.assertTrue(
+            acting,
+            "expected a majority-mass multi-hit residual arm in which the defender "
+            f"acts: {[(round(float(b.percentage), 2), self._text(b)[:70]) for b in branches]}",
         )
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
