@@ -1167,9 +1167,57 @@ def _build_side_spec(
                     f"survive exact public depletion {raw_substitute_depletion}",
                 )
         elif substitute_health_state == "unknown":
-            raise EngineWorldUnsupported(
-                "substitute_health_unknown",
-                f"side {slot!r} has explicit unknown Substitute health provenance",
+            # SAMPLE, do not refuse. This was 396 killed decisions in era 59 -- 48.6% of the
+            # construction channel and its largest class -- and GOAL.md §0.2 names the reason
+            # it should not be a refusal at all: "Hidden information is not a refusal
+            # category. The belief machinery's entire design is to sample any consistent
+            # hypothesis." It already does exactly that for unrevealed sets, items and
+            # abilities; a Substitute's remaining HP is one more belief dimension.
+            #
+            # THE CONSISTENT RANGE IS NARROW, which is what makes sampling honest here rather
+            # than a guess. `unknown` arises only from a NON-BREAKING hit whose damage the
+            # public record does not reveal (`_update_substitute_health_state`: the four
+            # fixed-damage gen 3 moves give `exact`, everything else gives `unknown`). So for
+            # each such hit we know two facts: it removed at least 1 HP, and the Substitute
+            # SURVIVED. With `hits` unknown-damage hits recorded, remaining health is
+            # therefore in `[1, initial - hits]` -- both ends carry information, and the
+            # window tightens as more hits land.
+            #
+            # Sampling per world, not once: each sampled world commits to its own hypothesis
+            # and the search averages over them, which is the same treatment the trapped and
+            # disabled flags received. Committing to one value globally would be the guess.
+            unknown_hits = side_payload.get("substituteUnknownHits")
+            hits = unknown_hits if isinstance(unknown_hits, int) and not isinstance(unknown_hits, bool) else 0
+            if hits < 1:
+                # NO BOUND SUPPLIED -> refuse exactly as before, under the SAME reason code.
+                # Strictly additive on purpose: a payload from a producer that does not carry
+                # `substituteUnknownHits` (an older capture, or any path that has not been
+                # taught to count) must behave identically to before this change. Minting a
+                # different code here would rename a refusal rather than fix it, and the
+                # rename would read as a new class in the next era's crosstab -- the exact
+                # discontinuity this campaign has had to document twice already.
+                #
+                # Sampling requires the bound. Without it the range is [1, initial], which is
+                # wide enough that a sampled Substitute HP would be a guess, and a wrong
+                # Substitute HP is silent: the search mis-decides whether an attack breaks it.
+                raise EngineWorldUnsupported(
+                    "substitute_health_unknown",
+                    f"side {slot!r} has explicit unknown Substitute health provenance "
+                    f"with no bounded hit count",
+                )
+            upper = initial_substitute_health - hits
+            if upper < 1:
+                # More hits than the sampled max HP can absorb: this WORLD is inconsistent
+                # with the public record, not the record with itself. Refusing one world is
+                # correct and is not a fallback -- the retry budget samples another.
+                raise EngineWorldUnsupported(
+                    "substitute_depletion_world_incompatible",
+                    f"side {slot!r} sampled max HP {party[active_index].maxhp} gives initial "
+                    f"Substitute HP {initial_substitute_health}, which cannot absorb {hits} "
+                    f"non-breaking hits",
+                )
+            substitute_health = (
+                rng.randint(1, upper) if rng is not None and upper > 1 else upper
             )
         else:
             raise EngineWorldUnsupported(
