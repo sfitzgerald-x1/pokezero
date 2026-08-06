@@ -3203,7 +3203,7 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// reproduced that end to end through `render_branch_events`. An extra line is the same
 /// defect class as a missing one: a wrong world instead of a refused one.
 ///
-/// That is the mistake this file already warns about ~70 lines above -- "fail-closed
+/// That is the mistake this file already warns about further up -- "fail-closed
 /// against unknown INSTRUCTIONS is not the same as fail-closed against unknown USES of a
 /// known one" -- committed against the very sentence that names it.
 ///
@@ -3225,9 +3225,10 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// phantom-line defect. If that block ever moves, this predicate needs a same-tail "and no
 /// later same-side Switch" clause too.
 ///
-/// Deliberately reusable: `Boost` has the identical two-producer problem (a switch-out
-/// pushes a boost RESET that Showdown does not narrate), so that fix wants this same
-/// tail-and-index shape rather than a second bespoke rule.
+/// Reused already: `Boost` has the same multi-producer problem -- a switch-out pushes a boost
+/// RESET that Showdown does not narrate -- and `boost_may_be_a_switch_out_reset` below is that
+/// fix, built on this same tail-and-index shape rather than a second bespoke rule. See its doc
+/// for the full producer list, which is FIVE and not two.
 fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideReference> {
     let remove = match tail.get(index)? {
         Instruction::RemoveVolatileStatus(remove)
@@ -3251,8 +3252,9 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 
 /// Is this `Boost` possibly a switch-out RESET rather than a narrated stat change?
 ///
-/// `Boost` has the same two-producer problem the substitute break has, and #1131 admitted it
-/// unconditionally:
+/// `Boost` has the same MULTI-producer problem the substitute break has -- five producers in
+/// gen3, enumerated below -- and #1131 admitted every one of them unconditionally. The two that
+/// matter for THIS predicate:
 ///
 ///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
 ///   * `generate_instructions.rs`'s switch path calls `state.reset_boosts(&switching_side_ref,
@@ -3269,8 +3271,10 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 /// # FIVE producers, not two -- this predicate closes ONE of the three open ones
 ///
 /// The first version of this doc called it "the two-producer problem". Review enumerated the
-/// gen3 construction sites and there are five, three of which Showdown narrates as something
-/// other than `-boost`/`-unboost`:
+/// gen3 construction sites and there are FIVE. Only the first narrates `-boost`/`-unboost`;
+/// the other four do something else, and three of those four are still open (White Herb
+/// self-closes). Two counts of three are easy to confuse here, so: four are mis-narrated, one
+/// of those four is now fixed, and three remain.
 ///
 ///   * move's own stat change -- `-boost`/`-unboost`. Correctly rendered.
 ///   * switch-out reset -- no line. CLOSED by this predicate.
@@ -3302,9 +3306,10 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 ///   * The SEARCH consumer does refuse. `mark_attribution_unsafe_subcase` populates
 ///     `attribution_unsafe`, and a branch with a Sleep-Talk-shaped entry there is discarded.
 ///   * The TRANSITION DIFFERENTIAL does NOT. It gates usability on the `lossy` set alone, and
-///     this path leaves `lossy` at exactly the bare marker, which is in the
-///     telemetry-only allowlist. So the differential accepts these branches and reads their
-///     rendered events -- meaning for that consumer this ships EXACTLY the render-nothing
+///     this path leaves `lossy` at exactly the bare marker, which is in the telemetry-only
+///     allowlist. So the differential accepts these branches -- WHEN that marker is the only
+///     one they carry, since usability is a property of the whole branch and any other lossy
+///     entry drops it -- and reads their rendered events -- meaning for that consumer this ships EXACTLY the render-nothing
 ///     behaviour the first version declined to commit to, resting on EXACTLY the reachability
 ///     premise it said it would not accept. The two consumers disagreeing is documented
 ///     elsewhere in this file; it is not new here, but it does invalidate the old argument.
