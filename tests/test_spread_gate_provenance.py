@@ -8,10 +8,18 @@ known one-point error.
 
 That makes the gate a **provenance** question, not a config question: which spreads a checkpoint
 receives must be decided by the schema stamped in that checkpoint, so a v3 checkpoint can never be
-fed v4 spreads and a v4 checkpoint can never be fed v3 spreads. Keyed off ambient config instead
--- ``DEFAULT_REPLAY_OBSERVATION_SPEC``, an env var, a launcher flag -- both failures are silent:
-the arrays keep their shape, every width check passes, and the model scores states whose stat
-columns are off by one point in 42.6% of variants.
+fed v4 spreads and a v4 checkpoint can never be fed v3 spreads.
+
+Which leaks are actually SILENT, stated precisely because an earlier revision of this docstring got
+it wrong. ``schema_v4`` has exactly one input (``showdown.py:4077``:
+``spec.schema_version == OBSERVATION_SCHEMA_VERSION_V4``), and v4 differs from every other schema on
+all three width axes -- 132/41/23 against v3's 155/51/87 and the v2.2 default's 155/51/151. So
+substituting a SPEC (e.g. falling back to ``DEFAULT_REPLAY_OBSERVATION_SPEC``) changes the tensor
+shape and the forward rejects it loudly; that is a crash, not a silent leak, and naming it as one
+-- as this file first did -- implies a whole class of leaks is covered here when it is not. The
+silent failure is a gate keyed off something ORTHOGONAL to the spec: an env var, a launcher flag, a
+global default read at the call site. That is the mutant the acceptance runs use, and it is the only
+shape this file can honestly claim to catch.
 
 What this file adds over ``test_observation_spec_v4.py``'s coverage, which pins the same gate:
 
@@ -22,6 +30,9 @@ What this file adds over ``test_observation_spec_v4.py``'s coverage, which pins 
   checkpoint file -> ``load_transformer_model_config`` -> ``observation_spec_from_model_config``
   -> ``spec.schema_version`` -> ``schema_v4`` -> ``exact_spreads``, plus
   ``resolve_checkpoint_contract`` and the encoder-tables latch on the artifact-export side.
+  This file is ADD-ONLY: that assertion is still present and is left in place deliberately, since
+  it is nearly free and fails on a call-site edit even in an environment with no Showdown checkout,
+  where everything here skips. What changes is that it is no longer the only thing pinning the gate.
 
 Two traps this fixture is built to avoid, both of which produced meaningless green runs while it
 was being written:
@@ -62,11 +73,50 @@ from pokezero.observation import (
 #: Hidden Power off Salamence's pool the primary would silently stop discriminating, and the
 #: breadth assertion below is what notices.
 DISCRIMINATING = {
-    "Salamence": ("NUMERIC_EXPECTED_DEF", "NUMERIC_EXPECTED_SPD"),
-    "Raikou": ("NUMERIC_EXPECTED_DEF",),
-    "Magneton": ("NUMERIC_EXPECTED_DEF",),
-    "Charizard": ("NUMERIC_EXPECTED_SPA",),
+    # MEASURED, per column, including the DIRECTION. An earlier revision listed four columns and
+    # asserted a blanket "corrected is always lower, since HPivs drops an IV to 30". Independent
+    # review showed both halves wrong: the gate has a SECOND, independent branch for the Atk/HP
+    # band (showdown.py:6864 -- separate from the Def/SpA/SpD/Spe loop above it), so six columns
+    # move on Salamence, not two; and the band moves UP on several species, because the legacy
+    # HP-trim approximation was wrong by +14..+17 in the low direction. The largest single effect
+    # of the gate -- Charizard's HP_LOW, +0.021, about 15x the Def/SpA deltas -- is in the
+    # direction the old assertion declared impossible.
+    #
+    # Listing only the Def/SpA/SpD columns also left the band branch UNCOVERED: setting
+    # `if exact_spreads:` to `if False:` at showdown.py:6864 half-reverted the gate with the whole
+    # file green.
+    "Salamence": {
+        "NUMERIC_EXPECTED_ATK_HIGH": "lower",
+        "NUMERIC_EXPECTED_ATK_LOW": "lower",
+        "NUMERIC_EXPECTED_DEF": "lower",
+        "NUMERIC_EXPECTED_HP_HIGH": "lower",
+        "NUMERIC_EXPECTED_HP_LOW": "lower",
+        "NUMERIC_EXPECTED_SPD": "lower",
+    },
+    # The primary for DIRECTION, because it moves BOTH ways: a sign flip anywhere in the gate
+    # cannot satisfy it, and it is the only fixture here that covers the band's upward correction.
+    "Charizard": {
+        "NUMERIC_EXPECTED_ATK_LOW": "higher",
+        "NUMERIC_EXPECTED_HP_HIGH": "lower",
+        "NUMERIC_EXPECTED_HP_LOW": "higher",
+        "NUMERIC_EXPECTED_SPA": "lower",
+    },
+    "Raikou": {
+        "NUMERIC_EXPECTED_ATK_HIGH": "higher",
+        "NUMERIC_EXPECTED_ATK_LOW": "higher",
+        "NUMERIC_EXPECTED_DEF": "lower",
+    },
+    "Magneton": {
+        "NUMERIC_EXPECTED_ATK_HIGH": "higher",
+        "NUMERIC_EXPECTED_ATK_LOW": "higher",
+        "NUMERIC_EXPECTED_DEF": "lower",
+    },
 }
+
+#: The species carrying the widest column set and the one carrying both directions. Both are
+#: exercised by the directional tests, so neither the Def/SpA/SpD loop nor the Atk/HP band can be
+#: reverted alone.
+PRIMARY_SPECIES = ("Salamence", "Charizard")
 
 #: Widths per schema, so the checkpoint stamps a self-consistent contract. Taken from the specs
 #: rather than written down, since a mismatch here would fail the contract resolver for the wrong
@@ -80,6 +130,16 @@ def _torch():
     except ImportError:  # pragma: no cover - optional dependency
         return None
     return torch
+
+
+def _registry_spec(schema_version: str):
+    """A spec from the module registry, for REFERENCE encodes only.
+
+    Named separately from the latched spec so the two can never be confused at a call site: the
+    directional tests must encode with the spec the CONSUMER LATCH produced from a checkpoint, and
+    an accidental registry lookup there is exactly what made the first revision of this file inert.
+    """
+    return showdown.observation_spec_for_schema(schema_version)
 
 
 def _write_checkpoint(path: Path, schema_version: str, vocab: tuple[str, ...]) -> Path:
@@ -144,9 +204,17 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
     def _state(self, species: str, level: int = 79):
         """A state whose opponent belief carries REAL candidate variants.
 
-        Built through `normalize_for_player` with the set source, which is how production gets
-        them. A state reconstructed from a recorded corpus row has none, and the expected-stat
-        block is then all zeros — the vacuity this fixture exists to avoid.
+        Built through `normalize_for_player` with the set source, which is the production
+        MECHANISM -- but note the feature is OFF by default: every consumer gates `set_source` on
+        `local_showdown.belief_set_source_env_enabled()`, which reads `POKEZERO_BELIEF_SET_SOURCE`
+        and defaults to `"0"`. So on a default run `_encode_expected_stats` reaches no variants and
+        this whole fork is inert under either schema. This file therefore pins a path that is
+        enabled by an env flag, not one that is always live; an earlier revision called it "how
+        production gets them" without that qualification, which overstates it.
+
+        Passed explicitly here rather than via the env flag so the coverage does not depend on the
+        ambient environment. A state reconstructed from a recorded corpus row has no variants at
+        all, and the expected-stat block is then all zeros -- the vacuity this fixture avoids.
         """
         lines = [
             "|start",
@@ -177,14 +245,19 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         )
         return state
 
-    def _expected_stats(self, state, schema_version: str, names) -> dict[str, float]:
-        """Encode under `schema_version` and read the named columns AT THAT SCHEMA'S indices."""
+    def _expected_stats(self, state, spec, names) -> dict[str, float]:
+        """Encode under `spec` and read the named columns at THAT schema's indices.
+
+        Takes a spec OBJECT, not a version string: the string form let the caller re-derive the
+        spec from the module registry, which is what made the checkpoint round-trip inert.
+        """
         import numpy
 
+        schema_version = spec.schema_version
         observation = showdown.observation_from_player_state(
             state,
             category_vocab=self.vocabs[schema_version],
-            spec=showdown.observation_spec_for_schema(schema_version),
+            spec=spec,
             dex=self.dex,
         )
         grid = numpy.asarray(observation.numeric_features)
@@ -213,6 +286,16 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         projection; the projection relocates the column without changing its value.
         """
         state = self._state(species)
+        # Exactly ONE revealed opponent, asserted rather than assumed: `_expected_stats` reads the
+        # first opponent token (`OPPONENT_POKEMON_TOKEN_OFFSET`) while this picks the first belief
+        # carrying variants, and those coincide only while the fixture reveals a single mon. With
+        # two, the reference and the encoded value could describe different mons and the absolute
+        # comparison would be meaningless.
+        self.assertEqual(
+            [mon.species for mon in state.belief_view.opponent_pokemon],
+            [species],
+            "fixture reveals more than one opponent; the reference and the read token may differ",
+        )
         belief = next(
             mon for mon in state.belief_view.opponent_pokemon if mon.candidate_variants
         )
@@ -230,9 +313,32 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         return {name: float(row[getattr(showdown, name)]) for name in names}
 
     def _spec_from_checkpoint(self, schema_version: str, tmp: Path):
-        """checkpoint file -> contract -> spec. The chain under test, not a shortcut around it."""
+        """checkpoint file -> CONSUMER latch -> the spec object an encode actually receives.
+
+        Deliberately routed through `env_config_from_checkpoint_provenance`, the latch every
+        real consumer uses (`local_showdown`, `collection`, the probes), and the returned spec
+        OBJECT is handed to `observation_from_player_state` verbatim.
+
+        The first version of this helper returned a spec and the callers used only
+        `spec.schema_version`, re-looking the spec back up out of the module registry via
+        `observation_spec_for_schema`. Independent review showed that made the whole chain
+        decorative: `resolve_checkpoint_contract` derives `contract.schema_version` by calling the
+        same two functions the helper then called itself, so the `assertEqual` fully determined the
+        string and nothing downstream could observe the checkpoint. Proved by stubbing this method
+        out entirely -- no file, no torch, no resolver -- with both directional tests still green.
+
+        Now the checkpoint's own widths are load-bearing (the spec object carries
+        `numeric_feature_count` / `token_count` / `transition_token_count` from the stamped
+        config), and a consumer that drops the checkpoint spec in favour of the env default turns
+        these tests red rather than leaving them green.
+        """
+        from pokezero.local_showdown import (
+            LocalShowdownConfig,
+            env_config_from_checkpoint_provenance,
+        )
         from pokezero.mcts_eval.resolver import resolve_checkpoint_contract
         from pokezero.neural_policy import (
+            feature_masks_from_model_config,
             load_transformer_model_config,
             observation_spec_from_model_config,
         )
@@ -248,76 +354,115 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
             schema_version,
             "the contract did not adopt the checkpoint's stamped schema",
         )
-        spec = observation_spec_from_model_config(load_transformer_model_config(path))
+        config = load_transformer_model_config(path)
+        env_config = env_config_from_checkpoint_provenance(
+            LocalShowdownConfig(),
+            feature_masks_from_model_config(config),
+            context="spread-gate-provenance",
+            required_specs=observation_spec_from_model_config(config),
+            required_vocabs=self.vocabs[schema_version],
+        )
+        spec = env_config.observation_spec
+        # The latch must have ADOPTED the checkpoint's spec, not kept the env default. Without
+        # this the helper could hand back `DEFAULT_REPLAY_OBSERVATION_SPEC` and the directional
+        # tests would report the default schema's spreads as the checkpoint's.
+        self.assertEqual(
+            spec.schema_version,
+            schema_version,
+            "the env latch did not adopt the checkpoint's spec",
+        )
+        self.assertEqual(
+            (spec.numeric_feature_count, spec.token_count),
+            (contract.numeric_feature_count, contract.token_count),
+            "the latched spec's widths disagree with the checkpoint contract",
+        )
         return contract, spec
 
     def test_the_fork_is_observable_at_all_on_this_fixture(self) -> None:
         """Reachability FIRST. Without this the two directional tests can both pass on a fixture
         where the corrected and legacy values coincide, which is true for most of the pool."""
-        state = self._state("Salamence")
-        names = DISCRIMINATING["Salamence"]
-        legacy = self._expected_stats(state, OBSERVATION_SCHEMA_VERSION_V3, names)
-        corrected = self._expected_stats(state, OBSERVATION_SCHEMA_VERSION_V4, names)
-        for name in names:
-            with self.subTest(column=name):
-                self.assertNotEqual(
-                    legacy[name],
-                    corrected[name],
-                    f"{name} is equal under both schemas, so this fixture cannot distinguish "
-                    "which spreads a checkpoint received",
-                )
-                # Direction, not just difference: the HPivs override DROPS an IV to 30, so the
-                # corrected stat is lower. An encoder that perturbed these columns in either
-                # direction would satisfy assertNotEqual.
-                self.assertLess(
-                    corrected[name],
-                    legacy[name],
-                    f"{name}: the corrected value should be LOWER (HPivs drops an IV to 30)",
-                )
+        for species in PRIMARY_SPECIES:
+            directions = DISCRIMINATING[species]
+            names = tuple(directions)
+            state = self._state(species)
+            legacy = self._expected_stats(
+                state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V3), names
+            )
+            corrected = self._expected_stats(
+                state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V4), names
+            )
+            for name in names:
+                with self.subTest(species=species, column=name):
+                    self.assertNotEqual(
+                        legacy[name],
+                        corrected[name],
+                        f"{species}/{name} is equal under both schemas, so this fixture cannot "
+                        "distinguish which spreads a checkpoint received",
+                    )
+                    # Direction PER COLUMN, from the measured map. A blanket "corrected is lower"
+                    # is false: the Def/SpA/SpD/Spe loop lowers stats (HPivs drops an IV to 30)
+                    # while the Atk/HP band corrects a legacy trim that under-estimated by
+                    # +14..+17, so those move UP. One direction for everything both mis-describes
+                    # the gate and lets a sign error through on the half it has backwards.
+                    if directions[name] == "lower":
+                        self.assertLess(
+                            corrected[name],
+                            legacy[name],
+                            f"{species}/{name}: corrected should be LOWER",
+                        )
+                    else:
+                        self.assertGreater(
+                            corrected[name],
+                            legacy[name],
+                            f"{species}/{name}: corrected should be HIGHER (the legacy band "
+                            "under-estimated it)",
+                        )
 
     def test_a_v3_checkpoint_can_never_receive_v4_spreads(self) -> None:
-        species, names = "Salamence", DISCRIMINATING["Salamence"]
-        state = self._state(species)
-        legacy = self._reference(species, names, exact=False)
-        corrected = self._reference(species, names, exact=True)
         with tempfile.TemporaryDirectory() as tmp:
             _, spec = self._spec_from_checkpoint(OBSERVATION_SCHEMA_VERSION_V3, Path(tmp))
-        got = self._expected_stats(state, spec.schema_version, names)
-        for name in names:
-            with self.subTest(column=name):
-                self.assertNotEqual(
-                    legacy[name], corrected[name], f"{name}: references coincide; vacuous"
-                )
-                self.assertEqual(
-                    got[name],
-                    legacy[name],
-                    f"{name}: a v3 checkpoint did NOT receive the legacy spread it trains "
-                    f"against (got {got[name]!r}, legacy {legacy[name]!r}, v4-corrected "
-                    f"{corrected[name]!r}). Three lineages train against the legacy value; "
-                    "changing it shifts their input distribution mid-run, silently and at full "
-                    "array width.",
-                )
+        for species in PRIMARY_SPECIES:
+            names = tuple(DISCRIMINATING[species])
+            state = self._state(species)
+            legacy = self._reference(species, names, exact=False)
+            corrected = self._reference(species, names, exact=True)
+            got = self._expected_stats(state, spec, names)
+            for name in names:
+                with self.subTest(species=species, column=name):
+                    self.assertNotEqual(
+                        legacy[name], corrected[name], f"{name}: references coincide; vacuous"
+                    )
+                    self.assertEqual(
+                        got[name],
+                        legacy[name],
+                        f"{name}: a v3 checkpoint did NOT receive the legacy spread it trains "
+                        f"against (got {got[name]!r}, legacy {legacy[name]!r}, v4-corrected "
+                        f"{corrected[name]!r}). Three lineages train against the legacy value; "
+                        "changing it shifts their input distribution mid-run, silently and at full "
+                        "array width.",
+                    )
 
     def test_a_v4_checkpoint_can_never_receive_v3_spreads(self) -> None:
-        species, names = "Salamence", DISCRIMINATING["Salamence"]
-        state = self._state(species)
-        legacy = self._reference(species, names, exact=False)
-        corrected = self._reference(species, names, exact=True)
         with tempfile.TemporaryDirectory() as tmp:
             _, spec = self._spec_from_checkpoint(OBSERVATION_SCHEMA_VERSION_V4, Path(tmp))
-        got = self._expected_stats(state, spec.schema_version, names)
-        for name in names:
-            with self.subTest(column=name):
-                self.assertNotEqual(
-                    legacy[name], corrected[name], f"{name}: references coincide; vacuous"
-                )
-                self.assertEqual(
-                    got[name],
-                    corrected[name],
-                    f"{name}: a v4 checkpoint did NOT receive the corrected spread (got "
-                    f"{got[name]!r}, v4-corrected {corrected[name]!r}, legacy "
-                    f"{legacy[name]!r}). v4 is unlaunched precisely so it can start correct.",
-                )
+        for species in PRIMARY_SPECIES:
+            names = tuple(DISCRIMINATING[species])
+            state = self._state(species)
+            legacy = self._reference(species, names, exact=False)
+            corrected = self._reference(species, names, exact=True)
+            got = self._expected_stats(state, spec, names)
+            for name in names:
+                with self.subTest(species=species, column=name):
+                    self.assertNotEqual(
+                        legacy[name], corrected[name], f"{name}: references coincide; vacuous"
+                    )
+                    self.assertEqual(
+                        got[name],
+                        corrected[name],
+                        f"{name}: a v4 checkpoint did NOT receive the corrected spread (got "
+                        f"{got[name]!r}, v4-corrected {corrected[name]!r}, legacy "
+                        f"{legacy[name]!r}). v4 is unlaunched precisely so it can start correct.",
+                    )
 
     def test_more_than_one_species_discriminates(self) -> None:
         """Breadth, so the primary fixture cannot silently stop discriminating.
@@ -326,11 +471,16 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         green while measuring nothing. This asserts the fork is visible across several pools.
         """
         observed = []
-        for species, names in sorted(DISCRIMINATING.items()):
+        for species, directions in sorted(DISCRIMINATING.items()):
+            names = tuple(directions)
             with self.subTest(species=species):
                 state = self._state(species)
-                legacy = self._expected_stats(state, OBSERVATION_SCHEMA_VERSION_V3, names)
-                corrected = self._expected_stats(state, OBSERVATION_SCHEMA_VERSION_V4, names)
+                legacy = self._expected_stats(
+                    state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V3), names
+                )
+                corrected = self._expected_stats(
+                    state, _registry_spec(OBSERVATION_SCHEMA_VERSION_V4), names
+                )
                 moved = [name for name in names if legacy[name] != corrected[name]]
                 self.assertEqual(
                     sorted(moved),
@@ -338,7 +488,24 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     f"{species}: expected {names} to move and only {moved} did",
                 )
                 observed.append(species)
-        self.assertGreaterEqual(len(observed), 3, "the fork narrowed to fewer than 3 pools")
+        # NOT a count of the literal's length -- that can only fail after a subTest already has,
+        # which review flagged as dead. Assert the properties the breadth exists for: both gate
+        # BRANCHES and both correction DIRECTIONS stay covered, so neither branch can be reverted
+        # alone and a sign error cannot pass.
+        covered = {name for d in DISCRIMINATING.values() for name in d}
+        self.assertTrue(
+            any(name.startswith("NUMERIC_EXPECTED_HP") for name in covered),
+            "no HP-band column is covered, so the Atk/HP branch could be reverted alone",
+        )
+        self.assertTrue(
+            covered & {"NUMERIC_EXPECTED_DEF", "NUMERIC_EXPECTED_SPA", "NUMERIC_EXPECTED_SPD"},
+            "no Def/SpA/SpD column is covered, so that loop could be reverted alone",
+        )
+        self.assertEqual(
+            {"lower", "higher"},
+            {value for d in DISCRIMINATING.values() for value in d.values()},
+            "the fixture no longer covers both correction directions, so a sign error passes",
+        )
 
 
 @requires_showdown("the latch is compared against real exported tables")
