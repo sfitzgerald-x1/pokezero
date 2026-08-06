@@ -7,7 +7,7 @@ label rather than an adjudication.
 
 No code change ships with this report. It exists so the next attempt starts from measurement instead
 of hypothesis — the previous engine fix in this **residue** (not this family: it targeted
-`19100180/24`) failed its own falsifier, opening 24 rows in each window.
+`19100180/24`) failed its own falsifier, opening 38 rows in dev and 40 in holdout.
 
 ## 1. The `limit:` label is unearned
 
@@ -20,8 +20,8 @@ label is wrong for this family:
 - `reports/c105_retract_limit_overclaim.json` records the limit label as **"8-for-8 falsified"** across
   the eight rows it was applied to — and `19000191/63` is one of the eight — c105 defines the set by reference rather than enumerating it,
   so the membership is corroborated at `reports/c111_residue_row_causes.md:91` ("this was v1's 'genuine
-  limit'"). Note the claim comes from c105's `SUPERSESSION_2026_08_04` field; its body says the
-  opposite, so a reader opening the file hits the retracted text first.
+  limit'"). Note the claim comes from c105's `SUPERSESSION_2026_08_04` field, which is the file's **first** key,
+  while its body says the opposite — so a reader hits the retraction before the text it retracts.
 - The audit's engine-gap signature — *a legal roll range straddling a discrete threshold while the
   emitted arm sits on one side of it* — holds for three of the four rows; `19000191/63` qualifies by
   the definition instead (see §2).
@@ -67,9 +67,12 @@ is correct for its own roll; the residue is the choice of representative. A harn
 narrower than "treat the drain as roll-inherited". The drain is `min(29, 137 − d)`: roll-inherited only
 while the cap binds (`d >= 108`), and a flat 29 below the band. Blanket roll-inheriting a `heal` would
 over-accept in the uncapped regime and mask real drain defects, so the reclassification has to be
-conditioned on the cap actually binding. The precedent it would follow is `_ROLL_SCALED_SOURCES`
-(`scripts/engine_transition_differential.py:330-332`), which already does this for `heal_to_full`,
-`capped_lethal` and `movepainsplit`.
+conditioned on the cap actually binding. The precedent is split across two mechanisms, and an earlier
+revision of this line conflated them: `_ROLL_SCALED_SOURCES`
+(`scripts/engine_transition_differential.py:330-332`) holds `capped_lethal`,
+`move_unknown_callee` and `movepainsplit` **unconditionally**, while `heal_to_full` is not in that
+frozenset at all — it is handled by the `source.endswith("_to_full")` clause and `capped_bases`, which
+is the part that actually conditions on the cap binding. The drain belongs with the latter.
 
 ## 4. A8 *is* a threshold change — and an earlier revision of this section said the opposite
 
@@ -107,9 +110,23 @@ arm's faint computed from its own residuals. On a non-burn sub-branch at 159 dam
 at `175 − 159 + 15 = 31` HP and lives; there is no mechanism by which the partition could kill it.
 
 **So the fix is a threshold change** — make `residual_lethality_threshold` status-aware by passing the
-`choice` in so it can see the secondaries, and take the minimum. The non-burn branch then carries two
-representatives instead of one, which is a finer sampling of the same fan, not an error. The masses
-stay exact because `P(roll ≥ 159) = 7/16` is a property of the roll and independent of the burn.
+`choice` in so it can see the secondaries. But the recipe is the **union of the distinct thresholds**,
+one arm each, **not the minimum.**
+
+> **An earlier revision of this section said "take the minimum", and called that safe. It is not, and
+> I over-corrected twice: first that the fix needed a restructuring, then that the minimum was fine.**
+> A review found the counterexample. When the defender already carries a **non-status** residual, the
+> minimum can *destroy* an arm the engine emits today. On this same state with the defender's Leftovers
+> cleared and sand up, the pre-move threshold is 160 and the engine correctly emits a residual-kill arm
+> at 160 on both sub-branches (6/16 of the fan). Taking `min(160, 129)` — 129 being sand 15 plus burn
+> 31 off 175 HP — drops the threshold *below the fan's lowest roll*, and all three partition sites gate
+> on `<min_roll> < residual_threshold` (`generate_instructions.rs`, the `residual_min`,
+> `min_damage_dealt` and `min_crit_roll` guards). With `144 < 129` false the partition does not fire at
+> all, and the 160 arm vanishes. That is a regression, and its shape — a sand or Leech Seed
+> residual-kill arm — is present in both committed sweeps, so it is not hypothetical.
+
+Emitting one arm per distinct threshold keeps the masses exact, because `P(roll ≥ t)` is a property of
+the roll and independent of the status branch.
 
 This also answers c117's open question — *whether a correct threshold is computable before the
 secondary is decided*. It is: 159 and 211, both re-derived and both produced empirically.
@@ -156,12 +173,19 @@ margin", which reuses the inference c128 withdrew.
 
 The previous engine fix in this residue — a gen-3 faint cancelling a queued switch — had a correct
 mechanism, a verified Showdown citation, a census, a red-on-main pin and green unit gates, **and was
-still wrong**: it opened **24 rows in each window**, taking dev 2 → 40 (net +38) and holdout 3 → 42
-(net +39), because its guard also cancelled forced replacements. A synthetic pin did not reproduce the
-state space the sweep covers.
+still wrong**: it opened **38 rows in dev and 40 in holdout** — 78 opened against a single closure,
+its own target `19100180/24` — taking dev 2 → 40 and holdout 3 → 42, net **+77**, because its guard
+also cancelled forced replacements. A synthetic pin did not reproduce the state space the sweep covers.
 
-An earlier revision of this section summarised that as "wrong by 48 rows" — 24 + 24 opened — without
-saying which quantity 48 was, and the net movement is +77. The two sweeps are now committed as
+> **Two earlier revisions of this figure were wrong, the second in a way worth recording.** The first
+> said "wrong by 48 rows" with no referent. The second said "24 rows in each window" — which is
+> internally impossible, since 24 opened with nothing closed cannot give a net of +38. I had read the
+> length of each artifact's `repros` list as the opened count, and **that list is capped at
+> `keep_repro=25`**. The real counts come from differencing `divergence_classes`: dev gains 38 rows
+> across `itemleftovers` (21), `itemleftovers,psn` (4), `itemleftovers,spikes` (4), `roll_scaled` (5)
+> and others, closing none; holdout gains 40 and loses exactly `component_extra_in_engine:spikes`.
+
+The two sweeps are committed as
 `reports/artifacts/c133_withdrawn_switchcancel_{dev,holdout}_sweep.json` (fingerprint `b73929bd1e`,
 `source_commit 0e4fc75a`), so the figure is checkable rather than asserted.
 
