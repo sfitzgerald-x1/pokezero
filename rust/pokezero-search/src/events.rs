@@ -377,10 +377,16 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // transition and disagreed about a NUMBER -- a roll or a merged chance branch, neither
     // fixable here -- while `structure` and `length` mean it regenerated a different
     // transition, which is a candidate-set or state-input bug and IS fixable here.
-    "values_only",
-    "structure",
-    "length",
-    "empty",
+    // PREFIXED. `SUBCASE_VOCABULARY` is shared across every lossy tag and
+    // `assert_subcase_vocabulary` validates per token with no tag scoping, so registering the
+    // bare words `structure`, `length` and `empty` would weaken the gate for unrelated
+    // families -- a mis-composed attract or `ambiguous_unrenderable` slug containing "length"
+    // would start passing. That gate is a PRODUCTION assert, so this reaches past tests.
+    "shape_values_only",
+    "shape_structure",
+    "shape_length",
+    "shape_empty",
+    "shape_no_candidates",
     // attract. These are the tokens after the tag, so `attract` itself is NOT one --
     // an earlier version listed it, which was an entry no path can emit, while
     // `volatile`, which attract DOES emit, was missing and passed only by coincidence
@@ -3774,16 +3780,19 @@ fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
         // same discipline `SUBCASE_VOCABULARY` enforces. A formatted key would also be
         // ungreppable, which is how a class stops being rankable.
         SleepTalkIdent::NoneMatched(NoneMatchedShape::ValuesOnly) => {
-            "sleeptalk_called_unidentified:none_matched:values_only"
+            "sleeptalk_called_unidentified:none_matched:shape_values_only"
         }
         SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure) => {
-            "sleeptalk_called_unidentified:none_matched:structure"
+            "sleeptalk_called_unidentified:none_matched:shape_structure"
         }
         SleepTalkIdent::NoneMatched(NoneMatchedShape::Length) => {
-            "sleeptalk_called_unidentified:none_matched:length"
+            "sleeptalk_called_unidentified:none_matched:shape_length"
         }
         SleepTalkIdent::NoneMatched(NoneMatchedShape::Empty) => {
-            "sleeptalk_called_unidentified:none_matched:empty"
+            "sleeptalk_called_unidentified:none_matched:shape_empty"
+        }
+        SleepTalkIdent::NoneMatched(NoneMatchedShape::NoCandidates) => {
+            "sleeptalk_called_unidentified:none_matched:shape_no_candidates"
         }
         // Exhaustive on purpose. A `_` arm would send a future variant into
         // `none_matched` with no compiler error -- a silent MIS-DIAGNOSIS of the
@@ -3822,7 +3831,7 @@ fn identify_sleep_talk_called(
     // The CLOSEST miss across all candidates. Seeded at the least informative shape so a
     // candidate list that produces nothing still yields a token rather than a default that
     // reads as a diagnosis.
-    let mut nearest = NoneMatchedShape::Empty;
+    let mut nearest = NoneMatchedShape::NoCandidates;
     for candidate in candidates {
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
@@ -3890,9 +3899,10 @@ fn identify_sleep_talk_called(
             // era-60 measurement says in as many words that it "must be classified before it
             // can be fixed". This is that classification, and it is the same move that turned
             // `ambiguous_unrenderable` from one opaque key into a ranked family list.
-            for branch in &generated {
-                nearest = nearest.min(divergence_shape(branch.instruction_list.as_slice(), tail));
-            }
+            nearest = nearest.min(nearest_divergence(
+                generated.iter().map(|b| b.instruction_list.as_slice()),
+                tail,
+            ));
         }
     }
     match matched {
@@ -3902,6 +3912,11 @@ fn identify_sleep_talk_called(
 }
 
 /// How a regenerated candidate branch DIFFERS from the observed tail.
+///
+/// Reordering these variants COMPILES and is caught by `the_ordering_keeps_the_closest_miss`.
+/// An earlier commit message claimed reordering "does not compile, so that property is
+/// compile-time rather than tested" -- false in both halves, and stated as fact. Coverage was
+/// better than claimed, which is the less harmful direction to be wrong in but still wrong.
 ///
 /// Ordered from most to least diagnostic, so `min` over all candidates keeps the closest miss:
 /// if any candidate reproduced the transition's SHAPE and differed only in a number, that is
@@ -3916,27 +3931,65 @@ fn identify_sleep_talk_called(
 /// enumeration mismatch, and every such world refused as `none_matched`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum NoneMatchedShape {
-    /// Same variant sequence, same sides, at least one numeric field differs. A roll or
-    /// merge disagreement.
+    /// Same variant sequence, same sides, at least one NUMERIC field differs.
+    ///
+    /// **This does NOT mean the engine owns it, and an earlier version of this doc said it
+    /// did.** Review measured the one `none_matched` population this repo can reproduce -- the
+    /// C31 bug, where `Choice::default()` was passed instead of the real defender choice, so
+    /// the engine's 32-roll damage enumeration did not match -- and it lands here **132 of
+    /// 132**. That bug was entirely RENDERER-side and was fixed in this file. So a numeric
+    /// divergence is a roll-enumeration disagreement whose cause may be engine-side (merged
+    /// chance branches) or renderer-side (a wrong state input, as C31 was), and this token
+    /// must not be read as an ownership verdict.
     ValuesOnly,
     /// Same number of instructions, different variant sequence.
     Structure,
     /// Different number of instructions.
     Length,
-    /// The candidate produced nothing at all.
+    /// A candidate produced an empty instruction list.
     Empty,
+    /// There were NO candidates to regenerate. `get_sleep_talk_choices` returns an empty list
+    /// when every non-Sleep-Talk slot is `Choices::NONE`, so the loop body never runs.
+    ///
+    /// Split out of `Empty`, which conflated it with "a candidate produced nothing" -- and this
+    /// one is different in kind: there was nothing to look at, it is knowable with certainty,
+    /// and it is trivially fixable. LAST in declaration order, so `min` never prefers it.
+    NoCandidates,
 }
 
 impl NoneMatchedShape {
     /// The sub-case token. Closed and greppable, like the renderer's family order.
     pub fn token(self) -> &'static str {
         match self {
-            NoneMatchedShape::ValuesOnly => "values_only",
-            NoneMatchedShape::Structure => "structure",
-            NoneMatchedShape::Length => "length",
-            NoneMatchedShape::Empty => "empty",
+            NoneMatchedShape::ValuesOnly => "shape_values_only",
+            NoneMatchedShape::Structure => "shape_structure",
+            NoneMatchedShape::Length => "shape_length",
+            NoneMatchedShape::Empty => "shape_empty",
+            NoneMatchedShape::NoCandidates => "shape_no_candidates",
         }
     }
+}
+
+/// The CLOSEST divergence across a candidate's regenerated branches.
+///
+/// Extracted from the loop specifically so it can be tested. Review's mutation battery found
+/// every kill landing on `divergence_shape` or the enum, and every SURVIVOR in the aggregation
+/// that computes what an era actually reads: swapping the argument order, and -- worst --
+/// `min` becoming `max`, which inverts the measurement to report the FARTHEST miss with a
+/// fully green suite. The enum's ORDERING was pinned; the USE of `min` was not, because no test
+/// crossed from the helper into the loop. It does now.
+///
+/// The C31 fixture cannot serve here: on a correct build it identifies its callee, so it
+/// produces no `none_matched` at all, and the only way to reach this code naturally is to
+/// reintroduce the bug. A pure function is testable without that.
+fn nearest_divergence<'a>(
+    branches: impl Iterator<Item = &'a [Instruction]>,
+    tail: &[Instruction],
+) -> NoneMatchedShape {
+    branches
+        .map(|branch| divergence_shape(branch, tail))
+        .min()
+        .unwrap_or(NoneMatchedShape::NoCandidates)
 }
 
 /// Classify one candidate branch against the observed tail.
@@ -3947,14 +4000,20 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
     if branch.len() != tail.len() {
         return NoneMatchedShape::Length;
     }
-    // `std::mem::discriminant` compares the VARIANT only, ignoring payloads -- which is
-    // exactly the distinction wanted here: same variants in the same order with different
-    // numbers is a roll disagreement, not a structural one.
-    if branch
-        .iter()
-        .zip(tail)
-        .all(|(a, b)| std::mem::discriminant(a) == std::mem::discriminant(b))
-    {
+    // VARIANT **and SIDE**. `std::mem::discriminant` alone ignores the entire payload, and
+    // `side_ref` lives in the payload -- so an earlier version reported
+    // `Damage(SideOne)` vs `Damage(SideTwo)` as a mere "value" difference. Review measured the
+    // same collapse for a different stat on `Boost`, a different volatile on
+    // `ApplyVolatileStatus`, a different status on `ChangeStatus` and a different weather on
+    // `ChangeWeather`. Every one of those is a WRONG-TARGET or WRONG-EFFECT renderer bug, and
+    // reporting them as numeric divergence pointed the diagnosis at the wrong owner.
+    //
+    // Side is checked via `instruction_side`, which is exhaustive over the variants that carry
+    // one. A `None` side (field-wide instructions like weather) compares equal, which is
+    // correct: those have no side to disagree about.
+    if branch.iter().zip(tail).all(|(a, b)| {
+        std::mem::discriminant(a) == std::mem::discriminant(b) && instruction_side(a) == instruction_side(b)
+    }) {
         return NoneMatchedShape::ValuesOnly;
     }
     NoneMatchedShape::Structure
@@ -6416,7 +6475,7 @@ mod tests {
         );
         assert_eq!(
             sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched(NoneMatchedShape::Structure)),
-            "sleeptalk_called_unidentified:none_matched:structure"
+            "sleeptalk_called_unidentified:none_matched:shape_structure"
         );
     }
 
@@ -8146,6 +8205,50 @@ mod none_matched_shape_tests {
         );
     }
 
+    /// SIDE is part of the shape, not a value. Review measured every one of these reporting
+    /// `ValuesOnly` before the predicate compared `instruction_side`, which pointed a
+    /// wrong-target renderer bug at the engine.
+    #[test]
+    fn a_side_difference_is_structural_not_numeric() {
+        let one = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 30,
+        });
+        let two = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 30,
+        });
+        assert_eq!(
+            divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&two)),
+            NoneMatchedShape::Structure,
+            "the same variant on the OTHER side is a wrong-target bug, not a roll disagreement"
+        );
+        // ...and the same side with a different number is still numeric, so the fix did not
+        // simply collapse everything into `Structure`.
+        let one_bigger = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 31,
+        });
+        assert_eq!(
+            divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&one_bigger)),
+            NoneMatchedShape::ValuesOnly
+        );
+    }
+
+    /// An empty candidate LIST is not an empty candidate BRANCH.
+    #[test]
+    fn no_candidates_is_distinct_from_an_empty_branch() {
+        assert_ne!(
+            NoneMatchedShape::NoCandidates.token(),
+            NoneMatchedShape::Empty.token()
+        );
+        // LAST in declaration order, so `min` never prefers it over a real observation.
+        assert_eq!(
+            NoneMatchedShape::NoCandidates.min(NoneMatchedShape::Empty),
+            NoneMatchedShape::Empty
+        );
+    }
+
     #[test]
     fn a_length_difference_outranks_a_variant_difference() {
         // Checked BEFORE the variant scan, because zipping unequal lengths would silently
@@ -8211,5 +8314,68 @@ mod none_matched_shape_tests {
                 shape.token()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod nearest_divergence_tests {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+
+    fn dmg(side: SideReference, amount: i16) -> Instruction {
+        Instruction::Damage(DamageInstruction {
+            side_ref: side,
+            damage_amount: amount,
+        })
+    }
+
+    fn heal(amount: i16) -> Instruction {
+        Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: amount,
+        })
+    }
+
+    /// The aggregation must keep the CLOSEST miss. `max` here reports the farthest, which is
+    /// near-universally the least informative bucket -- and it survived the whole suite before
+    /// this test existed, because nothing crossed from `divergence_shape` into the loop.
+    #[test]
+    fn the_aggregation_keeps_the_closest_miss_not_the_farthest() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        // One structurally-unrelated candidate branch, one that differs only numerically.
+        let far = [heal(10)];
+        let near = [dmg(SideReference::SideOne, 31)];
+        let branches: Vec<&[Instruction]> = vec![&far, &near];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::ValuesOnly,
+            "a structurally-unrelated candidate must not mask the near miss"
+        );
+    }
+
+    /// Argument order is load-bearing and was unobserved: `divergence_shape(&[], &[d])` is
+    /// `Empty` while `divergence_shape(&[d], &[])` is `Length`.
+    #[test]
+    fn the_argument_order_is_branch_then_tail() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        let empty: [Instruction; 0] = [];
+        let branches: Vec<&[Instruction]> = vec![&empty];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::Empty,
+            "an empty BRANCH against a non-empty tail is `Empty`; swapping the arguments \
+             would report `Length`"
+        );
+    }
+
+    /// No branches at all is `NoCandidates`, not a silent default that reads as a diagnosis.
+    #[test]
+    fn no_branches_reports_no_candidates() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        let branches: Vec<&[Instruction]> = vec![];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::NoCandidates
+        );
     }
 }
