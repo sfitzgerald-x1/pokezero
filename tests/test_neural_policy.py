@@ -8538,11 +8538,6 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
         # Truncating 40→16 tokens changes what the encoder attends, so logits must move.
         self.assertFalse(torch.allclose(full.policy_logits, trunc.policy_logits))
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ResumeAwareWarmupTest(unittest.TestCase):
     """The warm-resume LR ramp, and the cold-start gap that made it necessary.
 
@@ -8642,3 +8637,7 @@ class ResumeAwareWarmupTest(unittest.TestCase):
                     resume_warmup_end_progress=end,
                     resume_warmup_start_lr=self.FLOOR,
                 )
+
+
+if __name__ == "__main__":
+    unittest.main()
