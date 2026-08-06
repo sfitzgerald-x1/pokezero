@@ -1439,8 +1439,17 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // This assertion read `:ambiguous` before the three-way split, and
                 // that is now the arm that does NOT refuse -- so leaving it would have
                 // pinned the opposite of the intended behaviour.
+                //
+                // Now `:boost`, because the slug names the family that blocked the
+                // render. This fixture is the END-TO-END proof of that classifier: the
+                // comment above already reasoned "both +1 Defense, so the tail carries a
+                // BOOST", and the value is now derived from the tail through the real
+                // production render path rather than asserted in prose beside a coarser
+                // literal. It is still pinned to ONE exact string for the reason recorded
+                // above -- accepting a prefix would restore the tautology that review
+                // caught here, since every refusing arm shares the prefix.
                 assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:boost",
                     "byte-identical callees whose tail carries an effect the walk \
                      cannot render must refuse, and name that arm: {:?}",
                     r.attribution_unsafe
