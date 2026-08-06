@@ -14,7 +14,10 @@
 > {encoder fix, harness fix, demonstrated-unreachable with a pool check} and "open" is not
 > in it.
 
-# C112 v2 — superseded header, retained for traceability
+## v2's header, retained for traceability — NOT this ledger's claims
+
+> Everything in the block below is v2's text. It is kept so the corrections are traceable and
+> is **superseded** by the v3 header above; do not read it as current.
 
 > **v2 corrects v1 substantially after independent review. v1 should not be cited.**
 > Three of v1's central claims were wrong and one of them re-committed the exact error
@@ -36,7 +39,10 @@
 
 ## Era and provenance
 
-Read on `main` at `df4a0fce`, **2026-08-05**, with both poke-engine build artifacts
+Golden-v2 and scenarios read on `main` at `df4a0fce`; the v4 corpus (this revision's subject)
+read on `main` at `d57a26ac`, two commits later. `scripts/leaf_vs_reality.py` is unchanged
+across that range, so no measurement differs, but the provenance must describe the tree that
+produced each run rather than one date for all three. with both poke-engine build artifacts
 freshly re-vendored (#1119 patched the vendored `gen3/choice_effects.rs`; a stale tree
 fails three ability tests and is invisible from this harness).
 
@@ -96,10 +102,18 @@ that INERT line being the only thing distinguishing it from a pass.
   boundaries and is withdrawn. Any future coverage claim in boundaries needs the harness
   to record per-boundary family sets first; that is a harness change and out of scope here.
 
-Coverage on **the 124** (`corpus/golden-v4`): **138 of 138 rows attributed**, across 18
-families, no class open — S1 46 + S2 52 + S3 28 + S4 2 + S5 8 + S6 2. Of those, 110 are
-source-verified and 28 rest partly on side-symmetry (S3's opponent half, 14 rows, and S6's,
-1 row), which is carried as a split for the reason below.
+Coverage on the v4 corpus (`corpus/golden-v4`): **138 of 138 rows attributed** across 18
+families, no class open — S1 46 + S2 52 + S3 28 + S4 2 + S5 2 + S5b 1 + S6 5 + S7 2 = 138.
+
+**123 source-verified, 15 resting partly on side-symmetry** (S3's opponent half, 14 rows, and
+S7's opponent row, 1). An earlier revision of this sentence said "110 source-verified and 28
+… (14 rows, and 1 row)" — 14 + 1 is 15, not 28, so it stated two values for one quantity. That
+is the defect this ledger's own header says v1 was corrected for, committed in the sentence
+that announces the correction.
+
+**Note on "the 124".** 124 is `class_rows.state`, a count of BOUNDARIES; 138 is the sum of
+per-family boundary incidences, which this document calls rows. They are different units and
+the Units section forbids juxtaposing them, so the coverage claim is stated over rows only.
 
 On `golden-v2`: **119 of 119 rows**, same causes minus S6 (which does not surface there) and
 with S5 contributing 5 rather than 8. Scenarios: **10 of 10**, all S5.
@@ -107,9 +121,7 @@ with S5 contributing 5 rather than 8. Scenarios: **10 of 10**, all S5.
 The verified/inferred split is carried rather than merged because that is how a ledger of
 this kind gets over-read — and its predecessor was withdrawn for exactly that.
 
-The 12/12 split is carried here and not only in S3's prose, because merging a verified count
-with an inferred one is how a ledger of this kind gets over-read — and its predecessor was
-withdrawn for exactly that.
+
 
 ## The table
 
@@ -123,16 +135,16 @@ withdrawn for exactly that.
 | `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **S2** | harness fix |
 | `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **S3** line replay did not escalate | harness fix |
 | `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **S3** | harness fix (by symmetry) |
-| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **S4** in-branch Encore unappliable + line-derived tag | classifier fix |
-| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **S5** forced-recharge split by side | production + gate fix → **task 4** |
-| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **S5** | → **task 4** |
-| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **S5** | → **task 4** |
-| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **S5** | → **task 4** |
-| `legal_action_mask` action0 | 1 / 1 / 0 | **S5** | → **task 4** |
-| `legal_action_mask` action1 | 1 / 1 / 2 | **S5** | → **task 4** |
-| `legal_action_mask` action3 | 1 / 1 / 2 | **S5** | → **task 4** |
-| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **S6** harness opts into an approximated counter | harness fix |
-| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **S6** | harness fix (by symmetry) |
+| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **S4** Encore seeded at a floor and never advanced | encoder fix |
+| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **S5** self-side recharge root-freeze | production + gate fix → **task 4** |
+| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **S5b** recharge consumed a ply early, tag escapes seat-locally | accepted `engine_model` deviation + tag fix |
+| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **S6** stale Choice lock | encoder fix |
+| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **S6** | encoder fix |
+| `legal_action_mask` action0 | 1 / 1 / 0 | **S6** | encoder fix |
+| `legal_action_mask` action1 | 1 / 1 / 2 | **S6** | encoder fix |
+| `legal_action_mask` action3 | 1 / 1 / 2 | **S6** | encoder fix |
+| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **S7** Sleep-Talk turn refund not modelled | encoder fix |
+| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **S7**, same mon from the other seat | encoder fix |
 
 **[CORRECTION]** v2's table listed ten rows and omitted `CATEGORY_VOLATILE_OFFSET` and
 `NUMERIC_SLEEP_TURNS` entirely, because it ledgered a corpus on which they do not surface.
@@ -240,6 +252,12 @@ took a correction. Both guard arms are observable as other columns:
   step the argument would be comparing the belief ledger against itself. It is also written
   unconditionally (a NONE status renders `status:`), so absence cannot mean "never written".
 
+**Scope of that liveness evidence:** it is a **golden-v2** measurement and was not re-run on
+the v4 corpus, even though v4 is what licenses S3's 28 rows here. The conclusion still holds on
+v4 — no `self_team` `NUMERIC_LEGAL` or `CATEGORY_SECONDARY` family exists in the v4 artifact —
+but this ledger does not demonstrate the instrument is live there, so v4's half of S3 inherits
+golden-v2's liveness check rather than carrying its own.
+
 Both are **absent from `self_team` under EVERY class**, not just `state` — checked, because a
 `CATEGORY_SECONDARY` divergence would route to `ledger_skew` under a `curestatus` tag
 (`leaf_vs_reality.py:346-352`) or `engine_model` under
@@ -258,8 +276,8 @@ never going to fire. `NUMERIC_LEGAL` is the one that carries the signal.
 That leaves (1). **Disposition: harness fix** — the synthesized line set does not carry the
 `|turn|` boundary the parser escalates on.
 
-Scope limit, stated rather than glossed: this argument is clean for the **12 self-side**
-rows only. The opponent's 12 are attributed **by side-symmetry** — the guard and
+Scope limit, stated rather than glossed: this argument is clean for the self-side
+rows only. The opponent's 14 (12 on golden-v2) are attributed **by side-symmetry** — the guard and
 `meta.toxic[engine_side]` are one loop over both sides (`leaf.rs:1230-1269`) and the
 `|turn|`-escalation mechanism is side-agnostic — and the symmetry is an inference, counted
 separately in Units.
@@ -268,96 +286,131 @@ The opponent side has **no analogue of the discriminator, in principle**: for
 `Role::Opponent`, `belief = opponent_beliefs.get(&species_key)` (`encoder.rs:1993`), so its
 status token comes from `belief.status()` first and could not evidence the engine's
 `active.status` even if it had agreed. Worse, `opp_membership` routes every
-`opponent_team` column to `epistemic` on 78 boundaries (`leaf_vs_reality.py:334-335`), so an
-opponent status divergence is masked by construction — which is also what the 3-row
-`epistemic` toxic family is, a symptom of that sweep rather than an independent anomaly.
+`opponent_team` column to `epistemic` on 78 boundaries (golden-v2; **94** on v4) (`leaf_vs_reality.py:334-335`), so an
+opponent status divergence is masked by construction — which is also what the `epistemic` toxic family (3 rows on golden-v2, **5** on v4) is, a symptom of that sweep rather than an independent anomaly.
 
-## S4 — in-branch Encore is unappliable, and the tag that should catch it is line-derived (2 rows)
+## S4 — Encore is seeded at a deliberate floor and never advanced (2 rows)
 
-**[CORRECTION] — v2 left this open. It is closed here from the harness's own comments.**
+**[CORRECTION] — an earlier revision said root Encore states "fail-close" and that an
+in-branch Encore "cannot tick", disposition "classifier fix". Both were wrong.**
 
-Measured got 1/6, want 2/6 — one tick **behind**.
+Root Encore states do **not** fail-close in general. `engine_world.py:1292-1304` raises only
+when the locked move index cannot be resolved; boundary `1003#[8,9]` p1 has
+`self_active_volatiles: ['encore']` at the root and **was compared, not skipped**. What that
+path does is `engine_world.py:1324` — `volatile_durations["encore"] = 1` — documented at
+`:1316-1322` as "a deliberate floor … the true elapsed count is not observable from the
+request … Deriving the real value from observation history is follow-up work". Root elapsed is
+1, reality's leaf is 2, the leaf reads 1: consistent with a seeded floor that does not advance,
+not with non-application.
 
-The cause is documented in the harness: "the vendored gen3 engine does not apply the Encore
-volatile from a branch (world construction fail-closes on ROOT encore states for the same
-reason: `encore_move_unknown`)" (`leaf_vs_reality.py:609-611`). So an Encore that exists
-across the boundary cannot tick in the leaf's world.
+**And it must not be folded into `engine_model`.** The two partitions have **opposite
+signatures**: the `engine_model` example is got 0.0 / want 1/6 (Encore never applied), the
+`state` pair is got 1/6 / want 2/6 (applied, not advanced). Routing the second into the first
+via a `classify()` change — the previous revision's proposal — would bury a distinct mechanism
+under an already-accepted excuse.
 
-Why these 2 rows land in `state` rather than the `engine_model` class that already exists for
-exactly this: the tag is set by a **literal line match** —
+The tag observation stands and is worth keeping: the `encore` tag is a literal `"|Encore"` line
+match (`leaf_vs_reality.py:612-617`) routed at `:355`, so a mon already under Encore before the
+replayed window emits no line and falls to the `state` fallback (`:383`). That explains which
+bucket these rows land in; it is not the cause of the value being wrong.
 
-```python
-if any("|Encore" in line for source in (synthesized, row_next.get("event_slice") or ())
-       for line in source):
-    tags.add("encore")          # leaf_vs_reality.py:612-617
-```
+**Disposition: encoder fix** — advance the seeded Encore counter, which `engine_world.py`
+already names as follow-up work.
 
-— and `:355` routes tagged boundaries to `engine_model` before the fallback. A mon already
-under Encore *before* the replayed window emits no new `|Encore` line, so it gets no tag and
-falls through to `state` at `:382`. The artifact shows both halves of the partition:
-`engine_model / self_team / NUMERIC_ENCORE_TURNS rows=2` **and** the `state` pair.
+## S5 — the self-side recharge root-freeze (2 rows)
 
-**Disposition: classifier fix.** Derive the tag from the Encore volatile's presence in the
-root or leaf state rather than from a line match, and these rows join the `engine_model`
-class where the deviation is already accepted. No encoder or engine change.
+`CATEGORY_VOLATILE_OFFSET` (self) diverges with vocab id **877 = `volatile:mustrecharge`**
+(decoded from `corpus/encoder_tables_v4.json`): got 877, want 0 — the leaf's own mon carries
+`mustrecharge` where reality does not.
 
-## S5 — the forced-recharge split by side (8 rows on v4, 5 on gv2, 10 on scenarios)
+This is the A1 split `docs/leaf_observation_column_map.md` documents: the opponent side is
+refreshed live from the branch's `volatile_statuses` while the **self** side is root-frozen
+deliberately, because the live producer returns the opponent slot or nothing and never ours.
 
-**[CORRECTION] — v2 called this "the action surface, OPEN" and missed that it is one cause
-with the volatile columns, and that the cause is already documented.**
+**[CORRECTION]** An earlier revision cited `engine_search.py::_recharging_slots` as the
+producer for this measurement. That is production's producer, not this harness's:
+`leaf_vs_reality.py:430-439` derives `recharging` for **both** slots from the recorded chosen
+candidate and passes it at `:450`. The ledger was quoting the column map's own caveat that
+these gates "build a different world than production" while using the production path to
+attribute a gate measurement. The A1 attribution survives — the frozen self-side volatile is
+what the column reads — but the citation was wrong, and task 4's gates-first ordering exists
+precisely because of this discrepancy.
 
-All of these rows are one mechanism, and the v4 corpus is what makes it visible: the
-volatile columns v2 never ledgered share a boundary with the action surface.
+**Disposition: production + gate fix → task 4.** These 2 rows are the measured incidence.
 
-`CATEGORY_VOLATILE_OFFSET` diverges with vocab id **877 = `volatile:mustrecharge`**
-(decoded from `corpus/encoder_tables_v4.json`):
+**[CORRECTION]** The previous revision claimed 8 rows for this cause, folding in the five
+action-surface rows and the opponent volatile row. Both are separate mechanisms — S6 and S5b.
+`CATEGORY_VOLATILE_OFFSET` (self) carries `rows=2` and the artifact stores one example per
+family, so the second row's boundary is unverified; the id-877 reading rests on the example.
 
-- `golden-gen3randombattle-1009#[16,17]`, self side: got **877**, want 0 — the leaf's own mon
-  carries `mustrecharge` where reality does not. The **same boundary** carries every
-  action-surface row: `NUMERIC_ACTIVE` and `NUMERIC_LEGAL` got 1.0 want 0.0, and
-  `legal_action_mask` action0/1/3 got True want False.
-- `#[18,19]`, opponent side: got 0, want **877** — the mirror, one boundary later.
+## S5b — the recharge consumed a ply early, escaping its tag seat-locally (1 row)
 
-That is precisely what `docs/leaf_observation_column_map.md` already records about A1: the
-opponent side is refreshed live from the branch's own `volatile_statuses`, while the **self**
-side is root-frozen deliberately, because `engine_search.py::_recharging_slots` returns the
-opponent slot or nothing and never ours — so "the production root world currently lets our
-recharging mon pick any move". The leaf therefore holds a self-side `mustrecharge` while its
-own action surface presents moves as legal: the column map's phrase is that this member "did
-not merely go stale at a leaf but **contradicted the same observation's action surface**".
+`CATEGORY_VOLATILE_OFFSET` (opponent) at `1009#[18,19]`, seat **p1**, direction **inverted**:
+got 0 / want 877 — the leaf *lost* a recharge reality still has. Reality at round 18 p1 is
+`request_kind: force_switch` with `opponent_must_recharge=True`.
 
-**Disposition: production + gate fix, and it is task 4 of this goal, not a separate finding.**
-The column map also records why the gates cannot currently catch a bad fix:
-`leaf_root_parity.py`, `leaf_vs_reality.py`, `prior_mapping_assert.py` and
-`fidelity_gate_events.py` all derive `recharging` for BOTH slots from the recorded chosen
-candidate, so they build a different world than production and would ratify a symmetric
-self-side write rather than catch it. Task 4's ordering — gates first, then
-`_recharging_slots` — is exactly right, and these 8 rows are the measured incidence it should
-close.
+**[CORRECTION]** The previous revision called this "the opponent mirror" of S5. It is not: a
+different seat, the opposite direction, and a different mechanism — the harness's own
+documented deviation, "the engine consumes the recharge one ply early on **faint-replacement
+plies**" (`leaf_vs_reality.py:660-663`). It escapes the `recharge` tag only because `:664-675`
+inspects the **seat's own** target-row candidates and p1's row 19 carries no `recharge`
+candidate.
 
-**Severity note retained from v2, now with a cause:** this is still the only family where the
+**Disposition: accepted `engine_model` deviation plus a tag fix** — widen the tag's lookup
+beyond the seat's own candidates. Not task 4.
+
+## S6 — the world seeds benched mons with the previous stint's Choice lock (5 rows)
+
+**[CORRECTION] — the previous revision filed these five rows under the recharge cause. The
+corpus refutes that.** At `1009` round 17 seat p2, reality has `self_must_recharge = False`,
+the active mon is **Slaking holding `choiceband`**, and `self_last_used_move = hyperbeam`. The
+mask is `[F,F,T,F,T,T,T,T,F]` — exactly the Choice-locked move legal plus switches. Round 15
+(fresh switch-in) is all-legal and round 16 is the recharge request, so the round-17 shape is a
+**Choice lock**, not a recharge. A recharge mechanism also cannot explain why the three
+non-Hyper-Beam moves diverge while hyperbeam does not.
+
+`leaf.rs:1638-1646` already names this bug family: "the world constructor seeds benched mons
+with their LAST STINT's cached disabled bits (the payload caches per-mon move state) and the
+engine never re-enables them on a branch switch — present the request semantics instead
+(leaf-vs-reality repro: **Choice-Band Nidoking fresh switch-in shows all four moves legal**)."
+
+**Consequence for task 4, stated because the previous revision got it backwards:** making
+`_recharging_slots` symmetric would clear S5's 2 rows and leave these 5 untouched — the leaf's
+engine surface already has no `MUSTRECHARGE` at that leaf. The previous claim that "these 8
+rows are the measured incidence task 4 should close" was false.
+
+**Disposition: encoder fix.** This remains the highest-severity family: the only one where the
 leaf is *permissive* rather than empty, and a search pricing illegal actions is worse than one
 reading a stale counter.
 
-## S6 — the harness opts into an approximated sleep counter (2 rows)
+## S7 — the Sleep-Talk turn refund is not modelled at the leaf (2 rows)
 
-**[CORRECTION] — v2 never ledgered this class; it does not surface on the corpus v2 measured.**
+**[CORRECTION] — the previous revision blamed `approximate_sleep_turns=True`. That instrument
+does not feed this column and predicts the wrong direction.**
 
-Measured got 0.4 (2/5), want 0.2 (1/5) — the leaf is one tick **ahead**, the opposite
-direction from S4.
+`NUMERIC_SLEEP_TURNS` reads `exact.sleep_turns()` (`encoder.rs:2329`), which is the JSON ledger
+field `sleep_turns` (`encoder.rs:1464`), written by `leaf.rs:1461-1470` as `base + count` where
+`base` is the **root ledger's** value — the comment there says "Root sleepers keep their ledger
+base." `approximate_sleep_turns` only seeds poke-engine's internal wake-RNG counter
+(`engine_world.py:1735-1738`) and cannot move this cell. It also predicts the wrong sign: a
+`sleep_turns=0` approximation makes the leaf **lower**, while the measurement is got 0.4 (2/5)
+against want 0.2 (1/5) — the leaf is **higher**.
 
-`leaf_vs_reality.py:448` constructs every world with `approximate_sleep_turns=True`, and
-`engine_world.py:137-139` documents what that means: "mapping `slp` with `sleep_turns=0`
-('just fell asleep') — a documented approximation for search POCs; **the real fix is public
-sleep-counter tracking in the replay state**". So the leaf's counter restarts at 0 at world
-construction and ticks from the root, while reality's parser counts observed `\|cant …\|slp`
-lines since the `\|-status\|slp`. A mon that fell asleep before the root diverges by
-construction.
+The real cause, checked on the cited boundary. At `1011#[60,61]`, p1's benched Arbok has
+`sleep_turns=2, sleep_skipped_turns=1`, and the branch contains
+`|switch|selfa: Arbok|Arbok, L85, M|241/241 slp`. Gen3 **refunds** the turns spent on Sleep
+Talk / Snore when the sleeper pivots in (`time += skippedTime` in `slp.onSwitchIn`), which
+`belief.py:1526-1533` applies as `sleep_turns = max(0, sleep_turns - sleep_skipped_turns)` —
+so reality drops to 1. `LeafMeta.sleep` (`leaf.rs:322-329`) is keyed
+`(started, cant_count)` with **no skipped term**, so the leaf cannot apply the refund and
+carries the root's 2.
 
-**Disposition: harness fix**, and the harness already names the real one. The divergence is an
-artifact of the comparison setup the differential opts into, not an encoder defect — which is
-why it belongs in an excuse class rather than `state`, the same argument S4 makes.
-Opponent-side row attributed by symmetry (one loop, side-agnostic mechanism).
+**Disposition: encoder fix**, and the `state` class it landed in is **correct** — the previous
+revision's "an artifact of the comparison setup, not an encoder defect" removed a genuine
+defect from the defect list on a mechanism that cannot produce it.
+
+Both rows are the **same Arbok seen from the two seats**, one event, directly checkable — not a
+side-symmetry inference, which the previous revision also claimed.
 
 ## What is and is not comparable
 
