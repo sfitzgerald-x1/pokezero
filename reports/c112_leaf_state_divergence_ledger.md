@@ -5,9 +5,12 @@
 > ledger of "the 124". The 124 comes from a **v4** corpus, and v2's class set is a strict
 > SUBSET of it: four families were entirely unattributed — `NUMERIC_SLEEP_TURNS`
 > (self + opponent) and `CATEGORY_VOLATILE_OFFSET` (self + opponent). I substituted a
-> corpus that produced a tidier number. v3 measures all three corpora and attributes
-> **every one of the 18 families / 138 rows** the fixed harness surfaces, with a cause and
-> a disposition each — no class is left open.
+> corpus that produced a tidier number. v3 measures all three corpora and groups all 18
+> families / 138 rows into six mechanisms. **110 of the 138 rows carry a source-level cause
+> and a disposition; 28 (P2, toxic) carry a measurement, a pinned failure mode and an open
+> mechanism.** So the task's "a cause per class" is delivered for five of six classes and
+> NOT for P2 — said here because the header is the part that gets quoted, and an earlier
+> revision of this line claimed "no class is left open" while the body withdrew it.
 >
 > v3 closes the two classes v2 left open (encore, now P1; the action surface, now P5) rather than
 > recording a next check, because the task's disposition vocabulary is
@@ -44,8 +47,8 @@
 Golden-v2 and scenarios read on `main` at `df4a0fce`; the v4 corpus (this revision's subject)
 read on `main` at `d57a26ac`, two commits later. `scripts/leaf_vs_reality.py` is unchanged
 across that range, so no measurement differs, but the provenance must describe the tree that
-produced each run rather than one date for all three. Both poke-engine build artifacts were freshly re-vendored; both poke-engine build artifacts
-freshly re-vendored (#1119 patched the vendored `gen3/choice_effects.rs`; a stale tree
+produced each run rather than one date for all three.
+Both poke-engine build artifacts were freshly re-vendored (#1119 patched the vendored `gen3/choice_effects.rs`; a stale tree
 fails three ability tests and is invisible from this harness).
 
 | corpus | `rows.jsonl` sha256 | observation schema | tables | boundaries | compared | divergent | artifact |
@@ -105,8 +108,9 @@ that INERT line being the only thing distinguishing it from a pass.
   boundaries and is withdrawn. Any future coverage claim in boundaries needs the harness
   to record per-boundary family sets first; that is a harness change and out of scope here.
 
-Coverage on the v4 corpus (`corpus/golden-v4`): **138 of 138 rows attributed** across 18
-families — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = 138.
+Coverage on the v4 corpus (`corpus/golden-v4`), across 18
+families — **138 of 138 rows measured and grouped into six mechanisms; 110 attributed** —
+P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = 138.
 
 **Not every class has a source-level cause.** P2 (28 rows, toxic) has a measured rate and an
 excluded mechanism but no established cause; naming one would be the fourth attribution in this
@@ -250,6 +254,21 @@ root-frozen by construction. That is a decision procedure, not four instances.
 | `{prefix}_wrap_trap_elapsed` | `NUMERIC_WRAP_TRAP_TURNS` | **latent** |
 | `{prefix}_meanlook_trap` (`encoder.rs:2174`) | `NUMERIC_MEANLOOK_TRAP` | **latent** |
 
+**Membership rests on the closed write set, not on the measurement.** `leaf.rs`'s md writes are 17
+literal `md.insert` keys plus `key_sc` / `key_tox`, and nothing post-processes md between
+`encoder.encode_leaf` (`leaf_vs_reality.py:594`) and the comparison. The three latent keys are not
+in that set, so they are members **by construction**, whatever a corpus shows — the "never nonzero
+in 1271 rows" column above is evidence about **incidence**, not about membership. Stating it the
+other way round would be the absence-of-signal argument this ledger has already been corrected for
+twice.
+
+Positive evidence that those zeros are "nothing happened" rather than a dead instrument: golden-v4
+contains **zero** confusion, wrap-family (`wrap/whirlpool/clamp/firespin/bind/sandtomb`) and
+mean-look/spider-web events across **31,018** event lines, and the parser has live increment paths
+for all three (`showdown.py:2617`, `:2632`, `:5108`, with resets at `:2484`, `:2497`,
+`:2504-2505`). Claimed narrowly: the leaf never writes the key. Whether the parser produces correct
+values in a game that exercises them is not tested here.
+
 **P1 is the undeclared half of a class the harness already names.** The declared half is the same
 mechanism with a rationale attached and its own class, which is why it never reaches `state`:
 `self_must_recharge` (that is P3) and the `root_frozen_pack` set — `{prefix}_{truant_loaf,
@@ -309,14 +328,41 @@ mechanism. **I do not have one.** Two candidate leads, one already refuted:
   mechanism could not have been harness-confined.
 - *Refuted by measurement:* that the failures sit on boundaries whose round pair is non-adjacent
   (a faint/force-switch ply that does not complete the turn). Traced every toxic-column divergence
-  on golden-v4: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones. (33 = the 28
+  on golden-v4: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones. Definition, because the number is
+otherwise unreproducible: consecutive same-seat rows differ by **+1** in `decision_round_index`
+(both seats share the index), and a pair can still skip a round when only the other seat acted. My
+first pass used +2 as "adjacent" and would have reported the opposite conclusion. (33 = the 28
   `state` rows plus the 5 `epistemic` opponent rows, which the column-name trace cannot separate.)
   So non-adjacency does not explain it.
 
-**Disposition: undetermined.** The guard is excluded (below) and the write is live, so the residual
-is inside the escalation path itself, but naming a fix here would be the fourth attribution in this
-ledger asserted ahead of its evidence. **Task acceptance note: this is the one class of the six
-without a source-level cause — 28 of 138 rows.**
+### The failure mode IS pinned, even though the cause is not
+
+**`got = 0.0` in every stored example** — all three toxic families, across all three classes
+(`state/self_team` 14 rows, `state/opponent_team` 14, `epistemic/opponent_team` 5), report
+`got 0.0 / want 0.1333` (= 2/15). A missed *escalation* of a live counter would give
+`got = want − 1`; a counter that never started, or was cleared, gives `got = 0`. **So the residual
+is in the start/clear paths, not the escalation path** — which is why no variant of "did not
+escalate" belongs in this section's title, and why the two refuted leads above were both looking in
+the wrong place.
+
+**Named next check, grep-shaped.** The two implementations' arithmetic matches (both invert an exact
+residual as `damage / (max/16)`: `leaf.rs:494-533` against `showdown.py:2944-2963`). The one
+structural difference is **`toxic_stage_known`**, a tri-state the parser carries and gates *both* its
+escalation (`showdown.py:2586`) and its inference (`:2944-2963`, `:1998-2000`) on, distinguishing
+"stage 0" from "stage unknown". `LeafMeta` has `toxic`, `active_toxic` and `toxic_reentry_pending`
+and **no counterpart**.
+
+**And one case study that does NOT resolve, recorded so nobody adopts a story that merely fits.**
+At `1000#[56,57]` p1 the root's active is Latias at stage 0 while the leaf's is Volbeat, toxiced at
+round 48, switched out, re-entering inside the branch (`|switch|selfa: Volbeat|…|72/275 tox` then
+`|-damage|…|4/275 tox|[from] psn`). Reality reports **2** — but 72 → 4 of 275 is damage 68, unit 17,
+`68 % 17 == 0`, i.e. stage **4** under both residual-inversion rules. So reality's 2 comes from a
+path neither implementation's arithmetic explains, and "the leaf cannot restore a re-entering mon's
+stage" is a story that *fits* rather than a cause. Adopting it would be the encore-floor error again,
+which looked consistent only because the root happened to hold the same number.
+
+**Disposition: undetermined.** **Task acceptance note: this is the one class of the six without a
+source-level cause — 28 of 138 rows.**
 
 ### The guard is excluded
 
@@ -486,7 +532,7 @@ Four of the `state` families as they stood in v2's framing are columns that did 
    correction of the old ones.
 3. **v1's causal story for the published `state = 0` is also wrong.** A run that skipped
    100% of boundaries cannot emit `fold 440, epistemic 322, engine_roll 313`. The published
-   zero is explained by four of the five families not being columns yet — a corpus/schema
+   zero is explained by four of the families as v2 framed them not being columns yet — a corpus/schema
    cause, not the harness break.
 
 ## What this ledger does not claim
