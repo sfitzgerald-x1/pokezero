@@ -3377,7 +3377,6 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 /// these tails into `None` would make them silently indistinguishable from a rendered boost,
 /// and a family that reports its size is how we would learn whether the contiguous-pre-switch
 /// refinement is worth writing.
-
 fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
     let boost = match tail.get(index) {
         Some(Instruction::Boost(boost)) => boost,
