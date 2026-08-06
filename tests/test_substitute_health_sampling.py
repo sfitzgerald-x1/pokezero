@@ -21,11 +21,22 @@ But a non-breaking hit carries TWO facts, and the old code used neither:
   1. it removed at least 1 HP, and
   2. the Substitute SURVIVED it.
 
-So after `hits` such hits, remaining health lies in `[1, initial - hits]` where `initial`
-is `floor(maxhp / 4)`. Both ends are informative and the window TIGHTENS with each hit.
-That is a bounded range, not the open guess `[1, initial]` would be.
+So each hit contributes a MINIMUM DEPLETION -- its proven damage when the record resolves it
+(gen 3's four fixed-damage moves), otherwise 1 HP -- and remaining health lies in
+`[1, initial - min_depletion]` where `initial` is `floor(maxhp / 4)`.
 
-STRICTLY ADDITIVE. A payload that does not carry `substituteUnknownHits` refuses exactly
+ONE accumulator, deliberately. Two of them (a hit count plus a proven-damage total) produced
+an ORDERING ASYMMETRY that review measured twice: the proven-damage accumulation sat inside
+the `exact` branch, whose guard fails after any unknown hit, so a fixed-damage hit landing
+AFTER an unknown one contributed 1 instead of its real 77. Charging each hit exactly once
+into a single minimum makes the result order-independent -- Seismic Toss then Ice Beam and Ice
+Beam then Seismic Toss both give 78.
+
+Honest about the width: with one unknown hit and nothing resolved the range is
+`[1, initial - 1]`, which is 99.4% of `[1, initial]`, and 75% of real cases are exactly that.
+The unknown-hit term is a 1-HP tightening. What does real work is a RESOLVED hit.
+
+STRICTLY ADDITIVE. A payload that does not carry `substituteMinDepletion` refuses exactly
 as before, under the same reason code. That matters beyond compatibility: minting a new
 code for the no-bound case would rename a refusal rather than fix it, and the rename
 would read as a new class in the next era's crosstab -- a discontinuity this campaign has
@@ -83,13 +94,13 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
 
         self.assertEqual(replay.substitute_health_state.get("p1"), "unknown")
         self.assertEqual(
-            replay.substitute_unknown_hits.get("p1"),
+            replay.substitute_min_depletion.get("p1"),
             1,
             "the hit must be COUNTED even though its damage is unknowable -- the count is "
             "what bounds the sampled health instead of refusing the world",
         )
 
-    def test_hits_accumulate_so_the_window_tightens(self):
+    def test_unknown_hits_accumulate_one_hp_each(self):
         replay = self._state(
             "|move|p1a: Breloom|Substitute|p1a: Breloom",
             "|-start|p1a: Breloom|Substitute",
@@ -101,14 +112,62 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
             "|turn|3",
         )
 
-        self.assertEqual(replay.substitute_unknown_hits.get("p1"), 2)
+        self.assertEqual(
+            replay.substitute_min_depletion.get("p1"),
+            2,
+            "two unresolved hits prove at least 2 HP gone -- 1 each, not a hit COUNT that "
+            "later has to be reconciled with resolved damage",
+        )
 
-    def test_a_fixed_damage_move_stays_exact_and_counts_nothing(self):
+    def test_a_resolved_hit_after_an_unknown_one_still_contributes_its_damage(self):
+        """ORDERING B, the defect review measured after the first fix.
+
+        The proven-damage accumulation used to live inside the `exact` branch, whose guard is
+        `substitute_depletion is not None` -- and that is None after any unknown hit. So
+        Ice Beam then Seismic Toss charged 1 + 1 = 2 instead of 1 + 77 = 78, and the sampler
+        drew from `[1, initial - 2]` while the record proved `<= initial - 78`. Ordering A was
+        fixed and ordering B was not; only this test discriminates them.
+        """
+
+        unknown_first = self._state(
+            "|move|p1a: Breloom|Substitute|p1a: Breloom",
+            "|-start|p1a: Breloom|Substitute",
+            "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|2",
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|3",
+        )
+        resolved_first = self._state(
+            "|move|p1a: Breloom|Substitute|p1a: Breloom",
+            "|-start|p1a: Breloom|Substitute",
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|2",
+            "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|3",
+        )
+
+        self.assertEqual(unknown_first.substitute_min_depletion.get("p1"), 78)
+        self.assertEqual(
+            resolved_first.substitute_min_depletion.get("p1"),
+            78,
+            "the bound must be ORDER-INDEPENDENT: 77 + 1 either way",
+        )
+        self.assertEqual(unknown_first.substitute_health_state.get("p1"), "unknown")
+        self.assertEqual(resolved_first.substitute_health_state.get("p1"), "unknown")
+
+    def test_a_fixed_damage_move_stays_exact_and_charges_its_real_damage(self):
         """Seismic Toss is public and deterministic, so provenance stays `exact`.
 
-        This is the boundary that keeps the counter from cannibalising the precise path:
-        an exact depletion is strictly better than a sampled range and must not be
-        downgraded to one.
+        Two things must hold together. Provenance stays `exact` -- the precise path is
+        strictly better than a sampled range and must not be downgraded to one, and
+        `substitute_depletion` still carries the exact total that `engine_world` uses
+        directly. AND the minimum accumulator charges the real 77, not 1: under the
+        single-accumulator design a resolved hit contributes its damage, which is what makes
+        the bound order-independent.
         """
 
         replay = self._state(
@@ -122,9 +181,10 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
         self.assertEqual(replay.substitute_health_state.get("p1"), "exact")
         self.assertEqual(replay.substitute_depletion.get("p1"), 77, "Blissey is L77")
         self.assertEqual(
-            replay.substitute_unknown_hits.get("p1"),
-            0,
-            "an exact hit must not be counted as unknown, or the exact path loses HP twice",
+            replay.substitute_min_depletion.get("p1"),
+            77,
+            "a resolved hit charges its REAL damage, not 1 -- charging 1 here is what made "
+            "the bound depend on hit ordering",
         )
 
     def test_switching_out_resets_the_count(self):
@@ -157,7 +217,7 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
         )
 
         self.assertEqual(replay.substitute_health_state.get("p1"), "full")
-        self.assertEqual(replay.substitute_unknown_hits.get("p1"), 0)
+        self.assertEqual(replay.substitute_min_depletion.get("p1"), 0)
 
     def test_the_count_is_already_zero_at_the_moment_of_the_switch(self):
         """Isolate the switch reset by stopping BEFORE any new `-start`.
@@ -172,7 +232,10 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
         replay = self._state(
             "|move|p1a: Breloom|Substitute|p1a: Breloom",
             "|-start|p1a: Breloom|Substitute",
-            "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
+            # A RESOLVED hit, so `min_depletion` is 77 entering the reset. With only an
+            # Ice Beam here the assertion below was VACUOUS -- 1 or 0, both falsy-adjacent and
+            # review showed the mutation surviving. Every reset transcript needs proven damage.
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
             "|-activate|p1a: Breloom|Substitute|[damage]",
             "|turn|2",
             "|switch|p1a: Swampert|Swampert, L79, M|100/100",
@@ -185,7 +248,7 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
             "the Substitute left the field with its owner",
         )
         self.assertEqual(
-            replay.substitute_unknown_hits.get("p1"),
+            replay.substitute_min_depletion.get("p1"),
             0,
             "a count surviving the switch would bound the NEXT Substitute by hits that "
             "landed on a previous one",
@@ -203,7 +266,9 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
         replay = self._state(
             "|move|p1a: Breloom|Substitute|p1a: Breloom",
             "|-start|p1a: Breloom|Substitute",
-            "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
+            # RESOLVED, for the same reason as the switch case: with only an Ice Beam the
+            # post-reset assertion could not fail.
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
             "|-activate|p1a: Breloom|Substitute|[damage]",
             "|turn|2",
             "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
@@ -213,12 +278,44 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
 
         self.assertEqual(replay.substitute_health_state.get("p1"), "broken")
         self.assertEqual(
-            replay.substitute_unknown_hits.get("p1"),
+            replay.substitute_min_depletion.get("p1"),
             0,
             "a count surviving the break would bound the NEXT Substitute by hits that "
             "landed on the one that just died",
         )
-        self.assertEqual(replay.substitute_known_depletion.get("p1"), 0)
+        self.assertEqual(replay.substitute_min_depletion.get("p1"), 0)
+
+    def test_a_faint_behind_a_live_substitute_resets_the_bound(self):
+        """The faint reset is the one that is NOT redundant, and nothing covered it.
+
+        `-start` is masked by `-end`/switch/faint. The faint path has no reset in front of it:
+        a residual KO behind a live Substitute is routine, and it carries a non-zero bound into
+        the reset. Review found both the old and new field's faint resets surviving mutation.
+        """
+
+        replay = self._state(
+            "|move|p1a: Breloom|Substitute|p1a: Breloom",
+            "|-start|p1a: Breloom|Substitute",
+            "|move|p2a: Blissey|Seismic Toss|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|turn|2",
+            "|move|p2a: Blissey|Ice Beam|p1a: Breloom",
+            "|-activate|p1a: Breloom|Substitute|[damage]",
+            "|-damage|p1a: Breloom|0 fnt|[from] psn",
+            "|faint|p1a: Breloom",
+        )
+
+        self.assertEqual(
+            replay.substitute_health_state.get("p1"),
+            "absent",
+            "a fainted mon's Substitute must not survive as a phantom effect",
+        )
+        self.assertEqual(
+            replay.substitute_min_depletion.get("p1"),
+            0,
+            "a bound surviving the faint would constrain the NEXT Substitute by damage dealt "
+            "to a Pokemon that is already gone",
+        )
 
     def test_a_broken_substitute_also_resets_the_count(self):
         """The `-end` path, kept as its own case now that the two are separated."""
@@ -239,7 +336,7 @@ class SubstituteUnknownHitCountingTests(unittest.TestCase):
 
         self.assertEqual(replay.substitute_health_state.get("p1"), "full")
         self.assertEqual(
-            replay.substitute_unknown_hits.get("p1"),
+            replay.substitute_min_depletion.get("p1"),
             0,
             "carrying the broken Substitute's hits forward would bound the wrong effect",
         )
@@ -274,9 +371,9 @@ class SubstituteProducerConsumerSeamTests(unittest.TestCase):
     """The one test that crosses the producer -> payload -> consumer seam.
 
     Review found three mutations that make this PR a COMPLETE NO-OP in production while the
-    whole suite stays green: delete `"substituteUnknownHits"` from the payload builder,
+    whole suite stays green: delete `"substituteMinDepletion"` from the payload builder,
     misspell the key, or change its default. The producer tests read
-    `replay.substitute_unknown_hits`; the consumer tests hand-inject the payload key. Nothing
+    `replay.substitute_min_depletion`; the consumer tests hand-inject the payload key. Nothing
     joined them, so the single line the entire change depends on was unasserted -- exactly
     the "tests that assert nothing" shape this repo keeps being bitten by.
 
@@ -323,9 +420,9 @@ class SubstituteProducerConsumerSeamTests(unittest.TestCase):
             "|turn|2",
         )
 
-        self.assertEqual(replay.substitute_unknown_hits.get("p1"), 1)
+        self.assertEqual(replay.substitute_min_depletion.get("p1"), 1)
         self.assertEqual(
-            payload["sides"]["p1"].get("substituteUnknownHits"),
+            payload["sides"]["p1"].get("substituteMinDepletion"),
             1,
             "the parser's count must reach the payload under this exact key -- without it "
             "every world refuses and the whole change is a no-op in production",
@@ -346,11 +443,11 @@ class SubstituteProducerConsumerSeamTests(unittest.TestCase):
 
         self.assertEqual(replay.substitute_health_state.get("p1"), "unknown")
         self.assertEqual(
-            payload["sides"]["p1"].get("substituteKnownDepletion"),
-            77,
-            "the Seismic Toss 77 must survive the later unknown hit and reach the payload",
+            payload["sides"]["p1"].get("substituteMinDepletion"),
+            78,
+            "the Seismic Toss 77 must survive the later unknown hit and reach the payload, "
+            "plus 1 for that hit -- 78, not 1",
         )
-        self.assertEqual(payload["sides"]["p1"].get("substituteUnknownHits"), 1)
 
 
 @requires_showdown()
@@ -367,7 +464,7 @@ class SubstituteHealthSamplingTests(unittest.TestCase):
         payload["sides"]["p2"]["substituteHealthState"] = "unknown"
         payload["sides"]["p2"]["substituteDepletion"] = None
         if hits is not None:
-            payload["sides"]["p2"]["substituteUnknownHits"] = hits
+            payload["sides"]["p2"]["substituteMinDepletion"] = hits
         return payload
 
     def _build(self, payload, *, rng=None):
@@ -477,7 +574,7 @@ class SubstituteHealthSamplingTests(unittest.TestCase):
         proven = 40
         hits = 1
         payload = self._sub_payload(hits=hits)
-        payload["sides"]["p2"]["substituteKnownDepletion"] = proven
+        payload["sides"]["p2"]["substituteMinDepletion"] = proven + hits
         initial = self._build(payload).spec.side_two.pokemon[0].maxhp // 4
         self.assertGreater(
             initial - proven - hits, 0, "the fixture must leave a live Substitute"
@@ -510,7 +607,7 @@ class SubstituteHealthSamplingTests(unittest.TestCase):
         """The `upper < 1` guard must account for proven depletion, not only hits."""
 
         payload = self._sub_payload(hits=1)
-        payload["sides"]["p2"]["substituteKnownDepletion"] = 10_000
+        payload["sides"]["p2"]["substituteMinDepletion"] = 10_000
         with self.assertRaises(EngineWorldUnsupported) as caught:
             self._build(payload)
         self.assertEqual(

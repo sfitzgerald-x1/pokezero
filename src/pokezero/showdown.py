@@ -1534,11 +1534,7 @@ class ShowdownReplayState:
     # Non-breaking Substitute hits whose damage the public record does NOT reveal. Each one
     # removed at least 1 HP and the Substitute survived, which bounds its remaining health
     # even when the exact value is unknowable -- see `engine_world`'s sampling of it.
-    substitute_unknown_hits: Mapping[str, int] = field(default_factory=dict)
-    # Depletion PROVEN by public fixed-damage hits, which an unknown hit must not erase.
-    # `substitute_depletion` is cleared when provenance degrades to `unknown`; this survives,
-    # because a proven 100 HP of damage stays proven no matter what lands afterwards.
-    substitute_known_depletion: Mapping[str, int] = field(default_factory=dict)
+    substitute_min_depletion: Mapping[str, int] = field(default_factory=dict)
     # Whether ``toxic_stage`` is known from the public protocol. A zero alone is
     # ambiguous: it can mean a fresh Toxic/Switch-in counter, or an incomplete
     # prefix whose live toxic counter was never observed. The observation keeps
@@ -1852,8 +1848,7 @@ class _ReplayParser:
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.substitute_health_state: dict[str, str] = {"p1": "absent", "p2": "absent"}
         self.substitute_depletion: dict[str, int | None] = {"p1": None, "p2": None}
-        self.substitute_unknown_hits: dict[str, int] = {"p1": 0, "p2": 0}
-        self.substitute_known_depletion: dict[str, int] = {"p1": 0, "p2": 0}
+        self.substitute_min_depletion: dict[str, int] = {"p1": 0, "p2": 0}
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
@@ -1983,12 +1978,8 @@ class _ReplayParser:
             slot: str(snapshot.substitute_health_state.get(slot, "absent"))
             for slot in ("p1", "p2")
         }
-        parser.substitute_unknown_hits = {
-            slot: int(snapshot.substitute_unknown_hits.get(slot) or 0) for slot in ("p1", "p2")
-        }
-        parser.substitute_known_depletion = {
-            slot: int(snapshot.substitute_known_depletion.get(slot) or 0)
-            for slot in ("p1", "p2")
+        parser.substitute_min_depletion = {
+            slot: int(snapshot.substitute_min_depletion.get(slot) or 0) for slot in ("p1", "p2")
         }
         parser.substitute_depletion = {
             slot: snapshot.substitute_depletion.get(slot) for slot in ("p1", "p2")
@@ -2450,8 +2441,7 @@ class _ReplayParser:
                 # this provenance surface aligned with that fail-closed world.
                 self.substitute_health_state[pokemon.showdown_slot] = "absent"
                 self.substitute_depletion[pokemon.showdown_slot] = None
-                self.substitute_unknown_hits[pokemon.showdown_slot] = 0
-                self.substitute_known_depletion[pokemon.showdown_slot] = 0
+                self.substitute_min_depletion[pokemon.showdown_slot] = 0
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 self.toxic_stage_known[pokemon.showdown_slot] = True
@@ -2858,8 +2848,7 @@ class _ReplayParser:
             self.volatiles[slot].discard("substitute")
             self.substitute_health_state[slot] = "absent"
             self.substitute_depletion[slot] = None
-            self.substitute_unknown_hits[slot] = 0
-            self.substitute_known_depletion[slot] = 0
+            self.substitute_min_depletion[slot] = 0
             return
         if len(parts) < 4 or _side_condition_identifier(parts[3]) != "substitute":
             return
@@ -2875,14 +2864,12 @@ class _ReplayParser:
             # no test can distinguish deleting this line, and mutation confirms it. Kept as
             # defence in depth because the failure it prevents is silent: a stale count would
             # bound a Substitute that no longer exists.
-            self.substitute_unknown_hits[slot] = 0
-            self.substitute_known_depletion[slot] = 0
+            self.substitute_min_depletion[slot] = 0
             return
         if event_type == "-end":
             self.substitute_health_state[slot] = "broken"
             self.substitute_depletion[slot] = None
-            self.substitute_unknown_hits[slot] = 0
-            self.substitute_known_depletion[slot] = 0
+            self.substitute_min_depletion[slot] = 0
             return
         if event_type != "-activate":
             return
@@ -2895,26 +2882,31 @@ class _ReplayParser:
             if any(part.strip() == "[damage]" for part in parts[4:])
             else None
         )
+        resolved = damage is not None and damage > 0
+        # ACCUMULATE FIRST, decide provenance second. An earlier version put this inside the
+        # `exact` branch, whose guard requires `substitute_depletion is not None` -- and that
+        # is None after any unknown hit. So a fixed-damage hit landing AFTER an unknown one
+        # contributed 1 instead of its real 77/100, and the proven damage was lost. Review
+        # measured both orderings: exact-then-unknown was fixed, unknown-then-exact was not.
+        #
+        # ONE accumulator, not two, so the ordering asymmetry is impossible by construction
+        # rather than repaired case by case: charge each hit exactly once, its proven damage
+        # when the public record resolves it and the minimum 1 HP when it does not. The result
+        # is order-independent -- Seismic Toss then Ice Beam and Ice Beam then Seismic Toss
+        # both give 78 -- which is what a lower bound on total depletion should be.
+        self.substitute_min_depletion[slot] = self.substitute_min_depletion.get(slot, 0) + (
+            damage if resolved else 1
+        )
         current = self.substitute_depletion.get(slot)
-        if damage is not None and current is not None and damage > 0:
+        if resolved and current is not None:
             self.substitute_health_state[slot] = "exact"
             self.substitute_depletion[slot] = current + damage
-            self.substitute_known_depletion[slot] = (
-                self.substitute_known_depletion.get(slot, 0) + damage
-            )
         else:
             self.substitute_health_state[slot] = "unknown"
             self.substitute_depletion[slot] = None
-            # COUNT the hit even though its damage is unknown. The Substitute survived it,
-            # so each such hit removed at least 1 HP -- which is what lets `engine_world`
-            # sample a CONSISTENT remaining health instead of refusing the world outright.
-            self.substitute_unknown_hits[slot] = self.substitute_unknown_hits.get(slot, 0) + 1
-            # `substitute_known_depletion` is deliberately NOT touched here. Review measured
-            # the defect: because `substitute_depletion` is cleared one line above, a proven
-            # exact depletion used to VANISH the moment an unknown hit landed. Seismic Toss
-            # for 100 then Ice Beam gave `upper = initial - 1 = 161` while the record proved
-            # remaining HP <= 61, so 62% of sampled worlds were outside the allowed range and
-            # the mean sample exceeded the maximum possible. Proven damage stays proven.
+            # NOTHING to accumulate here: the hit was already charged above. Charging it in
+            # both places would double-count every unknown hit, which biases the bound the
+            # wrong way -- toward a Substitute weaker than the record proves.
 
     def _fixed_substitute_damage_from_previous_move(self, target_slot: str) -> int | None:
         if not self.public_lines:
@@ -3698,8 +3690,7 @@ class _ReplayParser:
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
             substitute_health_state=dict(self.substitute_health_state),
             substitute_depletion=dict(self.substitute_depletion),
-            substitute_unknown_hits=dict(self.substitute_unknown_hits),
-            substitute_known_depletion=dict(self.substitute_known_depletion),
+            substitute_min_depletion=dict(self.substitute_min_depletion),
             direct_materialization_blockers={
                 slot: tuple(sorted(blockers))
                 for slot, blockers in self.direct_materialization_blockers.items()
