@@ -2391,3 +2391,57 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
     );
 }
 
+/// The par-over-miss guess must only fire when paralysis IS the dominant outcome.
+///
+/// The branch renders `|cant|{ident}|par` for a paralyzed attacker whose tail is empty, on the
+/// stated grounds that "the paralysis outcome carries the larger probability mass". That
+/// justification is CONDITIONAL and the branch was not:
+///
+///     P(par)  = 0.25                   P(miss) = 0.75 * (1 - accuracy)
+///
+/// They cross at accuracy = 2/3. Below it the miss is MORE likely, and rendering `|cant|..|par`
+/// erases a `|move|` reveal and suppresses a PP decrement the fold tracks — for the outcome
+/// that probably did NOT happen.
+///
+/// Two fixtures, one either side of the crossover, because a single-sided test would pass on a
+/// branch that simply never fires:
+///   * Dynamic Punch, 50% — P(miss) 0.375 vs P(par) 0.25, so par must NOT be rendered.
+///   * Thunder, 70%      — P(miss) 0.225 vs P(par) 0.25, so par MUST still be rendered.
+///
+/// That second half is what stops the fix becoming "disable the branch": era 60's whole
+/// argument for downgrading attract rests on this branch being legitimate where it is
+/// dominant, and deleting it wholesale would remove the precedent rather than repair it.
+#[test]
+fn par_is_rendered_only_where_it_outweighs_the_miss() {
+    for (move_id, accuracy, want_par) in [
+        (Choices::DYNAMICPUNCH, 50.0_f32, false),
+        (Choices::THUNDER, 70.0_f32, true),
+    ] {
+        let mut state = confused_state(move_id);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        // Paralyzed attacker, so the branch's first condition holds.
+        state.side_two.get_active().status = PokemonStatus::PARALYZE;
+
+        let branches = generate(&mut state);
+        let mut saw_par = false;
+        let mut saw_any = false;
+        for branch in &branches {
+            let r = rendered(&mut state.clone(), branch);
+            saw_any = true;
+            if r.lines.iter().any(|l| l == "|cant|p2a: Opponent|par") {
+                saw_par = true;
+            }
+        }
+        assert!(saw_any, "VACUOUS: {move_id:?} produced no branches at all");
+        assert_eq!(
+            saw_par, want_par,
+            "{move_id:?} at {accuracy}% accuracy: P(miss) = {:.3} vs P(par) = 0.250, so \
+             `|cant|..|par` should{} be rendered",
+            0.75 * (1.0 - accuracy / 100.0),
+            if want_par { "" } else { " NOT" }
+        );
+    }
+}

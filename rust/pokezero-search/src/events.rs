@@ -2480,7 +2480,38 @@ fn render_move_phase(
     }
 
     if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
-        if !deterministic_noop && move_could_act {
+        // PARALYSIS MUST ACTUALLY BE THE DOMINANT OUTCOME, which is what the comment above
+        // claims and what this branch did not check.
+        //
+        // The justification for rendering `|cant|..|par` over a miss is that "the paralysis
+        // outcome carries the larger probability mass". That is CONDITIONAL, and the branch was
+        // not. With the engine merging the full-para branch into any same-delta branch:
+        //
+        //     P(par)  = 0.25                      (the paralysis roll)
+        //     P(miss) = 0.75 * (1 - accuracy)     (it acted, then missed)
+        //
+        // They cross at accuracy = 2/3. BELOW that, the miss is MORE likely and this branch
+        // rendered the minority outcome -- erasing a `|move|` reveal and suppressing a PP
+        // decrement the fold tracks. Measured: Dynamic Punch and Zap Cannon at 50% give
+        // P(miss) = 0.375 against P(par) = 0.25; Sing, Supersonic and Grass Whistle at 55%
+        // give 0.338; the OHKO moves at 30% give 0.525. Thunder and Blizzard at 70% give
+        // 0.225, so those were correct all along.
+        //
+        // `empty_tail_can_be_accuracy_miss` was already computed ~120 lines above and simply
+        // not consulted here.
+        //
+        // The masses are compared EXPLICITLY rather than hard-coding the 2/3 threshold, so the
+        // condition is visible in the code and moves correctly if either probability is ever
+        // re-derived. `PARALYSIS_ROLL` mirrors the engine's own constant.
+        const PARALYSIS_ROLL: f32 = 0.25;
+        let paralysis_dominates = if empty_tail_can_be_accuracy_miss {
+            let miss_mass = (1.0 - PARALYSIS_ROLL) * (1.0 - choice.accuracy / 100.0);
+            PARALYSIS_ROLL > miss_mass
+        } else {
+            // No miss to compete with, so paralysis is the only explanation left.
+            true
+        };
+        if !deterministic_noop && move_could_act && paralysis_dominates {
             out.lines.push(format!("|cant|{attacker_ident}|par"));
             return;
         }
