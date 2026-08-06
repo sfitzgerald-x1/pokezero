@@ -291,11 +291,45 @@ impl RenderedEvents {
     /// its own attestation.
     ///
     /// So: sub-case to the measurement channel, stable tag to the contract.
-    /// `&'static str` on BOTH arguments is deliberate, not an oversight beside
-    /// the `&str` siblings above: these are contract labels and must stay
-    /// literals. Widening them would let a caller pass a formatted string and
-    /// mint an unbounded set of `world_failure_reasons` keys.
-    fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &'static str) {
+    ///
+    /// `lossy_tag` stays `&'static str`: it is the contract label and must be a literal.
+    ///
+    /// `subcase` was `&'static str` too, and the reason given was sound -- a formatted
+    /// string could "mint an unbounded set of `world_failure_reasons` keys", and an
+    /// unbounded key set is what makes a measurement channel useless. It is relaxed to
+    /// `&str` so a sub-case can name a COMPOSITION (which effect families blocked a
+    /// render), which a literal cannot express.
+    ///
+    /// WHAT IS AND IS NOT GUARANTEED, stated precisely because the first version of this
+    /// comment claimed the wrong thing twice and review disproved both halves:
+    ///
+    /// * `assert_subcase_vocabulary` bounds the token ALPHABET, not the key SET. It admits
+    ///   any composition of registered tokens, which is an infinite language under
+    ///   repetition -- `...:boost+boost` passes it, proven by mutation.
+    /// * What actually bounds cardinality is the dedup and fixed-order sort in
+    ///   `unrenderable_tail_families`: each family appears at most once, in one order, so
+    ///   the key set for this class is the non-empty subsets of the REACHABLE token set.
+    /// * This is therefore NOT "stronger than `'static`". `'static` restricted keys to
+    ///   literals present in the source: finite, greppable, reviewable. The honest
+    ///   statement is that the ceiling rises from 1 key to 2^13 - 1 = 8,191, and
+    ///   that the REALIZED count is small because tails are short -- the oracle corpus
+    ///   yields two (`boost`, `substitute+volatile`).
+    ///
+    /// Note 13, not 14: `UNRENDERABLE_FAMILY_ORDER` has 14 entries but `unclassified` is
+    /// emitted by NO classifier arm -- it is reachable only through the degradation below,
+    /// itself unreachable while every arm's token is registered. Counting the order list
+    /// instead of the reachable token set overstated this 2x in an earlier version, in the
+    /// one comment block whose entire purpose is precision.
+    ///
+    /// An 8k ceiling is a real cost, accepted because a class that was 51.6% of the abort
+    /// channel could not be ranked at all as one key. It is bounded, greppable via the
+    /// order list, and every token maps to a named renderer gap.
+    ///
+    /// Note the sibling `mark_attribution_unsafe` already takes a `&str` and is already
+    /// called with `&format!(...)` by the attract path, with NO vocabulary check and no
+    /// paired-tag assert at all -- though that path is itself bounded at 2^5 by
+    /// construction, so it is not a live unbounded hole either.
+    fn mark_attribution_unsafe_subcase(&mut self, lossy_tag: &'static str, subcase: &str) {
         // The two arguments must name the SAME class, or this helper quietly
         // becomes the bug it exists to prevent: a branch whose contract tag and
         // measurement reason disagree changes which branches the differential
@@ -312,12 +346,71 @@ impl RenderedEvents {
             subcase.starts_with(lossy_tag),
             "sub-case {subcase:?} does not belong to lossy tag {lossy_tag:?}"
         );
+        assert_subcase_vocabulary(lossy_tag, subcase);
         self.mark_lossy(lossy_tag);
         self.attribution_unsafe.push(subcase.to_string());
     }
 
     pub fn is_attribution_unsafe(&self) -> bool {
         !self.attribution_unsafe.is_empty()
+    }
+}
+
+/// Every token a sub-case slug may contain, beyond the lossy tag itself.
+///
+/// This bounds the token ALPHABET a sub-case may draw on. It is NOT what bounds the key
+/// SET -- an earlier version of this line claimed it was, contradicting the corrected
+/// analysis on `mark_attribution_unsafe_subcase` sixty lines above. Cardinality is bounded
+/// by the dedup and fixed-order sort in `unrenderable_tail_families`. Two comments
+/// disagreeing about one claim is a failure this file already records twice. `attract_empty_tail_ambiguous`'s own tokens are
+/// listed here as well, so if that path is ever moved onto this helper it does not have
+/// to be discovered first.
+const SUBCASE_VOCABULARY: &[&str] = &[
+    // sleeptalk
+    "ambiguous",
+    "ambiguous_unrenderable",
+    "none_matched",
+    // attract. These are the tokens after the tag, so `attract` itself is NOT one --
+    // an earlier version listed it, which was an entry no path can emit, while
+    // `volatile`, which attract DOES emit, was missing and passed only by coincidence
+    // through `UNRENDERABLE_FAMILY_ORDER`. If the attract path is ever moved onto this
+    // helper, the pre-added entry would have been the wrong one.
+    "cannot_act",
+    "miss",
+    "noop",
+    "paralyzed",
+    "volatile",
+    // the escape hatch both paths use when no predicate fired
+    "unclassified",
+];
+
+/// Refuse a sub-case slug built from tokens nobody registered.
+///
+/// The `'static` bound on `subcase` used to make an unbounded key set unrepresentable.
+/// With composition allowed, this does the same job explicitly and more tightly: it
+/// admits a fixed vocabulary rather than any literal a caller cares to write. A
+/// mis-composed slug therefore fails LOUDLY at the call site instead of quietly becoming
+/// a 37th aggregate key that nobody can trace back to a code path -- but note the SCOPE:
+/// for the sleeptalk path it can no longer fire at all, because
+/// `unrenderable_tail_families` degrades an unregistered token to `unclassified` first, on
+/// purpose (a panic there aborts the worker). It stays live for paired-tag misuse and for
+/// any future caller that does not degrade.
+///
+/// A plain `assert!` for the same reason the paired-tag check above is one: the campaign
+/// wheels are built `--release`, where `debug_assert!` compiles out, so a debug assert
+/// would guard only `cargo test` -- the one place the call sites are already correct.
+fn assert_subcase_vocabulary(lossy_tag: &str, subcase: &str) {
+    let tail = &subcase[lossy_tag.len()..];
+    for token in tail.split([':', '+']) {
+        if token.is_empty() {
+            continue;
+        }
+        assert!(
+            SUBCASE_VOCABULARY.contains(&token)
+                || UNRENDERABLE_FAMILY_ORDER.contains(&token),
+            "sub-case {subcase:?} contains unregistered token {token:?}; \
+             add it to SUBCASE_VOCABULARY or UNRENDERABLE_FAMILY_ORDER"
+        );
     }
 }
 
@@ -1755,9 +1848,16 @@ fn render_move_phase(
                         // Ambiguous but the tail carries an effect the walk would DROP
                         // (a boost, status, heal, side condition...). Distinct sub-case so
                         // the cost of the remaining gap stays measurable.
+                        //
+                        // NAME WHICH ONE. Era 59 measured this key at 8,149 world failures
+                        // -- the largest world-level refusal in the era and 51.6% of the
+                        // abort channel -- as a single opaque token, so nothing said whether
+                        // closing it needed `-boost`, `-status`, `-heal` or the Substitute
+                        // family. The parenthetical above listed the candidates and the
+                        // measurement could not rank them.
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
-                            "sleeptalk_called_unidentified:ambiguous_unrenderable",
+                            &ambiguous_unrenderable_slug(&called_tail),
                         );
                     } else {
                         out.mark_attribution_unsafe_subcase(
@@ -2894,20 +2994,258 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
 /// loses nothing that the named path would have shown.
 fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
-    tail.iter().all(|instruction| {
-        matches!(
-            instruction,
-            // `damage_amount >= 0` is load-bearing, not defensive -- see the doc above.
-            Instruction::Damage(damage) if damage.damage_amount >= 0
-        ) || matches!(
-            instruction,
-            Instruction::Switch(_)
-                | Instruction::SetLastUsedMove(_)
-                | Instruction::ChangeDamageDealtDamage(_)
-                | Instruction::ChangeDamageDealtMoveCatagory(_)
-                | Instruction::ToggleDamageDealtHitSubstitute(_)
-        )
-    })
+    // DEFINED as "nothing blocks it", so the predicate and the diagnostic below cannot
+    // disagree about which instructions are renderable. They were two independent
+    // matches in the first version, and this file already records what that costs: the
+    // renderer and `engine_transition_differential.py` held opposite views of the
+    // sleeptalk contract for two eras with nothing to notice. One list, one answer.
+    unrenderable_tail_families(tail).is_empty()
+}
+
+/// Fixed slug order, so the emitted key is stable across runs and aggregators can sum
+/// it. Encounter order would make the same tail composition produce different keys
+/// depending on instruction sequence -- the requirement attract's slug records too.
+const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
+    "boost",
+    "statrecalc",
+    "status",
+    "sleepcounter",
+    "heal",
+    "substitute",
+    "volatile",
+    "sidecondition",
+    "weather",
+    "field",
+    "moveslot",
+    "item",
+    "silent",
+    "unclassified",
+];
+
+/// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
+/// instruction. `None` means the walk renders it (or correctly renders nothing).
+///
+/// EXHAUSTIVE on purpose -- no `_` arm. A new engine variant becomes a compile error
+/// here instead of silently classifying as one more `unclassified`, which on the largest
+/// failure class in the program would be a mis-diagnosis rather than a crash. This is
+/// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
+fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
+    match instruction {
+        // --- rendered, or provably nothing to render -------------------------------
+        //
+        // This arm set must stay EXACTLY the previous allowlist. Widening it here does
+        // not just add a diagnostic: it stops the branch being refused, which is a
+        // behaviour change to the largest failure class. `ambiguous_unrenderable_*`
+        // tests pin the membership in both directions.
+        //
+        // `damage_amount >= 0` is load-bearing, not defensive: `Damage` is SIGNED, and a
+        // negative amount is the engine's spelling for a heal (Pain Split). The walk
+        // emits on `active_hp < before` only, so a heal-direction `Damage` renders
+        // NOTHING -- see this function's caller doc for the reproduced C52-mirror defect.
+        Instruction::Damage(damage) if damage.damage_amount >= 0 => None,
+        Instruction::Switch(_) => None,
+        Instruction::SetLastUsedMove(_)
+        | Instruction::ChangeDamageDealtDamage(_)
+        | Instruction::ChangeDamageDealtMoveCatagory(_)
+        | Instruction::ToggleDamageDealtHitSubstitute(_) => None,
+
+        // --- blocked, grouped by the PROTOCOL LINE the walk would have to emit -----
+        //
+        // Grouped by protocol line, NOT by engine instruction kind, because the point of
+        // this classifier is to scope renderer work: a ranking whose buckets do not
+        // correspond to lines to emit mis-scopes the fix it exists to enable.
+        //
+        // Review caught three groups violating that, all of which would have sent a
+        // reader to write the wrong thing:
+        //   * `Change<Stat>` is NOT a `-boost`. The engine emits it from
+        //     `recalculate_stats` on mega/forme/transform, and it carries no protocol
+        //     line at all. Split out as `statrecalc`.
+        //   * `SetSleepTurns` / `SetRestTurns` / `DecrementRestTurns` are NOT `-status`.
+        //     The NAMED path renders them as `|cant|...|slp`. Split out as
+        //     `sleepcounter`.
+        //   * `DecrementPP` and `SetRestSleepPendingRefund` have NO public line on any
+        //     path -- the latter's own comment says "pure bookkeeping". A `pp` bucket
+        //     named a protocol line that does not exist in the protocol. Both are now
+        //     `silent`, which says the truth: renderable by doing nothing, and blocked
+        //     only because the allowlist is conservative about tails it has not audited.
+        //
+        // A heal-direction `Damage` lands with `Heal` because what the walk drops is
+        // identical: an HP INCREASE. That grouping IS by protocol line, so it stays.
+        Instruction::Damage(_) | Instruction::Heal(_) => Some("heal"),
+        Instruction::Boost(_) => Some("boost"),
+        Instruction::ChangeAttack(_)
+        | Instruction::ChangeDefense(_)
+        | Instruction::ChangeSpecialAttack(_)
+        | Instruction::ChangeSpecialDefense(_)
+        | Instruction::ChangeSpeed(_) => Some("statrecalc"),
+        Instruction::ChangeStatus(_) => Some("status"),
+        // `SetSleepTurns` and `DecrementRestTurns` are the two the NAMED path renders as
+        // `|cant|...|slp` (events.rs render arms). `SetRestTurns` is NOT one: the engine
+        // emits it immediately after `ChangeStatus(-> SLEEP)` when Rest is used, so the
+        // lines belong to that `ChangeStatus` and the accompanying `Heal`. It has no
+        // render arm and would have inflated this bucket.
+        Instruction::SetSleepTurns(_) | Instruction::DecrementRestTurns(_) => {
+            Some("sleepcounter")
+        }
+        // Only a substitute HIT pairs `DamageSubstitute` with a missing
+        // `-activate`/`-end` pair. `ChangeSubstituteHealth` is `silent`, not here:
+        // creation emits it alongside `Damage` + `ApplyVolatileStatus(SUBSTITUTE)` and
+        // break alongside `RemoveVolatileStatus(SUBSTITUTE)`, so a `volatile` or
+        // `substitute` companion is ALWAYS present and the line to emit is theirs.
+        // Filing it here made a Substitute-CREATION tail report `substitute+volatile`
+        // when the only missing line is the `volatile` one.
+        Instruction::DamageSubstitute(_) => Some("substitute"),
+        Instruction::ApplyVolatileStatus(_)
+        | Instruction::RemoveVolatileStatus(_)
+        | Instruction::ChangeVolatileStatusDuration(_) => Some("volatile"),
+        Instruction::ChangeSideCondition(_) => Some("sidecondition"),
+        Instruction::ChangeWeather(_) | Instruction::DecrementWeatherTurnsRemaining => {
+            Some("weather")
+        }
+        Instruction::ChangeTerrain(_)
+        | Instruction::DecrementTerrainTurnsRemaining
+        | Instruction::ToggleTrickRoom(_)
+        | Instruction::DecrementTrickRoomTurnsRemaining => Some("field"),
+        Instruction::DisableMove(_) | Instruction::EnableMove(_) | Instruction::ChangeMoveId(_) => {
+            Some("moveslot")
+        }
+        // Split out of the old `identity` group, which bundled ONE genuine gap with five
+        // silents and so violated the rule stated above as badly as `status` did before
+        // `sleepcounter` was split off. `ChangeItem` is the genuine one: Knock Off, Trick
+        // and consumed berries need `|-item|` / `|-enditem|`.
+        Instruction::ChangeItem(_) => Some("item"),
+        // NO PUBLIC LINE ON ANY PATH. This is the most decision-relevant bucket in the
+        // scheme: a `silent`-only tail needs ZERO renderer work, just an allowlist audit,
+        // so filing anything here that does need a line under-reports work, and filing a
+        // silent under a named family books "write a protocol line" for something that
+        // needs none.
+        //
+        //   * `SetRestSleepPendingRefund` -- its own comment says "pure bookkeeping".
+        //   * `DecrementPP` -- there is no `-pp` line in the protocol.
+        //   * `SetRestTurns` -- see `sleepcounter` above.
+        //   * `ChangeSubstituteHealth` -- see `substitute` above.
+        //   * `ChangeWish` / `DecrementWish` -- `DecrementWish` is read only as a
+        //     LOOKAHEAD, to tag an existing `|-heal|` with `[from] move: Wish`. The
+        //     renderable unit is that `Heal`, already counted under `heal`.
+        //   * `SetFutureSight` / `DecrementFutureSight` -- pending-slot bookkeeping;
+        //     `SetFutureSight`'s arm is `sim.apply` only and the decrement has no arm.
+        //   * `ChangeType` / `ChangeAbility` / `FormeChange` -- the named path's own arm
+        //     renders a single `|-transform|` and applies the rest silently.
+        //   * `ChangeTransformSnapshot`, `ToggleTerastallized` (gen9, unreachable in
+        //     gen3), and the switch-flow flags -- no render arm at all.
+        //   * `ToggleBatonPassing` -- sets a flag DECORATING an existing `|switch|`.
+        Instruction::SetRestSleepPendingRefund(_)
+        | Instruction::DecrementPP(_)
+        | Instruction::SetRestTurns(_)
+        | Instruction::ChangeSubstituteHealth(_)
+        | Instruction::ChangeWish(_)
+        | Instruction::DecrementWish(_)
+        | Instruction::SetFutureSight(_)
+        | Instruction::DecrementFutureSight(_)
+        | Instruction::ChangeType(_)
+        | Instruction::ChangeAbility(_)
+        | Instruction::FormeChange(_)
+        | Instruction::ChangeTransformSnapshot(_)
+        | Instruction::ToggleTerastallized(_)
+        | Instruction::SetSideOneMoveSecondSwitchOutMove(_)
+        | Instruction::SetSideTwoMoveSecondSwitchOutMove(_)
+        | Instruction::ToggleBatonPassing(_)
+        | Instruction::ToggleShedTailing(_)
+        | Instruction::ToggleSideOneForceSwitch
+        | Instruction::ToggleSideTwoForceSwitch => Some("silent"),
+    }
+}
+
+/// The effect families this ambiguous tail contains that the walk would DROP.
+///
+/// Empty means fully renderable, and the branch is kept as telemetry-only. Non-empty
+/// means the branch is refused, and the slug names WHY -- which is the whole point.
+///
+/// Era 59 measured `sleeptalk_called_unidentified:ambiguous_unrenderable` at 8,149 world
+/// failures, the single largest world-level refusal in the era and 51.6% of the abort
+/// channel, as ONE opaque key. There was no way to tell whether closing it needed
+/// `-boost`, `-status`, `-heal`, `-sidestart` or the Substitute family, so no fix could
+/// be scoped or ranked. This is the treatment #1030 gave `attract_empty_tail_ambiguous`,
+/// which is why that class arrives already broken into 17 measurable sub-cases and this
+/// one did not.
+///
+/// The only prior figure was 10 `[Boost]` and 6 `[DamageSubstitute, RemoveVolatileStatus]`
+/// over the 16-tail ORACLE CORPUS. That is not a production distribution and is not
+/// assumed to be one here: 16 hand-built tails cannot rank a class of 8,149.
+/// Keep a family only if it is REGISTERED; otherwise degrade to `unclassified`.
+///
+/// Extracted as a seam so the `else` branch is reachable from a test. Inlined, it was not:
+/// every family the classifier emits is registered, so no input could take that branch and
+/// DELETING the degradation left the whole suite green -- while the behaviour difference is
+/// real and severe. Proven by paired mutation: with an unregistered token, keeping this
+/// yields a measurable `unclassified` key; removing it panics through
+/// `assert_subcase_vocabulary` on the production render path, and a pyo3 panic is
+/// `BaseException`-derived while `engine_search.py` catches only `Exception` -- so the
+/// failure mode was a dead campaign worker.
+///
+/// `order` is a parameter rather than a direct read of `UNRENDERABLE_FAMILY_ORDER` for
+/// exactly one reason: a test can pass a deliberately short list and reach the branch.
+fn registered_family_or_unclassified(family: &'static str, order: &[&str]) -> &'static str {
+    if order.contains(&family) {
+        family
+    } else {
+        "unclassified"
+    }
+}
+
+fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
+    let mut families: Vec<&'static str> = Vec::new();
+    for instruction in tail {
+        // An UNREGISTERED token degrades to `unclassified` here, which is in both the
+        // order list and the vocabulary. That makes `assert_subcase_vocabulary`
+        // UNREACHABLE from this path by construction, and the difference is not
+        // cosmetic: pyo3 maps a Rust panic to `PanicException`, which derives from
+        // `BaseException` specifically so it propagates past ordinary handlers, and
+        // `engine_search.py` catches only `except Exception`. So the old behaviour --
+        // sort an unknown token last and let the assert fire -- meant a DEAD CAMPAIGN
+        // WORKER, which is strictly worse than the bad aggregate key the assert exists
+        // to prevent.
+        //
+        // The realistic sequence that would have hit it: the engine adds a variant, the
+        // exhaustive match forces an author to write `Some("newfamily")`, the author
+        // forgets `UNRENDERABLE_FAMILY_ORDER`, and the release wheel aborts mid-campaign.
+        // Now that path yields a measurable `unclassified` bucket instead, and the test
+        // below still fails in CI so the omission is caught before it ships.
+        if let Some(family) = unrenderable_family(instruction) {
+            let family = registered_family_or_unclassified(family, UNRENDERABLE_FAMILY_ORDER);
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+    }
+    families.sort_by_key(|family| {
+        UNRENDERABLE_FAMILY_ORDER
+            .iter()
+            .position(|known| known == family)
+            // Now genuinely unreachable: every token reaching here was just checked for
+            // membership. `usize::MAX` rather than a panic for the same reason as above.
+            .unwrap_or(usize::MAX)
+    });
+    families
+}
+
+/// `ambiguous_unrenderable`, with the blocking families named.
+///
+/// Kept next to the classifier so the `:`-joined shape and the contract-tag prefix stay
+/// visible together. The prefix must remain `SLEEPTALK_LOSSY_TAG`, since
+/// `mark_attribution_unsafe_subcase` asserts it and
+/// `engine_transition_differential.py` matches the bare tag exactly.
+fn ambiguous_unrenderable_slug(tail: &[Instruction]) -> String {
+    let families = unrenderable_tail_families(tail);
+    // Unreachable: this slug is only built when the tail is NOT fully renderable, which
+    // is defined as a non-empty family list. Named rather than emitting a bare trailing
+    // colon so a future edit that breaks that correspondence shows up in the measurement.
+    let joined = if families.is_empty() {
+        "unclassified".to_string()
+    } else {
+        families.join("+")
+    };
+    format!("{SLEEPTALK_LOSSY_TAG}:ambiguous_unrenderable:{joined}")
 }
 
 /// Why `identify_sleep_talk_called` could not name the called move.
@@ -3949,6 +4287,22 @@ pub fn branch_events(
 mod tests {
     use super::*;
 
+    // Two of the SIX shapes the renderable allowlist admits are only constructible with
+    // these, and `the_renderable_allowlist_is_exactly_what_it_was` pins all six. Imported
+    // here rather than at module scope so the non-test build keeps its current import set.
+    use poke_engine::instruction::{
+        ApplyVolatileStatusInstruction, ChangeDamageDealtDamageInstruction,
+        ChangeDamageDealtMoveCategoryInstruction, ChangeItemInstruction,
+        ChangeSideConditionInstruction, ChangeStatInstruction, ChangeWishInstruction,
+        ChangeSubsituteHealthInstruction, ChangeType, DecrementPPInstruction,
+        DisableMoveInstruction,
+        HealInstruction,
+        SetFutureSightInstruction, SetLastUsedMoveInstruction, SetSleepTurnsInstruction,
+        SwitchInstruction, ToggleBatonPassingInstruction,
+        ToggleDamageDealtHitSubstituteInstruction,
+    };
+    use poke_engine::state::{LastUsedMove, PokemonMoveIndex};
+
     /// #1048 VALIDATED: every confident Sleep Talk attribution names the callee
     /// the ENGINE actually used. 0 wrong attributions over 1,271 branches.
     ///
@@ -4388,6 +4742,609 @@ mod tests {
             "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
              printed above, and the comment here on what else must be updated."
         );
+    }
+
+    /// The refactor must not change WHICH branches are refused.
+    ///
+    /// `ambiguous_tail_is_fully_renderable` was an inline `matches!` pair and is now
+    /// defined as `unrenderable_tail_families(tail).is_empty()`. That is only a
+    /// refactor if the admitted set is byte-identical -- widening it by one variant
+    /// stops refusing a class of worlds, which is a behaviour change to the largest
+    /// failure class in the program, and narrowing it starts refusing worlds that
+    /// already worked. Neither would fail any other test in this file.
+    ///
+    /// Pinned in BOTH directions, and this time the claim is true. The first version said
+    /// "the six admitted shapes must render, and one representative of every blocked
+    /// family must not" while testing FOUR of six and FOUR of fourteen. Review found four
+    /// allowlist mutations that left all 376 tests green:
+    ///
+    /// * `Heal(_) => None` admits an explicit HP INCREASE -- exactly the C52-mirror defect
+    ///   this predicate exists for, and the variant the doc block spends 11 lines on had
+    ///   no representative at all.
+    /// * The volatile family `=> None` lets an unrendered `-start`/`-end` reach the fold.
+    /// * `Switch(_) => Some(..)` starts refusing Roar/Whirlwind ambiguities that worked.
+    /// * `ChangeDamageDealt* => Some(..)` starts refusing Counter/Mirror Coat tails.
+    ///
+    /// The oracle test is only a partial backstop and is blind to SINGLE-family
+    /// widenings: widening `substitute` alone stays green because `RemoveVolatileStatus`
+    /// still blocks those tails, and widening `volatile` alone stays green because
+    /// `DamageSubstitute` does. So coverage has to be exhaustive here, not sampled.
+    #[test]
+    fn the_renderable_allowlist_is_exactly_what_it_was() {
+        // ALL SIX admitted shapes. Three were missing before, so narrowing mutations on
+        // them passed.
+        let admitted: Vec<Instruction> = vec![
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 10,
+            }),
+            // Zero is a no-op and was admissible before; `>= 0`, not `> 0`.
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 0,
+            }),
+            Instruction::Switch(SwitchInstruction {
+                side_ref: SideReference::SideOne,
+                previous_index: PokemonIndex::P0,
+                next_index: PokemonIndex::P1,
+            }),
+            Instruction::SetLastUsedMove(SetLastUsedMoveInstruction {
+                side_ref: SideReference::SideOne,
+                last_used_move: LastUsedMove::None,
+                previous_last_used_move: LastUsedMove::None,
+            }),
+            Instruction::ChangeDamageDealtDamage(ChangeDamageDealtDamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_change: 5,
+            }),
+            Instruction::ChangeDamageDealtMoveCatagory(ChangeDamageDealtMoveCategoryInstruction {
+                side_ref: SideReference::SideOne,
+                move_category: MoveCategory::Physical,
+                previous_move_category: MoveCategory::Status,
+            }),
+            Instruction::ToggleDamageDealtHitSubstitute(
+                ToggleDamageDealtHitSubstituteInstruction {
+                    side_ref: SideReference::SideOne,
+                },
+            ),
+        ];
+        for instruction in &admitted {
+            assert_eq!(
+                unrenderable_family(instruction),
+                None,
+                "{instruction:?} was admitted by the previous allowlist and must stay \
+                 admitted -- widening or narrowing this set changes which worlds refuse"
+            );
+        }
+        assert!(
+            ambiguous_tail_is_fully_renderable(&admitted),
+            "a tail built only from admitted instructions must be fully renderable"
+        );
+
+        // ONE REPRESENTATIVE PER BLOCKED FAMILY, all sixteen. `Heal` is first because it
+        // is the variant review found most likely to be mistakenly admitted -- the whole
+        // C52-mirror doc block is about it -- and it previously had no representative at
+        // all, so `Heal(_) => None` left every test green.
+        let blocked: Vec<(Instruction, &str)> = vec![
+            (
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 40,
+                }),
+                "heal",
+            ),
+            (
+                // The load-bearing sign case: `Damage` is SIGNED, and negative is the
+                // engine's spelling for a heal (Pain Split). Same family as `Heal`
+                // because what the walk drops is identical -- an HP increase.
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: -130,
+                }),
+                "heal",
+            ),
+            (
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: 1,
+                }),
+                "boost",
+            ),
+            (
+                // NOT `boost`: the engine emits `Change<Stat>` from `recalculate_stats`
+                // on mega/forme/transform and it carries no `-boost` line.
+                Instruction::ChangeAttack(ChangeStatInstruction {
+                    side_ref: SideReference::SideOne,
+                    amount: 20,
+                }),
+                "statrecalc",
+            ),
+            (
+                Instruction::ChangeStatus(ChangeStatusInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: PokemonIndex::P0,
+                    old_status: PokemonStatus::NONE,
+                    new_status: PokemonStatus::SLEEP,
+                }),
+                "status",
+            ),
+            (
+                // NOT `status`: the named path renders these as `|cant|...|slp`.
+                Instruction::SetSleepTurns(SetSleepTurnsInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: PokemonIndex::P0,
+                    new_turns: 3,
+                    previous_turns: 0,
+                }),
+                "sleepcounter",
+            ),
+            (
+                // NOT `sleepcounter`, though it looks like it: `SetRestTurns` has no render
+                // arm. The engine emits it right after `ChangeStatus(-> SLEEP)` when Rest is
+                // used, so the lines belong to that ChangeStatus and the accompanying Heal.
+                // Mutation showed moving it into `sleepcounter` survived until this existed.
+                Instruction::SetRestTurns(SetSleepTurnsInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: PokemonIndex::P0,
+                    new_turns: 3,
+                    previous_turns: 0,
+                }),
+                "silent",
+            ),
+            (
+                // Was `identity`. The named path's own arm renders a single `|-transform|`
+                // and applies ChangeType/ChangeAbility/FormeChange silently, so only
+                // `ChangeItem` in that old group named real missing work.
+                Instruction::ChangeType(ChangeType {
+                    side_ref: SideReference::SideOne,
+                    new_types: (PokemonType::NORMAL, PokemonType::TYPELESS),
+                    old_types: (PokemonType::WATER, PokemonType::TYPELESS),
+                }),
+                "silent",
+            ),
+            (
+                Instruction::DamageSubstitute(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: 20,
+                }),
+                "substitute",
+            ),
+            (
+                // NOT `substitute`. Creation emits this with `Damage` +
+                // `ApplyVolatileStatus(SUBSTITUTE)`, break with
+                // `RemoveVolatileStatus(SUBSTITUTE)` -- so a `volatile` or `substitute`
+                // companion is ALWAYS present and the line to emit is theirs. Filed under
+                // `substitute` it made a Substitute-CREATION tail report
+                // `substitute+volatile` when only the `volatile` line is missing: a false
+                // positive in the bucket most likely to be ranked first. Mutation showed
+                // this misfiling survived until this representative existed.
+                Instruction::ChangeSubstituteHealth(ChangeSubsituteHealthInstruction {
+                    side_ref: SideReference::SideOne,
+                    health_change: -20,
+                }),
+                "silent",
+            ),
+            (
+                Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+                    side_ref: SideReference::SideOne,
+                    volatile_status: PokemonVolatileStatus::SUBSTITUTE,
+                }),
+                "volatile",
+            ),
+            (
+                Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
+                    side_ref: SideReference::SideOne,
+                    side_condition: PokemonSideCondition::Spikes,
+                    amount: 1,
+                }),
+                "sidecondition",
+            ),
+            (
+                Instruction::DecrementWeatherTurnsRemaining,
+                "weather",
+            ),
+            (
+                Instruction::DecrementTerrainTurnsRemaining,
+                "field",
+            ),
+            (
+                Instruction::DisableMove(DisableMoveInstruction {
+                    side_ref: SideReference::SideOne,
+                    move_index: PokemonMoveIndex::M0,
+                }),
+                "moveslot",
+            ),
+            (
+                Instruction::ChangeWish(ChangeWishInstruction {
+                    side_ref: SideReference::SideOne,
+                    wish_amount_change: 50,
+                }),
+                "silent",
+            ),
+            (
+                Instruction::SetFutureSight(SetFutureSightInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: PokemonIndex::P0,
+                    previous_pokemon_index: PokemonIndex::P0,
+                }),
+                "silent",
+            ),
+            (
+                Instruction::ChangeItem(ChangeItemInstruction {
+                    side_ref: SideReference::SideOne,
+                    current_item: Items::NONE,
+                    new_item: Items::LEFTOVERS,
+                }),
+                "item",
+            ),
+            (
+                Instruction::ToggleBatonPassing(ToggleBatonPassingInstruction {
+                    side_ref: SideReference::SideOne,
+                }),
+                "silent",
+            ),
+            (
+                // NOT `pp`: there is no `-pp` line in the protocol. `silent` says the
+                // truth -- no public line on any path.
+                Instruction::DecrementPP(DecrementPPInstruction {
+                    side_ref: SideReference::SideOne,
+                    move_index: PokemonMoveIndex::M0,
+                    amount: 1,
+                }),
+                "silent",
+            ),
+        ];
+        for (instruction, family) in &blocked {
+            assert_eq!(
+                unrenderable_family(instruction),
+                Some(*family),
+                "{instruction:?} must be blocked and classified as {family:?}"
+            );
+            assert!(
+                !ambiguous_tail_is_fully_renderable(std::slice::from_ref(instruction)),
+                "{instruction:?} carries an effect the walk drops, so its tail is not \
+                 fully renderable"
+            );
+        }
+
+        // EVERY family in the order list has a representative above, except the
+        // `unclassified` escape hatch which no instruction maps to. Without this, adding
+        // a family and forgetting to cover it silently reopens the gap review found.
+        let covered: Vec<&str> = blocked.iter().map(|(_, f)| *f).collect();
+        for family in UNRENDERABLE_FAMILY_ORDER {
+            if *family == "unclassified" {
+                continue;
+            }
+            assert!(
+                covered.contains(family),
+                "family {family:?} is in UNRENDERABLE_FAMILY_ORDER but has no \
+                 representative instruction in this test, so a mutation admitting it \
+                 would pass"
+            );
+        }
+    }
+
+    /// The slug names the blocking families, in FIXED order, deduplicated.
+    ///
+    /// Era 59 measured `ambiguous_unrenderable` at 8,149 world failures as one opaque
+    /// key, so nothing said whether closing it needed `-boost`, `-status`, `-heal` or
+    /// the Substitute family. These three properties are what make the replacement key
+    /// summable: a stable order (encounter order would split one composition across
+    /// several keys), dedup (two Boosts are one family), and the contract-tag prefix.
+    #[test]
+    fn the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed() {
+        let boost = Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        });
+        let second_boost = Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideTwo,
+            stat: PokemonBoostableStat::Attack,
+            amount: 2,
+        });
+        let status = Instruction::ChangeStatus(ChangeStatusInstruction {
+            side_ref: SideReference::SideOne,
+            pokemon_index: PokemonIndex::P0,
+            old_status: PokemonStatus::NONE,
+            new_status: PokemonStatus::SLEEP,
+        });
+
+        // Two Boosts are ONE family token.
+        assert_eq!(
+            unrenderable_tail_families(&[boost.clone(), second_boost]),
+            vec!["boost"],
+            "repeated instructions in the same family must collapse to one token"
+        );
+
+        // FIXED order, not encounter order. `boost` precedes `status` in
+        // UNRENDERABLE_FAMILY_ORDER, so both instruction orders give the same slug --
+        // otherwise one composition splits across two keys and neither sums.
+        let forward = ambiguous_unrenderable_slug(&[boost.clone(), status.clone()]);
+        let reversed = ambiguous_unrenderable_slug(&[status, boost.clone()]);
+        assert_eq!(forward, reversed, "slug must not depend on instruction order");
+        assert_eq!(
+            forward,
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:boost+status"
+        );
+
+        // The prefix is the CONTRACT tag. `engine_transition_differential.py` matches
+        // the bare tag exactly, and `mark_attribution_unsafe_subcase` asserts this
+        // relationship, so a slug that lost the prefix would panic in production.
+        assert!(ambiguous_unrenderable_slug(&[boost]).starts_with(SLEEPTALK_LOSSY_TAG));
+    }
+
+    /// Every token the classifier can emit must be ORDERABLE and REGISTERED.
+    ///
+    /// `unrenderable_tail_families` sorts by position in `UNRENDERABLE_FAMILY_ORDER` and
+    /// falls back to `usize::MAX` for an unknown token. That fallback is deliberate --
+    /// losing slug ordering is not worth aborting a search over -- but it means a family
+    /// added to the classifier and forgotten in the order list degrades SILENTLY to
+    /// encounter-order-dependent keys. And `assert_subcase_vocabulary` would then panic
+    /// in production, on the release wheel, where the assert is compiled in.
+    ///
+    /// Limit stated honestly: this checks the families a representative instruction can
+    /// reach, not all 50 engine variants. The exhaustive `match` in `unrenderable_family`
+    /// is what makes a NEW variant a compile error; this is what makes a new TOKEN a
+    /// test failure.
+    #[test]
+    fn every_classifier_token_is_registered_and_orderable() {
+        for family in UNRENDERABLE_FAMILY_ORDER {
+            assert_eq!(
+                UNRENDERABLE_FAMILY_ORDER
+                    .iter()
+                    .filter(|other| *other == family)
+                    .count(),
+                1,
+                "{family:?} appears twice in UNRENDERABLE_FAMILY_ORDER, so sort position \
+                 depends on which copy `position` finds"
+            );
+        }
+        let reachable = [
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideOne,
+                stat: PokemonBoostableStat::Defense,
+                amount: 1,
+            }),
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: -1,
+            }),
+            Instruction::ChangeStatus(ChangeStatusInstruction {
+                side_ref: SideReference::SideOne,
+                pokemon_index: PokemonIndex::P0,
+                old_status: PokemonStatus::NONE,
+                new_status: PokemonStatus::SLEEP,
+            }),
+            Instruction::DamageSubstitute(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 20,
+            }),
+        ];
+        for instruction in &reachable {
+            let family = unrenderable_family(instruction)
+                .expect("these representatives are all blocked families");
+            assert!(
+                UNRENDERABLE_FAMILY_ORDER.contains(&family),
+                "{family:?} is emitted by the classifier but missing from \
+                 UNRENDERABLE_FAMILY_ORDER, so its slug position is unstable and \
+                 `assert_subcase_vocabulary` will panic on the release wheel"
+            );
+        }
+    }
+
+    /// An unregistered token must panic, not mint a 37th untraceable aggregate key.
+    ///
+    /// This is what replaces the `&'static str` bound on `subcase`. That bound made an
+    /// unbounded key set unrepresentable; relaxing it to allow a COMPOSED slug would
+    /// have given that protection up for nothing if the vocabulary check did not
+    /// actually reject. Note it is a plain `assert!`, so it holds on the `--release`
+    /// campaign wheel too -- a `debug_assert!` would guard only `cargo test`.
+    #[test]
+    #[should_panic(expected = "unregistered token")]
+    fn a_subcase_token_outside_the_vocabulary_is_refused() {
+        assert_subcase_vocabulary(
+            SLEEPTALK_LOSSY_TAG,
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:invented_family",
+        );
+    }
+
+    /// The PAIRED-TAG assert, which nothing pinned.
+    ///
+    /// `mark_attribution_unsafe_subcase` asserts `subcase.starts_with(lossy_tag)`, and its
+    /// own comment says why: a branch whose contract tag and measurement reason disagree
+    /// changes which branches `engine_transition_differential.py` accepts, with nothing to
+    /// notice. Review found the assert survives DELETION with all 376 tests green -- this
+    /// PR added a `should_panic` for the new vocabulary check and left the older, more
+    /// consequential one uncovered.
+    #[test]
+    #[should_panic(expected = "does not belong to lossy tag")]
+    fn a_subcase_naming_a_different_class_is_refused() {
+        let mut out = RenderedEvents::default();
+        out.mark_attribution_unsafe_subcase(SLEEPTALK_LOSSY_TAG, "attract_empty_tail_ambiguous:miss");
+    }
+
+    /// The SIBLING paired-tag assert, in `mark_lossy_subcase`.
+    ///
+    /// Found while mutation-testing the one above: `mark_attribution_unsafe_subcase` and
+    /// `mark_lossy_subcase` each assert the same tag/sub-case relationship, and
+    /// neutralising the one in `mark_lossy_subcase` left every test green. Pre-existing
+    /// gap, not introduced here, but it is the same assert guarding the same contract on
+    /// the branch-USABLE path -- where a mismatched tag changes which branches the
+    /// differential accepts without refusing anything, so nothing would be loud.
+    #[test]
+    #[should_panic(expected = "does not belong to lossy tag")]
+    fn a_lossy_subcase_naming_a_different_class_is_refused() {
+        let mut out = RenderedEvents::default();
+        out.mark_lossy_subcase(SLEEPTALK_LOSSY_TAG, "attract_empty_tail_ambiguous:miss");
+    }
+
+    /// The full slug ORDER, not just one adjacent pair.
+    ///
+    /// `the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed` pins `boost` before
+    /// `status`, which leaves 14 of 16 token positions free: review showed swapping `heal`
+    /// and `substitute` in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
+    /// era-over-era with every test green. Cross-era comparability is the entire value of
+    /// a stable slug, so the whole sequence is pinned.
+    ///
+    /// If you are DELIBERATELY reordering, update this list and say so in the commit --
+    /// era N and era N+1 keys stop matching for any composition spanning the moved token.
+    #[test]
+    fn the_family_order_is_pinned_in_full() {
+        assert_eq!(
+            UNRENDERABLE_FAMILY_ORDER,
+            &[
+                "boost",
+                "statrecalc",
+                "status",
+                "sleepcounter",
+                "heal",
+                "substitute",
+                "volatile",
+                "sidecondition",
+                "weather",
+                "field",
+                "moveslot",
+                "item",
+                "silent",
+                "unclassified",
+            ],
+            "the emitted slug order changed; era-over-era keys will not match for any \
+             composition spanning a moved token"
+        );
+    }
+
+    /// An unregistered family must degrade to a measurable key, NOT abort the worker.
+    ///
+    /// pyo3 maps a Rust panic to `PanicException`, which derives from `BaseException`
+    /// precisely so it propagates past ordinary handlers, and `engine_search.py` catches
+    /// only `except Exception`. So a vocabulary miss on the release wheel -- where this is
+    /// a plain `assert!`, by design -- killed the campaign worker rather than producing a
+    /// bad aggregate key. Strictly worse than the thing the assert prevents.
+    ///
+    /// `unrenderable_tail_families` now maps an unregistered token to `unclassified`,
+    /// which is in both lists, making the assert unreachable from this path by
+    /// construction.
+    ///
+    /// The DEGRADATION itself, reachable now that it lives behind a seam.
+    ///
+    /// Deleting the degradation used to leave the whole suite green. Not because the
+    /// behaviour difference was unobservable -- it is severe, a dead campaign worker versus
+    /// a measurable key -- but because no input could reach the `else` branch through the
+    /// inlined form, since every family the classifier emits is registered. Review's fix
+    /// was a seam, not a 50-variant enumeration: enumerating variants would have been
+    /// exactly as vacuous, 50x longer, because every variant maps to a REGISTERED token.
+    #[test]
+    fn an_unregistered_family_degrades_to_unclassified() {
+        // A deliberately short order list makes `boost` unregistered, which no real input
+        // can achieve. This is the branch that stands between a future forgotten
+        // registration and an aborted worker.
+        assert_eq!(
+            registered_family_or_unclassified("boost", &["status", "heal"]),
+            "unclassified"
+        );
+        // And a registered family passes through untouched.
+        assert_eq!(
+            registered_family_or_unclassified("boost", UNRENDERABLE_FAMILY_ORDER),
+            "boost"
+        );
+        // `unclassified` must itself be registered, or the degradation would produce a
+        // token that panics in `assert_subcase_vocabulary` -- turning the guard into the
+        // very abort it exists to prevent.
+        assert!(UNRENDERABLE_FAMILY_ORDER.contains(&"unclassified"));
+        assert!(SUBCASE_VOCABULARY.contains(&"unclassified"));
+    }
+
+    /// COVERAGE LIMIT, stated because the first version of this test overstated it. That
+    /// version re-implemented the registered/unclassified choice inline in the test body
+    /// and asserted on its own copy -- so it passed whether or not the production code did
+    /// the same thing, and mutation confirmed it: DELETING the degradation from
+    /// `unrenderable_tail_families` leaves the whole suite green. It was the vacuous shape
+    /// this file already records twice.
+    ///
+    /// PRECISELY WHAT IS AND IS NOT CAUGHT, because I got this wrong twice.
+    ///
+    /// `an_unregistered_family_degrades_to_unclassified` pins the HELPER
+    /// (`registered_family_or_unclassified`) through the seam review suggested: inverting
+    /// its branch fails that test. What is still NOT caught is deleting the CALL from
+    /// `unrenderable_tail_families` -- mutation confirms that leaves the suite green. That
+    /// is the same direct-test-versus-wiring-test gap as the vocabulary check, and unlike
+    /// there it cannot be closed the same way: no real input reaches the branch, since
+    /// every family the classifier emits is registered, so a wiring test would need a
+    /// test-only injection point in production code.
+    ///
+    /// My earlier claim that "no test CAN catch that deletion" was wrong in one direction
+    /// and my replacement claim that "that deletion is now caught" was wrong in the other.
+    /// The accurate statement is the two sentences above. The reasoning below still explains
+    /// why the branch takes no real input:
+    /// the degradation is only reachable via a token absent from
+    /// `UNRENDERABLE_FAMILY_ORDER`, and no such token exists -- every family the classifier
+    /// can emit is registered, which `every_classifier_token_is_registered_and_orderable`
+    /// and the coverage loop in `the_renderable_allowlist_is_exactly_what_it_was` both
+    /// depend on. So the degradation is DEFENCE IN DEPTH for a future edit that adds a
+    /// family and forgets to register it. Removing it is harmful only together with that
+    /// second mistake.
+    ///
+    /// What this test does assert, through the real production functions: a registered
+    /// family produces a slug the marker accepts without panicking. What it does not
+    /// assert is the degradation's own existence. Anyone deleting it should know they are
+    /// removing a guard the suite cannot miss.
+    #[test]
+    fn a_registered_family_reaches_the_marker_without_panicking() {
+        let boost = Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        });
+        let families = unrenderable_tail_families(std::slice::from_ref(&boost));
+        assert_eq!(families, vec!["boost"]);
+        for family in &families {
+            assert!(
+                UNRENDERABLE_FAMILY_ORDER.contains(family),
+                "{family:?} is emitted but unregistered, so the release wheel would abort"
+            );
+        }
+        let mut out = RenderedEvents::default();
+        out.mark_attribution_unsafe_subcase(
+            SLEEPTALK_LOSSY_TAG,
+            &ambiguous_unrenderable_slug(std::slice::from_ref(&boost)),
+        );
+        assert!(out.is_attribution_unsafe());
+    }
+
+    /// The vocabulary check must be WIRED IN, not merely present.
+    ///
+    /// The test above calls `assert_subcase_vocabulary` directly, so it stays green if the
+    /// call is deleted from `mark_attribution_unsafe_subcase` -- it would pin a function
+    /// nothing invokes, which is the vacuous-test shape that has already cost this program
+    /// a wheel break and a negative control that asserted nothing. This one goes through
+    /// the marker, so removing the call fails it.
+    #[test]
+    #[should_panic(expected = "unregistered token")]
+    fn the_marker_itself_rejects_an_unregistered_token() {
+        let mut out = RenderedEvents::default();
+        out.mark_attribution_unsafe_subcase(
+            SLEEPTALK_LOSSY_TAG,
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:invented_family",
+        );
+    }
+
+    /// The slugs actually shipped must pass their own gate.
+    #[test]
+    fn the_live_subcase_slugs_are_all_in_vocabulary() {
+        for slug in [
+            sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
+            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched),
+        ] {
+            assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
+        }
+        let boost = Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        });
+        assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, &ambiguous_unrenderable_slug(&[boost]));
     }
 
     /// The ROUTING decision, tested directly for every variant.
