@@ -191,11 +191,32 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # the recorded chosen candidate. That is NOT what production builds, so these gates would ratify
 # a symmetric self-side write rather than catch it. Verify against engine_search's world, not
 # the gate's.
-# NUMERIC_MON_SWITCHED_VS_ACTIVE / NUMERIC_MON_STAYED_VS_ACTIVE used to be listed here.
-# They were never a designed freeze: `matchup_counters` lived in the fold but was not carried on
-# ProductsData, so the leaf fell through to the root row's `opponent_matchup_switch_evidence`.
-# The pair is now written from the fold (encoder.rs write_opponent_mon_history), so it is
-# MUST-MATCH and belongs in no excuse class -- if it regresses to frozen, this harness reports it.
+# The matchup pair, written from the fold since `matchup_counters` reached `ProductsData`. It used
+# to sit in V4_ROOT_FROZEN_PACK_COLUMNS below, which was never a designed freeze -- the counters
+# lived in the fold but were not carried on ProductsData, so the leaf fell through to the root
+# row's `opponent_matchup_switch_evidence`.
+#
+# It is NOT in an excuse class and it is NOT gated by raw count either: a leaf fold advanced over
+# synthesized lines can legitimately count an event reality did not, which is the documented `fold`
+# class. What is gated is the RELATIONSHIP that made surfacing correct -- measured over a 12-game
+# v4 corpus at 1271 boundaries, every boundary where the matchup pair diverges is also one where
+# the ALREADY-live tendency triple diverges (4 and 4, a 1:1 set match). A regression to the frozen
+# behaviour breaks that instantly: the pair went to 380 + 194 divergent boundaries while the
+# tendency columns stayed at 4. So `matchup_excess` = boundaries where the pair diverges and no
+# live tendency column does, and that gates the exit code.
+V4_MATCHUP_PAIR_COLUMNS = frozenset(
+    {"NUMERIC_MON_SWITCHED_VS_ACTIVE", "NUMERIC_MON_STAYED_VS_ACTIVE"}
+)
+
+# The already-live twin on the same tokens, same fold, 1/64 instead of 1/8. The two PAIRED
+# counters only: NUMERIC_MON_TURNS_ACTIVE_TOTAL is deliberately excluded even though it is the
+# third member of the same triple, because it counts turns rather than stay-or-switch events and
+# diverges on 91 of these boundaries -- letting it excuse a matchup divergence would loosen the
+# subset from 4 boundaries to 95 and let most of a full regression through.
+V4_LIVE_TENDENCY_COLUMNS = frozenset(
+    {"NUMERIC_MON_SWITCHED_BEFORE_ATTACK", "NUMERIC_MON_STAYED_AND_ATTACKED"}
+)
+
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
     {
         "NUMERIC_TRUANT_LOAF",
@@ -223,10 +244,13 @@ def classify(
     tags: set[str],
     reveal_pp: bool = False,
 ) -> str:
-    # BEFORE the fold prefix rule on purpose. The matchup pair is named NUMERIC_MON_*, so the
-    # prefix would sweep it into `fold` — an accepted class, but the wrong reason: nothing about
-    # it is fold-derived at the leaf today. Being accidentally accepted by a name coincidence is
-    # how a divergence stops being reviewed.
+    # BEFORE the fold prefix rule on purpose, and it still is, for the reason the rule was
+    # written: the matchup pair is named NUMERIC_MON_*, so the prefix would sweep it into `fold`
+    # by name coincidence, and being accidentally accepted is how a divergence stops being
+    # reviewed. It IS fold-derived at the leaf now, so `fold` would be the right class for the
+    # wrong reason -- it gets its own label instead, and `matchup_excess` below gates it.
+    if column in V4_MATCHUP_PAIR_COLUMNS:
+        return "matchup_fold"
     if column in V4_ROOT_FROZEN_PACK_COLUMNS:
         return "root_frozen_pack"
     if block == "transition" or column.startswith(
@@ -612,6 +636,9 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
 
     counts: Counter[str] = Counter()
     class_rows: Counter[str] = Counter()
+    # Gate state for the matchup pair; see V4_MATCHUP_PAIR_COLUMNS.
+    matchup_boundaries: set[tuple[str, str, int]] = set()
+    tendency_boundaries: set[tuple[str, str, int]] = set()
     families: Counter[tuple[str, str, str, str]] = Counter()
     family_examples: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
@@ -763,10 +790,22 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                     class_rows[klass] += 1
                 for family in row_families:
                     families[family] += 1
+                boundary = (battle_id, seat, row_n["decision_round_index"])
+                for family in row_families:
+                    if family[3] in V4_MATCHUP_PAIR_COLUMNS:
+                        matchup_boundaries.add(boundary)
+                    elif family[3] in V4_LIVE_TENDENCY_COLUMNS:
+                        tendency_boundaries.add(boundary)
 
+    # Boundaries where the fold-driven matchup pair diverges but NO live tendency column does.
+    # Sorted for a stable report; the count is what gates.
+    matchup_excess = sorted(matchup_boundaries - tendency_boundaries)
     return {
         "corpus": str(corpus_dir),
         "boundaries": sum(len(c) - 1 for c in raw["fold_chains"].values() if len(c) > 1),
+        "matchup_divergent_boundaries": len(matchup_boundaries),
+        "live_tendency_divergent_boundaries": len(tendency_boundaries),
+        "matchup_excess": [list(entry) for entry in matchup_excess],
         "counts": dict(sorted(counts.items())),
         "class_rows": dict(sorted(class_rows.items())),
         "families": [
@@ -796,6 +835,7 @@ def main(argv=None) -> int:
     tables = json.loads(tables_json)
     reports = []
     defect_rows = 0
+    matchup_excess_rows = 0
     for corpus_dir in args.corpus:
         report = run_corpus(corpus_dir, tables_json, tables)
         reports.append(report)
@@ -818,10 +858,22 @@ def main(argv=None) -> int:
         defect_rows += report["class_rows"].get("state", 0) + report["class_rows"].get(
             "turn", 0
         )
+        excess = report.get("matchup_excess") or []
+        print(
+            f"   matchup pair: {report['matchup_divergent_boundaries']} divergent boundaries, "
+            f"live tendency {report['live_tendency_divergent_boundaries']}, "
+            f"excess {len(excess)}"
+        )
+        for entry in excess[:5]:
+            print(f"     excess boundary {entry}")
+        matchup_excess_rows += len(excess)
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
     print(f"\nDEFECT-CLASS (state+turn) divergent boundaries: {defect_rows}")
-    return 0 if defect_rows == 0 else 1
+    # Gated alongside state+turn rather than folded into them: it is a different KIND of finding
+    # (a broken relationship, not a wrong cell) and collapsing it would hide which one fired.
+    print(f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): {matchup_excess_rows}")
+    return 0 if defect_rows == 0 and matchup_excess_rows == 0 else 1
 
 
 if __name__ == "__main__":

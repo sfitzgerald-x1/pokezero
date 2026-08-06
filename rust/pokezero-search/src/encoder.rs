@@ -3294,6 +3294,26 @@ fn write_opponent_mon_history(
         .iter()
         .map(|s| normalize_identifier(s))
         .collect();
+    // Hoisted for the same reason `cb_pinned` is: both are loop-invariant, and the matchup table
+    // is (their mon x our mon), so a per-token `.find()` that normalized as it went would
+    // allocate two Strings per candidate cell per token -- up to ~36 cells against the tendency
+    // lookup's <=6, inside the MCTS leaf-pricing closure that ROW_WRITE_NANOS times.
+    let our_active = self_mons
+        .iter()
+        .find(|mon| mon.active())
+        .map(|mon| normalize_identifier(&mon.species()))
+        .filter(|species| !species.is_empty());
+    let matchup_keys: Vec<(String, String)> = products
+        .tendency_stats
+        .opponent_mon_matchups
+        .iter()
+        .map(|cell| {
+            (
+                normalize_identifier(&cell.species),
+                normalize_identifier(&cell.opposing_species),
+            )
+        })
+        .collect();
     for (slot, mon) in opponent_mons.iter().take(limit).enumerate() {
         let token = opponent_offset + slot;
         let species_key = normalize_identifier(&mon.species());
@@ -3347,23 +3367,19 @@ fn write_opponent_mon_history(
             // of the (their mon x our mon) table whose `opposing_species` is OUR CURRENT
             // active, absent active or absent cell meaning an honest (0, 0).
             if layout.is_v4() && layout.stats_block {
-                let ours = self_mons
-                    .iter()
-                    .find(|mon| mon.active())
-                    .map(|mon| normalize_identifier(&mon.species()))
-                    .filter(|species| !species.is_empty());
                 // Later entries win, as in the tendency lookup above: production keys a dict by
                 // normalized species and Python's builder assigns in iteration order.
-                let cell = ours.as_ref().and_then(|ours| {
+                let cell = our_active.as_ref().and_then(|ours| {
                     products
                         .tendency_stats
                         .opponent_mon_matchups
                         .iter()
+                        .zip(matchup_keys.iter())
                         .rev()
-                        .find(|cell| {
-                            normalize_identifier(&cell.species) == species_key
-                                && normalize_identifier(&cell.opposing_species) == *ours
+                        .find(|(_, (species, opposing))| {
+                            *species == species_key && opposing == ours
                         })
+                        .map(|(cell, _)| cell)
                 });
                 for (column, count) in [
                     (

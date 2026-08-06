@@ -780,10 +780,19 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         )
         sys.path.remove(str(SCRIPTS))
 
-    def _driveable_row(self):
-        """The first p1 row whose engine world builds, with its fold state and encoder.
+    def _driveable_row(
+        self, *, evidence: str = "any", min_opponent_tokens: int = 1
+    ):
+        """The first p1 row matching the predicates, with its fold state and encoder.
 
-        Returns (row, fold_payload, encoder, state_str, ours, theirs, turn).
+        Preconditions are SELECTED on, not asserted after the fact: an earlier revision picked the
+        first driveable row and then asserted its metadata evidence was empty, so a fixture change
+        (or row 0 ceasing to build a world) turned a precondition into a red test that said nothing
+        about the code under review.
+
+        `evidence` is "empty" | "nonempty" | "any" for the row's
+        `opponent_matchup_switch_evidence`. Returns
+        (row, fold_payload, all_fold_payloads, encoder, state_str, ours, theirs, turn).
         """
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.engine_world import EngineWorldUnsupported, battle_spec_from_payload
@@ -803,6 +812,13 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         games = {game.record.battle_id: game for game in corpus.games}
         for index, row in enumerate(corpus.decision_rows):
             if row.player_id != "p1" or index not in folds:
+                continue
+            found = row.observation_metadata.get("opponent_matchup_switch_evidence") or {}
+            if evidence == "empty" and found:
+                continue
+            if evidence == "nonempty" and not found:
+                continue
+            if len(row.observation_metadata.get("opponent_team") or ()) < min_opponent_tokens:
                 continue
             game = games[row.battle_id]
             packed = {
@@ -856,13 +872,17 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             return (
                 row,
                 folds[index],
+                folds,
                 encoder,
                 state_str,
                 ours,
                 theirs,
                 int(metadata.get("turn_number") or 0),
             )
-        self.skipTest("no committed-sample p1 row could be driven into an engine world")
+        self.skipTest(
+            f"no committed-sample p1 row with evidence={evidence} and "
+            f">={min_opponent_tokens} opponent tokens could be driven into an engine world"
+        )
 
     def _matchup_columns(self, encoder, state_str, fold, turn):
         layout = self.tables["layout"]
@@ -879,16 +899,18 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         )
 
     def test_a_fold_advance_moves_the_pair_the_root_metadata_cannot_explain(self) -> None:
-        row, fold_payload, encoder, state_str, ours, theirs, turn = self._driveable_row()
-        # The load-bearing precondition. The chosen row's metadata evidence must be EMPTY, so a
-        # nonzero column after the advance cannot have come from the frozen metadata under any
-        # reading -- without this the test would pass on the frozen code the moment the root row
-        # happened to carry a nonzero pair.
-        self.assertEqual(
-            row.observation_metadata.get("opponent_matchup_switch_evidence") or {},
-            {},
-            "row's metadata evidence is non-empty, so a nonzero leaf column proves nothing",
-        )
+        # Evidence EMPTY by SELECTION: a nonzero column after the advance then cannot have come
+        # from the frozen metadata under any reading.
+        (
+            row,
+            fold_payload,
+            _folds,
+            encoder,
+            state_str,
+            ours,
+            theirs,
+            turn,
+        ) = self._driveable_row(evidence="empty")
         before = self._matchup_columns(
             encoder,
             state_str,
@@ -939,12 +961,24 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         test then passes vacuously, which is how its first revision managed to fail against
         correct code.
         """
-        row, fold_payload, encoder, state_str, ours, theirs, turn = self._driveable_row()
+        (
+            row,
+            fold_payload,
+            _folds,
+            encoder,
+            state_str,
+            ours,
+            theirs,
+            turn,
+        ) = self._driveable_row(evidence="empty")
         bench = next(
             (
                 entry
                 for entry in row.observation_metadata["self_team"]
-                if not entry.get("active") and entry.get("species") and entry.get("details")
+                if not entry.get("active")
+                and entry.get("species")
+                and entry.get("details")
+                and entry.get("condition")
             ),
             None,
         )
@@ -979,6 +1013,216 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             ([0.0] * len(after[0]), [0.0] * len(after[1])),
             "the pair moved for a matchup against a mon we do not have out -- the write reads "
             "the species row without conditioning on our active",
+        )
+
+
+    def test_an_empty_fold_cell_ZEROES_a_nonzero_metadata_pair(self) -> None:
+        """The unconditional write, which is the half that actually removes the freeze.
+
+        The surrounding tendency code writes only `if count != 0`. This pair must not: at the leaf
+        the metadata may carry a nonzero pair from the ROOT (conditioned on the root's active)
+        while the fold has no cell for the CURRENT facing, and a guarded write would leave the
+        root's number standing. That is the common shape in a search line -- switch our active and
+        every metadata cell keyed by opponent species is now answering the wrong question.
+
+        Independent review found that the two tests above never exercise it, because both select a
+        row whose metadata evidence is empty, so the value being overridden is always already zero.
+        """
+        (
+            row,
+            fold_payload,
+            folds,
+            encoder,
+            state_str,
+            _ours,
+            _theirs,
+            turn,
+        ) = self._driveable_row(evidence="nonempty")
+        evidence = row.observation_metadata["opponent_matchup_switch_evidence"]
+        species_order = [
+            entry["species"] for entry in row.observation_metadata["opponent_team"]
+        ]
+        # The token whose metadata pair is nonzero, and which half of the pair it is.
+        target = next(
+            (
+                (index, half)
+                for index, species in enumerate(species_order)
+                for half in (0, 1)
+                if (evidence.get(species.lower().replace("-", "").replace(" ", "")) or (0, 0))[
+                    half
+                ]
+            ),
+            None,
+        )
+        if target is None:
+            self.skipTest("row's metadata evidence carries no nonzero half to override")
+        index, half = target
+        # Control: with the row's OWN fold the column is nonzero, so the fixture really does put a
+        # live value on this cell and the zero below is about the empty fold, not a broken encode.
+        own = self._matchup_columns(
+            encoder,
+            state_str,
+            pokezero_search.FoldState.from_payload(fold_payload),
+            turn,
+        )
+        self.assertNotEqual(
+            own[half][index], 0.0, "control: the row's own fold did not light the cell"
+        )
+        # A fold with no matchup cells at all. Row 0's is the empty one; assert rather than trust,
+        # since "no cells" is the entire premise.
+        empty_fold_payload = folds[min(folds)]
+        overridden = self._matchup_columns(
+            encoder,
+            state_str,
+            pokezero_search.FoldState.from_payload(empty_fold_payload),
+            turn,
+        )
+        self.assertEqual(
+            overridden[half][index],
+            0.0,
+            "an empty fold cell left the root metadata's nonzero pair standing -- the write is "
+            "guarded on count != 0 and the freeze survives wherever the live cell is empty",
+        )
+
+    def test_the_pair_is_conditioned_on_WHICH_opponent_mon_each_token_is(self) -> None:
+        """The species half of the filter, which needs a row with more than one opponent token.
+
+        Independent review found the "exactly one token lit" assertion above cannot fail on a
+        single-token row: the write loop runs once, so dropping the `species` conjunct from the
+        cell lookup passed every test. On a two-token row it paints the active's counts onto the
+        bench token.
+        """
+        (
+            row,
+            fold_payload,
+            _folds,
+            encoder,
+            state_str,
+            _ours,
+            _theirs,
+            turn,
+        ) = self._driveable_row(min_opponent_tokens=2)
+        species_order = [
+            entry["species"] for entry in row.observation_metadata["opponent_team"]
+        ]
+        pair = self._matchup_columns(
+            encoder,
+            state_str,
+            pokezero_search.FoldState.from_payload(fold_payload),
+            turn,
+        )
+        lit = {
+            (half, index)
+            for half in (0, 1)
+            for index in range(len(species_order))
+            if pair[half][index] != 0.0
+        }
+        # Non-vacuity: some cell must be lit, or "the other token is zero" is trivially true.
+        self.assertTrue(
+            lit, "no matchup cell is lit on this row, so the species filter is not exercised"
+        )
+        # And the lit cells must not span two different opponent tokens for the same half: each
+        # opponent mon has its own row in the (their mon x our mon) table.
+        for half in (0, 1):
+            tokens = {index for lit_half, index in lit if lit_half == half}
+            self.assertLessEqual(
+                len(tokens),
+                1,
+                f"half {half} lit {len(tokens)} opponent tokens on a "
+                f"{len(species_order)}-token row -- the cell lookup is not filtered by species, "
+                "so one mon's counts are painted onto the others",
+            )
+
+
+@unittest.skipUnless(_available(), "requires numpy, the native crate, and a Showdown checkout")
+@unittest.skipUnless(
+    pokezero_search is not None
+    and hasattr(pokezero_search, "NativeEncoder")
+    and hasattr(pokezero_search, "FoldState"),
+    "wheel lacks NativeEncoder/FoldState",
+)
+class V4FoldBearingBoundaryEncodeTest(unittest.TestCase):
+    """Byte-exact `encode_with_fold` over the v4 sample — the products-bearing BOUNDARY encode.
+
+    This path had no v4 gate, which independent review caught. `RustBackend.encode` calls
+    `encode_decision` with no fold, so products are None and the matchup pair comes from the
+    metadata; the byte-exact v4 parity test above therefore never reaches the new write. The only
+    `encode_with_fold` byte-parity tests, `test_leaf_encoder.py::RustFoldFullSurfaceTest` and
+    `test_rust_encoder_v3.py`, both run on v3 fixtures where `layout.is_v4()` is false and the
+    block is inert.
+
+    It matters because `encode_with_fold` is the dataset-build backend
+    (`golden_encoder_backends.py::RustFoldBackend`) and the cross-backend comparison surface
+    (`scripts/validate_rust_encoder.py`). There the fold-driven write overrides Python's
+    metadata-derived one at the ROOT, where both are live and must agree — so a future skew
+    between the batch fold (`transitions.py::_fold_replay`) and the incremental one would silently
+    rewrite training bytes rather than failing anything.
+    """
+
+    def test_every_v4_sample_row_encodes_byte_exact_with_its_fold(self) -> None:
+        sys.path.insert(0, str(SCRIPTS)) 
+        try:
+            import export_encoder_tables
+            from golden_encoder_backends import row_inputs_from_decision_row
+        finally:
+            sys.path.remove(str(SCRIPTS))
+        from pokezero.golden_corpus import (
+            GOLDEN_ARRAY_FIELDS,
+            GOLDEN_CORPUS_SCHEMA_VERSION,
+            load_golden_corpus,
+        )
+        from pokezero.golden_corpus_fold import iter_fold_records
+
+        tables_json = json.dumps(
+            export_encoder_tables.build_tables(
+                str(_showdown_root()),
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        corpus = load_golden_corpus(SAMPLE_DIR)
+        folds = {
+            int(record["array_row_index"]): record["fold_state"]
+            for record in iter_fold_records(
+                SAMPLE_DIR, expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION
+            )
+        }
+        # The fixture must be v4, or this class silently re-tests the inert path it exists to
+        # replace -- which is the exact defect it was written for.
+        self.assertEqual(
+            corpus.header["observation"]["schema_version"],
+            OBSERVATION_SCHEMA_VERSION_V4,
+            "sample is not a v4 corpus, so the matchup write is inert here",
+        )
+        encoder = pokezero_search.NativeEncoder(tables_json)
+        driven = 0
+        for index, row in enumerate(corpus.decision_rows):
+            if index not in folds:
+                continue
+            fold = pokezero_search.FoldState.from_payload(folds[index])
+            buffers = encoder.encode_with_fold(
+                json.dumps(row_inputs_from_decision_row(row), sort_keys=True), fold
+            )
+            for name, dtype, _ in GOLDEN_ARRAY_FIELDS:
+                want = numpy.ascontiguousarray(getattr(row.arrays, name), dtype=dtype)
+                got = numpy.frombuffer(buffers[name], dtype=dtype).reshape(want.shape)
+                self.assertEqual(
+                    got.tobytes(),
+                    want.tobytes(),
+                    f"row {index} array {name} diverged from golden",
+                )
+            driven += 1
+        # Non-vacuity: the loop must actually have compared rows whose metadata evidence is
+        # nonzero, or a byte-exact pass says nothing about the matchup columns specifically.
+        self.assertGreater(driven, 0, "no v4 sample row could be encoded with its fold")
+        self.assertTrue(
+            any(
+                row.observation_metadata.get("opponent_matchup_switch_evidence")
+                for row in corpus.decision_rows
+            ),
+            "no sample row carries matchup evidence, so byte-exactness does not exercise the pair",
         )
 
 
