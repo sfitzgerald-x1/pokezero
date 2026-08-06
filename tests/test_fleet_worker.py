@@ -176,6 +176,8 @@ class ClaimTests(unittest.TestCase):
         self.assertTrue((self.queue / "pending" / "i7-s0.env").exists())
         self.assertFalse(list((self.queue / "claimed").iterdir()))
         self.assertFalse(list((self.queue / "failed").iterdir()))
+        # Absent, correctly: a relative route is rejected before the preflight runs, so
+        # nothing creates it. Contrast the post-preflight test, where it DOES exist.
         self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
 
     def test_persisted_fanin_manifest_rejects_relative_output_route(self) -> None:
@@ -328,7 +330,12 @@ class ClaimTests(unittest.TestCase):
             1,
         )
         self.assertFalse(list((self.queue / "failed").iterdir()))
-        self.assertFalse((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
+        # PRESENT: the preflight ran and created it, and it is now left in place. It is a
+        # permanent protocol directory -- _fanin_route_record creates it unconditionally and
+        # never removes it -- and deleting it on failure raced every peer running the same
+        # probe, which runs once per pending candidate BEFORE any claim. Asserting its absence
+        # pinned exactly that bug.
+        self.assertTrue((self.queue / fleet_worker._FANIN_ROUTE_DIRECTORY).exists())
 
     def test_fanin_claim_lease_binds_the_manifest_generation_that_was_parsed(self) -> None:
         from unittest.mock import patch
@@ -491,7 +498,12 @@ class ClaimTests(unittest.TestCase):
         self.assertTrue((self.queue / "pending" / "i7-s0.env").exists())
         self.assertFalse(list((self.queue / "claimed").iterdir()))
         self.assertFalse(list((self.queue / "failed").iterdir()))
-        self.assertFalse(route_directory.exists())
+        # The route directory is LEFT IN PLACE. It is a permanent part of the protocol --
+        # _fanin_route_record creates it unconditionally and never removes it -- and deleting it
+        # on a probe failure raced every peer running the same probe, which runs once per
+        # pending candidate BEFORE any claim. That race reintroduced the terminal rc=2 class
+        # this whole change exists to remove. Asserting its absence pinned the bug.
+        self.assertTrue(route_directory.exists())
 
 
 class WorkerLoopTests(unittest.TestCase):

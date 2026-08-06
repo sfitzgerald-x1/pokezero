@@ -380,8 +380,11 @@ def _fanin_directory_identity(observed: os.stat_result) -> tuple[int, int]:
     identity witnesses are written to the shared cache and re-checked by other
     workers, so every field in one must be a property of the file rather than of
     the observing client. ``S_IFMT`` keeps a directory from being confused with a
-    same-inode file; inode reuse (the race these witnesses exist for) is caught by
-    the inode itself, which ``st_dev`` never discriminated anyway.
+    same-inode file; inode reuse is closed by the SHA-256 that every durable FILE
+    witness carries beside this identity -- a colliding inode would have to be byte-identical,
+    which is not corruption. Directory identities carry no hash and reuse is not caught, but
+    ``(st_dev, st_ino)`` did not catch it either: ``st_dev`` is uniform across a cache tree, so
+    it only ever distinguished a different filesystem mounted at the same path.
     """
     return observed.st_ino, stat.S_IFMT(observed.st_mode)
 
@@ -992,12 +995,18 @@ def _fanin_staging_lease_is_active(staging: Path, producer_token: str) -> bool:
         payload = _read_fanin_authoritative_json(
             _fanin_staging_lease_path(staging), "staging producer lease",
         )
-    except FanInInventoryValidationError:
-        # A lease that changes under this read is a producer *renewing* it --
-        # the most direct evidence there is that its staging is still owned.
-        # Reporting it active only ever prevents a reclaim, never causes one,
-        # so this is strictly more conservative than either failing the sweep
-        # or treating the unreadable lease as dead.
+    except FanInInventoryValidationError as exc:
+        # A lease that CHANGED under this read is a producer *renewing* it -- the most direct
+        # evidence there is that its staging is still owned. Reporting it active only ever
+        # prevents a reclaim, never causes one.
+        #
+        # Deliberately narrowed to that case. A blanket except also swallowed a lease pathname
+        # that is a DIRECTORY, a SYMLINK, or unreadable (EACCES), reporting the staging owned
+        # forever so it was never reclaimed -- and note the asymmetry it created: malformed JSON
+        # below still returns False (reclaimable), so garbage read as dead while a symlink read
+        # as alive. Those are real faults; fail-safe is not the same as silent.
+        if "changed" not in str(exc):
+            raise
         return True
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "producer_token", "renewed_at"}:
         return False
@@ -3750,7 +3759,16 @@ def _fsync_directory(path: Path) -> None:
 
 def _preflight_fanin_location(path: Path, location: str) -> None:
     """Probe one mount for the local atomic operations fan-in relies on."""
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        # `mkdir(exist_ok=True)` re-raises when its post-EEXIST is_dir() recheck fails, which a
+        # concurrent peer can cause. The stat below is the real existence check.
+        pass
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {location} filesystem probe directory cannot be created: {path}"
+        ) from exc
     _fanin_authoritative_directory_stat(path, f"{location} filesystem probe directory")
     token = f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
     source_a = path / f"{token}.source-a"
@@ -3836,49 +3854,34 @@ def _preflight_fanin_location(path: Path, location: str) -> None:
         shutil.rmtree(moved, ignore_errors=True)
 
 
-def _remove_fanin_probe_directory(directory: Path, queue: Path) -> None:
-    """Drop a probe-created route directory unless a peer already adopted it.
-
-    The probe creates this directory only when it did not exist. Between the
-    probe and its cleanup another worker can bind a route record inside it --
-    that is the steady state this directory exists for, not a filesystem fault,
-    so a non-empty (or already-removed) directory must be left in place rather
-    than reported as a capability failure.
-    """
-    try:
-        directory.rmdir()
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        if exc.errno in (errno.ENOTEMPTY, errno.EEXIST, errno.EBUSY):
-            return
-        raise FanInInventoryValidationError(
-            f"fan-in route-CAS probe cleanup failed: {directory}"
-        ) from exc
-    _fsync_directory(queue)
-
-
 def _preflight_fanin_route_directory(queue: Path) -> None:
-    """Probe the exact directory that will host the route-record link CAS."""
+    """Probe the exact directory that will host the route-record link CAS.
+
+    The directory is created if absent and then LEFT IN PLACE. It is a permanent part of the
+    protocol -- ``_fanin_route_record`` creates it unconditionally with ``exist_ok=True`` and
+    never removes it -- so there is nothing to clean up, and removing it is actively harmful.
+
+    An earlier version of this probe deleted the directory it had created, which raced every
+    peer running the same probe: this preflight runs once per PENDING CANDIDATE INSPECTED,
+    before any claim, so at 256 workers it hammers one shared pathname continuously. A peer's
+    rmdir landing between another worker's ``mkdir(exist_ok=True)`` and its internal ``is_dir``
+    recheck makes CPython re-raise FileExistsError, which reached run_worker as
+    "TERMINAL fan-in filesystem preflight failed" and killed the worker before it collected
+    anything -- reintroducing, in the fix, the exact rc=2 class the fix exists to remove.
+    Landing the same rmdir mid-probe instead surfaced as a bogus "filesystem lacks required
+    hard-link, mkdir, or same-directory rename support".
+    """
     directory = queue / _FANIN_ROUTE_DIRECTORY
-    created = False
     try:
-        directory.mkdir()
-        created = True
+        directory.mkdir(exist_ok=True)
     except FileExistsError:
+        # A peer created it between our check and ours; that is the steady state, not a fault.
         pass
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in route provenance directory cannot be created: {directory}"
         ) from exc
-    try:
-        _preflight_fanin_location(directory, "route-CAS")
-    except BaseException:
-        if created:
-            _remove_fanin_probe_directory(directory, queue)
-        raise
-    if created:
-        _remove_fanin_probe_directory(directory, queue)
+    _preflight_fanin_location(directory, "route-CAS")
 
 
 def _preflight_fanin_filesystems(queue: Path, cache_dir: Path) -> None:
