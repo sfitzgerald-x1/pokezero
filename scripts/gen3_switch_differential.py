@@ -754,18 +754,6 @@ def _residual_seats(lines, tag: str):
     return [seat for seat, found in _residual_sequence(lines) if found == tag]
 
 
-def _p2_leftovers_healed(lines) -> bool:
-    """True if p2's Leftovers ticked in the measured block.
-
-    This is the component the engine dropped on both rows v2 opened, so it is the
-    fact worth asserting: a switch cancelled where Showdown continues it leaves the
-    wrong Pokemon active and the tick cannot be attributed.
-    """
-    return any(
-        line.startswith("|-heal|p2a:") and "item: Leftovers" in line for line in lines
-    )
-
-
 def _spikes_landing_hp(lines):
     """The ``cur/max`` (or ``0 fnt``) p2 lands on after its Spikes hit."""
     for line in lines:
@@ -1066,11 +1054,32 @@ def _spec(name):
             turns=[("move seismictoss", "move splash"),
                    ("switch 2", "move pursuit")],
             measured=1, setup_step=0,
-            setup_landed=lambda L: _has(L, "|-damage|p2a: Houndoom"),
+            # Seismic Toss is fixed at the user's level, so 291 - 100 = 191 exactly.
+            # Pinning the number rather than "some damage happened" is what makes
+            # this a real gate: the residual fact below is only meaningful while p2
+            # is genuinely below max HP, and that is an arithmetic claim.
+            setup_landed=lambda L: _has(L, "|-damage|p2a: Houndoom|191/291"),
             facts=lambda L: {
                 "switch_happened": _has(L, "|switch|p1a: Snorlax"),
                 "switcher_fainted": _has(L, f"|faint|p1a: {bait_species}"),
-                "residual_ran": _p2_leftovers_healed(L),
+                "residual_ran": "p2a" in _residual_seats(L, "item: Leftovers"),
+                # The hint is the gen<=4 pursuitfaint branch announcing itself. Held
+                # as a FACT and not only as the KO arm's landmark, so the control
+                # asserts its ABSENCE -- otherwise nothing rules out both arms
+                # quietly taking the same path.
+                "hint_seen": _has(
+                    L,
+                    "Previously chosen switches continue in Gen 2-4 after a "
+                    "Pursuit target faints.",
+                ),
+                # Queue semantics is the subject of this pack, so order is asserted,
+                # not just membership.
+                "faint_precedes_switch": _ordered(
+                    L, f"|faint|p1a: {bait_species}", "|switch|p1a: Snorlax"
+                ),
+                "switch_precedes_residual": _ordered(
+                    L, "|switch|p1a: Snorlax", "|-heal|p2a: Houndoom"
+                ),
             },
             expect={
                 # The switch happens in BOTH arms. That is the whole point: the KO
@@ -1079,6 +1088,11 @@ def _spec(name):
                 "switch_happened": True,
                 "switcher_fainted": ko,
                 "residual_ran": True,
+                "hint_seen": ko,
+                # Only the KO arm has a faint to order; `_ordered` is False when
+                # either entry is absent, which is the correct reading here.
+                "faint_precedes_switch": ko,
+                "switch_precedes_residual": True,
             },
             landmark=(
                 (lambda L: _has(
