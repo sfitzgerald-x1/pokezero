@@ -914,20 +914,20 @@ class TransformAndEncoreTests(unittest.TestCase):
         ]
         self._assert_reason(payload, "self_moveset_mismatch")
 
-    def test_self_moveset_mismatch_message_can_attribute_the_cause(self) -> None:
-        """The refusal must record what separates its two candidate causes.
+    def test_self_moveset_mismatch_message_names_the_mon_and_the_live_causes(self) -> None:
+        """The refusal must record what separates its LIVE causes.
 
         Era 59 measured 365 killed decisions here, 44.8% of the construction channel,
-        and the mismatching move was one of exactly four: toxic, substitute, spore,
-        shadowball. Those look like a sampling defect -- but gen 3 Mimic copies the
-        TARGET's last used move, and those four are exactly what an opponent commonly
-        uses. So the move name is consistent with BOTH causes, and the old message
-        recorded nothing that told them apart, which is why the class sat unattributed
-        across three eras.
+        with the mismatching move always one of four: toxic, substitute, spore,
+        shadowball. An earlier version of this test asserted a `sampled_has_mimic` flag
+        on the theory that Mimic was one of two candidate causes. Review showed that
+        was dead: gen 3 randbats carries no Mimic in any set, and our own side's team is
+        not sampled at all -- `determinization._self_team_from_metadata_result` takes the
+        battle-start request moves verbatim -- so the flag could only ever read False.
 
-        `mimic` in the SAMPLED set is the discriminator: Mimic can only have overwritten
-        a slot the sample knew about. So the message carries the sampled set and an
-        explicit flag.
+        The live causes are root-snapshot-vs-current-request divergence and Transform,
+        which `active` and `sampled_has_transform` do separate. Scalars come before the
+        moveset list because analyze_probe.py truncates at reason[:88].
         """
 
         payload = _payload(self.dex)
@@ -943,40 +943,55 @@ class TransformAndEncoreTests(unittest.TestCase):
         # rolls up on reason.split(":")[0].
         self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
         message = str(caught.exception)
-        # First request-known move missing from the sample, in request order.
         self.assertIn("bodyslam", message)
-        # The sampled set, so a reader can see what we believed we had.
-        self.assertRegex(message, r"sampled moveset \[[a-z0-9,]+\]")
-        self.assertIn("sampled_has_mimic=False", message)
-        # And the label must no longer ASSERT a cause the evidence does not support.
-        self.assertNotIn("Transform/Mimic-class desync", message)
+        # Names the MON. `slot` alone is only the side, so the old message could not.
+        self.assertIn("Swampert", message)
+        # CONTENT of the root team, not merely its shape. An earlier version used
+        # assertRegex on the bracket shape, and replacing the whole list with "zzz"
+        # still passed -- vacuous on exactly the half that produced the Ditto finding.
+        self.assertIn("[earthquake,icebeam]", message)
+        self.assertIn("has_transform=False", message)
+        self.assertIn("active=", message)
+        # The scalars must precede the list AND fit inside analyze_probe's reason[:88]
+        # of the collapsed key, or the tool of record never sees them. Asserted against
+        # that exact truncation, because a version that merely reordered still lost
+        # has_transform.
+        recorded = message.split(": ")[-1][:88]
+        for field in ("Swampert", "active=", "has_transform=", "bodyslam"):
+            self.assertIn(field, recorded, recorded)
 
-    def test_self_moveset_mismatch_flags_a_mimic_carrying_sample(self) -> None:
-        """The other arm: when the sample DOES carry mimic, say so.
+    def test_self_moveset_mismatch_flags_a_transform_carrying_team(self) -> None:
+        """The other arm, using the discriminator that is actually reachable.
 
-        Without this the flag could be hardcoded False and every assertion above would
-        still pass -- the same shape as a negative control that never fires.
+        `transform` really is in gen 3 randbats -- on ditto and mew only -- so this is
+        the population the `is_transformed_active` guard is meant to suppress. Review
+        found 6 of 7 killed decisions in the golden corpus are a BENCHED, already-
+        reverted Ditto whose request row still lists the copied moves, where failing
+        closed is correct; and one is a belief/payload desync where the suppression
+        missed. This flag is what tells those apart in telemetry.
         """
 
-        # The SAMPLED set is what must carry mimic, so it comes from the override's
-        # packed team, not from the request rows.
-        mimic_swampert = replace(_SWAMPERT, moves=("earthquake", "mimic"))
+        # Keeps Swampert as the species: this fixture's dex has no Ditto, and swapping it
+        # in raises `species_unknown` before the guard is reached. The flag is
+        # species-independent -- it reads the root team's moves -- so the artificiality
+        # costs nothing here. Production's real carriers are ditto and mew.
+        transform_carrier = replace(_SWAMPERT, moves=("earthquake", "transform"))
         override = BattleStartOverride(
             player_teams={
-                "p1": pack_team(_team(mimic_swampert, _STARMIE)),
+                "p1": pack_team(_team(transform_carrier, _STARMIE)),
                 "p2": pack_team(_team(_SNORLAX, _STARMIE)),
             },
         )
         payload = _payload(self.dex)
         payload["sides"]["p1"]["pokemon"][0]["moves"] = [
-            {"id": "spore", "pp": 15, "maxpp": 24, "disabled": False},
+            {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
         ]
 
         with self.assertRaises(EngineWorldUnsupported) as caught:
             battle_spec_from_payload(payload, override, dex=self.dex)
 
         self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
-        self.assertIn("sampled_has_mimic=True", str(caught.exception))
+        self.assertIn("has_transform=True", str(caught.exception))
 
     def test_self_moveset_mismatch_fails_closed_SEATED_AT_P2(self) -> None:
         """The same guard, with the engine seated at p2 instead of p1.
