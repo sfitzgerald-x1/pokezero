@@ -7,7 +7,7 @@
 
 C116 Phase 4 item 12: one more row disposed of, as a **harness fix**. Era: branch
 `harness-leechseed-heal-label` off `main` `5a44c04e`; engine+crate fingerprint `6caef725b2…` →
-`98d5c558ce…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
+`683715808ca…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
 patch stack does not).
 
 > **On the C116 citation.** The plan lives outside this repository at the owner's instruction and is
@@ -197,9 +197,9 @@ rather than cited as if I had run it.)
 | window | engine | measured | full_round | matched | diverged |
 |---|---|---|---|---|---|
 | dev `19,000,000–19,000,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,432 | 15,968 | 15,430 | 2 |
-| dev | branch, fp `98d5c558ce…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
+| dev | branch, fp `683715808ca…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
 | validation holdout `19,100,000–19,100,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,551 | 16,155 | 15,546 | 5 |
-| validation holdout | branch, fp `98d5c558ce…` | 15,551 | 16,155 | **15,548** | **3** |
+| validation holdout | branch, fp `683715808ca…` | 15,551 | 16,155 | **15,548** | **3** |
 
 **Closed `19100014/35` and `19100193/46`. Nothing opened.** `boundaries_measured` and
 `boundaries_full_round` identical, identity holds on all four, `engine_errors` 0 in all four.
