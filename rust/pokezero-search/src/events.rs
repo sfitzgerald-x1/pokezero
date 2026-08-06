@@ -1936,7 +1936,14 @@ fn render_move_phase(
                     // engine variant is a narrated break in one position and a silent
                     // switch-out cleanup in another.
                     for (index, instruction) in called_tail.iter().enumerate() {
-                        if let Instruction::Boost(boost) = instruction {
+                        if boost_may_be_a_switch_out_reset(&called_tail, index) {
+                            // Unreachable while the classifier refuses these tails, and here
+                            // anyway so the walk cannot render what the classifier does not
+                            // admit. That pairing is the invariant; its reachability is not,
+                            // which is the whole lesson of the substitute-break correction.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                        } else if let Instruction::Boost(boost) = instruction {
                             // RENDER the boost, which is what lets an ambiguous
                             // Harden/Withdraw tail be searched instead of thrown away.
                             //
@@ -3124,11 +3131,15 @@ fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
 /// it. Encounter order would make the same tail composition produce different keys
 /// depending on instruction sequence -- the requirement attract's slug records too.
 const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
-    // `boost` is deliberately ABSENT: the walk renders it, so no arm can emit it. Removed
-    // rather than left in place, because a token no classifier can produce is dead weight in
-    // a vocabulary whose whole job is to be a closed, greppable set. `statrecalc` stays --
-    // `Change<Stat>` is the engine's recalculation, carries no protocol line, and is still
-    // unrendered.
+    // `boost` is BACK, after #1131 removed it. The removal reasoned "the walk renders it, so
+    // no arm can emit it" -- true for a move's own stat change, false for the switch-out reset
+    // Showdown does not narrate. The narrowed classifier can emit this token again, so leaving
+    // it out would push an emittable family through `registered_family_or_unclassified` and
+    // bucket a KNOWN cause as `unclassified`.
+    //
+    // Position is unchanged from before #1131 removed it, and no slug emitted in the interval
+    // could contain it, so no era-over-era key moves.
+    "boost",
     "statrecalc",
     "status",
     "sleepcounter",
@@ -3199,6 +3210,50 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// Deliberately reusable: `Boost` has the identical two-producer problem (a switch-out
 /// pushes a boost RESET that Showdown does not narrate), so that fix wants this same
 /// tail-and-index shape rather than a second bespoke rule.
+/// Is this `Boost` possibly a switch-out RESET rather than a narrated stat change?
+///
+/// `Boost` has the same two-producer problem the substitute break has, and #1131 admitted it
+/// unconditionally:
+///
+///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
+///   * `generate_instructions.rs`'s switch path calls `state.reset_boosts(&switching_side_ref,
+///     ..)` when `!baton_passing`, in the pre-switch block beside the volatile clears and the
+///     toxic reset. Showdown drops boosts inside `clearVolatile()` and narrates NOTHING. This
+///     crate's own `render_switch_phase` already gets that right: it renders only the
+///     `switched && boost.side_ref != side` Intimidate case and sends everything else through
+///     `_ => sim.apply(ins)`, commented "Pre-switch bookkeeping (volatile clears, boost
+///     resets, ...): no lines."
+///
+/// So the unnamed-callee walk contradicted sibling code in the same file, and a phaze tail
+/// rendered a phantom `|-unboost|`.
+///
+/// # Why this REFUSES rather than rendering nothing
+///
+/// Rendering nothing would also remove the phantom, and it is what `render_switch_phase`
+/// does. But it needs one more premise: that a legitimate boost and a same-side switch cannot
+/// co-occur in ONE callee tail. That looks true in gen3 -- the only damaging drag moves are
+/// post-gen3, and no gen3 status move both boosts and phazes -- but it is a REACHABILITY
+/// argument, and this exact arm has already been burned once for accepting one. Get it wrong
+/// and a real boost renders as SILENCE, which is a wrong world; refusing only loses one.
+///
+/// So: fail closed. A `Boost` with a same-side `Switch` later in the tail is not renderable,
+/// and the tail refuses under a reopened `boost` family. Measured cost on the attribution
+/// oracle: ZERO searchable worlds -- the tally is unchanged at (2614, 2377, 237, 0), because
+/// no corpus tail pairs the two. If production ever shows this family carrying real volume,
+/// the follow-up is to render nothing for the contiguous pre-switch run specifically, with
+/// its own pin. A family that reports its own size is how we would learn that is worth
+/// writing; a family silently folded into `None` is how we would not.
+fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
+    let boost = match tail.get(index) {
+        Some(Instruction::Boost(boost)) => boost,
+        _ => return false,
+    };
+    tail[index + 1..].iter().any(|later| match later {
+        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
+        _ => false,
+    })
+}
+
 fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideReference> {
     let remove = match tail.get(index)? {
         Instruction::RemoveVolatileStatus(remove)
@@ -3285,6 +3340,11 @@ fn unrenderable_family_at(tail: &[Instruction], index: usize) -> Option<&'static
         // arm into the `None` set is a BEHAVIOUR CHANGE by design -- it stops refusing a
         // class -- which is why `the_renderable_allowlist_is_exactly_what_it_was` had to be
         // updated deliberately rather than silently widened.
+        // REOPENED, and NARROWED rather than reverted. #1131 admitted every `Boost`: right
+        // for a move's own stat change, wrong for the switch-out reset Showdown does not
+        // narrate. See `boost_may_be_a_switch_out_reset` for why this refuses rather than
+        // rendering silence.
+        Instruction::Boost(_) if boost_may_be_a_switch_out_reset(tail, index) => Some("boost"),
         Instruction::Boost(_) => None,
         Instruction::ChangeAttack(_)
         | Instruction::ChangeDefense(_)
@@ -5437,10 +5497,59 @@ mod tests {
             );
         }
 
+        // TAIL-CONTEXT families, which a lone instruction cannot represent because the
+        // classifier's answer depends on what surrounds it. `boost` is one: a move's own stat
+        // change is renderable, the switch-out RESET is not, and the only difference is a
+        // later same-side `Switch`.
+        //
+        // A separate list rather than forced into `blocked` above, because that loop asserts
+        // on `from_ref(instruction), 0` and a lone `Boost` legitimately answers `None`.
+        // Collapsing the two would mean weakening that loop or writing a representative that
+        // lies about its own family.
+        let blocked_in_tail: Vec<(Vec<Instruction>, usize, &str)> = vec![(
+            vec![
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Attack,
+                    amount: -2,
+                }),
+                Instruction::Switch(SwitchInstruction {
+                    side_ref: SideReference::SideOne,
+                    previous_index: PokemonIndex::P0,
+                    next_index: PokemonIndex::P1,
+                }),
+            ],
+            0,
+            "boost",
+        )];
+        for (tail, index, family) in &blocked_in_tail {
+            assert_eq!(
+                unrenderable_family_at(tail, *index),
+                Some(*family),
+                "{tail:?} at {index} must be blocked as {family:?}"
+            );
+            assert!(
+                !ambiguous_tail_is_fully_renderable(tail),
+                "{tail:?} carries an effect the walk drops, so it is not fully renderable"
+            );
+            // ...and the SAME instruction WITHOUT the tail context must stay admitted, or the
+            // narrowing is a blanket revert of #1131 wearing a guard's clothes.
+            assert_eq!(
+                unrenderable_family_at(std::slice::from_ref(&tail[*index]), 0),
+                None,
+                "{:?} alone is a move's own stat change and must stay renderable",
+                tail[*index]
+            );
+        }
+
         // EVERY family in the order list has a representative above, except the
         // `unclassified` escape hatch which no instruction maps to. Without this, adding
         // a family and forgetting to cover it silently reopens the gap review found.
-        let covered: Vec<&str> = blocked.iter().map(|(_, f)| *f).collect();
+        let covered: Vec<&str> = blocked
+            .iter()
+            .map(|(_, f)| *f)
+            .chain(blocked_in_tail.iter().map(|(_, _, f)| *f))
+            .collect();
         for family in UNRENDERABLE_FAMILY_ORDER {
             if *family == "unclassified" {
                 continue;
@@ -5625,6 +5734,7 @@ mod tests {
         assert_eq!(
             UNRENDERABLE_FAMILY_ORDER,
             &[
+                "boost",
                 "statrecalc",
                 "status",
                 "sleepcounter",
