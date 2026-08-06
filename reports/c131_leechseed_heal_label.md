@@ -81,13 +81,24 @@ string** was wrong.
 > labels, both are now verified red against deleting their own line.
 
 The revert check was run properly rather than assumed: `events.rs` was restored to `main` and the
-two pin functions **grafted back on**, so the pins ran against the old ordering with nothing else
-changed. One failed, one passed. Reverting the whole file would have deleted the pins along with
-the fix and "passed" vacuously — the same shape that has cost this program a red gate before.
+pin functions **grafted back on**, so they ran against the old code with nothing else changed.
+**Both failed.** Reverting the whole file would have deleted the pins along with the fix and
+"passed" vacuously — the same shape that has cost this program a red gate before.
 
-The control matters because the naive fix is to test Leftovers first and stop. It pins that a
-seeded opponent **without** Leftovers still yields the drain label, so the reorder did not simply
-starve the Leech Seed branch.
+> **"One failed, one passed" is what this paragraph said for two revisions, and it was false.** It
+> was true of the *original* pin pair, before the second pin's assertion was flipped from
+> `[from] Leech Seed` to `[silent]`; after the flip, restoring `main`'s fallback fails **both**, and
+> reverting either half in isolation fails the corresponding one. I edited the assertion and left the
+> sentence describing the old measurement — the same substitution §7 is about, inside the very
+> section added to correct it. Verified by running each revert shape: whole fallback → 2 failures;
+> reorder only → `a_seeded_opponent_does_not_steal_the_leftovers_tag`; `String::new()` → `"Leech
+> Seed"` only → `without_leftovers_…`.
+
+The second pin is a **regression pin, not a control** — see the blockquote above; an earlier revision
+of this paragraph argued it was the latter and that framing is withdrawn, not just its table cell.
+What it constrains is real and worth stating plainly: a seeded opponent **without** Leftovers must
+still have its drain heal rendered `[silent]` rather than attributed to Leftovers, so the reorder
+cannot be "test Leftovers first and stop".
 
 ## 4. Gates
 
@@ -142,7 +153,21 @@ on the turn sand or hail expires the engine emits no chip, the plan books one, a
 the constant fallback — the `19100193/46` signature. Measured: without the gate that state yields
 `["item: Leftovers", "item: Leftovers"]`, the genuine drain mislabelled as a second Leftovers tick;
 with it the drain renders `[silent]`. Exactly `== 1`, not `<= 1`: the engine's decrement is gated on
-`turns_remaining > 0`, so a pre-residual 0 means *permanent* weather, which does keep chipping.
+`turns_remaining > 0`, so any value at or below 0 skips the decrement, keeps its type, and keeps
+chipping.
+
+**Permanent gen3 weather is `-1`, not `0`** — `gen3/abilities.rs:20`
+`WEATHER_ABILITY_TURNS: i8 = -1`, what Sand Stream / Drizzle / Drought write. An earlier revision of
+this line said `0`, naming a value that is merely *also* non-decrementing while missing the one the
+pool actually produces. That matters here specifically: Tyranitar, Kyogre and Groudon are all in the
+pool, and **row `19100014/35` — one of the two rows this change closes — is Tyranitar switching into
+its own sand.** Right conclusion, wrong stated reason, which is exactly what §7 is about.
+
+And the boundary is now **pinned**, not merely argued. A review changed `==` to `<=` and all 375
+tests stayed green, while that mutation disagrees with the engine in 60 of 1,200 enumerated
+weather states — every one in the permanent region — reintroducing the `19100193/46` mislabel
+wholesale. The expiry pin's second arm asserts that `turns_remaining == -1` still books its chip.
+Verified red against both `<= 1` and `!= 0`.
 
 ## 6. Sweep
 

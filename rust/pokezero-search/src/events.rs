@@ -3451,9 +3451,22 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
     // one, the side's plan goes unusable, and every label on it drops to the
     // constant fallback.
     //
-    // Exactly `== 1`, not `<= 1`: the engine's decrement is gated on
-    // `turns_remaining > 0`, so a pre-residual 0 means PERMANENT weather, whose
-    // type is never cleared and which therefore does keep chipping.
+    // Exactly `== 1`, never `<= 1`. The engine's decrement is gated on
+    // `turns_remaining > 0`, so any value at or below 0 skips the decrement, keeps
+    // its `weather_type`, and therefore KEEPS CHIPPING.
+    //
+    // PERMANENT gen3 weather is `-1`, not `0`: `gen3/abilities.rs:20`
+    // `WEATHER_ABILITY_TURNS: i8 = -1`, which is what Sand Stream, Drizzle and
+    // Drought write. An earlier version of this comment said `0`, naming a value
+    // that is merely also non-decrementing while missing the one the pool actually
+    // produces -- and Tyranitar, Kyogre and Groudon are all in the pool. Row
+    // `19100014/35`, one of the two rows this change closes, is Tyranitar switching
+    // into its own sand.
+    //
+    // So `<= 1` is not a stylistic variant, it is a regression that reintroduces the
+    // `19100193/46` mislabel across the whole permanent-weather region. Pinned by
+    // `expiring_weather_books_no_chip_so_the_drain_keeps_its_label`'s second arm,
+    // because a review changed `==` to `<=` and all 375 tests stayed green.
     if state.weather.turns_remaining == 1 {
         return None;
     }
@@ -5489,6 +5502,40 @@ mod tests {
             vec!["item: Leftovers".to_string()],
             "the drain heal must stay silent; a second `item: Leftovers` means the \
              plan was disabled by a chip the engine never emitted"
+        );
+
+        // THE BOUNDARY, and it was unpinned until a review broke it: `== 1` and not
+        // `<= 1`. PERMANENT weather is `turns_remaining == -1`
+        // (`gen3/abilities.rs:20` `WEATHER_ABILITY_TURNS`), written by Sand Stream,
+        // Drizzle and Drought. The engine's decrement is gated on
+        // `turns_remaining > 0`, so permanent weather never clears and DOES chip --
+        // the plan must book it. Under `<= 1` the chip is skipped, the plan comes up
+        // one short, and the drain is mislabelled as a second Leftovers tick across
+        // the entire permanent-weather region. That region is reachable: Tyranitar,
+        // Kyogre and Groudon are all in the pool, and row `19100014/35` is Tyranitar
+        // switching into its own sand.
+        let mut permanent = parse_state(MINIMAL.trim()).expect("fixture parses");
+        permanent.weather.weather_type = Weather::SAND;
+        permanent.weather.turns_remaining = -1;
+        {
+            let active = permanent.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        permanent
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        assert_eq!(
+            residual_tags(
+                &mut permanent,
+                &vec![damage_one(20), heal_one(20), heal_one(40)],
+                "p1a",
+            ),
+            vec!["Sandstorm".to_string(), "item: Leftovers".to_string()],
+            "permanent weather (turns_remaining -1) never expires, so its chip MUST \
+             still be booked; skipping it re-arms the 19100193/46 mislabel"
         );
     }
 
