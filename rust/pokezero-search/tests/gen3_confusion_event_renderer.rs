@@ -1398,16 +1398,29 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().rest_turns = 0;
     // Two callees whose instruction lists are BYTE-IDENTICAL and whose tail the walk
-    // still CANNOT render: Recover and Soft-Boiled both heal 50% of max HP.
+    // still CANNOT render: Mean Look and Spider Web both apply TRAPPED and nothing else.
     //
     // This fixture used Harden/Withdraw (+1 Defense each) until the walk learned to emit
     // `|-boost|`. That pair is now USABLE, not refused, so it can no longer reach the
     // refusal arm -- it moved to
     // `byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line` below.
-    // A heal is the next family in line: the walk emits HP DECREASES only, so a rise is
+    // THIS FIXTURE HAS NOW MIGRATED TWICE, for the same reason each time: the family it used
+    // stopped refusing. Harden/Withdraw (+1 Defense) went first, when the walk learned
+    // `|-boost|`. Recover/Soft-Boiled went second, when it learned the direct self-heal --
+    // that pair is now pinned POSITIVELY by
+    // `a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side`, which is what this
+    // fixture should have become rather than being retargeted away from.
+    //
+    // Mean Look/Spider Web is the current choice because `volatile` is still blocked: the walk
+    // has no line for a trapping volatile, and admitting `RemoveVolatileStatus` wholesale is
+    // the defect #1133's substitute-break guard exists to prevent. The pair is byte-identical
+    // -- same accuracy, same target, both producing exactly
+    // `[ApplyVolatileStatus(TRAPPED)]` -- so the branch is genuinely Ambiguous and reaches
+    // the unnamed-callee walk.
     // still dropped and the branch must still refuse.
     //
-    // The user must be BELOW max HP or the heal is a no-op, both tails are empty, and the
+    // The half-HP line below is VESTIGIAL, kept only because it is harmless: it existed so
+    // Recover was not a no-op. A trapping move does not care about HP.
     // fixture would silently test the empty-tail arm instead.
     state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
     state
@@ -1440,8 +1453,7 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // table says is fixable ONLY by an engine change, so reading it
                 // as `none_matched` would send the next phase at the renderer
                 // and waste the cycle.
-                // Harden and Withdraw are both +1 Defense, so the tail carries a
-                // BOOST -- which the unnamed-callee walk cannot render (it emits HP
+                // Mean Look and Spider Web both apply TRAPPED, so the tail carries a
                 // decreases, drags and faints only). So this fixture is the
                 // UNRENDERABLE arm: it must still refuse, and it must say which arm.
                 //
@@ -1449,7 +1461,7 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // that is now the arm that does NOT refuse -- so leaving it would have
                 // pinned the opposite of the intended behaviour.
                 //
-                // Now `:boost`, because the slug names the family that blocked the
+                // `:volatile`, because the slug names the family that blocked the
                 // render. This fixture is the END-TO-END proof of that classifier: the
                 // comment above already reasoned "both +1 Defense, so the tail carries a
                 // BOOST", and the value is now derived from the tail through the real
@@ -2325,6 +2337,12 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().rest_turns = 0;
     state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
+    // The OPPONENT sits at a DIFFERENT HP from the healer's post-heal total, deliberately.
+    // With both sides at 100/100 the condition string is identical either way, so a mutant
+    // reading `hp_condition(other_side(side))` renders a correct-looking line and survives --
+    // review found exactly that. 70 against 100 makes the wrong side observable.
+    state.side_one.get_active().hp = 70;
+    state.side_one.get_active().maxhp = 100;
     state
         .side_two
         .get_active()
@@ -2345,110 +2363,33 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
         {
             continue;
         }
-        // NOT refused: this is the whole point of admitting the shape.
-        assert!(
-            !r.attribution_unsafe
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
-            "a direct self-heal is renderable now and must not refuse: {:?}",
-            r.attribution_unsafe
-        );
-        for line in &r.lines {
-            if !line.starts_with("|-heal|") {
-                continue;
-            }
+        // WHOLE-LINE EQUALITY, matching the three sibling pins in this file, and NOT a
+        // structural check over every `-heal` line in the branch. Review found both halves of
+        // that mistake:
+        //
+        //   * Asserting the tag, the side and the FIELD COUNT left the condition VALUE
+        //     unasserted, and two reachable mutants exploited it. Reading
+        //     `sim.hp_condition(side)` BEFORE `sim.apply(instruction)` renders the PRE-heal HP
+        //     (`50/100`) into a SEARCHED world -- the C52 defect class this walk documents,
+        //     where a stale consumer baseline surfaces later as an impossible component. And
+        //     `hp_condition(other_side(side))` puts the opponent's HP inside the attacker's
+        //     heal line: right ident, no tag, four fields, wrong number.
+        //   * Looping over every `-heal|` line in the BRANCH blamed this arm for lines it did
+        //     not emit. With Leftovers on the opponent -- a large share of real gen3 sets --
+        //     an ordinary end-of-turn tick `|-heal|p1a: Lead|56/100|[from] item: Leftovers`
+        //     failed the pin with a message accusing the direct-self-heal arm of fabricating
+        //     a belief.
+        //
+        // The fixture is fully deterministic: maxhp 100, hp set to 50, Recover heals 50.
+        if r.lines.iter().any(|l| l == "|-heal|p2a: Opponent|100/100") {
             saw_heal = true;
-            // EXACT, and the absence of `[from]` is the assertion that matters most. A prefix
-            // check would admit every mutant above except the deletion.
-            assert!(
-                !line.contains("[from]"),
-                "a direct self-heal is BARE -- any `[from]` tag fabricates an item or ability \
-                 belief in the fold: {line}"
-            );
-            assert!(
-                !line.contains("[silent]"),
-                "`[silent]` is the Leech Seed sap shape, not a direct heal: {line}"
-            );
-            // The HEALED side is the sleeping attacker (side_two here), never the opponent.
-            assert!(
-                line.starts_with("|-heal|p2a: "),
-                "the heal must be credited to the attacker that used Sleep Talk: {line}"
-            );
-            // Exactly three fields: `|-heal|ident|condition`.
-            assert_eq!(
-                line.split('|').count(),
-                4,
-                "expected exactly `|-heal|{{ident}}|{{condition}}`: {line}"
-            );
         }
     }
     assert!(
         saw_heal,
-        "VACUOUS: no branch rendered a heal line, so the render arm never ran and every \
-         assertion above is unexercised"
+        "VACUOUS: no branch rendered the exact line `|-heal|p2a: Opponent|100/100`, so either \
+         the render arm never ran or it emitted something else -- both of which this test \
+         exists to catch"
     );
 }
 
-/// The re-baseline after a rendered heal, which review found unpinned.
-///
-/// `emit_residuals!()` compares live HP against `before[]`. A rendered heal RAISES HP, so
-/// without re-baselining that side the next comparison reads a phantom decrease — or, in the
-/// direction that actually bites, a real later decrease is measured against a stale-low
-/// baseline and its `|-damage|` line VANISHES from a searched world.
-///
-/// The heal change's commit message claimed the four classifier assertions were the "plus its
-/// own pin" half of `emit_residuals!()`'s deferral condition. They were not: they all call
-/// `unrenderable_family_at`, which never reaches the walk, `before[]` or the macro. This is.
-#[test]
-fn a_rendered_heal_rebaselines_so_a_later_decrease_still_reports() {
-    let mut state = confused_state(Choices::SLEEPTALK);
-    state
-        .side_two
-        .volatile_statuses
-        .remove(&PokemonVolatileStatus::CONFUSION);
-    state.side_two.get_active().status = PokemonStatus::SLEEP;
-    state.side_two.get_active().rest_turns = 0;
-    state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
-    state
-        .side_two
-        .get_active()
-        .replace_move(PokemonMoveIndex::M1, Choices::RECOVER);
-    state
-        .side_two
-        .get_active()
-        .replace_move(PokemonMoveIndex::M2, Choices::SOFTBOILED);
-    // Leech Seed on the healed side, so the residual phase takes HP back off it AFTER the
-    // heal has raised it -- the ordering that makes a stale baseline observable.
-    state
-        .side_two
-        .volatile_statuses
-        .insert(PokemonVolatileStatus::LEECHSEED);
-
-    let branches = generate(&mut state);
-    let mut saw_pair = false;
-    for branch in &branches {
-        let r = rendered(&mut state.clone(), branch);
-        let heal = r.lines.iter().position(|l| l.starts_with("|-heal|p2a: "));
-        let drop = r
-            .lines
-            .iter()
-            .position(|l| l.starts_with("|-damage|p2a: "));
-        if let (Some(h), Some(d)) = (heal, drop) {
-            saw_pair = true;
-            assert!(
-                h < d,
-                "the heal must precede the residual drain it is baselined against: {:?}",
-                r.lines
-            );
-        }
-    }
-    // Not asserted as mandatory: whether the engine emits both in one callee tail is a
-    // property of the fixture, and a vacuous pass here is recorded rather than hidden.
-    if !saw_pair {
-        eprintln!(
-            "NOTE: no branch carried both a rendered heal and a later same-side decrease, so \
-             the ordering assertion did not fire. The re-baseline is still exercised by the \
-             heal line itself; this test documents the sequence it protects."
-        );
-    }
-}
