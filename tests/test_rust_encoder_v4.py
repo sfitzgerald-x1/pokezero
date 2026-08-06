@@ -1202,7 +1202,15 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         cells = pokezero_search.FoldState.from_payload(fold_payload).to_payload().get(
             "matchup_counters"
         ) or {}
-        prior = f"p2|{team[target]['species']}|{ours}"
+        # Slot DERIVED, not hardcoded "p2". `_driveable_row` only returns p1 rows today, so a
+        # literal would be correct now and would silently stop matching if that filter ever
+        # loosened -- `any(...)` would be permanently False, the precondition would never fire, and
+        # the false accusation it exists to prevent would come back. Silently, which is the disease
+        # this class keeps re-catching.
+        opponent = "p2" if row.player_id == "p1" else "p1"
+        # Note `normalize_id` strips the `|` delimiters too, so this compares a delimiter-free
+        # concatenation. Unambiguous for real gen3 species; a fuzzy match, not a structured one.
+        prior = f"{opponent}|{team[target]['species']}|{ours}"
         if any(normalize_id(key) == normalize_id(prior) for key in cells):
             self.skipTest("the active opponent already holds a cell against our active")
         moved = pokezero_search.FoldState.from_payload(fold_payload)

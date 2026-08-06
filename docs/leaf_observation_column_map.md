@@ -246,9 +246,11 @@ and the engine's chance model); `engine_model` is bounded by the vendored
 engine's API and every member is tagged, counted, and — where it can corrupt
 a search — failed closed at world construction. None of these classes can
 silently grow: the differential's exit code gates `state`/`turn` at zero and
-`matchup_excess` at `MATCHUP_EXCESS_ALLOWANCE` (16, scaled down on corpora too
-small to produce that many divergences), and every class reallocation requires a
-documented rule in `scripts/leaf_vs_reality.py::classify`.
+`matchup_excess` at 1.25% of the boundaries a run actually COMPARED (floor 1,
+ceiling 16, which binds on no corpus in use today) -- so a run that skips most of
+its boundaries is judged on the work it did, not on the corpus it was handed --
+and every class reallocation requires a documented rule in
+`scripts/leaf_vs_reality.py::classify`.
 
 **The golden-v2 / scenarios counts in the table above are UNVERIFIED: they were
 produced by a harness carrying two breaks, both fixed here.** `leaf_vs_reality.py` read the

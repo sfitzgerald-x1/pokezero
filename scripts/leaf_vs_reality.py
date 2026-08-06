@@ -701,9 +701,13 @@ def gate_exit_code(
     `state`/`turn` keep a ZERO threshold: any member is a defect. The matchup arm gets an allowance,
     because its documented false-positive class produces excess in the ones while a desurfacing
     regression produces it in the hundreds -- measured 0 surfaced against 425 frozen. The allowance
-    is passed in rather than read from the module constant because it SCALES with corpus size; see
-    `matchup_excess_allowance`. Callers pass the WORST corpus's excess rather than the sum, so
-    adding passing corpora cannot dilute the gate.
+    is passed in rather than read from the module constant because it scales with the boundaries a
+    run actually COMPARED; see `matchup_excess_allowance`.
+
+    Called once PER CORPUS, with that corpus's own excess and allowance, and the verdicts OR'd. An
+    earlier revision passed the worst corpus's excess against the tightest corpus's allowance, which
+    gates on a cross-product whose halves can come from different corpora and can therefore fail a
+    run in which every corpus passed its own threshold.
     """
     if defect_rows != 0:
         return 1
@@ -978,11 +982,11 @@ def main(argv=None) -> int:
         # NUMERIC_MON_* prefix put these columns in an un-gated class while a comment claimed
         # otherwise).
         #
-        # The predicate is the corpus's CAPACITY, not what this run happened to observe. Excess is
-        # keyed per boundary, so it cannot exceed `boundaries`; comparing the OBSERVED divergence
-        # count instead would fire on every healthy run -- 4 divergences against an allowance of 15
-        # on the 12-game corpus -- while asserting the false claim that no regression could fail
-        # here, when a regression on that same corpus produces 471.
+        # The predicate is the RUN's capacity, not what it happened to observe. Excess is keyed per
+        # boundary, so it cannot exceed the number compared; comparing the OBSERVED divergence count
+        # instead would fire on every healthy run -- 4 divergences against an allowance of 11 on the
+        # 12-game corpus -- while asserting the false claim that no regression could fail here, when
+        # a regression on that same corpus produces 471.
         if compared <= allowance:
             print(
                 f"     matchup gate INERT on this corpus: only {compared} of "
