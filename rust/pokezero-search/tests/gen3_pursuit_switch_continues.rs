@@ -85,7 +85,7 @@ fn switch_into(move_id: Choices, outgoing_hp: i16) -> Vec<String> {
     let hunter = &mut state.side_two.pokemon[PokemonIndex::P0];
     hunter.replace_move(PokemonMoveIndex::M0, move_id);
     hunter.item = Items::LEFTOVERS;
-    hunter.maxhp = 300;
+    hunter.maxhp = 300; // so the Leftovers tick asserted below is floor(300 / 16) = 18
     hunter.hp = 100; // damaged, so Leftovers actually emits a Heal
 
     let outgoing = &mut state.side_one.pokemon[PokemonIndex::P0];
