@@ -1174,51 +1174,98 @@ def _build_side_spec(
             # hypothesis." It already does exactly that for unrevealed sets, items and
             # abilities; a Substitute's remaining HP is one more belief dimension.
             #
-            # THE CONSISTENT RANGE IS NARROW, which is what makes sampling honest here rather
-            # than a guess. `unknown` arises only from a NON-BREAKING hit whose damage the
-            # public record does not reveal (`_update_substitute_health_state`: the four
-            # fixed-damage gen 3 moves give `exact`, everything else gives `unknown`). So for
-            # each such hit we know two facts: it removed at least 1 HP, and the Substitute
-            # SURVIVED. With `hits` unknown-damage hits recorded, remaining health is
-            # therefore in `[1, initial - hits]` -- both ends carry information, and the
-            # window tightens as more hits land.
+            # THE RANGE, stated without overselling it. `unknown` arises only from a
+            # NON-BREAKING hit whose damage the public record does not reveal
+            # (`_update_substitute_health_state`: gen 3's four fixed-damage moves give
+            # `exact`, everything else gives `unknown`). Each such hit proves two things: it
+            # removed at least 1 HP, and the Substitute SURVIVED. Adding the depletion already
+            # PROVEN by fixed-damage hits, remaining health lies in
+            # `[1, initial - known_depletion - hits]`.
             #
-            # Sampling per world, not once: each sampled world commits to its own hypothesis
-            # and the search averages over them, which is the same treatment the trapped and
-            # disabled flags received. Committing to one value globally would be the guess.
+            # HOW WIDE THAT ACTUALLY IS, measured rather than asserted: with no proven
+            # depletion and one unknown hit it is `[1, initial - 1]` -- 99.4% of the full
+            # `[1, initial]`, and review measured 75% of real cases at exactly one hit. So the
+            # per-hit term is a 1-HP tightening, not a narrow window. An earlier version of
+            # this comment called the range narrow and said it "tightens as more hits land",
+            # which oversold a 2-HP effect out of 96. What does real work is
+            # `known_depletion`, which can remove 100+ HP at a stroke.
+            #
+            # A ~10x TIGHTER BOUND IS AVAILABLE and is the obvious follow-up rather than a
+            # hypothetical: `gen3_damage.gen3_damage_rolls()` is engine-exact and already used
+            # in production, and in a sampled world the attacker's set, spread, item and
+            # boosts are all committed, so each unknown hit's damage is one of 16 consecutive
+            # integers. That needs per-hit move identity in the payload, which this counter
+            # does not carry.
+            #
+            # Sampling per world, not once: each world commits to its own hypothesis and
+            # search averages over them, the same treatment trapped and disabled received.
+            # Committing to one value globally would be the guess.
             unknown_hits = side_payload.get("substituteUnknownHits")
             hits = unknown_hits if isinstance(unknown_hits, int) and not isinstance(unknown_hits, bool) else 0
             if hits < 1:
-                # NO BOUND SUPPLIED -> refuse exactly as before, under the SAME reason code.
-                # Strictly additive on purpose: a payload from a producer that does not carry
-                # `substituteUnknownHits` (an older capture, or any path that has not been
-                # taught to count) must behave identically to before this change. Minting a
-                # different code here would rename a refusal rather than fix it, and the
-                # rename would read as a new class in the next era's crosstab -- the exact
-                # discontinuity this campaign has had to document twice already.
+                # NO COUNT SUPPLIED -> refuse exactly as before, under the SAME reason code.
                 #
-                # Sampling requires the bound. Without it the range is [1, initial], which is
-                # wide enough that a sampled Substitute HP would be a guess, and a wrong
-                # Substitute HP is silent: the search mis-decides whether an attack breaks it.
+                # The justification is COMPATIBILITY, not range width. An earlier version said
+                # sampling needs the bound because `[1, initial]` is "wide enough that a
+                # sampled value would be a guess" -- incoherent, since the range this DOES
+                # sample is 99.4% as wide. The real reason is that a producer which has not
+                # been taught to count must behave bit-for-bit as before, and minting a
+                # different code here would rename a refusal rather than fix it.
+                #
+                # UNREACHABLE from every live producer in this repo, which review established
+                # and I had not: the `"unknown"` assignment and the increment are adjacent
+                # statements and all four reset paths zero both, so
+                # `state == "unknown"` implies `hits >= 1`. Regenerating real protocol on era
+                # 59's own seed band gave 187/187 observations with `hits >= 1` and none with
+                # 0. So this is defence in depth against a future producer, not a live
+                # compatibility path.
                 raise EngineWorldUnsupported(
                     "substitute_health_unknown",
                     f"side {slot!r} has explicit unknown Substitute health provenance "
                     f"with no bounded hit count",
                 )
-            upper = initial_substitute_health - hits
+            raw_known = side_payload.get("substituteKnownDepletion")
+            known_depletion = (
+                raw_known
+                if isinstance(raw_known, int)
+                and not isinstance(raw_known, bool)
+                and raw_known > 0
+                else 0
+            )
+            upper = initial_substitute_health - known_depletion - hits
             if upper < 1:
-                # More hits than the sampled max HP can absorb: this WORLD is inconsistent
+                # More damage than the sampled max HP can absorb: this WORLD is inconsistent
                 # with the public record, not the record with itself. Refusing one world is
                 # correct and is not a fallback -- the retry budget samples another.
+                #
+                # NOTE this DOES reclassify: a case that used to raise
+                # `substitute_health_unknown` now raises
+                # `substitute_depletion_world_incompatible` when the sampled world cannot
+                # absorb the proven damage. Said plainly because the comments above argue
+                # against renaming refusal classes, and this is a narrow instance of exactly
+                # that. It needs a world whose max HP is small enough to be contradicted by
+                # the public record, which the existing exact-depletion path already treats
+                # the same way.
                 raise EngineWorldUnsupported(
                     "substitute_depletion_world_incompatible",
                     f"side {slot!r} sampled max HP {party[active_index].maxhp} gives initial "
-                    f"Substitute HP {initial_substitute_health}, which cannot absorb {hits} "
-                    f"non-breaking hits",
+                    f"Substitute HP {initial_substitute_health}, which cannot absorb proven "
+                    f"depletion {known_depletion} plus {hits} non-breaking hits",
                 )
-            substitute_health = (
-                rng.randint(1, upper) if rng is not None and upper > 1 else upper
-            )
+            if rng is None:
+                # RAISE rather than default to `upper`. Taking the maximum silently biases
+                # every world toward a near-full Substitute, and review found the first
+                # version of the consumer test was itself taking that branch -- so the
+                # `randint` path was not exercised at all. There is no live rng-less caller
+                # today (`build_engine_world` has none and defaults the approximation off),
+                # so this closes a latent trap rather than a live path.
+                raise EngineWorldUnsupported(
+                    "substitute_health_unknown",
+                    f"side {slot!r} needs an rng to sample bounded Substitute health",
+                )
+            # `randint(1, 1)` is 1, so no `upper > 1` special case: the earlier guard was an
+            # equivalent mutant -- dead code that no test could distinguish.
+            substitute_health = rng.randint(1, upper)
         else:
             raise EngineWorldUnsupported(
                 "substitute_health_provenance_contradiction",
