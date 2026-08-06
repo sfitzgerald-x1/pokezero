@@ -1,0 +1,2517 @@
+[
+  {
+    "boundaries": 1008,
+    "class_rows": {
+      "engine_model": 18,
+      "engine_pp_model": 1,
+      "engine_roll": 256,
+      "epistemic": 328,
+      "fold": 422,
+      "state": 106
+    },
+    "corpus": "corpus/golden-v2",
+    "counts": {
+      "divergent": 567,
+      "exact": 170,
+      "skip:no_branch_match": 33,
+      "skip:world_unsupported:encore_move_unknown": 6,
+      "skip:world_unsupported:materialization_blocker": 217,
+      "skip:world_unsupported:pending_baton_pass": 3,
+      "skip:world_unsupported:substitute_health_unknown": 12
+    },
+    "families": [
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_model",
+        "column": "NUMERIC_MOVE_PP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 95,
+          "got": 1.0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 13,
+          "want": 0.96875
+        },
+        "rows": 8
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 62,
+          "got": 0.75,
+          "rounds": [
+            54,
+            55
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.8125
+        },
+        "rows": 3
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 63,
+          "got": 0.6875,
+          "rounds": [
+            51,
+            52
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.75
+        },
+        "rows": 3
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_ENCORE_TURNS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 34,
+          "got": 0.0,
+          "rounds": [
+            6,
+            8
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.16666666666666666
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "CATEGORY_VOLATILE_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 33,
+          "got": 1183,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 0,
+          "got": 0.7342342342342343,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p1",
+          "token": 11,
+          "want": 0.7567567567567568
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 0,
+          "got": 0.5193370165745856,
+          "rounds": [
+            15,
+            16
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.5524861878453039
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "field",
+        "class": "engine_model",
+        "column": "NUMERIC_OPP_HAZARDS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 99,
+          "got": 0.0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 0,
+          "want": 0.3333333333333333
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1006",
+          "column": 61,
+          "got": 0.90625,
+          "rounds": [
+            7,
+            8
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.9375
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_pp_model",
+        "column": "NUMERIC_MOVE_PP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 95,
+          "got": 1.0,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": 15,
+          "want": 0.875
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_roll",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 0,
+          "got": 0.6254545454545455,
+          "rounds": [
+            14,
+            15
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.6327272727272727
+        },
+        "rows": 153
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_roll",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 0,
+          "got": 0.6683673469387755,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.6326530612244898
+        },
+        "rows": 151
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_CANDIDATE_SET_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 40,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 221
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_UNCERTAINTY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 41,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 221
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_MOVE_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 39,
+          "got": 0.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 220
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 20,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 207
+        },
+        "rows": 171
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+4",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 21,
+          "got": 133,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 205
+        },
+        "rows": 165
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_MOVE_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 44,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 4.0
+        },
+        "rows": 158
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 19,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 191
+        },
+        "rows": 150
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+5",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 22,
+          "got": 196,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 205
+        },
+        "rows": 142
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 18,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 178
+        },
+        "rows": 126
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ITEM_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 43,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 117
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 17,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 170
+        },
+        "rows": 105
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 11,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 76
+        },
+        "rows": 104
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+6",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 23,
+          "got": 205,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 207
+        },
+        "rows": 93
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK_HIGH",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 55,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.15126050420168066
+        },
+        "rows": 86
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK_LOW",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 54,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.15126050420168066
+        },
+        "rows": 86
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP_LOW",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 51,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.27450980392156865
+        },
+        "rows": 82
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP_HIGH",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 52,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.27450980392156865
+        },
+        "rows": 81
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ABILITY_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 42,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 81
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_FIXED_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 9,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 44
+        },
+        "rows": 78
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_PRIMARY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 0,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 540
+        },
+        "rows": 78
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_ROLE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 2,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 493
+        },
+        "rows": 78
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_SECONDARY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 1,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 730
+        },
+        "rows": 78
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_TYPE_1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 4,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1171
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_ACTIVE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 1,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_ATK",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 7,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.35
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_DEF",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 8,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.8
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_HP",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 6,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.25
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPA",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 9,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.35
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPD",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 10,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.8
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 11,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.45
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 53,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.20588235294117646
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_DEF",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 56,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.39215686274509803
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 50,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.27450980392156865
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPA",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 57,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.20588235294117646
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPD",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 58,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.39215686274509803
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 59,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.24649859943977592
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 0,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.8163265306122449
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_LEGAL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 2,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_LEVEL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 4,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.74
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_PRESENT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 3,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 78
+      },
+      {
+        "array": "attention_mask",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "attention_mask",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": -1,
+          "got": false,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": true
+        },
+        "rows": 78
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_TURNS_ACTIVE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 27,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.015625
+        },
+        "rows": 76
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 63,
+          "got": 0.0,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.9375
+        },
+        "rows": 70
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+7",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 24,
+          "got": 207,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0
+        },
+        "rows": 66
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 12,
+          "got": 80,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0
+        },
+        "rows": 65
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 79,
+          "got": 0.0,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 64
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 62,
+          "got": 0.0,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.9166666666666666
+        },
+        "rows": 61
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 78,
+          "got": 0.0,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 57
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ITEM",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 46,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 56
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 61,
+          "got": 0.0,
+          "rounds": [
+            10,
+            11
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.96875
+        },
+        "rows": 55
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 77,
+          "got": 0.0,
+          "rounds": [
+            10,
+            11
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 54
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 60,
+          "got": 0.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.96875
+        },
+        "rows": 52
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 76,
+          "got": 0.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 52
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+4",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 64,
+          "got": 0.0,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.875
+        },
+        "rows": 51
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+4",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 80,
+          "got": 0.0,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 48
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+8",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 25,
+          "got": 0,
+          "rounds": [
+            28,
+            29
+          ],
+          "seat": "p1",
+          "token": 11,
+          "want": 196
+        },
+        "rows": 46
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_GENDER_MALE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 36,
+          "got": 0.0,
+          "rounds": [
+            11,
+            12
+          ],
+          "seat": "p1",
+          "token": 9,
+          "want": 1.0
+        },
+        "rows": 39
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_TYPE_2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 5,
+          "got": 0,
+          "rounds": [
+            28,
+            29
+          ],
+          "seat": "p1",
+          "token": 11,
+          "want": 1159
+        },
+        "rows": 35
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_GENDER_FEMALE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 37,
+          "got": 0.0,
+          "rounds": [
+            19,
+            21
+          ],
+          "seat": "p1",
+          "token": 10,
+          "want": 1.0
+        },
+        "rows": 29
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+5",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 65,
+          "got": 0.0,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.9166666666666666
+        },
+        "rows": 26
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+5",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 81,
+          "got": 0.0,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 26
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET+2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 13,
+          "got": 0,
+          "rounds": [
+            28,
+            29
+          ],
+          "seat": "p1",
+          "token": 11,
+          "want": 80
+        },
+        "rows": 24
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+9",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 26,
+          "got": 0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 9,
+          "want": 197
+        },
+        "rows": 19
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ABILITY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 45,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 18
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+6",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 66,
+          "got": 0.0,
+          "rounds": [
+            14,
+            15
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.9583333333333334
+        },
+        "rows": 12
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+6",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 82,
+          "got": 0.0,
+          "rounds": [
+            14,
+            15
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 12
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ABILITY_OFFSET+1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 10,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 63
+        },
+        "rows": 7
+      },
+      {
+        "array": "categorical_ids",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 11,
+          "got": 81,
+          "rounds": [
+            37,
+            38
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0
+        },
+        "rows": 7
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+10",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 27,
+          "got": 0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 9,
+          "want": 201
+        },
+        "rows": 7
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ITEM_COUNT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 43,
+          "got": 1.0,
+          "rounds": [
+            37,
+            38
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.0
+        },
+        "rows": 7
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ITEM",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 46,
+          "got": 1.0,
+          "rounds": [
+            37,
+            38
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.0
+        },
+        "rows": 7
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_TOXIC_STAGE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1005",
+          "column": 17,
+          "got": 0.0,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p2",
+          "token": 11,
+          "want": 0.13333333333333333
+        },
+        "rows": 3
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET+3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 14,
+          "got": 79,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p1",
+          "token": 12,
+          "want": 0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+7",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 67,
+          "got": 0.0,
+          "rounds": [
+            28,
+            29
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.9583333333333334
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+7",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 83,
+          "got": 0.0,
+          "rounds": [
+            28,
+            29
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET+4",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1005",
+          "column": 15,
+          "got": 81,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0
+        },
+        "rows": 1
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+11",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1001",
+          "column": 28,
+          "got": 0,
+          "rounds": [
+            7,
+            8
+          ],
+          "seat": "p1",
+          "token": 9,
+          "want": 201
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BOOST_SPD",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1008",
+          "column": 15,
+          "got": 0.0,
+          "rounds": [
+            13,
+            14
+          ],
+          "seat": "p2",
+          "token": 12,
+          "want": -0.16666666666666666
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_DAMAGE_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 137,
+          "got": 0.22448979591836737,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 24,
+          "want": 0.24489795918367352
+        },
+        "rows": 171
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_DAMAGE_FRACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 121,
+          "got": 0.3928571428571429,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 0.4285714285714286
+        },
+        "rows": 162
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "fold",
+        "column": "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 49,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.015625
+        },
+        "rows": 76
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_FAIL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 153,
+          "got": 0.0,
+          "rounds": [
+            22,
+            23
+          ],
+          "seat": "p1",
+          "token": 45,
+          "want": 1.0
+        },
+        "rows": 50
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_DEFENDER",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 45,
+          "got": 0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 1125
+        },
+        "rows": 28
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_OUTCOME",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 46,
+          "got": 896,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 897
+        },
+        "rows": 24
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_EFFECTIVENESS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 47,
+          "got": 756,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 757
+        },
+        "rows": 22
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_SIDE_EFFECT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 48,
+          "got": 0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 902
+        },
+        "rows": 20
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_FAIL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 152,
+          "got": 0.0,
+          "rounds": [
+            23,
+            24
+          ],
+          "seat": "p1",
+          "token": 46,
+          "want": 1.0
+        },
+        "rows": 16
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_ACTION",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 44,
+          "got": 0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 866
+        },
+        "rows": 14
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_KIND",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 42,
+          "got": 1128,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 761
+        },
+        "rows": 14
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_MISS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 142,
+          "got": 0.0,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 1.0
+        },
+        "rows": 14
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_N_HITS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 138,
+          "got": 0.0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 0.2
+        },
+        "rows": 14
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_SELF_HP_COST",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 151,
+          "got": 0.43243243243243246,
+          "rounds": [
+            13,
+            14
+          ],
+          "seat": "p2",
+          "token": 37,
+          "want": 0.7567567567567568
+        },
+        "rows": 9
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_MOVE_PRIORITY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 8,
+          "got": 548,
+          "rounds": [
+            31,
+            32
+          ],
+          "seat": "p1",
+          "token": 55,
+          "want": 552
+        },
+        "rows": 8
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_SELF_HP_COST",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 150,
+          "got": 0.22568093385214005,
+          "rounds": [
+            29,
+            30
+          ],
+          "seat": "p1",
+          "token": 52,
+          "want": 0.2178988326848249
+        },
+        "rows": 6
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_MOVE_CATEGORY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 6,
+          "got": 1154,
+          "rounds": [
+            37,
+            38
+          ],
+          "seat": "p1",
+          "token": 61,
+          "want": 1155
+        },
+        "rows": 5
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TYPE_1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 4,
+          "got": 1143,
+          "rounds": [
+            11,
+            12
+          ],
+          "seat": "p1",
+          "token": 35,
+          "want": 1142
+        },
+        "rows": 4
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TYPE_2",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 5,
+          "got": 1131,
+          "rounds": [
+            11,
+            12
+          ],
+          "seat": "p1",
+          "token": 35,
+          "want": 1130
+        },
+        "rows": 4
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_MISS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 126,
+          "got": 1.0,
+          "rounds": [
+            11,
+            12
+          ],
+          "seat": "p1",
+          "token": 35,
+          "want": 0.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_SECONDARY",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 1,
+          "got": 397,
+          "rounds": [
+            59,
+            60
+          ],
+          "seat": "p1",
+          "token": 83,
+          "want": 224
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_FIRST_KIND",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 39,
+          "got": 1135,
+          "rounds": [
+            59,
+            60
+          ],
+          "seat": "p1",
+          "token": 83,
+          "want": 1134
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "fold",
+        "column": "NUMERIC_MON_STAYED_AND_ATTACKED",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 48,
+          "got": 0.015625,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p1",
+          "token": 11,
+          "want": 0.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_CRIT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1002",
+          "column": 141,
+          "got": 0.0,
+          "rounds": [
+            25,
+            26
+          ],
+          "seat": "p1",
+          "token": 49,
+          "want": 1.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_CRIT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 125,
+          "got": 0.0,
+          "rounds": [
+            30,
+            31
+          ],
+          "seat": "p1",
+          "token": 53,
+          "want": 1.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_N_HITS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 122,
+          "got": 0.2,
+          "rounds": [
+            59,
+            60
+          ],
+          "seat": "p1",
+          "token": 83,
+          "want": 0.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_PRESENT",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 148,
+          "got": 0.0,
+          "rounds": [
+            2,
+            4
+          ],
+          "seat": "p2",
+          "token": 26,
+          "want": 1.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "state",
+        "column": "NUMERIC_STALL_COUNTER",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 32,
+          "got": 0.0,
+          "rounds": [
+            22,
+            23
+          ],
+          "seat": "p1",
+          "token": 10,
+          "want": 0.125
+        },
+        "rows": 23
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "state",
+        "column": "NUMERIC_STALL_COUNTER",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 32,
+          "got": 0.0,
+          "rounds": [
+            38,
+            39
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.125
+        },
+        "rows": 23
+      },
+      {
+        "array": "numeric_features",
+        "block": "field",
+        "class": "state",
+        "column": "NUMERIC_OPP_WISH_TURNS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 109,
+          "got": 0.0,
+          "rounds": [
+            21,
+            22
+          ],
+          "seat": "p1",
+          "token": 0,
+          "want": 0.5
+        },
+        "rows": 17
+      },
+      {
+        "array": "numeric_features",
+        "block": "field",
+        "class": "state",
+        "column": "NUMERIC_SELF_WISH_TURNS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 108,
+          "got": 0.0,
+          "rounds": [
+            21,
+            22
+          ],
+          "seat": "p2",
+          "token": 0,
+          "want": 0.5
+        },
+        "rows": 17
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "state",
+        "column": "NUMERIC_TOXIC_STAGE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 17,
+          "got": 0.0,
+          "rounds": [
+            56,
+            57
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.13333333333333333
+        },
+        "rows": 12
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "state",
+        "column": "NUMERIC_TOXIC_STAGE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1000",
+          "column": 17,
+          "got": 0.0,
+          "rounds": [
+            55,
+            57
+          ],
+          "seat": "p2",
+          "token": 8,
+          "want": 0.13333333333333333
+        },
+        "rows": 12
+      },
+      {
+        "array": "numeric_features",
+        "block": "field",
+        "class": "state",
+        "column": "NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 107,
+          "got": 0.0,
+          "rounds": [
+            24,
+            25
+          ],
+          "seat": "p2",
+          "token": 0,
+          "want": 1.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "numeric_features",
+        "block": "field",
+        "class": "state",
+        "column": "NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1004",
+          "column": 106,
+          "got": 0.0,
+          "rounds": [
+            24,
+            25
+          ],
+          "seat": "p1",
+          "token": 0,
+          "want": 1.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "state",
+        "column": "NUMERIC_ENCORE_TURNS",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1003",
+          "column": 34,
+          "got": 0.16666666666666666,
+          "rounds": [
+            8,
+            9
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.3333333333333333
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "state",
+        "column": "NUMERIC_ACTIVE",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 1,
+          "got": 1.0,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": 13,
+          "want": 0.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "state",
+        "column": "NUMERIC_LEGAL",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 2,
+          "got": 1.0,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": 13,
+          "want": 0.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action0",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 0,
+          "got": true,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": -1,
+          "want": false
+        },
+        "rows": 1
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action1",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 1,
+          "got": true,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": -1,
+          "want": false
+        },
+        "rows": 1
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action3",
+        "example": {
+          "battle_id": "golden-gen3randombattle-1009",
+          "column": 3,
+          "got": true,
+          "rounds": [
+            16,
+            17
+          ],
+          "seat": "p2",
+          "token": -1,
+          "want": false
+        },
+        "rows": 1
+      }
+    ],
+    "live_tendency_divergent_boundaries": 78,
+    "matchup_divergent_boundaries": 0,
+    "matchup_excess": []
+  }
+]
