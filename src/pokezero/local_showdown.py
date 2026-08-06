@@ -2253,6 +2253,7 @@ def _public_materialization_payload(
             # explicitly unknown so engine_world declines them.
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
             "substituteDepletion": replay.substitute_depletion.get(player),
+            "substituteMinDepletion": replay.substitute_min_depletion.get(player, 0),
             "materializationBlockers": sorted(blockers),
             # At an ordinary request the observation feature names the next residual; at the
             # post-upkeep forced-switch boundary it names the residual just paid. The helper

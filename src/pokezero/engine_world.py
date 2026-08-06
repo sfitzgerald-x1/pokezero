@@ -1167,10 +1167,122 @@ def _build_side_spec(
                     f"survive exact public depletion {raw_substitute_depletion}",
                 )
         elif substitute_health_state == "unknown":
-            raise EngineWorldUnsupported(
-                "substitute_health_unknown",
-                f"side {slot!r} has explicit unknown Substitute health provenance",
+            # SAMPLE, do not refuse. This was 396 killed decisions in era 59 -- 48.6% of the
+            # construction channel and its largest class -- and GOAL.md §0.2 names the reason
+            # it should not be a refusal at all: "Hidden information is not a refusal
+            # category. The belief machinery's entire design is to sample any consistent
+            # hypothesis." It already does exactly that for unrevealed sets, items and
+            # abilities; a Substitute's remaining HP is one more belief dimension.
+            #
+            # THE RANGE, stated without overselling it. `unknown` arises only from a
+            # NON-BREAKING hit whose damage the public record does not reveal
+            # (`_update_substitute_health_state`: gen 3's four fixed-damage moves give
+            # `exact`, everything else gives `unknown`). Each such hit proves two things: it
+            # removed at least 1 HP, and the Substitute SURVIVED. Adding the depletion already
+            # PROVEN by fixed-damage hits, remaining health lies in
+            # `[1, initial - min_depletion]`.
+            #
+            # ONE ACCUMULATOR, order-independent. Each hit is charged exactly once: its
+            # proven damage when the public record resolves it, the minimum 1 HP when it does
+            # not. Seismic Toss then Ice Beam and Ice Beam then Seismic Toss both give 78.
+            # Two accumulators produced an ordering asymmetry that review measured twice.
+            #
+            # HOW WIDE THAT ACTUALLY IS. With a single UNRESOLVED hit and nothing proven the
+            # range is `[1, initial - 1]` -- for the measured `initial = 162` case that is
+            # 161/162, and it is nearer 98% at a small `initial` like 50, so the figure is
+            # instance-specific rather than a constant. An earlier version called the range
+            # narrow and said it "tightens as more hits land", which oversold a per-hit effect
+            # of 1 HP. What does real work is a RESOLVED hit, which can remove 100 at a stroke.
+            #
+            # Review measured the HIT distribution on era 59's seed band at 75% one hit / 19.6%
+            # two / 5.4% three (n=56) -- but that was on the retired hit-COUNT field, so it does
+            # not by itself say how often `min_depletion` is 1. That needs one hit, unresolved,
+            # with nothing resolved before it, and the resolved/unresolved mix was not measured.
+            # Stated as the separate facts they are rather than fused into a claim about this
+            # bound.
+            #
+            # A ~10x TIGHTER BOUND IS AVAILABLE and is the obvious follow-up rather than a
+            # hypothetical: `gen3_damage.gen3_damage_rolls()` is engine-exact and already used
+            # in production, and in a sampled world the attacker's set, spread, item and
+            # boosts are all committed, so each unknown hit's damage is one of 16 consecutive
+            # integers. That needs per-hit move identity in the payload, which this counter
+            # does not carry.
+            #
+            # Sampling per world, not once: each world commits to its own hypothesis and
+            # search averages over them, the same treatment trapped and disabled received.
+            # Committing to one value globally would be the guess.
+            raw_min = side_payload.get("substituteMinDepletion")
+            # `bool` is excluded explicitly because `True` is an `int` in Python and would
+            # otherwise become a bound of 1 from a flag. No `> 0` clause: the `< 1` gate below
+            # already refuses zero and negatives, so adding one here was redundant rather than
+            # protective -- mutation showed removing it changed nothing, which is how a
+            # redundant guard reads as a tested one.
+            min_depletion = (
+                raw_min if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 0
             )
+            if min_depletion < 1:
+                # NO BOUND SUPPLIED -> refuse exactly as before, under the SAME reason code.
+                #
+                # The justification is COMPATIBILITY, not range width. An earlier version said
+                # sampling needs the bound because `[1, initial]` is "wide enough that a
+                # sampled value would be a guess" -- incoherent, since the range this DOES
+                # sample is 99.4% as wide when one unknown hit has landed. The real reason is
+                # that a producer which has not been taught to accumulate must behave
+                # bit-for-bit as before, and minting a different code here would rename a
+                # refusal rather than fix it.
+                #
+                # UNREACHABLE from every live producer in this repo, which review established
+                # and I had not: the `"unknown"` assignment and the accumulation are adjacent
+                # statements and all four reset paths zero the accumulator, so
+                # `state == "unknown"` implies `min_depletion >= 1`. Regenerating real protocol
+                # on era 59's own seed band gave 187/187 observations with at least one hit and
+                # none with zero (n=187, a different and larger sample than the n=56 hit
+                # distribution cited above). "At least one hit implies a bound of at least 1" is
+                # then arithmetic, not a second measurement, since the bound sums
+                # `damage or 1` per hit. Defence in depth against a future producer, not a live
+                # path.
+                raise EngineWorldUnsupported(
+                    "substitute_health_unknown",
+                    f"side {slot!r} has explicit unknown Substitute health provenance "
+                    f"with no bounded minimum depletion",
+                )
+            upper = initial_substitute_health - min_depletion
+            if upper < 1:
+                # More proven depletion than the sampled max HP can absorb: this WORLD is
+                # inconsistent with the public record, not the record with itself. Refusing one
+                # world is correct and is not a fallback -- the retry budget samples another.
+                #
+                # NOTE this DOES reclassify: a case that used to raise
+                # `substitute_health_unknown` now raises
+                # `substitute_depletion_world_incompatible`. Said plainly because the comments
+                # above argue against renaming refusal classes, and this is a narrow instance
+                # of exactly that. The existing exact-depletion path already treats the
+                # analogous case the same way.
+                raise EngineWorldUnsupported(
+                    "substitute_depletion_world_incompatible",
+                    f"side {slot!r} sampled max HP {party[active_index].maxhp} gives initial "
+                    f"Substitute HP {initial_substitute_health}, which cannot absorb a proven "
+                    f"minimum depletion of {min_depletion}",
+                )
+            if rng is None:
+                # RAISE rather than default to `upper`. Taking the maximum silently biases
+                # every world toward a near-full Substitute, and review found the first
+                # version of the consumer test was itself taking that branch -- so the
+                # `randint` path was not exercised at all.
+                #
+                # The SHARED reason code is deliberate: `engine_search`'s telemetry key
+                # interpolates the detail string, so this and the no-bound refusal above
+                # already separate in the raw sub-keys while sharing one class. Do not "tidy"
+                # these messages into one, or a wiring bug merges into a hidden-information
+                # class. There is precedent -- `pending_baton_pass` raises the same way for a
+                # missing rng.
+                raise EngineWorldUnsupported(
+                    "substitute_health_unknown",
+                    f"side {slot!r} needs an rng to sample bounded Substitute health",
+                )
+            # `randint(1, 1)` is 1, so no `upper > 1` special case: that guard was an
+            # equivalent mutant -- dead code no test could distinguish.
+            substitute_health = rng.randint(1, upper)
         else:
             raise EngineWorldUnsupported(
                 "substitute_health_provenance_contradiction",
