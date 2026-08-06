@@ -1932,7 +1932,60 @@ fn render_move_phase(
                         };
                     }
                     for instruction in &called_tail {
-                        if let Instruction::Switch(switch) = instruction {
+                        if let Instruction::Boost(boost) = instruction {
+                            // RENDER the boost, which is what lets an ambiguous
+                            // Harden/Withdraw tail be searched instead of thrown away.
+                            //
+                            // `ambiguous_unrenderable` was 8,149 world failures in era 59 --
+                            // 51.6% of the abort channel and the largest single world-level
+                            // refusal in the era. #1124 split it by blocking effect family
+                            // precisely so the work could be scoped, and `boost` is the family
+                            // the oracle corpus shows dominating: 10 of its 16 refused tails
+                            // are a bare `[Boost]`, from identical-boost pairs like
+                            // Harden/Withdraw where no candidate can be named but the
+                            // transition is proven.
+                            //
+                            // RESIDUALS FIRST, exactly as the `Switch` arm does, and for the
+                            // same reason: the walk's contract is IN ORDER. Without this a
+                            // `[Damage, Boost..]` tail rendered the boosts BEFORE the damage
+                            // they follow -- reproduced on Overheat/Psycho Boost (-2 spa) and
+                            // Ancient Power/Silver Wind (+1 all five), both of which this
+                            // change newly admits, so the misordering would have been a
+                            // regression introduced by the fix. The whole suite passed with
+                            // and without it, so `renders_a_damage_then_boost_tail_in_order`
+                            // exists to pin it.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            // NO `amount != 0` guard, mirroring the named path, which has
+                            // none either. An earlier version had one, justified by two claims
+                            // that are both FALSE: the engine never writes a 0-delta `Boost`
+                            // (every construction site is zero-guarded --
+                            // `gen3/generate_instructions.rs`'s `if boost_amount != 0`, plus
+                            // the ability, item and Belly Drum sites), and Showdown DOES show
+                            // a line for a capped boost -- `|-boost|IDENT|stat|0`, which this
+                            // renderer already emits from its own `capped_boost_move` block,
+                            // driven by the move rather than by a `Boost` instruction. So the
+                            // guard was dead code resting on a wrong premise, and removing it
+                            // also removes the `!= 0` -> `> 0` mutation that silently dropped
+                            // every `|-unboost|`.
+                            out.lines.push(render_boost_line(
+                                ctx,
+                                sim,
+                                boost.side_ref,
+                                boost.stat,
+                                boost.amount,
+                                None,
+                            ));
+                            // GHOST CURSE is the one suppression the named path has and this
+                            // arm does not: it skips the boost lines and marks the branch
+                            // `ghost_curse_engine_model` attribution-unsafe. Unreachable here
+                            // only by accident -- `Choices::CURSE` carries a
+                            // `volatile_status` alongside its boosts, so such a tail still
+                            // holds `ApplyVolatileStatus` and is blocked by the `volatile`
+                            // family. Recorded because admitting `volatile` is a plausible
+                            // next step, and it would turn this into three phantom boost lines
+                            // with no refusal.
+                        } else if let Instruction::Switch(switch) = instruction {
                             emit_residuals!();
                             sim.apply(instruction);
                             let details =
@@ -3006,7 +3059,11 @@ fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
 /// it. Encounter order would make the same tail composition produce different keys
 /// depending on instruction sequence -- the requirement attract's slug records too.
 const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
-    "boost",
+    // `boost` is deliberately ABSENT: the walk renders it, so no arm can emit it. Removed
+    // rather than left in place, because a token no classifier can produce is dead weight in
+    // a vocabulary whose whole job is to be a closed, greppable set. `statrecalc` stays --
+    // `Change<Stat>` is the engine's recalculation, carries no protocol line, and is still
+    // unrendered.
     "statrecalc",
     "status",
     "sleepcounter",
@@ -3072,7 +3129,13 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         // A heal-direction `Damage` lands with `Heal` because what the walk drops is
         // identical: an HP INCREASE. That grouping IS by protocol line, so it stays.
         Instruction::Damage(_) | Instruction::Heal(_) => Some("heal"),
-        Instruction::Boost(_) => Some("boost"),
+        // RENDERED NOW, so no longer a blocker. The unnamed-callee walk emits the
+        // `|-boost|`/`|-unboost|` line above, which is the whole reason this family existed:
+        // a bare `[Boost]` tail is fully expressible and must not refuse a world. Moving an
+        // arm into the `None` set is a BEHAVIOUR CHANGE by design -- it stops refusing a
+        // class -- which is why `the_renderable_allowlist_is_exactly_what_it_was` had to be
+        // updated deliberately rather than silently widened.
+        Instruction::Boost(_) => None,
         Instruction::ChangeAttack(_)
         | Instruction::ChangeDefense(_)
         | Instruction::ChangeSpecialAttack(_)
@@ -4784,9 +4847,11 @@ mod tests {
         assert!(
             multi_label_refused > 0,
             "VACUOUS THE OTHER WAY: no ambiguous branch was refused, so nothing here \
-             exercises `ambiguous_tail_is_fully_renderable`. The Harden/Withdraw fixture \
-             carries an unrendered Boost and MUST refuse; a predicate that accepted \
-             everything would pass this test without it."
+             exercises `ambiguous_tail_is_fully_renderable` and a predicate that accepted \
+             everything would pass. NOTE the population changed: Harden/Withdraw no longer \
+             refuses now that its Boost is rendered, so the surviving refusals are the \
+             `substitute+volatile` substitute break -- `[DamageSubstitute, \
+             RemoveVolatileStatus]`, which the walk still cannot express."
         );
         // ...and the two must partition the ambiguous population exactly.
         assert_eq!(
@@ -4825,7 +4890,12 @@ mod tests {
         // together. Do not update one without the other.
         assert_eq!(
             (total_branches, agree, multi_label_unattributed, multi_label_refused),
-            (2614, 2377, 221, 16),
+            // 221 -> 231 usable and 16 -> 6 unrenderable: the ten `[Boost]` tails that the
+            // walk now renders. `branches`, `agree` and WRONG are unchanged, which is the
+            // claim that matters -- no attribution moved, only the refuse/count decision.
+            // The remaining 6 are the `[DamageSubstitute, RemoveVolatileStatus]` substitute
+            // break, the other family and the obvious next step.
+            (2614, 2377, 231, 6),
             "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
              printed above, and the comment here on what else must be updated."
         );
@@ -4894,6 +4964,17 @@ mod tests {
                     side_ref: SideReference::SideOne,
                 },
             ),
+            // NEWLY ADMITTED, and the reason this test exists. The unnamed-callee walk now
+            // emits `|-boost|`/`|-unboost|`, so a bare `[Boost]` tail is fully expressible and
+            // must stop refusing worlds. Measured on the attribution oracle: usable 221 -> 231,
+            // unrenderable 16 -> 6, with zero change to `agree` or WRONG. Moving an arm into
+            // the admitted set is a BEHAVIOUR change, which is precisely why this test had to
+            // be edited by hand rather than quietly widened.
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideOne,
+                stat: PokemonBoostableStat::Defense,
+                amount: 1,
+            }),
         ];
         for instruction in &admitted {
             assert_eq!(
@@ -4931,16 +5012,10 @@ mod tests {
                 "heal",
             ),
             (
-                Instruction::Boost(BoostInstruction {
-                    side_ref: SideReference::SideOne,
-                    stat: PokemonBoostableStat::Defense,
-                    amount: 1,
-                }),
-                "boost",
-            ),
-            (
-                // NOT `boost`: the engine emits `Change<Stat>` from `recalculate_stats`
-                // on mega/forme/transform and it carries no `-boost` line.
+                // NOT a boost family any more -- see the admitted list above. Kept here only
+                // as the contrast for `statrecalc`, which looks like a boost and is not.
+                // The engine emits `Change<Stat>` from `recalculate_stats` on
+                // mega/forme/transform and it carries no `-boost` line.
                 Instruction::ChangeAttack(ChangeStatInstruction {
                     side_ref: SideReference::SideOne,
                     amount: 20,
@@ -5121,15 +5196,15 @@ mod tests {
     /// several keys), dedup (two Boosts are one family), and the contract-tag prefix.
     #[test]
     fn the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed() {
-        let boost = Instruction::Boost(BoostInstruction {
+        // `statrecalc`, not `boost`: Boost is now RENDERED and therefore admitted, so it can
+        // no longer stand in for "a blocked family". `Change<Stat>` still carries no line.
+        let boost = Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         });
-        let second_boost = Instruction::Boost(BoostInstruction {
+        let second_boost = Instruction::ChangeDefense(ChangeStatInstruction {
             side_ref: SideReference::SideTwo,
-            stat: PokemonBoostableStat::Attack,
-            amount: 2,
+            amount: 15,
         });
         let status = Instruction::ChangeStatus(ChangeStatusInstruction {
             side_ref: SideReference::SideOne,
@@ -5141,7 +5216,7 @@ mod tests {
         // Two Boosts are ONE family token.
         assert_eq!(
             unrenderable_tail_families(&[boost.clone(), second_boost]),
-            vec!["boost"],
+            vec!["statrecalc"],
             "repeated instructions in the same family must collapse to one token"
         );
 
@@ -5153,7 +5228,7 @@ mod tests {
         assert_eq!(forward, reversed, "slug must not depend on instruction order");
         assert_eq!(
             forward,
-            "sleeptalk_called_unidentified:ambiguous_unrenderable:boost+status"
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:statrecalc+status"
         );
 
         // The prefix is the CONTRACT tag. `engine_transition_differential.py` matches
@@ -5189,10 +5264,9 @@ mod tests {
             );
         }
         let reachable = [
-            Instruction::Boost(BoostInstruction {
+            Instruction::ChangeAttack(ChangeStatInstruction {
                 side_ref: SideReference::SideOne,
-                stat: PokemonBoostableStat::Defense,
-                amount: 1,
+                amount: 20,
             }),
             Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
@@ -5282,7 +5356,6 @@ mod tests {
         assert_eq!(
             UNRENDERABLE_FAMILY_ORDER,
             &[
-                "boost",
                 "statrecalc",
                 "status",
                 "sleepcounter",
@@ -5328,13 +5401,13 @@ mod tests {
         // can achieve. This is the branch that stands between a future forgotten
         // registration and an aborted worker.
         assert_eq!(
-            registered_family_or_unclassified("boost", &["status", "heal"]),
+            registered_family_or_unclassified("statrecalc", &["status", "heal"]),
             "unclassified"
         );
         // And a registered family passes through untouched.
         assert_eq!(
-            registered_family_or_unclassified("boost", UNRENDERABLE_FAMILY_ORDER),
-            "boost"
+            registered_family_or_unclassified("statrecalc", UNRENDERABLE_FAMILY_ORDER),
+            "statrecalc"
         );
         // `unclassified` must itself be registered, or the degradation would produce a
         // token that panics in `assert_subcase_vocabulary` -- turning the guard into the
@@ -5379,13 +5452,13 @@ mod tests {
     /// removing a guard the suite cannot miss.
     #[test]
     fn a_registered_family_reaches_the_marker_without_panicking() {
-        let boost = Instruction::Boost(BoostInstruction {
+        // `statrecalc`: Boost is admitted now, so it produces NO family at all.
+        let boost = Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         });
         let families = unrenderable_tail_families(std::slice::from_ref(&boost));
-        assert_eq!(families, vec!["boost"]);
+        assert_eq!(families, vec!["statrecalc"]);
         for family in &families {
             assert!(
                 UNRENDERABLE_FAMILY_ORDER.contains(family),
@@ -5445,10 +5518,12 @@ mod tests {
             side_ref: SideReference::SideOne,
             damage_amount: 10,
         })];
-        let unrenderable = vec![Instruction::Boost(BoostInstruction {
+        // `Change<Stat>`, not Boost: Boost is RENDERED now and so no longer unrenderable.
+        // Using it here would assert the opposite of the intended behaviour, which is the
+        // exact trap this test's own comment records from an earlier split.
+        let unrenderable = vec![Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         })];
 
         // A HEAL-DIRECTION Damage must refuse. `Damage` is signed and the walk emits on

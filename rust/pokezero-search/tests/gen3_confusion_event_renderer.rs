@@ -1397,18 +1397,27 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         .remove(&PokemonVolatileStatus::CONFUSION);
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().rest_turns = 0;
-    // Two callees whose instruction lists are BYTE-IDENTICAL: Harden and
-    // Withdraw are both +1 Defense on the user. Splash and Harden do NOT work --
-    // Harden emits a boost and Splash emits nothing, so the tails differ and the
-    // engine identifies each correctly. Ambiguity needs genuinely equal effects.
+    // Two callees whose instruction lists are BYTE-IDENTICAL and whose tail the walk
+    // still CANNOT render: Recover and Soft-Boiled both heal 50% of max HP.
+    //
+    // This fixture used Harden/Withdraw (+1 Defense each) until the walk learned to emit
+    // `|-boost|`. That pair is now USABLE, not refused, so it can no longer reach the
+    // refusal arm -- it moved to
+    // `byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line` below.
+    // A heal is the next family in line: the walk emits HP DECREASES only, so a rise is
+    // still dropped and the branch must still refuse.
+    //
+    // The user must be BELOW max HP or the heal is a no-op, both tails are empty, and the
+    // fixture would silently test the empty-tail arm instead.
+    state.side_two.get_active().hp = state.side_two.get_active().maxhp / 2;
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+        .replace_move(PokemonMoveIndex::M1, Choices::RECOVER);
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+        .replace_move(PokemonMoveIndex::M2, Choices::SOFTBOILED);
 
     let branches = generate(&mut state);
     let mut saw_subcase = false;
@@ -1449,7 +1458,7 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
                 // above -- accepting a prefix would restore the tautology that review
                 // caught here, since every refusing arm shares the prefix.
                 assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:boost",
+                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:heal",
                     "byte-identical callees whose tail carries an effect the walk \
                      cannot render must refuse, and name that arm: {:?}",
                     r.attribution_unsafe
@@ -1478,6 +1487,201 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         }
     }
     assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+}
+
+/// A BOOST tail is now rendered, so the branch is usable AND the line is emitted.
+///
+/// This is the case the refusal fixture above used to cover. `ambiguous_unrenderable` was
+/// 8,149 world failures in era 59 -- 51.6% of the abort channel and the largest single
+/// world-level refusal in the era -- and #1124's family split existed to scope exactly this.
+/// The oracle corpus put 10 of its 16 refused tails on a bare `[Boost]`, from
+/// identical-boost pairs like Harden/Withdraw where the callee cannot be named but the
+/// transition is proven.
+///
+/// TWO assertions, because either alone is satisfiable by a broken change: the branch must
+/// stop refusing, AND the walk must actually emit the `|-boost|` line. Admitting the family
+/// without rendering it would silently drop a boost into the fold -- precisely the
+/// C52-mirror defect `ambiguous_tail_is_fully_renderable` exists to prevent -- and rendering
+/// without admitting would leave the world refused for nothing.
+#[test]
+fn byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::HARDEN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
+
+    let branches = generate(&mut state);
+    let mut saw_boost_line = false;
+    let mut saw_lossy_subcase = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a boost tail is fully renderable now and must not refuse: {:?}",
+            r.attribution_unsafe
+        );
+
+        if r.lossy
+            .iter()
+            .any(|x| x == "sleeptalk_called_unidentified")
+        {
+            saw_lossy_subcase = true;
+            // The CONTRACT tag stays bare so the differential still accepts the branch.
+            assert!(
+                !r.lossy
+                    .iter()
+                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
+                "the lossy contract tag must stay unsplit: {:?}",
+                r.lossy
+            );
+        }
+        // EXACT LINE, not a prefix. `starts_with("|-boost|")` is a tautology over this
+        // arm's only output shape, and review showed it letting three mutations through the
+        // whole suite: the wrong ident (boost credited to the other Pokemon), the wrong stat
+        // code, and a spurious `[from] item: Leftovers` tag -- which still starts with
+        // `|-boost|` while making the FOLD ignore the boost entirely, since its `-boost` arm
+        // is gated on `from_payload is None`. The sibling refusal test's own comment warns
+        // that "accepting a prefix would restore the tautology that review caught here"; this
+        // one had reintroduced it.
+        if r.lines.iter().any(|line| line == "|-boost|p2a: Opponent|def|1") {
+            saw_boost_line = true;
+        }
+        assert!(
+            !r.lines.iter().any(|line| line.starts_with("|-boost|")
+                && line != "|-boost|p2a: Opponent|def|1"),
+            "no boost line other than the +1 Defense the tail carries: {:?}",
+            r.lines
+        );
+    }
+
+    assert!(
+        saw_lossy_subcase,
+        "the ambiguity must still be COUNTED as lossy -- a class that stops refusing must \
+         not stop being measured"
+    );
+    assert!(
+        saw_boost_line,
+        "the walk must EMIT the boost line, not merely stop refusing: admitting the family \
+         without rendering it drops the boost into the fold silently"
+    );
+}
+
+/// A NEGATIVE boost, on the OPPONENT, with an exact line.
+///
+/// Charm and Feather Dance are both -2 Attack on the target, so their tails are
+/// byte-identical and the callee cannot be named. This covers two gaps the Harden/Withdraw
+/// fixture structurally cannot, both of which review found live and green:
+///
+///   * `|-unboost|` at all. An `amount != 0` -> `amount > 0` mutation silently dropped every
+///     negative boost line -- the C52-mirror defect verbatim, family admitted and effect
+///     dropped. (The guard is now gone entirely, which removes the mutation target, but the
+///     coverage belongs here regardless.)
+///   * A boost whose target is NOT the active side. Harden/Withdraw boosts the user, so
+///     `boost.side_ref` and the walk's `side` coincide and using either produces the same
+///     ident. An opponent-target boost separates them.
+#[test]
+fn a_negative_opponent_boost_renders_the_exact_unboost_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::CHARM);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::FEATHERDANCE);
+
+    let branches = generate(&mut state);
+    let mut saw_unboost = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a negative boost is as renderable as a positive one: {:?}",
+            r.attribution_unsafe
+        );
+        // The TARGET is side one, not the sleeper on side two -- that is the whole point.
+        if r.lines.iter().any(|line| line == "|-unboost|p1a: Lead|atk|2") {
+            saw_unboost = true;
+        }
+    }
+
+    assert!(
+        saw_unboost,
+        "the exact `|-unboost|p1a: Lead|atk|2` line must be emitted -- the magnitude is \
+         unsigned and the head flips on sign, and the ident must be the TARGET's"
+    );
+}
+
+/// The walk's contract is IN ORDER, and a `[Damage, Boost..]` tail is where that bites.
+///
+/// Ancient Power and Silver Wind are both 60 BP with a +1 all-stats secondary, so their
+/// tails are byte-identical and shaped `[..., Damage, Boost x5]`. Before the residual flush
+/// was added to the Boost arm the stream put all five boosts BEFORE the damage they follow.
+/// Both branches refused on main, so the misordering would have been a fidelity regression
+/// introduced by the very change that admits them -- and the full suite passed with and
+/// without the fix, which is why this exists.
+#[test]
+fn renders_a_damage_then_boost_tail_in_order() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::ANCIENTPOWER);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SILVERWIND);
+
+    let branches = generate(&mut state);
+    let mut checked = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        let damage_at = r.lines.iter().position(|l| l.starts_with("|-damage|"));
+        let first_boost_at = r.lines.iter().position(|l| l.starts_with("|-boost|"));
+        if let (Some(damage), Some(boost)) = (damage_at, first_boost_at) {
+            checked = true;
+            assert!(
+                damage < boost,
+                "the engine's tail is damage-then-boosts, so the stream must be too: {:?}",
+                r.lines
+            );
+        }
+    }
+
+    assert!(
+        checked,
+        "fixture produced no branch carrying both a damage and a boost line -- without one \
+         this test asserts nothing"
+    );
 }
 
 /// The OTHER arm: byte-identical callees whose tail the walk CAN render are USABLE.

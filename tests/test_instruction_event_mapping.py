@@ -264,6 +264,70 @@ class BranchEventsTest(unittest.TestCase):
         )
         self.assertEqual(tackle["self_hp_cost"], 0.0)
 
+    def test_an_unnamed_callee_boost_lands_on_the_sleeptalk_window(self) -> None:
+        """CHARACTERIZATION of a known divergence, not an endorsement of it.
+
+        Rendering a boost in the unnamed-callee walk (#1131) lets a proven-but-unnamed
+        ambiguity be searched instead of discarded. The cost, measured by review: the walk
+        emits no callee `|move|` line, so the boost lands on the SLEEP TALK window. The fold
+        records `side_effect='boost'` on the `sleeptalk` token, where real play records
+        `'none'` there and opens a separate `harden, called=True, side_effect='boost'` token.
+
+        This is inherent to rendering a transition whose actor cannot be named, not a defect
+        in that arm. It is NOT fixable in the fold: the `-boost` arm has no side check, and
+        adding one would break legitimate opponent-target boosts (Growl, Charm, Intimidate)
+        while not even closing this case -- Harden's target is the same side as the window.
+
+        Accepted because the marginal wrongness is small against what the design already
+        ships: on these branches the callee token was ALREADY absent, which is the standing
+        cost of the usable-ambiguity arm. This adds one wrong categorical value on the token
+        that remains, in place of discarding the world entirely.
+
+        Pinned because an unobserved divergence is how this codebase has drifted before, and
+        three plausible edits change it silently: admitting the `volatile` family, touching
+        the fold's `from_payload is None` gate, or any later attempt to name the callee.
+        Same shape as `test_rough_skin_contact_damage_is_not_a_self_cost`: render, advance a
+        `FoldState`, assert what the fold READS.
+        """
+
+        state = _build_state(
+            ("sleeptalk", "harden", "withdraw"),
+            ("splash",),
+            s1_status="sleep",
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, False)
+        )
+        boosted = next(
+            b
+            for b in report["branches"]
+            if any(line.startswith("|-boost|") for line in b["events"])
+        )
+
+        fold = pokezero_search.FoldState.initial("p1")
+        fold.advance_in_place(LEAD_LINES)
+        fold.advance_in_place(boosted["events"])
+        tokens = fold.products_payload()["transition_tokens"]
+
+        sleeptalk = next(
+            token
+            for token in tokens
+            if token["kind"] == "move" and token["action"] == "sleeptalk"
+        )
+        self.assertEqual(
+            sleeptalk["side_effect"],
+            "boost",
+            "the boost lands on the SLEEP TALK window; real play puts it on the callee's own "
+            "window and leaves sleeptalk at 'none'",
+        )
+        self.assertFalse(
+            any(
+                token["kind"] == "move" and token.get("called") for token in tokens
+            ),
+            "no callee token exists, because the callee cannot be named -- that absence is "
+            "the standing cost of the usable-ambiguity arm, not new to the boost change",
+        )
+
     def test_ambiguous_sleep_talk_call_is_flagged_but_NOT_rejected(self) -> None:
         # An asleep Sleep Talker whose callable moves ALL produce an empty
         # delta (splash, and roar against a reserve-less side): the called
