@@ -3325,6 +3325,61 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 /// these tails into `None` would make them silently indistinguishable from a rendered boost,
 /// and a family that reports its size is how we would learn whether the contiguous-pre-switch
 /// refinement is worth writing.
+/// Is this HP increase a DIRECT healing move on the attacker -- the one heal shape the walk
+/// can express -- rather than drain, an absorb ability, or Rest?
+///
+/// `heal` is the family for HP INCREASES, because `emit_residuals!()` is decreases-only by
+/// design (its own comment: "DECREASES ONLY, deliberately. Rendering the heal direction was
+/// shipped once and emitted lines for the wrong Pokemon; it needs the same per-side
+/// re-baselining this walk now has, plus its own pin."). Era-60 production ranks it second
+/// among the walk's gaps, at 117 records / 461 world failures.
+///
+/// # Why this is NOT a mirror of the boost or substitute fixes
+///
+/// A `-heal` line's `[from]` tag is not decoration: the FOLD READS IT. `belief.py` treats
+/// `[from] item: Leftovers` as an item reveal, and `[from] ability: X` as an ability reveal on
+/// the healed mon -- its comment records a live capture where misreading `[of]` pinned an
+/// ability on the attacker and overwrote a protocol-confirmed Pressure. So an invented tag
+/// FABRICATES a belief, which is worse than refusing. Four shapes exist and the named path
+/// distinguishes all four:
+///
+///   * drain (Absorb, Giga Drain): `|-heal|{attacker}|{cond}|[from] drain|[of] {defender}`
+///   * absorb ability (Volt/Water Absorb): `|-heal|{defender}|{cond}|[from] ability: X|[of] ..`
+///   * direct healing move (Recover, Soft-Boiled, Moonlight): BARE `|-heal|{ident}|{cond}`
+///   * Rest: `|-heal|{ident}|{cond} slp|[silent]`
+///
+/// Only the third is admitted here, and the discrimination is a property of the TAIL:
+///
+///   * The heal must be on the ATTACKER. A heal on the defender is an absorb ability.
+///   * The tail must carry NO damage to the defender. Damage plus a heal on the attacker is
+///     drain, whose line needs `[from] drain|[of] ..`.
+///   * The amount must be POSITIVE. A negative `Heal` is the engine's spelling for Liquid
+///     Ooze, which the named path renders as `-damage`, not `-heal`.
+///
+/// Rest needs no clause: its tail always carries `ChangeStatus` and `SetSleepTurns`, which are
+/// the still-blocked `status` and `sleepcounter` families, so those tails refuse regardless.
+/// That is a companion-blocks-it argument rather than a reachability one -- the companion is
+/// emitted by construction, the way the substitute break's `DamageSubstitute` is.
+///
+/// This is a PARTIAL close of the family, deliberately. The slug still reports `heal` for
+/// every tail this does not admit, so the remainder stays rankable instead of vanishing.
+fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: SideReference) -> bool {
+    let healed = match tail.get(index) {
+        // POSITIVE only: a negative `Heal` is Liquid Ooze and renders as `-damage`.
+        Some(Instruction::Heal(heal)) if heal.heal_amount > 0 => heal.side_ref,
+        _ => return false,
+    };
+    if healed != attacker {
+        return false;
+    }
+    // No damage to the OTHER side anywhere in the tail, or this is drain.
+    !tail.iter().any(|other| match other {
+        Instruction::Damage(dmg) => dmg.side_ref != attacker && dmg.damage_amount > 0,
+        Instruction::DamageSubstitute(dmg) => dmg.side_ref != attacker,
+        _ => false,
+    })
+}
+
 fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
     let boost = match tail.get(index) {
         Some(Instruction::Boost(boost)) => boost,
