@@ -49,7 +49,9 @@ was being written:
    them -- they are a runtime derivation from the randbats set source. Reconstructing a state from
    a recorded row therefore yields an all-zero expected-stat block and a comparison that cannot
    fail. So the state here is built through ``normalize_for_player(..., set_source=...)``, the
-   production path, and the fixture asserts the variants arrived.
+   production MECHANISM -- though note the feature is off by default, since every consumer gates
+   ``set_source`` on ``belief_set_source_env_enabled()`` and that reads ``POKEZERO_BELIEF_SET_SOURCE``
+   defaulting to ``"0"``. The fixture passes it explicitly and asserts the variants arrived.
 2. **v4 REMAPS these columns.** The writer uses legacy indices (``NUMERIC_EXPECTED_HP`` = 66) and
    a projection maps them into the grouped layout, where HP is 53. Reading the module constant out
    of a v4 array reads a different feature entirely and reports "no difference" for every species.
@@ -79,10 +81,15 @@ from pokezero.observation import (
 #: that species. The DIRECTIONS are level-robust -- independent review swept L50..L100 and found no
 #: sign flips -- it is the discriminating POWER that varies with level.
 #:
-#: Two things must stay covered. Both BRANCHES, because `exact_spreads` gates them independently
-#: (the Def/SpA/SpD/Spe loop and the Atk/HP band are separate `if exact_spreads:` blocks) and
-#: either can be reverted alone. And both DIRECTIONS: the loop lowers stats (HPivs drops an IV to
-#: 30) while the band corrects a legacy trim that UNDER-estimated by +14..+17, so it moves up.
+#: Two things must stay covered, and the reason for the first is NOT what an earlier revision of
+#: this comment said. The `if exact_spreads:` blocks are not independent: the pre-pass under
+#: `if exact_spreads and variants:` builds `exact_variant_spreads`, and the Atk/HP band CONSUMES
+#: that same list ("Already computed above for the Def/SpA/SpD/Spe block"). So reverting the loop
+#: reverts both, and only the BAND is independently revertible -- which is precisely why band
+#: columns must be covered. Independent review measured the two mutants as indistinguishable
+#: (25 failures each, identical breakdown), disproving the "either can be reverted alone" claim
+#: this comment used to make. And both DIRECTIONS: the loop lowers stats (HPivs drops an IV to 30)
+#: while the band corrects a legacy trim that UNDER-estimated by +14..+17, so it moves up.
 #: Charizard's HP_LOW (+0.021, ~15x the Def/SpA deltas) is the gate's largest single effect and is
 #: in the direction an earlier revision asserted was impossible.
 DISCRIMINATING = {
@@ -141,6 +148,27 @@ def _torch():
     return torch
 
 
+def _stamped_contract(path: Path) -> tuple[str, int, int]:
+    """(schema, token_count, transition_token_count) read RAW from the payload dict.
+
+    The widths come from the same independent read as the schema, which is what closes a real
+    fragility independent review demonstrated: `DEFAULT_REPLAY_OBSERVATION_SPEC` tracks the CURRENT
+    schema, so the day it is bumped to v3 a consumer that ignores the checkpoint would return a v3
+    default, match the stamped v3 schema, and `test_a_v3_checkpoint_can_never_receive_v4_spreads`
+    would pass against a consumer that never opened the file. Verified: with the default at v2.2
+    both directions die on that mutant; with the default at v3 the v3 direction goes green. A
+    region-trimmed width cannot be produced by any default, so asserting it keeps the check alive
+    across that change.
+    """
+    payload = _torch().load(path, map_location="cpu", weights_only=True)
+    config = payload["model_config"]
+    return (
+        str(config["observation_schema_version"]),
+        int(config["token_count"]),
+        int(config["transition_token_count"]),
+    )
+
+
 def _stamped_schema(path: Path) -> str:
     """The schema stamped in a checkpoint, read RAW from the payload dict.
 
@@ -164,7 +192,13 @@ def _registry_spec(schema_version: str):
     return showdown.observation_spec_for_schema(schema_version)
 
 
-def _write_checkpoint(path: Path, schema_version: str, vocab: tuple[str, ...]) -> Path:
+def _write_checkpoint(
+    path: Path,
+    schema_version: str,
+    vocab: tuple[str, ...],
+    *,
+    transition_token_count: int | None = None,
+) -> Path:
     """A checkpoint stamped with `schema_version` and that schema's own widths.
 
     Only `schema_version` + `model_config` are written: `load_transformer_model_config` reads
@@ -174,19 +208,29 @@ def _write_checkpoint(path: Path, schema_version: str, vocab: tuple[str, ...]) -
     from pokezero.neural_policy import NEURAL_POLICY_SCHEMA_VERSION, TransformerPolicyConfig
 
     spec = showdown.observation_spec_for_schema(schema_version)
+    # A REGION-TRIMMED stamp when asked. This is what makes the v3 direction impossible for a
+    # schema-keyed lookup to reproduce: no registry spec and no ambient default will ever carry
+    # `transition_token_count=32`, so a consumer that ignores the file cannot accidentally match.
+    # Not a contrivance -- `resolver.py` documents the real case ("a region-trimmed 39-token server
+    # drives a 39-token encode; without this, collectors encoded the default layout and every
+    # forward 400'd"). Trimming applies only to schemas that HAVE a transition region: v4 has none,
+    # so the v4 direction stays schema-keyed, which is stated where it is relied on.
+    if transition_token_count is None:
+        transition_token_count = spec.transition_token_count
+    token_count = spec.token_count - (spec.transition_token_count - transition_token_count)
     config = TransformerPolicyConfig.compact_category(
         category_vocab=vocab,
         category_oov_buckets=16,
         observation_schema_version=schema_version,
         # Every width from the SPEC, not defaulted: the default token_count is v2.2's 151, and
         # the config cross-checks token_count == fixed prefix + transition region.
-        token_count=spec.token_count,
+        token_count=token_count,
         categorical_feature_count=spec.categorical_feature_count,
         numeric_feature_count=spec.numeric_feature_count,
-        transition_token_count=spec.transition_token_count,
+        transition_token_count=transition_token_count,
         # Must not exceed the physical region: the default budget is 128, v3's region is 64, and
         # v4 has none at all (a nonzero budget there is rejected outright).
-        transition_token_budget=spec.transition_token_count,
+        transition_token_budget=transition_token_count,
         policy_id=f"spread-gate-provenance-{schema_version}",
     )
     _torch().save(
@@ -371,11 +415,12 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
             context="spread-gate-provenance",
         )
         spec = env_config.observation_spec
+        schema, token_count, transition_token_count = _stamped_contract(path)
         self.assertEqual(
-            spec.schema_version,
-            _stamped_schema(path),
-            "the consumer's spec disagrees with the schema stamped in the checkpoint -- it did "
-            "not derive it from the file",
+            (spec.schema_version, spec.token_count, spec.transition_token_count),
+            (schema, token_count, transition_token_count),
+            "the consumer's spec disagrees with what is stamped in the checkpoint -- it did not "
+            "derive it from the file",
         )
         return env_config, spec
 
@@ -397,10 +442,10 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     self.assertNotEqual(
                         legacy[name],
                         corrected[name],
-                            f"exact_spreads has NO EFFECT on {species}/{name}: either the gate's "
-                        "branch for this column was reverted (the Def/SpA/SpD/Spe loop or the "
-                        "Atk/HP band) or the fixture stopped discriminating. Check the diff "
-                        "before the randbats data.",
+                            f"exact_spreads has NO EFFECT on {species}/{name}: the gate collapsed "
+                        "to a constant, or its branch for this column was reverted (the "
+                        "Def/SpA/SpD/Spe loop or the Atk/HP band), or the fixture stopped "
+                        "discriminating. Check the diff before the randbats data.",
                     )
                     # Direction PER COLUMN, from the measured map. A blanket "corrected is lower"
                     # is false: the Def/SpA/SpD/Spe loop lowers stats (HPivs drops an IV to 30)
@@ -423,10 +468,15 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
 
     def test_a_v3_checkpoint_can_never_receive_v4_spreads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            # Region-TRIMMED on purpose (32 of v3's 64). No registry spec and no ambient
+            # default carries this width, so a consumer that never opens the file cannot match it
+            # even if the default is bumped to v3 -- which review showed would otherwise turn this
+            # very test green against an ignoring consumer.
             path = _write_checkpoint(
                 Path(tmp) / "v3.pt",
                 OBSERVATION_SCHEMA_VERSION_V3,
                 tuple(self.vocabs[OBSERVATION_SCHEMA_VERSION_V3].tokens),
+                transition_token_count=32,
             )
             _, spec = self._latched_from_checkpoint(path)
         for species in PRIMARY_SPECIES:
@@ -441,9 +491,10 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     self.assertNotEqual(
                         legacy[name],
                         corrected[name],
-                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate's branch for "
-                        "this column was reverted, or the fixture stopped discriminating. Check "
-                        "the diff before the randbats data.",
+                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate collapsed "
+                        "to a constant, or its branch for this column was reverted, or the "
+                        "fixture stopped discriminating. Check the diff before the randbats "
+                        "data.",
                     )
                     self.assertEqual(
                         got[name],
@@ -475,9 +526,10 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     self.assertNotEqual(
                         legacy[name],
                         corrected[name],
-                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate's branch for "
-                        "this column was reverted, or the fixture stopped discriminating. Check "
-                        "the diff before the randbats data.",
+                        f"exact_spreads has NO EFFECT on {species}/{name}: the gate collapsed "
+                        "to a constant, or its branch for this column was reverted, or the "
+                        "fixture stopped discriminating. Check the diff before the randbats "
+                        "data.",
                     )
                     self.assertEqual(
                         got[name],
@@ -502,7 +554,6 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
         L79 moves DEF/SPD; at its real L73 it moves SPA instead. A fixture pinned to the wrong level
         tests a state the generator never produces.
         """
-        observed = []
         for species, (level, directions) in sorted(DISCRIMINATING.items()):
             names = tuple(directions)
             with self.subTest(species=species):
@@ -519,7 +570,6 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     sorted(names),
                     f"{species}: expected {names} to move and only {moved} did",
                 )
-                observed.append(species)
 
     def test_the_fixture_literal_still_covers_both_branches_and_directions(self) -> None:
         """A LINT on the fixture literal. Touches no encoder, deliberately separate.
