@@ -914,6 +914,70 @@ class TransformAndEncoreTests(unittest.TestCase):
         ]
         self._assert_reason(payload, "self_moveset_mismatch")
 
+    def test_self_moveset_mismatch_message_can_attribute_the_cause(self) -> None:
+        """The refusal must record what separates its two candidate causes.
+
+        Era 59 measured 365 killed decisions here, 44.8% of the construction channel,
+        and the mismatching move was one of exactly four: toxic, substitute, spore,
+        shadowball. Those look like a sampling defect -- but gen 3 Mimic copies the
+        TARGET's last used move, and those four are exactly what an opponent commonly
+        uses. So the move name is consistent with BOTH causes, and the old message
+        recorded nothing that told them apart, which is why the class sat unattributed
+        across three eras.
+
+        `mimic` in the SAMPLED set is the discriminator: Mimic can only have overwritten
+        a slot the sample knew about. So the message carries the sampled set and an
+        explicit flag.
+        """
+
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["moves"] = [
+            {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+            {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
+        ]
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex)
+
+        # The CODE is unchanged, so era-over-era counts stay comparable -- the ledger
+        # rolls up on reason.split(":")[0].
+        self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
+        message = str(caught.exception)
+        # First request-known move missing from the sample, in request order.
+        self.assertIn("bodyslam", message)
+        # The sampled set, so a reader can see what we believed we had.
+        self.assertRegex(message, r"sampled moveset \[[a-z0-9,]+\]")
+        self.assertIn("sampled_has_mimic=False", message)
+        # And the label must no longer ASSERT a cause the evidence does not support.
+        self.assertNotIn("Transform/Mimic-class desync", message)
+
+    def test_self_moveset_mismatch_flags_a_mimic_carrying_sample(self) -> None:
+        """The other arm: when the sample DOES carry mimic, say so.
+
+        Without this the flag could be hardcoded False and every assertion above would
+        still pass -- the same shape as a negative control that never fires.
+        """
+
+        # The SAMPLED set is what must carry mimic, so it comes from the override's
+        # packed team, not from the request rows.
+        mimic_swampert = replace(_SWAMPERT, moves=("earthquake", "mimic"))
+        override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(_team(mimic_swampert, _STARMIE)),
+                "p2": pack_team(_team(_SNORLAX, _STARMIE)),
+            },
+        )
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["moves"] = [
+            {"id": "spore", "pp": 15, "maxpp": 24, "disabled": False},
+        ]
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, override, dex=self.dex)
+
+        self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
+        self.assertIn("sampled_has_mimic=True", str(caught.exception))
+
     def test_self_moveset_mismatch_fails_closed_SEATED_AT_P2(self) -> None:
         """The same guard, with the engine seated at p2 instead of p1.
 

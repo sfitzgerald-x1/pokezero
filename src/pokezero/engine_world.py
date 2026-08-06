@@ -1897,10 +1897,28 @@ def _move_specs(
                 continue
             if request_move.startswith("hiddenpower") and sampled_has_hp:
                 continue
+            # The message carries the SAMPLED set and the mimic flag because without
+            # them this class cannot be attributed from telemetry, only guessed at.
+            #
+            # Era 59 measured 365 killed decisions here -- 44.8% of the construction
+            # channel -- and the mismatching move was one of exactly four: toxic
+            # (5,248 world failures), substitute (3,280), spore (1,712), shadowball
+            # (128). Those are ordinary randbats moves, which reads as a sampling
+            # defect. But gen 3 Mimic copies the TARGET'S last used move, and those
+            # four are precisely what an opponent commonly uses -- so the move name
+            # alone is consistent with both "our sample is wrong" and "Mimic replaced
+            # a slot", and the old message recorded nothing that separates them.
+            #
+            # `mimic` in the SAMPLED set is what separates them: Mimic can only have
+            # overwritten a slot the sample knew about. The label no longer asserts
+            # Transform/Mimic as the cause, because that was an attribution the
+            # evidence did not support.
+            sampled_sorted = ",".join(sorted(sampled_ids))
             raise EngineWorldUnsupported(
                 "self_moveset_mismatch",
                 f"{slot}: request-known move {request_move!r} is absent from the sampled "
-                f"moveset (Transform/Mimic-class desync)",
+                f"moveset [{sampled_sorted}] "
+                f"(sampled_has_mimic={'mimic' in sampled_ids})",
             )
 
     specs: list[MoveSpec] = []
