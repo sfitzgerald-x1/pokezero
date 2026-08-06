@@ -477,7 +477,7 @@ class ClaimTests(unittest.TestCase):
                 fleet_worker._resolve_fanin_route(self.queue, task)
         self.assertTrue(replaced)
 
-    def test_route_directory_preflight_failure_leaves_queue_and_route_state_untouched(self) -> None:
+    def test_route_directory_preflight_failure_leaves_the_queue_untouched(self) -> None:
         from unittest.mock import patch
 
         _manifest(self.queue, "i7-s0.env", out=self.root.resolve() / "cache" / "slice")

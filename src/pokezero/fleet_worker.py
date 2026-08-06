@@ -161,6 +161,17 @@ class _SelectedFanInVersionVanishedError(RuntimeError):
     """A selected immutable version vanished while its files were being read."""
 
 
+class _FanInRecordRacedError(FanInInventoryValidationError):
+    """The record under this read was concurrently rewritten, replaced, or removed.
+
+    Subclasses the inventory error so any path that does not explicitly handle a race still
+    fails closed exactly as before. Exists so callers can distinguish "a producer is actively
+    working on this" from a genuine fault BY TYPE -- an earlier version matched on the message
+    text, which made control flow depend on the pathname interpolated into it: a shard named
+    `...changed...` silently reopened the hole the narrowing had just closed.
+    """
+
+
 class _FanInFenceAdvancedError(FanInInventoryValidationError):
     """A peer installed the next guard generation mid-traversal; re-traverse.
 
@@ -396,7 +407,7 @@ def _verify_fanin_directory_identity(
 ) -> None:
     observed = _fanin_authoritative_directory_stat(path, label)
     if _fanin_directory_identity(observed) != expected:
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} identity changed during validation: {path}"
         )
 
@@ -412,7 +423,7 @@ def _read_fanin_file_with_parent_snapshot(
     parent_identity = _fanin_directory_identity(parent)
     try:
         if expected_parent is not None and parent_identity != expected_parent:
-            raise FanInInventoryValidationError(
+            raise _FanInRecordRacedError(
                 f"fan-in {label} directory identity changed during validation: {path.parent}"
             )
         contents, identity = _read_fanin_authoritative_regular_file_snapshot(
@@ -995,18 +1006,18 @@ def _fanin_staging_lease_is_active(staging: Path, producer_token: str) -> bool:
         payload = _read_fanin_authoritative_json(
             _fanin_staging_lease_path(staging), "staging producer lease",
         )
-    except FanInInventoryValidationError as exc:
+    except _FanInRecordRacedError:
         # A lease that CHANGED under this read is a producer *renewing* it -- the most direct
         # evidence there is that its staging is still owned. Reporting it active only ever
         # prevents a reclaim, never causes one.
         #
-        # Deliberately narrowed to that case. A blanket except also swallowed a lease pathname
+        # Caught BY TYPE, not by message text: matching on the string made control flow
+        # depend on the pathname interpolated into it, so a shard named `...changed...`
+        # reopened this hole. A blanket except also swallowed a lease pathname
         # that is a DIRECTORY, a SYMLINK, or unreadable (EACCES), reporting the staging owned
         # forever so it was never reclaimed -- and note the asymmetry it created: malformed JSON
         # below still returns False (reclaimable), so garbage read as dead while a symlink read
         # as alive. Those are real faults; fail-safe is not the same as silent.
-        if "changed" not in str(exc):
-            raise
         return True
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "producer_token", "renewed_at"}:
         return False
@@ -1182,7 +1193,7 @@ def _open_fanin_authoritative_directory(path: Path, label: str) -> tuple[int, os
     # mutable guard directory only needs the stable directory object identity.
     if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
         os.close(descriptor)
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} changed while opening: {path}"
         )
     return descriptor, expected
@@ -1195,7 +1206,7 @@ def _verify_fanin_authoritative_directory_identity(
 ) -> None:
     observed = _fanin_authoritative_directory_stat(path, label)
     if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} identity changed during validation: {path}"
         )
 
@@ -1238,7 +1249,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
     try:
         file_descriptor = os.open(name, os.O_RDONLY | no_follow, dir_fd=descriptor)
     except FileNotFoundError:
-        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from None
+        raise _FanInRecordRacedError(f"fan-in {label} vanished during validation: {name}") from None
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in {label} is unreadable: {name}"
@@ -1252,7 +1263,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
         while chunk := os.read(file_descriptor, 1024 * 1024):
             chunks.append(chunk)
         if _fanin_stat_snapshot(os.fstat(file_descriptor)) != _fanin_stat_snapshot(expected):
-            raise FanInInventoryValidationError(
+            raise _FanInRecordRacedError(
                 f"fan-in {label} changed during read: {name}"
             )
     finally:
@@ -1260,7 +1271,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
     try:
         observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
     except FileNotFoundError as exc:
-        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from exc
+        raise _FanInRecordRacedError(f"fan-in {label} vanished during validation: {name}") from exc
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in {label} is unreadable: {name}"
