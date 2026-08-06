@@ -3016,20 +3016,37 @@ def actor_move_states_from_request_history(
             # a superset by construction whenever idents collide, so a strict subset is the
             # NORMAL case there: measured, 4 usable moves against a 6-move union.
             #
-            # So equality would reject every duplicate-ident team, and the design is on
-            # firmer ground than its old justification claimed. Equality and reversed-subset
-            # mutants now die at the unit level; they survive only the LIVE gate, and only
-            # because p2 is not the search seat there.
+            # So equality would reject every duplicate-ident team WHOSE DUPLICATES DIFFER in
+            # moveset -- identical duplicates union back to 4 and equality still accepts. The
+            # corpus's only case does differ, so subset is required here; the quantifier just
+            # is not universal. The design is on firmer ground than its old justification
+            # claimed. Equality and reversed-subset mutants now die at the unit level; they
+            # survive only the LIVE gate, and only because p2 is not the search seat there.
             #
-            # PROVENANCE, in three tiers rather than two, since one of these is stronger
-            # than "read only":
-            #   * MEASURED live -- the 2,219-request scan (scope: per-row movesets,
-            #     pre-union), and `recharge` appearing 6 times with no `pp`, so
-            #     `_request_active_moves` drops it.
-            #   * SAME CODE PATH as a measured case -- Encore/moveSlot-locked shares the one
-            #     `if (lockedMove)` block with recharge in Showdown's `sim/pokemon.ts`,
-            #     sibling branches both returning pp-less dicts.
-            #   * SOURCE ONLY -- Struggle is a genuinely separate branch and is unverified by
+            # PROVENANCE. Three tiers, and note that "Wrong v1" above is MEASURED, not read:
+            #   * MEASURED live -- (a) the 2,219-request scan, scope per-row movesets and
+            #     pre-union; (b) `mustrecharge` from Hyper Beam, 6 times, carrying no `pp`, so
+            #     `_request_active_moves` drops it; (c) ENCORE, which carries `pp` and does
+            #     NOT narrow the list. An earlier version of this comment put Encore in the
+            #     `if (lockedMove)` block alongside recharge, "sibling branches both returning
+            #     pp-less dicts". That is FALSE and it contradicted "Wrong v1" four lines
+            #     above. `onSemiLockMove` is registered only in the gen 1 and gen 2 mods
+            #     (Bide), so `getSemiLockedMove` cannot return Encore; gen 3 Encore is
+            #     `onDisableMove` + `onOverrideAction`, which DISABLES the other three slots.
+            #     Driving `encore_wobbuffet` with the encored seat as p2 captured the real
+            #     shape: four slots, all with `pp`, three flagged `disabled: True`. So Encore
+            #     contributed zero strict subsets to the scan because it never narrows -- not
+            #     because it was dropped upstream. That capture also shows a 0-PP slot staying
+            #     listed with `disabled: True`, which independently confirms the "always the
+            #     full moveSlots list" premise this whole argument rests on.
+            #   * SAME BLOCK as a measured case, NOT measured -- SolarBeam's `twoturnmove`
+            #     charge turn (7 gen 3 randbats sets) reaches the same `if (lockedMove)` block
+            #     as the measured `mustrecharge`. The corpus has no SolarBeam scenario, which
+            #     is consistent with all 6 pp-less requests in the scan logging as
+            #     `recharge`. Every other producer of that block -- outrage, thrash,
+            #     petaldance, rollout, iceball, uproar, bide, fly, dig, skullbash, skyattack,
+            #     razorwind -- appears in ZERO gen 3 randbats sets.
+            #   * SOURCE ONLY -- Struggle, its own `!moves.length` branch, unverified by
             #     measurement; an attempt to produce a live Struggle request failed on
             #     packed-team format.
             #
