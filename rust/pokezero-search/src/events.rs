@@ -1945,31 +1945,46 @@ fn render_move_phase(
                             // Harden/Withdraw where no candidate can be named but the
                             // transition is proven.
                             //
-                            // Apply BEFORE emitting, mirroring the named path. A zero amount
-                            // emits nothing: the engine writes a clamped boost as a 0-delta
-                            // instruction and Showdown shows no line for one.
-                            //
-                            // The `sim.apply` is REQUIRED BY CONTRACT and currently
-                            // UNOBSERVABLE, labelled rather than left looking tested. The walk
-                            // applies every instruction in order -- the `else` arm below did so
-                            // for Boost before this arm existed -- but mutation shows deleting
-                            // it changes no output: `render_boost_line` takes the stat and
-                            // magnitude from the INSTRUCTION, boosts move no HP so
-                            // `emit_residuals!` cannot see them, and the harness asserts the
-                            // renderer leaves the source state untouched, so nothing outside
-                            // can observe it either. It stays because the contract is
-                            // "apply in order" and a later instruction may read boosts.
+                            // RESIDUALS FIRST, exactly as the `Switch` arm does, and for the
+                            // same reason: the walk's contract is IN ORDER. Without this a
+                            // `[Damage, Boost..]` tail rendered the boosts BEFORE the damage
+                            // they follow -- reproduced on Overheat/Psycho Boost (-2 spa) and
+                            // Ancient Power/Silver Wind (+1 all five), both of which this
+                            // change newly admits, so the misordering would have been a
+                            // regression introduced by the fix. The whole suite passed with
+                            // and without it, so `renders_a_damage_then_boost_tail_in_order`
+                            // exists to pin it.
+                            emit_residuals!();
                             sim.apply(instruction);
-                            if boost.amount != 0 {
-                                out.lines.push(render_boost_line(
-                                    ctx,
-                                    sim,
-                                    boost.side_ref,
-                                    boost.stat,
-                                    boost.amount,
-                                    None,
-                                ));
-                            }
+                            // NO `amount != 0` guard, mirroring the named path, which has
+                            // none either. An earlier version had one, justified by two claims
+                            // that are both FALSE: the engine never writes a 0-delta `Boost`
+                            // (every construction site is zero-guarded --
+                            // `gen3/generate_instructions.rs`'s `if boost_amount != 0`, plus
+                            // the ability, item and Belly Drum sites), and Showdown DOES show
+                            // a line for a capped boost -- `|-boost|IDENT|stat|0`, which this
+                            // renderer already emits from its own `capped_boost_move` block,
+                            // driven by the move rather than by a `Boost` instruction. So the
+                            // guard was dead code resting on a wrong premise, and removing it
+                            // also removes the `!= 0` -> `> 0` mutation that silently dropped
+                            // every `|-unboost|`.
+                            out.lines.push(render_boost_line(
+                                ctx,
+                                sim,
+                                boost.side_ref,
+                                boost.stat,
+                                boost.amount,
+                                None,
+                            ));
+                            // GHOST CURSE is the one suppression the named path has and this
+                            // arm does not: it skips the boost lines and marks the branch
+                            // `ghost_curse_engine_model` attribution-unsafe. Unreachable here
+                            // only by accident -- `Choices::CURSE` carries a
+                            // `volatile_status` alongside its boosts, so such a tail still
+                            // holds `ApplyVolatileStatus` and is blocked by the `volatile`
+                            // family. Recorded because admitting `volatile` is a plausible
+                            // next step, and it would turn this into three phantom boost lines
+                            // with no refusal.
                         } else if let Instruction::Switch(switch) = instruction {
                             emit_residuals!();
                             sim.apply(instruction);
@@ -4832,9 +4847,11 @@ mod tests {
         assert!(
             multi_label_refused > 0,
             "VACUOUS THE OTHER WAY: no ambiguous branch was refused, so nothing here \
-             exercises `ambiguous_tail_is_fully_renderable`. The Harden/Withdraw fixture \
-             carries an unrendered Boost and MUST refuse; a predicate that accepted \
-             everything would pass this test without it."
+             exercises `ambiguous_tail_is_fully_renderable` and a predicate that accepted \
+             everything would pass. NOTE the population changed: Harden/Withdraw no longer \
+             refuses now that its Boost is rendered, so the surviving refusals are the \
+             `substitute+volatile` substitute break -- `[DamageSubstitute, \
+             RemoveVolatileStatus]`, which the walk still cannot express."
         );
         // ...and the two must partition the ambiguous population exactly.
         assert_eq!(

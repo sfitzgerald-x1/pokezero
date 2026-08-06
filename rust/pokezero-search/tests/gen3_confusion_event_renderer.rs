@@ -1549,9 +1549,23 @@ fn byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line()
                 r.lossy
             );
         }
-        if r.lines.iter().any(|line| line.starts_with("|-boost|")) {
+        // EXACT LINE, not a prefix. `starts_with("|-boost|")` is a tautology over this
+        // arm's only output shape, and review showed it letting three mutations through the
+        // whole suite: the wrong ident (boost credited to the other Pokemon), the wrong stat
+        // code, and a spurious `[from] item: Leftovers` tag -- which still starts with
+        // `|-boost|` while making the FOLD ignore the boost entirely, since its `-boost` arm
+        // is gated on `from_payload is None`. The sibling refusal test's own comment warns
+        // that "accepting a prefix would restore the tautology that review caught here"; this
+        // one had reintroduced it.
+        if r.lines.iter().any(|line| line == "|-boost|p2a: Opponent|def|1") {
             saw_boost_line = true;
         }
+        assert!(
+            !r.lines.iter().any(|line| line.starts_with("|-boost|")
+                && line != "|-boost|p2a: Opponent|def|1"),
+            "no boost line other than the +1 Defense the tail carries: {:?}",
+            r.lines
+        );
     }
 
     assert!(
@@ -1563,6 +1577,110 @@ fn byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line()
         saw_boost_line,
         "the walk must EMIT the boost line, not merely stop refusing: admitting the family \
          without rendering it drops the boost into the fold silently"
+    );
+}
+
+/// A NEGATIVE boost, on the OPPONENT, with an exact line.
+///
+/// Charm and Feather Dance are both -2 Attack on the target, so their tails are
+/// byte-identical and the callee cannot be named. This covers two gaps the Harden/Withdraw
+/// fixture structurally cannot, both of which review found live and green:
+///
+///   * `|-unboost|` at all. An `amount != 0` -> `amount > 0` mutation silently dropped every
+///     negative boost line -- the C52-mirror defect verbatim, family admitted and effect
+///     dropped. (The guard is now gone entirely, which removes the mutation target, but the
+///     coverage belongs here regardless.)
+///   * A boost whose target is NOT the active side. Harden/Withdraw boosts the user, so
+///     `boost.side_ref` and the walk's `side` coincide and using either produces the same
+///     ident. An opponent-target boost separates them.
+#[test]
+fn a_negative_opponent_boost_renders_the_exact_unboost_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::CHARM);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::FEATHERDANCE);
+
+    let branches = generate(&mut state);
+    let mut saw_unboost = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        assert!(
+            !r.attribution_unsafe
+                .iter()
+                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
+            "a negative boost is as renderable as a positive one: {:?}",
+            r.attribution_unsafe
+        );
+        // The TARGET is side one, not the sleeper on side two -- that is the whole point.
+        if r.lines.iter().any(|line| line == "|-unboost|p1a: Lead|atk|2") {
+            saw_unboost = true;
+        }
+    }
+
+    assert!(
+        saw_unboost,
+        "the exact `|-unboost|p1a: Lead|atk|2` line must be emitted -- the magnitude is \
+         unsigned and the head flips on sign, and the ident must be the TARGET's"
+    );
+}
+
+/// The walk's contract is IN ORDER, and a `[Damage, Boost..]` tail is where that bites.
+///
+/// Ancient Power and Silver Wind are both 60 BP with a +1 all-stats secondary, so their
+/// tails are byte-identical and shaped `[..., Damage, Boost x5]`. Before the residual flush
+/// was added to the Boost arm the stream put all five boosts BEFORE the damage they follow.
+/// Both branches refused on main, so the misordering would have been a fidelity regression
+/// introduced by the very change that admits them -- and the full suite passed with and
+/// without the fix, which is why this exists.
+#[test]
+fn renders_a_damage_then_boost_tail_in_order() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::ANCIENTPOWER);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SILVERWIND);
+
+    let branches = generate(&mut state);
+    let mut checked = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        let damage_at = r.lines.iter().position(|l| l.starts_with("|-damage|"));
+        let first_boost_at = r.lines.iter().position(|l| l.starts_with("|-boost|"));
+        if let (Some(damage), Some(boost)) = (damage_at, first_boost_at) {
+            checked = true;
+            assert!(
+                damage < boost,
+                "the engine's tail is damage-then-boosts, so the stream must be too: {:?}",
+                r.lines
+            );
+        }
+    }
+
+    assert!(
+        checked,
+        "fixture produced no branch carrying both a damage and a boost line -- without one \
+         this test asserts nothing"
     );
 }
 
