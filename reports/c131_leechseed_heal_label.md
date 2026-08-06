@@ -7,7 +7,7 @@
 
 C116 Phase 4 item 12: one more row disposed of, as a **harness fix**. Era: branch
 `harness-leechseed-heal-label` off `main` `a4132d16`; engine+crate fingerprint `12e05f6e8a…` →
-`15b9f280fc…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
+`7f0e61be89…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
 patch stack does not).
 
 > **On the C116 citation.** The plan lives outside this repository at the owner's instruction and is
@@ -22,14 +22,18 @@ drain heal — has been discarded. The fallback tested the **Leech Seed drain be
 an ordinary Leftovers tick on a side whose opponent happened to be seeded came back labelled
 `leechseed`. That is the H.1 fall-through the plan exists to prevent.
 
-The fix orders the fallback by the engine's own residual phase order: **Leftovers is 10.4 and the
-drain is 10.5**, so Leftovers is tested first.
+The fallback now tests Leftovers first. **The phase-order reasoning an earlier revision of this
+section gave for that is retracted — see §5.** `residual_heal_cause` takes no heal index, so it is a
+constant function of state and cannot implement "answer with the earlier phase" at all; and the
+premise is false anyway, because a faster victim's drain precedes the seeder's Leftovers tick. The
+narrow true reason is that the drain is rendered *silently*, so `"Leech Seed"` is never a correct
+answer for a `[from]`-tagged heal and nothing is displaced by preferring Leftovers.
 
 ```rust
 if s.get_active_immutable().item == Items::LEFTOVERS { return "item: Leftovers".to_string(); }
 if opponent.volatile_statuses.contains(&PokemonVolatileStatus::LEECHSEED)
     && opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE
-{ return "Leech Seed".to_string(); }
+{ return String::new(); }   // renders `[silent]`, which is what Showdown emits
 ```
 
 ## 2. The row, and why it is only a label
@@ -54,13 +58,27 @@ string** was wrong.
 
 | pin | on `main`'s ordering | on this branch |
 |---|---|---|
-| `a_seeded_opponent_does_not_steal_the_leftovers_tag` | **RED** (`events.rs:5930`) | green |
-| control: `without_leftovers_a_seeded_opponent_still_yields_the_drain_label` | green | green |
+| `a_seeded_opponent_does_not_steal_the_leftovers_tag` | **RED** | green |
+| `without_leftovers_a_seeded_opponent_still_yields_the_drain_label` | **RED** | green |
 | `liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain` | n/a (new) | green; red when the guard is deleted |
+| `sand_veil_is_exempt_so_the_plan_does_not_book_a_chip_that_never_fires` | n/a (new) | green; **red** when the exemption is deleted |
+| `expiring_weather_books_no_chip_so_the_drain_keeps_its_label` | n/a (new) | green; **red** when the expiry gate is deleted |
 
-> The control now asserts `[silent]`, not `[from] Leech Seed` — see §5. And the LIQUID OOZE
-> guard was **unpinned**: the review deleted it and the entire crate suite stayed green. The
-> new pin above is verified red against exactly that deletion.
+> **`without_leftovers_…` is NOT a control, and calling it one was wrong.** Once its assertion was
+> flipped to `[silent]` it became a second *regression* pin: on `main` the fallback returns
+> `"Leech Seed"`, so the line has no `[silent]` and the pin is **RED**. An earlier revision of this
+> table recorded it as green in both eras — I flipped the assertion and did not re-run the revert
+> check, then reported a result that no longer held. Verified by restoring `main`'s drain return:
+> that pin, and only that pin, fails.
+>
+> The LIQUID OOZE guard was **unpinned** — the review deleted it and the whole crate suite stayed
+> green — and so was the **Sand Veil exemption**, the one line worth two rows.
+>
+> **Both of my first Sand Veil and expiry pins were vacuous, in the same commit, for the same
+> reason.** They asserted on DAMAGE tags, and an unfilled chip slot does not corrupt damage
+> attribution — it corrupts the HEAL labels, because that is where the fallback has to guess between
+> Leftovers and the cross-side drain. Deleting the exemption left both green. Rewritten on heal
+> labels, both are now verified red against deleting their own line.
 
 The revert check was run properly rather than assumed: `events.rs` was restored to `main` and the
 two pin functions **grafted back on**, so the pins ran against the old ordering with nothing else
@@ -76,7 +94,7 @@ starve the Leech Seed branch.
 | gate | result |
 |---|---|
 | crate suite, `RUSTFLAGS="-C debug-assertions=yes"` | 0 failed, 32 test groups ok |
-| the two new pins | 3 ran, OK (2 pins + 1 pre-existing sibling) |
+| the new pins | 5, all OK; each verified red against deleting the line it covers |
 
 ## 5. The mechanism I got wrong, and the one that was actually load-bearing
 
@@ -108,16 +126,32 @@ Two further corrections the review forced, both verified:
   failing, at zero measured cost. It now asserts `[silent]`.
 
 `ResidualPlan` books no slot for **Rain Dish** or **Sitrus** either (`RAINDISH`/`SITRUS` also grep to
-zero in `events.rs`), so those heals disable a side's plan the same way. Filed, not fixed here.
+zero in `events.rs`) — but **both are UNREACHABLE in the gen3 randbats pool**, so neither can cost a
+row, and an earlier revision of this line overstated them by omitting that check. Verified against
+the live checkout: `data/random-battles/gen3/sets.json` has **zero** sets with Rain Dish (or Dry
+Skin, Overcoat, Ice Body) across its 220 species, and `teams.ts:452-513` `getItem` can only return
+Stick, Soul Dew, Silk Scarf, Thick Club, Light Ball, Lum Berry, Choice Band, Twisted Spoon, White
+Herb, Salac/Liechi/Petaya Berry or Leftovers — **Sitrus Berry cannot be held**. The repo already
+applies exactly this test to DRYSKIN at `gen3/generate_instructions.rs:1567`, so the instrument was
+available and I skipped it.
+
+**The reachable member of the same class is weather EXPIRY, and it is fixed here.**
+`weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`) while the engine decrements
+and clears the weather at `generate_instructions.rs:4144-4163` *before* its chip loop at `:4193`. So
+on the turn sand or hail expires the engine emits no chip, the plan books one, and the side drops to
+the constant fallback — the `19100193/46` signature. Measured: without the gate that state yields
+`["item: Leftovers", "item: Leftovers"]`, the genuine drain mislabelled as a second Leftovers tick;
+with it the drain renders `[silent]`. Exactly `== 1`, not `<= 1`: the engine's decrement is gated on
+`turns_remaining > 0`, so a pre-residual 0 means *permanent* weather, which does keep chipping.
 
 ## 6. Sweep
 
 | window | engine | measured | full_round | matched | diverged |
 |---|---|---|---|---|---|
 | dev `19,000,000–19,000,199` | `main` `a4132d16`, fp `12e05f6e8a…` | 15,432 | 15,968 | 15,430 | 2 |
-| dev | branch, fp `f6c676ea90…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
+| dev | branch, fp `7f0e61be89…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
 | validation holdout `19,100,000–19,100,199` | `main` `a4132d16`, fp `12e05f6e8a…` | 15,551 | 16,155 | 15,546 | 5 |
-| validation holdout | branch, fp `f6c676ea90…` | 15,551 | 16,155 | **15,548** | **3** |
+| validation holdout | branch, fp `7f0e61be89…` | 15,551 | 16,155 | **15,548** | **3** |
 
 **Closed `19100014/35` and `19100193/46`. Nothing opened.** `boundaries_measured` and
 `boundaries_full_round` identical, identity holds on all four, `engine_errors` 0 in all four.

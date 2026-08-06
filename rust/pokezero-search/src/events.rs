@@ -3442,6 +3442,21 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
     if active.hp <= 0 {
         return None;
     }
+    // WEATHER EXPIRY, the same class of defect as the Sand Veil gate below and
+    // found by the same review. `weather_is_active` does NOT read
+    // `turns_remaining` (`gen3/state.rs:1050-1060`), and this function reads the
+    // PRE-residual state -- but the engine decrements and clears the weather at
+    // `generate_instructions.rs:4144-4163`, BEFORE its chip loop at `:4193`. So on
+    // the turn the weather expires the engine emits NO chip while the plan books
+    // one, the side's plan goes unusable, and every label on it drops to the
+    // constant fallback.
+    //
+    // Exactly `== 1`, not `<= 1`: the engine's decrement is gated on
+    // `turns_remaining > 0`, so a pre-residual 0 means PERMANENT weather, whose
+    // type is never cleared and which therefore does keep chipping.
+    if state.weather.turns_remaining == 1 {
+        return None;
+    }
     if state.weather_is_active(&Weather::HAIL) {
         if active.has_type(&PokemonType::ICE) {
             return None;
@@ -5362,6 +5377,121 @@ mod tests {
         );
     }
 
+    /// SAND VEIL, and this pin is the whole point of the change.
+    ///
+    /// Round 2's review deleted `|| active.ability == Abilities::SANDVEIL` from
+    /// `weather_chips` and the ENTIRE crate suite stayed green: 373 passed, 0
+    /// failed. The one line this branch exists for -- worth two holdout rows -- was
+    /// pinned by nothing, while the LIQUID OOZE guard worth zero measured rows got
+    /// a pin the round before.
+    ///
+    /// MY FIRST VERSION OF THIS PIN WAS ALSO VACUOUS, and I wrote it in the same
+    /// commit as an expiry pin with the identical flaw. It asserted on DAMAGE tags
+    /// with a poison-only segment, and deleting the exemption still left it green.
+    /// An unfilled chip slot does not corrupt damage attribution -- it corrupts the
+    /// HEAL labels, because that is where the fallback has to guess between
+    /// Leftovers and the cross-side drain. Twice in one commit I asserted on the
+    /// wrong side of the mechanism and called it a pin.
+    ///
+    /// Measured: without the exemption this state yields
+    /// `["item: Leftovers", "item: Leftovers"]` -- the genuine drain mislabelled as
+    /// a second Leftovers tick, which is the `19100193/46` signature.
+    #[test]
+    fn sand_veil_is_exempt_so_the_plan_does_not_book_a_chip_that_never_fires() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+            active.ability = Abilities::SANDVEIL;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+
+        // Sand is active with turns to spare, but this mon is EXEMPT, so the engine
+        // emits no chip for it: the segment is the Leftovers tick plus the drain.
+        let segment = vec![heal_one(20), heal_one(40)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "the drain heal must stay silent; a second `item: Leftovers` means the \
+             plan booked a sandstorm chip for a Sand Veil mon"
+        );
+
+        // Anti-vacuity: the same state WITHOUT Sand Veil really does book a chip,
+        // so the fixture is exercising the exemption and not an empty plan.
+        let mut control = parse_state(MINIMAL.trim()).expect("fixture parses");
+        control.weather.weather_type = Weather::SAND;
+        control.weather.turns_remaining = 5;
+        {
+            let active = control.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        control
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        let with_chip = vec![damage_one(20), heal_one(20), heal_one(40)];
+        assert_eq!(
+            residual_tags(&mut control, &with_chip, "p1a"),
+            vec!["Sandstorm".to_string(), "item: Leftovers".to_string()],
+            "without Sand Veil the chip is booked and the plan reconciles"
+        );
+    }
+
+    /// WEATHER EXPIRY, the same class as Sand Veil and REACHABLE in the pool.
+    ///
+    /// `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`)
+    /// and this function reads the PRE-residual state, but the engine decrements
+    /// and clears the weather at `generate_instructions.rs:4144-4163` BEFORE its
+    /// chip loop at `:4193`. So on the expiring turn the engine emits no chip while
+    /// the plan books one, and the side falls to the constant fallback.
+    ///
+    /// MY FIRST VERSION OF THIS PIN WAS VACUOUS AND PASSED WITHOUT THE FIX. It
+    /// asserted on DAMAGE tags, and the defect does not show there -- an unfilled
+    /// chip slot corrupts the HEAL labels, because that is where the fallback has
+    /// to guess between Leftovers and the drain. Asserting on the wrong side of the
+    /// mechanism looked like a test and constrained nothing.
+    ///
+    /// Measured: without the `turns_remaining == 1` gate this state yields
+    /// `["item: Leftovers", "item: Leftovers"]` -- the genuine drain mislabelled as
+    /// a second Leftovers tick, the `19100193/46` signature. With it, the drain
+    /// renders `[silent]` as Showdown does.
+    #[test]
+    fn expiring_weather_books_no_chip_so_the_drain_keeps_its_label() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 1;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+
+        // The engine cleared the weather first, so the segment carries NO chip:
+        // just the Leftovers tick and the cross-side drain heal.
+        let segment = vec![heal_one(20), heal_one(40)];
+        let tags = residual_tags(&mut state, &segment, "p1a");
+        assert_eq!(
+            tags,
+            vec!["item: Leftovers".to_string()],
+            "the drain heal must stay silent; a second `item: Leftovers` means the \
+             plan was disabled by a chip the engine never emitted"
+        );
+    }
+
     /// THE COUNTEREXAMPLE TO AMOUNT MATCHING, pinned on purpose.
     ///
     /// The sandstorm chip and the partial-trap tick are BOTH `maxhp/16`, so on a
@@ -5469,9 +5599,18 @@ mod tests {
     /// `19100193/46`.
     ///
     /// `residual_heal_cause` is the fallback reached when the residual plan fails
-    /// reconciliation, and it used to test Leech Seed BEFORE Leftovers. Leftovers
-    /// is residual phase 10.4 and the seeder's drain is 10.5, so when a side
-    /// could produce both, the FIRST heal is the Leftovers tick. On that row the
+    /// reconciliation, and it used to test Leech Seed BEFORE Leftovers.
+    ///
+    /// NOTE: an earlier version of this docstring justified the order by residual
+    /// PHASE -- Leftovers 10.4 before the drain 10.5 -- and that reasoning is
+    /// RETRACTED where the function is defined, ~2,100 lines up. This function
+    /// receives no heal index, so it is a constant function of state and has no
+    /// notion of "first"; and a faster victim's drain is emitted BEFORE the
+    /// seeder's Leftovers tick, so the premise is false regardless. The real reason
+    /// Leftovers wins is that the drain renders silently, so `"Leech Seed"` is
+    /// never a correct answer for a `[from]`-tagged heal.
+    ///
+    /// On that row the
     /// plan reserved a drain slot — opponent seeded, both actives alive when it
     /// was built — but the seeder died to poison at 10.6 before the 10.5 sap
     /// could run, so `emitted_heal` came up one short, the plan was discarded,
