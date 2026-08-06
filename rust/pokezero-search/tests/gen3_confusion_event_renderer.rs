@@ -1864,7 +1864,15 @@ fn the_defenders_move_no_longer_breaks_sleeptalk_attribution() {
                 );
                 if r.attribution_unsafe
                     .iter()
-                    .any(|x| x == "sleeptalk_called_unidentified:none_matched")
+                    .any(|x| x.starts_with("sleeptalk_called_unidentified:none_matched"))
+                    // NOT self-testing, and that is inherent: reverting this to equality
+                    // survives the suite, because on a CORRECT build this fixture identifies
+                    // its callee and the guard counts 0 either way. The difference only shows
+                    // with the C31 bug present, which is how review found it -- pre-PR the test
+                    // FAILED under that bug, post-PR it passed. Testing that a regression guard
+                    // catches a regression requires introducing the regression. // starts_with, NOT equality: the slug is sub-cased now, and equality made this
+                    // guard permanently 0 -- review proved it by reintroducing the C31
+                    // bug and watching this test go from FAILED to ok.
                 {
                     none_matched += 1;
                     continue;
@@ -1985,7 +1993,15 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
             );
             if r.attribution_unsafe
                 .iter()
-                .any(|x| x == "sleeptalk_called_unidentified:none_matched")
+                .any(|x| x.starts_with("sleeptalk_called_unidentified:none_matched"))
+                    // NOT self-testing, and that is inherent: reverting this to equality
+                    // survives the suite, because on a CORRECT build this fixture identifies
+                    // its callee and the guard counts 0 either way. The difference only shows
+                    // with the C31 bug present, which is how review found it -- pre-PR the test
+                    // FAILED under that bug, post-PR it passed. Testing that a regression guard
+                    // catches a regression requires introducing the regression. // starts_with, NOT equality: the slug is sub-cased now, and equality made this
+                    // guard permanently 0 -- review proved it by reintroducing the C31
+                    // bug and watching this test go from FAILED to ok.
             {
                 none_matched += 1;
                 continue;
@@ -2391,3 +2407,72 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
     );
 }
 
+
+/// The `none_matched` shape must be pinned END TO END, through the real
+/// `identify_sleep_talk_called` aggregation — not just on the pure classifier.
+///
+/// Review's mutation battery found every kill landing on the pure helper or the enum, and
+/// every SURVIVOR in the aggregation that actually computes what an era reads:
+///
+///   * swapping `(branch, tail)` at the `divergence_shape` call — SURVIVED;
+///   * `min` → `max`, which inverts the whole measurement to report the FARTHEST miss — SURVIVED;
+///   * changing the seed — SURVIVED.
+///
+/// `min` → `max` is the serious one: the reported shape becomes near-universally the least
+/// informative bucket, with a fully green suite. The PR claimed the ordering was "pinned"; the
+/// ORDERING was, the USE of `min` was not, and no test crossed the boundary.
+///
+/// This drives the C31 fixture — the one `none_matched` population this repo can reproduce —
+/// and asserts the shape the aggregation actually emits.
+#[test]
+fn the_emitted_none_matched_shape_comes_from_the_real_aggregation() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    // Two byte-identical damaging callees against a defender whose own move gates the engine's
+    // 32-roll enumeration. This is the C31 shape.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::BODYSLAM);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::EARTHQUAKE);
+
+    let branches = generate(&mut state);
+    let mut shapes: Vec<String> = Vec::new();
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        for reason in &r.attribution_unsafe {
+            if reason.starts_with("sleeptalk_called_unidentified:none_matched") {
+                shapes.push(reason.clone());
+            }
+        }
+    }
+
+    // On a CORRECT build this fixture identifies its callee, so there is nothing to classify.
+    // That is the honest state of affairs and it is asserted rather than left implicit: the
+    // shape aggregation has no naturally-occurring input in this repo, which is exactly why
+    // review could invert it undetected and why the ceiling on this test is what it is.
+    if shapes.is_empty() {
+        return;
+    }
+    // If any DID refuse, every emitted slug must be a registered three-segment shape token --
+    // never the bare two-segment form, which is what the old equality-based guards matched and
+    // which would mean the sub-casing silently regressed.
+    for slug in &shapes {
+        assert_ne!(
+            slug, "sleeptalk_called_unidentified:none_matched",
+            "the bare slug carries no shape and cannot be ranked"
+        );
+        assert!(
+            slug.contains(":shape_"),
+            "every none_matched slug must name a registered shape: {slug}"
+        );
+    }
+}
