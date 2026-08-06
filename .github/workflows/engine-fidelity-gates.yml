@@ -56,6 +56,12 @@ jobs:
             # The coverage-bound pins. Listed so a PR that only weakens them still
             # trips this workflow.
             tests/test_single_seat_coverage_bound.py
+            # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
+            # only change is deleting one of them skips mass-gate and goes green.
+            reports/artifacts/c131_leechseed_main_dev_sweep.json
+            reports/artifacts/c131_leechseed_main_holdout_sweep.json
+            reports/artifacts/c131_leechseed_fix_dev_sweep.json
+            reports/artifacts/c131_leechseed_fix_holdout_sweep.json
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py

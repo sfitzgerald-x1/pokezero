@@ -18,7 +18,8 @@ else:
 
 A single-seat ply — one where only one side is asked to act, because the other is waiting — is
 counted in `skip:single_seat_boundary` and **never** in `boundaries_full_round`. The two sets do not
-overlap, and their sum is every boundary the sweep encountered.
+overlap, and their sum is every boundary that reached the counting fork. (A boundary aborted earlier
+for `abort:no_legal_action` is in neither; it is 0 in both windows, so the totals below are exact.)
 
 `measured_fraction_of_full_rounds` therefore divides by `boundaries_full_round`, a denominator that
 **excludes the single-seat population entirely**. It is not wrong for what it says; it is easy to read
@@ -43,8 +44,11 @@ counters picked out of many:
 | dev | 15,432 | 536 | 15,968 | 1,742 | **17,710** |
 | holdout | 15,551 | 604 | 16,155 | 1,813 | **17,968** |
 
-The exits are `skip:world_unsupported:*`, `skip:unmappable_choice:*`, `world_prestate_mismatch`, and
-`limit:world_substitute_health_unknown`. Two traps to avoid when re-deriving this:
+The exits **observed in these windows** are `skip:world_unsupported:*`, `skip:unmappable_choice:*`,
+`world_prestate_mismatch` and `limit:world_substitute_health_unknown`. Others exist and are 0 here
+(`skip:no_materialization:*`, `skip:no_action_candidates`, `skip:world_error:*`);
+`skip:strict_all_branches_lossy` is **not** an exit — it fires after `boundaries_measured` has already
+incremented. Two traps to avoid when re-deriving this:
 
 - `world_prestate_mismatch`'s four `:p1_hp` / `:p1_status` / `:p2_hp` / `:p2_status` sub-counters **sum
   to the parent** (39 dev, 68 holdout), so adding parent and children double-counts.
@@ -60,8 +64,25 @@ reconcile and is what first made me doubt the total.
 
 ## 3. What lives in the unmeasured population
 
-Every **post-move-faint replacement ply**. When a Pokémon faints to a move, gen 3 pauses mid-turn for
-the replacement; the surviving side gets `wait`, so the ply is single-seat and is skipped.
+**Almost every post-move-faint replacement ply.** When a Pokémon faints to a move, gen 3 pauses
+mid-turn for the replacement; the surviving side gets `wait`, so the ply is single-seat and skipped.
+
+> **The exception, and an earlier draft asserted there was none.** That draft said "*Every*
+> post-move-faint replacement ply is single-seat" and concluded "the differential has **never**
+> compared a deferred residual phase". Both are false. When **both** actives faint in the same ply —
+> Explosion, Selfdestruct, Destiny Bond, a recoil KO, all present in gen3 randbats — there is no
+> survivor to receive `wait`: both sides get `forceSwitch`, `requested == {"p1","p2"}`, and the
+> replacement ply is a **full-round boundary that IS measured**. Demonstrated in Showdown
+> (`gen3customgame`, sandstorm up, Tauros Explosion): both requests come back
+> `forceSwitch=true wait=false`, and the following ply carries both switches plus the full residual
+> phase. Corroborating from the harness side, `_is_forced_replacement_ply` is called only from
+> `evaluate_boundary_strict`, which only full-round boundaries reach — so the harness already assumes
+> replacement-shaped plies can be compared.
+>
+> The quantitative bound is unaffected (87 % vs 96.6 % does not move), and the harness handles the
+> double-faint case correctly. But a universal claim was the *justification* for why the bound matters,
+> in a report whose whole purpose is to stop an over-read — so it is corrected rather than softened
+> silently.
 
 That matters because **the residual phase is deferred onto exactly those plies**. Measured by driving
 Showdown directly in `gen3customgame`: the move-faint ply itself carries no residuals, and the ply
@@ -91,7 +112,24 @@ accompanied by this bound. It must not be phrased as though every boundary were 
 
 ## 5. Pin
 
-`tests/test_single_seat_coverage_bound.py` asserts that both counters are present in any produced
-report and that they are disjoint, so the denominator is always recoverable and this bound stays
-computable. It does **not** pin the exact fraction — that legitimately drifts with the pool and the
-seed window, and pinning it would produce a gate that fails for the wrong reason.
+`tests/test_single_seat_coverage_bound.py` asserts that both counters are present, that the
+full-round path reconciles (`measured + in-path exits == full_round`), and that the single-seat share
+stays material — so the denominator is always recoverable and this bound stays computable. It does
+**not** pin the exact fraction, which legitimately drifts with the pool and the seed window; a gate on
+it would fail for the wrong reason.
+
+> **What these pins cannot do, stated because it is easy to over-read them.** They read four
+> *committed* artifacts. They import nothing from `scripts/`, exercise no live code path, and
+> therefore **cannot go red from a change to the counting logic** — only from someone editing those
+> JSON files. If a future edit hoisted `counts["boundaries_full_round"] += 1` above the `if` and nobody
+> regenerated the artifacts, these pins would stay green.
+>
+> That is exactly how the first version of them was defeated: a review folded single-seat plies into
+> `boundaries_full_round` *and recomputed the derived fraction the way the live writer does*, and all
+> three pins passed. My own red-run had appeared to catch it only because hand-editing the JSON left
+> `measured_fraction_of_full_rounds` stale — an artifact of mutating data instead of code. The
+> reconciliation assertion added since catches that mutation, but the structural limitation remains.
+>
+> The cheap way to get one live-coupled pin: the single-seat arm never calls `_prepare_boundary`, so it
+> needs no engine. A stub `env` whose `requested_players()` returns one seat, driven through
+> `run_game`, would assert on the real fork. Filed, not done here.

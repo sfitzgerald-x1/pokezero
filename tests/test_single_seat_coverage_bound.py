@@ -82,10 +82,49 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
                 f"{name}: measured ({measured}) exceeds full rounds ({full}), so the "
                 "two counters are no longer disjoint",
             )
+            # THE RECONCILIATION, and it is what actually catches the regression
+            # this pin claims to catch. Folding single-seat plies into
+            # `boundaries_full_round` -- i.e. hoisting the increment above the
+            # `if` -- escaped every other assertion here, because they all get
+            # WEAKER as `full` grows. A review built that mutation and it passed:
+            # my own red-run had only "caught" it because hand-editing the JSON
+            # left `measured_fraction_of_full_rounds` stale at its old value,
+            # which the live writer would never do.
+            #
+            # `full_round` must equal measured plus the exits taken INSIDE the
+            # full-round path. That identity breaks the moment single-seat plies
+            # are counted as full rounds.
+            exits = sum(
+                v
+                for k, v in counters.items()
+                if k.startswith(
+                    (
+                        "skip:world_unsupported",
+                        "skip:unmappable_choice",
+                        "skip:no_materialization",
+                        "skip:no_action_candidates",
+                        "skip:world_error",
+                        "limit:",
+                    )
+                )
+                and k != "skip:single_seat_boundary"
+            ) + counters.get("world_prestate_mismatch", 0)
+            self.assertEqual(
+                measured + exits, full,
+                f"{name}: the full-round path no longer reconciles "
+                f"({measured} + {exits} != {full}); single-seat plies may now be "
+                "counted as full rounds",
+            )
+
             # And the reported fraction really is over full rounds, not over all
             # boundaries -- which is the fact the report exists to state.
-            fraction = report.get("measured_fraction_of_full_rounds")
-            if fraction is not None:
+            #
+            # `assertIn` rather than a truthiness guard: the writer always emits
+            # this key, and a bare `if fraction is not None` silently dropped both
+            # assertions below when a review renamed it.
+            self.assertIn("measured_fraction_of_full_rounds", report, f"{name}")
+            fraction = report["measured_fraction_of_full_rounds"]
+            if True:
                 self.assertAlmostEqual(
                     fraction, measured / full, places=3,
                     msg=(
