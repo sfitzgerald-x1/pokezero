@@ -123,10 +123,33 @@ one arm each, **not the minimum.**
 > on `<min_roll> < residual_threshold` (`generate_instructions.rs`, the `residual_min`,
 > `min_damage_dealt` and `min_crit_roll` guards). With `144 < 129` false the partition does not fire at
 > all, and the 160 arm vanishes. That is a regression, and its shape — a sand or Leech Seed
-> residual-kill arm — is present in both committed sweeps, so it is not hypothetical.
+> residual-kill arm — appears in the **dev** sweep's divergence classes
+> (`component_missing_in_engine:sandstorm`, `component_missing_in_engine:itemleftovers,leechseed`), so
+> it is not hypothetical. An earlier revision said "both committed sweeps"; the holdout sweep's classes
+> show neither, and since the retained repros are capped at 25 out of ~15.5 k measured boundaries their
+> absence there is not evidence either way.
 
-Emitting one arm per distinct threshold keeps the masses exact, because `P(roll ≥ t)` is a property of
-the roll and independent of the status branch.
+**And the mass rule is disjoint bands, not `P(roll ≥ t)` per arm** — a third correction to this
+paragraph, because my first union recipe double-counted. The thresholds are **nested**: a status only
+adds a residual tick, so `t_status < t_premove`, and `{roll ≥ t_status} ⊃ {roll ≥ t_premove}`. Giving
+each arm `P(roll ≥ tᵢ)` therefore counts every roll above the higher threshold twice. Verified on a
+170-max fan with thresholds 145 and 169: `15/16 + 1/16 +` a survive arm of `1/16` = **17/16**, which
+overflows, and `update_percentage(1.0 - branch_chance - residual_kill_chance)` has no room for it.
+Worse than the overflow, the single roll ≥ 169 also sits inside the 145 arm, whose non-burn
+sub-branch renders a *survival* — so the excess mass lands on the wrong outcome.
+
+The correct rule: sort the distinct thresholds `t₁ < … < t_k`; arm `i` carries the **disjoint band**
+`#{rolls ∈ [tᵢ, tᵢ₊₁)}/16`, the top arm carries `#{rolls ≥ t_k}/16`, and the survive arm keeps
+`#{rolls < t₁}/16`. On that fan: `145 → 14/16`, `169 → 1/16`, survive `→ 1/16`, totalling exactly
+`16/16`.
+
+The status-independence of `P(roll ≥ t)` is true, and it is what makes the *structure* sound; it is not
+a licence for the per-arm mass. I conflated the two.
+
+**Reachability of the nested case**, so this is not filed as a corner: it needs
+`t_premove − t_status ≤` the fan width, i.e. roughly `maxhp/8 ≲ 0.15 · max_damage`. Burn and poison
+make that window narrow but real — a near-full-HP defender against a near-OHKO move — and a **Toxic**
+secondary (gen-3 Poison Fang) halves the gap to `maxhp/16` and opens it wide.
 
 This also answers c117's open question — *whether a correct threshold is computable before the
 secondary is decided*. It is: 159 and 211, both re-derived and both produced empirically.
