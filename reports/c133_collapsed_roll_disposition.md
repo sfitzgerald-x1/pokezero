@@ -6,7 +6,8 @@ collapsed-roll rows. **None is a limit**, and the `limit:` prefix two of them ca
 label rather than an adjudication.
 
 No code change ships with this report. It exists so the next attempt starts from measurement instead
-of hypothesis — the previous engine fix in this family failed its own falsifier by 48 rows.
+of hypothesis — the previous engine fix in this **residue** (not this family: it targeted
+`19100180/24`) failed its own falsifier, opening 24 rows in each window.
 
 ## 1. The `limit:` label is unearned
 
@@ -17,18 +18,29 @@ label is wrong for this family:
 - `scripts/family_bucket_audit.py:58` buckets it as **"engine-gap (partially resolved)"**, and `:12`
   defines engine-gap as the engine's branch support not containing the observed transition.
 - `reports/c105_retract_limit_overclaim.json` records the limit label as **"8-for-8 falsified"** across
-  the eight rows it was applied to — and `19000191/63` is explicitly one of the eight.
+  the eight rows it was applied to — and `19000191/63` is one of the eight — c105 defines the set by reference rather than enumerating it,
+  so the membership is corroborated at `reports/c111_residue_row_causes.md:91` ("this was v1's 'genuine
+  limit'"). Note the claim comes from c105's `SUPERSESSION_2026_08_04` field; its body says the
+  opposite, so a reader opening the file hits the retracted text first.
 - The audit's engine-gap signature — *a legal roll range straddling a discrete threshold while the
-  emitted arm sits on one side of it* — holds for all four rows.
+  emitted arm sits on one side of it* — holds for three of the four rows; `19000191/63` qualifies by
+  the definition instead (see §2).
 
 ## 2. The shared shape
 
-In every case the observed damage roll **is a member of the engine's own 16-roll fan**, and it lies on
-the far side of the residual-lethality threshold from the arm the engine emitted.
+In every case the observed damage roll **is a member of the engine's own 16-roll fan**. In three of
+the four it also lies on the far side of the residual-lethality threshold from the arm the engine
+emitted.
+
+`19000191/63` is the exception, and §3 says so: there the engine emits arms on **both** sides of
+threshold 108 (survive at `-101`, kill at `-108`), so the straddle is already resolved and the observed
+109 sits on the same side as the emitted 108. That row is an engine gap by the audit's **definition**
+(the branch support lacks a transition enumeration would reach) rather than by its **signature**.
 
 Worth stating because I got it wrong first: `calculate_damage(..., DamageRolls::Max)` returns
-**maxima**, not roll endpoints; the fan is derived at `generate_instructions.rs:3343` as
-`raw_damage * random / 100`. On `19000074/27` the crit fan is
+**maxima**, not roll endpoints; the fan is derived in the `for random in 85..=100` loop of
+`generate_instructions_from_move` as `raw_damage * random / 100` (cited by symbol: that file is
+gitignored and locally rebuilt, so line numbers into it do not resolve for a later reader). On `19000074/27` the crit fan is
 `[214, 216, 219, 221, 224, 226, 229, 231, 234, 236, 239, 241, 244, 246, 249, 252]` and the observed
 **241 is roll 96**. The engine's `227` is the *mean of the 12 non-KO rolls* — not a fan member at all;
 `244` is the defender's HP. The engine prices the observed roll and emits no arm at it.
@@ -38,7 +50,7 @@ Worth stating because I got it wrong first: `calculate_damage(..., DamageRolls::
 | row | mechanism | disposition |
 |---|---|---|
 | `19000074/27` | the **crit**-straddle path has no residual sub-split | engine fix, ~15 lines, mirrors existing code |
-| `19100107/135`, `19100191/5` | the threshold is read **before** the move's own secondary status (cause **A8**) | engine fix, but see §4 — deeper than it looks |
+| `19100107/135`, `19100191/5` | the threshold is read **before** the move's own secondary status (cause **A8**) | engine fix — make the threshold status-aware; see §4 |
 | `19000191/63` | the arm exists; its representative mis-prices a roll-dependent drain | needs enumeration or a matcher change |
 
 **`19000074/27`.** The crit population straddles two thresholds — KO at 244 and sand-lethality at 229 —
@@ -51,36 +63,58 @@ does not ask.
 **`19000191/63`.** The engine *does* emit the residual-kill arm, at the threshold 108. Showdown rolled
 109. Over the 7-roll lethal band the Leech Seed drain is **injective** — 108→29, 109→28, 110→27,
 111→26, 112→25, 113→24, 115→22 — so no single representative can cover it. The engine's HP arithmetic
-is correct for its own roll; the residue is the choice of representative. A harness route also exists:
-the drain is a heal capped by the victim's remaining HP, i.e. roll-inherited, which is the principle
-the matcher already applies to `heal_to_full`, `capped_lethal` and `movepainsplit`.
+is correct for its own roll; the residue is the choice of representative. A harness route also exists, but it must be
+narrower than "treat the drain as roll-inherited". The drain is `min(29, 137 − d)`: roll-inherited only
+while the cap binds (`d >= 108`), and a flat 29 below the band. Blanket roll-inheriting a `heal` would
+over-accept in the uncapped regime and mask real drain defects, so the reclassification has to be
+conditioned on the cap actually binding. The precedent it would follow is `_ROLL_SCALED_SOURCES`
+(`scripts/engine_transition_differential.py:330-332`), which already does this for `heal_to_full`,
+`capped_lethal` and `movepainsplit`.
 
-## 4. Why A8 is not a threshold tweak — the finding that matters here
+## 4. A8 *is* a threshold change — and an earlier revision of this section said the opposite
 
-The obvious fix for `19100107/135` and `19100191/5` is to make `residual_lethality_threshold`
-status-aware: take the minimum over the statuses the move can inflict. **That is wrong**, and the
-reason is measurable.
+**An earlier revision of this report claimed, in capitals, that a min-over-statuses threshold would be
+wrong and that the fix required "a restructuring of the order in which the partition and the secondary
+are resolved". That was wrong, and a review disproved it by running the counterfactual. Corrected here
+because a claim like that would send the next attempt into work it does not need.**
 
-Replaying `19100107/135` from its recorded state:
+The premise was right and the inference was not. The premise, verified: on `19100107/135` the two
+41.75 % arms are `burn=False damages=[25,157]` and `burn=True damages=[25,157,31]` — identical damage.
+The same holds on `19100191/5`, where the non-burn (71.72 %) and burn (7.97 %) arms both carry `-203`,
+and `7.97 / 79.69 = 10 %` is exactly Fire Blast's burn rate. So the damage representative really is
+chosen before the status branch.
+
+What I inferred from that — that a burn-aware threshold would "price a residual death on a branch
+where no residual is lethal" — misreads what the partition emits. An `extra_branches` entry is a
+**damage representative plus a mass**, not an asserted KO: `generate_instructions.rs` pushes
+`(kill_ins, residual_threshold)` and the consuming loop passes that value into `run_move`, which then
+computes the faint from the residual instructions *that branch actually emits*. Nothing in the
+partition asserts a death.
+
+Verified by replaying `19100107/135`'s recorded state with only Roselia's status field changed, so a
+pre-move residual threshold exists:
 
 ```
- 41.748%  burn=False  damages=[25, 157]
- 41.748%  burn=True   damages=[25, 157, 31]
+BASELINE          41.75  [25, 157]           41.75  [25, 157, 31]   (burn)
+COUNTERFACTUAL    46.97  [25, 150, 31]       36.53  [25, 159, 31]
 ```
 
-The burn arm and the non-burn arm **carry the same damage, 157**. The status branch happens inside
-`run_move`, *after* the damage representative was chosen. So a threshold that assumes the burn would
-apply the burn-aware value to the non-burn arm as well — pricing a residual death on a branch where
-no residual is lethal.
+The existing machinery, handed threshold 159, emits **an arm at exactly the observed 159**, at mass
+`36.53 / (36.53 + 46.97) = 7/16` — the seven fan rolls at or above 159. And the composition is
+multiplicative rather than conflicting: a review's sand counterfactual on `19100191/5` produced two
+damage arms × two status arms = four arms, with the burn fraction exactly 10 % inside each, and each
+arm's faint computed from its own residuals. On a non-burn sub-branch at 159 damage the defender sits
+at `175 − 159 + 15 = 31` HP and lives; there is no mechanism by which the partition could kill it.
 
-The correct fix has to partition **per status branch**, so the burn arm's representative can be 159
-(matching the observation) while the non-burn arm's stays on the unburned threshold. That is a
-restructuring of the order in which the partition and the secondary are resolved, not a change to the
-threshold function.
+**So the fix is a threshold change** — make `residual_lethality_threshold` status-aware by passing the
+`choice` in so it can see the secondaries, and take the minimum. The non-burn branch then carries two
+representatives instead of one, which is a finer sampling of the same fan, not an error. The masses
+stay exact because `P(roll ≥ 159) = 7/16` is a property of the roll and independent of the burn.
 
-This does answer c117's open question — *whether a correct threshold is computable before the
-secondary is decided*. The thresholds are 159 and 211 and both are computable. But computing them is
-necessary and not sufficient; the arm they belong on is the harder half.
+This also answers c117's open question — *whether a correct threshold is computable before the
+secondary is decided*. It is: 159 and 211, both re-derived and both produced empirically.
+
+The real risk is not correctness but re-pricing: see §7.
 
 ## 5. What a limit claim in this family would need, and why none holds
 
@@ -93,7 +127,8 @@ per-roll enumerator can produce that the comparator accepts.
 For all four rows the observed roll **is** in the engine's fan, so the falsifier fires immediately.
 No limit can be asserted. For `19100107/135` and `19100191/5` the specific limit claim would be "no
 correct threshold is computable before the secondary is decided" — and §4 shows the thresholds are
-computable, so that claim is dead too.
+computable *and* that the existing partition emits a matching arm from them, so that claim is dead
+too.
 
 ## 6. Why widening the roll-fan gate is not the answer
 
@@ -105,21 +140,34 @@ widening `pending_hp_reading_move` is worth **zero** rows here.
 Making any of them enumerate requires dropping `first_move` *and* the `defender_choice` clause — i.e.
 enumerating every damaging move for both movers, which is the blanket enumeration `reports/c128`
 rejected. c128's "no throughput cost" result does **not** cover it: that flag ORed into the
-`defender_choice` clause only, and c128 says so. The engine's own comment measures the per-call cost
-of one-sided enumeration at "12 branches to 144, ~8x slower per call"; two-sided composes
-multiplicatively and is unmeasured.
+`defender_choice` clause only, and c128 says so. The engine's own comment gives a **per-call** cost for
+one-sided enumeration — "12 branches to 144, ~8x slower per call" — and two-sided composition is
+unmeasured.
 
-The two targeted engine fixes add at most one arm per boundary, and only where the straddle already
-fires. That is the cheaper path by a wide margin.
+**That per-call figure must not be read as a workload cost, and c128 §3(b) is an explicit retraction of
+my doing exactly that**: measured at the differential's workload, one-sided enumeration cost nothing
+(1,463.6 games/h with it on versus 1,427.8 with it off). So: the two targeted engine fixes add at most
+one arm per boundary and only where the straddle already fires, which is cheaper *in branch count*;
+the aggregate cost of two-sided enumeration is unmeasured, and the one aggregate measurement in
+evidence found no cost at all. An earlier revision of this section concluded "cheaper by a wide
+margin", which reuses the inference c128 withdrew.
 
 ## 7. The warning this report exists to carry
 
 The previous engine fix in this residue — a gen-3 faint cancelling a queued switch — had a correct
 mechanism, a verified Showdown citation, a census, a red-on-main pin and green unit gates, **and was
-still wrong by 48 rows** (dev 2 → 40, holdout 3 → 42), because its guard also cancelled forced
-replacements. A synthetic pin did not reproduce the state space the sweep covers.
+still wrong**: it opened **24 rows in each window**, taking dev 2 → 40 (net +38) and holdout 3 → 42
+(net +39), because its guard also cancelled forced replacements. A synthetic pin did not reproduce the
+state space the sweep covers.
+
+An earlier revision of this section summarised that as "wrong by 48 rows" — 24 + 24 opened — without
+saying which quantity 48 was, and the net movement is +77. The two sweeps are now committed as
+`reports/artifacts/c133_withdrawn_switchcancel_{dev,holdout}_sweep.json` (fingerprint `b73929bd1e`,
+`source_commit 0e4fc75a`), so the figure is checkable rather than asserted.
 
 So for each fix above: register a prediction naming **"nothing opened"** as a falsifier, and sweep
-both windows before believing it. Both remaining fixes re-price a survive representative — 227 → 220
-and 203 → 197 — which shifts the acceptance window on arms that currently match. Whether that opens
+both windows before believing it. The remaining fixes re-price **three** survive representatives — 227 → 220 on `19000074/27`,
+203 → 197 on `19100191/5`, and **157 → 150 on `19100107/135`** (measured in §4's counterfactual; an
+earlier revision listed only two) — each of which shifts the acceptance window on arms that currently
+match. Whether that opens
 rows is unmeasured and is exactly what the sweep is for.
