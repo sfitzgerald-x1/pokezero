@@ -5394,9 +5394,14 @@ mod tests {
     ///
     /// Round 2's review deleted `|| active.ability == Abilities::SANDVEIL` from
     /// `weather_chips` and the ENTIRE crate suite stayed green: 373 passed, 0
-    /// failed. The one line this branch exists for -- worth two holdout rows -- was
-    /// pinned by nothing, while the LIQUID OOZE guard worth zero measured rows got
-    /// a pin the round before.
+    /// failed. The line was pinned by nothing, while the LIQUID OOZE guard worth zero
+    /// measured rows got a pin the round before.
+    ///
+    /// WORTH ONE ROW, NOT TWO. An earlier version of this docstring said two. The
+    /// branch's own artifact at the reorder-only revision (`87bcf351`, whose tree has
+    /// zero `SANDVEIL` occurrences) records holdout **4** with `19100193/46` already
+    /// closed -- so the fallback reorder plus `[silent]` closes that row unaided, and
+    /// this exemption closes `19100014/35` (both of its arms), 4 -> 3.
     ///
     /// MY FIRST VERSION OF THIS PIN WAS ALSO VACUOUS, and I wrote it in the same
     /// commit as an expiry pin with the identical flaw. It asserted on DAMAGE tags

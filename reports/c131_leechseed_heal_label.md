@@ -72,7 +72,7 @@ string** was wrong.
 > that pin, and only that pin, fails.
 >
 > The LIQUID OOZE guard was **unpinned** — the review deleted it and the whole crate suite stayed
-> green — and so was the **Sand Veil exemption**, the one line worth two rows.
+> green — and so was the **Sand Veil exemption**, which is worth **one** row -- see the correction below.
 >
 > **Both of my first Sand Veil and expiry pins were vacuous, in the same commit, for the same
 > reason.** They asserted on DAMAGE tags, and an unfilled chip slot does not corrupt damage
@@ -119,7 +119,23 @@ slot makes the whole side's plan unusable**; and every heal on that side then fe
 a *constant function of state* — it cannot label two heals on one side differently. Reordering it
 could therefore only ever fix whichever of Cacturne's two heals happened to be the Leftovers tick.
 
-The gate is one line, and with it the plan reconciles and **both** arms close:
+**ATTRIBUTION, CORRECTED: this exemption closes ONE row, not two.** Earlier revisions of this
+report, the pin docstring and the PR body all said two. Refuted by this branch's own committed
+artifact at the reorder-only revision `87bcf351`, whose tree contains **zero** `SANDVEIL`
+occurrences and whose holdout sweep records **4 diverged with `19100193/46` already closed** (the
+`component_mismatch:itemleftovers|leechseed` class absent). So the split is:
+
+| change | closes | holdout |
+|---|---|---|
+| fallback reorder + `[silent]` | `19100193/46` | 5 → 4 |
+| Sand Veil exemption | `19100014/35` (both arms) | 4 → 3 |
+
+That also **partly rehabilitates the reorder**, which §5's first revision called "half a fix, kept
+because it is monotone". It is not merely monotone — it closes a row on its own. What was true is
+narrower: the reorder alone could not close `19100014/35`, because the fallback is a constant
+function of state and that row needs *two* heals on one side labelled differently.
+
+The gate is one line, and with it both arms of `19100014/35` close:
 
 ```rust
 || active.ability == Abilities::SANDVEIL
