@@ -2890,11 +2890,110 @@ def build_report(
     return report
 
 
+# The FINAL HOLDOUT. Seeds at or above this are reserved for exactly ONE
+# measurement, ever, and must stay untouched until the program's terminal claim is
+# ready. The reservation used to live only in a plan document and in whoever was
+# driving the script.
+#
+# It stopped living there on 2026-08-05, when a convenience shell loop over three
+# `--seed-start` values -- `for start in 19100000 19000000 19200000` -- executed 60
+# games of the reserved range while probing an unrelated question. Nothing about
+# that probe needed the final holdout; it was a third sample window added without
+# registering what it was. A window whose entire value is that it has never been
+# executed should not be reachable by a typo or a loop, so the tool enforces it now
+# rather than the operator's memory.
+FINAL_HOLDOUT_SEED_FLOOR = 19_200_000
+
+FINAL_HOLDOUT_OPT_IN = "--final-holdout-i-mean-it"
+
+
+def _reject_unguarded_final_holdout(seed_start: int, games: int, opted_in: bool) -> str | None:
+    """Return an error message if this run would touch the reserved final holdout.
+
+    Checks the whole span, not just the start: `--seed-start 19199990 --games 200`
+    runs into the reserved range even though its start is below the floor.
+    """
+
+    last_seed = seed_start + max(games, 1) - 1
+    if last_seed < FINAL_HOLDOUT_SEED_FLOOR or opted_in:
+        return None
+    overlap_from = max(seed_start, FINAL_HOLDOUT_SEED_FLOOR)
+    # The registered final-holdout block is 19,200,000-19,200,199. The floor is an
+    # unbounded half-line above it on purpose -- a typo of 19,300,000 should not
+    # sail through -- but that also catches already-consumed historical bands such
+    # as c73's 19,500,000. So the "exactly one measurement" sentence is scoped to
+    # the registered block rather than asserted about every seed above the floor,
+    # where it would simply be false.
+    registered_block = overlap_from <= FINAL_HOLDOUT_SEED_FLOOR + 199
+    rationale = (
+        "This is the registered final-holdout block, reserved for exactly ONE "
+        "measurement, ever."
+        if registered_block
+        else "This is above the final-holdout floor and is reserved by default."
+    )
+    return (
+        f"refusing to run on reserved seeds: {overlap_from}..{last_seed} are at or "
+        f"above {FINAL_HOLDOUT_SEED_FLOOR}. {rationale} If this really is that "
+        f"measurement, pass {FINAL_HOLDOUT_OPT_IN}."
+    )
+
+
+def _reject_reserved_seeds_in_records(
+    records: Sequence[Mapping[str, Any]], opted_in: bool
+) -> str | None:
+    """Refuse to AGGREGATE records whose seeds are in the reserved final holdout.
+
+    The argparse-time check bounds only what this invocation would EXECUTE. In
+    `--merge-from` mode `--seed-start`/`--games` are untouched defaults, so a
+    checkpoint carrying reserved seeds merges into an `acceptance_eligible: true`
+    report with no warning at all. That is not an execution hole, but it is exactly
+    the artifact the CLI pin says must never exist: a report that makes reserved
+    seeds look measured. It matters more than usual here because the incident that
+    prompted this guard may well have left such a checkpoint behind.
+    """
+
+    if opted_in:
+        return None
+    # Coerce through float, because `.isdigit()` FAILED OPEN. A review found that a
+    # record carrying `"seed": 19200008.0` or `" 19200009"` produced
+    # `str(...).isdigit() == False`, skipped the seed, and wrote an
+    # `acceptance_eligible` report over the reserved range with exit 0. Floats do
+    # reach here: the dedupe above already does `int(record.get("seed", -1))`.
+    # A guard on a reserved range must fail CLOSED or it is decoration.
+    reserved = set()
+    for record in records:
+        try:
+            seed = int(float(record["seed"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seed >= FINAL_HOLDOUT_SEED_FLOOR:
+            reserved.add(seed)
+    reserved = sorted(reserved)
+    if not reserved:
+        return None
+    shown = ", ".join(str(x) for x in reserved[:5])
+    more = f" (+{len(reserved) - 5} more)" if len(reserved) > 5 else ""
+    return (
+        f"refusing to aggregate records from the reserved final holdout: "
+        f"{len(reserved)} seed(s) at or above {FINAL_HOLDOUT_SEED_FLOOR} -- "
+        f"{shown}{more}. Pass {FINAL_HOLDOUT_OPT_IN} only if this is the single "
+        f"terminal measurement."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", default=DEFAULT_SHOWDOWN_ROOT)
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--seed-start", type=int, default=900000)
+    parser.add_argument(
+        FINAL_HOLDOUT_OPT_IN,
+        action="store_true",
+        help=(
+            "Permit a run at or above the reserved final-holdout seed floor. "
+            "Only for the single terminal measurement."
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--keep-repro", type=int, default=25)
     parser.add_argument("--json", type=str, default=None)
@@ -2961,6 +3060,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="per-game cap on repros written to the checkpoint (keeps shard files small)",
     )
     args = parser.parse_args(argv)
+    # Derive the attribute from the flag rather than hand-writing it. A review
+    # renamed the flag and found all seven pins stayed green while the opt-in
+    # silently became unreachable -- `getattr(..., False)` turned a typo into
+    # "not opted in". No default, so a mismatch is an AttributeError.
+    _opt_in_attr = FINAL_HOLDOUT_OPT_IN.removeprefix("--").replace("-", "_")
+    _final_holdout_error = _reject_unguarded_final_holdout(
+        args.seed_start,
+        args.games,
+        getattr(args, _opt_in_attr),
+    )
+    if _final_holdout_error is not None:
+        print(f"error: {_final_holdout_error}", file=sys.stderr)
+        return 2
 
     # The engine must have been built from the CHECKED-OUT patch set. A stale
     # wheel measured 4.43 % divergence where a HEAD build measured 1.11 % on
@@ -2994,6 +3106,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "(shards should use disjoint seed ranges)",
                 file=sys.stderr,
             )
+        _reserved_error = _reject_reserved_seeds_in_records(
+            deduped, getattr(args, _opt_in_attr)
+        )
+        if _reserved_error is not None:
+            print(f"error: {_reserved_error}", file=sys.stderr)
+            return 2
         report = build_report(
             deduped,
             elapsed=None,
@@ -3022,6 +3140,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
         done_records = load_checkpoint(args.checkpoint, repair_torn_tail=True)
+        _reserved_error = _reject_reserved_seeds_in_records(
+            done_records, getattr(args, _opt_in_attr)
+        )
+        if _reserved_error is not None:
+            print(f"error: {_reserved_error}", file=sys.stderr)
+            return 2
         resume_failures = _resume_provenance_failures(done_records, provenance)
         if resume_failures:
             raise SystemExit(
