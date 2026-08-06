@@ -508,6 +508,14 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
 
     def test_a_v4_checkpoint_can_never_receive_v3_spreads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            # NOT default-proof, unlike the v3 direction, and stated here because this is where
+            # someone debugging a spuriously-green run would look. v4 has no transition region to
+            # trim, so the stamped contract is schema-keyed; if `DEFAULT_REPLAY_OBSERVATION_SPEC`
+            # ever becomes v4, a consumer that ignores the checkpoint would return a v4 default,
+            # match the stamped v4 contract, and this test would pass without the file being read.
+            # Measured: with the default forced to v4 only the v3 direction still fails. The v3
+            # direction stays default-proof via its trimmed region, so the pair as a whole keeps
+            # one live pin in that scenario.
             path = _write_checkpoint(
                 Path(tmp) / "v4.pt",
                 OBSERVATION_SCHEMA_VERSION_V4,
