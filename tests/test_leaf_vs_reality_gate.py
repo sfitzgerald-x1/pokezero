@@ -15,10 +15,22 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+# `leaf_vs_reality` imports numpy and pokezero_search at module scope, so a bare interpreter turns
+# this file into a pytest COLLECTION ERROR while every sibling in this area degrades to a skip.
+# Sharp irony worth avoiding: `gate_exit_code` was extracted for testability and its test could not
+# be collected without a compiled wheel it has nothing to do with.
+pytest.importorskip("numpy", reason="leaf_vs_reality imports numpy at module scope")
+pytest.importorskip(
+    "pokezero_search", reason="leaf_vs_reality imports the native crate at module scope"
+)
+
 from leaf_vs_reality import (  # noqa: E402
+    MATCHUP_EXCESS_ALLOWANCE,
     V4_LIVE_TENDENCY_COLUMNS,
     V4_MATCHUP_PAIR_COLUMNS,
     V4_ROOT_FROZEN_PACK_COLUMNS,
@@ -31,14 +43,29 @@ class GateExitCodeTest(unittest.TestCase):
     def test_a_clean_run_exits_zero(self) -> None:
         self.assertEqual(gate_exit_code(0, 0), 0)
 
-    def test_matchup_excess_ALONE_fails_the_run(self) -> None:
+    def test_a_regression_sized_excess_fails_the_run(self) -> None:
         """The arm that cannot be observed end-to-end. Measured 425 on the frozen build."""
-        self.assertEqual(gate_exit_code(0, 1), 1)
         self.assertEqual(gate_exit_code(0, 425), 1)
+        self.assertEqual(gate_exit_code(0, MATCHUP_EXCESS_ALLOWANCE + 1), 1)
+
+    def test_the_documented_false_positive_class_does_NOT_fail_the_run(self) -> None:
+        """The allowance exists because the harness documents facing-ordering divergences as
+        legitimate. Gating those at zero while the docs call them expected is how a gate ends up
+        disabled -- independent review's point, and the reason this is a magnitude test."""
+        self.assertEqual(gate_exit_code(0, 1), 0)
+        self.assertEqual(gate_exit_code(0, MATCHUP_EXCESS_ALLOWANCE), 0)
+
+    def test_the_allowance_sits_between_the_noise_and_the_signal(self) -> None:
+        """Both bounds. An allowance above the measured regression would be decorative, and one at
+        zero would re-create the incoherence."""
+        self.assertGreater(MATCHUP_EXCESS_ALLOWANCE, 0)
+        self.assertLess(MATCHUP_EXCESS_ALLOWANCE, 425)
 
     def test_state_defects_alone_still_fail_the_run(self) -> None:
-        """Guard the narrowness: adding the second arm must not have weakened the first."""
+        """Guard the narrowness: `state`/`turn` keep a ZERO threshold. The allowance is the matchup
+        arm's alone, and adding it must not have loosened the original gate."""
         self.assertEqual(gate_exit_code(124, 0), 1)
+        self.assertEqual(gate_exit_code(1, 0), 1)
 
     def test_both_arms_fail(self) -> None:
         self.assertEqual(gate_exit_code(124, 425), 1)

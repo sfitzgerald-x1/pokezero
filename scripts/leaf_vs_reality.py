@@ -205,16 +205,20 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # tendency columns stayed at 4. So `matchup_excess` = boundaries where the pair diverges and no
 # live tendency column does, and that gates the exit code.
 #
-# KNOWN false-positive class, stated because a nonzero excess should not be read as "the surface
-# regressed". The matchup table is strictly finer-grained than the marginal that excuses it, so a
+# KNOWN false-positive class, and the reason the gate has an ALLOWANCE rather than a zero
+# threshold. The matchup table is strictly finer-grained than the marginal that excuses it, so a
 # marginal can agree while a facing-level cell disagrees: if reality switches our active BEFORE
 # their attack and the synthesized branch orders it after -- the ordering ambiguity this harness
 # already classes as `fold` -- then `stayed_and_attacked` is +1 in both while the cell moves from
 # (theirs, old active) to (theirs, new active). The unit test
 # `test_the_pair_is_conditioned_on_which_of_OUR_mons_is_active` is that exact shape. It did not
-# fire on 12 games; it is not structurally impossible. A nonzero excess means "look", not
-# "regressed" -- and the two numbers printed beside it (pair vs live tendency) are what tells the
-# two apart: a regression moves the pair by two orders of magnitude, this class by ones.
+# fire on 12 games; it is not structurally impossible.
+#
+# An earlier revision documented that class as expected AND hard-failed on excess > 0. Independent
+# review pointed out those are incompatible: the first legitimate facing-ordering divergence turns
+# the harness red with the committed docs saying "expected", which is how a gate ends up disabled.
+# So the discriminator this prose names -- MAGNITUDE, ones against hundreds -- is what gates.
+MATCHUP_EXCESS_ALLOWANCE = 16
 #
 # Deliberately keyed per BOUNDARY, not per (boundary, token): the looser excuse is the right side
 # to err on given the false-positive class above, and a regression is not remotely close to the
@@ -650,8 +654,17 @@ def gate_exit_code(defect_rows: int, matchup_excess_rows: int) -> int:
     contribution to the EXIT CODE cannot be observed end-to-end -- only its printed count can.
     Independent review flagged exactly that gap. This function is the whole decision, so
     `tests/test_leaf_vs_reality_gate.py` can pin it directly.
+
+    `state`/`turn` keep a ZERO threshold: any member is a defect. The matchup arm gets
+    MATCHUP_EXCESS_ALLOWANCE, because its documented false-positive class produces excess in the
+    ones while a desurfacing regression produces it in the hundreds -- measured 0 surfaced against
+    425 frozen, so the allowance sits 26x below the signal it must catch and above the noise it
+    must not. Taking the WORST corpus rather than the sum keeps the allowance per-corpus, so
+    passing more corpora cannot accumulate its way past the gate.
     """
-    return 0 if defect_rows == 0 and matchup_excess_rows == 0 else 1
+    if defect_rows != 0:
+        return 1
+    return 1 if matchup_excess_rows > MATCHUP_EXCESS_ALLOWANCE else 0
 
 
 def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) -> dict[str, Any]:
@@ -877,6 +890,7 @@ def main(argv=None) -> int:
     reports = []
     defect_rows = 0
     matchup_excess_rows = 0
+    matchup_excess_rows_max = 0
     for corpus_dir in args.corpus:
         report = run_corpus(corpus_dir, tables_json, tables)
         reports.append(report)
@@ -907,14 +921,19 @@ def main(argv=None) -> int:
         )
         for entry in excess[:5]:
             print(f"     excess boundary {entry}")
+            matchup_excess_rows_max = max(matchup_excess_rows_max, len(excess))
         matchup_excess_rows += len(excess)
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
     print(f"\nDEFECT-CLASS (state+turn) divergent boundaries: {defect_rows}")
     # Gated alongside state+turn rather than folded into them: it is a different KIND of finding
     # (a broken relationship, not a wrong cell) and collapsing it would hide which one fired.
-    print(f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): {matchup_excess_rows}")
-    return gate_exit_code(defect_rows, matchup_excess_rows)
+    print(
+        f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): "
+        f"{matchup_excess_rows} (worst corpus {matchup_excess_rows_max}, "
+        f"allowance {MATCHUP_EXCESS_ALLOWANCE})"
+    )
+    return gate_exit_code(defect_rows, matchup_excess_rows_max)
 
 
 if __name__ == "__main__":

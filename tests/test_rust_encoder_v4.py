@@ -779,6 +779,45 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             cls.tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         )
         sys.path.remove(str(SCRIPTS))
+        # ONE loud check for what the fixture must contain, because the tests below have four
+        # independent skip paths between them and a fixture regression would otherwise vanish as
+        # four silent skips rather than one legible failure.
+        rows = [
+            row.observation_metadata
+            for row in load_golden_corpus(SAMPLE_DIR).decision_rows
+            if row.player_id == "p1"
+        ]
+        missing = [
+            name
+            for name, ok in (
+                (
+                    "a p1 row with EMPTY matchup evidence",
+                    any(not (md.get("opponent_matchup_switch_evidence") or {}) for md in rows),
+                ),
+                (
+                    "a p1 row with NONEMPTY matchup evidence",
+                    any(md.get("opponent_matchup_switch_evidence") for md in rows),
+                ),
+                (
+                    "a p1 row with >=2 opponent tokens",
+                    any(len(md.get("opponent_team") or ()) >= 2 for md in rows),
+                ),
+                (
+                    "a p1 row whose active mon has a benched teammate",
+                    any(
+                        any(e.get("active") for e in md.get("self_team") or ())
+                        and sum(1 for e in md.get("self_team") or () if not e.get("active")) > 0
+                        for md in rows
+                    ),
+                ),
+            )
+            if not ok
+        ]
+        if missing:
+            raise AssertionError(
+                "the committed v4 sample no longer supports this class; regenerate it or "
+                "re-point the tests. Missing: " + "; ".join(missing)
+            )
 
     def _driveable_row(
         self, *, evidence: str = "any", min_opponent_tokens: int = 1
@@ -1127,9 +1166,11 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         # matchup cell; a longer game would have red-lighted shipping code. Independent review
         # caught it.
         #
-        # Instead: advance a SECOND fold so that exactly one of the two tokens gains a cell, and
-        # require the OTHER token to stay at whatever it already was. A lookup missing the species
-        # conjunct paints the new cell onto every token, so the untouched token moves.
+        # Instead: advance a SECOND fold so exactly one of the two tokens gains a cell, then
+        # assert the whole per-token vector. A lookup missing the species conjunct selects a cell
+        # by facing alone, so at least one token receives a value belonging to a different mon --
+        # which token, and whether it moves or merely fails to, depends on BTreeMap order, which is
+        # why the assertion below is a vector rather than a pair of relations.
         from pokezero.showdown import _normalize_identifier as normalize_id
 
         # The advance has to land on the mon the fold considers ACTIVE, since that is where it
@@ -1160,23 +1201,32 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             ]
         )
         after = self._matchup_columns(encoder, state_str, moved, turn)
-        # Non-vacuity: the advance must have moved the TARGET token, or "the other token did not
-        # move" is trivially true.
-        self.assertNotEqual(
-            (after[0][target], after[1][target]),
-            (pair[0][target], pair[1][target]),
-            "the advance did not move the targeted opponent token, so the species filter is not "
-            "exercised on this row",
-        )
-        # And the OTHER token must be untouched. It is nonzero here (the benched mon carries an
-        # earlier episode), so a species-blind lookup -- which selects the last cell matching only
-        # on facing -- overwrites it with the newly created cell and this fires.
+        # BOTH tokens asserted as ONE expected vector, with one message, deliberately.
+        #
+        # Splitting it into "target moved" + "other unchanged" made the kill order-dependent, which
+        # independent review demonstrated on this very fixture: the cells are keyed
+        # (slot, species, facing) in a BTreeMap, so a species-blind lookup's `.rev()` returns
+        # whichever species sorts LAST -- here the benched Typhlosion, not the newly created
+        # Deoxys-Defense cell. The blind lookup then hands `other` its own correct value while
+        # leaving `target` unmoved, so the "other unchanged" assertion passed and the NON-VACUITY
+        # check fired instead, reporting "the fixture does not exercise the filter" for what is
+        # actually an encoder bug. That is the one message that must never fire for a real defect.
+        #
+        # Asserting the whole vector is order-independent: whichever cell a mutant corrupts, the
+        # diff names it and the message is right. It also subsumes the non-vacuity check, since
+        # requiring the target to hold the post-advance value IS the claim that the advance moved
+        # it.
+        expected = {
+            target: (0.0, 0.125),
+            other: (pair[0][other], pair[1][other]),
+        }
+        got = {index: (after[0][index], after[1][index]) for index in (target, other)}
         self.assertEqual(
-            (after[0][other], after[1][other]),
-            (pair[0][other], pair[1][other]),
-            f"advancing a matchup for {team[target]['species']} also moved "
-            f"{team[other]['species']}'s token -- the cell lookup is not filtered by species, so "
-            "one mon's counts are painted onto the others",
+            got,
+            expected,
+            f"per-token matchup vector wrong after advancing {team[target]['species']} against "
+            f"{ours} (other token is {team[other]['species']}): the cell lookup is not filtered by "
+            "species, so one mon's counts reach another mon's token",
         )
 
 
@@ -1204,13 +1254,14 @@ class V4FoldBearingBoundaryEncodeTest(unittest.TestCase):
     between the batch fold (`transitions.py::_fold_replay`) and the incremental one would silently
     rewrite training bytes rather than failing anything.
 
-    What this does NOT do, stated because the class name invites the wrong reading: it cannot tell
-    the fold-driven write apart from the metadata one. Delete the products block entirely and this
-    still passes, because `encode_pokemon_tokens` produces the same bytes wherever the two agree --
-    which on this fixture is everywhere (all five rows verified in review). It is a REGRESSION
-    guard on a path that had none, not a test of the override. The override itself is covered by
-    `V4LeafMatchupPairTracksTheFoldTest`, which drives `encode_leaf` with a fold the metadata
-    cannot explain.
+    Precisely what it does and does not bind, since "boundary encode" invites the wrong reading.
+    It is blind to the products write being ABSENT: delete the block entirely and this still
+    passes, because `encode_pokemon_tokens` writes the same bytes wherever the two sources agree,
+    which on this fixture is everywhere (all five rows). It is sensitive to the write being PRESENT
+    AND WRONG: dropping either the species or the `opposing_species` conjunct makes it emit a value
+    that overrides the correct metadata write, and this test fails on both. So it partially pins the
+    override -- its output at the root on the evidence-bearing rows -- while `encode_leaf` coverage
+    in `V4LeafMatchupPairTracksTheFoldTest` is what proves the override exists at all.
     """
 
     def test_every_v4_sample_row_encodes_byte_exact_with_its_fold(self) -> None:
