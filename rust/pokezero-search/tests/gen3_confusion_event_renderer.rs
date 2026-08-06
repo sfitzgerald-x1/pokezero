@@ -1870,9 +1870,13 @@ fn the_defenders_move_no_longer_breaks_sleeptalk_attribution() {
                     // its callee and the guard counts 0 either way. The difference only shows
                     // with the C31 bug present, which is how review found it -- pre-PR the test
                     // FAILED under that bug, post-PR it passed. Testing that a regression guard
-                    // catches a regression requires introducing the regression. // starts_with, NOT equality: the slug is sub-cased now, and equality made this
-                    // guard permanently 0 -- review proved it by reintroducing the C31
-                    // bug and watching this test go from FAILED to ok.
+                    // catches a regression requires introducing the regression.
+                    //
+                    // Review's 2x2, so a future reader can reproduce in one command: with the
+                    // C31 bug present this test FAILS under `starts_with` and PASSES under
+                    // equality; on a clean build both pass. The property that actually matters
+                    // -- that the bare two-segment slug is never emitted -- is pinned at unit
+                    // level by `every_shape_token_is_in_the_subcase_vocabulary`.
                 {
                     none_matched += 1;
                     continue;
@@ -1999,9 +2003,13 @@ fn a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp() {
                     // its callee and the guard counts 0 either way. The difference only shows
                     // with the C31 bug present, which is how review found it -- pre-PR the test
                     // FAILED under that bug, post-PR it passed. Testing that a regression guard
-                    // catches a regression requires introducing the regression. // starts_with, NOT equality: the slug is sub-cased now, and equality made this
-                    // guard permanently 0 -- review proved it by reintroducing the C31
-                    // bug and watching this test go from FAILED to ok.
+                    // catches a regression requires introducing the regression.
+                    //
+                    // Review's 2x2, so a future reader can reproduce in one command: with the
+                    // C31 bug present this test FAILS under `starts_with` and PASSES under
+                    // equality; on a clean build both pass. The property that actually matters
+                    // -- that the bare two-segment slug is never emitted -- is pinned at unit
+                    // level by `every_shape_token_is_in_the_subcase_vocabulary`.
             {
                 none_matched += 1;
                 continue;
