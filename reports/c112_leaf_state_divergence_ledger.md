@@ -7,10 +7,11 @@
 > (self + opponent) and `CATEGORY_VOLATILE_OFFSET` (self + opponent). I substituted a
 > corpus that produced a tidier number. v3 measures all three corpora and groups all 18
 > families / 138 rows into six mechanisms. **110 of the 138 rows carry a source-level cause
-> and a disposition; 28 (P2, toxic) carry a measurement, a pinned failure mode and an open
-> mechanism.** So the task's "a cause per class" is delivered for five of six classes and
-> NOT for P2 — said here because the header is the part that gets quoted, and an earlier
-> revision of this line claimed "no class is left open" while the body withdrew it.
+> and a disposition.** An earlier revision left P2 (toxic, 28 rows) open; it is closed here by
+> following the next check that revision named — the absent `toxic_stage_known` tri-state. The
+> header is the part that gets quoted, so: a cause per class is now delivered for all six, with one
+> constraint recorded inside P2 (the entry-value arithmetic is not identified, so a fix must
+> reproduce the parser's entry semantics rather than just add a field).
 >
 > v3 closes the two classes v2 left open (encore, now P1; the action surface, now P5) rather than
 > recording a next check, because the task's disposition vocabulary is
@@ -110,8 +111,10 @@ that INERT line being the only thing distinguishing it from a pass.
 
 Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state` families / 138
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
-P6 2 = 138. **110 rows carry a source-level cause and a disposition** (P1, P3, P4, P5, P6). **28 do
-not** — P2, toxic, which carries a measured rate, a pinned failure mode and an open mechanism.
+P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
+earlier revision and is closed here: its cause is the absent `toxic_stage_known` tri-state, found by
+following the next check that revision named. The entry-value arithmetic remains unidentified and is
+flagged inside P2 as a constraint on the fix, not as an open cause.
 
 Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
 that section (its second row's boundary is unverified, and the id-877 reading rests on the one
@@ -309,11 +312,11 @@ already computes for `*_sleep_clause_used`.
 does not reset on switch-out the way the parser's per-active counter does, so writing it is
 exact only within a stint.
 
-## P2 — the toxic write is live and 91% correct; the residual mechanism is NOT established (28 rows on v4, 24 on gv2)
+## P2 — the toxic write is live and 91% correct; the residual is the absent `toxic_stage_known` tri-state (28 rows on v4, 24 on gv2)
 
-**[CORRECTION] — earlier revisions titled this "the line replay did not escalate" and gave a
-disposition. Neither is earned, and the measurement that proves the write works also refutes the
-headline.**
+**[CORRECTION] — earlier revisions titled this "the line replay did not escalate", then left it
+open. The first was wrong, and the measurement that proves the write works also refutes it; the
+second is closed below.**
 
 The parser's toxic stage **changes across 153 (self) / 155 (opponent) boundaries** on golden-v4,
 and only **14 / 14** diverge. A root-frozen passthrough diverges on all of them — P1's stall
@@ -365,8 +368,43 @@ path neither implementation's arithmetic explains, and "the leaf cannot restore 
 stage" is a story that *fits* rather than a cause. Adopting it would be the encore-floor error again,
 which looked consistent only because the root happened to hold the same number.
 
-**Disposition: undetermined.** **Task acceptance note: this is the one class of the six without a
-source-level cause — 28 of 138 rows.**
+### The cause: `LeafMeta` has no `toxic_stage_known` tri-state
+
+**[CORRECTION] — an earlier revision of this section shipped with "disposition: undetermined" and
+recorded this as the one class without a cause. It is closed here.** The named next check was the
+right one.
+
+The parser carries **two** pieces of state, not one: `toxic_stage` and a companion
+`toxic_stage_known` (`showdown.py:1539,1853`). The `known` flag is what lets it distinguish "stage
+0" from "stage unknown", and it gates both halves of the parser's behaviour:
+
+- **Reset.** On resume, `toxic_stage_known[slot]` is set to
+  `_is_current_public_active(active) and not _condition_has_status(condition, "tox")`
+  (`showdown.py:1994-1997`) — i.e. a toxiced active makes the stage UNKNOWN — and the next loop
+  zeroes every unknown stage (`:1998-1999`).
+- **Inference.** The residual-inversion path is gated on `parser.toxic_stage_known[slot]`
+  (`:2047`, and `:2586`, `:2944-2963`), so it refuses to infer a stage it has declared unknown.
+
+`LeafMeta` (`leaf.rs:309-313`) carries `toxic`, `active_toxic` and `toxic_reentry_pending` and
+**no `known` counterpart**. So the leaf cannot represent "unknown", cannot reproduce the reset that
+depends on it, and cannot gate its own inversion on it.
+
+**Measured signature that matches.** Every toxiced mon reports **stage 2 on entry** in the parser's
+metadata, then increments — battle 1000 p1: Volbeat 0 → **2** the round it is toxed (47→48), then
+3, 3; Minun **2** on becoming active with `tox` (51), then 3, 4; 0 while Latias (unpoisoned) is out
+(55-56); Volbeat **2** again on re-entry at 4/275 tox (57). The leaf reports **0** at every one of
+those, which is exactly what a implementation with no `known` state and no entry value does.
+
+**Claimed narrowly, because this ledger has adopted three stories that merely fit.** What is
+established is the *structural* cause: the parser's behaviour is gated on a flag the leaf does not
+have, and the leaf's 0 is what its absence produces. What is **not** established is the arithmetic
+that yields 2 specifically — the residual inversion gives 4 at `1000#[56,57]` (damage 68, unit 17),
+so 2 comes from a path this ledger has not identified, and the entry-value question is separate from
+the missing-tri-state question. A fix must reproduce the parser's entry semantics, not just add a
+field.
+
+**Disposition: encoder fix** in `rust/pokezero-search/src/leaf.rs` — add the `known` tri-state to
+`LeafMeta` and mirror the parser's reset/entry semantics. Same file as P1 and P6.
 
 ### The guard is excluded
 
@@ -542,7 +580,8 @@ Four of the `state` families as they stood in v2's framing are columns that did 
 ## What this ledger does not claim
 
 - Coverage is in **rows**, and the row→boundary mapping is not derivable from the artifact.
-- **One class has no cause: P2, 28 rows.** The other five do, with the owning file named.
+- **All six classes have a cause**, with the owning file named. P2 was open in an earlier revision
+  and closed by its own named next check.
   P3 points at task 4 of this goal. No disposition is a `classify()` change — an earlier revision
   proposed one for encore and it was withdrawn when that cause turned out to be P1.
   `demonstrated-unreachable` is used nowhere; the one place v2 claimed it, it was false.
