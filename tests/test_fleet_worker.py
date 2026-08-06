@@ -607,8 +607,12 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(len(list((self.queue / "done").iterdir())), 3)
 
 
-class FanInTests(unittest.TestCase):
-    """Shard fan-in: one worker-owned versioned shard per window."""
+class FanInFixture(unittest.TestCase):
+    """Temp queue + cache dir and the shard/task builders every fan-in test uses.
+
+    Held apart from the tests so other fan-in suites can reuse the fixture
+    without inheriting (and re-running) this one's cases.
+    """
 
     def setUp(self) -> None:
         import tempfile
@@ -736,7 +740,7 @@ class FanInTests(unittest.TestCase):
             root_identity=fleet_worker._fanin_directory_identity(root),
             record=record,
             record_parent_identity=parent_identity,
-            record_identity=fleet_worker._fanin_stat_snapshot(observed),
+            record_identity=fleet_worker._fanin_durable_stat_snapshot(observed),
             record_sha256=hashlib.sha256(encoded).hexdigest(),
             task=task,
         )
@@ -814,6 +818,10 @@ class FanInTests(unittest.TestCase):
 
     def _failed_claims(self, worker: str, base: str) -> list[Path]:
         return list((self.queue / "failed").glob(f"{base}.{worker}.*.failed"))
+
+
+class FanInTests(FanInFixture):
+    """Shard fan-in: one worker-owned versioned shard per window."""
 
     def test_tasks_fan_into_one_versioned_shard(self) -> None:
         self._manifests(3)
@@ -2910,6 +2918,214 @@ class CliWiringTests(unittest.TestCase):
                 "--format", "gen3randombattle",
             ])
             self.assertEqual(rc, 0)  # empty queue + idle-exit → clean recycle
+
+
+# A fleet worker driven from a child interpreter, so a whole fan-in fleet can be
+# raced against one shared cache the way it is deployed. ``dev_offset`` and
+# ``time_offset`` model a *second client* of that shared filesystem: the same
+# files, observed through a different superblock and a separately revalidated
+# attribute cache. Each identity helper is wrapped rather than reimplemented, so
+# the shim stays neutral to how those helpers are defined.
+_FLEET_CHILD = '''
+import os, sys
+sys.path.insert(0, {root_src!r})
+sys.path.insert(0, {root!r})
+from pathlib import Path
+from pokezero import fleet_worker
+
+dev_offset, time_offset = int(sys.argv[3]), int(sys.argv[4])
+
+
+class ForeignStat:
+    __slots__ = ("_observed",)
+
+    def __init__(self, observed):
+        self._observed = observed
+
+    def __getattr__(self, name):
+        if name == "st_dev":
+            return self._observed.st_dev + dev_offset
+        if name in ("st_mtime_ns", "st_ctime_ns"):
+            return getattr(self._observed, name) + time_offset
+        return getattr(self._observed, name)
+
+
+if dev_offset or time_offset:
+    for _name in (
+        "_fanin_directory_identity", "_fanin_stat_identity",
+        "_fanin_stat_snapshot", "_fanin_durable_stat_snapshot",
+    ):
+        _original = getattr(fleet_worker, _name, None)
+        if _original is not None:
+            def _wrapper(observed, _original=_original):
+                return _original(ForeignStat(observed))
+            setattr(fleet_worker, _name, _wrapper)
+
+
+def collect(argv):
+    import shutil
+    from pokezero.dataset import TrajectoryDatasetConfig
+    from tests.test_cache_concat import rollout_record, write_cache
+
+    out = Path(argv[argv.index("--out") + 1])
+    seed = int(argv[argv.index("--seed-start") + 1])
+    staging = out.parent / (".collect-staging-%s.%d" % (out.name, os.getpid()))
+    staging.mkdir(parents=True, exist_ok=True)
+    cache = write_cache(
+        staging, "c", [rollout_record(seed)],
+        config=TrajectoryDatasetConfig(window_size=1),
+    )
+    shutil.move(str(cache), str(out))
+    shutil.rmtree(staging, ignore_errors=True)
+    return 0
+
+
+raise SystemExit(fleet_worker.run_worker(
+    Path(sys.argv[1]), worker_id=sys.argv[2], static_argv=[], collect_fn=collect,
+    max_rss_mb=None, idle_exit_seconds=4.0, sleep_seconds=0.05, shard_fanin=True,
+    log_dir=Path(sys.argv[5]),
+))
+'''
+
+
+class FanInSharedFilesystemFleetTests(FanInFixture):
+    """A whole fan-in fleet against one shared cache, as deployed.
+
+    Everything below the concurrency is inherited from ``FanInTests``. What these
+    add is the condition the single-process tests structurally cannot reach: more
+    than one worker, and more than one *client* of the shared filesystem.
+    """
+
+    WORKERS = 4
+    TASKS = 8
+
+    def _run_fleet(self, *, dev_offset: int = 0, time_offset: int = 0) -> list[int]:
+        """Race WORKERS child workers over TASKS tasks; return their exit codes.
+
+        Odd-numbered workers observe the shared files as a foreign client would.
+        """
+        child = self.root / "fleet_child.py"
+        child.write_text(
+            _FLEET_CHILD.format(root=str(ROOT), root_src=str(ROOT / "src")),
+            encoding="utf-8",
+        )
+        self._manifests(self.TASKS)
+        processes = []
+        for index in range(self.WORKERS):
+            foreign = index % 2 == 1
+            processes.append(subprocess.Popen(
+                [
+                    sys.executable, str(child), str(self.queue), f"w{index}",
+                    str(dev_offset if foreign else 0),
+                    str(time_offset if foreign else 0),
+                    str(self.root / "worker-logs"),
+                ],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            ))
+        codes = []
+        for process in processes:
+            try:
+                _out, err = process.communicate(timeout=300)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                _out, err = process.communicate()
+                self.fail(f"fan-in worker hung: {err.decode('utf-8', 'replace')[-2000:]}")
+            codes.append(process.returncode)
+            if process.returncode not in (0, 2):
+                self.fail(
+                    "fan-in worker crashed instead of exiting cleanly:\n"
+                    + err.decode("utf-8", "replace")[-2000:]
+                )
+        return codes
+
+    def _terminal_log_lines(self) -> list[str]:
+        lines = []
+        for log in sorted((self.root / "worker-logs").glob("*.log")):
+            lines += [
+                line for line in log.read_text(encoding="utf-8").splitlines()
+                if "TERMINAL" in line
+            ]
+        return lines
+
+    def _assert_fleet_drained(self, codes: list[int]) -> None:
+        done = sorted(path.name for path in (self.queue / "done").iterdir())
+        failed = sorted(path.name for path in (self.queue / "failed").iterdir())
+        self.assertEqual(failed, [])
+        # rc=2 is the terminal "selected inventory is corrupt, preserve the
+        # claim and stop" exit. Concurrency alone must never produce it, so the
+        # log line that caused it is the whole diagnosis -- report it.
+        self.assertEqual(
+            [code for code in codes if code != 0], [],
+            "worker(s) exited terminally:\n  " + "\n  ".join(self._terminal_log_lines()),
+        )
+        self.assertEqual(len(done), self.TASKS, f"only {len(done)}/{self.TASKS} tasks completed")
+        inventory = read_fanin_inventory(
+            self.cache_dir, self._contract(tasks=self.TASKS, games=self.TASKS),
+        )
+        self.assertEqual(
+            sorted(task.task_id for task in inventory.tasks),
+            sorted(f"i1-s{index}.env" for index in range(self.TASKS)),
+        )
+
+    def test_a_concurrent_fleet_drains_its_queue_on_one_shared_cache(self) -> None:
+        self._assert_fleet_drained(self._run_fleet())
+
+    def test_workers_on_different_mounts_of_the_shared_cache_all_collect(self) -> None:
+        """The production failure: fan-in collected 0 of 800 slices across pods.
+
+        Every worker validates *other* workers' published shards, against an
+        identity witness those workers wrote into the shared cache. A witness
+        carrying the writer's ``st_dev`` cannot be re-checked from any other
+        mount, so the first published shard makes every other worker exit rc=2.
+        """
+        self._assert_fleet_drained(self._run_fleet(dev_offset=4096))
+
+    def test_a_revalidated_attribute_cache_is_not_shard_corruption(self) -> None:
+        """Same, for timestamps: st_mtime/st_ctime are not content signals.
+
+        A remote client revalidates cached attributes against the server
+        independently of the writer, and ``st_ctime`` moves on metadata changes
+        that leave the bytes alone. Whether these are the certified bytes is
+        settled by the SHA-256 recorded beside the identity, not by a timestamp.
+        """
+        self._assert_fleet_drained(self._run_fleet(time_offset=1_000_000))
+
+
+class FanInDurableWitnessTests(FanInFixture):
+    """What a published witness is allowed to contain."""
+
+    def test_a_published_acceptance_records_no_client_local_identity(self) -> None:
+        task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        target = self._write_version("shard-wtest-v1", [task])
+        published = json.loads(
+            (target / fleet_worker.FANIN_PUBLICATION_NAME).read_text(encoding="utf-8")
+        )
+        payload_files = published["payload_files"]
+        self.assertTrue(payload_files)
+        for entry in payload_files:
+            observed = os.lstat(target.joinpath(*entry["relative"]))
+            # The witness must be exactly the durable projection: reproducible
+            # from any client. st_dev and both timestamps are not.
+            self.assertEqual(
+                tuple(entry["identity"]),
+                fleet_worker._fanin_durable_stat_snapshot(observed),
+            )
+            self.assertNotIn(observed.st_dev, entry["identity"])
+            self.assertNotIn(observed.st_mtime_ns, entry["identity"])
+            self.assertNotIn(observed.st_ctime_ns, entry["identity"])
+            self.assertTrue(fleet_worker._is_sha256(entry["sha256"]))
+
+    def test_the_witness_still_rejects_a_tampered_or_replaced_payload(self) -> None:
+        """Dropping client-local fields must not cost any integrity."""
+        for mutate in (self._mutate_cache_payload_in_place, self._replace_cache_payload_identically):
+            with self.subTest(mutate=mutate.__name__):
+                self.setUp()  # a fresh cache per mutation
+                task = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+                target = self._write_version("shard-wtest-v1", [task])
+                fleet_worker._select_accepted_fanin_shards(self.cache_dir)  # accepted as published
+                mutate(target)
+                with self.assertRaises(FanInValidationError):
+                    fleet_worker._select_accepted_fanin_shards(self.cache_dir)
 
 
 if __name__ == "__main__":
