@@ -311,6 +311,29 @@ jobs:
             exit 1
           fi
 
+      - name: Final-holdout guard pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_final_holdout_guard -v 2>&1 \
+            | tee /tmp/holdout.log
+          if ! grep -qE 'Ran 14 tests' /tmp/holdout.log; then
+            echo "::error::expected 14 final-holdout pins; the suite shrank or grew"
+            exit 1
+          fi
+          # No pin may skip. Every one runs without a Showdown checkout by
+          # construction, so a skip means someone reintroduced an environmental
+          # dependency and disarmed a pin.
+          #
+          # Assert on a BARE `OK` rather than grepping for 'skipped'. The step's own
+          # log already contains "engine build-freshness check SKIPPED" twice, so the
+          # lowercase grep passed only by letter case -- one character from
+          # reintroducing the red-gate incident above. `^OK$` is strictly stronger:
+          # unittest prints `OK (skipped=N)` when anything skips.
+          if ! grep -qE '^OK$' /tmp/holdout.log; then
+            echo "::error::final-holdout pins did not report a clean OK (skip or failure)"
+            exit 1
+          fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
@@ -330,23 +353,6 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
-      - name: Final-holdout guard pins
-        run: |
-          set -o pipefail
-          python -m unittest tests.test_final_holdout_guard -v 2>&1 \
-            | tee /tmp/holdout.log
-          if ! grep -qE 'Ran 14 tests' /tmp/holdout.log; then
-            echo "::error::expected 14 final-holdout pins; the suite shrank or grew"
-            exit 1
-          fi
-          # No pin may skip. Every one of them runs without a Showdown checkout by
-          # construction, so a skip means someone reintroduced an environmental
-          # dependency and disarmed a pin.
-          if grep -q 'skipped' /tmp/holdout.log; then
-            echo "::error::a final-holdout pin SKIPPED; it is no longer gating"
-            exit 1
-          fi
-
       - name: Engine stat attestation
         run: |
           set -o pipefail

@@ -208,6 +208,16 @@ class FinalHoldoutGuardTests(unittest.TestCase):
                         "--seed-start", str(FINAL_HOLDOUT_SEED_FLOOR),
                         "--matcher", "strict",
                         "--skip-build-check",
+                        # A NONEXISTENT root, deliberately. This is the only place in
+                        # the repo that calls `main()` at reserved seeds, and without
+                        # this it targets DEFAULT_SHOWDOWN_ROOT -- a real checkout on a
+                        # developer machine. A refactor that keeps these four names
+                        # while routing around them (a local import, say) would bind
+                        # the stubs to nothing, and combined with a guard regression
+                        # the test suite itself would sweep 60 reserved seeds. With it,
+                        # this pin CANNOT sweep, and it still fails on the ordering
+                        # assertion under every mutation.
+                        "--showdown-root", "/nonexistent/holdout/guard/ordering",
                         "--json", str(out),
                     ]
                 )
@@ -216,9 +226,13 @@ class FinalHoldoutGuardTests(unittest.TestCase):
             for name, original in saved.items():
                 setattr(etd, name, original)
 
-        # `played` empty is the ordering assertion. If the guard is moved after the
-        # sweep, `run_game` fires and this is what fails -- and it fails saying so,
-        # rather than dying in an unrelated dex load.
+        # `load_showdown_dex` is the FIRST tripwire, not `run_game`: it is called
+        # ~20 lines earlier, so under every mutation I built it is what actually
+        # fires ("load_showdown_dex ran before the guard refused the seeds"). An
+        # earlier version of this comment, and the PR body, claimed `run_game` was
+        # the failing assertion -- stale, and it made `played` read as load-bearing
+        # when it is unreachable. `played` stays as a labelled backstop for a future
+        # refactor that reorders those calls.
         self.assertEqual(played, [], "the sweep ran before the guard refused it")
         self.assertEqual(code, 2)
 
