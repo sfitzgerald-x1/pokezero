@@ -3689,7 +3689,10 @@ def _public_materialization_state(
         replay=public_replay,
         belief_engine=belief_engine,
         self_request=json.loads(json.dumps(request, separators=(",", ":"))),
-        self_move_states=actor_move_states_from_request_history(actor_requests),
+        self_move_states=actor_move_states_from_request_history(
+            actor_requests,
+            initial_request=actor_requests[0] if actor_requests else request,
+        ),
         self_initial_request=json.loads(
             json.dumps(actor_requests[0] if actor_requests else request, separators=(",", ":"))
         ),

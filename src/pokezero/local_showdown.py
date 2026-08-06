@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached, normalize_id
+from .tier2 import canonical_move_id
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -696,7 +697,10 @@ class LocalShowdownEnv:
             replay=replace(replay, requests={}),
             belief_engine=self._belief_engine.clone(),
             self_request=_json_clone_mapping(request),
-            self_move_states=actor_move_states_from_request_history(self._request_history[player]),
+            self_move_states=actor_move_states_from_request_history(
+                self._request_history[player],
+                initial_request=self._first_requests.get(player) or request,
+            ),
             self_initial_request=_json_clone_mapping(self._first_requests.get(player) or request),
         )
 
@@ -2909,6 +2913,8 @@ def _request_active_materialization_state(request: Mapping[str, Any]) -> dict[st
 
 def actor_move_states_from_request_history(
     requests: Sequence[Mapping[str, Any]],
+    *,
+    initial_request: Mapping[str, Any] | None = None,
 ) -> dict[str, tuple[Mapping[str, Any], ...]]:
     """Return each actor-known active move state from its most recent request.
 
@@ -2929,6 +2935,13 @@ def actor_move_states_from_request_history(
     `request-known move 'bodyslam' is absent from the sampled moveset`. Failing closed there
     is CORRECT -- the input really is wrong -- so loosening that guard would hide the defect
     rather than fix it.
+
+    ONE KNOWN STALENESS, named because this module's rule is to refuse inexact self PP
+    rather than guess it. The retained snapshot predates the Transform USE that produced the
+    transform, so a benched reverted Ditto/Mew is materialized with one PP too many on its
+    transform slot -- measured at 16 retained where the truth is 15. Bounded to 1 PP on that
+    one slot, and refreshed by any later clean request for that Pokemon. Deriving PP from the
+    public move record removes it; that work is additive and this fix does not foreclose it.
 
     KEEP the earlier clean snapshot; do not erase the identity. Erasing also removes
     `self_moveset_mismatch`, but strands the Pokemon with no PP at all and `engine_world`
@@ -2955,7 +2968,21 @@ def actor_move_states_from_request_history(
     battle-start request team verbatim, so it cannot carry one.
     """
 
-    own_by_identity = _own_move_ids_by_identity(requests[0]) if requests else {}
+    # The battle-start request is PASSED IN, not taken as `requests[0]`. Review showed a
+    # truncated history does not degrade to a no-op -- it INVERTS this fix:
+    #
+    #   [clean, transformed] -> {'ditto': ['transform']}                 (correct)
+    #   [transformed, clean] -> {'ditto': ['bodyslam', ...]}             (copied kept,
+    #                                                                     REAL set dropped)
+    #
+    # and pre-PR that second order returned the clean set, so a truncated history would be
+    # strictly worse than before. Two real surfaces already produce non-battle-start
+    # histories: `materialize_scenario_state` seeds `_request_history` with a single
+    # mid-battle request, and `restore_public_materialization` leaves it empty after
+    # `_reset`, so any stepped search env starts mid-battle. Both production call sites
+    # already hold the initial request one line away; requiring it removes the assumption.
+    reference = initial_request if initial_request is not None else (requests[0] if requests else None)
+    own_by_identity = _own_move_ids_by_identity(reference) if reference is not None else {}
     states: dict[str, tuple[Mapping[str, Any], ...]] = {}
     for request in requests:
         identity = _request_active_pokemon_identity(request)
@@ -2969,9 +2996,25 @@ def actor_move_states_from_request_history(
                 for move in moves
                 if isinstance(move.get("id"), str)
             }
-            # SUBSET, not equality: a Disable/Encore/Choice-locked active request
-            # legitimately lists FEWER moves than the Pokemon knows. Only moves it does
-            # not know at all indicate a copied moveset.
+            # SUBSET, not equality -- but NOT for the reason an earlier version of this
+            # comment gave. It claimed Disable/Encore/Choice-locked requests list fewer
+            # moves; they do not. `active[0].moves` is always the full current moveSlots
+            # list with `disabled` flags, and the locked/recharge/struggle shapes carry NO
+            # `pp`, so `_request_active_moves` has already dropped them. Review measured
+            # ZERO strict-subset pp-bearing requests in 2,219 real actor requests, and both
+            # an equality mutant and a reversed-subset mutant pass the live gate -- the two
+            # are indistinguishable on real input.
+            #
+            # Subset is kept because it is the weaker, safer claim: it says "every move the
+            # player may pick is one this Pokemon knows", which is what makes the moveset
+            # its own. Equality would additionally assert the request never narrows, which
+            # nothing here needs and no measurement supports.
+            #
+            # It must be a subset test rather than an INTERSECTION test. Ditto's own set is
+            # the single move `transform`, which no opponent carries, so for Ditto
+            # "not a subset" and "no overlap" coincide -- but Mew has 7 randbats sets whose
+            # four own moves overlap what it copies, and an intersection test would retain
+            # the copied set for the whole Mew population. Pinned by a Mew test.
             if not usable <= own:
                 continue
         states[identity] = tuple(_json_clone_mapping(move) for move in moves)
@@ -2999,26 +3042,54 @@ def _own_move_ids_by_identity(request: Mapping[str, Any]) -> dict[str, frozenset
         ids = frozenset(
             _base_move_id(move) for move in raw if isinstance(move, str) and move
         )
-        if ids:
-            own[_request_pokemon_identity(row)] = ids
+        if not ids:
+            continue
+        identity = _request_pokemon_identity(row)
+        if identity in own:
+            # TWO ROWS, ONE IDENT. Species Clause makes this unreachable in randbats, but a
+            # Custom Game team can carry duplicates, and review observed it live: the
+            # `attract_snorlax` scenario puts two Blisseys on p2, both `p2: Blissey`, and a
+            # dict overwrite kept the LAST row -- so the active Blissey's own moveset read as
+            # another Pokemon's and its PP snapshot was dropped on the very first request.
+            #
+            # UNION rather than overwrite. This predicate only ever asks "does the Pokemon
+            # know this move", so admitting both rows' moves keeps a duplicate-ident team
+            # from looking transformed. It cannot mask a real transform, because a copied
+            # moveset is not a subset of the union either.
+            own[identity] = own[identity] | ids
+        else:
+            own[identity] = ids
     return own
 
 
 def _base_move_id(move_id: str) -> str:
-    """Collapse Showdown's resolved-power spellings so the two lists are comparable.
+    """Collapse Showdown's resolved-power spellings so the two move lists are comparable.
 
     The same move is spelled differently in the two places this compares:
-    `side.pokemon[].moves` carries resolved power (`hiddenpowerice70`, `return102`) while
-    `active[0].moves[].id` carries the base id (`hiddenpower`, `return`). Comparing raw
-    would call every Hidden Power carrier transformed and silently drop its PP snapshot --
-    a regression in the opposite direction, and one the era counts could not separate from
-    the fix, because both show up as fewer retained snapshots.
+    `side.pokemon[].moves` carries resolved power (`return102`) while
+    `active[0].moves[].id` carries the base id (`return`). Comparing raw would call every
+    Return and Hidden Power carrier transformed and silently drop its PP snapshot -- a
+    regression in the opposite direction, and one era counts could not separate from the
+    fix, because both show up as fewer retained snapshots. Measured across the scenario
+    sweep, `return102` (100 occurrences) is the ONLY digit-bearing spelling that appears.
+
+    Built on `tier2.canonical_move_id` rather than a local `rstrip("0123456789")`, for two
+    reasons review supplied. It restricts the strip to the three BP-suffixed prefixes, so
+    `conversion2` no longer collapses onto `conversion` -- both are real gen 3 moves, the
+    only such collision in the 954-id gen 3 dex, unreachable in randbats but reachable in
+    Custom Game. And it is the SAME helper `determinization._self_team_from_metadata_result`
+    uses to build the root self_team, which is the exact reference `_move_specs` compares
+    the retained moveset against; two normalizers for one comparison is how they drift.
+
+    Hidden Power still needs its own collapse: gen 3 emits `hiddenpowerice` on the team
+    side (no BP suffix -- `sim/pokemon.ts` appends power only for gen >= 6) against a bare
+    `hiddenpower` id, so canonicalisation alone leaves them unequal.
     """
 
-    normalized = normalize_id(move_id)
-    if normalized.startswith("hiddenpower"):
+    canonical = canonical_move_id(move_id)
+    if canonical.startswith("hiddenpower"):
         return "hiddenpower"
-    return normalized.rstrip("0123456789") or normalized
+    return canonical
 
 
 def _request_active_pokemon_identity(request: Mapping[str, Any]) -> str | None:
