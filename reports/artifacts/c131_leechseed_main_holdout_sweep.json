@@ -18,8 +18,8 @@
   },
   "gating_exact": 14120,
   "gating_support_based": 1431,
-  "elapsed_seconds": 488.92,
-  "games_per_hour": 1472.6,
+  "elapsed_seconds": 506.29,
+  "games_per_hour": 1422.1,
   "boundaries_full_round": 16155,
   "boundaries_measured": 15551,
   "transitions_matched": 15546,
@@ -138,7 +138,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785986666",
+        "|t:|1785987312",
         "|switch|p1a: Tyranitar|Tyranitar, L74, M|133/269",
         "|move|p2a: Cacturne|Leech Seed|p1a: Tyranitar",
         "|-start|p1a: Tyranitar|move: Leech Seed",
@@ -241,7 +241,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785986880",
+        "|t:|1785987533",
         "|move|p1a: Roselia|Hidden Power|p2a: Ho-Oh",
         "|-resisted|p2a: Ho-Oh",
         "|-damage|p2a: Ho-Oh|42/264",
@@ -344,7 +344,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785987068",
+        "|t:|1785987728",
         "|switch|p2a: Medicham|Medicham, L81, M|27/230",
         "|-damage|p2a: Medicham|0 fnt|[from] Spikes",
         "|faint|p2a: Medicham",
@@ -432,7 +432,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785987091",
+        "|t:|1785987753",
         "|switch|p2a: Ninjask|Ninjask, L79, F|225/225",
         "|move|p1a: Flygon|Fire Blast|p2a: Ninjask",
         "|-supereffective|p2a: Ninjask",
@@ -528,7 +528,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785987098",
+        "|t:|1785987761",
         "|move|p2a: Cacturne|Leech Seed||[still]",
         "|-fail|p2a: Cacturne",
         "|move|p1a: Miltank|Curse|p1a: Miltank",
@@ -551,7 +551,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"12e05f6e8a031997218ed2e07afc7cfc5db42f6e2e4b29d2d5778c6a2b96eca5\", \"image_commit\": null, \"source_commit\": \"0fc94e048683fd3f4d81368a84e03dfd99d6711a\"}"
+      "{\"engine_fingerprint\": \"12e05f6e8a031997218ed2e07afc7cfc5db42f6e2e4b29d2d5778c6a2b96eca5\", \"image_commit\": null, \"source_commit\": \"a4132d16d2ecd198ebeab3d58572995288ad8a5b\"}"
     ]
   }
 }
