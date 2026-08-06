@@ -2954,14 +2954,21 @@ def _reject_reserved_seeds_in_records(
 
     if opted_in:
         return None
-    reserved = sorted(
-        {
-            int(r["seed"])
-            for r in records
-            if str(r.get("seed", "")).lstrip("-").isdigit()
-            and int(r["seed"]) >= FINAL_HOLDOUT_SEED_FLOOR
-        }
-    )
+    # Coerce through float, because `.isdigit()` FAILED OPEN. A review found that a
+    # record carrying `"seed": 19200008.0` or `" 19200009"` produced
+    # `str(...).isdigit() == False`, skipped the seed, and wrote an
+    # `acceptance_eligible` report over the reserved range with exit 0. Floats do
+    # reach here: the dedupe above already does `int(record.get("seed", -1))`.
+    # A guard on a reserved range must fail CLOSED or it is decoration.
+    reserved = set()
+    for record in records:
+        try:
+            seed = int(float(record["seed"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seed >= FINAL_HOLDOUT_SEED_FLOOR:
+            reserved.add(seed)
+    reserved = sorted(reserved)
     if not reserved:
         return None
     shown = ", ".join(str(x) for x in reserved[:5])

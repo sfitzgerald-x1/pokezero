@@ -27,6 +27,27 @@ from engine_transition_differential import (  # noqa: E402
 )
 
 
+def _reserved_record(seed: int) -> dict[str, object]:
+    """A schema-valid checkpoint record, so `load_checkpoint` accepts it.
+
+    The point of these two pins is to reach the RECORD-level guard through
+    `main()`, so the record has to survive schema validation first -- a malformed
+    one is rejected earlier for the wrong reason and would pin nothing.
+    """
+
+    from engine_transition_differential import CHECKPOINT_SCHEMA
+
+    return {
+        "schema": CHECKPOINT_SCHEMA,
+        "build_check": "gated",
+        "provenance": {"engine_fingerprint": None, "image_commit": None, "source_commit": None},
+        "seed": int(seed),
+        "seconds": 0.0,
+        "counters": {},
+        "repros": [],
+    }
+
+
 class FinalHoldoutGuardTests(unittest.TestCase):
     def test_the_two_working_windows_are_never_blocked(self) -> None:
         # The dev and validation windows are swept constantly. If the guard ever
@@ -76,6 +97,25 @@ class FinalHoldoutGuardTests(unittest.TestCase):
             _reject_unguarded_final_holdout(FINAL_HOLDOUT_SEED_FLOOR, 0, False)
         )
 
+    def test_the_message_names_the_registered_block_only_where_that_is_true(self) -> None:
+        # NB-3 from round 2: swapping the two rationale branches was undetected by
+        # every pin. The distinction is not cosmetic -- "reserved for exactly ONE
+        # measurement, ever" is FALSE for already-consumed historical bands above the
+        # floor (c73 swept 19,500,000), and a guard that tells a contributor a
+        # falsehood about their own seeds teaches them to distrust it.
+        registered = _reject_unguarded_final_holdout(FINAL_HOLDOUT_SEED_FLOOR, 60, False)
+        assert registered is not None
+        self.assertIn("registered final-holdout block", registered)
+        self.assertIn("exactly ONE measurement", registered)
+
+        above = _reject_unguarded_final_holdout(19_500_000, 10, False)
+        assert above is not None
+        self.assertIn("reserved by default", above)
+        self.assertNotIn(
+            "exactly ONE measurement", above,
+            "a consumed band above the floor must not be described as the one-shot block",
+        )
+
     def test_the_opt_in_is_the_only_way_through(self) -> None:
         self.assertIsNone(
             _reject_unguarded_final_holdout(FINAL_HOLDOUT_SEED_FLOOR, 200, True)
@@ -121,31 +161,23 @@ class FinalHoldoutGuardTests(unittest.TestCase):
             self.assertFalse(ck.exists(), "a refused run must not leave a checkpoint either")
 
     def test_the_guard_fires_before_a_single_game_is_played(self) -> None:
-        # The ordering property, pinned DIRECTLY.
+        # THE ORDERING PROPERTY, and this pin must hold WITHOUT a Showdown checkout.
         #
-        # This needs a REAL Showdown root, and that is the whole subtlety. The pin
-        # above uses a nonexistent root so build freshness and dex loading cannot
-        # decide its verdict -- but that also means removing the guard makes it die
-        # in `load_showdown_dex` with a FileNotFoundError, which masks the ordering
-        # signal. It detects "guard absent" for the wrong reason.
+        # My first version required the real Showdown root and called `skipTest`
+        # otherwise. CI has no built Showdown -- no workflow installs node or builds
+        # it, and two other steps in the same job say so outright -- so the pin
+        # skipped, the workflow's own no-skip assertion fired, and I turned the
+        # required check RED on every PR that trips the filter. The only route back
+        # to green would have been to weaken the step: the exact failure mode this
+        # whole change exists to prevent, one level up. Round 2's review caught it
+        # from the live run.
         #
-        # So here the dex must actually load, `run_game` must actually be
-        # reachable, and only the guard may stand between the two. With the guard
-        # present: exit 2, `run_game` never called. With the guard moved after the
-        # sweep: `run_game` fires and `played` is non-empty, which is an ordering
-        # failure and reads as one.
+        # So the collaborators between the guard and the simulator are stubbed
+        # instead. The pin now discriminates on a machine that CANNOT sweep, which
+        # is precisely what CI is.
         import tempfile
 
         import engine_transition_differential as etd
-
-        root = Path(etd.DEFAULT_SHOWDOWN_ROOT)
-        if not (root / "dist" / "sim" / "index.js").is_file():
-            # Deliberately NOT a silent pass. A skip here means this pin is not
-            # gating, so it must be loud and it must name the reason.
-            self.skipTest(
-                f"built Showdown data absent under {root}; the ordering pin cannot "
-                "distinguish guard-before-sweep from a dex load failure without it"
-            )
 
         played: list[object] = []
 
@@ -153,24 +185,93 @@ class FinalHoldoutGuardTests(unittest.TestCase):
             played.append(args)
             raise AssertionError("run_game was called on reserved seeds")
 
-        original = etd.run_game
+        def _unreachable(name: str):
+            def _fail(*args: object, **kwargs: object) -> None:
+                raise AssertionError(f"{name} ran before the guard refused the seeds")
+
+            return _fail
+
+        saved = {
+            name: getattr(etd, name)
+            for name in ("run_game", "load_showdown_dex", "LocalShowdownEnv", "EngineMctsPolicy")
+        }
         etd.run_game = _explode  # type: ignore[assignment]
+        etd.load_showdown_dex = _unreachable("load_showdown_dex")  # type: ignore[assignment]
+        etd.LocalShowdownEnv = _unreachable("LocalShowdownEnv")  # type: ignore[assignment]
+        etd.EngineMctsPolicy = _unreachable("EngineMctsPolicy")  # type: ignore[assignment]
         try:
             with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "must-not-exist.json"
                 code = etd.main(
                     [
                         "--games", "60",
                         "--seed-start", str(FINAL_HOLDOUT_SEED_FLOOR),
                         "--matcher", "strict",
                         "--skip-build-check",
-                        "--json", str(Path(tmp) / "out.json"),
+                        "--json", str(out),
                     ]
                 )
+                self.assertFalse(out.exists(), "a refused run must write no report")
         finally:
-            etd.run_game = original  # type: ignore[assignment]
+            for name, original in saved.items():
+                setattr(etd, name, original)
 
+        # `played` empty is the ordering assertion. If the guard is moved after the
+        # sweep, `run_game` fires and this is what fails -- and it fails saying so,
+        # rather than dying in an unrelated dex load.
         self.assertEqual(played, [], "the sweep ran before the guard refused it")
         self.assertEqual(code, 2)
+
+    def test_merging_a_reserved_seed_checkpoint_is_refused_through_main(self) -> None:
+        # Round 2's review found that deleting the record guard from EITHER
+        # aggregation site escaped all ten pins, because the only coverage drove the
+        # helper directly and never `main()`. Two pins now drive `main()`.
+        import json
+        import tempfile
+
+        from engine_transition_differential import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ck = Path(tmp) / "reserved.jsonl"
+            ck.write_text(
+                "\n".join(
+                    json.dumps(_reserved_record(FINAL_HOLDOUT_SEED_FLOOR + i))
+                    for i in range(3)
+                )
+                + "\n"
+            )
+            out = Path(tmp) / "must-not-exist.json"
+            code = main(["--merge-from", str(ck), "--json", str(out)])
+            self.assertEqual(code, 2, "merging reserved seeds must be refused")
+            self.assertFalse(
+                out.exists(),
+                "a refused merge must not leave a report that makes the seeds look measured",
+            )
+
+    def test_resuming_a_reserved_seed_checkpoint_is_refused_through_main(self) -> None:
+        import json
+        import tempfile
+
+        from engine_transition_differential import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ck = Path(tmp) / "reserved.jsonl"
+            ck.write_text(json.dumps(_reserved_record(FINAL_HOLDOUT_SEED_FLOOR)) + "\n")
+            out = Path(tmp) / "must-not-exist.json"
+            # Clean args on purpose: seed_start is the DEV window, so only the
+            # record-level guard can catch this.
+            code = main(
+                [
+                    "--checkpoint", str(ck),
+                    "--resume",
+                    "--seed-start", "19000000",
+                    "--games", "1",
+                    "--skip-build-check",
+                    "--json", str(out),
+                ]
+            )
+            self.assertEqual(code, 2, "resuming over reserved seeds must be refused")
+            self.assertFalse(out.exists(), "a refused resume must write no report")
 
     def test_aggregating_reserved_seeds_is_refused(self) -> None:
         # NB-3: the argparse check bounds only what this invocation would EXECUTE.
@@ -193,6 +294,35 @@ class FinalHoldoutGuardTests(unittest.TestCase):
         self.assertIsNone(
             _reject_reserved_seeds_in_records([{"seed": "not-a-number"}, {}], False)
         )
+
+    def test_the_record_guard_fails_closed_on_non_integer_seeds(self) -> None:
+        # NB-2 from round 2, and it FAILED OPEN, which is the worst direction. The
+        # original check was `str(r["seed"]).lstrip("-").isdigit()`, so a record
+        # carrying `19200008.0` or `" 19200009"` was skipped entirely and an
+        # `acceptance_eligible` report over the reserved range was written with exit
+        # 0. Floats genuinely reach here -- the dedupe upstream already does
+        # `int(record.get("seed", -1))`.
+        #
+        # I fixed the coercion and then did NOT pin it: a mutation restoring
+        # `.isdigit()` escaped all twelve pins. This is that pin.
+        from engine_transition_differential import _reject_reserved_seeds_in_records
+
+        for seed in (
+            FINAL_HOLDOUT_SEED_FLOOR + 8,          # int
+            float(FINAL_HOLDOUT_SEED_FLOOR + 8),   # float, the reported hole
+            f" {FINAL_HOLDOUT_SEED_FLOOR + 9}",    # leading whitespace
+            str(FINAL_HOLDOUT_SEED_FLOOR + 10),    # plain string
+        ):
+            self.assertIsNotNone(
+                _reject_reserved_seeds_in_records([{"seed": seed}], False),
+                f"a reserved seed expressed as {seed!r} slipped through",
+            )
+
+        # Unparseable seeds must not crash the check; they are simply not evidence
+        # of a reserved run.
+        for junk in ("not-a-number", None, object()):
+            self.assertIsNone(_reject_reserved_seeds_in_records([{"seed": junk}], False))
+        self.assertIsNone(_reject_reserved_seeds_in_records([{}], False))
 
     def test_the_opt_in_attribute_is_derived_from_the_flag(self) -> None:
         # NB-4: the attribute name used to be a hand-written string duplicating the
