@@ -343,6 +343,19 @@ jobs:
             exit 1
           fi
 
+      - name: Single-seat coverage bound
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_single_seat_coverage_bound -v 2>&1 \
+            | tee /tmp/coverage.log
+          if ! grep -qE 'Ran 3 tests' /tmp/coverage.log; then
+            echo "::error::expected 3 coverage-bound pins; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/coverage.log; then
+            echo "::error::coverage-bound pins did not report a clean OK"
+            exit 1
+          fi
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
@@ -366,22 +379,10 @@ jobs:
       # The differential measures ~87% of boundaries, not the ~96.6% its own
       # `measured_fraction_of_full_rounds` reports: that metric's denominator is
       # `boundaries_full_round`, which by construction EXCLUDES single-seat plies
-      # (~10% of boundaries, and the entire deferred-residual population). These
+      # (~10% of boundaries, and almost all of the deferred-residual population --
+      # all of it except a simultaneous double faint). These
       # pins keep the real denominator recoverable from any report, so a residue
       # figure cannot be read as full coverage. reports/c132.
-      - name: Single-seat coverage bound
-        run: |
-          set -o pipefail
-          python -m unittest tests.test_single_seat_coverage_bound -v 2>&1 \
-            | tee /tmp/coverage.log
-          if ! grep -qE 'Ran 3 tests' /tmp/coverage.log; then
-            echo "::error::expected 3 coverage-bound pins; the suite shrank or grew"
-            exit 1
-          fi
-          if ! grep -qE '^OK$' /tmp/coverage.log; then
-            echo "::error::coverage-bound pins did not report a clean OK"
-            exit 1
-          fi
       - name: Engine stat attestation
         run: |
           set -o pipefail

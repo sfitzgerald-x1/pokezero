@@ -9,8 +9,10 @@ silently excludes ~10 % of boundaries.
 Measured on the C131 artifacts: dev 1,742 of 17,710 boundaries (9.8 %) and holdout
 1,813 of 17,968 (10.1 %) are single-seat and never compared, so the differential
 measures ~87 % of boundaries rather than the ~96.6 % its own metric reports. The
-whole deferred-residual population — every post-move-faint replacement ply — lives
-in that gap.
+deferred-residual population lives almost entirely in that gap: every
+post-move-faint replacement ply is single-seat EXCEPT when both actives faint in the
+same ply (Explosion, Selfdestruct, Destiny Bond, recoil KO), where both sides get
+`forceSwitch`, the boundary is full-round, and it IS measured.
 
 These pins keep the bound COMPUTABLE. They deliberately do not pin the fraction
 itself: that drifts with the pool and the seed window, and a gate on it would fail
@@ -92,8 +94,16 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
             # which the live writer would never do.
             #
             # `full_round` must equal measured plus the exits taken INSIDE the
-            # full-round path. That identity breaks the moment single-seat plies
-            # are counted as full rounds.
+            # full-round path. That catches the fold-and-recompute mutation.
+            #
+            # It is NOT a complete guard, and the comment here used to claim it was
+            # ("breaks the moment single-seat plies are counted as full rounds"). A
+            # review constructed the counterexample: fold single-seat into
+            # `full_round` AND route those plies to an in-path exit such as
+            # `skip:no_action_candidates`, and the identity still holds while the
+            # denominator becomes unrecoverable again. `exits` is a hardcoded prefix
+            # allowlist, so a renamed or newly-added exit counter is in fact the
+            # likeliest way for this assertion to trip.
             exits = sum(
                 v
                 for k, v in counters.items()
@@ -107,7 +117,6 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
                         "limit:",
                     )
                 )
-                and k != "skip:single_seat_boundary"
             ) + counters.get("world_prestate_mismatch", 0)
             self.assertEqual(
                 measured + exits, full,
@@ -124,20 +133,19 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
             # assertions below when a review renamed it.
             self.assertIn("measured_fraction_of_full_rounds", report, f"{name}")
             fraction = report["measured_fraction_of_full_rounds"]
-            if True:
-                self.assertAlmostEqual(
-                    fraction, measured / full, places=3,
-                    msg=(
-                        f"{name}: measured_fraction_of_full_rounds does not equal "
-                        "measured/full_round, so its denominator has changed meaning"
-                    ),
-                )
-                self.assertGreater(
-                    fraction, measured / (full + single),
-                    f"{name}: the reported fraction must be strictly larger than "
-                    "coverage over ALL boundaries, or single-seat plies are being "
-                    "counted somewhere they were not before",
-                )
+            self.assertAlmostEqual(
+                fraction, measured / full, places=3,
+                msg=(
+                    f"{name}: measured_fraction_of_full_rounds does not equal "
+                    "measured/full_round, so its denominator has changed meaning"
+                ),
+            )
+            self.assertGreater(
+                fraction, measured / (full + single),
+                f"{name}: the reported fraction must be strictly larger than "
+                "coverage over ALL boundaries, or single-seat plies are being "
+                "counted somewhere they were not before",
+            )
 
     def test_the_unmeasured_population_is_material_not_a_rounding_error(self) -> None:
         # Anti-complacency. If this ever drops near zero the bound stops mattering

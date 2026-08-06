@@ -55,8 +55,10 @@ incremented. Two traps to avoid when re-deriving this:
 - `limit:world_substitute_health_unknown` reads like an annotation but is a genuine exit; omit it and
   the reconciliation misses by exactly its count.
 
-Naively summing every `skip:*` counter gives 17,544 against a `full_round` of 15,968 — which does not
-reconcile and is what first made me doubt the total.
+Summing `boundaries_measured` plus **every** `skip:*` counter gives 17,544 against a `full_round` of
+15,968 — which does not reconcile, and is what first made me doubt the total. (The `skip:*` counters
+alone sum to 2,112; an earlier draft of this sentence said 17,544 was the `skip:*` sum, omitting the
+`measured +`.)
 
 > An earlier draft of this stated "10.9 % of full-round boundaries", dividing 1,742 by 15,968. That
 > denominator is wrong — the sets are disjoint, so the ratio means nothing. Caught by reading the
@@ -90,7 +92,8 @@ after the replacement carries the whole phase — weather upkeep, both actives' 
 The engine defers it identically; its branch ends in `ToggleSide*ForceSwitch` and the next transition
 carries the full list.
 
-So the differential has never compared a deferred residual phase. Both simulators agree there as far
+So the differential has compared a deferred residual phase only in the double-faint case above. Both
+simulators agree there as far
 as the spot checks in `agents/reports/rust-fidelity/a12_candidate_residuals_skipped_on_move_faint.md`
 go, but agreement on a handful of hand-built states is not the same as 400 games of measurement, and
 the distinction should not be blurred.
