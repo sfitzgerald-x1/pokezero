@@ -1,100 +1,77 @@
-# C112 v1 — WITHDRAWN. Do not cite.
+# C112 v2 — source-level cause and disposition for every `state`-class row in the leaf differential
 
-> **This ledger is withdrawn on independent review, before merge. Three of its central
-> claims are wrong.** It is left in place only so the corrections are traceable; every
-> number in it should be treated as unverified until v2.
+> **v2 corrects v1 substantially after independent review. v1 should not be cited.**
+> Three of v1's central claims were wrong and one of them re-committed the exact error
+> C111 v1 was withdrawn for. Every correction is marked **[CORRECTION]** below.
 >
-> 1. **S2 is FALSE.** The stall counter IS in engine state — the engine names it
->    `protect` (`state.rs:699 pub protect: i8`), increments it on each successful
->    Protect/Endure (`gen3/generate_instructions.rs:4941,4952`), reads it as the
->    consecutive-success chance (`:2774,2796`), and **production already seeds it**:
->    `engine_world.py:1265 side_conditions["protect"] = stall_counter`. My grep for
->    "stall" was a substring false-negative. So the 46 rows are the SAME one-line
->    shape as S1 (`leaf.rs:2220 side_condition_counts()` exports five side conditions
->    and omits `protect`), NOT "demonstrated-unreachable from engine state", and the
->    root-freeze-vs-`ProductsData` decision I posed does not exist. The real caveat I
->    should have carried: the engine's `protect` is a SIDE condition and does not
->    reset on switch-out the way the parser's does, so plumbing it is exact only
->    within a stint — a fidelity note, not unreachability.
->
->    This re-commits precisely the error C111 v1 was withdrawn for: claiming rows are
->    irreducible when they are not.
->
-> 2. **The row accounting does not close.** This file gives three different numbers
->    for one quantity (18, 26, 31 open rows), and "88 of 106" divides a ROW count by a
->    BOUNDARY count. The `state` families sum to 119 rows on golden-v2 (88 attributed
->    + 31 open) while `class_rows.state` counts 106 boundaries. Worse, "88 of 106" is
->    not derivable at all: families are incremented per boundary and the artifact
->    records no per-boundary family list, so the distinct boundaries the S1+S2
->    families cover is only bounded to [23, 88]. The coverage claim cannot be checked.
->
-> 3. **"golden-v2 is comparable" is FALSE**, which was the load-bearing justification
->    for lifting UNVERIFIED. `boundaries = decisions − 2·games`, and trajectories come
->    from a policy that reads only `legal_action_mask` and a seeded RNG, so 1008 is
->    structurally invariant to schema changes and could not have moved. Meanwhile four
->    of the five state families are columns that did not exist at the retracted row's
->    2026-07-19 era. The two rows compare different observation vectors — exactly why
->    the scenarios row was retracted — so the golden-v2 re-derivation must be
->    retracted too and UNVERIFIED must stay.
->
-> Also wrong: the retraction's causal story (a run that skipped 100% of boundaries
-> cannot emit `fold 440`, so the published `state = 0` is explained by those columns
-> not existing yet, not by the harness break); S5 understates scenarios (2 boundaries
-> / 10 rows, not 1 / 5); S3 and S4 are more closed than "open" — the committed
-> artifact already contains both discriminators; "on all N rows" overstates an
-> artifact that stores one example per family; the `matched + diverged == compared`
-> identity is a tautology, not an assertion; and the era stamp is dated in the future.
-
-# C112 — source-level cause and disposition for every `state`-class row in the leaf differential
-
-> **Scope and honesty note.** This ledger attributes **88 of 106** `state`-class rows on
-> golden-v2 to two verified source-level causes with a disposition each. **Three classes
-> (26 rows on golden-v2, 10 on scenarios) are recorded as OPEN, deliberately unattributed**,
-> with the measured direction and the exact next check for each. C111 v1 shipped three wrong
-> attributions and had to be withdrawn; guessing is the known failure mode in this format, so
-> the open rows say "open" rather than carrying a plausible cause.
+> - **v1's S2 was FALSE.** It called `NUMERIC_STALL_COUNTER` "demonstrated-unreachable
+>   from engine state" on a grep for `stall` that was a substring false-negative. The
+>   engine names it `protect`, and production already seeds it. Those 46 rows are a
+>   harness fix, not a design decision. See S2.
+> - **v1's coverage arithmetic did not close.** It gave three numbers for one quantity
+>   (18/26/31) and divided a ROW count by a BOUNDARY count. See "Units".
+> - **v1 claimed the regenerated golden-v2 is comparable to the published row.** It is
+>   not, and that claim was the sole justification for lifting UNVERIFIED. See "What is
+>   and is not comparable".
+> - v1 also left S3 and S4 "open" when the committed artifact already answered S3;
+>   understated the scenarios action-surface incidence; claimed a direction "on all N
+>   rows" from an artifact storing one example per family; cited a tautology as
+>   evidence; and stamped its era one day in the future.
 
 ## Era and provenance
 
-Read on `main` at `df4a0fce`, with both poke-engine build artifacts freshly re-vendored
-(#1119 patched the vendored `gen3/choice_effects.rs`; a stale tree makes three ability tests
-fail and is invisible from the harness).
+Read on `main` at `df4a0fce`, **2026-08-05**, with both poke-engine build artifacts
+freshly re-vendored (#1119 patched the vendored `gen3/choice_effects.rs`; a stale tree
+fails three ability tests and is invisible from this harness).
 
-| corpus | observation schema | tables | boundaries | compared | divergent | artifact |
-|---|---|---|---|---|---|---|
-| `corpus/golden-v2` | `pokezero.observation.v3` | `/tmp/tables_v3.json` | 1008 | 737 | 567 | `reports/c112_leaf_state_golden_v2.json` |
-| `corpus/golden-v2-scenarios` | `pokezero.observation.v2.2` | `corpus/encoder_tables_v2.2.json` | 369 | 273 | 174 | `reports/c112_leaf_state_scenarios.json` |
+| corpus | `rows.jsonl` sha256 | observation schema | tables | boundaries | compared | divergent | artifact |
+|---|---|---|---|---|---|---|---|
+| `corpus/golden-v2` | `e8d4db0772c65648…` | `pokezero.observation.v3` | v3, exported below | 1008 | 737 | 567 | `reports/c112_leaf_state_golden_v2.json` |
+| `corpus/golden-v2-scenarios` | `1931040f087f317a…` | `pokezero.observation.v2.2` | `corpus/encoder_tables_v2.2.json` | 369 | 273 | 174 | `reports/c112_leaf_state_scenarios.json` |
 
-`matched + diverged == compared` on both (170+567 = 737; 99+174 = 273). Compared is
-boundaries minus skips, and is the denominator every rate below uses — **not** the boundary
-count, which credits capacity the run did not exercise.
+**[CORRECTION]** v1 recorded no corpus hash, so "regenerate before citing" was
+unfalsifiable, and cited an ephemeral `/tmp` tables path. `corpus/` is gitignored, so the
+hashes above are the only way a future reader can tell whether their regeneration matches.
 
 Producing commands, verbatim:
 
 ```sh
-# corpora (both regenerated; corpus/ is gitignored)
 PYTHONPATH=src python -m pokezero.golden_corpus --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
     --games 10 --seed-start 1000 --out corpus/golden-v2 --belief-set-source on \
     --observation-schema pokezero.observation.v3
 PYTHONPATH=src python -m pokezero.golden_corpus_scenarios --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
     --out corpus/golden-v2-scenarios --belief-set-source on
-
-# tables
 PYTHONPATH=src python scripts/export_encoder_tables.py --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
     --observation-schema v3 --out /tmp/tables_v3.json
-
-# the measurement
 PYTHONPATH=src:scripts python scripts/leaf_vs_reality.py --corpus corpus/golden-v2 \
     --tables /tmp/tables_v3.json --json reports/c112_leaf_state_golden_v2.json
 PYTHONPATH=src:scripts python scripts/leaf_vs_reality.py --corpus corpus/golden-v2-scenarios \
     --tables corpus/encoder_tables_v2.2.json --json reports/c112_leaf_state_scenarios.json
 ```
 
-**The scenarios generator takes no `--observation-schema`** and defaults to v2.2, which is why
-the two corpora are read at different schemas. Running the scenarios corpus against v3 tables
-skips **273 of 369** boundaries on `encode_error:ValueError` and the harness then reports
-`matchup gate INERT on this corpus: only 0 of 369 same-seat boundaries were compared` — worth
-recording because that INERT line is the only thing distinguishing that run from a pass.
+`golden_corpus_scenarios` takes no `--observation-schema` and defaults to v2.2, which is
+why the two corpora are read at different schemas. Against v3 tables the scenarios corpus
+skips **273 of 369** boundaries on `encode_error:ValueError`, and the run then prints
+`matchup gate INERT on this corpus: only 0 of 369 same-seat boundaries were compared` —
+that INERT line being the only thing distinguishing it from a pass.
+
+## Units — read this before any count below
+
+**[CORRECTION]** v1 mixed two incompatible denominators. This ledger states coverage in
+**ROWS** throughout:
+
+- A **row** is one `(array, block, column)` family. The `state`+`turn` families sum to
+  **119 rows** on golden-v2 and **10** on scenarios.
+- `class_rows.state` counts **BOUNDARIES**: **106** on golden-v2, **2** on scenarios.
+- **The mapping between them is not derivable from the artifact.** Families are
+  incremented once per boundary (`leaf_vs_reality.py:892-893`) and no per-boundary family
+  list is stored, so the distinct boundaries any group of families covers is only bounded
+  — for v1's S1+S2 group, to `[23, 88]`. v1's headline "88 of 106" divided rows by
+  boundaries and is withdrawn. Any future coverage claim in boundaries needs the harness
+  to record per-boundary family sets first; that is a harness change and out of scope here.
+
+Coverage, in rows: **112 of 119 attributed on golden-v2** (S1 42 + S2 46 + S3 24),
+**7 open** (S4 2 + S5 5). Scenarios: **0 of 10 attributed**, all 10 open under S5.
 
 ## The table
 
@@ -104,131 +81,175 @@ recording because that INERT line is the only thing distinguishing that run from
 | `NUMERIC_OPP_WISH_TURNS` | 17 / 0 | **S1** | harness fix (one line) |
 | `NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF` | 4 / 0 | **S1**, different predicate | harness fix |
 | `NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP` | 4 / 0 | **S1**, different predicate | harness fix |
-| `NUMERIC_STALL_COUNTER` (self) | 23 / 0 | **S2** never plumbed; not in engine state | **demonstrated-unreachable from engine state** → encoder-side decision |
-| `NUMERIC_STALL_COUNTER` (opponent) | 23 / 0 | **S2** | as above |
-| `NUMERIC_TOXIC_STAGE` (self) | 12 / 0 | **OPEN — S3** | open (two candidate mechanisms below) |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 12 / 0 | **OPEN — S3** | open |
-| `NUMERIC_ENCORE_TURNS` | 2 / 0 | **OPEN — S4** | open (one tick behind; candidate: tagged engine-model) |
-| action surface (`NUMERIC_ACTIVE`, `NUMERIC_LEGAL`, `legal_action_mask`) | 5 / 10 | **OPEN — S5** | open |
-
-Row counts are per (array, block, column) family; one boundary can carry several, which is why
-the rows sum above the 106/2 divergent-boundary counts.
+| `NUMERIC_STALL_COUNTER` (self) | 23 / 0 | **S2** omitted from the side-condition export | **harness fix** *(v1 said unreachable — [CORRECTION])* |
+| `NUMERIC_STALL_COUNTER` (opponent) | 23 / 0 | **S2** | **harness fix** |
+| `NUMERIC_TOXIC_STAGE` (self) | 12 / 0 | **S3** line replay did not escalate | **harness fix** *(v1 said open — [CORRECTION])* |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 12 / 0 | **S3** | **harness fix** |
+| `NUMERIC_ENCORE_TURNS` | 2 / 0 | **S4**, narrowed | open — narrowed to the untagged partition |
+| action surface (`NUMERIC_ACTIVE`, `NUMERIC_LEGAL`, `legal_action_mask`) | 5 / 10 | **S5** | open — highest severity |
 
 ## S1 — the leaf writes an ADJACENT metadata key, not the one the column reads (42 rows)
 
-**Verified at source.** `leaf.rs:1221-1222`:
+Unchanged from v1; independently re-verified, including that no other site writes the
+target keys.
 
-```rust
-md.insert("self_wish_pending".into(), json!(self_side.wish.0 != 0));
-md.insert("opponent_wish_pending".into(), json!(opp_side.wish.0 != 0));
-```
+`leaf.rs:1221-1222` sets `self_wish_pending` / `opponent_wish_pending` as **booleans** from
+`side.wish.0 != 0`. The diverging columns read `self_wish_turns` / `opponent_wish_turns`
+(`showdown.py:1719-1720`; value `min(1, remaining / 2)` per `:517`), consumed at
+`encoder.rs:1289,1297`. A repo-wide grep for `wish_turns|sleep_clause_blocks` under `rust/`
+finds **only reads, no writer**, so the keys hold their dataclass default of 0 — matching
+got 0.0 / want 0.5. Both `NUMERIC_SELF_WISH_PENDING` and `NUMERIC_SELF_WISH_TURNS` exist as
+distinct columns (`showdown.py:907,911`), so the leaf populates one member of a pair and
+leaves the other at zero.
 
-The leaf sets `self_wish_pending` / `opponent_wish_pending` as **booleans**. The diverging
-columns are `NUMERIC_SELF_WISH_TURNS` / `NUMERIC_OPP_WISH_TURNS`, which read the *separate*
-state fields `self_wish_turns` / `opponent_wish_turns` (`showdown.py:1719-1720`, value
-`min(1, remaining / 2)` per `showdown.py:517`). Those are never set at the leaf, so they hold
-their dataclass default of `0` — which is exactly the measured signature: **got 0.0, want 0.5**
-on all 34 rows, never the reverse.
+**The count is available and discarded**: `pub wish: (i8, i16)` (`state.rs:1208`), first
+member is the remaining-turns counter; `set_wish` sets `wish.0 = 2`.
 
-Both `NUMERIC_SELF_WISH_PENDING` and `NUMERIC_SELF_WISH_TURNS` exist as distinct columns
-(`showdown.py:907,911`), so this is not a duplicate — the leaf populates one member of a pair
-and silently leaves the other at zero.
+Same shape, different predicate, for the sleep-clause pair: the leaf sets
+`self_sleep_clause_used` (`leaf.rs:1233,1240`, with a real engage/release derivation at
+`:1254-1261`) while the columns read `self_sleep_clause_blocks` (`showdown.py:1729-1730`,
+`encoder.rs:1275,1282`) — documented there as a different question.
 
-**The count is available and is being discarded.** `pub wish: (i8, i16)` (`state.rs:1208`) — the
-first member IS the remaining-turns counter, and `!= 0` throws it away. So this is a one-line
-harness fix, not a modelling gap: write the count beside the bool.
+**Disposition: harness fix.** Neither is a comparison limit.
 
-Same shape, different predicate, for the sleep-clause pair. The leaf sets
-`self_sleep_clause_used` (`leaf.rs:1233,1240`, with a genuine engage/release derivation at
-`:1254-1261`), while the column reads `self_sleep_clause_blocks` (`showdown.py:1729-1730`) —
-documented there as "an opposing mon is currently asleep from a sleep OUR side inflicted",
-which is a *different question* from whether the clause has been used. Never set → `False` →
-**got 0.0, want 1.0** on all 8 rows.
+## S2 — `NUMERIC_STALL_COUNTER` is omitted from the leaf's side-condition export (46 rows)
 
-**Disposition: harness fix.** Neither is a comparison limit and neither needs an encoder change.
+**[CORRECTION] — this replaces v1's "demonstrated-unreachable from engine state", which
+was false.** v1 grepped `leaf.rs` and `state.rs` for `stall`, found only `terastallized`,
+and concluded the value does not exist in the engine. The engine names it **`protect`**:
 
-## S2 — `NUMERIC_STALL_COUNTER` is not derivable from engine state (46 rows)
+- `third_party/poke-engine-src/src/state.rs:699` — `pub protect: i8` on `SideConditions`.
+- `gen3/generate_instructions.rs:4941,4952` — `+= 1` on each successful PROTECT/ENDURE,
+  reset to 0 otherwise. That is the same "consecutive successful stall uses" quantity as
+  `showdown.py::_update_stall_counter`.
+- `gen3/generate_instructions.rs:2774,2796` — the engine reads it as the consecutive-protect
+  success chance, so it is load-bearing, not vestigial.
+- **`src/pokezero/engine_world.py:1265` — `side_conditions["protect"] = stall_counter`.**
+  Production already seeds the engine counter from the parser's, and the comment at
+  `:1252-1258` states the semantics match with no offset.
 
-**Verified two ways.** `stall_counter` has **zero** occurrences in
-`rust/pokezero-search/src/leaf.rs`, so the leaf never writes it and the column is 0 at every
-depth — matching the measured **got 0.0, want 0.125** on all 46 rows.
+So at a leaf `side.side_conditions.protect` **is** the live stall counter, and
+`leaf.rs:2220 side_condition_counts()` already exports `spikes/reflect/lightscreen/
+safeguard/mist` from that exact struct while omitting `protect`. Same one-line shape as S1.
 
-And it cannot simply be plumbed: `third_party/poke-engine-src/src/state.rs` carries no
-stall/protect/consecutive-protect counter at all (the only `stall` substring matches are
-`terastallized`). The counter is protocol-derived — the Protect/Detect success chain — which is
-why `showdown.py` has 31 references to it and the engine none.
+**Disposition: harness fix.** The root-freeze-vs-`ProductsData` decision v1 posed to the
+owner does not exist, and v1's escalation that "46 of the 106 are arguably in the wrong
+class" is withdrawn — that argument rested on the value being unreachable.
 
-**Disposition: demonstrated-unreachable from engine state.** This is not a harness bug to fix
-in `leaf.rs`; the value has to come from the root row or the fold, which makes it the same
-shape as the k0 feature pack and therefore an **encoder-side design decision**, not a defect.
-Two options, both owner calls, deliberately not made here:
+**The caveat v1 should have carried instead**, which is a fidelity note rather than a
+blocker: the engine's `protect` is a **side** condition and does not reset on switch-out or
+faint the way the parser's per-active counter does, so plumbing it is exact only within a
+stint. Whoever writes the fix must decide what to emit across a switch.
 
-1. root-freeze it explicitly (add to a documented frozen set, as the k0 pack is), or
-2. carry it on the fold and surface it through `ProductsData` — the route taken for
-   `matchup_counters` in #1118.
+**[CORRECTION]** v1 also claimed `showdown.py` "has 31 references"; that reproduces as
+neither the line nor the occurrence count. The claim is dropped rather than restated.
 
-Until one is chosen, 46 of the 106 rows are **correctly** divergent and the `state` class is
-the wrong bucket for them: `state` is documented as "MUST-MATCH engine-state-derived cells",
-and this cell is by construction not engine-state-derived. **Reclassifying it is a
-`classify()` change and is out of this ledger's documentation-only scope** — but it is the
-single largest contributor to the 106 and the reason that number should not be read as 106
-encoder defects.
+## S3 — the toxic line replay did not escalate (24 rows)
 
-## S3 — `NUMERIC_TOXIC_STAGE`: OPEN, 24 rows
+**[CORRECTION] — v1 left this open with two candidate mechanisms. The committed artifact
+already discriminates them, so it is closed here with no new measurement.**
 
-Measured **got 0.0, want 0.1333** (= 2/15, i.e. reality is at Toxic stage 2 while the leaf
-reads 0). Two candidate mechanisms, both live, and I have not established which fires:
+The leaf's toxic stage is deliberately line-driven, not engine-derived (`leaf.rs:298-302`:
+"the parser's toxic stage … LINES, not of engine state — the engine ticks its toxic counter
+on every … faint-pending ply ticks the engine but never the parser"). The parser escalates
+on `|turn|` lines only (review F1). v1's two candidates were:
 
-1. **The line replay did not escalate.** The leaf's toxic stage is *deliberately* line-driven,
-   not engine-derived — `leaf.rs:298-302` states it: "the parser's toxic stage and … LINES, not
-   of engine state — the engine ticks its toxic counter on every … faint-pending ply ticks the
-   engine but never the parser". The parser escalates on `|turn|` lines only (review F1), so a
-   synthesized line set without the `|turn|` boundary leaves `meta.toxic` at 0.
-2. **The leaf's own guard zeroed it.** `leaf.rs:1265-1267` zeroes a nonzero stage when
-   `active.hp <= 0 || active.status != PokemonStatus::TOXIC`. The engine does carry
-   `toxic_count` (`state.rs:707`) and a `TOXIC` status, so a status representation mismatch
-   would zero a correct stage.
+1. the line replay never escalated, leaving `meta.toxic` at 0; or
+2. the guard at `leaf.rs:1265-1267` zeroed a correct stage when
+   `active.hp <= 0 || active.status != PokemonStatus::TOXIC`.
 
-**Next check, precise:** instrument `LeafMeta` at one of the 12 example boundaries
-(`golden-gen3randombattle-1000#[56,57]` p1) and print `meta.toxic[side]` *before* the guard.
-Nonzero-before-guard proves (2); zero proves (1). Both dispositions differ — (1) is a
-harness/line-replay fix, (2) is a status-mapping fix — so attributing without this measurement
-is exactly the C111 v1 error.
+**(2) is excluded by the artifact.** Both guard arms are observable as other columns: status
+rides `CATEGORY_SECONDARY` (`encoder.rs:2258-2262`) and liveness rides `NUMERIC_PRESENT` /
+`attention_mask`. In `reports/c112_leaf_state_golden_v2.json` there is **no `self_team`
+family for any of the three** — verified: `CATEGORY_SECONDARY` ABSENT, `NUMERIC_PRESENT`
+ABSENT, `attention_mask`/`self_team` ABSENT. So on the 12 self-side toxic boundaries the
+leaf's active status and liveness agree with reality, and neither arm can have fired.
 
-## S4 — `NUMERIC_ENCORE_TURNS`: OPEN, 2 rows
+That leaves (1). **Disposition: harness fix** — the synthesized line set does not carry the
+`|turn|` boundary the parser escalates on.
 
-Measured **got 0.1667 (1/6), want 0.3333 (2/6)** — one tick behind, not absent, which
-distinguishes it from S1/S2. The candidate cause is the already-tagged engine-model deviation
-"Encore volatile not applied" (`docs/leaf_observation_column_map.md`, `engine_model` row), in
-which case these rows are misfiled into `state` and belong in `engine_model`. Not asserted:
-that class is documented as *not applied*, whereas these rows show a value that IS applied and
-merely lags, so the existing tag may not be the right one.
+Scope limit, stated rather than glossed: this argument is clean for the **12 self-side**
+rows. The opponent side additionally shows an `epistemic`-classed `NUMERIC_TOXIC_STAGE`
+family (3 rows), so the opponent's 12 `state` rows are attributed by symmetry with the self
+side, not independently.
 
-**Next check:** replay `golden-gen3randombattle-1003#[8,9]` p1 and compare the engine's
-`ENCORE` volatile duration against the parser's `opponent_encore_elapsed` tick, to see whether
-the lag is the documented non-application or a separate off-by-one.
+## S4 — `NUMERIC_ENCORE_TURNS`: OPEN, narrowed (2 rows)
 
-## S5 — the action surface: OPEN, 5 rows on golden-v2 and 10 on scenarios
+Measured got 1/6, want 2/6 — one tick **behind**, not absent.
 
-`NUMERIC_ACTIVE`, `NUMERIC_LEGAL` and three `legal_action_mask` slots diverge on a single
-boundary per corpus (`golden-gen3randombattle-1009#[16,17]` p2), all in the same direction:
-**got True/1.0, want False/0.0** — the leaf believes actions are legal that reality does not.
-Five rows on one boundary is one disagreement, not five.
+**[CORRECTION]** v1 speculated that the documented `engine_model` tag "Encore volatile not
+applied" might be the wrong one, without noticing that the artifact already partitions the
+class: it contains **both** `engine_model / self_team / NUMERIC_ENCORE_TURNS rows=2` **and**
+the `state` pair. `leaf_vs_reality.py:355` routes any boundary carrying the `encore` tag to
+`engine_model` before the fallback, so the 2 `state` rows are by construction the
+**untagged** ones. The tag question is therefore answered: these rows are not the documented
+non-application.
 
-This is the only `state` family whose direction implies the leaf is *permissive* rather than
-*empty*, which makes it the highest-severity open row here: a search that prices illegal
-actions is worse than one reading a stale counter.
+Still open: what the untagged one-tick lag is. **Next check:** replay
+`golden-gen3randombattle-1003#[8,9]` p1 and compare the engine's `ENCORE` volatile duration
+against the parser's `opponent_encore_elapsed` tick.
 
-**Next check:** dump the leaf's `action_candidates` and reality's for that boundary and diff
-the three slots. Note the scenarios corpus also reports 7 `skip:action_unmapped`, which may be
-the same mechanism surfacing as a skip rather than a divergence.
+## S5 — the action surface: OPEN, highest severity (5 rows gv2 / 10 rows scenarios)
+
+`NUMERIC_ACTIVE`, `NUMERIC_LEGAL` and three `legal_action_mask` slots, all in the same
+direction: **got True/1.0, want False/0.0** — the leaf believes actions are legal that
+reality does not. This is the only `state` family where the leaf is **permissive** rather
+than empty, which makes it the highest-severity row here: a search pricing illegal actions
+is worse than one reading a stale counter.
+
+**[CORRECTION]** v1 said "a single boundary per corpus" and "five rows on one boundary is
+one disagreement, not five". True on golden-v2 (one boundary,
+`golden-gen3randombattle-1009#[16,17]` p2). **False on scenarios**: `class_rows.state = 2`
+and every one of the five families has `rows = 2` — **two boundaries, ten rows**. v1 also
+described the scenarios contribution as "2 rows" in its closing section. The corpus built
+to exercise edge cases has twice the incidence, which v1 under-reported.
+
+**Next check:** dump the leaf's `action_candidates` and reality's for the named boundary and
+diff the three slots. The scenarios corpus also reports 7 `skip:action_unmapped`, possibly
+the same mechanism surfacing as a skip.
+
+## What is and is not comparable
+
+**[CORRECTION] — v1 claimed the regenerated golden-v2 is comparable to the published
+closure row because it reproduces 1008 boundaries. That is false, and it was the sole
+justification for lifting UNVERIFIED from the `leaf_vs_reality` tables.**
+
+Boundary count cannot detect the change: `boundaries = decisions − 2·games` (verified:
+gv2 manifest `decisions 1028, games 10` → 1008; scenarios `405, 18` → 369), and the
+trajectories come from `RandomLegalPolicy` / `SimpleLegalPolicy`, whose `select_action`
+reads **only** `legal_action_mask` and a seeded RNG (`policy.py:151-171`). It is
+structurally invariant to observation-schema and engine changes, so 1008 could not have
+moved.
+
+Meanwhile the contents did change: the regenerated corpus is v3, and `--observation-schema`
+only reached `golden_corpus` on 2026-08-04, while the published row is stamped 2026-07-19.
+Four of the five `state` families are columns that did not exist then —
+`NUMERIC_SLEEP_CLAUSE_BLOCKS_*` (2026-07-20), `NUMERIC_STALL_COUNTER` and
+`NUMERIC_SELF_WISH_TURNS` and `NUMERIC_ENCORE_TURNS` (2026-07-21).
+
+**Consequences, applied in `docs/leaf_observation_column_map.md`:**
+
+1. The published closure rows are **RETRACTED for both corpora**, not corrected. No
+   per-class delta (`fold 440→422` etc.) is attributable to the harness fix.
+2. The re-derived rows are published as a **new measurement at their own era**, not as a
+   correction of the old ones.
+3. **v1's causal story for the published `state = 0` is also wrong.** A run that skipped
+   100% of boundaries cannot emit `fold 440, epistemic 322, engine_roll 313`. The published
+   zero is explained by four of the five families not being columns yet — a corpus/schema
+   cause, not the harness break.
 
 ## What this ledger does not claim
 
-- It is **not** a completeness claim over `state`: 18 of 106 golden-v2 rows are open.
-- It is documentation only — no classifier change, no encoder change, no harness change.
-- The **scenarios** corpus contributes only S5 (2 rows). Its `state` class is otherwise clean,
-  so every S1–S4 count above is golden-v2 only.
-- `self_moveset_mismatch` (11 skips on scenarios) and the residue-row classes are owned by the
-  fallback-burndown and rust-fidelity lanes; they appear here only as skip counts and are
-  **not** attributed. A note belongs in those ledgers, not a fix here.
+- Coverage is in **rows**, and the row→boundary mapping is not derivable from the artifact.
+- Documentation only: no classifier, encoder or harness change.
+- **[CORRECTION]** v1 wrote "got 0.0, want 0.5 on all 34 rows". The harness stores **one
+  example per family** (`leaf_vs_reality.py:874-875`), so direction is *inferred from
+  source* for S1/S2/S3, not measured per row. The uniformity claim is withdrawn.
+- **[CORRECTION]** v1 offered `matched + diverged == compared` as evidence. `compared` is
+  *defined* as `exact + divergent` (`leaf_vs_reality.py:972`), so the identity is a
+  tautology and no harness assertion exists. The non-vacuous identity —
+  `sum(all counts) == boundaries` — is not checked by the harness either; verified by hand
+  here (1008 and 369) and it holds. Mechanizing it is task 3's subject.
+- `self_moveset_mismatch` (11 scenarios skips) and the residue-row classes are owned by the
+  fallback-burndown and rust-fidelity lanes; they appear only as skip counts and are **not**
+  attributed. A note belongs in those ledgers.
