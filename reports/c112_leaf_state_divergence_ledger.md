@@ -1,3 +1,50 @@
+# C112 v1 — WITHDRAWN. Do not cite.
+
+> **This ledger is withdrawn on independent review, before merge. Three of its central
+> claims are wrong.** It is left in place only so the corrections are traceable; every
+> number in it should be treated as unverified until v2.
+>
+> 1. **S2 is FALSE.** The stall counter IS in engine state — the engine names it
+>    `protect` (`state.rs:699 pub protect: i8`), increments it on each successful
+>    Protect/Endure (`gen3/generate_instructions.rs:4941,4952`), reads it as the
+>    consecutive-success chance (`:2774,2796`), and **production already seeds it**:
+>    `engine_world.py:1265 side_conditions["protect"] = stall_counter`. My grep for
+>    "stall" was a substring false-negative. So the 46 rows are the SAME one-line
+>    shape as S1 (`leaf.rs:2220 side_condition_counts()` exports five side conditions
+>    and omits `protect`), NOT "demonstrated-unreachable from engine state", and the
+>    root-freeze-vs-`ProductsData` decision I posed does not exist. The real caveat I
+>    should have carried: the engine's `protect` is a SIDE condition and does not
+>    reset on switch-out the way the parser's does, so plumbing it is exact only
+>    within a stint — a fidelity note, not unreachability.
+>
+>    This re-commits precisely the error C111 v1 was withdrawn for: claiming rows are
+>    irreducible when they are not.
+>
+> 2. **The row accounting does not close.** This file gives three different numbers
+>    for one quantity (18, 26, 31 open rows), and "88 of 106" divides a ROW count by a
+>    BOUNDARY count. The `state` families sum to 119 rows on golden-v2 (88 attributed
+>    + 31 open) while `class_rows.state` counts 106 boundaries. Worse, "88 of 106" is
+>    not derivable at all: families are incremented per boundary and the artifact
+>    records no per-boundary family list, so the distinct boundaries the S1+S2
+>    families cover is only bounded to [23, 88]. The coverage claim cannot be checked.
+>
+> 3. **"golden-v2 is comparable" is FALSE**, which was the load-bearing justification
+>    for lifting UNVERIFIED. `boundaries = decisions − 2·games`, and trajectories come
+>    from a policy that reads only `legal_action_mask` and a seeded RNG, so 1008 is
+>    structurally invariant to schema changes and could not have moved. Meanwhile four
+>    of the five state families are columns that did not exist at the retracted row's
+>    2026-07-19 era. The two rows compare different observation vectors — exactly why
+>    the scenarios row was retracted — so the golden-v2 re-derivation must be
+>    retracted too and UNVERIFIED must stay.
+>
+> Also wrong: the retraction's causal story (a run that skipped 100% of boundaries
+> cannot emit `fold 440`, so the published `state = 0` is explained by those columns
+> not existing yet, not by the harness break); S5 understates scenarios (2 boundaries
+> / 10 rows, not 1 / 5); S3 and S4 are more closed than "open" — the committed
+> artifact already contains both discriminators; "on all N rows" overstates an
+> artifact that stores one example per family; the `matched + diverged == compared`
+> identity is a tautology, not an assertion; and the era stamp is dated in the future.
+
 # C112 — source-level cause and disposition for every `state`-class row in the leaf differential
 
 > **Scope and honesty note.** This ledger attributes **88 of 106** `state`-class rows on
