@@ -482,9 +482,11 @@ about constants immediately above the place it had stopped being applied is exac
 **So the guard is excluded on two different grounds, not one.** On the **21** cells the
 counterfactual takes exact, it is excluded directly — the same guard passes and the leaf emits 2.
 On the remaining **12 — all opponent tokens**, where the crude patch could not align, the exclusion
-rests on the shared switch signature (27/27 and 33/33) plus the absence argument above, with the
-opponent-side caveat that argument carries. That is weaker for those 12 and is said here rather than
-averaged in.
+rests on the shared switch signature (27/27 and 33/33) **and on the counterfactual passing for 7
+sibling opponent cells (7/19)** — same class of cell, same intervention, guard passes. It does NOT
+rest on the absence argument: the caveat above is a **disqualification** for the opponent side, not
+a discount, since that side has no analogue in principle. The absence argument stays scoped to the
+self side, where it holds.
 
 ## P3 — the self-side recharge root-freeze (2 rows)
 
@@ -638,11 +640,14 @@ Four of the `state` families as they stood in v2's framing are columns that did 
 - Documentation only: no classifier, encoder or harness change.
 - **[CORRECTION]** v1 wrote "got 0.0, want 0.5 on all 34 rows". The harness stores **one
   example per family** (`leaf_vs_reality.py:874-875`), so direction is *inferred from
-  source* for **P1**, not measured per row. The uniformity claim is withdrawn **for P1 only**:
-  P2's was subsequently measured per row by re-encoding every boundary and reading every cell
-  rather than reading the artifact — 33/33 on v4 and 27/27 on gv2, all `got = 0.0`. This
-  section is the conservative backstop, so it must not discount the document's strongest
-  measurement.
+  source* for **P1**, not measured per row. The uniformity claim is **withdrawn in full**; for P2
+  only the `got` half was later re-established, per row, by re-encoding every boundary and reading
+  every cell rather than reading the artifact — 33/33 on v4 and 27/27 on gv2, all `got = 0.0`.
+  **`want` is NOT uniform:** v4 `{0.1333: 32, 0.0667: 1}`, gv2 `{0.1333: 26, 0.0667: 1}`. That odd
+  cell corroborates rather than troubles the account — `0.0667` is stage **1**, exactly the mid-turn
+  `force_switch` sampling case withdrawal (3) describes. This section is the conservative backstop,
+  so it must neither discount the document's strongest measurement nor let a half-claim stand as a
+  whole one.
 - **[CORRECTION]** v1 offered `matched + diverged == compared` as evidence. `compared` is
   *defined* as `exact + divergent` (`leaf_vs_reality.py:972`), so the identity is a
   tautology and no harness assertion exists. The non-vacuous identity —
