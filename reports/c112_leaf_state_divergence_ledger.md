@@ -60,8 +60,8 @@ that INERT line being the only thing distinguishing it from a pass.
 **[CORRECTION]** v1 mixed two incompatible denominators. This ledger states coverage in
 **ROWS** throughout:
 
-- A **row** is one `(array, block, column)` family. The `state`+`turn` families sum to
-  **119 rows** on golden-v2 and **10** on scenarios.
+- A **row** is one `(array, block, column)` family. The `state` families sum to
+  **119 rows** (`turn` contributes none) on golden-v2 and **10** on scenarios.
 - `class_rows.state` counts **BOUNDARIES**: **106** on golden-v2, **2** on scenarios.
 - **The mapping between them is not derivable from the artifact.** Families are
   incremented once per boundary (`leaf_vs_reality.py:892-893`) and no per-boundary family
@@ -70,8 +70,13 @@ that INERT line being the only thing distinguishing it from a pass.
   boundaries and is withdrawn. Any future coverage claim in boundaries needs the harness
   to record per-boundary family sets first; that is a harness change and out of scope here.
 
-Coverage, in rows: **112 of 119 attributed on golden-v2** (S1 42 + S2 46 + S3 24),
+Coverage, in rows: **100 source-verified + 12 by side-symmetry = 112 of 119 attributed on
+golden-v2** (S1 42 + S2 46 + S3 self-side 12 verified, S3 opponent-side 12 by symmetry),
 **7 open** (S4 2 + S5 5). Scenarios: **0 of 10 attributed**, all 10 open under S5.
+
+The 12/12 split is carried here and not only in S3's prose, because merging a verified count
+with an inferred one is how a ledger of this kind gets over-read — and its predecessor was
+withdrawn for exactly that.
 
 ## The table
 
@@ -158,20 +163,51 @@ on `|turn|` lines only (review F1). v1's two candidates were:
 2. the guard at `leaf.rs:1265-1267` zeroed a correct stage when
    `active.hp <= 0 || active.status != PokemonStatus::TOXIC`.
 
-**(2) is excluded by the artifact.** Both guard arms are observable as other columns: status
-rides `CATEGORY_SECONDARY` (`encoder.rs:2258-2262`) and liveness rides `NUMERIC_PRESENT` /
-`attention_mask`. In `reports/c112_leaf_state_golden_v2.json` there is **no `self_team`
-family for any of the three** — verified: `CATEGORY_SECONDARY` ABSENT, `NUMERIC_PRESENT`
-ABSENT, `attention_mask`/`self_team` ABSENT. So on the 12 self-side toxic boundaries the
-leaf's active status and liveness agree with reality, and neither arm can have fired.
+**(2) is excluded by the artifact** — but only via instruments that can actually move, which
+took a correction. Both guard arms are observable as other columns:
+
+- the `active.hp <= 0` arm rides **`NUMERIC_LEGAL`** (`encoder.rs:2282-2285`:
+  `if condition.fainted { 0.0 } else { 1.0 }`), where `condition.fainted` is parsed from the
+  leaf's own condition string (`encoder.rs:555`) which the leaf writes from the same `p.hp`
+  the guard reads (`leaf.rs:1506`). `NUMERIC_LEGAL` is not in `EPISTEMIC_PREFIXES`, so a
+  `self_team` divergence would fall to the `state` fallback and appear in the table above.
+- the `active.status != TOXIC` arm rides **`CATEGORY_SECONDARY`** (`encoder.rs:2258-2262`).
+  It is the engine's own field, not the belief ledger: `belief` is `None` for
+  `Role::SelfTeam` (`encoder.rs:1992-1994`), so the status falls through to
+  `condition.status` ← md `"status"` ← `status_code(p.status)` (`leaf.rs:1505`). Without that
+  step the argument would be comparing the belief ledger against itself. It is also written
+  unconditionally (a NONE status renders `status:`), so absence cannot mean "never written".
+
+Both are **absent from `self_team` under EVERY class**, not just `state` — checked, because a
+`CATEGORY_SECONDARY` divergence would route to `ledger_skew` under a `curestatus` tag
+(`leaf_vs_reality.py:346-352`) or `engine_model` under
+`transform|recharge|encore|baton_pass` (`:355`), and a `state`-only check would have missed
+those. So neither arm can have fired.
+
+**[CORRECTION]** An earlier revision of this section cited `NUMERIC_PRESENT` and
+`self_team`'s `attention_mask` as the liveness instruments. Both are **constants**:
+`NUMERIC_PRESENT` is set unconditionally to 1.0 for every team token
+(`encoder.rs:1233`) and the self-side attention mask depends only on team size
+(`encoder.rs:1110-1112`). Neither can ever diverge, so reading their absence as a
+measurement was the same false-negative move as v1's `grep stall` — an instrument that was
+never going to fire. `NUMERIC_LEGAL` is the one that carries the signal.
 
 That leaves (1). **Disposition: harness fix** — the synthesized line set does not carry the
 `|turn|` boundary the parser escalates on.
 
 Scope limit, stated rather than glossed: this argument is clean for the **12 self-side**
-rows. The opponent side additionally shows an `epistemic`-classed `NUMERIC_TOXIC_STAGE`
-family (3 rows), so the opponent's 12 `state` rows are attributed by symmetry with the self
-side, not independently.
+rows only. The opponent's 12 are attributed **by side-symmetry** — the guard and
+`meta.toxic[engine_side]` are one loop over both sides (`leaf.rs:1230-1269`) and the
+`|turn|`-escalation mechanism is side-agnostic — and the symmetry is an inference, counted
+separately in Units.
+
+The opponent side has **no analogue of the discriminator, in principle**: for
+`Role::Opponent`, `belief = opponent_beliefs.get(&species_key)` (`encoder.rs:1993`), so its
+status token comes from `belief.status()` first and could not evidence the engine's
+`active.status` even if it had agreed. Worse, `opp_membership` routes every
+`opponent_team` column to `epistemic` on 78 boundaries (`leaf_vs_reality.py:334-335`), so an
+opponent status divergence is masked by construction — which is also what the 3-row
+`epistemic` toxic family is, a symptom of that sweep rather than an independent anomaly.
 
 ## S4 — `NUMERIC_ENCORE_TURNS`: OPEN, narrowed (2 rows)
 

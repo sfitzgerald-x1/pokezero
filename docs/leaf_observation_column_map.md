@@ -99,16 +99,13 @@ world-constant, **C** = static contract (layout constants, invariant).
 | `NUMERIC_ACTIVE` | E | engine `active_index` (a fainted, not-yet-replaced active stays marked active — request semantics) |
 | boosts (`_encode_active_boosts` :2065) | E | engine side boost fields (atk/def/spa/spd/spe/accuracy/evasion) |
 | volatiles (`_encode_active_volatiles` :2075) | E | engine volatile bitset filtered/mapped to `TRACKED_VOLATILES` ids (leaf.rs `VOLATILE_MAP`); engine-only mechanics volatiles dropped; CURSE Ghost-gated AND target-placed (review F5 + live-protocol probe 2026-07-19: the gen3 engine applies the base Curse choice's USER volatile with no Ghost split — the spurious non-Ghost volatile is dropped, and a Ghost curser's volatile is mapped onto the CURSED TARGET's tracked list, where the real protocol starts it; the volatile's engine LIFETIME still follows the curser's switch-outs — residual engine-model deviation) |
-| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` through raw sentinel 16, reset on switch/drag, re-seeded only by exact or switch/drag-proven first Toxic residual, and cleared by any active status replacement including Rest, curestatus, cureteam, or faint), replayed by `LeafMeta` with private renderer status transitions where public protocol intentionally omits a cure line; a sanctioned root stage zero is private context only and requires same-seat active faint → upkeep → non-Baton-Pass toxic switch, then is consumed by its first residual. Encoding caps the raw sentinel at 15/15, and a state-side guard clears any non-Toxic active status. The materialized engine counter is pre-tick and capped at 14, so its next residual is capped at stage 15. The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero |
-> **STALE COUNT — corrected 2026-08-05.** The zero/count claim in the row above predates the harness fixes and is refuted by `reports/c112_leaf_state_divergence_ledger.md`: re-derived on golden-v2 / scenarios, `engine_pp_model` is **1 / 2** (not zero), `NUMERIC_TOXIC_STAGE` is **12 + 12 `state` + 3 `epistemic`** (not zero), the `legal_action_mask` families are **`state`-classed and explicitly NOT one of the documented engine-model tags**, and `NUMERIC_TURNS_ACTIVE` is **76 / 10 `epistemic`** (not zero).
+| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` through raw sentinel 16, reset on switch/drag, re-seeded only by exact or switch/drag-proven first Toxic residual, and cleared by any active status replacement including Rest, curestatus, cureteam, or faint), replayed by `LeafMeta` with private renderer status transitions where public protocol intentionally omits a cure line; a sanctioned root stage zero is private context only and requires same-seat active faint → upkeep → non-Baton-Pass toxic switch, then is consumed by its first residual. Encoding caps the raw sentinel at 15/15, and a state-side guard clears any non-Toxic active status. The materialized engine counter is pre-tick and capped at 14, so its next residual is capped at stage 15. The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero **STALE COUNT, corrected 2026-08-05:** "the differential's toxic family is zero" is RETRACTED — re-derived it is 12 + 12 `state` plus 3 `epistemic`; attributed as S3 in `reports/c112_leaf_state_divergence_ledger.md`. |
 | belief facts: possible abilities/items/moves, revealed flags+counts, `candidate_set_count`, `NUMERIC_UNCERTAINTY`, `candidate_variants` → expected-stat ranges (:2492) | **W** | root, byte-frozen (epistemic); the SELF ledger is NOT epistemic — a first-time-active self mon (e.g. the replacement after a faint) gets a synthesized minimal entry, matching production's ledger growth |
 | exact-state ledger: `NUMERIC_SLEEP_TURNS`, `NUMERIC_REST_SLEEP`, `NUMERIC_WAKE_KNOWN` (:2348) | E (line-driven) | `sleep_turns` = observed `|cant …|slp` lines since the `|-status|slp`, per MON (belief.py:91 semantics; a sleeper that faints after its cants keeps them); `rest_sleep` from engine rest counters; `WAKE_KNOWN` derives from W ability facts |
-| `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `|turn|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero |
-> **STALE COUNT — corrected 2026-08-05.** The zero/count claim in the row above predates the harness fixes and is refuted by `reports/c112_leaf_state_divergence_ledger.md`: re-derived on golden-v2 / scenarios, `engine_pp_model` is **1 / 2** (not zero), `NUMERIC_TOXIC_STAGE` is **12 + 12 `state` + 3 `epistemic`** (not zero), the `legal_action_mask` families are **`state`-classed and explicitly NOT one of the documented engine-model tags**, and `NUMERIC_TURNS_ACTIVE` is **76 / 10 `epistemic`** (not zero).
+| `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `|turn|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero **STALE COUNT, corrected 2026-08-05:** "post-fix the family is zero" is RETRACTED — re-derived it is 76 / 10 rows, class `epistemic`. |
 | `NUMERIC_TRAPPER_ALIVE` | W+E | ability certainty is W; alive/active bits are E |
 | `NUMERIC_SUB_HP_FRACTION` (:2472) | E | engine SUBSTITUTE volatile + production's presence-plus-INITIAL-size formula (`_substitute_hp_fraction` :2472-2485: floor(maxhp/4)/maxhp self, 0.25 opponent — "chip against the sub is not protocol-derivable, so the value is presence + initial size, not a running ledger"). PROBED 2026-07-19: the engine DOES track real per-side `substitute_health` (state.rs:1059; decremented exactly on sub hits, generate_instructions.rs:980-1005) — deliberately NOT consumed: production itself writes initial size only and the model was trained on that surface, so a live-sub-HP cell would diverge from both. Whether a hit BREAKS the sub stays roll-envelope + world-side sub-health-approximation dependent |
-| opponent revealed-move PP fractions + validity (:2421) | W + E (line-driven) | revealed set is W; `move_uses` = root ledger uses + the branch's LINE-REPLAYED charges (**review F3 CLOSED 2026-07-19**: the engine only emits `DecrementPP` when pp < 10 — the vendored gen3 `generate_instructions.rs` "only decrement pp if the move is at 10 or less" optimization, :1622-1643 — so engine PP deltas are root-frozen above 10. `LeafMeta::move_charges` replays the PARSER's charging rules over the synthesized `\|move\|` lines instead — belief.py `_charge_move_use` :796-814 + the ingestion exemptions :431-445: called moves charge the caller only, `[from]lockedmove` continuations and Struggle charge nothing, Pressure on the OPPOSING active doubles foe-targeted charges (world abilities; gen 3 announces Pressure on entry so world truth == the ledger's revealed-ability rule). Post-fix the differential's engine_pp class is ZERO on both corpora — residual PP divergences are reveal/bucket-composition-driven (epistemic) or ride tagged engine-model boundaries) |
-> **STALE COUNT — corrected 2026-08-05.** The zero/count claim in the row above predates the harness fixes and is refuted by `reports/c112_leaf_state_divergence_ledger.md`: re-derived on golden-v2 / scenarios, `engine_pp_model` is **1 / 2** (not zero), `NUMERIC_TOXIC_STAGE` is **12 + 12 `state` + 3 `epistemic`** (not zero), the `legal_action_mask` families are **`state`-classed and explicitly NOT one of the documented engine-model tags**, and `NUMERIC_TURNS_ACTIVE` is **76 / 10 `epistemic`** (not zero).
+| opponent revealed-move PP fractions + validity (:2421) | W + E (line-driven) | revealed set is W; `move_uses` = root ledger uses + the branch's LINE-REPLAYED charges (**review F3 CLOSED 2026-07-19**: the engine only emits `DecrementPP` when pp < 10 — the vendored gen3 `generate_instructions.rs` "only decrement pp if the move is at 10 or less" optimization, :1622-1643 — so engine PP deltas are root-frozen above 10. `LeafMeta::move_charges` replays the PARSER's charging rules over the synthesized `\|move\|` lines instead — belief.py `_charge_move_use` :796-814 + the ingestion exemptions :431-445: called moves charge the caller only, `[from]lockedmove` continuations and Struggle charge nothing, Pressure on the OPPOSING active doubles foe-targeted charges (world abilities; gen 3 announces Pressure on entry so world truth == the ledger's revealed-ability rule). Post-fix the differential's engine_pp class is ZERO on both corpora — residual PP divergences are reveal/bucket-composition-driven (epistemic) or ride tagged engine-model boundaries) **STALE COUNT, corrected 2026-08-05:** "the differential's engine_pp class is ZERO on both corpora" is RETRACTED — re-derived it is 1 / 2. |
 | tendency triple `NUMERIC_MON_*` (:2643) | **F** | fold products `opponent_mon_tendencies` |
 | pinned Tier-2 `NUMERIC_TIER2_CB_PINNED` / `_INVESTMENT_PINNED` (:1233–1269, :2334) | **F** | fold products `cb_pinned_species` / `investment_pinned` (running state, truncation-robust) |
 
@@ -119,8 +116,7 @@ world-constant, **C** = static contract (layout constants, invariant).
 | move ids, mechanics, PP fractions | E (line-driven PP) | engine active's move surface (engine slot order = sampled = request order, root-parity-proven; hidden power renders as plain `hiddenpower`); PP = base − `LeafMeta::move_charges` (the F3 line-replay above; the request follows the same deduction rules). Base: the ROOT ACTIVE's engine PP (request-seeded, exact); a mon benched at the root uses maxpp − the SELF belief-ledger's `move_uses` (the cached request-history PP the world seeds benched mons with is stale by their last stint's FINAL action — requests are pre-action). maxpp from dex; a recharging active (MUSTRECHARGE) presents the production request shape: one legal PP-less `recharge` pseudo-move, switching disallowed |
 | disabled / `NUMERIC_ACTIVE` | E (line-guarded) | engine `Move.disabled`, EXCEPT a fresh switch-in (line-tracked: switched and no `|move|` since): choice locks reset on switch but the world seeds benched mons with their last stint's cached disabled bits and the engine never re-enables them on a branch switch (`use_last_used_move` is off in constructed worlds) — Choice-Band-Nidoking repro |
 | legal bits + switch candidates | E | the engine's OWN option surface (`get_all_options`) mapped through the canonical switch map over the EVOLVED team ordering; fresh switch-ins bypass the stale-lock option restriction (pp>0 ⇒ legal) |
-| `legal_action_mask` (:3227) | E | same. **Honest history (review item 3a): at depth 0 the engine option surface reproduced every recorded request mask (root-parity), but PRE-FIX the mask did NOT reproduce reality at switch-reached leaves — the self-team permutation put switch bits on wrong indices (~26% of boundaries) and stale choice locks killed move bits on fresh switch-ins. POST-FIX the differential's mask families are zero outside the documented engine-model tags (transform/recharge/encore/baton-pass)** |
-> **STALE COUNT — corrected 2026-08-05.** The zero/count claim in the row above predates the harness fixes and is refuted by `reports/c112_leaf_state_divergence_ledger.md`: re-derived on golden-v2 / scenarios, `engine_pp_model` is **1 / 2** (not zero), `NUMERIC_TOXIC_STAGE` is **12 + 12 `state` + 3 `epistemic`** (not zero), the `legal_action_mask` families are **`state`-classed and explicitly NOT one of the documented engine-model tags**, and `NUMERIC_TURNS_ACTIVE` is **76 / 10 `epistemic`** (not zero).
+| `legal_action_mask` (:3227) | E | same. **Honest history (review item 3a): at depth 0 the engine option surface reproduced every recorded request mask (root-parity), but PRE-FIX the mask did NOT reproduce reality at switch-reached leaves — the self-team permutation put switch bits on wrong indices (~26% of boundaries) and stale choice locks killed move bits on fresh switch-ins. POST-FIX the differential's mask families are zero outside the documented engine-model tags (transform/recharge/encore/baton-pass)** **STALE COUNT, corrected 2026-08-05:** "the mask families are zero outside the documented engine-model tags" is RETRACTED — re-derived, `legal_action_mask` slots are `state`-classed on both corpora and are explicitly NOT one of those tags; open as S5, the highest-severity row in `reports/c112_leaf_state_divergence_ledger.md`. |
 
 ### Token 22 stats (`_encode_stats_token` :2665)
 
@@ -167,7 +163,7 @@ root state, byte-diff of all five arrays against the recorded golden arrays.
 | golden-v2-scenarios (**NOT re-derived**) | 290 | 235 | 235 (100%) | 0 | 55 (15 encore, 2 baton-pass, 12 self_moveset_mismatch, 26 self_request_state_unsupported) |
 
 **These two rows keep their UNVERIFIED status.** They are the ROOT-PARITY harness
-(`leaf_root_parity.py`), not `leaf_vs_reality.py`, so the 2026-08-06 re-derivation
+(`leaf_root_parity.py`), not `leaf_vs_reality.py`, so the 2026-08-05 re-derivation
 does not cover them and neither of the two harness breaks fixed there is known to
 apply. Their row counts (1028 / 290) also predate the corpus regeneration. Re-deriving
 them is a separate pass.
@@ -197,10 +193,12 @@ placement, 2026-07-19; exit gates on the defect classes):
 
 | corpus | boundaries | driven | exact | divergent | **state** | **turn** | fold | epistemic | engine_pp | engine_roll | engine_model | ledger_skew |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+| golden-v2 (post-#730, **RETRACTED**) | 1008 | 771 | 78 | 693 | 0 | 0 | 440 | 322 | 663 | 313 | 9 | 1 |
 | golden-v2 (closure 2026-07-19, **RETRACTED**) | 1008 | 771 | 220 | 551 | 0 | 0 | 440 | 322 | 0 | 313 | 33 | 1 |
-| golden-v2 (**re-derived** 2026-08-06, v3) | 1008 | **737** | **170** | **567** | **106** | **0** | **422** | **328** | **1** | **256** | **18** | **0** |
+| golden-v2 (**re-derived** 2026-08-05, v3) | 1008 | **737** | **170** | **567** | **106** | **0** | **422** | **328** | **1** | **256** | **18** | **0** |
+| golden-v2-scenarios (post-#730, **RETRACTED**) | 270 | 183 | 9 | 174 | 0 | 0 | 108 | 49 | 173 | 97 | 16 | 0 |
 | golden-v2-scenarios (closure, **RETRACTED**) | 270 | 183 | 53 | 130 | 0 | 0 | 108 | 49 | 0 | 97 | 5 | 0 |
-| golden-v2-scenarios (**re-derived** 2026-08-06, v2.2) | **369** | **273** | **99** | **174** | **2** | **0** | **137** | **86** | **2** | **116** | **11** | **0** |
+| golden-v2-scenarios (**re-derived** 2026-08-05, v2.2) | **369** | **273** | **99** | **174** | **2** | **0** | **137** | **86** | **2** | **116** | **11** | **0** |
 
 **Reading this table. BOTH closure rows are RETRACTED, not corrected, and the
 re-derived rows are a NEW measurement at their own era — no per-class delta between
@@ -264,19 +262,21 @@ none visible to the depth-0 gate.
 
 ## Accepted encoding divergences (by design)
 
-The go/no-go ledger for starting evals, **re-derived 2026-08-06 with the fixed
+The go/no-go ledger for starting evals, **re-derived 2026-08-05 with the fixed
 harness** on `main` at `df4a0fce`. Counts are divergent boundaries touching the
 class; a boundary can carry several.
 
 **`state` is NOT zero, and the previous claim that it was is RETRACTED.** This
 section used to say the defect classes "are pinned at ZERO by the gate's exit
 code". The gate does exit non-zero, but the count was never zero: it is **106 on
-golden-v2 and 2 on scenarios**. The published zeros came from a harness that
-skipped 100% of boundaries while printing `DEFECT-CLASS divergent boundaries: 0`
+golden-v2 and 2 on scenarios**. The published zeros are explained by four of the five
+`state` families not being columns yet at that era, NOT by the harness breaks — a run
+that skipped 100% of boundaries could not have emitted `fold 440, epistemic 322,
+engine_roll 313`
 (both breaks named at the end of this section). Attribution is in
 `reports/c112_leaf_state_divergence_ledger.md`, stated in ROWS because the
-row→boundary mapping is not derivable from the artifact: **112 of 119 rows
-attributed on golden-v2** (wish/sleep-clause adjacent-key writes 42, stall counter
+row→boundary mapping is not derivable from the artifact: **100 source-verified + 12
+by side-symmetry = 112 of 119 rows attributed on golden-v2** (wish/sleep-clause adjacent-key writes 42, stall counter
 46, toxic line replay 24), **7 open** (encore 2, action surface 5). Scenarios: all
 10 rows open. All three attributed causes are **harness fixes** — an earlier
 revision called the 46 stall rows "unreachable from engine state" and posed an
@@ -306,7 +306,7 @@ its boundaries is judged on the work it did, not on the corpus it was handed --
 and every class reallocation requires a documented rule in
 `scripts/leaf_vs_reality.py::classify`.
 
-**UNVERIFIED status, per table, as of 2026-08-06.** The blanket marking this
+**UNVERIFIED status, per table, as of 2026-08-05.** The blanket marking this
 paragraph used to carry is replaced by a per-table one, because a single label over
 three tables produced by two different harnesses at three different eras is not
 actionable.
