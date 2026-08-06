@@ -7,7 +7,7 @@
 
 C116 Phase 4 item 12: one more row disposed of, as a **harness fix**. Era: branch
 `harness-leechseed-heal-label` off `main` `5a44c04e`; engine+crate fingerprint `6caef725b2…` →
-`080bbfcd16…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
+`98d5c558ce…` (`events.rs` is inside the fingerprint, so the crate change moves it even though the
 patch stack does not).
 
 > **On the C116 citation.** The plan lives outside this repository at the owner's instruction and is
@@ -174,9 +174,9 @@ Verified red against both `<= 1` and `!= 0`.
 | window | engine | measured | full_round | matched | diverged |
 |---|---|---|---|---|---|
 | dev `19,000,000–19,000,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,432 | 15,968 | 15,430 | 2 |
-| dev | branch, fp `080bbfcd16…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
+| dev | branch, fp `98d5c558ce…` | 15,432 | 15,968 | 15,430 | **2 (unchanged)** |
 | validation holdout `19,100,000–19,100,199` | `main` `5a44c04e`, fp `6caef725b2…` | 15,551 | 16,155 | 15,546 | 5 |
-| validation holdout | branch, fp `080bbfcd16…` | 15,551 | 16,155 | **15,548** | **3** |
+| validation holdout | branch, fp `98d5c558ce…` | 15,551 | 16,155 | **15,548** | **3** |
 
 **Closed `19100014/35` and `19100193/46`. Nothing opened.** `boundaries_measured` and
 `boundaries_full_round` identical, identity holds on all four, `engine_errors` 0 in all four.
@@ -212,6 +212,24 @@ the same failure as the baseline error two reports earlier: the artifact was sit
 
 Being right about an outcome for the wrong reason is not a prediction holding, and a negative clause
 is exactly where that distinction bites — it is the clause that *looks* like rigour.
+
+## 7b. Filed, not fixed: what remains unpinned around these fixes
+
+Both from round 3's review, both verified.
+
+**The three sibling exemptions in the same condition are unpinned.** Deleting
+`|| has_type(GROUND)` or `|| has_type(STEEL)` from `weather_chips`'s sand branch, or the hail `ICE`
+exemption, or the `hp <= 0` gate at the top, each leaves the whole suite green. Pre-existing — but
+this change added a **fourth** disjunct to that exact condition and pinned only its own, so the
+asymmetry is now this PR's to name. Cheap to close and deliberately not bundled here.
+
+**`liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain` pins an engine-unreachable shape.**
+It feeds a *positive* `Heal` to a side with no Leftovers whose seeded opponent has Liquid Ooze. The
+engine cannot produce that: `generate_instructions.rs:4299-4308` emits Liquid Ooze as
+`Heal{heal_amount: -ooze}`, which `events.rs:3261` routes to the Liquid Ooze **damage** renderer and
+never to `residual_heal_cause`. The pin is genuinely red against deleting the guard it covers, but
+the guard is effectively dead code — consistent with this report's own "worth zero measured rows",
+and worth saying outright rather than leaving it to look like coverage of something live.
 
 ## 8. Residue after this
 

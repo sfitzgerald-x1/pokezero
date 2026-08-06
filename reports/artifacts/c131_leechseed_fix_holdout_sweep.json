@@ -18,8 +18,8 @@
   },
   "gating_exact": 14120,
   "gating_support_based": 1431,
-  "elapsed_seconds": 645.25,
-  "games_per_hour": 1115.8,
+  "elapsed_seconds": 505.97,
+  "games_per_hour": 1423.0,
   "boundaries_full_round": 16155,
   "boundaries_measured": 15551,
   "transitions_matched": 15548,
@@ -146,7 +146,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785995623",
+        "|t:|1785998390",
         "|move|p1a: Roselia|Hidden Power|p2a: Ho-Oh",
         "|-resisted|p2a: Ho-Oh",
         "|-damage|p2a: Ho-Oh|42/264",
@@ -249,7 +249,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785995860",
+        "|t:|1785998577",
         "|switch|p2a: Medicham|Medicham, L81, M|27/230",
         "|-damage|p2a: Medicham|0 fnt|[from] Spikes",
         "|faint|p2a: Medicham",
@@ -337,7 +337,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1785995895",
+        "|t:|1785998600",
         "|switch|p2a: Ninjask|Ninjask, L79, F|225/225",
         "|move|p1a: Flygon|Fire Blast|p2a: Ninjask",
         "|-supereffective|p2a: Ninjask",
@@ -357,7 +357,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"080bbfcd16ee2d181dd36c02c7dbef0b0f3124cd759cd5e0d2aacd7e7ae35134\", \"image_commit\": null, \"source_commit\": \"22889a6b8ca49a588f7f8ebd9c3ae0f3337dd7ae\"}"
+      "{\"engine_fingerprint\": \"98d5c558ce3a7be59ad0aada30b110ca1d9c8e40afdf4522c022edb203e04d05\", \"image_commit\": null, \"source_commit\": \"99b1598a5929ca27057b2fc0f02da437e0fe3e9c\"}"
     ]
   }
 }
