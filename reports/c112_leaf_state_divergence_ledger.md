@@ -108,21 +108,25 @@ that INERT line being the only thing distinguishing it from a pass.
   boundaries and is withdrawn. Any future coverage claim in boundaries needs the harness
   to record per-boundary family sets first; that is a harness change and out of scope here.
 
-Coverage on the v4 corpus (`corpus/golden-v4`), across 18
-families — **138 of 138 rows measured and grouped into six mechanisms; 110 attributed** —
-P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = 138.
+Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state` families / 138
+rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
+P6 2 = 138. **110 rows carry a source-level cause and a disposition** (P1, P3, P4, P5, P6). **28 do
+not** — P2, toxic, which carries a measured rate, a pinned failure mode and an open mechanism.
 
-**Not every class has a source-level cause.** P2 (28 rows, toxic) has a measured rate and an
-excluded mechanism but no established cause; naming one would be the fourth attribution in this
-ledger asserted ahead of its evidence. So: **110 of 138 rows carry a cause and a disposition, 28
-carry a measurement and an open mechanism.** The task asks for a cause per class, and this is the
-one place it is not delivered — stated here rather than left for a reader to find.
+Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
+that section (its second row's boundary is unverified, and the id-877 reading rests on the one
+stored example). The ledger's one remaining **inference** sits *inside* the open class: P2's
+opponent 14 would inherit the self half's cause by side-symmetry (`leaf.rs:1230-1269`) once that
+cause exists.
 
-**124 source-verified, 14 resting on side-symmetry** — P2's opponent half only. Two earlier
-revisions of this sentence were wrong in different ways: the first said "110 and 28 (14 rows, and
-1 row)", where 14 + 1 is 15, not 28; the second kept 123/15 after P6's own text had withdrawn its
-symmetry claim, so an arithmetic contradiction was replaced by a semantic one. P6's two rows are
-the same mon from two seats — one directly-checked event, not an inference.
+**[CORRECTION]** Two earlier revisions stated a verified/inferred split — "110 source-verified and
+28 … (14 rows, and 1 row)", then "123 / 15", then "124 source-verified, 14 resting on
+side-symmetry". All three are withdrawn. The last was the worst: it counted P2's self-side 14 as
+verified two paragraphs after declaring P2 unattributed, and described the other 14 as an inference
+from a cause that does not exist. **No split is stated over unattributed rows**, and no row count
+of 124 appears anywhere — that numeral is the BOUNDARY count, and 110 + 14 colliding with it was a
+coincidence, not a measurement. Four consecutive edits to this paragraph each fixed the wrong
+sentence and left the composition unread.
 
 **Note on "the 124".** 124 is `class_rows.state`, a count of BOUNDARIES; 138 is the sum of
 per-family boundary incidences, which this document calls rows. They are different units and
