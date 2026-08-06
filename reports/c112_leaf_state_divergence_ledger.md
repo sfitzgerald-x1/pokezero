@@ -6,7 +6,7 @@
 > SUBSET of it: four families were entirely unattributed — `NUMERIC_SLEEP_TURNS`
 > (self + opponent) and `CATEGORY_VOLATILE_OFFSET` (self + opponent). I substituted a
 > corpus that produced a tidier number. v3 measures all three corpora and groups all 18
-> families / 138 rows into six mechanisms. **110 of the 138 rows carry a source-level cause
+> families / 138 rows into six mechanisms. **All 138 rows carry a source-level cause
 > and a disposition.** An earlier revision left P2 (toxic, 28 rows) open; it is closed here by
 > following the next check that revision named — the absent `toxic_stage_known` tri-state. The
 > header is the part that gets quoted, so: a cause per class is now delivered for all six, with one
@@ -118,9 +118,9 @@ flagged inside P2 as a constraint on the fix, not as an open cause.
 
 Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
 that section (its second row's boundary is unverified, and the id-877 reading rests on the one
-stored example). The ledger's one remaining **inference** sits *inside* the open class: P2's
-opponent 14 would inherit the self half's cause by side-symmetry (`leaf.rs:1230-1269`) once that
-cause exists.
+stored example). P2's opponent 14 are covered by the same mechanism as the self 14 — all 33
+divergent toxic cells share the in-branch-switch signature — so no side-symmetry inference remains
+anywhere in this ledger.
 
 **[CORRECTION]** Two earlier revisions stated a verified/inferred split — "110 source-verified and
 28 … (14 rows, and 1 row)", then "123 / 15", then "124 source-verified, 14 resting on
@@ -154,8 +154,8 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 | `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | harness fix |
 | `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | harness fix |
 | `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | harness fix |
-| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** line replay did not escalate | harness fix |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2** | harness fix (by symmetry) |
+| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | encoder fix |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | encoder fix |
 | `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | production + gate fix → **task 4** |
 | `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | harness fix |
 | `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | harness fix |
@@ -177,7 +177,7 @@ encoding search uses:
 | cause | the fix lands in | production or harness |
 |---|---|---|
 | P1 | `rust/pokezero-search/src/leaf.rs` (write the md keys) | **production** |
-| P2 | not established — see the section | unknown |
+| P2 | `rust/pokezero-search/src/events.rs` or `leaf.rs` | **production** |
 | P3 | `engine_search.py::_recharging_slots` + the four gates | **production**, = task 4 |
 | P4 | `scripts/leaf_vs_reality.py:430-439` | harness |
 | P5 | `engine_world.py` world construction / the leaf's request-shape handling | **production** |
@@ -312,7 +312,7 @@ already computes for `*_sleep_clause_used`.
 does not reset on switch-out the way the parser's per-active counter does, so writing it is
 exact only within a stint.
 
-## P2 — the toxic write is live and 91% correct; the residual is the absent `toxic_stage_known` tri-state (28 rows on v4, 24 on gv2)
+## P2 — the event renderer emits status-free condition strings, so the replay cannot see an in-branch toxic entry (28 rows on v4, 24 on gv2)
 
 **[CORRECTION] — earlier revisions titled this "the line replay did not escalate", then left it
 open. The first was wrong, and the measurement that proves the write works also refutes it; the
@@ -368,43 +368,84 @@ path neither implementation's arithmetic explains, and "the leaf cannot restore 
 stage" is a story that *fits* rather than a cause. Adopting it would be the encore-floor error again,
 which looked consistent only because the root happened to hold the same number.
 
-### The cause: `LeafMeta` has no `toxic_stage_known` tri-state
+### The cause: the event renderer emits status-free condition strings
 
-**[CORRECTION] — an earlier revision of this section shipped with "disposition: undetermined" and
-recorded this as the one class without a cause. It is closed here.** The named next check was the
-right one.
+**[CORRECTION] — the previous revision of this section blamed an absent `toxic_stage_known`
+tri-state in `LeafMeta`. That is WITHDRAWN and was the sixth refuted attribution in this ledger.
+It failed the same way two earlier ones did: the cited mechanism is not on the live path
+(`showdown.py:1994-1999` and `:2047` are inside `_ReplayParser.from_snapshot`, a legacy-snapshot
+compat fallback that `continue`s whenever the snapshot carries the field — which the only
+construction site always does), and the "stage 2 on entry" signature I built it on does not exist
+(see below). It also proposed a fix that would have changed no row.**
 
-The parser carries **two** pieces of state, not one: `toxic_stage` and a companion
-`toxic_stage_known` (`showdown.py:1539,1853`). The `known` flag is what lets it distinguish "stage
-0" from "stage unknown", and it gates both halves of the parser's behaviour:
+The real cause, with a counterfactual. `events.rs:751-760` — `hp_condition` — returns `"0 fnt"`, a
+percent form, or `"{hp}/{maxhp}"`, and **never appends a status token**. So every condition string
+in a synthesized branch is status-free, including the `|switch|` line (`events.rs:1171-1172`).
+Compare the ledger's own case study, `1000#[56,57]` p1:
 
-- **Reset.** On resume, `toxic_stage_known[slot]` is set to
-  `_is_current_public_active(active) and not _condition_has_status(condition, "tox")`
-  (`showdown.py:1994-1997`) — i.e. a toxiced active makes the stage UNKNOWN — and the next loop
-  zeroes every unknown stage (`:1998-1999`).
-- **Inference.** The residual-inversion path is gated on `parser.toxic_stage_known[slot]`
-  (`:2047`, and `:2586`, `:2944-2963`), so it refuses to infer a stage it has declared unknown.
+```
+synthesized: |switch|p1a: Volbeat|Volbeat, L94, M|72/275          <- no " tox"
+             |-damage|p1a: Volbeat|4/275|[from] Spikes
+             |-heal|p1a: Volbeat|21/275|[from] item: Leftovers
+             |-damage|p1a: Volbeat|4/275|[from] psn
+reality:     |switch|p1a: Volbeat|Volbeat, L94, M|72/275 tox
+             |-damage|p1a: Volbeat|4/275 tox|[from] Spikes
+             |-heal|p1a: Volbeat|21/275 tox|[from] item: Leftovers
+             |-damage|p1a: Volbeat|4/275 tox|[from] psn
+```
 
-`LeafMeta` (`leaf.rs:309-313`) carries `toxic`, `active_toxic` and `toxic_reentry_pending` and
-**no `known` counterpart**. So the leaf cannot represent "unknown", cannot reproduce the reset that
-depends on it, and cannot gate its own inversion on it.
+The leaf's `|switch|` handler calls `clear_toxic_meta` (`leaf.rs:763`), then
+`update_active_condition`, which sets `active_toxic` only if the condition string carries a status
+token (`leaf.rs:546`). It never does. So `active_toxic` stays `false` and
+`reseed_toxic_from_residual` bails at its first guard (`leaf.rs:499`:
+`if !is_toxic_residual || !meta.active_toxic[side]`). Stage stays 0, and `|turn|` does not escalate
+0.
 
-**Measured signature that matches.** Every toxiced mon reports **stage 2 on entry** in the parser's
-metadata, then increments — battle 1000 p1: Volbeat 0 → **2** the round it is toxed (47→48), then
-3, 3; Minun **2** on becoming active with `tox` (51), then 3, 4; 0 while Latias (unpoisoned) is out
-(55-56); Volbeat **2** again on re-entry at 4/275 tox (57). The leaf reports **0** at every one of
-those, which is exactly what a implementation with no `known` state and no entry value does.
+**Counterfactual, which is what makes this a cause rather than a story that fits.** Re-injecting
+only the ` tox` suffix into the synthesized condition strings, changing nothing else:
 
-**Claimed narrowly, because this ledger has adopted three stories that merely fit.** What is
-established is the *structural* cause: the parser's behaviour is gated on a flag the leaf does not
-have, and the leaf's 0 is what its absence produces. What is **not** established is the arithmetic
-that yields 2 specifically — the residual inversion gives 4 at `1000#[56,57]` (damage 68, unit 17),
-so 2 comes from a path this ledger has not identified, and the entry-value question is separate from
-the missing-tri-state question. A fix must reproduce the parser's entry semantics, not just add a
-field.
+```
+plain    [56,57] token1 got= 0.0     want= 0.1333
+patched  [56,57] token1 got= 0.1333  want= 0.1333
+```
 
-**Disposition: encoder fix** in `rust/pokezero-search/src/leaf.rs` — add the `known` tri-state to
-`LeafMeta` and mirror the parser's reset/entry semantics. Same file as P1 and P6.
+and corpus-wide the same crude positional restoration takes **21 of the 33 divergent toxic cells
+exact** (the residual 12 are ones the crude patch could not align, mostly opponent tokens).
+
+**Signature, 33/33.** Every divergent toxic cell sits on a branch containing a `|switch|` or
+`|drag|`: `{(has switch/drag, has |-status|..tox)} = {(True, False): 28, (True, True): 5}`, and
+`got = 0.0` in all 33. That is the mechanism's fingerprint — an in-branch entry whose status the
+replay cannot see.
+
+**Two claims from the previous revision are withdrawn outright:**
+
+1. *"Every toxiced mon reports stage 2 on entry."* All three cited cases are ordinary parser
+   arithmetic — `|-status|..tox` sets stage 1 (`showdown.py:4971-4975`) and the next `|turn|`
+   escalates to 2 (`:2585-2587`). Minun did not even enter poisoned: it switched in clean via Baton
+   Pass and was toxed afterwards. And the corpus contains rows at stage **1** (mid-turn
+   `force_switch` decisions sampled before the next `|turn|`), so "2" was a sampling artifact of
+   when metadata is captured relative to `|turn|`.
+2. *"Reality's 2 comes from a path neither implementation's arithmetic explains."* It does not —
+   **I misread two `-damage` lines with different `[from]` tags.** 72 → 4 is the **Spikes** line
+   (3 layers, 275/4 = 68); the psn residual is two lines later, 21 → 4 = 17 = one unit → stage 1
+   (`showdown.py:2951-2963`), then `|turn|` → 2. The arithmetic was identified all along.
+
+**And `LeafMeta` does have counterparts**, so the previous revision's central premise was false in
+both directions: `toxic_reentry_pending` (`leaf.rs:320`) gates the rounded-residual inference at
+`:511-513`, which is exactly what the parser's one live use of `known` does at
+`showdown.py:2944-2945`; and `active_toxic` (`:313`) is documented as whether the active mon is
+"publicly known to retain badly poisoned status" — the leaf's own unknown-vs-0 distinction. It is
+not missing. **It is being fed a status-free string.**
+
+The leaf already implements the parser's whole algorithm identically —
+`|-status|` → 1 (`leaf.rs:748`), exact-residual inversion (`:494-533`), `|turn|` escalation
+(`:630-631`). **The delta is the input, not the algorithm.**
+
+**Disposition: encoder fix**, either in `rust/pokezero-search/src/events.rs:751-760` (emit the
+status suffix, as reality's stream does) or `rust/pokezero-search/src/leaf.rs:763-775` (derive
+`active_toxic` from the branch's engine state on switch rather than from the condition string). The
+renderer option is the narrower one and is shared with production's own leaf, so it needs its own
+parity check.
 
 ### The guard is excluded
 
