@@ -89,7 +89,7 @@ withdrawn for exactly that.
 | `NUMERIC_STALL_COUNTER` (self) | 23 / 0 | **S2** omitted from the side-condition export | **harness fix** *(v1 said unreachable — [CORRECTION])* |
 | `NUMERIC_STALL_COUNTER` (opponent) | 23 / 0 | **S2** | **harness fix** |
 | `NUMERIC_TOXIC_STAGE` (self) | 12 / 0 | **S3** line replay did not escalate | **harness fix** *(v1 said open — [CORRECTION])* |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 12 / 0 | **S3** | **harness fix** |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 12 / 0 | **S3** | **harness fix (by symmetry)** |
 | `NUMERIC_ENCORE_TURNS` | 2 / 0 | **S4**, narrowed | open — narrowed to the untagged partition |
 | action surface (`NUMERIC_ACTIVE`, `NUMERIC_LEGAL`, `legal_action_mask`) | 5 / 10 | **S5** | open — highest severity |
 
@@ -168,9 +168,25 @@ took a correction. Both guard arms are observable as other columns:
 
 - the `active.hp <= 0` arm rides **`NUMERIC_LEGAL`** (`encoder.rs:2282-2285`:
   `if condition.fainted { 0.0 } else { 1.0 }`), where `condition.fainted` is parsed from the
-  leaf's own condition string (`encoder.rs:555`) which the leaf writes from the same `p.hp`
-  the guard reads (`leaf.rs:1506`). `NUMERIC_LEGAL` is not in `EPISTEMIC_PREFIXES`, so a
-  `self_team` divergence would fall to the `state` fallback and appear in the table above.
+  leaf's own condition string (`encoder.rs:555`). That string is written from the same `p.hp`
+  the guard reads — literally the same expression, `if hp <= 0 { return "0 fnt" }`
+  (`leaf.rs:195-198`) against the guard's `active.hp <= 0` (`leaf.rs:1266`), with no rounding,
+  clamp or separate faint flag that could drift.
+
+  The write is gated: the primary path (`leaf.rs:1432-1434`) re-derives the string only
+  `if changed` (`:1430-1431`), otherwise the root ledger's string is retained by design
+  (`:1421-1428`); `leaf.rs:1506` is the fallback for a first-time-active self mon. That gate
+  cannot hide a fainted leaf mon: for the guard to fire while `NUMERIC_LEGAL` stays 1.0 you
+  would need `p.hp <= 0` AND `snapshot.hp == p.hp`, i.e. the mon was already at hp <= 0 at the
+  root — in which case the retained root string is itself `"0 fnt"` and `fainted` is still
+  true. The only escape is a recorded root-ledger skew, and `ledger_skew` is **0** on
+  golden-v2.
+
+  `NUMERIC_LEGAL` is not in `EPISTEMIC_PREFIXES`, so a `self_team` divergence would fall to
+  the `state` fallback and appear in the table above. It is also a **live** instrument in this
+  corpus, which is the check the old version lacked: in `corpus/golden-v2/arrays.npz` the
+  self-team `NUMERIC_LEGAL` cells take both values (2055 zeros of 6168, in 787 of 1028 rows),
+  where `NUMERIC_PRESENT` is `{1.0}` and the self-side `attention_mask` is `{True}`.
 - the `active.status != TOXIC` arm rides **`CATEGORY_SECONDARY`** (`encoder.rs:2258-2262`).
   It is the engine's own field, not the belief ledger: `belief` is `None` for
   `Role::SelfTeam` (`encoder.rs:1992-1994`), so the status falls through to
@@ -187,7 +203,8 @@ those. So neither arm can have fired.
 **[CORRECTION]** An earlier revision of this section cited `NUMERIC_PRESENT` and
 `self_team`'s `attention_mask` as the liveness instruments. Both are **constants**:
 `NUMERIC_PRESENT` is set unconditionally to 1.0 for every team token
-(`encoder.rs:1233`) and the self-side attention mask depends only on team size
+(`encoder.rs:2286` — and `docs/leaf_observation_column_map.md:83` already classifies it `C |
+constants`) and the self-side attention mask depends only on team size
 (`encoder.rs:1110-1112`). Neither can ever diverge, so reading their absence as a
 measurement was the same false-negative move as v1's `grep stall` — an instrument that was
 never going to fire. `NUMERIC_LEGAL` is the one that carries the signal.
