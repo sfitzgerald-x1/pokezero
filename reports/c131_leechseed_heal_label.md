@@ -22,7 +22,7 @@ every case; only attribution was wrong.**
 | # | change | why |
 |---|---|---|
 | 1 | `weather_chips` gains the Sand Veil exemption | the engine skips the sand chip for `SANDVEIL` (`gen3/generate_instructions.rs:4223`); `events.rs` did not, so the plan booked a chip that never fired |
-| 2 | `weather_chips` books no chip when weather expires | `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`), but the engine decrements and clears the weather (`:4144-4163`) **before** its chip loop (`:4193`) |
+| 2 | `weather_chips` books no chip when weather expires | `weather_is_active` ignores `turns_remaining` (`gen3/state.rs:1050-1060`), but the engine decrements and clears the weather (`gen3/generate_instructions.rs:4144-4163`) **before** its chip loop (`gen3/generate_instructions.rs:4193`) |
 | 3 | `residual_heal_cause` tests Leftovers before the drain | a Leftovers tick on a side whose opponent was seeded came back labelled `leechseed` |
 | 4 | the drain returns `String::new()`, rendering `[silent]` | Showdown renders it silently: `sim/battle.ts:2293-2296`, `case 'leechseed'`, reached from `data/moves.ts:10218-10221`. There is no `[from] Leech Seed` heal line in Showdown |
 
