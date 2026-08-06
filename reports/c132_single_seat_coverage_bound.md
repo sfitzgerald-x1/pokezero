@@ -35,6 +35,25 @@ From the artifacts committed with C131:
 
 About 8.7 single-seat boundaries per game in dev, 9.1 in holdout.
 
+**The accounting reconciles exactly**, which is what makes 17,710 the real total rather than two
+counters picked out of many:
+
+| window | measured | + exits inside the full-round path | = full_round | + single-seat | = all |
+|---|---|---|---|---|---|
+| dev | 15,432 | 536 | 15,968 | 1,742 | **17,710** |
+| holdout | 15,551 | 604 | 16,155 | 1,813 | **17,968** |
+
+The exits are `skip:world_unsupported:*`, `skip:unmappable_choice:*`, `world_prestate_mismatch`, and
+`limit:world_substitute_health_unknown`. Two traps to avoid when re-deriving this:
+
+- `world_prestate_mismatch`'s four `:p1_hp` / `:p1_status` / `:p2_hp` / `:p2_status` sub-counters **sum
+  to the parent** (39 dev, 68 holdout), so adding parent and children double-counts.
+- `limit:world_substitute_health_unknown` reads like an annotation but is a genuine exit; omit it and
+  the reconciliation misses by exactly its count.
+
+Naively summing every `skip:*` counter gives 17,544 against a `full_round` of 15,968 — which does not
+reconcile and is what first made me doubt the total.
+
 > An earlier draft of this stated "10.9 % of full-round boundaries", dividing 1,742 by 15,968. That
 > denominator is wrong — the sets are disjoint, so the ratio means nothing. Caught by reading the
 > counting code rather than trusting the arithmetic.
