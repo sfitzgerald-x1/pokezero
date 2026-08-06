@@ -6,18 +6,20 @@
 > SUBSET of it: four families were entirely unattributed — `NUMERIC_SLEEP_TURNS`
 > (self + opponent) and `CATEGORY_VOLATILE_OFFSET` (self + opponent). I substituted a
 > corpus that produced a tidier number. v3 measures all three corpora and groups all 18
-> families / 138 rows into six mechanisms. **110 of the 138 rows carry a source-level cause
-> and a disposition; 28 (P2, toxic) carry a measurement, a pinned failure mode and an open
-> mechanism.** So the task's "a cause per class" is delivered for five of six classes and
-> NOT for P2 — said here because the header is the part that gets quoted, and an earlier
-> revision of this line claimed "no class is left open" while the body withdrew it.
+> families / 138 rows into six mechanisms. **All 138 rows carry a source-level cause
+> and a disposition.** P2 (toxic, 28 rows) was open in an earlier revision and is closed here: the
+> event renderer emits status-free condition strings, so the leaf's replay cannot see that a mon
+> switching in mid-branch is badly poisoned. Evidenced by a counterfactual (re-injecting the status
+> suffix makes the case study exact) and a 33/33 signature on v4, 27/27 on golden-v2. Three earlier
+> attributions for this class are withdrawn inside P2, including two of my own.
 >
 > v3 closes the two classes v2 left open (encore, now P1; the action surface, now P5) rather than
 > recording a next check, because the task's disposition vocabulary is
 > {encoder fix, harness fix, demonstrated-unreachable with a pool check} and "open" is not
 > in it. Dispositions name the **owning file** instead, because `harness fix` / `encoder fix` was
-> applied inconsistently and read four production changes as test-only work. Five of six name a
-> file; P2 names none, because its mechanism is not established.
+> applied inconsistently and read four production changes as test-only work. All six name a file.
+> P2's is `events.rs`, and its section states plainly that the fix is a production behaviour change
+> with named consumers and two contract assertions — not a small one.
 
 ## v2's header, retained for traceability — NOT this ledger's claims
 
@@ -110,14 +112,17 @@ that INERT line being the only thing distinguishing it from a pass.
 
 Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state` families / 138
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
-P6 2 = 138. **110 rows carry a source-level cause and a disposition** (P1, P3, P4, P5, P6). **28 do
-not** — P2, toxic, which carries a measured rate, a pinned failure mode and an open mechanism.
+P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
+earlier revision and is closed here: the event renderer emits status-free condition strings
+(`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
+counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
+for the class withdrawn.
 
 Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
 that section (its second row's boundary is unverified, and the id-877 reading rests on the one
-stored example). The ledger's one remaining **inference** sits *inside* the open class: P2's
-opponent 14 would inherit the self half's cause by side-symmetry (`leaf.rs:1230-1269`) once that
-cause exists.
+stored example). P2's opponent 14 are covered by the same mechanism as the self 14 — all 33
+divergent toxic cells share the in-branch-switch signature — so no side-symmetry inference remains
+anywhere in this ledger.
 
 **[CORRECTION]** Two earlier revisions stated a verified/inferred split — "110 source-verified and
 28 … (14 rows, and 1 row)", then "123 / 15", then "124 source-verified, 14 resting on
@@ -151,8 +156,8 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 | `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | harness fix |
 | `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | harness fix |
 | `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | harness fix |
-| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** line replay did not escalate | harness fix |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2** | harness fix (by symmetry) |
+| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | encoder fix |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | encoder fix |
 | `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | production + gate fix → **task 4** |
 | `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | harness fix |
 | `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | harness fix |
@@ -174,7 +179,7 @@ encoding search uses:
 | cause | the fix lands in | production or harness |
 |---|---|---|
 | P1 | `rust/pokezero-search/src/leaf.rs` (write the md keys) | **production** |
-| P2 | not established — see the section | unknown |
+| P2 | `rust/pokezero-search/src/events.rs` (both options root there — see P2) | **production** |
 | P3 | `engine_search.py::_recharging_slots` + the four gates | **production**, = task 4 |
 | P4 | `scripts/leaf_vs_reality.py:430-439` | harness |
 | P5 | `engine_world.py` world construction / the leaf's request-shape handling | **production** |
@@ -309,99 +314,179 @@ already computes for `*_sleep_clause_used`.
 does not reset on switch-out the way the parser's per-active counter does, so writing it is
 exact only within a stint.
 
-## P2 — the toxic write is live and 91% correct; the residual mechanism is NOT established (28 rows on v4, 24 on gv2)
+## P2 — the event renderer emits status-free condition strings, so the replay cannot see an in-branch toxic entry (28 rows on v4, 24 on gv2)
 
-**[CORRECTION] — earlier revisions titled this "the line replay did not escalate" and gave a
-disposition. Neither is earned, and the measurement that proves the write works also refutes the
-headline.**
+**Cause.** `events.rs:751-760` (`hp_condition`) returns `"0 fnt"`, a percent form, or
+`"{hp}/{maxhp}"` and **never appends a status token**. So every condition string in a synthesized
+branch is status-free, including the `|switch|` line (`events.rs:1171-1172`). Compare
+`1000#[56,57]` p1:
 
-The parser's toxic stage **changes across 153 (self) / 155 (opponent) boundaries** on golden-v4,
-and only **14 / 14** diverge. A root-frozen passthrough diverges on all of them — P1's stall
-counter does, 27 of 27 — so the leaf's line-driven write is live and correct on ~91% of the
-boundaries where it must move. That is a positive measurement of a moving instrument, which is
-what this ledger keeps demanding of itself, and it is why P2 is **not** a P1 member.
+```
+synthesized: |switch|p1a: Volbeat|Volbeat, L94, M|72/275          <- no " tox"
+             |-damage|p1a: Volbeat|4/275|[from] Spikes
+             |-heal|p1a: Volbeat|21/275|[from] item: Leftovers
+             |-damage|p1a: Volbeat|4/275|[from] psn
+reality:     |switch|p1a: Volbeat|Volbeat, L94, M|72/275 tox
+             |-damage|p1a: Volbeat|4/275 tox|[from] Spikes
+             |-heal|p1a: Volbeat|21/275 tox|[from] item: Leftovers
+             |-damage|p1a: Volbeat|4/275 tox|[from] psn
+```
 
-But 14 of 153 is not "did not escalate"; it is "fails on 9% of them", and that needs its own
-mechanism. **I do not have one.** Two candidate leads, one already refuted:
+The leaf's `|switch|` handler calls `clear_toxic_meta` (`leaf.rs:763`), then
+`update_active_condition`, which sets `active_toxic` only if the condition string carries a status
+token (`leaf.rs:546`). It never does, so `active_toxic` stays `false`,
+`reseed_toxic_from_residual` bails at its first guard (`leaf.rs:499`), the stage stays 0, and
+`|turn|` does not escalate 0.
 
-- *Refuted:* that the synthesized line set lacks the `\|turn\|` boundary the parser escalates on.
-  `synthesized` is `branch["events"]` rendered by **production's** event renderer
-  (`leaf_vs_reality.py:558` → `envstep.rs:198` → `events.rs`), and `events.rs:1088,1112` **does**
-  emit `\|turn\|N+1` — though only when the ply completes the battle turn (`:1065-1072`). An
+**Counterfactual — a passing intervention, which is what makes this a cause rather than a story
+that fits.** Re-injecting only the ` tox` suffix, changing nothing else:
+
+```
+plain    [56,57] token1 got= 0.0     want= 0.1333
+patched  [56,57] token1 got= 0.1333  want= 0.1333
+```
+
+Corpus-wide the same crude positional restoration takes **21 of 33** divergent toxic cells exact;
+the residual 12 are **all** opponent tokens (indices 8-12) the crude patch could not align.
+
+The 21 split **14 self (14/14) and 7 opponent (7/19)**, so the intervention passes on **both
+sides**. The opponent rows are therefore *directly demonstrated*, not inferred from the self side —
+which is the stronger basis for this ledger carrying no side-symmetry inference.
+
+**Signature, on both corpora.** Every divergent toxic cell sits on a branch containing a `|switch|`
+or `|drag|`, and `got = 0.0` in every one:
+
+| corpus | divergent toxic cells | on a branch with `\|switch\|`/`\|drag\|` | `got` |
+|---|---|---|---|
+| `golden-v4` | 33 (14 self + 14 opp `state`, 5 opp `epistemic`) | **33 / 33** | all 0.0 |
+| `golden-v2` | 27 (12 self + 12 opp `state`, 3 opp `epistemic`) | **27 / 27** | all 0.0 |
+
+The gv2 half of this section's row count was an inherited assertion until it was measured; it is now
+a measurement, on the second corpus.
+
+**P2 is not a P1 passthrough member**, and the same measurement shows why: the parser's stage
+changes across 153/155 boundaries and only 14/14 diverge, so the leaf's line-driven write is live
+and ~91% correct where a passthrough would diverge on all of them (P1's stall counter does, 27 of
+27). The 5 `epistemic` opponent rows travel with the 28 `state` rows because a column-name trace
+cannot separate them by class.
+
+**The leaf already implements the parser's whole algorithm identically** — `|-status|` → 1
+(`leaf.rs:748`), exact-residual inversion (`:494-533`), `|turn|` escalation (`:630-631`), and the
+rounded-residual gate `toxic_reentry_pending` (`:511-513`) which is exactly the parser's one live use
+of `toxic_stage_known` (`showdown.py:2944-2945`). **The delta is the input, not the algorithm.**
+
+### Disposition: encoder fix in `events.rs`, and it is NOT small
+
+Both options are `events.rs`-rooted, and the narrowness runs opposite to what an earlier revision
+claimed:
+
+- **Narrower:** emit a switch-in `ActiveStatusTransition`. Those are built at `events.rs:230-238`
+  from `ChangeStatusInstruction` only — a switch-in is not a status change, which is why production
+  carries this bug too. Touches `LeafMeta` alone. Note the "fix it in `leaf.rs`" phrasing an earlier
+  revision used is not possible: `evolve_leaf_meta_with_status_transitions`
+  (`leaf.rs:603-608`) takes `(meta, lines, ctx, transitions)` and has **no access to engine state**.
+
+  Two traps for whoever implements it, recorded because this ledger has already shipped a
+  disposition that would have changed no row — one that changes a row to the WRONG value is worth
+  two sentences. (i) **Ordering:** transitions for offset *k* are applied *before* `lines[k]`
+  (`leaf.rs:611-621`), so a transition emitted at the switch line's own offset is wiped by
+  `clear_toxic_meta` on that same line; it must be offset+1. (ii) **The existing arm clobbers two
+  fields:** `leaf.rs:613-616` sets `toxic = 1` *and* `toxic_reentry_pending = false` — the first
+  pre-empts the residual inversion (harmless at `1000#[56,57]` only because the answer happens to
+  be 1), the second disables the `/100` re-entry inference at `:511-513`, which is the very
+  mechanism this section credits the leaf for implementing correctly. A switch-in needs
+  `active_toxic = true` **without** touching either. That is a new arm, not the existing one.
+- **Wider:** append the status suffix in `hp_condition`. `render_branch_events` is production's
+  leaf-pricing path — `model.rs:972`, whose `rendered.lines` feed `fold.advance_in_place` (`:993`),
+  `evolve_self_order` (`:1001`, `:1007`), `evolve_leaf_meta_with_status_transitions` (`:1012`) and
+  `encode_leaf` (`:1019`), plus `envstep.rs::env_step`. It also breaks **two in-crate assertions
+  that encode the current shape as a contract**: `events.rs:6509-6516` ("Damage lines carry plain
+  ASCII cur/max integers (fold input contract)") and `events.rs:6753-6756`
+  (`assert_eq!(base, "100", …)` after `split_once('/')`). And `leaf.rs:541-544` documents "no status
+  token means 'unchanged', not 'cured'" — once absence can mean "no status", that rule becomes a
+  stale-status bug and must be revisited in the same change.
+
+So this is a production behaviour change with named consumers and two contract assertions, not a
+one-line encoder fix.
+
+**Harness/production asymmetry, recorded because this section asserts "production":** the pyo3
+`LeafEncoder::encode_leaf` (`leaf.rs:2308-2321`) goes through `branch_context(lines)` →
+`evolve_leaf_meta` with **no** transitions, while production passes
+`rendered.active_status_transitions`. For the 5 `(switch, |-status|)` cells both reach TOXIC by
+different routes, so the counts are unaffected — but the harness is not a byte-identical proxy for
+production on this path.
+
+### Prior attributions for this class, all withdrawn
+
+Also checked and refuted, recorded because a completeness claim needs them and because the second
+is the first thing a reviewer re-asks:
+
+- **The synthesized stream lacks the `\|turn\|` boundary the parser escalates on.** It does not —
+  `events.rs:1088,1112` emit `\|turn\|N+1`, though only when the ply completes the battle turn. An
   earlier revision asserted this as the cause; it is production's stream either way, so the
-  mechanism could not have been harness-confined.
-- *Refuted by measurement:* that the failures sit on boundaries whose round pair is non-adjacent
-  (a faint/force-switch ply that does not complete the turn). Traced every toxic-column divergence
-  on golden-v4: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones. Definition, because the number is
-otherwise unreproducible: consecutive same-seat rows differ by **+1** in `decision_round_index`
-(both seats share the index), and a pair can still skip a round when only the other seat acted. My
-first pass used +2 as "adjacent" and would have reported the opposite conclusion. (33 = the 28
-  `state` rows plus the 5 `epistemic` opponent rows, which the column-name trace cannot separate.)
-  So non-adjacency does not explain it.
+  mechanism could never have been harness-confined. Folded into (1) below as its purported
+  mechanism.
+- **The failures sit on non-adjacent round pairs** (a faint/force-switch ply that does not complete
+  the turn). Measured and refuted: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones.
+  Definition, because the number is otherwise unreproducible — consecutive same-seat rows differ by
+  **+1** in `decision_round_index` (both seats share the index) and a pair can still skip a round
+  when only the other seat acted. My first pass used +2 as "adjacent" and would have reported the
+  opposite conclusion.
 
-### The failure mode IS pinned, even though the cause is not
-
-**`got = 0.0` in every stored example** — all three toxic families, across all three classes
-(`state/self_team` 14 rows, `state/opponent_team` 14, `epistemic/opponent_team` 5), report
-`got 0.0 / want 0.1333` (= 2/15). A missed *escalation* of a live counter would give
-`got = want − 1`; a counter that never started, or was cleared, gives `got = 0`. **So the residual
-is in the start/clear paths, not the escalation path** — which is why no variant of "did not
-escalate" belongs in this section's title, and why the two refuted leads above were both looking in
-the wrong place.
-
-**Named next check, grep-shaped.** The two implementations' arithmetic matches (both invert an exact
-residual as `damage / (max/16)`: `leaf.rs:494-533` against `showdown.py:2944-2963`). The one
-structural difference is **`toxic_stage_known`**, a tri-state the parser carries and gates *both* its
-escalation (`showdown.py:2586`) and its inference (`:2944-2963`, `:1998-2000`) on, distinguishing
-"stage 0" from "stage unknown". `LeafMeta` has `toxic`, `active_toxic` and `toxic_reentry_pending`
-and **no counterpart**.
-
-**And one case study that does NOT resolve, recorded so nobody adopts a story that merely fits.**
-At `1000#[56,57]` p1 the root's active is Latias at stage 0 while the leaf's is Volbeat, toxiced at
-round 48, switched out, re-entering inside the branch (`|switch|selfa: Volbeat|…|72/275 tox` then
-`|-damage|…|4/275 tox|[from] psn`). Reality reports **2** — but 72 → 4 of 275 is damage 68, unit 17,
-`68 % 17 == 0`, i.e. stage **4** under both residual-inversion rules. So reality's 2 comes from a
-path neither implementation's arithmetic explains, and "the leaf cannot restore a re-entering mon's
-stage" is a story that *fits* rather than a cause. Adopting it would be the encore-floor error again,
-which looked consistent only because the root happened to hold the same number.
-
-**Disposition: undetermined.** **Task acceptance note: this is the one class of the six without a
-source-level cause — 28 of 138 rows.**
+1. *"The line replay did not escalate."* Refuted by measurement: the parser's stage changes across
+   153/155 boundaries and only 14/14 diverge, so the write is live and ~91% correct (the
+   classification consequence is stated in the cause block above). Its purported mechanism — a
+   missing `\|turn\|` — is refuted separately above.
+2. *"The residual is the absent `toxic_stage_known` tri-state in `LeafMeta`."* The cited gates
+   (`showdown.py:1994-1999`, `:2047`) are inside `_ReplayParser.from_snapshot`, a legacy-snapshot
+   fallback that `continue`s whenever the snapshot carries the field — which the only construction
+   site always does (`:3639` → `:3660`). Dead for anything this codebase produces: the same error as
+   blaming `approximate_sleep_turns` (P6) and the seeded encore floor (P1). The proposed fix would
+   also have changed no row, since a boolean cannot turn 0 into 2 when the arithmetic producing the
+   value is never reached. And `LeafMeta` has counterparts in both directions —
+   `toxic_reentry_pending` and `active_toxic`, the latter documented as whether the active is
+   "publicly known to retain badly poisoned status".
+3. *"Every toxiced mon reports stage 2 on entry, and reality's 2 comes from a path neither
+   implementation's arithmetic explains."* Both halves false. The three cited cases are ordinary
+   arithmetic — `|-status|..tox` sets 1 (`showdown.py:4971-4975`), the next `|turn|` escalates to 2
+   (`:2585-2587`) — and one of them switched in **clean** via Baton Pass and was toxed afterwards.
+   The corpus also holds stage-**1** rows where the decision is sampled before the next `|turn|`, so
+   "2" was a sampling artifact. And the unexplained arithmetic was **my own wrong subtraction**:
+   72 → 4 is the **Spikes** line (3 layers, 275/4 = 68); the psn residual is two lines later,
+   21 → 4 = 17 = one unit → stage 1 (`showdown.py:2951-2963`), then `|turn|` → 2.
 
 ### The guard is excluded
 
+The leaf's own zeroing guard (`leaf.rs:1265-1267`,
+`active.hp <= 0 || active.status != PokemonStatus::TOXIC`) is **not** what produces these rows, and
+the counterfactual confirms it: with the status suffix restored the same guard passes and the leaf
+emits 2. The two arms are observable as other columns and both are absent from `self_team` under
+every class — the `hp <= 0` arm rides `NUMERIC_LEGAL` (`encoder.rs:2282-2285`), whose
+`condition.fainted` comes from the same expression as the guard (`leaf.rs:195-198` against `:1266`);
+the status arm rides `CATEGORY_SECONDARY` (`encoder.rs:2258-2262`), which for self-team tokens is
+the engine's own field since `belief` is `None` for `Role::SelfTeam` (`encoder.rs:1992-1994`).
 
+**[CORRECTION]** An earlier revision cited `NUMERIC_PRESENT` and the self-side `attention_mask` as
+the liveness instruments. Both are **constants** (`encoder.rs:2286`, `:1110-1112`) and can never
+diverge, so reading their absence measured nothing.
 
-The leaf's toxic stage is deliberately line-driven, not engine-derived (`leaf.rs:298-302`), and
-the parser escalates on `\|turn\|` lines only. Two candidate mechanisms: the replay never
-escalated, or the guard at `leaf.rs:1265-1267` zeroed a correct stage when
-`active.hp <= 0 || active.status != PokemonStatus::TOXIC`.
+**Scope of the absence argument, restored — a rewrite deleted it while keeping the argument that
+needs it.** Absence is evidence only if the instrument moves, and the proof that `NUMERIC_LEGAL`
+moves is a **golden-v2** measurement (2055 zeros of 6168 cells, in 787 of 1028 rows) that was
+**never re-run on v4**, so v4's half inherits gv2's liveness check. On the opponent side there is no
+analogue in principle: its status token comes from `belief.status()` first (`encoder.rs:1993`), and
+`opp_membership` sweeps opponent columns into `epistemic` on 94 v4 boundaries. Stating the lesson
+about constants immediately above the place it had stopped being applied is exactly the failure this
+`[CORRECTION]` describes.
 
-**The guard is excluded**, via instruments that can actually move:
-
-- the `hp <= 0` arm rides **`NUMERIC_LEGAL`** (`encoder.rs:2282-2285`), whose `condition.fainted`
-  comes from the leaf's own condition string, written by the *same expression* as the guard —
-  `if hp <= 0 { return "0 fnt" }` (`leaf.rs:195-198`) against `active.hp <= 0` (`leaf.rs:1266`).
-- the status arm rides **`CATEGORY_SECONDARY`** (`encoder.rs:2258-2262`), which for self-team
-  tokens is the engine's own field and not the belief ledger, because `belief` is `None` for
-  `Role::SelfTeam` (`encoder.rs:1992-1994`).
-
-Both are **absent from `self_team` under EVERY class**, not just `state` — checked, because a
-`CATEGORY_SECONDARY` divergence would route to `ledger_skew` or `engine_model` under other tags.
-
-**[CORRECTION]** An earlier revision cited `NUMERIC_PRESENT` and the self-side `attention_mask`
-as the liveness instruments. Both are **constants** (`encoder.rs:2286`, `:1110-1112`) and can
-never diverge, so reading their absence measured nothing.
-
-**Scope, twice over.** The argument is clean for the self side; the opponent's 14 rows are
-attributed **by side-symmetry** (one loop over both sides, `leaf.rs:1230-1269`, side-agnostic
-mechanism), and the opponent has no analogue in principle because its status token comes from
-`belief.status()` first (`encoder.rs:1993`) while `opp_membership` sweeps opponent columns into
-`epistemic` on 94 v4 boundaries. And the `NUMERIC_LEGAL` liveness evidence is a **golden-v2**
-measurement (2055 zeros of 6168 cells, 787 of 1028 rows) not re-run on v4; the conclusion holds
-there (no such family in the v4 artifact) but v4's half inherits gv2's liveness check.
-
-**Disposition: harness fix.**
+**So the guard is excluded on two different grounds, not one.** On the **21** cells the
+counterfactual takes exact, it is excluded directly — the same guard passes and the leaf emits 2.
+On the remaining **12 — all opponent tokens**, where the crude patch could not align, the exclusion
+rests on the shared switch signature (27/27 and 33/33) **and on the counterfactual passing for 7
+sibling opponent cells (7/19)** — same class of cell, same intervention, guard passes. It does NOT
+rest on the absence argument: the caveat above is a **disqualification** for the opponent side, not
+a discount, since that side has no analogue in principle. The absence argument stays scoped to the
+self side, where it holds.
 
 ## P3 — the self-side recharge root-freeze (2 rows)
 
@@ -542,16 +627,27 @@ Four of the `state` families as they stood in v2's framing are columns that did 
 ## What this ledger does not claim
 
 - Coverage is in **rows**, and the row→boundary mapping is not derivable from the artifact.
-- **One class has no cause: P2, 28 rows.** The other five do, with the owning file named.
+- **All six classes have a cause**, with the owning file named. P2 was open in two earlier
+  revisions; the check those revisions named was itself refuted, and P2 is closed on a different
+  mechanism with a passing counterfactual.
   P3 points at task 4 of this goal. No disposition is a `classify()` change — an earlier revision
   proposed one for encore and it was withdrawn when that cause turned out to be P1.
   `demonstrated-unreachable` is used nowhere; the one place v2 claimed it, it was false.
-- **One** disposition rests on side-symmetry: P2's opponent half, 14 rows. Counted separately in
-  Units and marked in the table. Two earlier revisions said "three … " and then listed two.
+- **No disposition rests on side-symmetry.** P2's opponent rows were attributed that way in an
+  earlier revision; they now share the self side's measured signature (33/33 on v4, 27/27 on gv2), so
+  the inference is gone rather than relocated. Two earlier revisions said "three" and listed two, and
+  a third claimed the table marked it after this commit's predecessor had deleted the marker.
 - Documentation only: no classifier, encoder or harness change.
 - **[CORRECTION]** v1 wrote "got 0.0, want 0.5 on all 34 rows". The harness stores **one
   example per family** (`leaf_vs_reality.py:874-875`), so direction is *inferred from
-  source* for P1 and P2, not measured per row. The uniformity claim is withdrawn.
+  source* for **P1**, not measured per row. The uniformity claim is **withdrawn in full**; for P2
+  only the `got` half was later re-established, per row, by re-encoding every boundary and reading
+  every cell rather than reading the artifact — 33/33 on v4 and 27/27 on gv2, all `got = 0.0`.
+  **`want` is NOT uniform:** v4 `{0.1333: 32, 0.0667: 1}`, gv2 `{0.1333: 26, 0.0667: 1}`. That odd
+  cell corroborates rather than troubles the account — `0.0667` is stage **1**, exactly the mid-turn
+  `force_switch` sampling case withdrawal (3) describes. This section is the conservative backstop,
+  so it must neither discount the document's strongest measurement nor let a half-claim stand as a
+  whole one.
 - **[CORRECTION]** v1 offered `matched + diverged == compared` as evidence. `compared` is
   *defined* as `exact + divergent` (`leaf_vs_reality.py:972`), so the identity is a
   tautology and no harness assertion exists. The non-vacuous identity —
