@@ -2918,11 +2918,59 @@ def _reject_unguarded_final_holdout(seed_start: int, games: int, opted_in: bool)
     if last_seed < FINAL_HOLDOUT_SEED_FLOOR or opted_in:
         return None
     overlap_from = max(seed_start, FINAL_HOLDOUT_SEED_FLOOR)
+    # The registered final-holdout block is 19,200,000-19,200,199. The floor is an
+    # unbounded half-line above it on purpose -- a typo of 19,300,000 should not
+    # sail through -- but that also catches already-consumed historical bands such
+    # as c73's 19,500,000. So the "exactly one measurement" sentence is scoped to
+    # the registered block rather than asserted about every seed above the floor,
+    # where it would simply be false.
+    registered_block = overlap_from <= FINAL_HOLDOUT_SEED_FLOOR + 199
+    rationale = (
+        "This is the registered final-holdout block, reserved for exactly ONE "
+        "measurement, ever."
+        if registered_block
+        else "This is above the final-holdout floor and is reserved by default."
+    )
     return (
-        f"refusing to run on the reserved final holdout: seeds "
-        f"{overlap_from}..{last_seed} are at or above {FINAL_HOLDOUT_SEED_FLOOR}. "
-        f"This range is for exactly ONE measurement, ever. If this really is that "
+        f"refusing to run on reserved seeds: {overlap_from}..{last_seed} are at or "
+        f"above {FINAL_HOLDOUT_SEED_FLOOR}. {rationale} If this really is that "
         f"measurement, pass {FINAL_HOLDOUT_OPT_IN}."
+    )
+
+
+def _reject_reserved_seeds_in_records(
+    records: Sequence[Mapping[str, Any]], opted_in: bool
+) -> str | None:
+    """Refuse to AGGREGATE records whose seeds are in the reserved final holdout.
+
+    The argparse-time check bounds only what this invocation would EXECUTE. In
+    `--merge-from` mode `--seed-start`/`--games` are untouched defaults, so a
+    checkpoint carrying reserved seeds merges into an `acceptance_eligible: true`
+    report with no warning at all. That is not an execution hole, but it is exactly
+    the artifact the CLI pin says must never exist: a report that makes reserved
+    seeds look measured. It matters more than usual here because the incident that
+    prompted this guard may well have left such a checkpoint behind.
+    """
+
+    if opted_in:
+        return None
+    reserved = sorted(
+        {
+            int(r["seed"])
+            for r in records
+            if str(r.get("seed", "")).lstrip("-").isdigit()
+            and int(r["seed"]) >= FINAL_HOLDOUT_SEED_FLOOR
+        }
+    )
+    if not reserved:
+        return None
+    shown = ", ".join(str(x) for x in reserved[:5])
+    more = f" (+{len(reserved) - 5} more)" if len(reserved) > 5 else ""
+    return (
+        f"refusing to aggregate records from the reserved final holdout: "
+        f"{len(reserved)} seed(s) at or above {FINAL_HOLDOUT_SEED_FLOOR} -- "
+        f"{shown}{more}. Pass {FINAL_HOLDOUT_OPT_IN} only if this is the single "
+        f"terminal measurement."
     )
 
 
@@ -3005,10 +3053,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="per-game cap on repros written to the checkpoint (keeps shard files small)",
     )
     args = parser.parse_args(argv)
+    # Derive the attribute from the flag rather than hand-writing it. A review
+    # renamed the flag and found all seven pins stayed green while the opt-in
+    # silently became unreachable -- `getattr(..., False)` turned a typo into
+    # "not opted in". No default, so a mismatch is an AttributeError.
+    _opt_in_attr = FINAL_HOLDOUT_OPT_IN.removeprefix("--").replace("-", "_")
     _final_holdout_error = _reject_unguarded_final_holdout(
         args.seed_start,
         args.games,
-        getattr(args, "final_holdout_i_mean_it", False),
+        getattr(args, _opt_in_attr),
     )
     if _final_holdout_error is not None:
         print(f"error: {_final_holdout_error}", file=sys.stderr)
@@ -3046,6 +3099,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "(shards should use disjoint seed ranges)",
                 file=sys.stderr,
             )
+        _reserved_error = _reject_reserved_seeds_in_records(
+            deduped, getattr(args, _opt_in_attr)
+        )
+        if _reserved_error is not None:
+            print(f"error: {_reserved_error}", file=sys.stderr)
+            return 2
         report = build_report(
             deduped,
             elapsed=None,
@@ -3074,6 +3133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
         done_records = load_checkpoint(args.checkpoint, repair_torn_tail=True)
+        _reserved_error = _reject_reserved_seeds_in_records(
+            done_records, getattr(args, _opt_in_attr)
+        )
+        if _reserved_error is not None:
+            print(f"error: {_reserved_error}", file=sys.stderr)
+            return 2
         resume_failures = _resume_provenance_failures(done_records, provenance)
         if resume_failures:
             raise SystemExit(

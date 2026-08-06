@@ -49,6 +49,10 @@ jobs:
             # Without these the classifier half of B1 -- which edits the differential --
             # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
+            # The final-holdout guard's pins. Listed so a PR that ONLY weakens the
+            # pin file still trips this workflow -- otherwise the guard could be
+            # disarmed by a test-only edit that never triggers its own gate.
+            tests/test_final_holdout_guard.py
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
@@ -290,6 +294,31 @@ jobs:
       # (poke_engine_adapter.py: engine.State(...)). Only a nonzero assertion
       # distinguishes "carried" from "hardcoded"; verified by reintroducing the
       # literal 0, which fails 2 of these 5.
+      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
+      # measurement, ever, and that reservation used to live only in a plan
+      # document -- until a convenience shell loop over three --seed-start values
+      # executed 60 games of it. The guard now refuses such runs, and these pins
+      # are what keep the guard honest, so they have to actually run: shipping the
+      # enforcement of an enforcement outside automation is the same mistake one
+      # level up, and it is the mistake this whole workflow was written to stop.
+      - name: Final-holdout guard pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_final_holdout_guard -v 2>&1 \
+            | tee /tmp/holdout.log
+          if ! grep -qE 'Ran 10 tests' /tmp/holdout.log; then
+            echo "::error::expected 10 final-holdout pins; the suite shrank or grew"
+            exit 1
+          fi
+          # One pin skips when built Showdown data is absent, and it is the ONE
+          # that pins the load-bearing ordering property (guard fires before any
+          # game is played). This job builds Showdown, so a skip here means the
+          # ordering pin silently stopped gating.
+          if grep -q 'skipped' /tmp/holdout.log; then
+            echo "::error::a final-holdout pin SKIPPED; the ordering pin is not gating"
+            exit 1
+          fi
+
       - name: Engine binding boundary pins
         run: |
           set -o pipefail
