@@ -53,6 +53,9 @@ jobs:
             # pin file still trips this workflow -- otherwise the guard could be
             # disarmed by a test-only edit that never triggers its own gate.
             tests/test_final_holdout_guard.py
+            # The coverage-bound pins. Listed so a PR that only weakens them still
+            # trips this workflow.
+            tests/test_single_seat_coverage_bound.py
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
@@ -353,6 +356,26 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
+
+      # The differential measures ~87% of boundaries, not the ~96.6% its own
+      # `measured_fraction_of_full_rounds` reports: that metric's denominator is
+      # `boundaries_full_round`, which by construction EXCLUDES single-seat plies
+      # (~10% of boundaries, and the entire deferred-residual population). These
+      # pins keep the real denominator recoverable from any report, so a residue
+      # figure cannot be read as full coverage. reports/c132.
+      - name: Single-seat coverage bound
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_single_seat_coverage_bound -v 2>&1 \
+            | tee /tmp/coverage.log
+          if ! grep -qE 'Ran 3 tests' /tmp/coverage.log; then
+            echo "::error::expected 3 coverage-bound pins; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/coverage.log; then
+            echo "::error::coverage-bound pins did not report a clean OK"
+            exit 1
+          fi
       - name: Engine stat attestation
         run: |
           set -o pipefail
