@@ -3298,22 +3298,45 @@ fn write_opponent_mon_history(
     // is (their mon x our mon), so a per-token `.find()` that normalized as it went would
     // allocate two Strings per candidate cell per token -- up to ~36 cells against the tendency
     // lookup's <=6, inside the MCTS leaf-pricing closure that ROW_WRITE_NANOS times.
-    let our_active = self_mons
-        .iter()
-        .find(|mon| mon.active())
-        .map(|mon| normalize_identifier(&mon.species()))
-        .filter(|species| !species.is_empty());
-    let matchup_keys: Vec<(String, String)> = products
-        .tendency_stats
-        .opponent_mon_matchups
-        .iter()
-        .map(|cell| {
-            (
-                normalize_identifier(&cell.species),
-                normalize_identifier(&cell.opposing_species),
-            )
+    //
+    // Gated on the SAME condition as the consuming block below, not just hoisted. The fold
+    // populates `opponent_mon_matchups` at every schema, so an ungated hoist made v2.2 and v3 --
+    // where the consumer never runs and the cost used to be exactly zero -- pay up to ~72 String
+    // allocations per encode for a value that is discarded. Three lineages are training against
+    // those layouts right now.
+    let matchup_write = layout.is_v4() && layout.stats_block;
+    let our_active = matchup_write
+        .then(|| {
+            self_mons
+                .iter()
+                .find(|mon| mon.active())
+                .map(|mon| normalize_identifier(&mon.species()))
+                .filter(|species| !species.is_empty())
         })
-        .collect();
+        .flatten();
+    let matchup_keys: Vec<(String, String)> = if matchup_write {
+        products
+            .tendency_stats
+            .opponent_mon_matchups
+            .iter()
+            .map(|cell| {
+                (
+                    normalize_identifier(&cell.species),
+                    normalize_identifier(&cell.opposing_species),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // `.rev()` on the zip below pairs cell i with key i ONLY while the lengths match. They do by
+    // construction (`.map()` over the same Vec), but a later `filter_map` here would silently
+    // misalign the pairing under `.rev()` and write wrong values without panicking.
+    debug_assert!(
+        !matchup_write
+            || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
+        "matchup_keys must stay 1:1 with opponent_mon_matchups for the zip+rev lookup"
+    );
     for (slot, mon) in opponent_mons.iter().take(limit).enumerate() {
         let token = opponent_offset + slot;
         let species_key = normalize_identifier(&mon.species());
@@ -3366,7 +3389,7 @@ fn write_opponent_mon_history(
             // empty. Mirrors `_matchup_switch_evidence` (showdown.py:3959): select the column
             // of the (their mon x our mon) table whose `opposing_species` is OUR CURRENT
             // active, absent active or absent cell meaning an honest (0, 0).
-            if layout.is_v4() && layout.stats_block {
+            if matchup_write {
                 // Later entries win, as in the tendency lookup above: production keys a dict by
                 // normalized species and Python's builder assigns in iteration order.
                 let cell = our_active.as_ref().and_then(|ours| {

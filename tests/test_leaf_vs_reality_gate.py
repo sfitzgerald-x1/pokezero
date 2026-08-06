@@ -32,16 +32,16 @@ class GateExitCodeTest(unittest.TestCase):
         self.assertEqual(gate_exit_code(0, 0), 0)
 
     def test_matchup_excess_ALONE_fails_the_run(self) -> None:
-        """The arm that cannot be observed end-to-end. Measured 470 on the frozen build."""
+        """The arm that cannot be observed end-to-end. Measured 425 on the frozen build."""
         self.assertEqual(gate_exit_code(0, 1), 1)
-        self.assertEqual(gate_exit_code(0, 470), 1)
+        self.assertEqual(gate_exit_code(0, 425), 1)
 
     def test_state_defects_alone_still_fail_the_run(self) -> None:
         """Guard the narrowness: adding the second arm must not have weakened the first."""
         self.assertEqual(gate_exit_code(124, 0), 1)
 
     def test_both_arms_fail(self) -> None:
-        self.assertEqual(gate_exit_code(124, 470), 1)
+        self.assertEqual(gate_exit_code(124, 425), 1)
 
 
 class MatchupClassificationTest(unittest.TestCase):
@@ -72,11 +72,17 @@ class MatchupClassificationTest(unittest.TestCase):
             with self.subTest(column=column):
                 self.assertEqual(self._classify(column), "fold")
 
-    def test_turns_active_total_is_NOT_a_sibling(self) -> None:
-        """It is the third member of the same triple but counts turns, not stay-or-switch events,
-        and diverges on 91 of the 12-game corpus's boundaries -- letting it excuse a matchup
-        divergence would loosen the subset from 4 boundaries to 95."""
-        self.assertNotIn("NUMERIC_MON_TURNS_ACTIVE_TOTAL", V4_LIVE_TENDENCY_COLUMNS)
+    def test_the_whole_tendency_triple_is_a_sibling(self) -> None:
+        """Including TURNS_ACTIVE_TOTAL, which an earlier revision excluded on false arithmetic.
+
+        The claim was that including it would "let most of a full regression through". Measured:
+        frozen excess is 470 with two siblings and 425 with three, against a surfaced excess of 0
+        either way -- so the exclusion bought no detection while costing false-alarm headroom on
+        the sibling most correlated with the known false-positive class (its 91/1271 divergences
+        are evidence that leaf occupant attribution drifts, and occupant attribution is where the
+        matchup cell's `facing` key comes from).
+        """
+        self.assertIn("NUMERIC_MON_TURNS_ACTIVE_TOTAL", V4_LIVE_TENDENCY_COLUMNS)
 
     def test_the_pair_left_the_frozen_pack(self) -> None:
         self.assertFalse(V4_MATCHUP_PAIR_COLUMNS & V4_ROOT_FROZEN_PACK_COLUMNS)

@@ -1038,6 +1038,11 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             _theirs,
             turn,
         ) = self._driveable_row(evidence="nonempty")
+        # The PRODUCTION normalizer. A hand-rolled `lower().replace("-","")` missed apostrophes
+        # and periods, so Farfetch'd and Mr. Mime fell through to `target is None` and a SILENT
+        # skipTest -- this test already has one skip path, and two is how it disappears unnoticed.
+        from pokezero.showdown import _normalize_identifier as normalize_id
+
         evidence = row.observation_metadata["opponent_matchup_switch_evidence"]
         species_order = [
             entry["species"] for entry in row.observation_metadata["opponent_team"]
@@ -1048,9 +1053,7 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
                 (index, half)
                 for index, species in enumerate(species_order)
                 for half in (0, 1)
-                if (evidence.get(species.lower().replace("-", "").replace(" ", "")) or (0, 0))[
-                    half
-                ]
+                if (evidence.get(normalize_id(species)) or (0, 0))[half]
             ),
             None,
         )
@@ -1068,9 +1071,15 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
         self.assertNotEqual(
             own[half][index], 0.0, "control: the row's own fold did not light the cell"
         )
-        # A fold with no matchup cells at all. Row 0's is the empty one; assert rather than trust,
-        # since "no cells" is the entire premise.
+        # A fold with no matchup cells at all -- the entire premise, so it is ASSERTED rather
+        # than trusted. An earlier revision's comment claimed this assertion while the code merely
+        # took `folds[min(folds)]` on faith.
         empty_fold_payload = folds[min(folds)]
+        self.assertFalse(
+            empty_fold_payload.get("matchup_counters") or {},
+            "the fold chosen as the empty one already carries matchup cells, so a zero below "
+            "would not be evidence about the unconditional write",
+        )
         overridden = self._matchup_columns(
             encoder,
             state_str,
@@ -1098,7 +1107,7 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             _folds,
             encoder,
             state_str,
-            _ours,
+            ours,
             _theirs,
             turn,
         ) = self._driveable_row(min_opponent_tokens=2)
@@ -1111,27 +1120,64 @@ class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
             pokezero_search.FoldState.from_payload(fold_payload),
             turn,
         )
-        lit = {
-            (half, index)
-            for half in (0, 1)
-            for index in range(len(species_order))
-            if pair[half][index] != 0.0
-        }
-        # Non-vacuity: some cell must be lit, or "the other token is zero" is trivially true.
-        self.assertTrue(
-            lit, "no matchup cell is lit on this row, so the species filter is not exercised"
-        )
-        # And the lit cells must not span two different opponent tokens for the same half: each
-        # opponent mon has its own row in the (their mon x our mon) table.
-        for half in (0, 1):
-            tokens = {index for lit_half, index in lit if lit_half == half}
-            self.assertLessEqual(
-                len(tokens),
-                1,
-                f"half {half} lit {len(tokens)} opponent tokens on a "
-                f"{len(species_order)}-token row -- the cell lookup is not filtered by species, "
-                "so one mon's counts are painted onto the others",
+        # A DIFFERENTIAL, not a cap on how many tokens may be lit. "At most one lit token per
+        # half" is not a property of a correct encoder -- two of their mons can each hold a cell
+        # against our current active, and correct code then lights both. An earlier revision
+        # asserted the cap and passed only because this fixture's fold happens to hold a single
+        # matchup cell; a longer game would have red-lighted shipping code. Independent review
+        # caught it.
+        #
+        # Instead: advance a SECOND fold so that exactly one of the two tokens gains a cell, and
+        # require the OTHER token to stay at whatever it already was. A lookup missing the species
+        # conjunct paints the new cell onto every token, so the untouched token moves.
+        from pokezero.showdown import _normalize_identifier as normalize_id
+
+        # The advance has to land on the mon the fold considers ACTIVE, since that is where it
+        # attributes the attack -- and the counter increments once per matchup EPISODE, not per
+        # attack, so aiming it at a mon that already has a cell moves nothing and the non-vacuity
+        # check below correctly rejects that setup.
+        team = row.observation_metadata["opponent_team"]
+        target = next((index for index, e in enumerate(team) if e.get("active")), None)
+        other = next(
+            (
+                index
+                for index, e in enumerate(team)
+                if index != target
+                and e.get("species")
+                and normalize_id(e["species"]) != normalize_id(team[target]["species"])
             )
+            if target is not None
+            else iter(()),
+            None,
+        )
+        if target is None or other is None:
+            self.skipTest("row has no active opponent plus a distinct second token")
+        moved = pokezero_search.FoldState.from_payload(fold_payload)
+        moved.advance_in_place(
+            [
+                f"|move|p2a: {team[target]['species']}|Tackle|p1a: {ours}",
+                f"|turn|{turn + 1}",
+            ]
+        )
+        after = self._matchup_columns(encoder, state_str, moved, turn)
+        # Non-vacuity: the advance must have moved the TARGET token, or "the other token did not
+        # move" is trivially true.
+        self.assertNotEqual(
+            (after[0][target], after[1][target]),
+            (pair[0][target], pair[1][target]),
+            "the advance did not move the targeted opponent token, so the species filter is not "
+            "exercised on this row",
+        )
+        # And the OTHER token must be untouched. It is nonzero here (the benched mon carries an
+        # earlier episode), so a species-blind lookup -- which selects the last cell matching only
+        # on facing -- overwrites it with the newly created cell and this fires.
+        self.assertEqual(
+            (after[0][other], after[1][other]),
+            (pair[0][other], pair[1][other]),
+            f"advancing a matchup for {team[target]['species']} also moved "
+            f"{team[other]['species']}'s token -- the cell lookup is not filtered by species, so "
+            "one mon's counts are painted onto the others",
+        )
 
 
 @unittest.skipUnless(_available(), "requires numpy, the native crate, and a Showdown checkout")
@@ -1157,10 +1203,18 @@ class V4FoldBearingBoundaryEncodeTest(unittest.TestCase):
     metadata-derived one at the ROOT, where both are live and must agree — so a future skew
     between the batch fold (`transitions.py::_fold_replay`) and the incremental one would silently
     rewrite training bytes rather than failing anything.
+
+    What this does NOT do, stated because the class name invites the wrong reading: it cannot tell
+    the fold-driven write apart from the metadata one. Delete the products block entirely and this
+    still passes, because `encode_pokemon_tokens` produces the same bytes wherever the two agree --
+    which on this fixture is everywhere (all five rows verified in review). It is a REGRESSION
+    guard on a path that had none, not a test of the override. The override itself is covered by
+    `V4LeafMatchupPairTracksTheFoldTest`, which drives `encode_leaf` with a fold the metadata
+    cannot explain.
     """
 
     def test_every_v4_sample_row_encodes_byte_exact_with_its_fold(self) -> None:
-        sys.path.insert(0, str(SCRIPTS)) 
+        sys.path.insert(0, str(SCRIPTS))
         try:
             import export_encoder_tables
             from golden_encoder_backends import row_inputs_from_decision_row
@@ -1198,9 +1252,12 @@ class V4FoldBearingBoundaryEncodeTest(unittest.TestCase):
         )
         encoder = pokezero_search.NativeEncoder(tables_json)
         driven = 0
+        driven_with_evidence = 0
         for index, row in enumerate(corpus.decision_rows):
             if index not in folds:
                 continue
+            if row.observation_metadata.get("opponent_matchup_switch_evidence"):
+                driven_with_evidence += 1
             fold = pokezero_search.FoldState.from_payload(folds[index])
             buffers = encoder.encode_with_fold(
                 json.dumps(row_inputs_from_decision_row(row), sort_keys=True), fold
@@ -1217,12 +1274,11 @@ class V4FoldBearingBoundaryEncodeTest(unittest.TestCase):
         # Non-vacuity: the loop must actually have compared rows whose metadata evidence is
         # nonzero, or a byte-exact pass says nothing about the matchup columns specifically.
         self.assertGreater(driven, 0, "no v4 sample row could be encoded with its fold")
-        self.assertTrue(
-            any(
-                row.observation_metadata.get("opponent_matchup_switch_evidence")
-                for row in corpus.decision_rows
-            ),
-            "no sample row carries matchup evidence, so byte-exactness does not exercise the pair",
+        self.assertGreater(
+            driven_with_evidence,
+            0,
+            "no COMPARED row carries matchup evidence, so byte-exactness does not exercise the "
+            "pair on any row this test actually drove",
         )
 
 

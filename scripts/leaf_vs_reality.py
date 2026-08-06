@@ -204,17 +204,46 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # behaviour breaks that instantly: the pair went to 380 + 194 divergent boundaries while the
 # tendency columns stayed at 4. So `matchup_excess` = boundaries where the pair diverges and no
 # live tendency column does, and that gates the exit code.
+#
+# KNOWN false-positive class, stated because a nonzero excess should not be read as "the surface
+# regressed". The matchup table is strictly finer-grained than the marginal that excuses it, so a
+# marginal can agree while a facing-level cell disagrees: if reality switches our active BEFORE
+# their attack and the synthesized branch orders it after -- the ordering ambiguity this harness
+# already classes as `fold` -- then `stayed_and_attacked` is +1 in both while the cell moves from
+# (theirs, old active) to (theirs, new active). The unit test
+# `test_the_pair_is_conditioned_on_which_of_OUR_mons_is_active` is that exact shape. It did not
+# fire on 12 games; it is not structurally impossible. A nonzero excess means "look", not
+# "regressed" -- and the two numbers printed beside it (pair vs live tendency) are what tells the
+# two apart: a regression moves the pair by two orders of magnitude, this class by ones.
+#
+# Deliberately keyed per BOUNDARY, not per (boundary, token): the looser excuse is the right side
+# to err on given the false-positive class above, and a regression is not remotely close to the
+# margin either way.
 V4_MATCHUP_PAIR_COLUMNS = frozenset(
     {"NUMERIC_MON_SWITCHED_VS_ACTIVE", "NUMERIC_MON_STAYED_VS_ACTIVE"}
 )
 
-# The already-live twin on the same tokens, same fold, 1/64 instead of 1/8. The two PAIRED
-# counters only: NUMERIC_MON_TURNS_ACTIVE_TOTAL is deliberately excluded even though it is the
-# third member of the same triple, because it counts turns rather than stay-or-switch events and
-# diverges on 91 of these boundaries -- letting it excuse a matchup divergence would loosen the
-# subset from 4 boundaries to 95 and let most of a full regression through.
+# The already-live twin on the same tokens, from the same fold, 1/64 instead of 1/8.
+#
+# All THREE members of the triple, including NUMERIC_MON_TURNS_ACTIVE_TOTAL. An earlier revision
+# excluded it on the stated grounds that including it "would loosen the subset from 4 to 95 and let
+# most of a full regression through". That arithmetic is wrong, and independent review caught it:
+# the frozen build puts 471 boundaries in the matchup set, so widening the excuse set to 95 cannot
+# take excess below ~376. Measured rather than bounded: frozen excess is 470 with the two paired
+# counters and 425 with all three -- both enormous against a surfaced excess of 0, which is
+# unchanged either way because the surfaced 4 is a subset of both excuse sets.
+#
+# So the exclusion bought no detection and cost false-alarm headroom on the sibling MOST likely to
+# co-occur with a real false positive: TURNS_ACTIVE_TOTAL diverges on 91 of 1271 boundaries (7%),
+# which is direct evidence that the leaf fold's per-mon occupant attribution is routinely off
+# against reality here -- and occupant attribution is what the matchup cell's `facing` key is
+# derived from.
 V4_LIVE_TENDENCY_COLUMNS = frozenset(
-    {"NUMERIC_MON_SWITCHED_BEFORE_ATTACK", "NUMERIC_MON_STAYED_AND_ATTACKED"}
+    {
+        "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+        "NUMERIC_MON_STAYED_AND_ATTACKED",
+        "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+    }
 )
 
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
