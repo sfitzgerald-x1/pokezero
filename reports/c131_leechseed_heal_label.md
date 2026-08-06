@@ -240,7 +240,9 @@ is exactly where that distinction bites — it is the clause that *looks* like r
 
 Both from round 3's review, both verified.
 
-**The four sibling exemptions in the same condition are unpinned.** Deleting `|| has_type(ROCK)`,
+**Four sibling exemptions and the fainted-active gate are unpinned.** (Three sit in the sand
+condition; the ICE one is in the hail branch, so "the same condition" in an earlier revision was
+loose.) Deleting `|| has_type(ROCK)`,
 `|| has_type(GROUND)` or `|| has_type(STEEL)` from `weather_chips`'s sand branch, or the hail `ICE`
 exemption, or the `hp <= 0` gate at the top, each leaves the whole suite green. (An earlier revision
 said "three" and omitted ROCK.) Pre-existing — but
