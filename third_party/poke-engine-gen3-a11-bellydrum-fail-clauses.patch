@@ -1,0 +1,46 @@
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -643,8 +643,42 @@
+     match choice.move_id {
+         Choices::BELLYDRUM => {
+             let boost_amount = 6 - attacking_side.attack_boost;
++            // Read the boost BEFORE `get_active()` takes its mutable borrow of
++            // `attacking_side`, or this is E0503.
++            let attack_already_maxed = attacking_side.attack_boost >= 6;
+             let attacker = attacking_side.get_active();
+-            if attacker.hp > attacker.maxhp / 2 {
++            // Showdown fails Belly Drum on THREE conditions and this arm only
++            // implemented the first. `data/moves.ts:1222-1228` -- with no gen3 or
++            // gen4 override, so base is the effective handler:
++            //
++            //   if (target.hp <= target.maxhp / 2      // present here
++            //       || target.boosts.atk >= 6          // WAS MISSING
++            //       || target.maxhp === 1)             // WAS MISSING (Shedinja)
++            //     return false;
++            //
++            // At +6 Attack the move must fail outright. This arm instead halved HP
++            // and pushed a `6 - 6 = 0` boost, so a second Belly Drum cost the user
++            // half its remaining HP for nothing. Holdout rows 19100072/17 and
++            // 19100072/19 are exactly that: Linoone at 131/261 (already halved
++            // once, already +6) drums again, Showdown emits `|-fail|` and applies
++            // nothing, the engine applies -130.
++            //
++            // The Shedinja clause is UNREACHABLE IN THIS POOL and is included for
++            // parity with the source, not because it fixes anything. Checked with
++            // the harness's own reachability instrument
++            // (`pokezero.randbat.Gen3RandbatSource.from_showdown_root`, 220
++            // species): Belly Drum is carried by exactly two species -- charizard
++            // (2 of 6 variants) and linoone (3 of 4) -- and shedinja's six variants
++            // are agility / batonpass / hiddenpowerfighting / shadowball /
++            // silverwind / toxic, none of which is Belly Drum. So no legal gen3
++            // randbats team can reach it.
++            //
++            // Were it reachable it would matter: at maxhp == 1, `hp > maxhp / 2` is
++            // `1 > 0` and passes, so this arm would grant +6 Attack for a
++            // `maxhp / 2 == 0` damage instruction -- a free omniboost Showdown
++            // refuses. Claiming a fix for it would be claiming a fix for a state
++            // the pool cannot produce.
++            if attacker.hp > attacker.maxhp / 2 && !attack_already_maxed && attacker.maxhp > 1 {
+                 instructions
+                     .instruction_list
+                     .push(Instruction::Damage(DamageInstruction {
