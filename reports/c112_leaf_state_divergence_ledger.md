@@ -179,7 +179,7 @@ encoding search uses:
 | cause | the fix lands in | production or harness |
 |---|---|---|
 | P1 | `rust/pokezero-search/src/leaf.rs` (write the md keys) | **production** |
-| P2 | `rust/pokezero-search/src/events.rs` or `leaf.rs` | **production** |
+| P2 | `rust/pokezero-search/src/events.rs` (both options root there — see P2) | **production** |
 | P3 | `engine_search.py::_recharging_slots` + the four gates | **production**, = task 4 |
 | P4 | `scripts/leaf_vs_reality.py:430-439` | harness |
 | P5 | `engine_world.py` world construction / the leaf's request-shape handling | **production** |
@@ -349,6 +349,10 @@ patched  [56,57] token1 got= 0.1333  want= 0.1333
 Corpus-wide the same crude positional restoration takes **21 of 33** divergent toxic cells exact;
 the residual 12 are **all** opponent tokens (indices 8-12) the crude patch could not align.
 
+The 21 split **14 self (14/14) and 7 opponent (7/19)**, so the intervention passes on **both
+sides**. The opponent rows are therefore *directly demonstrated*, not inferred from the self side —
+which is the stronger basis for this ledger carrying no side-symmetry inference.
+
 **Signature, on both corpora.** Every divergent toxic cell sits on a branch containing a `|switch|`
 or `|drag|`, and `got = 0.0` in every one:
 
@@ -359,6 +363,12 @@ or `|drag|`, and `got = 0.0` in every one:
 
 The gv2 half of this section's row count was an inherited assertion until it was measured; it is now
 a measurement, on the second corpus.
+
+**P2 is not a P1 passthrough member**, and the same measurement shows why: the parser's stage
+changes across 153/155 boundaries and only 14/14 diverge, so the leaf's line-driven write is live
+and ~91% correct where a passthrough would diverge on all of them (P1's stall counter does, 27 of
+27). The 5 `epistemic` opponent rows travel with the 28 `state` rows because a column-name trace
+cannot separate them by class.
 
 **The leaf already implements the parser's whole algorithm identically** — `|-status|` → 1
 (`leaf.rs:748`), exact-residual inversion (`:494-533`), `|turn|` escalation (`:630-631`), and the
@@ -375,6 +385,17 @@ claimed:
   carries this bug too. Touches `LeafMeta` alone. Note the "fix it in `leaf.rs`" phrasing an earlier
   revision used is not possible: `evolve_leaf_meta_with_status_transitions`
   (`leaf.rs:603-608`) takes `(meta, lines, ctx, transitions)` and has **no access to engine state**.
+
+  Two traps for whoever implements it, recorded because this ledger has already shipped a
+  disposition that would have changed no row — one that changes a row to the WRONG value is worth
+  two sentences. (i) **Ordering:** transitions for offset *k* are applied *before* `lines[k]`
+  (`leaf.rs:611-621`), so a transition emitted at the switch line's own offset is wiped by
+  `clear_toxic_meta` on that same line; it must be offset+1. (ii) **The existing arm clobbers two
+  fields:** `leaf.rs:613-616` sets `toxic = 1` *and* `toxic_reentry_pending = false` — the first
+  pre-empts the residual inversion (harmless at `1000#[56,57]` only because the answer happens to
+  be 1), the second disables the `/100` re-entry inference at `:511-513`, which is the very
+  mechanism this section credits the leaf for implementing correctly. A switch-in needs
+  `active_toxic = true` **without** touching either. That is a new arm, not the existing one.
 - **Wider:** append the status suffix in `hp_condition`. `render_branch_events` is production's
   leaf-pricing path — `model.rs:972`, whose `rendered.lines` feed `fold.advance_in_place` (`:993`),
   `evolve_self_order` (`:1001`, `:1007`), `evolve_leaf_meta_with_status_transitions` (`:1012`) and
@@ -395,11 +416,27 @@ one-line encoder fix.
 different routes, so the counts are unaffected — but the harness is not a byte-identical proxy for
 production on this path.
 
-### Three prior attributions for this class, all withdrawn
+### Prior attributions for this class, all withdrawn
+
+Also checked and refuted, recorded because a completeness claim needs them and because the second
+is the first thing a reviewer re-asks:
+
+- **The synthesized stream lacks the `\|turn\|` boundary the parser escalates on.** It does not —
+  `events.rs:1088,1112` emit `\|turn\|N+1`, though only when the ply completes the battle turn. An
+  earlier revision asserted this as the cause; it is production's stream either way, so the
+  mechanism could never have been harness-confined. Folded into (1) below as its purported
+  mechanism.
+- **The failures sit on non-adjacent round pairs** (a faint/force-switch ply that does not complete
+  the turn). Measured and refuted: **26 of 33 sit on ADJACENT same-seat pairs**, 7 on gapped ones.
+  Definition, because the number is otherwise unreproducible — consecutive same-seat rows differ by
+  **+1** in `decision_round_index` (both seats share the index) and a pair can still skip a round
+  when only the other seat acted. My first pass used +2 as "adjacent" and would have reported the
+  opposite conclusion.
 
 1. *"The line replay did not escalate."* Refuted by measurement: the parser's stage changes across
-   153/155 boundaries and only 14/14 diverge, so the write is live and ~91% correct. That also
-   proves P2 is **not** a P1 passthrough member.
+   153/155 boundaries and only 14/14 diverge, so the write is live and ~91% correct (the
+   classification consequence is stated in the cause block above). Its purported mechanism — a
+   missing `\|turn\|` — is refuted separately above.
 2. *"The residual is the absent `toxic_stage_known` tri-state in `LeafMeta`."* The cited gates
    (`showdown.py:1994-1999`, `:2047`) are inside `_ReplayParser.from_snapshot`, a legacy-snapshot
    fallback that `continue`s whenever the snapshot carries the field — which the only construction
@@ -432,6 +469,22 @@ the engine's own field since `belief` is `None` for `Role::SelfTeam` (`encoder.r
 **[CORRECTION]** An earlier revision cited `NUMERIC_PRESENT` and the self-side `attention_mask` as
 the liveness instruments. Both are **constants** (`encoder.rs:2286`, `:1110-1112`) and can never
 diverge, so reading their absence measured nothing.
+
+**Scope of the absence argument, restored — a rewrite deleted it while keeping the argument that
+needs it.** Absence is evidence only if the instrument moves, and the proof that `NUMERIC_LEGAL`
+moves is a **golden-v2** measurement (2055 zeros of 6168 cells, in 787 of 1028 rows) that was
+**never re-run on v4**, so v4's half inherits gv2's liveness check. On the opponent side there is no
+analogue in principle: its status token comes from `belief.status()` first (`encoder.rs:1993`), and
+`opp_membership` sweeps opponent columns into `epistemic` on 94 v4 boundaries. Stating the lesson
+about constants immediately above the place it had stopped being applied is exactly the failure this
+`[CORRECTION]` describes.
+
+**So the guard is excluded on two different grounds, not one.** On the **21** cells the
+counterfactual takes exact, it is excluded directly — the same guard passes and the leaf emits 2.
+On the remaining **12 — all opponent tokens**, where the crude patch could not align, the exclusion
+rests on the shared switch signature (27/27 and 33/33) plus the absence argument above, with the
+opponent-side caveat that argument carries. That is weaker for those 12 and is said here rather than
+averaged in.
 
 ## P3 — the self-side recharge root-freeze (2 rows)
 
@@ -585,7 +638,11 @@ Four of the `state` families as they stood in v2's framing are columns that did 
 - Documentation only: no classifier, encoder or harness change.
 - **[CORRECTION]** v1 wrote "got 0.0, want 0.5 on all 34 rows". The harness stores **one
   example per family** (`leaf_vs_reality.py:874-875`), so direction is *inferred from
-  source* for P1 and P2, not measured per row. The uniformity claim is withdrawn.
+  source* for **P1**, not measured per row. The uniformity claim is withdrawn **for P1 only**:
+  P2's was subsequently measured per row by re-encoding every boundary and reading every cell
+  rather than reading the artifact — 33/33 on v4 and 27/27 on gv2, all `got = 0.0`. This
+  section is the conservative backstop, so it must not discount the document's strongest
+  measurement.
 - **[CORRECTION]** v1 offered `matched + diverged == compared` as evidence. `compared` is
   *defined* as `exact + divergent` (`leaf_vs_reality.py:972`), so the identity is a
   tautology and no harness assertion exists. The non-vacuous identity —
