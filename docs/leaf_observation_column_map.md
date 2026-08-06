@@ -99,13 +99,13 @@ world-constant, **C** = static contract (layout constants, invariant).
 | `NUMERIC_ACTIVE` | E | engine `active_index` (a fainted, not-yet-replaced active stays marked active — request semantics) |
 | boosts (`_encode_active_boosts` :2065) | E | engine side boost fields (atk/def/spa/spd/spe/accuracy/evasion) |
 | volatiles (`_encode_active_volatiles` :2075) | E | engine volatile bitset filtered/mapped to `TRACKED_VOLATILES` ids (leaf.rs `VOLATILE_MAP`); engine-only mechanics volatiles dropped; CURSE Ghost-gated AND target-placed (review F5 + live-protocol probe 2026-07-19: the gen3 engine applies the base Curse choice's USER volatile with no Ghost split — the spurious non-Ghost volatile is dropped, and a Ghost curser's volatile is mapped onto the CURSED TARGET's tracked list, where the real protocol starts it; the volatile's engine LIFETIME still follows the curser's switch-outs — residual engine-model deviation) |
-| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` through raw sentinel 16, reset on switch/drag, re-seeded only by exact or switch/drag-proven first Toxic residual, and cleared by any active status replacement including Rest, curestatus, cureteam, or faint), replayed by `LeafMeta` with private renderer status transitions where public protocol intentionally omits a cure line; a sanctioned root stage zero is private context only and requires same-seat active faint → upkeep → non-Baton-Pass toxic switch, then is consumed by its first residual. Encoding caps the raw sentinel at 15/15, and a state-side guard clears any non-Toxic active status. The materialized engine counter is pre-tick and capped at 14, so its next residual is capped at stage 15. The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero |
+| `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is `\|turn\|`-line-driven (set 1 on `-status tox`, +1 per `\|turn\|` through raw sentinel 16, reset on switch/drag, re-seeded only by exact or switch/drag-proven first Toxic residual, and cleared by any active status replacement including Rest, curestatus, cureteam, or faint), replayed by `LeafMeta` with private renderer status transitions where public protocol intentionally omits a cure line; a sanctioned root stage zero is private context only and requires same-seat active faint → upkeep → non-Baton-Pass toxic switch, then is consumed by its first residual. Encoding caps the raw sentinel at 15/15, and a state-side guard clears any non-Toxic active status. The materialized engine counter is pre-tick and capped at 14, so its next residual is capped at stage 15. The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero **STALE COUNT, corrected 2026-08-05:** "the differential's toxic family is zero" is RETRACTED — re-derived it is 12 + 12 `state` plus 3 `epistemic`; attributed as S3 in `reports/c112_leaf_state_divergence_ledger.md`. |
 | belief facts: possible abilities/items/moves, revealed flags+counts, `candidate_set_count`, `NUMERIC_UNCERTAINTY`, `candidate_variants` → expected-stat ranges (:2492) | **W** | root, byte-frozen (epistemic); the SELF ledger is NOT epistemic — a first-time-active self mon (e.g. the replacement after a faint) gets a synthesized minimal entry, matching production's ledger growth |
-| exact-state ledger: `NUMERIC_SLEEP_TURNS`, `NUMERIC_REST_SLEEP`, `NUMERIC_WAKE_KNOWN` (:2348) | E (line-driven) | `sleep_turns` = observed `|cant …|slp` lines since the `|-status|slp`, per MON (belief.py:91 semantics; a sleeper that faints after its cants keeps them); `rest_sleep` from engine rest counters; `WAKE_KNOWN` derives from W ability facts |
-| `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `|turn|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero |
+| exact-state ledger: `NUMERIC_SLEEP_TURNS`, `NUMERIC_REST_SLEEP`, `NUMERIC_WAKE_KNOWN` (:2348) | E (line-driven) | `sleep_turns` = observed `\|cant …\|slp` lines since the `\|-status\|slp`, per MON (belief.py:91 semantics; a sleeper that faints after its cants keeps them); `rest_sleep` from engine rest counters; `WAKE_KNOWN` derives from W ability facts |
+| `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `\|turn\|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero **STALE COUNT, corrected 2026-08-05:** "post-fix the family is zero" is RETRACTED — re-derived it is 76 / 10 rows, class `epistemic`. |
 | `NUMERIC_TRAPPER_ALIVE` | W+E | ability certainty is W; alive/active bits are E |
 | `NUMERIC_SUB_HP_FRACTION` (:2472) | E | engine SUBSTITUTE volatile + production's presence-plus-INITIAL-size formula (`_substitute_hp_fraction` :2472-2485: floor(maxhp/4)/maxhp self, 0.25 opponent — "chip against the sub is not protocol-derivable, so the value is presence + initial size, not a running ledger"). PROBED 2026-07-19: the engine DOES track real per-side `substitute_health` (state.rs:1059; decremented exactly on sub hits, generate_instructions.rs:980-1005) — deliberately NOT consumed: production itself writes initial size only and the model was trained on that surface, so a live-sub-HP cell would diverge from both. Whether a hit BREAKS the sub stays roll-envelope + world-side sub-health-approximation dependent |
-| opponent revealed-move PP fractions + validity (:2421) | W + E (line-driven) | revealed set is W; `move_uses` = root ledger uses + the branch's LINE-REPLAYED charges (**review F3 CLOSED 2026-07-19**: the engine only emits `DecrementPP` when pp < 10 — the vendored gen3 `generate_instructions.rs` "only decrement pp if the move is at 10 or less" optimization, :1622-1643 — so engine PP deltas are root-frozen above 10. `LeafMeta::move_charges` replays the PARSER's charging rules over the synthesized `\|move\|` lines instead — belief.py `_charge_move_use` :796-814 + the ingestion exemptions :431-445: called moves charge the caller only, `[from]lockedmove` continuations and Struggle charge nothing, Pressure on the OPPOSING active doubles foe-targeted charges (world abilities; gen 3 announces Pressure on entry so world truth == the ledger's revealed-ability rule). Post-fix the differential's engine_pp class is ZERO on both corpora — residual PP divergences are reveal/bucket-composition-driven (epistemic) or ride tagged engine-model boundaries) |
+| opponent revealed-move PP fractions + validity (:2421) | W + E (line-driven) | revealed set is W; `move_uses` = root ledger uses + the branch's LINE-REPLAYED charges (**review F3 CLOSED 2026-07-19**: the engine only emits `DecrementPP` when pp < 10 — the vendored gen3 `generate_instructions.rs` "only decrement pp if the move is at 10 or less" optimization, :1622-1643 — so engine PP deltas are root-frozen above 10. `LeafMeta::move_charges` replays the PARSER's charging rules over the synthesized `\|move\|` lines instead — belief.py `_charge_move_use` :796-814 + the ingestion exemptions :431-445: called moves charge the caller only, `[from]lockedmove` continuations and Struggle charge nothing, Pressure on the OPPOSING active doubles foe-targeted charges (world abilities; gen 3 announces Pressure on entry so world truth == the ledger's revealed-ability rule). Post-fix the differential's engine_pp class is ZERO on both corpora — residual PP divergences are reveal/bucket-composition-driven (epistemic) or ride tagged engine-model boundaries) **STALE COUNT, corrected 2026-08-05:** "the differential's engine_pp class is ZERO on both corpora" is RETRACTED — re-derived it is 1 / 2. |
 | tendency triple `NUMERIC_MON_*` (:2643) | **F** | fold products `opponent_mon_tendencies` |
 | pinned Tier-2 `NUMERIC_TIER2_CB_PINNED` / `_INVESTMENT_PINNED` (:1233–1269, :2334) | **F** | fold products `cb_pinned_species` / `investment_pinned` (running state, truncation-robust) |
 
@@ -114,9 +114,9 @@ world-constant, **C** = static contract (layout constants, invariant).
 | surface | class | leaf source |
 |---|---|---|
 | move ids, mechanics, PP fractions | E (line-driven PP) | engine active's move surface (engine slot order = sampled = request order, root-parity-proven; hidden power renders as plain `hiddenpower`); PP = base − `LeafMeta::move_charges` (the F3 line-replay above; the request follows the same deduction rules). Base: the ROOT ACTIVE's engine PP (request-seeded, exact); a mon benched at the root uses maxpp − the SELF belief-ledger's `move_uses` (the cached request-history PP the world seeds benched mons with is stale by their last stint's FINAL action — requests are pre-action). maxpp from dex; a recharging active (MUSTRECHARGE) presents the production request shape: one legal PP-less `recharge` pseudo-move, switching disallowed |
-| disabled / `NUMERIC_ACTIVE` | E (line-guarded) | engine `Move.disabled`, EXCEPT a fresh switch-in (line-tracked: switched and no `|move|` since): choice locks reset on switch but the world seeds benched mons with their last stint's cached disabled bits and the engine never re-enables them on a branch switch (`use_last_used_move` is off in constructed worlds) — Choice-Band-Nidoking repro |
+| disabled / `NUMERIC_ACTIVE` | E (line-guarded) | engine `Move.disabled`, EXCEPT a fresh switch-in (line-tracked: switched and no `\|move\|` since): choice locks reset on switch but the world seeds benched mons with their last stint's cached disabled bits and the engine never re-enables them on a branch switch (`use_last_used_move` is off in constructed worlds) — Choice-Band-Nidoking repro |
 | legal bits + switch candidates | E | the engine's OWN option surface (`get_all_options`) mapped through the canonical switch map over the EVOLVED team ordering; fresh switch-ins bypass the stale-lock option restriction (pp>0 ⇒ legal) |
-| `legal_action_mask` (:3227) | E | same. **Honest history (review item 3a): at depth 0 the engine option surface reproduced every recorded request mask (root-parity), but PRE-FIX the mask did NOT reproduce reality at switch-reached leaves — the self-team permutation put switch bits on wrong indices (~26% of boundaries) and stale choice locks killed move bits on fresh switch-ins. POST-FIX the differential's mask families are zero outside the documented engine-model tags (transform/recharge/encore/baton-pass)** |
+| `legal_action_mask` (:3227) | E | same. **Honest history (review item 3a): at depth 0 the engine option surface reproduced every recorded request mask (root-parity), but PRE-FIX the mask did NOT reproduce reality at switch-reached leaves — the self-team permutation put switch bits on wrong indices (~26% of boundaries) and stale choice locks killed move bits on fresh switch-ins. POST-FIX the differential's mask families are zero outside the documented engine-model tags (transform/recharge/encore/baton-pass)** **STALE COUNT, corrected 2026-08-05:** "the mask families are zero outside the documented engine-model tags" is RETRACTED — re-derived, `legal_action_mask` slots are `state`-classed on both corpora and are explicitly NOT one of those tags; open as S5, the highest-severity row in `reports/c112_leaf_state_divergence_ledger.md`. |
 
 ### Token 22 stats (`_encode_stats_token` :2665)
 
@@ -159,8 +159,14 @@ root state, byte-diff of all five arrays against the recorded golden arrays.
 
 | corpus | rows | driven | exact | divergent | skips (world fail-closed) |
 |---|---|---|---|---|---|
-| golden-v2 | 1028 | 1015 | **1015 (100%)** | 0 | 13 (8 encore_move_unknown, 3 pending_baton_pass, 2 self_request_state_unsupported) |
-| golden-v2-scenarios | 290 | 235 | **235 (100%)** | 0 | 55 (15 encore, 2 baton-pass, 12 self_moveset_mismatch, 26 self_request_state_unsupported) |
+| golden-v2 (**NOT re-derived**) | 1028 | 1015 | 1015 (100%) | 0 | 13 (8 encore_move_unknown, 3 pending_baton_pass, 2 self_request_state_unsupported) |
+| golden-v2-scenarios (**NOT re-derived**) | 290 | 235 | 235 (100%) | 0 | 55 (15 encore, 2 baton-pass, 12 self_moveset_mismatch, 26 self_request_state_unsupported) |
+
+**These two rows keep their UNVERIFIED status.** They are the ROOT-PARITY harness
+(`leaf_root_parity.py`), not `leaf_vs_reality.py`, so the 2026-08-05 re-derivation
+does not cover them and neither of the two harness breaks fixed there is known to
+apply. Their row counts (1028 / 290) also predate the corpus regeneration. Re-deriving
+them is a separate pass.
 
 Every skip is an `EngineWorldUnsupported` fail-closed reason — positions the
 branch simulator itself cannot search today (the same wall as
@@ -187,13 +193,45 @@ placement, 2026-07-19; exit gates on the defect classes):
 
 | corpus | boundaries | driven | exact | divergent | **state** | **turn** | fold | epistemic | engine_pp | engine_roll | engine_model | ledger_skew |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| golden-v2 (post-#730) | 1008 | 771 | 78 | 693 | **0** | **0** | 440 | 322 | 663 | 313 | 9 | 1 |
-| golden-v2 (closure) | 1008 | 771 | **220** | 551 | **0** | **0** | 440 | 322 | **0** | 313 | 33 | 1 |
-| golden-v2-scenarios (post-#730) | 270 | 183 | 9 | 174 | **0** | **0** | 108 | 49 | 173 | 97 | 16 | 0 |
-| golden-v2-scenarios (closure) | 270 | 183 | **53** | 130 | **0** | **0** | 108 | 49 | **0** | 97 | 5 | 0 |
+| golden-v2 (post-#730, **RETRACTED**) | 1008 | 771 | 78 | 693 | 0 | 0 | 440 | 322 | 663 | 313 | 9 | 1 |
+| golden-v2 (closure 2026-07-19, **RETRACTED**) | 1008 | 771 | 220 | 551 | 0 | 0 | 440 | 322 | 0 | 313 | 33 | 1 |
+| golden-v2 (**re-derived** 2026-08-05, v3) | 1008 | **737** | **170** | **567** | **106** | **0** | **422** | **328** | **1** | **256** | **18** | **0** |
+| golden-v2-scenarios (post-#730, **RETRACTED**) | 270 | 183 | 9 | 174 | 0 | 0 | 108 | 49 | 173 | 97 | 16 | 0 |
+| golden-v2-scenarios (closure, **RETRACTED**) | 270 | 183 | 53 | 130 | 0 | 0 | 108 | 49 | 0 | 97 | 5 | 0 |
+| golden-v2-scenarios (**re-derived** 2026-08-05, v2.2) | **369** | **273** | **99** | **174** | **2** | **0** | **137** | **86** | **2** | **116** | **11** | **0** |
+
+**Reading this table. BOTH closure rows are RETRACTED, not corrected, and the
+re-derived rows are a NEW measurement at their own era — no per-class delta between
+them is attributable to the harness fix.**
+
+An earlier revision of this paragraph claimed golden-v2 *was* comparable because the
+regenerated corpus reproduces 1008 boundaries. That is false and is withdrawn.
+`boundaries = decisions − 2·games`, and trajectories come from a policy whose
+`select_action` reads only `legal_action_mask` and a seeded RNG (`policy.py:151-171`),
+so the count is structurally invariant to schema and engine changes and could not have
+moved. Meanwhile four of the five `state` families are columns that did not exist at
+the closure row's 2026-07-19 era (`NUMERIC_SLEEP_CLAUSE_BLOCKS_*` 2026-07-20;
+`NUMERIC_STALL_COUNTER`, `NUMERIC_SELF_WISH_TURNS`, `NUMERIC_ENCORE_TURNS`
+2026-07-21), and `--observation-schema` only reached `golden_corpus` on 2026-08-04.
+The two rows compare different observation vectors.
+
+This also means the published `state = 0` is NOT explained by the harness breaks: a
+run that skipped 100% of boundaries cannot emit `fold 440, epistemic 322,
+engine_roll 313`. It is explained by those four columns not existing yet.
+
+`driven` is renamed `compared` in the re-derived rows. It equals `exact + divergent`
+*by definition* (`leaf_vs_reality.py:972`), so that identity is a tautology and is not
+evidence of anything; the non-vacuous one, `sum(all counts) == boundaries`, is not
+asserted by the harness either and was checked by hand (1008, 369). Mechanizing it is
+task 3's subject.
+
+The two schemas differ because `golden_corpus_scenarios` takes no
+`--observation-schema` and defaults to v2.2, while golden-v2 was regenerated at v3.
+Against v3 tables the scenarios corpus skips 273 of 369 boundaries on
+`encode_error:ValueError`.
 
 (Class columns count divergent boundaries touching that class; a boundary
-can carry several. Skips mirror the fidelity gate: world fail-closed 13/52,
+can carry several. **The skip composition and the `9→33` delta below are STALE and RETRACTED**: re-derived, world fail-closed is **238 / 69** and `no_branch_match` **33 / 18**, with 191 boundaries moved from `no_branch_match` into `materialization_blocker` — a shift neither harness break explains and which no one has attributed. Original text, retained for traceability: skips mirror the fidelity gate: world fail-closed 13/52,
 no_branch_match 224/28 — dominated by roll-collapse outcomes reality didn't
 take — plus 7 action_unmapped scenario rows. The closure's engine_model
 delta on golden-v2 (9→33) is the honest REALLOCATION of PP cells that ride
@@ -206,7 +244,7 @@ Every non-defect class is documented above: `fold` inherits the fidelity
 gate's (b)/(c) classes; `epistemic` is the root-frozen belief surface
 meeting row n+1's new reveals — including opponent-PP bucket cells whose
 validity bit or bucket move-identity flipped with the reveal (by design);
-`engine_pp_model` is same-revealed-set PP-count divergence and is now ZERO;
+`engine_pp_model` is same-revealed-set PP-count divergence and **is 1 / 2, not zero — the "now ZERO" claim here is RETRACTED** (`reports/c112_leaf_state_divergence_ledger.md`);
 `engine_roll` is the damage-roll collapse envelope (HP fractions, sub
 breaks, pinch-berry thresholds); `engine_model` is the tagged
 vendored-engine deviations (Transform empty delta, Encore volatile not
@@ -224,19 +262,35 @@ none visible to the depth-0 gate.
 
 ## Accepted encoding divergences (by design)
 
-The go/no-go ledger for starting evals: after the encoding-fidelity closure,
-these are the ONLY classes that remain non-zero in `leaf_vs_reality`, each
-accepted with a reason — none is an encoder defect, and the defect classes
-(`state`, `turn`) are pinned at ZERO by the gate's exit code.
+The go/no-go ledger for starting evals, **re-derived 2026-08-05 with the fixed
+harness** on `main` at `df4a0fce`. Counts are divergent boundaries touching the
+class; a boundary can carry several.
+
+**`state` is NOT zero, and the previous claim that it was is RETRACTED.** This
+section used to say the defect classes "are pinned at ZERO by the gate's exit
+code". The gate does exit non-zero, but the count was never zero: it is **106 on
+golden-v2 and 2 on scenarios**. The published zeros are explained by four of the five
+`state` families not being columns yet at that era, NOT by the harness breaks — a run
+that skipped 100% of boundaries could not have emitted `fold 440, epistemic 322,
+engine_roll 313`
+(the two harness breaks are named at the end of this section; neither is the cause here). Attribution is in
+`reports/c112_leaf_state_divergence_ledger.md`, stated in ROWS because the
+row→boundary mapping is not derivable from the artifact: **100 source-verified + 12
+by side-symmetry = 112 of 119 rows attributed on golden-v2** (wish/sleep-clause adjacent-key writes 42, stall counter
+46, toxic line replay 24), **7 open** (encore 2, action surface 5). Scenarios: all
+10 rows open. All three attributed causes are **harness fixes** — an earlier
+revision called the 46 stall rows "unreachable from engine state" and posed an
+encoder-side design decision; that was a substring false-negative (the engine names
+it `protect` and `engine_world.py:1265` already seeds it) and is withdrawn.
 
 | class | golden-v2 | scenarios | why it is accepted |
 |---|---|---|---|
-| `fold` | 440 | 108 | The transition/tendency history inherits the fidelity gate's documented equivalence classes: collapsed damage-roll floats inside the engine's envelope and merged no-op branches. The fold itself is byte-exact over all 1318 corpus rows (`validate_rust_encoder --backend rust-fold`); the divergence is the determinized branch's chance semantics, not the fold. |
-| `epistemic` | 322 | 49 | Owner-decided architecture: belief facts (revealed sets, candidate buckets, expected stats, opponent-team membership) are per-world constants FROZEN at the root. Row n+1 saw new reveals the leaf must not anticipate — materializing them would present the sampled world as revealed fact. |
-| `engine_pp_model` | **0** | **0** | CLOSED by the PP line-replay (this change). |
-| `engine_roll` | 313 | 97 | Determinized chance semantics: the engine prices one representative damage roll (0.925·max collapse); reality rolled elsewhere in the envelope. HP fractions, substitute survival, and pinch-berry thresholds ride the roll. Exact-expectation backup prices the enumerated distribution — per-branch observations legitimately differ from the one trajectory reality took. |
-| `engine_model` | 33 | 5 | Tagged vendored-engine deviations, each with a fail-closed or counted guard: Transform's empty delta (roots fail closed), Encore volatile not applied (roots fail closed), recharge consumed one ply early on faint-replacement plies, Baton-Passed saved moves never resolving, merged full-para/miss/fail outcomes (engine `combine_duplicate_instructions` — the renderer picks the dominant-mass cause), Ghost-curse boost delta + volatile lifetime (rendered real-shape, flagged `lossy`, scenario-gated). |
-| `ledger_skew` | 1 | 0 | Recorded production inconsistency reproduced as recorded: the belief ledger's condition string keeps a stale status suffix through a cure (Refresh/Heal Bell) — root-parity documents the same ~1% class on recorded rows. |
+| `fold` | **422** | **137** | The transition/tendency history inherits the fidelity gate's documented equivalence classes: collapsed damage-roll floats inside the engine's envelope and merged no-op branches. The fold itself is byte-exact over all 1318 corpus rows (`validate_rust_encoder --backend rust-fold`); the divergence is the determinized branch's chance semantics, not the fold. |
+| `epistemic` | **328** | **86** | Owner-decided architecture: belief facts (revealed sets, candidate buckets, expected stats, opponent-team membership) are per-world constants FROZEN at the root. Row n+1 saw new reveals the leaf must not anticipate — materializing them would present the sampled world as revealed fact. |
+| `engine_pp_model` | **1** | **2** | Previously published as `0 / 0` and "CLOSED"; that is **RETRACTED** — the class is small but non-zero. The PP line-replay closed the bulk of it, not all of it. |
+| `engine_roll` | **256** | **116** | Determinized chance semantics: the engine prices one representative damage roll (0.925·max collapse); reality rolled elsewhere in the envelope. HP fractions, substitute survival, and pinch-berry thresholds ride the roll. Exact-expectation backup prices the enumerated distribution — per-branch observations legitimately differ from the one trajectory reality took. |
+| `engine_model` | **18** | **11** | Tagged vendored-engine deviations, each with a fail-closed or counted guard: Transform's empty delta (roots fail closed), Encore volatile not applied (roots fail closed), recharge consumed one ply early on faint-replacement plies, Baton-Passed saved moves never resolving, merged full-para/miss/fail outcomes (engine `combine_duplicate_instructions` — the renderer picks the dominant-mass cause), Ghost-curse boost delta + volatile lifetime (rendered real-shape, flagged `lossy`, scenario-gated). |
+| `ledger_skew` | **0** | **0** | Recorded production inconsistency reproduced as recorded: the belief ledger's condition string keeps a stale status suffix through a cure (Refresh/Heal Bell) — root-parity documents the same ~1% class on recorded rows. |
 | `root_frozen_pack` | n/a (v4 only) | n/a (v4 only) | **V4 k0 feature pack, root-frozen at the leaf.** The 13 pack columns enumerated in `leaf_vs_reality.py::V4_ROOT_FROZEN_PACK_COLUMNS` are written from the ROOT's `observation_metadata` and never re-derived per leaf, so at depth > 0 they describe the root. **Permanent by design** — the hazard credit/expected pair encodes the gen3 grounding rule (Levitate, Flying, unrevealed-slot accounting); re-deriving that rule in Rust is exactly the duplication this design refuses, since a second implementation free to drift is worse than a stale-but-consistent one. Same for the damage ledgers, Truant phase, items-removed credit, choice lock, item-swapped, last-used move and traced ability. **The former "(b) follow-up, not accepted forever" members are GONE from this set** — `NUMERIC_MON_SWITCHED_VS_ACTIVE` / `NUMERIC_MON_STAYED_VS_ACTIVE` are now written from the fold at the leaf; see the `matchup_fold` row below. **A1 (forced recharge) is SPLIT BY SIDE** and is not in this set, because it rides the `CATEGORY_VOLATILE_*` bag as `volatile:mustrecharge` rather than owning a column. **Opponent side: LIVE** — it was the one pack member that did not merely go stale at a leaf but contradicted the *same observation's* action surface, which reads the `MUSTRECHARGE` volatile live to present the forced single "recharge" pseudo-move; `leaf.rs` refreshes `opponent_must_recharge` from the branch's own `volatile_statuses`. **Self side: root-frozen, deliberately** — `MUSTRECHARGE` only enters a constructed world via `recharging_slots`, and the live producer `engine_search.py::_recharging_slots` returns the opponent slot or nothing, never ours; since `model.rs` encodes the ROOT state for `root_priors`, deriving the self flag from `volatile_statuses` would write `False` at depth 0 for a genuinely recharging self mon and regress root/leaf parity in exchange for fixing a staleness. Frozen is correct until `_recharging_slots` is made symmetric — which is a real modelling gap worth closing (the production root world currently lets our recharging mon pick any move) but changes search-world construction, where `engine_world.py` treats `mustrecharge` as a hard lock like `trapped`. **Gate caveat:** `leaf_root_parity.py`, `leaf_vs_reality.py`, `prior_mapping_assert.py` and `fidelity_gate_events.py` all derive `recharging` for BOTH slots from the recorded chosen candidate, so they build a different world than production and would ratify a symmetric self-side write rather than catch it. |
 | `matchup_fold` | n/a (v4 only) | n/a (v4 only) | **The matchup pair, fold-driven at the leaf and NOT an excuse class.** `matchup_counters` reaches `ProductsData`, so `encoder.rs::write_opponent_mon_history` re-selects the (their mon × our mon) cell against the LEAF's active mon, mirroring `showdown._matchup_switch_evidence`. It keeps its own label rather than the `fold` one purely so the `NUMERIC_MON_*` prefix rule cannot sweep it into an accepted class by name coincidence; `classify` therefore matches it BEFORE that rule, and being accidentally accepted by a name coincidence is how a divergence stops being reviewed. Divergence is gated on MAGNITUDE, not on being zero, because a leaf fold advanced over synthesized lines can legitimately count an event reality did not: `matchup_excess` counts boundaries where the pair diverges and no live tendency counter does, and it must stay within `MATCHUP_EXCESS_ALLOWANCE` (16) on every corpus. Zero tolerance would red-light the harness on the first legitimate facing-ordering divergence while this very table calls that divergence expected — the pairing that gets a gate disabled. Measured on a 12-game v4 corpus (1271 same-seat boundaries): pair 4 divergent boundaries against the live tendency triple's 95, **excess 0**; with the fold write removed, pair 471 and **excess 425**. Known false-positive class, so a nonzero excess means "look" not "regressed": the matchup table is finer-grained than the marginal that excuses it, so an ordering difference that leaves `stayed_and_attacked` equal can still move the cell between two facings. A regression moves the pair by two orders of magnitude; that class by ones. |
 | long-game Tier-2 overlay capacity | n/a | n/a | `FoldState` retains a 512-action tail. If a cumulative tracker annotation arrives only after its token has aged out of both fold representations, the live fold fails closed for the rest of that battle instead of applying it to an ambiguous token. This is the same bounded-history contract as corpus folding; it is a visible fallback, not silent encoding drift. |
@@ -252,8 +306,18 @@ its boundaries is judged on the work it did, not on the corpus it was handed --
 and every class reallocation requires a documented rule in
 `scripts/leaf_vs_reality.py::classify`.
 
-**The golden-v2 / scenarios counts in the table above are UNVERIFIED: they were
-produced by a harness carrying two breaks, both fixed here.** `leaf_vs_reality.py` read the
+**UNVERIFIED status, per table, as of 2026-08-05.** The blanket marking this
+paragraph used to carry is replaced by a per-table one, because a single label over
+three tables produced by two different harnesses at three different eras is not
+actionable.
+
+| table | status |
+|---|---|
+| `leaf_vs_reality` class table (above) | **RE-DERIVED**, both corpora, verified against committed artifacts at the stated era. Not comparable to the retracted closure numbers. |
+| `leaf_vs_reality` era table | **BOTH closure rows RETRACTED** — neither corpus is comparable to its re-derived row (the boundary count is structurally invariant, and four `state` columns postdate the 2026-07-19 era). The re-derived rows are a NEW measurement at their own era, verified against committed artifacts. |
+| `leaf_root_parity` table (rows 1028 / 290) | **STILL UNVERIFIED.** Different harness; not covered by this pass. |
+
+The two breaks that invalidated the originals, both fixed: `leaf_vs_reality.py` read the
 observation schema off a key the corpus rows do not carry, so the encoder's
 schema guard rejected every boundary as `skip:encode_error`; skips print in a
 separate column from the gated class, so a fully-skipped run still printed

@@ -1,0 +1,1761 @@
+[
+  {
+    "boundaries": 369,
+    "class_rows": {
+      "engine_model": 11,
+      "engine_pp_model": 2,
+      "engine_roll": 116,
+      "epistemic": 86,
+      "fold": 137,
+      "state": 2
+    },
+    "corpus": "corpus/golden-v2-scenarios",
+    "counts": {
+      "divergent": 174,
+      "exact": 99,
+      "skip:action_unmapped": 7,
+      "skip:lossy_render": 2,
+      "skip:no_branch_match": 18,
+      "skip:world_unsupported:encore_move_unknown": 14,
+      "skip:world_unsupported:materialization_blocker": 23,
+      "skip:world_unsupported:payload_malformed": 4,
+      "skip:world_unsupported:pending_baton_pass": 2,
+      "skip:world_unsupported:self_moveset_mismatch": 11,
+      "skip:world_unsupported:volatile_unsupported": 15
+    },
+    "families": [
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_model",
+        "column": "NUMERIC_ACTIVE",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 1,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 14,
+          "want": 1.0
+        },
+        "rows": 8
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_model",
+        "column": "NUMERIC_LEGAL",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 2,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 14,
+          "want": 1.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "engine_model",
+        "column": "action1",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 1,
+          "got": false,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": true
+        },
+        "rows": 4
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "engine_model",
+        "column": "action2",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 2,
+          "got": false,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": true
+        },
+        "rows": 4
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "engine_model",
+        "column": "action3",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 3,
+          "got": false,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": true
+        },
+        "rows": 4
+      },
+      {
+        "array": "categorical_ids",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "CATEGORY_VOLATILE_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-encore_wobbuffet-91000",
+          "column": 33,
+          "got": 1183,
+          "rounds": [
+            4,
+            5
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0
+        },
+        "rows": 3
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 0,
+          "got": 0.6885245901639344,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p2",
+          "token": 8,
+          "want": 0.7049180327868853
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 0,
+          "got": 0.6885245901639344,
+          "rounds": [
+            12,
+            13
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.6655737704918033
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "CATEGORY_PRIMARY",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 0,
+          "got": 543,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 686
+        },
+        "rows": 1
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "CATEGORY_PRIMARY",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 0,
+          "got": 543,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 686
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_ATK",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 17,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.55
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_ATK",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 17,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.55
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_DEF",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 18,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.325
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_DEF",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 18,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.325
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPA",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 19,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.325
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPA",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 19,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.325
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPD",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 20,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.55
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPD",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 20,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.55
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPE",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 21,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.15
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_model",
+        "column": "NUMERIC_BASE_SPE",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 21,
+          "got": 0.24,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.15
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_model",
+        "column": "NUMERIC_MOVE_PP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-ditto_transform-91000",
+          "column": 31,
+          "got": 0.3125,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 14,
+          "want": 0.5
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "engine_pp_model",
+        "column": "NUMERIC_MOVE_PP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 31,
+          "got": 1.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": 13,
+          "want": 0.875
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "engine_roll",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 0,
+          "got": 0.2597402597402597,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.2727272727272727
+        },
+        "rows": 70
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "engine_roll",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 0,
+          "got": 0.2351421188630491,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p1",
+          "token": 1,
+          "want": 0.23772609819121446
+        },
+        "rows": 67
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_MOVE_COUNT",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 4,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 59
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 17,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1223
+        },
+        "rows": 52
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 76,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.9583333333333334
+        },
+        "rows": 49
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 121,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 43
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 11,
+          "got": 0,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 76
+        },
+        "rows": 33
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ITEM_COUNT",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 8,
+          "got": 0.0,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 33
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ITEM",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 11,
+          "got": 0.0,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 32
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+1",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 18,
+          "got": 0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 172
+        },
+        "rows": 14
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+1",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 77,
+          "got": 0.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 0.9375
+        },
+        "rows": 12
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 69,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.32633053221288516
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK_HIGH",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 71,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.32633053221288516
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_ATK_LOW",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 70,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.32633053221288516
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_DEF",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 72,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.27871148459383754
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPA",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 73,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.26750700280112044
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPD",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 74,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.27871148459383754
+        },
+        "rows": 11
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_SPE",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 75,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.20868347338935575
+        },
+        "rows": 11
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_PRIMARY",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 0,
+          "got": 0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 696
+        },
+        "rows": 10
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_ROLE",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 2,
+          "got": 0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 493
+        },
+        "rows": 10
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_SECONDARY",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 1,
+          "got": 0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 730
+        },
+        "rows": 10
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_TYPE_1",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 4,
+          "got": 0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1174
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_ACTIVE",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 1,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_ATK",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 17,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.55
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_DEF",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 18,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.45
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_HP",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 16,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.5
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPA",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 19,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.425
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPD",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 20,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.45
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_BASE_SPE",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 21,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.3
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 66,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.4271708683473389
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP_HIGH",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 68,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.4271708683473389
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_EXPECTED_HP_LOW",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 67,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.4271708683473389
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_HP_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 0,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_LEGAL",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 2,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_LEVEL",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 15,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.84
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_PRESENT",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 3,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_TURNS_ACTIVE",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 61,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.015625
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_UNCERTAINTY",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 6,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1.0
+        },
+        "rows": 10
+      },
+      {
+        "array": "attention_mask",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "attention_mask",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": -1,
+          "got": false,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": true
+        },
+        "rows": 10
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+1",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 122,
+          "got": 0.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 9
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+2",
+        "example": {
+          "battle_id": "golden-scenario-encore_wobbuffet-91000",
+          "column": 19,
+          "got": 0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 1227
+        },
+        "rows": 7
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_TYPE_2",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 5,
+          "got": 0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 1167
+        },
+        "rows": 7
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+2",
+        "example": {
+          "battle_id": "golden-scenario-encore_wobbuffet-91000",
+          "column": 78,
+          "got": 0.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.975
+        },
+        "rows": 7
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+2",
+        "example": {
+          "battle_id": "golden-scenario-encore_wobbuffet-91000",
+          "column": 123,
+          "got": 0.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 6
+      },
+      {
+        "array": "categorical_ids",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_ITEM_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 11,
+          "got": 1219,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0
+        },
+        "rows": 5
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_FIXED_COUNT",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 9,
+          "got": 0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 19
+        },
+        "rows": 4
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ABILITY_COUNT",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 7,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ABILITY",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 10,
+          "got": 0.0,
+          "rounds": [
+            0,
+            1
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 4
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_BELIEF_MOVE_OFFSET+3",
+        "example": {
+          "battle_id": "golden-scenario-resttalk_snorlax-91000",
+          "column": 20,
+          "got": 0,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 186
+        },
+        "rows": 1
+      },
+      {
+        "array": "categorical_ids",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "CATEGORY_VOLATILE_OFFSET",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 33,
+          "got": 0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p2",
+          "token": 8,
+          "want": 1184
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_OFFSET+3",
+        "example": {
+          "battle_id": "golden-scenario-resttalk_snorlax-91000",
+          "column": 79,
+          "got": 0.0,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 0.8125
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "epistemic",
+        "column": "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+3",
+        "example": {
+          "battle_id": "golden-scenario-resttalk_snorlax-91000",
+          "column": 124,
+          "got": 0.0,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p2",
+          "token": 7,
+          "want": 1.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "NUMERIC_POSSIBLE_ITEM_COUNT",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 8,
+          "got": 1.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "self_team",
+        "class": "epistemic",
+        "column": "NUMERIC_REVEALED_ITEM",
+        "example": {
+          "battle_id": "golden-scenario-berry_eat_chesto-91000",
+          "column": 11,
+          "got": 1.0,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p2",
+          "token": 1,
+          "want": 0.0
+        },
+        "rows": 1
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_DAMAGE_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 105,
+          "got": 0.39276485788113696,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p1",
+          "token": 29,
+          "want": 0.39018087855297157
+        },
+        "rows": 85
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_DAMAGE_FRACTION",
+        "example": {
+          "battle_id": "golden-scenario-attract_snorlax-91011",
+          "column": 140,
+          "got": 0.8014842300556586,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 0.7884972170686456
+        },
+        "rows": 62
+      },
+      {
+        "array": "numeric_features",
+        "block": "opponent_team",
+        "class": "fold",
+        "column": "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+        "example": {
+          "battle_id": "golden-scenario-baton_pass_boundary-91000",
+          "column": 65,
+          "got": 0.0,
+          "rounds": [
+            4,
+            6
+          ],
+          "seat": "p1",
+          "token": 8,
+          "want": 0.015625
+        },
+        "rows": 10
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_EFFECTIVENESS",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 47,
+          "got": 757,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 756
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TM_SECOND_OUTCOME",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 46,
+          "got": 897,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 891
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TYPE_1",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 4,
+          "got": 1143,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 25,
+          "want": 1137
+        },
+        "rows": 2
+      },
+      {
+        "array": "categorical_ids",
+        "block": "transition",
+        "class": "fold",
+        "column": "CATEGORY_TYPE_2",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 5,
+          "got": 1131,
+          "rounds": [
+            1,
+            2
+          ],
+          "seat": "p1",
+          "token": 25,
+          "want": 1130
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TM2_MISS",
+        "example": {
+          "battle_id": "golden-scenario-toxic_stall-91000",
+          "column": 145,
+          "got": 0.0,
+          "rounds": [
+            6,
+            7
+          ],
+          "seat": "p1",
+          "token": 30,
+          "want": 1.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_CRIT",
+        "example": {
+          "battle_id": "golden-scenario-trick_swap_exchange-91000",
+          "column": 109,
+          "got": 1.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": 26,
+          "want": 0.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "transition",
+        "class": "fold",
+        "column": "NUMERIC_TT_SELF_HP_COST",
+        "example": {
+          "battle_id": "golden-scenario-flashfire_houndoom-91007",
+          "column": 153,
+          "got": 0.12765957446808507,
+          "rounds": [
+            3,
+            4
+          ],
+          "seat": "p1",
+          "token": 27,
+          "want": 0.13617021276595742
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "state",
+        "column": "NUMERIC_ACTIVE",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 1,
+          "got": 1.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": 14,
+          "want": 0.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "numeric_features",
+        "block": "action",
+        "class": "state",
+        "column": "NUMERIC_LEGAL",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 2,
+          "got": 1.0,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": 14,
+          "want": 0.0
+        },
+        "rows": 2
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action1",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 1,
+          "got": true,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": false
+        },
+        "rows": 2
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action2",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 2,
+          "got": true,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": false
+        },
+        "rows": 2
+      },
+      {
+        "array": "legal_action_mask",
+        "block": "legal_action_mask",
+        "class": "state",
+        "column": "action3",
+        "example": {
+          "battle_id": "golden-scenario-hyperbeam_recharge-91000",
+          "column": 3,
+          "got": true,
+          "rounds": [
+            2,
+            3
+          ],
+          "seat": "p1",
+          "token": -1,
+          "want": false
+        },
+        "rows": 2
+      }
+    ],
+    "live_tendency_divergent_boundaries": 10,
+    "matchup_divergent_boundaries": 0,
+    "matchup_excess": []
+  }
+]
