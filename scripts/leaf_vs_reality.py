@@ -613,6 +613,18 @@ def anchor_observation_schema(golden_rows, battle_id: str, row_n, seat: str) -> 
     return "" if golden is None else str(golden.observation_schema_version or "")
 
 
+def gate_exit_code(defect_rows: int, matchup_excess_rows: int) -> int:
+    """The exit gate, extracted so the matchup arm is testable without a corpus.
+
+    On any corpus that exercises the matchup columns, `defect_rows` is already nonzero from
+    pre-existing state-class divergences (124 on the 12-game v4 corpus), so the matchup arm's
+    contribution to the EXIT CODE cannot be observed end-to-end -- only its printed count can.
+    Independent review flagged exactly that gap. This function is the whole decision, so
+    `tests/test_leaf_vs_reality_gate.py` can pin it directly.
+    """
+    return 0 if defect_rows == 0 and matchup_excess_rows == 0 else 1
+
+
 def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) -> dict[str, Any]:
     raw = load_corpus(corpus_dir)
     golden = load_golden_corpus(corpus_dir)
@@ -873,7 +885,7 @@ def main(argv=None) -> int:
     # Gated alongside state+turn rather than folded into them: it is a different KIND of finding
     # (a broken relationship, not a wrong cell) and collapsing it would hide which one fired.
     print(f"MATCHUP-EXCESS boundaries (pair diverges, live tendency does not): {matchup_excess_rows}")
-    return 0 if defect_rows == 0 and matchup_excess_rows == 0 else 1
+    return gate_exit_code(defect_rows, matchup_excess_rows)
 
 
 if __name__ == "__main__":
