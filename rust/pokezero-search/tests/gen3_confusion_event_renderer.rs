@@ -2225,3 +2225,73 @@ fn a_phaze_that_clears_a_substitute_keeps_refusing_and_renders_no_end_line() {
          the phaze case and the phantom-line guard above is unexercised"
     );
 }
+
+/// A phaze must not render a phantom `|-unboost|` either: `Boost` has the same two-producer
+/// problem the substitute break has, and #1131 admitted it unconditionally.
+///
+///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
+///   * The switch path's `reset_boosts(&switching_side_ref, ..)`, called when
+///     `!baton_passing` in the pre-switch block. Showdown drops boosts inside
+///     `clearVolatile()` and narrates NOTHING.
+///
+/// This crate's own `render_switch_phase` already discriminates correctly — it renders only
+/// the Intimidate case and drops the rest through an arm commented "Pre-switch bookkeeping
+/// (volatile clears, boost resets, ...): no lines." The unnamed-callee walk contradicted it.
+///
+/// The fixture carries a live `attack_boost`, so the drag emits `Boost(SideOne, Attack, -2)`.
+/// The tail must REFUSE (family `boost`) rather than render silence — see
+/// `boost_may_be_a_switch_out_reset` for why fail-closed is the right disposition when the
+/// alternative rests on a reachability argument.
+#[test]
+fn a_phaze_that_resets_boosts_renders_no_unboost_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().rest_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::ROAR);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::WHIRLWIND);
+    // A live boost on the side about to be dragged, so the switch-out reset is nonzero.
+    state.side_one.attack_boost = 2;
+
+    let branches = generate(&mut state);
+    let mut saw_refusal = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        // No boost line of EITHER polarity, on any branch, refused or not — the walk runs
+        // either way and Showdown emits nothing for a switch-out reset.
+        assert!(
+            !r.lines
+                .iter()
+                .any(|line| line.starts_with("|-boost|") || line.starts_with("|-unboost|")),
+            "a switch-out boost reset must render NO boost line: {:?}",
+            r.lines
+        );
+        if r.attribution_unsafe
+            .iter()
+            .any(|x| x.starts_with("sleeptalk_called_unidentified:ambiguous_unrenderable:"))
+        {
+            saw_refusal = true;
+        }
+    }
+    // BOTH guards do independent work, verified by removing each half of the fix:
+    //   * classifier AND walk arm removed (the pre-fix state) -> the phantom appears, and the
+    //     assertion above fires on `|-unboost|p1a: Lead|atk|2` sitting before the drag.
+    //   * classifier removed, walk arm kept -> no phantom, but the tail is ADMITTED and the
+    //     walk renders nothing, i.e. a searched world with a MISSING line. That is a distinct
+    //     defect of the same class, and only this vacuity guard catches it.
+    // So neither assertion is redundant, which is not obvious from reading them.
+    assert!(
+        saw_refusal,
+        "VACUOUS: no branch refused, so either the fixture no longer reaches the reset case \
+         or the tail is being admitted and silently under-rendered"
+    );
+}
