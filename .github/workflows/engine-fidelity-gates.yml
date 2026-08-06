@@ -53,6 +53,15 @@ jobs:
             # pin file still trips this workflow -- otherwise the guard could be
             # disarmed by a test-only edit that never triggers its own gate.
             tests/test_final_holdout_guard.py
+            # The coverage-bound pins. Listed so a PR that only weakens them still
+            # trips this workflow.
+            tests/test_single_seat_coverage_bound.py
+            # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
+            # only change is deleting one of them skips mass-gate and goes green.
+            reports/artifacts/c131_leechseed_main_dev_sweep.json
+            reports/artifacts/c131_leechseed_main_holdout_sweep.json
+            reports/artifacts/c131_leechseed_fix_dev_sweep.json
+            reports/artifacts/c131_leechseed_fix_holdout_sweep.json
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
@@ -311,6 +320,21 @@ jobs:
             exit 1
           fi
 
+      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
+      # measurement, ever, and that reservation used to live only in a plan
+      # document -- until a convenience shell loop over three --seed-start values
+      # executed 60 games of it. The guard refuses such runs; these pins keep the
+      # guard honest, so they have to actually run.
+      #
+      # NOTE ON SKIPS, learned the hard way. The first version of this step said
+      # "this job builds Showdown" and errored on any skip. CI builds no Showdown --
+      # no workflow installs node, none is tracked, and two steps in this same job
+      # say so outright -- so the ordering pin skipped and this step went RED on
+      # every PR that tripped the filter. A permanently-red gate discriminates
+      # nothing: the only way back to green is to delete the step, which is the
+      # failure mode the guard exists to prevent, one level up. The ordering pin now
+      # stubs its collaborators and needs no checkout, so the no-skip assertion
+      # below is meaningful rather than self-defeating.
       - name: Final-holdout guard pins
         run: |
           set -o pipefail
@@ -334,25 +358,31 @@ jobs:
             exit 1
           fi
 
+      # The differential measures ~87% of boundaries, not the ~96.6% its own
+      # `measured_fraction_of_full_rounds` reports: that metric's denominator is
+      # `boundaries_full_round`, which by construction EXCLUDES single-seat plies
+      # (~10% of boundaries, and almost all of the deferred-residual population --
+      # all of it except a simultaneous double faint). These pins keep the real
+      # denominator recoverable from any report, so a residue figure cannot be read
+      # as full coverage. reports/c132.
+      - name: Single-seat coverage bound
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_single_seat_coverage_bound -v 2>&1 \
+            | tee /tmp/coverage.log
+          if ! grep -qE 'Ran 3 tests' /tmp/coverage.log; then
+            echo "::error::expected 3 coverage-bound pins; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/coverage.log; then
+            echo "::error::coverage-bound pins did not report a clean OK"
+            exit 1
+          fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
       # what #1113 did at 7abf3343, invisibly, because no workflow executed it.
-      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
-      # measurement, ever, and that reservation used to live only in a plan
-      # document -- until a convenience shell loop over three --seed-start values
-      # executed 60 games of it. The guard refuses such runs; these pins keep the
-      # guard honest, so they have to actually run.
-      #
-      # NOTE ON SKIPS, learned the hard way. The first version of this step said
-      # "this job builds Showdown" and errored on any skip. CI builds no Showdown --
-      # no workflow installs node, none is tracked, and two steps in this same job
-      # say so outright -- so the ordering pin skipped and this step went RED on
-      # every PR that tripped the filter. A permanently-red gate discriminates
-      # nothing: the only way back to green is to delete the step, which is the
-      # failure mode the guard exists to prevent, one level up. The ordering pin now
-      # stubs its collaborators and needs no checkout, so the no-skip assertion
-      # below is meaningful rather than self-defeating.
       - name: Engine stat attestation
         run: |
           set -o pipefail

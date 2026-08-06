@@ -138,7 +138,26 @@ count but not the next.
 
 | row | cause | disposition |
 |---|---|---|
-| `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | already classed as limits by the harness |
+| `19100107/135`, `19100191/5` | `limit:roll_divergent_lethality` | **NOT disposed — see below.** The `limit:` prefix is a classifier label, not an adjudicated limit |
 | `19100180/24` | hazard applied to the non-replacing side on a forced-replacement ply (B1) | open |
 | `19000191/63` | collapsed roll; the heal delta (28 vs 29) is downstream and verified — after a 109-vs-101 move roll Raichu sits at 14 vs 22, so `min(29, 14+14)=28` and `min(29, 22+14)=29` are each correct given their own HP | open |
-| `19000074/27` | collapsed roll on the crit magnitude, plus a 1.56 % crit-kill arm omitting the attacker's own sandstorm chip | open; that component is candidate **A12** — the engine skips the whole residual phase on a move-caused faint, which is measured, while whether Showdown agrees is **not** |
+| `19000074/27` | crit fan straddles the residual-lethality threshold; the crit-straddle path emits no residual arm | open. Its 1.56 % component was filed as candidate **A12**, now **retracted** — both simulators defer the residual phase to the replacement ply, so that was never a defect |
+
+> **The `limit:` label on two of these rows is unearned, and I have been reporting it as a disposition.
+> It is not one.** C116 item 12 requires each row to be an engine fix, a harness fix, or a limit **with
+> a written demonstration**. A classifier prefix is none of those. Three of the repo's own records say
+> so:
+>
+> - `scripts/family_bucket_audit.py:58` buckets this family as **"engine-gap (partially resolved)"**,
+>   and `:12` defines engine-gap as the engine's branch support not containing the observed transition.
+> - `reports/c105_retract_limit_overclaim.json` records the limit label as **"8-for-8 falsified"** across
+>   the eight rows it was applied to — and `19000191/63` is explicitly one of the eight.
+> - The signature the audit gives for an engine gap — a legal roll range straddling a discrete threshold
+>   while the emitted arm sits on one side of it — holds for **all four** of these rows.
+>
+> On `19000074/27` the observed crit of **241 is roll 96 of the engine's own priced fan**
+> (`[214 … 241, 244, 246, 249, 252]`); the engine's `227` is the mean of the 12 non-KO rolls and is not a
+> fan member. The engine prices the roll and emits no arm at it.
+>
+> So the honest count is **five rows, none disposed** — not "five rows, two already limits". Corrected
+> here rather than carried forward.
