@@ -2033,6 +2033,26 @@ fn render_move_phase(
                             // Pressure. Inventing a tag FABRICATES a belief, which is worse
                             // than refusing. The predicate exists precisely to admit only the
                             // shape whose correct tag is no tag.
+                            // TWO MUTANTS STILL SURVIVE HERE, stated rather than implied,
+                            // because an earlier version of this arm claimed a pin it did not
+                            // have and review caught exactly that:
+                            //
+                            //   * passing `0` instead of `index` to the predicate. Survives
+                            //     because in every fixture that reaches this arm the `Heal` IS
+                            //     at index 0 -- a gen3 Sleep Talk callee tail for a direct
+                            //     healing move contains nothing else. Killing it needs a tail
+                            //     with an instruction before the heal, which no reachable gen3
+                            //     callee produces.
+                            //   * deleting the re-baseline below. Survives because making it
+                            //     observable needs a same-side HP DECREASE later in the same
+                            //     tail, and the Leech Seed fixture written for it does not
+                            //     produce one -- the residual lands outside the callee tail.
+                            //     The sibling test records that non-firing rather than passing
+                            //     silently.
+                            //
+                            // Both are the same shape as the `emit_residuals!()` survivor the
+                            // substitute arm documents: unreachable-today rather than untested
+                            // in principle.
                             emit_residuals!();
                             sim.apply(instruction);
                             let ident = ctx.active_ident(sim.state, side);
@@ -3357,6 +3377,18 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 /// these tails into `None` would make them silently indistinguishable from a rendered boost,
 /// and a family that reports its size is how we would learn whether the contiguous-pre-switch
 /// refinement is worth writing.
+
+fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
+    let boost = match tail.get(index) {
+        Some(Instruction::Boost(boost)) => boost,
+        _ => return false,
+    };
+    tail[index + 1..].iter().any(|later| match later {
+        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
+        _ => false,
+    })
+}
+
 /// Is this HP increase a DIRECT healing move on the attacker -- the one heal shape the walk
 /// can express -- rather than drain, an absorb ability, or Rest?
 ///
@@ -3408,17 +3440,6 @@ fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: Side
     !tail.iter().any(|other| match other {
         Instruction::Damage(dmg) => dmg.side_ref != attacker && dmg.damage_amount > 0,
         Instruction::DamageSubstitute(dmg) => dmg.side_ref != attacker,
-        _ => false,
-    })
-}
-
-fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
-    let boost = match tail.get(index) {
-        Some(Instruction::Boost(boost)) => boost,
-        _ => return false,
-    };
-    tail[index + 1..].iter().any(|later| match later {
-        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
         _ => false,
     })
 }
@@ -5311,7 +5332,7 @@ mod tests {
     /// The refactor must not change WHICH branches are refused.
     ///
     /// `ambiguous_tail_is_fully_renderable` was an inline `matches!` pair and is now
-    /// defined as `unrenderable_tail_families(tail, SideReference::SideOne).is_empty()`. That is only a
+    /// defined as `unrenderable_tail_families(tail, attacker).is_empty()`. That is only a
     /// refactor if the admitted set is byte-identical -- widening it by one variant
     /// stops refusing a class of worlds, which is a behaviour change to the largest
     /// failure class in the program, and narrowing it starts refusing worlds that
