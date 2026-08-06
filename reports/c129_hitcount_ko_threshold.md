@@ -114,21 +114,40 @@ Residue is now **dev 2 / holdout 7**.
 Both surfaced by the second review of #1116 as non-blocking, and both are real.
 
 **N1 — Case B's residual arms are the last basis mix in the file.**
-`generate_instructions.rs:3610` and `:3683` compare a **per-hit** `max_damage_dealt` against a
-**total**-basis `residual_threshold`, and `:3618` / `:3691` push that unconverted threshold as
-per-hit damage. There is no subtraction on those paths, so neither the negative count nor the
+`generate_instructions.rs:3636` compares a **per-hit** `max_damage_dealt` against a
+**total**-basis `residual_threshold`, and `:3644` / `:3717` push that unconverted threshold as
+per-hit damage. (Line numbers re-derived by grep against the built tree for this revision; the
+first version of this section cited `:3610`/`:3618`/`:3683`/`:3691`, of which none resolved.
+`third_party/poke-engine-src` is gitignored and rebuilt, so anchors here are era-scoped.) There is no subtraction on those paths, so neither the negative count nor the
 `0/0` can occur, and the unscaled `floor(x) < t ⟹ x < t` proof still holds — which is why this
 is not a crash. It is pre-existing on `main` and untouched here, but it is now the only
-inconsistency left. Reproduced on this branch at `bonemerang attack=200 hp=150 maxhp=400 poison`:
-the 5.2734 % arm is `Damage SideTwo: 100 | Damage SideTwo: 50` = 150 = **a KO priced as a
-residual death**.
+inconsistency left. Reproduced on this branch at `bonemerang attack=200 level=100 hp=150 maxhp=400 defense=85
+poison`: the 5.2734 % arm is `Damage SideTwo: 100 | Damage SideTwo: 50` = 150 = **a KO priced as a
+residual death**. `level` and `defense` are load-bearing and were missing from the first version of
+this line — at the test helper's defaults (`level=80, defense=180`) there is no such arm at all, so
+the repro as first written did not reproduce.
 
-**N2 — the survive arm truncates.** `average_non_kill_damage / hit_count` (`:3509`, `:3555`,
-`:3663`) is integer division, so the survive arm under-deals by up to `hit_count - 1` HP.
+**N2 — the survive arm truncates.** The three per-hit conversions at `:3509`, `:3581` and
+`:3689` are integer division, so the survive arm under-deals by up to `hit_count - 1` HP.
+(`:3555`/`:3663` in the first version of this line were stale.)
 
-**N4 — no pin catches a floor that is too high.** The three pins here catch a floor that is too
-low (the panic) and a floor removed entirely, but a floor of `0.90` instead of `0.85` passes all
-three. The straddle band's bottom edge is unpinned.
+**N4 — no pin catches a floor that is too high.** The pins here catch a floor that is too low
+(the panic) and a floor removed entirely, but a floor of `0.90` instead of `0.85` passes all of
+them. The straddle band's bottom edge is unpinned.
+
+**N5 — the ceiling can overshoot into a move-KO, but not reachably.** The residual arm deals
+`hit_count * ceil(rt / hit_count)`, which exceeds `rt` by `(-rt) mod hit_count`; since `hp - rt` is
+the net end-of-turn tick, the arm kills on the move whenever that tick is `<= hit_count - 1`.
+Round 3's review reproduced it over a 1,020,240-state sweep: **4,326** such states, **every one at
+`maxhp <= 47`**. The gen3 randbats universe has 1,682 variants and its only `maxhp <= 47` is
+**Shedinja at 1**, which cannot satisfy the arm's own `0 < residual_threshold < hp` gate; the next
+smallest is **Dugtrio at 166**. So it is unreachable in this pool and is filed rather than fixed.
+The minimal fix, if the invariant is ever wanted unconditionally, is to gate the push on
+`hit_count as i16 * residual_per_hit < defender_active.hp` and skip the arm otherwise — mass is
+preserved because `residual_kill_chance` stays 0.
+
+**Also filed, from round 3:** `residual_phase_final_hp` models no Curse or Nightmare tick, so the
+residual threshold is silently absent for those two sources.
 
 **The multi-hit shared roll, still unfixed and now filed.** The engine applies **one** damage roll
 to a whole multi-hit move, so it can only produce even totals for a two-hit move, while Showdown

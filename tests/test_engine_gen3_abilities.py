@@ -867,19 +867,48 @@ class AbilityMechanicsTests(unittest.TestCase):
             f"{offenders}",
         )
 
-        # Anti-vacuity: the residual arm must actually be present and carry mass,
-        # or the assertion above is trivially satisfied by its absence.
-        acting = [
-            (float(b.percentage), self._text(b))
-            for b in branches
-            if len(re.findall(r"Damage SideTwo: (\d+)", self._text(b))) >= 3
-            and "Damage SideOne" in self._text(b)
-            and float(b.percentage) > 50.0
-        ]
-        self.assertTrue(
-            acting,
-            "expected a majority-mass multi-hit residual arm in which the defender "
-            f"acts: {[(round(float(b.percentage), 2), self._text(b)[:70]) for b in branches]}",
+        # THE LOOP ABOVE IS NOT LOAD-BEARING AND IS KEPT ONLY AS A CHEAP SCAN.
+        # Round 3's review proved it is structurally dead for the bug it names:
+        # `len(hits) < 3` skips every arm with two damage entries, and an arm that
+        # kills on a TWO-hit move has at most two by construction -- the pre-fix
+        # arm was `[345, 50]`. The pre-fix failure came from the clause below, not
+        # from `offenders`. So the real assertions are stated directly, on the arm
+        # that actually carries the mass.
+        residual_arm = max(
+            branches,
+            key=lambda b: (
+                float(b.percentage)
+                if len(re.findall(r"Damage SideTwo: (\d+)", self._text(b))) >= 3
+                else -1.0
+            ),
+        )
+        arm_text = self._text(residual_arm)
+        arm_hits = [int(m) for m in re.findall(r"Damage SideTwo: (\d+)", arm_text)]
+        self.assertGreaterEqual(
+            len(arm_hits), 3,
+            f"no multi-hit residual arm present at all: {arm_text[:120]}",
+        )
+        self.assertGreater(
+            float(residual_arm.percentage), 50.0,
+            f"the residual arm should carry the majority of the mass: {arm_text[:120]}",
+        )
+
+        # (1) The defender must SURVIVE the move and act. Catches BLOCK 1, where
+        #     the arm dealt `hit_count * threshold` and killed on the move.
+        self.assertIn(
+            "Damage SideOne", arm_text,
+            "the residual arm killed on the move and deleted the defender's turn: "
+            f"{arm_text[:120]}",
+        )
+        # (2) The defender must still DIE to the residual. Catches the opposite
+        #     wrong fix -- TRUNCATING instead of ceiling division, which round 3
+        #     built and found passes every other pin, suite and probe in the repo.
+        #     Truncating gives 172+172 = 344, leaving 51 against a 50 tick, so the
+        #     defender lives and the arm's total falls one short of its own HP.
+        self.assertGreaterEqual(
+            sum(arm_hits), 395,
+            "the residual arm no longer kills via the residual -- truncating "
+            f"division rather than ceiling? total={sum(arm_hits)} arm={arm_text[:120]}",
         )
 
     def test_effect_spore_invalid_outcomes_keep_their_probability_mass(self) -> None:
