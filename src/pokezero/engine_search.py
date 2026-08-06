@@ -495,6 +495,64 @@ def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
     return f"{text[: limit - len(suffix)]}{suffix}"
 
 
+# The closed vocabulary for `EngineSearchStats.choices_unmapped_causes`.
+#
+# Closed and greppable on purpose, the same discipline `UNRENDERABLE_FAMILY_ORDER` applies in
+# the Rust renderer: a diagnosis counter whose keys are open-ended cannot be aggregated across
+# an era, and an unregistered token is how a class silently stops being rankable.
+_CHOICES_UNMAPPED_CAUSES = (
+    # The request carried no `action_candidates` at all. Not a legality mismatch -- the
+    # observation itself is missing the field, so this is a plumbing failure, not a
+    # belief/engine disagreement.
+    "no_action_candidates",
+    # The search produced no choices to map. Distinct from every choice failing: there was
+    # nothing to fail. Reachable when every world aborted but the caller did not take the
+    # `crate_search_failed` exit first.
+    "aggregated_empty",
+    # Every proposed choice failed to map AND no move was legal in the request. This is a
+    # SWITCH-ONLY decision -- a force switch, or an active mon with no usable move -- and the
+    # engine proposed only moves. The fix belongs on the policy side: propose a switch.
+    "all_unmapped_switch_only",
+    # Every proposed choice failed to map WHILE some move WAS legal. The engine's world and
+    # the request disagree about WHICH move is legal: PP exhaustion, Taunt, Disable, or a
+    # choice/Encore lock. A belief or PP-derivation bug, not a policy one.
+    "all_unmapped_legality_mismatch",
+    # Choices mapped, but every weight was non-positive, so `weight > best_weight` never
+    # fired against the 0.0 seed. A zero-visit search, not a mapping failure at all -- and
+    # invisible in `unmapped_choices`, since nothing was unmapped.
+    "mapped_but_no_positive_weight",
+)
+
+
+def _classify_unmapped(
+    *,
+    aggregated: Mapping[str, float],
+    mapped_any: bool,
+    any_legal_move: bool,
+    any_legal_switch: bool,
+) -> str:
+    """Name WHY `_map_choices` is about to return None.
+
+    Keyword-only, so a future argument cannot be silently absorbed into the wrong slot --
+    every parameter here is a bool or a mapping and three of them are bools, which is
+    precisely the shape where positional calls go wrong unnoticed.
+    """
+
+    if not aggregated:
+        return "aggregated_empty"
+    if mapped_any:
+        # Something mapped, so the failure is the weight comparison, not the mapping.
+        return "mapped_but_no_positive_weight"
+    if any_legal_move:
+        return "all_unmapped_legality_mismatch"
+    # No legal move. `any_legal_switch` is not branched on: with no legal move and no legal
+    # switch the request offers nothing at all, which is a different bug entirely, but it
+    # still reaches this line as switch-only. Recorded as a parameter rather than dropped so
+    # the distinction is available to a follow-up without re-plumbing.
+    del any_legal_switch
+    return "all_unmapped_switch_only"
+
+
 @dataclass
 class EngineMctsStats:
     """Cumulative per-policy telemetry; every fallback is counted, never hidden."""
@@ -550,6 +608,26 @@ class EngineMctsStats:
     # Non-zero means the sample is INCOMPLETE across classes.
     fallback_sample_addresses_dropped: int = 0
     unmapped_choices: Counter = field(default_factory=Counter)
+    # WHY `_map_choices` returned None, which `unmapped_choices` cannot say.
+    #
+    # `choices_unmapped` was 29 fallback decisions on era 60 and is a stop-condition term
+    # in its own right -- GOAL.md requires it at zero independently of the fallback rate --
+    # but the reason is a single opaque literal with THREE call sites, all of the same shape
+    # (`_map_choices(...) is None`). So era 60 could say the class was 29 and not one word
+    # about which of four distinct causes produced it.
+    #
+    # This is the same shape of gap that `ambiguous_unrenderable` had before its family
+    # split: one key at meaningful volume, no way to scope the fix. That split is what let
+    # era 60 rank the abort channel at all, and it is the reason this counter exists.
+    #
+    # Deliberately NOT a sub-cased reason. `fallback_reasons` is a closed 7-literal set and
+    # the per-decision address store bounds itself on that ("The reason set is closed and
+    # small (7 literals), so this adds at most 7 keys"). Sub-casing the reason would
+    # multiply the address keys and silently weaken that bound. A separate counter carries
+    # the diagnosis with no effect on the reason vocabulary.
+    #
+    # The token set is closed and greppable; see `_CHOICES_UNMAPPED_CAUSES`.
+    choices_unmapped_causes: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
     # Native per-phase search wall (crate-measured, never derived by
@@ -680,6 +758,7 @@ class EngineMctsStats:
                 self.fallback_sample_addresses_dropped
             ),
             "unmapped_choices": dict(self.unmapped_choices),
+            "choices_unmapped_causes": dict(self.choices_unmapped_causes),
             "model_evals": self.model_evals,
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
@@ -1960,6 +2039,7 @@ class EngineMctsPolicy:
     ) -> Optional[int]:
         candidates = context.observation.metadata.get("action_candidates")
         if not isinstance(candidates, Sequence):
+            self.stats.choices_unmapped_causes["no_action_candidates"] += 1
             return None
         mask = context.observation.legal_action_mask
 
@@ -1996,8 +2076,20 @@ class EngineMctsPolicy:
                         canonical_gen3_randbat_species_id(species)
                     ] = index
 
+        # Recorded BEFORE the mapping loop, because the loop's own bookkeeping cannot
+        # distinguish "the engine proposed a move and no move was legal" from "the engine
+        # proposed a move and a DIFFERENT move was legal". The first is a switch-only
+        # decision -- a force switch, or an active mon with no usable move -- and the fix is
+        # for the policy to propose a switch. The second is a legality mismatch between the
+        # engine's world and the request: PP exhaustion, Taunt, Disable, or a choice/Encore
+        # lock. Those are different bugs with different owners, and era 60 could not tell
+        # them apart.
+        any_legal_move = bool(move_index_by_id) or hidden_power_index is not None
+        any_legal_switch = bool(switch_index_by_species)
+
         best_index: Optional[int] = None
         best_weight = 0.0
+        mapped_any = False
         for choice, weight in aggregated.items():
             index: Optional[int] = None
             if choice.startswith("switch "):
@@ -2016,9 +2108,19 @@ class EngineMctsPolicy:
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue
+            mapped_any = True
             if weight > best_weight:
                 best_weight = weight
                 best_index = index
+        if best_index is None:
+            self.stats.choices_unmapped_causes[
+                _classify_unmapped(
+                    aggregated=aggregated,
+                    mapped_any=mapped_any,
+                    any_legal_move=any_legal_move,
+                    any_legal_switch=any_legal_switch,
+                )
+            ] += 1
         return best_index
 
     def _fallback(
