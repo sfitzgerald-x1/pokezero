@@ -1164,7 +1164,7 @@ pub(crate) fn encode_row_value(
         // v4 has NO transition region, but the products still carry the tendency counters and
         // the pinned Tier-2 conclusions, which are current-state surfaces on the mon tokens.
         // write_history_cells owns both, and skips the transition rows itself at v4.
-        write_history_cells(tables, &mut grid, products, md, &opponent_mons)?;
+        write_history_cells(tables, &mut grid, products, md, &self_mons, &opponent_mons)?;
     }
 
     let (categorical, numeric) = grid.finish();
@@ -2875,6 +2875,7 @@ fn write_history_cells(
     grid: &mut Grid,
     products: &ProductsData,
     md: &Value,
+    self_mons: &[MonToken],
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;
@@ -2889,7 +2890,7 @@ fn write_history_cells(
     if layout.stats_block {
         write_stats_token(tables, grid, products)?;
     }
-    write_opponent_mon_history(tables, grid, products, opponent_mons)?;
+    write_opponent_mon_history(tables, grid, products, self_mons, opponent_mons)?;
     Ok(())
 }
 
@@ -3281,6 +3282,7 @@ fn write_opponent_mon_history(
     tables: &Tables,
     grid: &mut Grid,
     products: &ProductsData,
+    self_mons: &[MonToken],
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;
@@ -3323,6 +3325,61 @@ fn write_opponent_mon_history(
                             (count as f64 / layout.stat_count_divisor).min(1.0),
                         );
                     }
+                }
+            }
+            // The matchup-conditional pair, written from the FOLD rather than the metadata.
+            //
+            // `encode_pokemon_tokens` already wrote these two columns from
+            // `md["opponent_matchup_switch_evidence"]`, which is correct on the root/boundary
+            // encode (no products) but FROZEN at the leaf: leaf.rs rebuilds the team rows from
+            // live engine state and never rebuilds that fold-derived key, so a search line saw
+            // the root's counts against the root's active. That mattered more than ordinary
+            // staleness because this column's divisor is 8, not 64 -- one event moves it 12.5%
+            // against the tendency triple's 1.6% -- so the 8x more sensitive column sat still
+            // while the insensitive one advanced live, an off-distribution (matchup, tendency)
+            // pair the model never trained on. Measured movement: 0.191 cell changes per ply,
+            // 55.9% of 4-ply windows and 79.8% of 8-ply windows containing at least one.
+            //
+            // Runs AFTER the metadata write (write_history_cells is called after
+            // encode_pokemon_tokens) and writes unconditionally, zero included, so it fully
+            // overrides the stale pair instead of leaving it standing when the live cell is
+            // empty. Mirrors `_matchup_switch_evidence` (showdown.py:3959): select the column
+            // of the (their mon x our mon) table whose `opposing_species` is OUR CURRENT
+            // active, absent active or absent cell meaning an honest (0, 0).
+            if layout.is_v4() && layout.stats_block {
+                let ours = self_mons
+                    .iter()
+                    .find(|mon| mon.active())
+                    .map(|mon| normalize_identifier(&mon.species()))
+                    .filter(|species| !species.is_empty());
+                // Later entries win, as in the tendency lookup above: production keys a dict by
+                // normalized species and Python's builder assigns in iteration order.
+                let cell = ours.as_ref().and_then(|ours| {
+                    products
+                        .tendency_stats
+                        .opponent_mon_matchups
+                        .iter()
+                        .rev()
+                        .find(|cell| {
+                            normalize_identifier(&cell.species) == species_key
+                                && normalize_identifier(&cell.opposing_species) == *ours
+                        })
+                });
+                for (column, count) in [
+                    (
+                        "NUMERIC_MON_SWITCHED_VS_ACTIVE",
+                        cell.map(|c| c.switched_out_before_attacking).unwrap_or(0),
+                    ),
+                    (
+                        "NUMERIC_MON_STAYED_VS_ACTIVE",
+                        cell.map(|c| c.stayed_and_attacked).unwrap_or(0),
+                    ),
+                ] {
+                    grid.set_num(
+                        token,
+                        layout.num_col(column)?,
+                        (count as f64 / layout.matchup_count_divisor).min(1.0),
+                    );
                 }
             }
         }

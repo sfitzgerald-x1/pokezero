@@ -2273,6 +2273,22 @@ impl FoldStateInner {
                 turns_active: counters.turns_active,
             })
             .collect();
+        // The matchup-conditional twin, same filter and same order as `mon_tendencies` above:
+        // Python takes `sorted(self.matchup_counters.items())` filtered to `side == opponent`
+        // (`transitions_fold.py:899-909`), and this BTreeMap already iterates in
+        // `(side, species, facing)` order, so no explicit sort is needed to match.
+        let mon_matchups: Vec<MatchupCounterData> = self
+            .matchup_counters
+            .iter()
+            .filter(|((side, _, _), _)| *side == opponent)
+            .map(|((side, species, facing), counters)| MatchupCounterData {
+                slot: *side,
+                species: species.clone(),
+                opposing_species: facing.clone(),
+                switched_out_before_attacking: counters.switched_out_before_attacking,
+                stayed_and_attacked: counters.stayed_and_attacked,
+            })
+            .collect();
         // The consumer reduction: {weather: OR(from_ability)} for the opponent side,
         // sorted by weather id (BTreeMap iteration order).
         let weather_reveals: Vec<(String, bool)> = self
@@ -2288,6 +2304,7 @@ impl FoldStateInner {
             opponent_switch_count: switches,
             opponent_decision_opportunities: opportunities,
             opponent_mon_tendencies: mon_tendencies,
+            opponent_mon_matchups: mon_matchups,
             opponent_weather_reveals: weather_reveals,
             blocked_on_our_attack_count: blocked,
             pursuit_intercept_predict_count: pursuit,
@@ -2304,6 +2321,30 @@ pub(crate) struct MonTendencyData {
     pub(crate) turns_active: i64,
 }
 
+/// One (their mon x our mon) cell, the matchup-conditional twin of `MonTendencyData`.
+///
+/// Surfaced through `ProductsData` rather than left to the root row's `observation_metadata`.
+/// It was frozen at the root for no designed reason -- `matchup_counters` lived in the fold and
+/// was simply never added here -- and the freeze fell on the wrong side of a divisor asymmetry:
+/// the whole-game tendency counts normalize by `_STAT_COUNT_DIVISOR = 64`, so one event moves
+/// that column 1.6%, while these cells normalize by `_MATCHUP_COUNT_DIVISOR = 8` and one event
+/// moves 12.5%. The 8x more sensitive column was the frozen one while the insensitive one
+/// updated live.
+///
+/// Measured before changing it, since "these cells are visited a handful of times per game"
+/// cuts both ways: over 25 games / 1,294 decision points the cells change 0.191 times per ply,
+/// and a window of K consecutive plies contains at least one change 34.5% of the time at K=2,
+/// 55.9% at K=4, 79.8% at K=8. Movement inside a search line is the common case, not the rare
+/// one, so freezing produced (matchup, tendency) pairs that do not occur in training -- the
+/// tendency column advancing while the matchup column sits.
+pub(crate) struct MatchupCounterData {
+    pub(crate) slot: u8,
+    pub(crate) species: String,
+    pub(crate) opposing_species: String,
+    pub(crate) switched_out_before_attacking: i64,
+    pub(crate) stayed_and_attacked: i64,
+}
+
 pub(crate) struct TendencyStatsData {
     pub(crate) perspective_slot: u8,
     pub(crate) opponent_slot: u8,
@@ -2314,6 +2355,7 @@ pub(crate) struct TendencyStatsData {
     pub(crate) blocked_on_our_attack_count: i64,
     pub(crate) pursuit_intercept_predict_count: i64,
     pub(crate) my_switch_turn_count: i64,
+    pub(crate) opponent_mon_matchups: Vec<MatchupCounterData>,
 }
 
 pub(crate) struct ProductsData {

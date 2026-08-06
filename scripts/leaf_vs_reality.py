@@ -191,6 +191,11 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # the recorded chosen candidate. That is NOT what production builds, so these gates would ratify
 # a symmetric self-side write rather than catch it. Verify against engine_search's world, not
 # the gate's.
+# NUMERIC_MON_SWITCHED_VS_ACTIVE / NUMERIC_MON_STAYED_VS_ACTIVE used to be listed here.
+# They were never a designed freeze: `matchup_counters` lived in the fold but was not carried on
+# ProductsData, so the leaf fell through to the root row's `opponent_matchup_switch_evidence`.
+# The pair is now written from the fold (encoder.rs write_opponent_mon_history), so it is
+# MUST-MATCH and belongs in no excuse class -- if it regresses to frozen, this harness reports it.
 V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
     {
         "NUMERIC_TRUANT_LOAF",
@@ -204,8 +209,6 @@ V4_ROOT_FROZEN_PACK_COLUMNS = frozenset(
         "NUMERIC_OPP_ITEMS_REMOVED_CREDIT",
         "NUMERIC_CHOICE_LOCKED",
         "NUMERIC_ITEM_SWAPPED",
-        "NUMERIC_MON_SWITCHED_VS_ACTIVE",
-        "NUMERIC_MON_STAYED_VS_ACTIVE",
         "CATEGORY_LAST_USED_MOVE",
         "CATEGORY_TRACED_ABILITY",
     }
@@ -302,6 +305,7 @@ def drive_pair(
     dex,
     history_lines: list[str],
     tables_json: str,
+    observation_schema_version: str,
 ) -> tuple[str, Any]:
     """Returns (status, payload). status='ok' payload=(buffers, turn); else a
     skip reason string."""
@@ -469,7 +473,7 @@ def drive_pair(
         "battle_seed": anchor.get("battle_seed"),
         "format_id": anchor.get("format_id"),
         "player_id": anchor.get("player_id"),
-        "observation_schema_version": anchor.get("observation_schema_version"),
+        "observation_schema_version": observation_schema_version,
         "observation_metadata": anchor.get("observation_metadata"),
         "public_materialization": payload,
     }
@@ -574,6 +578,17 @@ def drive_pair(
     return "ok", (buffers, turn, tags)
 
 
+def anchor_observation_schema(golden_rows, battle_id: str, row_n, seat: str) -> str:
+    """The OBSERVATION schema the anchor row was encoded at.
+
+    Deliberately not defaulted to the tables' own schema version: the encoder compares this
+    against the table layout and a self-derived value would make that guard vacuous. Missing
+    means "", which the guard rejects — the honest outcome, and now a visible one.
+    """
+    golden = golden_rows.get((battle_id, row_n["decision_round_index"], seat))
+    return "" if golden is None else str(golden.observation_schema_version or "")
+
+
 def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) -> dict[str, Any]:
     raw = load_corpus(corpus_dir)
     golden = load_golden_corpus(corpus_dir)
@@ -612,6 +627,9 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                 dex=dex,
                 history_lines=list(history),
                 tables_json=tables_json,
+                observation_schema_version=anchor_observation_schema(
+                    golden_rows, battle_id, row_n, seat
+                ),
             )
             history.extend(row_next.get("event_slice") or ())
             if status != "ok":
@@ -681,7 +699,11 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                         if name == "legal_action_mask":
                             token, column = -1, int(position[0])
                             colname = f"action{column}"
-                    block = block_of(token) if token >= 0 else name
+                    block = (
+                        block_of(token, tables["layout"]["token_count"])
+                        if token >= 0
+                        else name
+                    )
                     opp_membership = (
                         isinstance(token, int) and token in membership_tokens
                     )

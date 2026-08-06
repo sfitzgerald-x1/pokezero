@@ -739,5 +739,248 @@ class RustEncoderV4ParityTest(unittest.TestCase):
                 name,
             )
 
+@unittest.skipUnless(_available(), "requires numpy, the native crate, and a Showdown checkout")
+@unittest.skipUnless(
+    pokezero_search is not None
+    and hasattr(pokezero_search, "LeafEncoder")
+    and hasattr(pokezero_search, "FoldState"),
+    "wheel lacks LeafEncoder/FoldState",
+)
+class V4LeafMatchupPairTracksTheFoldTest(unittest.TestCase):
+    """The matchup pair must come from the FOLD at the leaf, not the root row's metadata.
+
+    `matchup_counters` lived in the fold but was never carried on `ProductsData`, so
+    `encode_leaf` fell through to the root row's `opponent_matchup_switch_evidence` and the pair
+    sat frozen for a whole search subtree. The sibling test
+    `test_the_matchup_pair_reaches_every_opponent_token` cannot see this: it drives
+    `RustBackend.encode`, the ROW path, where the metadata IS the live source.
+
+    Why it mattered more than ordinary staleness: this pair's divisor is 8, the tendency triple's
+    is 64, so one event moves the matchup column 12.5% against the tendency column's 1.6%. The
+    8x more sensitive column was the frozen one while the insensitive one advanced live, which
+    hands the model (matchup, tendency) pairs that never occur in training -- the two counters
+    always move together there. Measured on a 12-game v4 golden corpus (1271 same-seat
+    boundaries): frozen, the pair diverged from reality on 380 (stayed) + 194 (switched)
+    boundaries; fold-driven, on 4 and 0 -- and those 4 are exactly the boundaries where the
+    ALREADY-live `NUMERIC_MON_STAYED_AND_ATTACKED` diverges too, so the surfaced column adds no
+    divergence of its own.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, str(SCRIPTS))
+        import export_encoder_tables
+
+        cls.tables = export_encoder_tables.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+        )
+        cls.tables_json = json.dumps(
+            cls.tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        sys.path.remove(str(SCRIPTS))
+
+    def _driveable_row(self):
+        """The first p1 row whose engine world builds, with its fold state and encoder.
+
+        Returns (row, fold_payload, encoder, state_str, ours, theirs, turn).
+        """
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.engine_world import EngineWorldUnsupported, battle_spec_from_payload
+        from pokezero.env import BattleStartOverride
+        from pokezero.golden_corpus import GOLDEN_CORPUS_SCHEMA_VERSION
+        from pokezero.golden_corpus_fold import iter_fold_records
+        from pokezero.poke_engine_adapter import build_poke_engine_state
+
+        corpus = load_golden_corpus(SAMPLE_DIR)
+        folds = {
+            int(record["array_row_index"]): record["fold_state"]
+            for record in iter_fold_records(
+                SAMPLE_DIR, expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION
+            )
+        }
+        dex = load_showdown_dex_cached(str(_showdown_root()))
+        games = {game.record.battle_id: game for game in corpus.games}
+        for index, row in enumerate(corpus.decision_rows):
+            if row.player_id != "p1" or index not in folds:
+                continue
+            game = games[row.battle_id]
+            packed = {
+                slot: (game.record.true_teams.get(slot) or {}).get("packed")
+                for slot in ("p1", "p2")
+            }
+            if not packed["p1"] or not packed["p2"]:
+                continue
+            try:
+                world = battle_spec_from_payload(
+                    row.public_materialization,
+                    BattleStartOverride(player_teams=packed),
+                    dex=dex,
+                    approximate_sleep_turns=True,
+                    approximate_substitute_health=True,
+                )
+                state_str = build_poke_engine_state(world.spec).to_string()
+            except EngineWorldUnsupported:
+                continue
+            metadata = row.observation_metadata
+            ours = next(
+                (e["species"] for e in metadata["self_team"] if e.get("active")), ""
+            )
+            theirs = next(
+                (e["species"] for e in metadata["opponent_team"] if e.get("active")), ""
+            )
+            if not ours or not theirs:
+                continue
+            context = json.dumps(
+                {
+                    "p1": list(world.party_species["p1"]),
+                    "p2": list(world.party_species["p2"]),
+                    "turn": int(row.public_materialization.get("turn") or 0),
+                }
+            )
+            row_inputs = json.dumps(
+                {
+                    "battle_id": row.battle_id,
+                    "battle_seed": row.battle_seed,
+                    "format_id": row.format_id,
+                    "player_id": row.player_id,
+                    "observation_schema_version": row.observation_schema_version,
+                    "observation_metadata": metadata,
+                    "public_materialization": row.public_materialization,
+                },
+                sort_keys=True,
+            )
+            encoder = pokezero_search.LeafEncoder(
+                self.tables_json, row_inputs, context, state_str
+            )
+            return (
+                row,
+                folds[index],
+                encoder,
+                state_str,
+                ours,
+                theirs,
+                int(metadata.get("turn_number") or 0),
+            )
+        self.skipTest("no committed-sample p1 row could be driven into an engine world")
+
+    def _matchup_columns(self, encoder, state_str, fold, turn):
+        layout = self.tables["layout"]
+        offset = layout["token_offsets"]["opponent_pokemon"]
+        width = layout["token_offsets"]["action_candidates"] - offset
+        buffers = encoder.encode_leaf(state_str, fold, turn)
+        grid = numpy.frombuffer(
+            buffers["numeric_features"], dtype="<f8"
+        ).reshape(layout["token_count"], -1)
+        columns = layout["numeric_columns"]
+        return (
+            list(grid[offset : offset + width, columns["NUMERIC_MON_SWITCHED_VS_ACTIVE"]]),
+            list(grid[offset : offset + width, columns["NUMERIC_MON_STAYED_VS_ACTIVE"]]),
+        )
+
+    def test_a_fold_advance_moves_the_pair_the_root_metadata_cannot_explain(self) -> None:
+        row, fold_payload, encoder, state_str, ours, theirs, turn = self._driveable_row()
+        # The load-bearing precondition. The chosen row's metadata evidence must be EMPTY, so a
+        # nonzero column after the advance cannot have come from the frozen metadata under any
+        # reading -- without this the test would pass on the frozen code the moment the root row
+        # happened to carry a nonzero pair.
+        self.assertEqual(
+            row.observation_metadata.get("opponent_matchup_switch_evidence") or {},
+            {},
+            "row's metadata evidence is non-empty, so a nonzero leaf column proves nothing",
+        )
+        before = self._matchup_columns(
+            encoder,
+            state_str,
+            pokezero_search.FoldState.from_payload(fold_payload),
+            turn,
+        )
+        self.assertEqual(
+            before,
+            ([0.0] * len(before[0]), [0.0] * len(before[1])),
+            "empty metadata evidence must encode as an all-zero pair",
+        )
+        fold = pokezero_search.FoldState.from_payload(fold_payload)
+        # Their active stays in and attacks ours: one `stayed_and_attacked` increment on the
+        # (their mon x our mon) cell, and 1/8 is the shipped divisor's single-event step.
+        fold.advance_in_place(
+            [f"|move|p2a: {theirs}|Tackle|p1a: {ours}", f"|turn|{turn + 1}"]
+        )
+        after = self._matchup_columns(encoder, state_str, fold, turn)
+        self.assertEqual(
+            after[0],
+            before[0],
+            "a stay-and-attack must not touch the SWITCHED column (transposed write)",
+        )
+        self.assertEqual(
+            max(after[1]),
+            0.125,
+            "stayed-vs-active did not reach the fold's single-event value (1/8)",
+        )
+        self.assertEqual(
+            sum(1 for value in after[1] if value != 0.0),
+            1,
+            "exactly one opponent token faces us; a broader write is not conditioned",
+        )
+
+    def test_the_pair_is_conditioned_on_which_of_OUR_mons_is_active(self) -> None:
+        """Selecting the wrong column of the (their mon x our mon) table is the other failure
+        mode, and it survives the test above: a write that reads "any cell for this species"
+        still moves.
+
+        Mirrors `_matchup_switch_evidence` (showdown.py), which picks the column whose
+        `opposing_species` is our current active. So: switch OUR active inside the fold, let
+        their mon attack that one, then encode the ORIGINAL engine state, where our active is
+        still the row's. The cell now exists in the fold but under a different facing, and the
+        encoded pair must stay zero.
+
+        Note the fold takes `facing` from the active it TRACKS, not from the target named on the
+        `|move|` line -- retargeting the line alone leaves the cell on the old facing and this
+        test then passes vacuously, which is how its first revision managed to fail against
+        correct code.
+        """
+        row, fold_payload, encoder, state_str, ours, theirs, turn = self._driveable_row()
+        bench = next(
+            (
+                entry
+                for entry in row.observation_metadata["self_team"]
+                if not entry.get("active") and entry.get("species") and entry.get("details")
+            ),
+            None,
+        )
+        if bench is None:
+            self.skipTest("fixture has no benched self mon to condition against")
+        self.assertNotEqual(bench["species"], ours, "bench mon must differ from our active")
+        fold = pokezero_search.FoldState.from_payload(fold_payload)
+        fold.advance_in_place(
+            [
+                f"|switch|p1a: {bench['species']}|{bench['details']}|{bench['condition']}",
+                f"|move|p2a: {theirs}|Tackle|p1a: {bench['species']}",
+                f"|turn|{turn + 1}",
+            ]
+        )
+        after = self._matchup_columns(encoder, state_str, fold, turn)
+        # Non-vacuity by DIFFERENCE rather than by assertion about the fold's internals: the
+        # control advance is the identical attack with our active left alone, encoded against the
+        # identical state. It lights the column. So everything about the two runs is the same
+        # except which facing the fold filed the cell under, and only the control moves.
+        control = pokezero_search.FoldState.from_payload(fold_payload)
+        control.advance_in_place(
+            [f"|move|p2a: {theirs}|Tackle|p1a: {ours}", f"|turn|{turn + 1}"]
+        )
+        control_pair = self._matchup_columns(encoder, state_str, control, turn)
+        self.assertEqual(
+            max(control_pair[1]),
+            0.125,
+            "control advance did not move the column, so 'stayed zero' below proves nothing",
+        )
+        self.assertEqual(
+            after,
+            ([0.0] * len(after[0]), [0.0] * len(after[1])),
+            "the pair moved for a matchup against a mon we do not have out -- the write reads "
+            "the species row without conditioning on our active",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
