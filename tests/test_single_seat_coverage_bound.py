@@ -121,8 +121,10 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
             self.assertEqual(
                 measured + exits, full,
                 f"{name}: the full-round path no longer reconciles "
-                f"({measured} + {exits} != {full}); single-seat plies may now be "
-                "counted as full rounds",
+                f"({measured} + {exits} != {full}). Likeliest cause: an exit counter "
+                "was renamed or added, since the list above is a hardcoded prefix "
+                "allowlist. Other possibility: single-seat plies are now counted as "
+                "full rounds.",
             )
 
             # And the reported fraction really is over full rounds, not over all

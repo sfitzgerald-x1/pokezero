@@ -1679,10 +1679,8 @@ _RESIDUAL_PHASE_SOURCES = frozenset({
 
 
 def _is_forced_replacement_ply(step_lines: Sequence[str]) -> bool:
-    """A ply on which nobody moved, somebody switched, and no residual phase ran.
-
-    Nobody moved, somebody switched, no residual phase ran, and the battle did
-    not end.
+    """A ply on which nobody moved, somebody switched, no residual phase ran, and
+    the battle did not end.
 
     THE OLD FIRST LINE SAID "because it is a replacement", AND THAT REASON IS THE
     OPPOSITE OF WHAT SHOWDOWN DOES. Being a replacement ply is not what makes the
@@ -1692,12 +1690,12 @@ def _is_forced_replacement_ply(step_lines: Sequence[str]) -> bool:
     residual phase -- weather upkeep, both actives' chips, items, status. The
     engine defers it identically (its arm ends in `ToggleSide*ForceSwitch`, and the
     next transition carries the whole phase), so the two agree.
-    
+
     The predicate is still correct, for a different reason than it claimed: such a
     ply carries `|upkeep|`, so the first clause excludes it. What this really
     matches is the OTHER shape -- a replacement with no residual phase at all,
     which is the switch-then-nothing ply.
-    
+
     Hoisted to module level so it can be pinned BEHAVIOURALLY. An earlier version
     lived inline and its pins asserted on `inspect.getsource` TEXT, which meant
     inverting the `|win|` clause would have passed every one of them -- the exact
