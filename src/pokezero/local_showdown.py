@@ -2915,15 +2915,110 @@ def actor_move_states_from_request_history(
     A normal Showdown request carries exact PP only for the current active Pokemon. Keeping the
     most recent such state per own Pokemon is player-known information and lets direct search
     restore a previously active Pokemon after it has switched out.
+
+    A request taken while that Pokemon was TRANSFORMED is skipped, and its earlier clean
+    snapshot kept instead. This is the fix for the dominant half of `self_moveset_mismatch`
+    -- 365 killed decisions in era 59, 44.8% of the construction channel, all seat p1.
+
+    THE MECHANISM. `request["active"][0]["moves"]` is the USABLE moveset, so while Ditto is
+    transformed it lists the COPIED moves. Retaining that was permanent: gen 3 reverts
+    Transform on switch-out, so a benched Ditto never appears active again with its own set
+    and no later request refreshes the entry. The stale row reached
+    `engine_world._move_specs` as Ditto's request-known moveset, was compared against the
+    root snapshot's `[transform]`, and refused every world with
+    `request-known move 'bodyslam' is absent from the sampled moveset`. Failing closed there
+    is CORRECT -- the input really is wrong -- so loosening that guard would hide the defect
+    rather than fix it.
+
+    KEEP the earlier clean snapshot; do not erase the identity. Erasing also removes
+    `self_moveset_mismatch`, but strands the Pokemon with no PP at all and `engine_world`
+    then refuses it as `self_pp_unknown`. Measured on the golden-corpus `ditto_transform`
+    sweep: erasing turned 7 refusals into 8, which is not a fix. Keeping the pre-transform
+    snapshot is right on the merits too, because the copied moves spend the COPIED PP -- a
+    transformed Ditto using Body Slam does not decrement Ditto's own Transform PP.
+
+    HOW A TRANSFORMED REQUEST IS RECOGNISED, and why the obvious way fails. Comparing the
+    usable moveset against the same request's `side.pokemon[].moves` does NOT work: that
+    assumption (that Showdown reports base moves there, untouched by Transform) is false on
+    this path, and it was measured rather than argued. Instrumenting the sweep printed
+
+        usable=['bodyslam','curse','rest','shadowball'] own=['bodyslam','curse','rest','shadowball']
+
+    -- the request reports the copied set in BOTH places, so a subset check inside one
+    request can never fire.
+
+    The FIRST request is the reference instead. It is battle-start, so it necessarily
+    predates any Transform, and its `side.pokemon[].moves` give each own Pokemon's real
+    moveset. A later active moveset that is not a subset of that is not this Pokemon's.
+
+    Not Mimic: `mimic` appears in no gen 3 randbats set, and our own team is the
+    battle-start request team verbatim, so it cannot carry one.
     """
 
+    own_by_identity = _own_move_ids_by_identity(requests[0]) if requests else {}
     states: dict[str, tuple[Mapping[str, Any], ...]] = {}
     for request in requests:
         identity = _request_active_pokemon_identity(request)
         moves = _request_active_moves(request)
-        if identity is not None and moves:
-            states[identity] = tuple(_json_clone_mapping(move) for move in moves)
+        if identity is None or not moves:
+            continue
+        own = own_by_identity.get(identity)
+        if own:
+            usable = {
+                _base_move_id(str(move.get("id")))
+                for move in moves
+                if isinstance(move.get("id"), str)
+            }
+            # SUBSET, not equality: a Disable/Encore/Choice-locked active request
+            # legitimately lists FEWER moves than the Pokemon knows. Only moves it does
+            # not know at all indicate a copied moveset.
+            if not usable <= own:
+                continue
+        states[identity] = tuple(_json_clone_mapping(move) for move in moves)
     return states
+
+
+def _own_move_ids_by_identity(request: Mapping[str, Any]) -> dict[str, frozenset[str]]:
+    """Each own Pokemon's real move ids, from the BATTLE-START request.
+
+    Battle-start is what makes this reference trustworthy: it precedes any Transform, so
+    these are base movesets even though the same field is unreliable in later requests.
+    """
+
+    side = request.get("side")
+    rows = side.get("pokemon") if isinstance(side, Mapping) else None
+    if not isinstance(rows, list):
+        return {}
+    own: dict[str, frozenset[str]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        raw = row.get("moves")
+        if not isinstance(raw, list):
+            continue
+        ids = frozenset(
+            _base_move_id(move) for move in raw if isinstance(move, str) and move
+        )
+        if ids:
+            own[_request_pokemon_identity(row)] = ids
+    return own
+
+
+def _base_move_id(move_id: str) -> str:
+    """Collapse Showdown's resolved-power spellings so the two lists are comparable.
+
+    The same move is spelled differently in the two places this compares:
+    `side.pokemon[].moves` carries resolved power (`hiddenpowerice70`, `return102`) while
+    `active[0].moves[].id` carries the base id (`hiddenpower`, `return`). Comparing raw
+    would call every Hidden Power carrier transformed and silently drop its PP snapshot --
+    a regression in the opposite direction, and one the era counts could not separate from
+    the fix, because both show up as fewer retained snapshots.
+    """
+
+    normalized = normalize_id(move_id)
+    if normalized.startswith("hiddenpower"):
+        return "hiddenpower"
+    return normalized.rstrip("0123456789") or normalized
 
 
 def _request_active_pokemon_identity(request: Mapping[str, Any]) -> str | None:
