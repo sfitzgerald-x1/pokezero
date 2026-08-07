@@ -1,0 +1,78 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1196,7 +1196,33 @@
+         );
+     }
+ }
++
++/// C116 Phase 2 spike -- enumerate-then-merge, OFF BY DEFAULT.
++///
++/// Read once from `POKEZERO_ENUMERATE_ROLLS` (accepts `1`/`true`).
++static ENUMERATE_DAMAGE_ROLLS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+ 
++pub fn enumerate_damage_rolls() -> bool {
++    *ENUMERATE_DAMAGE_ROLLS.get_or_init(|| {
++        matches!(
++            std::env::var("POKEZERO_ENUMERATE_ROLLS").as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
++        )
++    })
++}
++
++/// The 16 gen3 damage rolls of a fan, in EXACT INTEGER arithmetic, pre-merged on
++/// equal damage.
++fn push_enumerated_rolls(arms: &mut Vec<(i16, f32)>, max_damage: i16, mass_per_roll: f32) {
++    for numerator in 85..=100i32 {
++        let rolled = (max_damage as i32 * numerator / 100) as i16;
++        match arms.iter_mut().find(|(damage, _)| *damage == rolled) {
++            Some(existing) => existing.1 += mass_per_roll,
++            None => arms.push((rolled, mass_per_roll)),
++        }
++    }
++}
++
+ fn compare_health_with_damage_multiples(max_damage: i16, health: i16) -> (i16, i16) {
+     let max_damage_f32 = max_damage as f32;
+     let health_f32 = health as f32;
+@@ -3717,7 +3743,13 @@
+     // Without it the threshold is read from the defender's pre-move state, the
+     // burn a Fire move is about to apply is invisible, and the split never fires
+     // on the boundary it exists for. reports/c135 sections 2-3, cause A8.
+-    let residual_thresholds = residual_lethality_thresholds(state, &attacking_side, choice);
++    // THE SPIKE DELETES THIS CALL. Under enumeration there is no threshold to
++    // place, because no roll is collapsed before its consequences are computed.
++    let residual_thresholds = if enumerate_damage_rolls() {
++        ResidualThresholdLadder::new()
++    } else {
++        residual_lethality_thresholds(state, &attacking_side, choice)
++    };
+ 
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     let defender_active = defender_side.get_active();
+@@ -3781,7 +3813,25 @@
+         } else {
+             min_damage_dealt
+         };
+-        if branch_on_damage
++        if enumerate_damage_rolls() && branch_on_damage && fixed_damage.is_none() {
++            // ENUMERATE-THEN-MERGE. One arm per distinct roll, mass 1/16 each,
++            // times the crit split. No threshold is consulted and no
++            // representative roll is chosen.
++            let crit_rate = critical_hit_chance(choice, defender_active.ability);
++            let mut roll_arms: Vec<(i16, f32)> = Vec::with_capacity(32);
++            if crit_rate < 1.0 {
++                push_enumerated_rolls(&mut roll_arms, max_damage_dealt, (1.0 - crit_rate) / 16.0);
++            }
++            if crit_rate > 0.0 {
++                push_enumerated_rolls(&mut roll_arms, max_crit_damage, crit_rate / 16.0);
++            }
++            for (roll_damage, mass) in roll_arms {
++                let mut roll_ins = incoming_instructions.clone();
++                roll_ins.update_percentage(mass);
++                extra_branches.push((roll_ins, roll_damage));
++            }
++            incoming_instructions.update_percentage(0.0);
++        } else if branch_on_damage
+             && ko_max_damage >= defender_active.hp
+             && ko_min_damage < defender_active.hp
+         {
