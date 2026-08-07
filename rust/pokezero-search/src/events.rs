@@ -3532,9 +3532,10 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 /// 3,533 world failures, 24.6% of all world-failure classes) and it survived the partial close
 /// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
 /// heal on the attacker with no foe damage -- and the ranking cannot say which of the
-/// remaining shapes a refusal is without this split. There are FIVE buckets below, not the
-/// three named in `heal_is_a_direct_self_heal`'s doc block: that block predates
-/// `heal_paindmg` and `heal_zero_marker`.
+/// remaining shapes a refusal is without this split. There are FIVE buckets below against
+/// the FOUR shapes `heal_is_a_direct_self_heal`'s doc block enumerates: that block predates
+/// `heal_paindmg` and `heal_zero_marker`, and Rest -- its fourth shape -- has no bucket of
+/// its own because its companion `status`/`sleepcounter` instructions refuse the tail first.
 ///
 /// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
 /// of refused tails is byte-identical to before. Nothing here changes what is searched.
@@ -3587,8 +3588,11 @@ fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> 
         // would mis-scope the very fix this split exists to aim. Review caught the first
         // version of this arm doing exactly that, with a test pinning the mislabel.
         Some(Instruction::Heal(heal)) if heal.heal_amount == 0 => "heal_zero_marker",
-        // Any future producer. Deliberately NOT silent: the remainder stays rankable,
-        // which is what let this family be found at all.
+        // Any future producer. NOT silent, deliberately -- but note this no longer keeps
+        // the remainder RANKABLE the way the bare `heal` bucket once did: the token is
+        // deregistered, so `registered_family_or_unclassified` maps it to `unclassified`.
+        // That is the intended outcome for a shape nothing can currently produce (both
+        // `"heal"` returns here are unreachable), and it is measurable rather than a panic.
         _ => "heal",
     }
 }
@@ -6502,7 +6506,8 @@ mod tests {
         out.mark_lossy_subcase(SLEEPTALK_LOSSY_TAG, "attract_empty_tail_ambiguous:miss");
     }
 
-    /// The cardinality ceiling quoted in `SUBCASE_VOCABULARY`'s doc block, ENFORCED.
+    /// The cardinality ceiling quoted in `mark_attribution_unsafe_subcase`'s doc block,
+    /// ENFORCED.
     ///
     /// That figure has been wrong THREE times -- "2^13 - 1 = 8,191, 14 entries" while the
     /// array held 13; then 18 entries after the heal split with the arithmetic unmoved;
@@ -6515,17 +6520,18 @@ mod tests {
         assert_eq!(
             (UNRENDERABLE_FAMILY_ORDER.len(), reachable, 2usize.pow(reachable as u32) - 1),
             (17, 16, 65_535),
-            "the order list changed size -- update THREE places in SUBCASE_VOCABULARY's \
-             doc block (the `2^16 - 1 = 65,535` figure, the `Note 16, not 17` line, and \
-             the `A 65k ceiling` sentence) plus this test's own doc block"
+            "the order list changed size -- update THREE places in \
+             `mark_attribution_unsafe_subcase`'s doc block (the `2^16 - 1 = 65,535` \
+             figure, the `Note 16, not 17` line, and the `A 65k ceiling` sentence) plus \
+             this test's own doc block"
         );
     }
 
     /// The full slug ORDER, not just one adjacent pair.
     ///
     /// `the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed` pins `boost` before
-    /// `status`, which leaves 15 of 17 token positions free: review showed swapping `heal`
-    /// and `substitute` in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
+    /// `status`, which leaves 15 of 17 token positions free: review showed that swapping
+    /// two adjacent tokens in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
     /// era-over-era with every test green. Cross-era comparability is the entire value of
     /// a stable slug, so the whole sequence is pinned.
     ///
