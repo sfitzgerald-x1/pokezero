@@ -114,9 +114,26 @@ _C141 = {
 # correct rather than an omission. All four close the four-term identity through the checker below
 # (79 + 2 + 0 + 0 == 81 at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix).
 #
-# NOTE for whoever lands next: #1159 also bumps this line, to 71 from its own 70. The two edits
-# conflict, and the resolution is NOT 71 + 4 or 74 + 1 by arithmetic -- re-derive the count from the
-# merged corpus, because that is the only reading this pin's exactness is worth anything under.
+# COLLISION, and it is three-way. `origin/main` selects 70. #1159 adds one sweep artifact and bumps
+# to 71; it is approved and lands before this branch. This branch adds four and reads 74 *against a
+# base of 70*. So once #1159 is in, the value here is whatever the selector says on the merged tree --
+# NOT `71 + 4` and NOT `74 + 1`. Do not compute it.
+#
+# Two reasons the arithmetic and the measurement can legitimately disagree, so only the measurement
+# counts. First, membership is decided by a top-level `boundaries_measured` and nothing else: an
+# artifact can be committed alongside a sweep and still be invisible here, which is exactly what
+# `c145_settling_branch_dump.json` does. #1159 is reported to ship a replay artifact in that same
+# category -- treat that as a thing to CHECK on the merged tree, not as a given, because if it is
+# wrong in either direction the arithmetic is off by one and this pin is the only thing that says so.
+# Second, an artifact that silently stops carrying the key drops OUT of the corpus, which is the
+# fail-open this pin exists to catch and which pure addition would mask.
+#
+# The procedure, which is what caught C145 rather than any reasoning about it:
+#   1. run the selector above over BOTH trees (merged, and the base it came from);
+#   2. confirm the set difference is exactly the files the PR adds, with NOTHING removed;
+#   3. set the number to the measured count and confirm the module is green;
+#   4. confirm the pin is still LIVE by setting it one lower and watching it fail -- a bump that
+#      disarms this pin is indistinguishable from a correct one in the diff.
 _EXPECTED_SWEEP_ARTIFACTS = 74
 
 
