@@ -197,7 +197,9 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 # from the recorded chosen candidate, which seeded each gate's world from the very thing it was
 # checking — so they would ratify a self-side write rather than catch it. They now use
 # fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and reads the
-# parser tracker. Independence from the recorded action is the property that lets them catch a
+# parser tracker. Shown end-to-end in reports/c141_recharge_gate_injection_proof.md -- and read
+# its limits section, because the result is narrower than the headline: the pre-task-4 gates
+# also caught 4 of the 5 rows, and the whole signal lives in one battle of twelve. Independence from the recorded action is the property that lets them catch a
 # bad write; symmetry is what keeps the two boundaries MEASURED. Both are needed and they are
 # different properties. See tests/test_recharge_gate_derivation.py.
 # The matchup pair, written from the fold since `matchup_counters` reached `ProductsData`. It used
