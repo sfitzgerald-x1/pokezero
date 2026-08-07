@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pokezero.train_agent import (  # noqa: E402
     claim_next_request,
+    _process_group_is_alive,
     record_running_trainer,
     release_stale_claims,
     run_training_attempt,
@@ -162,40 +163,94 @@ class TrainAgentRestartTest(unittest.TestCase):
             # And it is genuinely runnable again, not merely moved.
             self.assertEqual(serve_queue(queue, owner="boot-A", once=True), 1)
 
-    def test_a_claim_is_not_released_while_its_trainer_is_still_running(self) -> None:
-        """The reproduced double-trainer, asserted so it cannot come back.
+    def test_an_orphaned_trainer_is_killed_before_its_claim_is_released(self) -> None:
+        """The reproduced double-trainer, closed at the level that actually holds it: the GROUP.
 
-        Independent review demonstrated this end to end: the agent is killed mid-train, but its
-        child was detached into a new session so it keeps training; the supervisor respawns the
-        agent within 5s; `release_stale_claims` returned the claim to pending WITHOUT asking whether
-        a trainer was still alive; the new agent forked a second trainer. Two processes then wrote
-        the same iteration-NNNN/transformer-policy.pt, both with --delete-cache-after-read on the
-        same shards.
+        The rendered train script defines a shell function before invoking python, so bash cannot
+        exec-replace itself -- the real tree is agent -> `bash -c` -> python trainer. An earlier fix
+        tracked the direct child, i.e. the WRAPPER, and review reproduced the hole: kill the wrapper
+        and the trainer is reparented and keeps writing the checkpoint, while a liveness check on
+        the wrapper pid reports dead, so the claim is released and a second trainer starts.
 
-        The sibling test below asserts an ABANDONED claim IS released -- the two together are the
-        actual contract: release when nothing is running, never while something is.
+        THE SCRIPT SHAPE IS THE TEST. A single simple command is exec-replaced by bash, making
+        wrapper and trainer the same process and hiding the bug -- which is exactly why the previous
+        tests passed against broken code. This one contains a function definition, so bash forks.
         """
         with TemporaryDirectory() as root:
             queue = Path(root) / "train-queue"
-            write_request(queue, 31, "true")
-            claimed = claim_next_request(queue, "boot-A")
-            self.assertIsNotNone(claimed)
-            # A live process stands in for the orphaned trainer.
-            stand_in = subprocess.Popen(["sleep", "60"])
+            started = Path(root) / "trainer.pid"
+            # A function definition forces bash to fork rather than exec-replace.
+            script = f"run_it() {{ sleep 120; }}; run_it & echo $! > {started}; wait"
+            write_request(queue, 41, script)
+            self.assertIsNotNone(claim_next_request(queue, "boot-A"))
+
+            proc = subprocess.Popen(
+                ["bash", "-c", script], preexec_fn=os.setsid,
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not started.exists():
+                time.sleep(0.1)
+            self.assertTrue(started.exists(), "the stand-in trainer never started")
+            grandchild = int(started.read_text().strip())
+            pgid = os.getpgid(proc.pid)
+            self.assertNotEqual(
+                grandchild, proc.pid,
+                "the script did not fork, so this test cannot see the wrapper/trainer distinction",
+            )
+            record_running_trainer(queue, "train-0041", pgid)
+
+            # Model what actually happens when the agent dies: PDEATHSIG kills the WRAPPER and it is
+            # reaped by init, leaving the trainer orphaned but still running in the same group.
+            # This is the state release_stale_claims has to handle, and the state in which a
+            # wrapper-pid liveness check reports "dead" while a writer is very much alive.
+            proc.kill()
+            proc.wait(timeout=5)
+            self.assertTrue(
+                _process_group_is_alive(pgid),
+                "the orphaned trainer is not visible via its group, so this test proves nothing",
+            )
+
+            # The claim is from a previous life of this pod, so the trainer under it is unowned:
+            # release must KILL it, not leave it racing whoever picks the claim up next.
+            released = release_stale_claims(queue, "boot-A")
+            self.assertEqual(released, ["train-0041.json"])
+            for _ in range(50):
+                try:
+                    os.kill(grandchild, 0)
+                except OSError:
+                    break
+                time.sleep(0.2)
+            else:
+                os.killpg(pgid, 9)
+                self.fail(f"grandchild trainer {grandchild} survived release; two writers possible")
+            proc.wait(timeout=5)
+
+    def test_liveness_is_measured_on_the_group_not_the_wrapper(self) -> None:
+        """The predicate itself, isolated. Pointing it at the wrapper pid is what made the previous
+        fix ineffective, and the difference is only visible when the script forks."""
+        with TemporaryDirectory() as root:
+            started = Path(root) / "pid"
+            script = f"run_it() {{ sleep 60; }}; run_it & echo $! > {started}; wait"
+            proc = subprocess.Popen(["bash", "-c", script], preexec_fn=os.setsid)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not started.exists():
+                time.sleep(0.1)
+            pgid = os.getpgid(proc.pid)
+            grandchild = int(started.read_text().strip())
             try:
-                record_running_trainer(queue, "train-0031", stand_in.pid)
-                self.assertEqual(
-                    release_stale_claims(queue, "boot-A"), [],
-                    "released a claim whose trainer is still running, so a second trainer would "
-                    "start on the same checkpoint path",
+                os.kill(proc.pid, 9)   # exactly what PDEATHSIG delivers to the wrapper
+                proc.wait(timeout=5)
+                self.assertTrue(
+                    _process_group_is_alive(pgid),
+                    "the group reads dead while the trainer is still running, so a claim would be "
+                    "released with a live writer under it",
                 )
-                self.assertFalse((queue / "pending" / "train-0031.json").exists())
             finally:
-                stand_in.kill()
-                stand_in.wait()
-            # Once it is gone, the claim becomes releasable again.
-            record_running_trainer(queue, "train-0031", stand_in.pid)
-            self.assertEqual(release_stale_claims(queue, "boot-A"), ["train-0031.json"])
+                try:
+                    os.killpg(pgid, 9)
+                except OSError:
+                    pass
+            del grandchild
 
     def test_the_forked_trainer_is_death_linked_to_the_agent(self) -> None:
         """PR_SET_PDEATHSIG, which closes the double-trainer at its source rather than papering

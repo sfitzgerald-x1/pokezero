@@ -55,6 +55,18 @@ from pathlib import Path
 # enough -- pids are reused, and a reused pid on a restarted pod would let two agents believe they
 # own the same iteration. The boot id changes on every pod start, which is what makes the pair
 # unambiguous within the only scope that matters here.
+# Resolved once, at import, rather than inside every forked child: the fork -> setsid -> dlopen ->
+# prctl window is time during which the agent can die and orphan the child, and there is no reason
+# to make it wider than it has to be.
+try:  # pragma: no cover - Linux only
+    import ctypes as _ctypes
+
+    _LIBC = _ctypes.CDLL("libc.so.6", use_errno=True)
+    _PR_SET_PDEATHSIG = 1
+except Exception:  # pragma: no cover
+    _LIBC = None
+    _PR_SET_PDEATHSIG = 1
+
 _CLAIM_SCHEMA = "pokezero.foundation-train-claim.v1"
 _RESULT_SCHEMA = "pokezero.foundation-train-result.v1"
 
@@ -182,7 +194,7 @@ def _claim_token_path(queue: Path, stem: str) -> Path:
     return queue / "claimed" / f"{stem}.claim.json"
 
 
-def record_running_trainer(queue: Path, stem: str, pid: int | None) -> None:
+def record_running_trainer(queue: Path, stem: str, pgid: int | None) -> None:
     """Note in the claim whether a trainer process is currently alive for it.
 
     The second layer under PR_SET_PDEATHSIG, and the one that works where prctl does not (no Linux,
@@ -195,18 +207,30 @@ def record_running_trainer(queue: Path, stem: str, pid: int | None) -> None:
         payload = json.loads(token.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
-    payload["trainer_pid"] = pid
+    payload["trainer_pgid"] = pgid
     try:
         _write_json_atomic(token, payload)
     except OSError:
         pass
 
 
-def _process_is_alive(pid: int | None) -> bool:
-    if not pid:
+def _process_group_is_alive(pgid: int | None) -> bool:
+    """Is ANY process left in the trainer's group?
+
+    The group, not the direct child, and that distinction is the whole fix. The rendered train
+    script defines a shell function before invoking python, so bash cannot exec-replace itself: the
+    real tree is agent -> `bash -c` -> python trainer. Tracking the direct child tracked the
+    WRAPPER. Kill the wrapper and the trainer is reparented and keeps writing the checkpoint, while
+    a liveness check on the wrapper pid reports dead -- so the claim was released and a second
+    trainer started. That was reproduced.
+
+    After setsid the wrapper's pid IS the group id of the whole tree, so killpg(pgid, 0) answers
+    the question that actually matters: is anything still training.
+    """
+    if not pgid:
         return False
     try:
-        os.kill(pid, 0)
+        os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -214,6 +238,21 @@ def _process_is_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
+
+
+def _kill_group(pgid: int | None) -> None:
+    """SIGKILL a whole trainer group and wait briefly for it to clear."""
+    if not pgid:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        return
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not _process_group_is_alive(pgid):
+            return
+        time.sleep(0.2)
 
 
 def release_stale_claims(queue: Path, owner: str) -> list[str]:
@@ -233,13 +272,28 @@ def release_stale_claims(queue: Path, owner: str) -> list[str]:
             continue
         if payload.get("owner") != owner:
             continue
-        # REFUSE to release while our previous trainer is still running. This is the case that
-        # produced two concurrent trainers on one iteration: the agent dies, its detached child
-        # keeps training, the supervisor respawns the agent within seconds, and a naive release
-        # hands the same iteration to a second fork. Leaving the claim in place lets the surviving
-        # trainer finish; if it never does, the controller's own bound decides.
-        if _process_is_alive(payload.get("trainer_pid")):
-            continue
+        # KILL our own orphaned trainer before releasing, rather than merely refusing.
+        #
+        # This claim belongs to a PREVIOUS life of this pod, so whatever is still running under it
+        # is unowned: the agent that would have recorded its result is gone. Leaving it alive means
+        # it writes a checkpoint nobody tracks, racing whoever picks the claim up next -- the exact
+        # two-writer case. Refusing instead would be safe but strands the iteration until the
+        # controller's bound expires, on a run that could restart in seconds.
+        #
+        # The GROUP, not the direct child: the trainer is a grandchild (bash wrapper -> python), so
+        # signalling the wrapper leaves the trainer running.
+        pgid = payload.get("trainer_pgid")
+        if _process_group_is_alive(pgid):
+            print(f"train-agent: killing orphaned trainer group {pgid} before releasing", flush=True)
+            _kill_group(pgid)
+            if _process_group_is_alive(pgid):
+                # Could not clear it; refuse rather than create a second writer.
+                print(
+                    f"train-agent: trainer group {pgid} survived SIGKILL; leaving the claim in "
+                    "place rather than risking a second trainer",
+                    flush=True,
+                )
+                continue
         request_path = claimed / f"{token.name[: -len('.claim.json')]}.json"
         try:
             if request_path.exists():
@@ -269,13 +323,11 @@ def _child_preexec() -> None:  # pragma: no cover - runs only in the forked chil
     liveness record (see `claim_next_request`) is what prevents the double-trainer.
     """
     os.setsid()
-    try:
-        import ctypes
-
-        PR_SET_PDEATHSIG = 1
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
-    except Exception:
-        pass
+    if _LIBC is not None:
+        try:
+            _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+        except Exception:
+            pass
 
 
 def run_training_attempt(
