@@ -1343,3 +1343,18 @@ poke-engine-gen3-hitcount-ko-threshold.patch
 # data/moves.ts:1222-1228, no gen3/gen4 override. Closes holdout rows
 # 19100072/17 and 19100072/19.
 poke-engine-gen3-a11-bellydrum-fail-clauses.patch
+
+# A faint cancels the queued action of every STILL-ACTIVE Pokemon, switches
+# included (Showdown faintMessages, sim/battle.ts:2609-2618, over getAllActive()).
+# The MoveCategory::Switch arm returned above every cancellation gate, so a switch
+# was the one action nothing could cancel. Closes holdout 19100180/24, where both
+# sides switch, p2's incoming Pokemon dies to Spikes, and the engine performed p1's
+# switch anyway. The predicate is the Showdown rule verbatim -- someone newly
+# fainted AND this side is still standing afterwards -- with no Pursuit branch:
+# getAllActive() filters on !fainted, so a Pursuit victim (which IS the switcher) is
+# outside the set and its switch correctly proceeds. Two earlier attempts each
+# implemented one direction only and were withdrawn on their falsifiers; both are
+# now pinned by Showdown scenarios and engine tests. Predictions and measurements:
+# reports/c136_faint_cancels_prediction.md, with the four sweeps it cites at
+# reports/artifacts/c136_faintcancels_{main,fix}_{dev,holdout}_sweep.json.
+poke-engine-gen3-faint-cancels-opposing-switch.patch
