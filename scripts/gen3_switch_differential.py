@@ -1039,12 +1039,21 @@ def _spec(name):
         #
         # This is the shape of holdout row `19100180/24`.
         #
-        # Read this pair TOGETHER with `pursuitkoswitcher`. The two are not in
-        # conflict, they are the rule and its one exception: a faint cancels the
-        # OTHER side's switch, but a Pursuit faint does not cancel the switch of the
-        # Pokemon it just killed. A guard that implements only one of them is wrong
-        # in the other's direction, which is exactly how both previous attempts
-        # failed -- v1 in this direction, v2 in Pursuit's.
+        # Read this pair TOGETHER with `pursuitkoswitcher`. They look contradictory
+        # and are not, and the precise reason matters for anyone writing the engine
+        # guard. The single rule is:
+        #
+        #     a faint cancels the queued action of every STILL-ACTIVE Pokemon.
+        #
+        # `getAllActive()` (`sim/battle.ts:1362-1371`) skips fainted Pokemon, so a
+        # Pursuit victim is never in the cancellation set at all -- it is outside the
+        # rule's domain rather than an exception to it, and its switch resolves
+        # because `switchIn` bails to 'pursuitfaint' and the gen<=4 branch unshifts
+        # the action back at priority -101. Stating it as "a rule and an exception"
+        # is looser than the source and invites a guard with a special case in it.
+        # A guard that implements only one of these two fixtures is wrong in the
+        # other's direction, which is exactly how both previous attempts failed --
+        # v1 in this direction, v2 in Pursuit's.
         fainting = name == "faintcancelsopposingswitch"
         incoming = _shedinja() if fainting else _snorlax()
         incoming_species = "Shedinja" if fainting else "Snorlax"
@@ -1053,15 +1062,26 @@ def _spec(name):
             turns=[("move spikes", "move splash"),
                    ("switch 2", "switch 2")],
             measured=1, setup_step=0,
-            # A real gate: Spikes can fail (already stacked), and if it never landed
-            # the measured ply would be an ordinary double switch proving nothing.
+            # A shape assertion on step 0, NOT a gate that can fire: Spikes is
+            # `accuracy: true` (`data/moves.ts`) and is used once against a side
+            # holding zero layers, so `onSideRestart`'s `layers >= 3` bail is
+            # unreachable and this can never skip a seed. It documents what the
+            # measured ply depends on. An earlier revision called it "a real gate",
+            # which was simply false.
             setup_landed=lambda L: _has(L, "|-sidestart|p2: PokeZero p2|Spikes"),
             facts=lambda L: {
                 "incoming_fainted": _has(L, f"|faint|p2a: {incoming_species}"),
                 # The queued switch belonging to the side that did NOT faint.
                 "opposing_switch_happened": _has(L, "|switch|p1a: Blissey"),
-                # A cancelled action also ends the ply early: no residual phase runs
-                # at all, which is why the engine's deferral behaviour has to agree.
+                # NOT caused by the cancellation, and the distinction was measured:
+                # reorder the switches so the opposing switch is NOT cancelled and
+                # `upkeep_ran` is still False. The block defers because the fainting
+                # side owes a forced replacement -- the mechanism `faintresiduals`
+                # already pins -- independently of whether anything was cancelled.
+                # Confirmed in the other direction by `pursuitkoswitcher`, which has a
+                # faint, no cancellation, the replacement satisfied in-ply, and a
+                # residual that DOES run. Asserted here as a co-observation that the
+                # two mechanisms compose, never as evidence of cancellation.
                 "upkeep_ran": _has(L, "|upkeep"),
             },
             expect={
