@@ -127,12 +127,61 @@ _C141 = {
 # some future selector regains a filter.
 #
 # Committing a new sweep artifact means bumping this number. That is the point: it makes the
-# new artifact pass through the checker deliberately rather than by default. C141's
-# final-holdout sweep lands with PR #1159 and takes it to 75.
+# new artifact pass through the checker deliberately rather than by default.
 #
-# C142 committed four (`c142_{base,rumpfix}_{dev,holdout}_sweep.json`) and took it from
-# 70 to 74. The pin fired on the rebase, which is the whole point of an exact count.
-_EXPECTED_SWEEP_ARTIFACTS = 74
+# 70 -> 71: `reports/artifacts/c141_final_holdout_sweep.json`, the C141 final-holdout sweep,
+# added by PR #1159. This is NOT a routine re-stamp -- it is the sweep whose lossy count of 4
+# forced this whole correction, and it is the THIRD corpus member to carry a nonzero
+# `skip:strict_all_branches_lossy`, and the first in the `reports/artifacts` sweep series.
+# `c26` and `c27` (lossy 2 each) were already in the corpus and are the pre-existing
+# counterexamples pinned above; c141 is emphatically NOT the first firing in this repo. Of the
+# 56 artifacts in `reports/artifacts/` carrying a `counters` block, 55 are at 0 and c141 alone
+# is nonzero -- which is the whole and only sense in which it is a first.
+#
+# `_C141`'s hardcoded values above are now redundant with the glob, since the artifact is
+# committed and selected; they are retained as an explicit named pin. Verified equal to the
+# committed artifact at bump time: 16274 / 16268 / 2 / 0, lossy 4.
+#
+# PR #1159 also adds `reports/artifacts/c141_final_holdout_replay.json`, which is deliberately
+# NOT in this corpus: it is a branch-level replay of two retained repros and carries no
+# top-level `boundaries_measured`, so the selector below excludes it. Verified, not assumed --
+# as is the fact that #1161's `c143_heal_attribution_probe.json`, which landed on main in the
+# same merge, is outside the selector too. The delta really is this one sweep artifact.
+#
+# 71 -> 75 (C145). The four added are the one-game `19100170` bisect sweeps
+# `reports/artifacts/c145_g19100170_{2ec0cb13,dc6e1e19,d27316b6,head}.json`.
+#
+# MEASURED, not computed. An earlier revision of this branch read 74 against a base of 70, and
+# `71 + 4` happening to agree with the selector here is a coincidence of this merge, not a method:
+# membership turns on a top-level `boundaries_measured` and nothing else, so a file can land in
+# `reports/artifacts/` without entering this corpus -- `c145_settling_branch_dump.json` does exactly
+# that, as do #1159's `c141_final_holdout_replay.json` and #1161's two `c143` artifacts noted above.
+# The directory count and the corpus count therefore move independently and neither may be used to
+# sanity-check the other.
+#
+# The procedure, which is what caught C145's bump rather than any reasoning about it:
+#   1. run the selector below over BOTH trees -- the merged one and the base it came from;
+#   2. confirm the set difference is exactly the files the PR adds, with NOTHING removed (a member
+#      that silently stops carrying the key drops OUT, which is this pin's fail-open and which pure
+#      addition would mask);
+#   3. set the number to the measured count and confirm the module is green;
+#   4. confirm the pin is still LIVE by setting it one lower and watching it fail -- a bump that
+#      disarms this pin is indistinguishable from a correct one in the diff.
+# All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
+# at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
+_EXPECTED_SWEEP_ARTIFACTS = 79
+#
+# 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
+# the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
+# would enter the corpus. All FOUR do -- `c142_{base,rumpfix}_{dev,holdout}_sweep.json` -- so the
+# selector reports 79 against a base of 75 with nothing removed. Recorded because the wrong figure
+# came from reasoning about membership instead of running the selector, which is precisely what
+# steps 1-2 exist to prevent, and because a predicted 78 would have been indistinguishable from a
+# correct bump in the diff.
+#
+# `reports/artifacts/c142_recoil_ground_truth.json` is deliberately outside the corpus: it is
+# Showdown recoil ground-truth measurement with no `boundaries_measured`. Verified via the set
+# difference, not assumed.
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

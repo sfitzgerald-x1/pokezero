@@ -6,10 +6,10 @@ Diagnosis of `19200131/129` in `reports/artifacts/c141_final_holdout_sweep.json`
 pct=6.25: p1 roll-scaled components differ: observed=[('recoil', -18)] engine=[('recoil', -32)]
 ```
 
-> The `c141` artifact and its prediction land with the final-holdout sweep (PR #1159), which
-> merges ahead of this one; the citations above resolve once it does. Nothing in this diagnosis
-> re-measures that window — every number here comes from the artifact's own retained state, from
-> generated Showdown fixtures, or from the two development windows.
+> The `c141` artifact and its prediction are now **on `main`** (PR #1159 merged), so every
+> citation here resolves against a committed file. Nothing in this diagnosis re-measures that
+> window — every number comes from the artifact's own retained state, from generated Showdown
+> fixtures, or from the two development windows.
 
 ## Verdict
 
@@ -192,10 +192,19 @@ windows that can be. Two honest caveats:
   of the 14 drops, so at most 10 remain for rump boundaries. With the one proven by replay,
   the bound is **1–10**.
 
-  Those 4 are also the first `skip:strict_all_branches_lossy` in **the sweep-artifact
-  series**: the counter is absent from all **64** JSONs matching `reports/artifacts/*.json`
-  on this branch (glob re-run after the merge, not carried forward). It is **not** the first
-  time it has ever fired, and an earlier draft of this report said so. As hard counter values
+  Those 4 are the **only** `skip:strict_all_branches_lossy` in the sweep-artifact series. Of
+  the **71** JSONs matching `reports/artifacts/*.json` on this branch, exactly one —
+  `c141_final_holdout_sweep.json`, the artifact this diagnosis is about — carries the counter
+  nonzero, at 4; the other 70 are absent or 0.
+
+  ⚠ This sentence previously read "absent from all **64**", which was true when written and
+  went false **silently** when `main` merged #1159 and brought `c141_final_holdout_sweep.json`
+  into the directory the glob scans. Re-derived after the merge rather than carried forward.
+  Worth naming as a class: the artifact-count pin in
+  `tests/test_boundary_verdict_partition.py` fails **loudly** when the corpus moves, and this
+  glob assertion fails **quietly**, so a prose count over a directory that other PRs write into
+  has to be re-run on every merge or dropped. It is **not** the first time the counter has ever
+  fired, and an earlier draft of this report said so. As hard counter values
   it is **2** in `reports/c26_structural_probe_report.json` and **2** in
   `reports/c27_structural_probe_report.json`. An older-era diagnosis,
   `reports/c32_fail_diagnosis.json`, records the same phenomenon at **372** under the
@@ -389,6 +398,11 @@ counterexample is **this branch's own validation-holdout artifact**: `strict:los
 every boundary `matched`, identity closes. Folding `strict:lossy_render` into
 `VERDICT_PARTITION_SKIP_COUNTERS` — the mutant a timing-only rule would permit — fails 45 tests,
 including the corpus pin on real committed artifacts.
+
+The two-condition form is now written into `reports/c144_boundary_identity_correction.md` §2,
+which is the report of record for this identity, together with the retraction of the
+timing-only version. The tuple itself was never in doubt and was independently confirmed to be
+exactly those two members; what was wrong was the *rule* offered for why.
 
 ### Blast radius
 

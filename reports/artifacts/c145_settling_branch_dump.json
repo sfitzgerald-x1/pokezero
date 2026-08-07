@@ -1,0 +1,267 @@
+{
+  "schema": "pokezero-c145-settling-branch-dump/1",
+  "what": "H11's own stated settling measurement, run. For each of the two rows the differential retained at dc6e1e19, the observed damage components, the engine's rendered branch (via pokezero_search.branch_events, the same call evaluate_boundary_strict makes), the raw instruction stream, and the SAME state re-rendered with only side one's last_used_move changed from the as-built move:0 to the correct move:3.",
+  "provenance": {
+    "engine_fingerprint": "fdbf59379399b94447c029d402d837b1738ec6e6bba4bfe8992a38fd30528875",
+    "image_commit": null,
+    "source_commit": "dc6e1e197a54a734934cb04cc1b7986835a80ee4"
+  },
+  "matcher": "strict",
+  "enumerate_rolls": false,
+  "rows": [
+    {
+      "seed": 19100170,
+      "step": 71,
+      "turn": 64,
+      "divergence_class": "component_missing_in_engine:itemleftovers",
+      "branch_count": 1,
+      "gating": "exact",
+      "choices": {
+        "p1": "protect",
+        "p2": "delcatty"
+      },
+      "slot_sides": {
+        "p1": "side_one",
+        "p2": "side_two"
+      },
+      "showdown_protocol": [
+        "|",
+        "|t:|1786131535",
+        "|switch|p2a: Delcatty|Delcatty, L96, M|101/290",
+        "|-damage|p2a: Delcatty|65/290|[from] Spikes",
+        "|move|p1a: Ditto|Protect||[still]",
+        "|-fail|p1a: Ditto",
+        "|",
+        "|-heal|p1a: Ditto|161/258|[from] item: Leftovers",
+        "|-heal|p2a: Delcatty|83/290|[from] item: Leftovers",
+        "|upkeep",
+        "|turn|65"
+      ],
+      "showdown_leftovers_lines": [
+        "|-heal|p1a: Ditto|161/258|[from] item: Leftovers",
+        "|-heal|p2a: Delcatty|83/290|[from] item: Leftovers"
+      ],
+      "observed_components": {
+        "p1": [
+          [
+            "itemleftovers",
+            16
+          ]
+        ],
+        "p2": [
+          [
+            "spikes",
+            -36
+          ],
+          [
+            "itemleftovers",
+            18
+          ]
+        ]
+      },
+      "branch_misses": [
+        "pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[]"
+      ],
+      "side_one_last_used_move_as_built": "move:0",
+      "renders": {
+        "as_built_move_0": [
+          {
+            "percentage": 100.0,
+            "lossy": [],
+            "events": [
+              "|",
+              "|switch|p2a: Delcatty|Delcatty, L96, M|101/290",
+              "|-damage|p2a: Delcatty|65/290|[from] Spikes",
+              "|move|p1a: Ditto|bodyslam|p2a: Delcatty",
+              "|-damage|p2a: Delcatty|0 fnt",
+              "|faint|p2a: Delcatty",
+              "|"
+            ],
+            "components": {
+              "p1": [],
+              "p2": [
+                [
+                  "spikes",
+                  -36
+                ],
+                [
+                  "capped_lethal",
+                  -65
+                ]
+              ]
+            }
+          }
+        ],
+        "substituted_move_3": [
+          {
+            "percentage": 100.0,
+            "lossy": [],
+            "events": [
+              "|",
+              "|switch|p2a: Delcatty|Delcatty, L96, M|101/290",
+              "|-damage|p2a: Delcatty|65/290|[from] Spikes",
+              "|move|p1a: Ditto|protect||[still]",
+              "|",
+              "|-heal|p1a: Ditto|161/258|[from] item: Leftovers",
+              "|-heal|p2a: Delcatty|83/290|[from] item: Leftovers",
+              "|upkeep",
+              "|turn|65"
+            ],
+            "components": {
+              "p1": [
+                [
+                  "itemleftovers",
+                  16
+                ]
+              ],
+              "p2": [
+                [
+                  "spikes",
+                  -36
+                ],
+                [
+                  "itemleftovers",
+                  18
+                ]
+              ]
+            }
+          }
+        ]
+      },
+      "raw_instructions": {
+        "as_built_move_0": [
+          [
+            "Switch SideTwo: P2 -> P3",
+            "SetLastUsedMove SideTwo: Move(M2) -> Switch(P3)",
+            "Damage SideTwo: 36",
+            "DecrementPP SideOne: M0 1",
+            "Damage SideTwo: 65",
+            "ToggleSideTwoForceSwitch"
+          ]
+        ]
+      }
+    },
+    {
+      "seed": 19100170,
+      "step": 72,
+      "turn": 65,
+      "divergence_class": "component_missing_in_engine:itemleftovers",
+      "branch_count": 1,
+      "gating": "exact",
+      "choices": {
+        "p1": "protect",
+        "p2": "typhlosion"
+      },
+      "slot_sides": {
+        "p1": "side_one",
+        "p2": "side_two"
+      },
+      "showdown_protocol": [
+        "|",
+        "|t:|1786131535",
+        "|switch|p2a: Typhlosion|Typhlosion, L79, F|33/252",
+        "|-damage|p2a: Typhlosion|2/252|[from] Spikes",
+        "|move|p1a: Ditto|Protect||[still]",
+        "|-fail|p1a: Ditto",
+        "|",
+        "|-heal|p1a: Ditto|177/258|[from] item: Leftovers",
+        "|-end|p1a: Ditto|Encore",
+        "|upkeep",
+        "|turn|66"
+      ],
+      "showdown_leftovers_lines": [
+        "|-heal|p1a: Ditto|177/258|[from] item: Leftovers"
+      ],
+      "observed_components": {
+        "p1": [
+          [
+            "itemleftovers",
+            16
+          ]
+        ],
+        "p2": [
+          [
+            "spikes",
+            -31
+          ]
+        ]
+      },
+      "branch_misses": [
+        "pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[]"
+      ],
+      "side_one_last_used_move_as_built": "move:0",
+      "renders": {
+        "as_built_move_0": [
+          {
+            "percentage": 100.0,
+            "lossy": [],
+            "events": [
+              "|",
+              "|switch|p2a: Typhlosion|Typhlosion, L79, F|33/252",
+              "|-damage|p2a: Typhlosion|2/252|[from] Spikes",
+              "|move|p1a: Ditto|bodyslam|p2a: Typhlosion",
+              "|-damage|p2a: Typhlosion|0 fnt",
+              "|faint|p2a: Typhlosion",
+              "|"
+            ],
+            "components": {
+              "p1": [],
+              "p2": [
+                [
+                  "spikes",
+                  -31
+                ],
+                [
+                  "capped_lethal",
+                  -2
+                ]
+              ]
+            }
+          }
+        ],
+        "substituted_move_3": [
+          {
+            "percentage": 100.0,
+            "lossy": [],
+            "events": [
+              "|",
+              "|switch|p2a: Typhlosion|Typhlosion, L79, F|33/252",
+              "|-damage|p2a: Typhlosion|2/252|[from] Spikes",
+              "|move|p1a: Ditto|protect||[still]",
+              "|",
+              "|-heal|p1a: Ditto|177/258|[from] item: Leftovers",
+              "|upkeep",
+              "|turn|66"
+            ],
+            "components": {
+              "p1": [
+                [
+                  "itemleftovers",
+                  16
+                ]
+              ],
+              "p2": [
+                [
+                  "spikes",
+                  -31
+                ]
+              ]
+            }
+          }
+        ]
+      },
+      "raw_instructions": {
+        "as_built_move_0": [
+          [
+            "Switch SideTwo: P3 -> P5",
+            "SetLastUsedMove SideTwo: Switch(P0) -> Switch(P5)",
+            "Damage SideTwo: 31",
+            "DecrementPP SideOne: M0 1",
+            "Damage SideTwo: 2",
+            "ToggleSideTwoForceSwitch"
+          ]
+        ]
+      }
+    }
+  ]
+}

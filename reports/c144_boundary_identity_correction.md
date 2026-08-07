@@ -193,14 +193,39 @@ these is inside the measured region, and none of them is a boundary verdict:
 
   ⚠ **CORRECTED 2026-08-07 (C142).** The clause "every other `skip:*` counter … fire *before*
   `boundaries_measured` increments" is now false: `skip:rump_branch_set` is a `skip:*` counter,
-  is not the lossy one, and fires **after**. It was true when written — every `skip:*` site then
+  is not the lossy one, and fires **after**.
+
+  It was true when written, and why matters for anyone re-deriving it: every `skip:*` site then
   existing sat in `_prepare_boundary` and was immediately followed by `return None`, so
   `counts["boundaries_measured"] += 1` never ran, and `skip:single_seat_boundary` sits in the
-  `else` branch where `_prepare_boundary` is not called at all. The repair is **not** to invert
-  the timing rule: membership needs *two* conditions — fires after `boundaries_measured`, **and**
-  is the boundary's terminal verdict (at most one per boundary, mutually exclusive with
-  `transition:*`). Timing alone would admit `gating:*`, which increments on the very next line,
-  and every `strict:*` counter in `evaluate_boundary_strict`. None of those is a verdict.
+  `else` branch where `_prepare_boundary` is not called at all.
+
+  **The membership rule, stated in full because this is the report of record and it will be
+  cited as settled.** A counter is a term of the verdict partition **iff both** hold:
+
+  1. it increments only **after** `boundaries_measured` has incremented for that boundary —
+     otherwise the boundary is not in the denominator being partitioned; **and**
+  2. the increment is that boundary's **terminal verdict** — at most one such counter fires per
+     boundary, and it is mutually exclusive with `transition:matched` / `transition:diverged`.
+     In the code this is literally the `continue` in `run_game` that skips
+     `counts[f"transition:{verdict}"] += 1`.
+
+  **Condition 1 alone is not sufficient, and the repair is not to invert the timing rule.**
+  `gating:*` increments on the line immediately after `boundaries_measured`, and every
+  `strict:*` counter inside `evaluate_boundary_strict` fires later still, because that function
+  runs after `_prepare_boundary` has returned. None is a verdict: each fails condition 2.
+  `strict:lossy_render` is the sharpest case — it can increment several times for one boundary
+  and leaves that boundary free to receive an ordinary verdict.
+
+  Recorded as a retraction, not only as a rule: C142's *first* repair of this clause read
+  "membership is decided by **when** a counter fires, never by its prefix", which states only
+  condition 1 and fails for the same reason the sentence it replaced failed — a plausible rule
+  refuted by a counterexample in its own paragraph. The two-condition form is pinned as
+  arithmetic in `tests/test_boundary_verdict_partition.py`
+  (`test_firing_after_boundaries_measured_is_NOT_sufficient_for_membership`), whose live
+  counterexample is C142's own validation-holdout artifact: `strict:lossy_render` 3, every
+  boundary `matched`, identity closes. Folding `strict:lossy_render` into the partition fails 45
+  tests. Neither prefix nor timing is the rule.
 
 ## 3. Where the false invariant appeared, and what each site was
 
