@@ -311,22 +311,25 @@ impl RenderedEvents {
     ///   the key set for this class is the non-empty subsets of the REACHABLE token set.
     /// * This is therefore NOT "stronger than `'static`". `'static` restricted keys to
     ///   literals present in the source: finite, greppable, reviewable. The honest
-    ///   statement is that the ceiling rises from 1 key to 2^17 - 1 = 131,071, and
+    ///   statement is that the ceiling rises from 1 key to 2^16 - 1 = 65,535, and
     ///   that the REALIZED count is small because tails are short -- the oracle corpus
     ///   yields two (`boost`, `substitute+volatile`).
     ///
-    /// Note 17, not 18: `UNRENDERABLE_FAMILY_ORDER` has 18 entries but `unclassified` is
+    /// Note 16, not 17: `UNRENDERABLE_FAMILY_ORDER` has 17 entries but `unclassified` is
     /// emitted by NO classifier arm -- it is reachable only through the degradation below,
     /// itself unreachable while every arm's token is registered. Counting the order list
     /// instead of the reachable token set overstated this 2x in an earlier version, in the
     /// one comment block whose entire purpose is precision.
     ///
-    /// RECOUNT FROM THE ARRAY, never by adding to this number. It read "2^13 - 1 = 8,191,
-    /// 14 entries" while the array held 13, and the heal split then took it to 18 without
-    /// the arithmetic moving -- understating an explicitly ACCEPTED cost by 16x. Both
-    /// errors are the same one: treating this figure as prose rather than as a count.
+    /// RECOUNT FROM THE ARRAY, never by adding to this number -- and the recount is now
+    /// ENFORCED by `the_cardinality_ceiling_matches_the_array`, because being told to
+    /// recount did not work. This figure has been wrong three times: it read "2^13 - 1 =
+    /// 8,191, 14 entries" while the array held 13; the heal split took it to 18 without
+    /// the arithmetic moving; and the correction to 2^17 was itself stale, because
+    /// deregistering `heal` had already taken 18 back to 17. Each time the error was the
+    /// same -- treating a COUNT as prose. A test is the only thing that has held.
     ///
-    /// A 131k ceiling is a real cost, accepted because a class that was 51.6% of the abort
+    /// A 65k ceiling is a real cost, accepted because a class that was 51.6% of the abort
     /// channel could not be ranked at all as one key. It is bounded, greppable via the
     /// order list, and every token maps to a named renderer gap.
     ///
@@ -410,6 +413,7 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "heal_liquidooze",
     "heal_defender",
     "heal_drain_or_shellbell",
+    "heal_zero_marker",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -3252,8 +3256,7 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     "statrecalc",
     "status",
     "sleepcounter",
-    // The `heal` SUB-CASES, kept adjacent to the bare token so composite keys stay
-    // readable. `heal` itself remains, as the honest remainder -- see `heal_subcase`.
+    // The `heal` SUB-CASES.
     //
     // ERA-OVER-ERA DRIFT, stated because the `boost` note above understated exactly this:
     // every key containing `heal` MOVES with this change, and unlike the `boost` case the
@@ -3490,8 +3493,10 @@ fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
 /// That is a companion-blocks-it argument rather than a reachability one -- the companion is
 /// emitted by construction, the way the substitute break's `DamageSubstitute` is.
 ///
-/// This is a PARTIAL close of the family, deliberately. The slug still reports `heal` for
-/// every tail this does not admit, so the remainder stays rankable instead of vanishing.
+/// This is a PARTIAL close of the family, deliberately. Every tail this does not admit is
+/// reported under a `heal_*` SUB-CASE by `heal_subcase`, so the remainder stays rankable
+/// instead of vanishing. The bare `heal` token is deregistered -- no reachable input
+/// produces it once the sub-cases exist.
 fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: SideReference) -> bool {
     let healed = match tail.get(index) {
         // POSITIVE only: a negative `Heal` is Liquid Ooze and renders as `-damage`.
@@ -3525,8 +3530,9 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 /// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 final, 64/64 shards:
 /// 3,533 world failures, 24.6% of all world-failure classes) and it survived the partial close
 /// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
-/// heal on the attacker with no foe damage -- so everything here is one of the three
-/// cases its doc block names, and the ranking cannot say which without this split.
+/// heal on the attacker with no foe damage -- and the ranking cannot say which of the
+/// remaining shapes a refusal is without this split. There are FIVE buckets below, not the
+/// three that doc block names: it predates `heal_paindmg` and `heal_zero_marker`.
 ///
 /// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
 /// of refused tails is byte-identical to before. Nothing here changes what is searched.
@@ -6051,10 +6057,9 @@ mod tests {
                 "silent",
             ),
             (
-                // The bare `heal` REMAINDER. A heal-direction `Damage` on the DEFENDER is
-                // not Pain Split's own side and carries no sub-case of its own, so it
-                // reaches the fall-through -- which keeps a representative, or a mutation
-                // collapsing every sub-case back onto `heal` would pass.
+                // PAIN SPLIT at the boundary: a heal-direction `Damage` of just -1, on the
+                // ATTACKER's side (SideOne is the attacker this loop passes). Pins that the
+                // sign test is `< 0`, not a magnitude threshold.
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideOne,
                     damage_amount: -1,
@@ -6072,10 +6077,10 @@ mod tests {
                 "heal_liquidooze",
             ),
             (
-                // The bare `heal` REMAINDER must keep a representative of its own, or a
-                // mutation collapsing every sub-case back onto it would pass. A
-                // zero-amount `Heal` is neither positive nor negative, so it reaches the
-                // fall-through arm.
+                // A ZERO-amount `Heal` is a gen3 BRANCH MARKER -- Protect-blocked, or a
+                // full-HP absorb no-op -- not a heal. The bare `heal` remainder
+                // deliberately has NO representative: it is unreachable, which is why the
+                // token is deregistered from UNRENDERABLE_FAMILY_ORDER.
                 Instruction::Heal(HealInstruction {
                     side_ref: SideReference::SideOne,
                     heal_amount: 0,
@@ -6170,7 +6175,7 @@ mod tests {
             1,
             "heal_drain_or_shellbell",
         )];
-        // THE HEAL PREDICATE, pinned in all four directions it discriminates on. This family
+        // THE HEAL PREDICATE, pinned in every direction it discriminates on. This family
         // is only PARTIALLY closed, and each clause is what keeps a mis-tagged `-heal` -- which
         // FABRICATES a belief in the fold -- out of a searched world.
         let self_heal = Instruction::Heal(HealInstruction {
@@ -6223,6 +6228,29 @@ mod tests {
             ),
             Some("heal_defender"),
             "a defender heal stays an absorb ability even when the tail damages the foe"
+        );
+
+        // ZERO-DAMAGE CONTROL, pinning `> 0` rather than `>= 0` in `tail_damages_the_foe`.
+        // Review mutated that comparison and the whole suite stayed GREEN, while the change
+        // flips this tail from ADMITTED to refused -- an admission boundary with nothing
+        // watching. The two drain fixtures use 60 and 25, which cannot discriminate.
+        assert_eq!(
+            unrenderable_family_at(
+                &[
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount: 0,
+                    }),
+                    Instruction::Heal(HealInstruction {
+                        side_ref: SideReference::SideOne,
+                        heal_amount: 30,
+                    }),
+                ],
+                1,
+                SideReference::SideOne
+            ),
+            None,
+            "a ZERO-amount foe Damage is not damage, so this stays a direct self-heal"
         );
 
         // 4. LIQUID OOZE: a negative heal, which the named path renders as `-damage`.
@@ -6471,10 +6499,28 @@ mod tests {
         out.mark_lossy_subcase(SLEEPTALK_LOSSY_TAG, "attract_empty_tail_ambiguous:miss");
     }
 
+    /// The cardinality ceiling quoted in `SUBCASE_VOCABULARY`'s doc block, ENFORCED.
+    ///
+    /// That figure has been wrong THREE times -- "2^13 - 1 = 8,191, 14 entries" while the
+    /// array held 13; then 18 entries after the heal split with the arithmetic unmoved;
+    /// then 2^17 after deregistering `heal` had already taken 18 back to 17. Each time the
+    /// error was treating a COUNT as prose, and each time the fix was a comment telling the
+    /// next author to recount. Telling did not work. A test does.
+    #[test]
+    fn the_cardinality_ceiling_matches_the_array() {
+        let reachable = UNRENDERABLE_FAMILY_ORDER.len() - 1; // `unclassified` is unemittable
+        assert_eq!(
+            (UNRENDERABLE_FAMILY_ORDER.len(), reachable, 2usize.pow(reachable as u32) - 1),
+            (17, 16, 65_535),
+            "the order list changed size -- update the `2^16 - 1 = 65,535` figure and the \
+             `Note 16, not 17` line in SUBCASE_VOCABULARY's doc block to match"
+        );
+    }
+
     /// The full slug ORDER, not just one adjacent pair.
     ///
     /// `the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed` pins `boost` before
-    /// `status`, which leaves 14 of 16 token positions free: review showed swapping `heal`
+    /// `status`, which leaves 15 of 17 token positions free: review showed swapping `heal`
     /// and `substitute` in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
     /// era-over-era with every test green. Cross-era comparability is the entire value of
     /// a stable slug, so the whole sequence is pinned.
@@ -6495,7 +6541,8 @@ mod tests {
                 // remainder. Unlike the "substitute" removal below, this one DOES move
                 // real keys: era 61 measured 3,533 world failures under `heal`, and every
                 // one of them now reports a sub-case instead. The sum across the five
-                // tokens is what compares to the old bare count.
+                // tokens is what compares to the old bare count. The BARE token is gone
+                // from this array: after the split nothing can emit it.
                 "heal_paindmg",
                 "heal_liquidooze",
                 "heal_defender",
