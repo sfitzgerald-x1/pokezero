@@ -59,8 +59,9 @@ sweepable. Nothing here ran at or above `19_200_000`; `FINAL_HOLDOUT_SEED_FLOOR`
 **Why one game and not 200.** The disposition is about two boundaries in one game, and
 `--games 1 --seed-start 19100170` reproduces that game bit-for-bit: `boundaries_full_round` = 88
 and `boundaries_measured` = 81 at all four commits, with an identical skip histogram. It is a
-4.8-second measurement rather than a 20-minute one, which is what made a four-commit bisect with a
-real build at each point affordable. The 200-game holdout censuses are **not** re-derived here;
+4.8-second measurement (`elapsed_seconds` 4.78 at `dc6e1e19`) against roughly 16 minutes for the
+200-game form at that run's own measured 753.3 games/hour — which is what made a four-commit bisect
+with a real build at each point affordable. The 200-game holdout censuses are **not** re-derived here;
 they are already on `main` in `reports/artifacts/c137_merged_base_holdout_sweep.json` (4 diverged,
 `itemleftovers` 2, at `dc6e1e19`) and `reports/artifacts/c138_collapsefix_mainhead_holdout_sweep.json`
 (2 diverged, `itemleftovers` 0, at `f876803e`), and I re-read both to confirm the counters this
