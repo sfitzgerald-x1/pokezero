@@ -1,0 +1,502 @@
+{
+  "purpose": "Replay of both retained C141 final-holdout repros, so the report's \"1 genuine divergence\" headline is re-derivable offline from committed artifacts alone. The parent sweep artifact records transitions_diverged: 2 and only the surviving 6.25% branch miss; the dropped 93.75% branch, its recoil -19, and its lossy marker slug are recorded ONLY here.",
+  "not_a_re_measurement": "Pure re-execution of state the differential already retained: poke_engine/branch_events on the recorded engine_state with the recorded joint action. No game was simulated, no seed was drawn, and the final-holdout window was not touched.",
+  "source_artifact": "reports/artifacts/c141_final_holdout_sweep.json",
+  "engine_build_fingerprint": "44ee1430708cbb55",
+  "engine_patches": 71,
+  "replay_script": "scripts/replay_residue.py",
+  "replay_script_sha256": "9aaf9117f0f664efd51fd33ea33190665c9e6f18fa5b22979e578173cb7d098b",
+  "equivalent_command": "PYTHONPATH=src python scripts/replay_residue.py --report reports/artifacts/c141_final_holdout_sweep.json --seed <seed> --step <step> --max-branches 16",
+  "rows": [
+    {
+      "seed": 19200131,
+      "step": 129,
+      "divergence_class": "roll_scaled_component",
+      "gating": "exact",
+      "choices": {
+        "p1": "doubleedge",
+        "p2": "batonpass"
+      },
+      "turn": 117,
+      "pre_state_hp": {
+        "p1": 46,
+        "p2": 97
+      },
+      "showdown_protocol": [
+        "|",
+        "|t:|1786096418",
+        "|move|p1a: Delcatty|Double-Edge|p2a: Scizor",
+        "|-resisted|p2a: Scizor",
+        "|-damage|p2a: Scizor|42/249 par",
+        "|-damage|p1a: Delcatty|28/290|[from] Recoil|[of] p2a: Scizor",
+        "|-activate|p2a: Scizor|move: Attract|[of] p1a: Delcatty",
+        "|cant|p2a: Scizor|Attract",
+        "|",
+        "|-heal|p1a: Delcatty|46/290|[from] item: Leftovers",
+        "|-heal|p2a: Scizor|57/249 par|[from] item: Leftovers",
+        "|upkeep",
+        "|turn|118"
+      ],
+      "observed_components": {
+        "p1": {
+          "exact": [
+            [
+              "itemleftovers",
+              18
+            ]
+          ],
+          "rolled": [
+            [
+              "recoil",
+              -18
+            ]
+          ]
+        },
+        "p2": {
+          "exact": [
+            [
+              "itemleftovers",
+              15
+            ]
+          ],
+          "rolled": [
+            [
+              "move",
+              -55
+            ]
+          ]
+        }
+      },
+      "artifact_branch_misses": [
+        "pct=6.25: p1 roll-scaled components differ: observed=[('recoil', -18)] engine=[('recoil', -32)]"
+      ],
+      "artifact_branch_count": 2,
+      "engine_candidates": [
+        {
+          "branch_count": 2,
+          "branches": [
+            {
+              "percentage": 93.75,
+              "lossy_markers": [
+                "attract_empty_tail_ambiguous:paralyzed+cannot_act"
+              ],
+              "components": {
+                "p1": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      18
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "recoil",
+                      -19
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      15
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -57
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 6.25,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "recoil",
+                      -32
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "capped_lethal",
+                      -97
+                    ]
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "seed": 19200244,
+      "step": 115,
+      "divergence_class": "component_mismatch:heal|itemleftovers",
+      "gating": "exact",
+      "choices": {
+        "p1": "flamethrower",
+        "p2": "fireblast"
+      },
+      "turn": 107,
+      "pre_state_hp": {
+        "p1": 268,
+        "p2": 157
+      },
+      "showdown_protocol": [
+        "|",
+        "|t:|1786096679",
+        "|move|p2a: Wigglytuff|Fire Blast|p1a: Moltres",
+        "|-resisted|p1a: Moltres",
+        "|-damage|p1a: Moltres|219/268 par",
+        "|move|p1a: Moltres|Flamethrower|p2a: Wigglytuff",
+        "|-damage|p2a: Wigglytuff|11/407 brn",
+        "|",
+        "|-heal|p2a: Wigglytuff|36/407 brn|[from] item: Leftovers",
+        "|-damage|p2a: Wigglytuff|0 fnt|[from] Leech Seed|[of] p1a: Moltres",
+        "|-heal|p1a: Moltres|255/268 par|[silent]",
+        "|faint|p2a: Wigglytuff",
+        "|",
+        "|win|PokeZero p1"
+      ],
+      "observed_components": {
+        "p1": {
+          "exact": [
+            [
+              "heal",
+              36
+            ]
+          ],
+          "rolled": [
+            [
+              "move",
+              -49
+            ]
+          ]
+        },
+        "p2": {
+          "exact": [
+            [
+              "itemleftovers",
+              25
+            ]
+          ],
+          "rolled": [
+            [
+              "move",
+              -146
+            ],
+            [
+              "capped_lethal",
+              -36
+            ]
+          ]
+        }
+      },
+      "artifact_branch_misses": [
+        "pct=49.03: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[('itemleftovers', 37)]",
+        "pct=10.74: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[]",
+        "pct=1.33: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[('heal', 50), ('itemleftovers', 16)]",
+        "pct=3.27: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[('itemleftovers', 37)]",
+        "pct=0.72: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[]",
+        "pct=3.75: p1 roll-scaled components differ: observed=[('', -49)] engine=[]",
+        "pct=9.23: p1 roll-scaled components differ: observed=[('', -49)] engine=[]",
+        "pct=2.02: p1 roll-scaled components differ: observed=[('', -49)] engine=[]",
+        "pct=19.92: p1 roll-scaled components differ: observed=[('', -49)] engine=[('', -45), ('itemleftovers_to_full', 45)]"
+      ],
+      "artifact_branch_count": 9,
+      "engine_candidates": [
+        {
+          "branch_count": 9,
+          "branches": [
+            {
+              "percentage": 3.75,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": []
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "brn",
+                      -50
+                    ],
+                    [
+                      "itemleftovers",
+                      25
+                    ],
+                    [
+                      "leechseed",
+                      -50
+                    ]
+                  ],
+                  "rolled": []
+                }
+              }
+            },
+            {
+              "percentage": 9.23,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": []
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      25
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -145
+                    ],
+                    [
+                      "capped_lethal",
+                      -37
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 2.02,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": []
+                },
+                "p2": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "capped_lethal",
+                      -157
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 19.92,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "move",
+                      -45
+                    ],
+                    [
+                      "itemleftovers_to_full",
+                      45
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "brn",
+                      -50
+                    ],
+                    [
+                      "itemleftovers",
+                      25
+                    ],
+                    [
+                      "leechseed",
+                      -50
+                    ]
+                  ],
+                  "rolled": []
+                }
+              }
+            },
+            {
+              "percentage": 49.03,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      37
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -45
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      25
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -145
+                    ],
+                    [
+                      "capped_lethal",
+                      -37
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 10.74,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "move",
+                      -45
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "capped_lethal",
+                      -157
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 1.33,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [
+                    [
+                      "heal",
+                      50
+                    ],
+                    [
+                      "itemleftovers",
+                      16
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -91
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "brn",
+                      -50
+                    ],
+                    [
+                      "itemleftovers",
+                      25
+                    ],
+                    [
+                      "leechseed",
+                      -50
+                    ]
+                  ],
+                  "rolled": []
+                }
+              }
+            },
+            {
+              "percentage": 3.27,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      37
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -91
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [
+                    [
+                      "itemleftovers",
+                      25
+                    ]
+                  ],
+                  "rolled": [
+                    [
+                      "move",
+                      -145
+                    ],
+                    [
+                      "capped_lethal",
+                      -37
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "percentage": 0.72,
+              "lossy_markers": [],
+              "components": {
+                "p1": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "move",
+                      -91
+                    ]
+                  ]
+                },
+                "p2": {
+                  "exact": [],
+                  "rolled": [
+                    [
+                      "capped_lethal",
+                      -157
+                    ]
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
