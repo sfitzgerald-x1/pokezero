@@ -204,13 +204,26 @@ these is inside the measured region, and none of them is a boundary verdict:
   cited as settled.** A counter is a term of the verdict partition **iff both** hold:
 
   1. it increments only **after** `boundaries_measured` has incremented for that boundary —
-     otherwise the boundary is not in the denominator being partitioned; **and**
+     otherwise the boundary is not in the denominator being partitioned;
   2. the increment is that boundary's **terminal verdict** — at most one such counter fires per
      boundary, and it is mutually exclusive with `transition:matched` / `transition:diverged`.
      In the code this is literally the `continue` in `run_game` that skips
-     `counts[f"transition:{verdict}"] += 1`.
+     `counts[f"transition:{verdict}"] += 1`; **and**
+  3. it is the **unkeyed** verdict counter. A per-boundary *attribution sub-key* is an
+     attribute of a verdict already counted, not a second verdict.
+
+  **Condition 3 is load-bearing, and it was missing from C142's second attempt as well.**
+  Without it the definition over-admits the withheld verdict's own siblings,
+  `skip:rump_branch_set_row:{seed}/{step}` and `skip:rump_branch_set_surviving_decile:{N}`:
+  each fires exactly once per withheld boundary, after the measure, and never alongside a
+  `transition:*`, so each satisfies 1 and 2. Four withheld boundaries carrying both families
+  sum to **108 against `boundaries_measured` 100** under a 1+2-only reading. The shipped
+  `VERDICT_PARTITION_SKIP_COUNTERS` is an explicit two-name tuple and closes correctly, so this
+  was a defect in the *stated rule*, not in the instrument — which is exactly why it is worth
+  fixing in the text that is designated citable.
 
   **Condition 1 alone is not sufficient, and the repair is not to invert the timing rule.**
+  (Nor are 1 and 2 together — see condition 3 above.)
   `gating:*` increments on the line immediately after `boundaries_measured`, and every
   `strict:*` counter inside `evaluate_boundary_strict` fires later still, because that function
   runs after `_prepare_boundary` has returned. None is a verdict: each fails condition 2.

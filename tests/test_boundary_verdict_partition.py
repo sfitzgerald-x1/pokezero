@@ -447,20 +447,32 @@ class VerdictPartitionFailuresTests(unittest.TestCase):
             "strict:sleeptalk_union_branch": 7,
             "strict:diverged_on_full_branch_set": 4,
             "strict:lossy_render_marker:attract_empty_tail_ambiguous": 3,
+            # CONDITION 3. These two are the withheld verdict's own per-boundary
+            # attribution sub-keys, and they satisfy conditions 1 and 2 exactly: each
+            # fires once per withheld boundary, after `boundaries_measured`, never
+            # alongside a `transition:*`. They are attributes of a verdict already
+            # counted, not further verdicts, and admitting them double-counts the
+            # boundary -- four withheld boundaries carrying both families sum to 108
+            # against a `boundaries_measured` of 100. Found in review, after the
+            # two-condition rule had already replaced a one-condition one.
+            "skip:rump_branch_set_row:19000001/7": 1,
+            "skip:rump_branch_set_surviving_decile:0": 1,
         }
         for name in post_measure_non_verdicts:
             self.assertNotIn(
                 name, VERDICT_PARTITION_COUNTERS,
                 f"{name} fires after boundaries_measured but is not a terminal verdict",
             )
+        # Coherent by construction: the sub-keys above describe ONE withheld boundary, so
+        # the report carries one. 94 + 4 + 0 + 1 + 1 == 100.
         report = {
             "boundaries_measured": 100,
             "transitions_matched": 94,
             "transitions_diverged": 4,
             "engine_errors": 0,
             "counters": {
-                VERDICT_PARTITION_LOSSY_COUNTER: 2,
-                "skip:rump_branch_set": 0,
+                VERDICT_PARTITION_LOSSY_COUNTER: 1,
+                "skip:rump_branch_set": 1,
                 **post_measure_non_verdicts,
             },
         }
@@ -469,7 +481,7 @@ class VerdictPartitionFailuresTests(unittest.TestCase):
         # statement of "these are not verdicts".
         for name, value in post_measure_non_verdicts.items():
             self.assertNotEqual(
-                94 + 4 + 0 + 2 + value, 100,
+                94 + 4 + 0 + 1 + 1 + value, 100,
                 f"{name} at {value} would coincidentally close the identity; pick a "
                 "value that discriminates",
             )

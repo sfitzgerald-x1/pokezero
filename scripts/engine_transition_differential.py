@@ -3110,14 +3110,27 @@ def checkpoint_report_aggregate(
 # fires before `boundaries_measured` increments". C142's `skip:rump_branch_set` falsifies
 # it as stated: it is a `skip:*` counter, it is not the lossy one, and it fires after.
 #
-# The membership test is TWO conditions, and firing late is only the first of them:
+# The membership test is THREE conditions, and firing late is only the first of them:
 #
 #   1. the counter increments only AFTER `boundaries_measured` has incremented for that
-#      boundary -- otherwise the boundary is not in the denominator at all; and
+#      boundary -- otherwise the boundary is not in the denominator at all;
 #   2. the increment is the boundary's TERMINAL VERDICT: at most one per boundary, and
 #      mutually exclusive with `transition:matched` / `transition:diverged`. In the code
 #      that is literally the `continue` in `run_game` that skips
-#      `counts[f"transition:{verdict}"] += 1`.
+#      `counts[f"transition:{verdict}"] += 1`; and
+#   3. it is the UNKEYED verdict counter. A per-boundary attribution sub-key -- this
+#      exit's own `skip:rump_branch_set_row:{seed}/{step}` and
+#      `skip:rump_branch_set_surviving_decile:{N}` -- is an ATTRIBUTE of a verdict already
+#      counted, not a second verdict, and summing it double-counts its boundary.
+#
+# Condition 3 is not decoration: without it the definition over-admits this exit's own
+# siblings, which satisfy 1 and 2 exactly (each fires once per withheld boundary, after
+# the measure, and never alongside a `transition:*`). Four withheld boundaries carrying
+# both families sum to 108 against `boundaries_measured` 100 under a 1+2-only reading.
+# The SHIPPED tuple is an explicit two-name list and closes correctly, so this is a
+# defect in the stated rule rather than in the code -- but the rule is cited as settled
+# in `reports/c144_boundary_identity_correction.md`, and it has already needed one
+# retraction, so it is stated correctly here rather than left to be re-derived.
 #
 # Condition 1 alone is NOT sufficient, and the counterexamples are in the paragraph
 # above. `gating:*` increments on the line immediately after `boundaries_measured`, and

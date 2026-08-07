@@ -509,13 +509,21 @@ jobs:
       # C111-C141 era: `matched + diverged == boundaries_measured` is FALSE, because
       # `engine_error` and `skip:strict_all_branches_lossy` are both counted after
       # `boundaries_measured` has already incremented. reports/c144.
+      #
+      # C142 makes it FIVE-term (`skip:rump_branch_set`) and takes the module 23 -> 26,
+      # adding the two sufficiency pins for the membership rule and the artifact-shape
+      # pin. The count below is EXACT for the same reason #1163 chose an exact count over
+      # a floor: a floor was the one fail-open in its mutation battery. Note that this
+      # guard lives in YAML, so no local `unittest` or `pytest` run can see it -- it is
+      # invisible to the "run the suite and diff the failing set" check, which is how a
+      # module that grew without its guard following reached an approved PR.
       - name: Boundary verdict partition
         run: |
           set -o pipefail
           python -m unittest tests.test_boundary_verdict_partition -v 2>&1 \
             | tee /tmp/verdict.log
-          if ! grep -qE 'Ran 23 tests' /tmp/verdict.log; then
-            echo "::error::expected 23 verdict-partition pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 26 tests' /tmp/verdict.log; then
+            echo "::error::expected 26 verdict-partition pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. The module's anti-vacuity pins -- that the

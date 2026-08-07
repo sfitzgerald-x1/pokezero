@@ -382,9 +382,10 @@ already in the same comment four lines above the claim:
 None of those is a partition term. The discriminator is the **second** condition:
 
 > A counter is a partition term iff (1) it increments only after `boundaries_measured` has
-> incremented for that boundary, **and** (2) the increment is that boundary's *terminal
-> verdict* — at most one per boundary, and mutually exclusive with `transition:matched` /
-> `transition:diverged`.
+> incremented for that boundary, (2) the increment is that boundary's *terminal verdict* — at
+> most one per boundary, and mutually exclusive with `transition:matched` /
+> `transition:diverged` — **and** (3) it is the *unkeyed* verdict counter, per-boundary
+> attribution sub-keys being attributes of a verdict already counted rather than further terms.
 
 In the code, (2) is literally the `continue` in `run_game` that skips
 `counts[f"transition:{verdict}"] += 1`. Verified for both skip terms: each has exactly **one**
@@ -399,10 +400,19 @@ every boundary `matched`, identity closes. Folding `strict:lossy_render` into
 `VERDICT_PARTITION_SKIP_COUNTERS` — the mutant a timing-only rule would permit — fails 45 tests,
 including the corpus pin on real committed artifacts.
 
-The two-condition form is now written into `reports/c144_boundary_identity_correction.md` §2,
-which is the report of record for this identity, together with the retraction of the
-timing-only version. The tuple itself was never in doubt and was independently confirmed to be
-exactly those two members; what was wrong was the *rule* offered for why.
+**Clause 3 was itself a review finding, and it is why this rule is now three conditions.** The
+two-condition form over-admits *this exit's own siblings*: `skip:rump_branch_set_row:{seed}/{step}`
+and `skip:rump_branch_set_surviving_decile:{N}` each fire exactly once per withheld boundary,
+after the measure, never alongside a `transition:*` — satisfying 1 and 2 — so four withheld
+boundaries carrying both families sum to **108 against `boundaries_measured` 100** under a
+1+2-only reading. `VERDICT_PARTITION_SKIP_COUNTERS` is an explicit two-name tuple, so the
+instrument was always right; the *stated rule* was not. That is two retractions on one clause,
+which is the reason it is now pinned as arithmetic in three places rather than trusted as prose.
+
+The three-condition form is written into `reports/c144_boundary_identity_correction.md` §2, the
+report of record for this identity, with both retractions recorded. The tuple itself was never
+in doubt and was independently confirmed to be exactly those two members; what was wrong, twice,
+was the *rule* offered for why.
 
 ### Blast radius
 
