@@ -6764,10 +6764,23 @@ Rules:
    A fidelity claim requires `matched` to go **up** or hold — or, if it falls,
    a per-row account of which rows left `matched` and why. A fix that removes a
    *spurious* match correctly lowers it.
-2. Check that `transition:matched + transition:diverged +
+2. Check that `transition:matched + transition:diverged + engine_error +
    skip:strict_all_branches_lossy == boundaries_measured` on both sides. Summing
-   all `skip:*` does **not** reconcile (it is 2,322 here); that one counter is
-   the one in the identity.
+   all `skip:*` does **not** reconcile (it is 2,322 here); that one `skip:*`
+   counter is the one in the identity, because it is the only one that fires
+   *after* `boundaries_measured` has incremented.
+
+   **C144 correction:** this rule shipped with `engine_error` omitted (three
+   terms). It is FOUR-term. `engine_error` is also counted after
+   `boundaries_measured` increments and also takes the boundary out of both
+   `transition:*` tallies, so a run with a pyo3 panic in the matcher violates the
+   three-term form exactly as it violates the two-term one. It has been 0 on
+   every committed artifact, so the omission was never exercised — which is the
+   same reason the two-term form survived as long as it did.
+   `verdict_partition_failures()` in `scripts/engine_transition_differential.py`
+   is now the mechanized form of this rule and
+   `scripts/cert_sweep_readout.py` gates on it per shard. See
+   `reports/c144_boundary_identity_correction.md`.
 3. Baseline and test must differ **only** by the patch under test, and you must
    be able to **show** that from the artifacts. Record `engine_fingerprint`
    *and* a hash of the counter-computing harness, then exhibit the

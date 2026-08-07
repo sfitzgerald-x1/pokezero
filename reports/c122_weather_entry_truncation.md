@@ -113,6 +113,14 @@ now empty. It is not. That row is a different defect wearing the same signature 
 is a damage-magnitude or partition-arm divergence rather than truncation. Identity `matched + diverged == boundaries`
 holds on all four rows. Artifacts committed as `reports/artifacts/c122_weather_{dev,holdout}_sweep.json`.
 
+> **[CORRECTION 2026-08-07 — C144.]** The identity is four-term, not two-term:
+> `matched + diverged + engine_errors + skip:strict_all_branches_lossy ==
+> boundaries_measured`. The two-term form closes on these four rows **only because
+> `skip:strict_all_branches_lossy` is 0 on both committed artifacts** (re-derived:
+> `c122_weather_dev_sweep.json` 15,219 + 5 + 0 + 0 = 15,224; `..._holdout_sweep.json`
+> 15,385 + 11 + 0 + 0 = 15,396). Stated as a general property it is false —
+> `reports/c144_boundary_identity_correction.md`.
+
 Residue is now **dev 5 / holdout 11**, reported as an outcome.
 
 ## 7. Note

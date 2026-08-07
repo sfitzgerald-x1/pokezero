@@ -47,8 +47,17 @@ counters picked out of many:
 The exits **observed in these windows** are `skip:world_unsupported:*`, `skip:unmappable_choice:*`,
 `world_prestate_mismatch` and `limit:world_substitute_health_unknown`. Others exist and are 0 here
 (`skip:no_materialization:*`, `skip:no_action_candidates`, `skip:world_error:*`);
-`skip:strict_all_branches_lossy` is **not** an exit — it fires after `boundaries_measured` has already
-incremented. Two traps to avoid when re-deriving this:
+`skip:strict_all_branches_lossy` is **not** an exit *from this reconciliation* — it fires after
+`boundaries_measured` has already incremented, so it must not be added to the `exits` column.
+
+> **[C144 clarification, 2026-08-07.]** "Not an exit" is true of the **coverage** partition on
+> this page and false of the **verdict** partition. The boundary is inside
+> `boundaries_measured` and outside both `transition:matched` and `transition:diverged`, so it
+> exits the verdict tally: `matched + diverged + engine_error + skip:strict_all_branches_lossy
+> == boundaries_measured`, four terms. This page's sentence was read as licensing the two-term
+> form, which is how that false identity spread. `reports/c144_boundary_identity_correction.md`.
+
+Two traps to avoid when re-deriving this:
 
 - `world_prestate_mismatch`'s four `:p1_hp` / `:p1_status` / `:p2_hp` / `:p2_status` sub-counters **sum
   to the parent** (39 dev, 68 holdout), so adding parent and children double-counts.
