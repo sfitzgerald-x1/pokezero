@@ -265,6 +265,7 @@ def _repricer(real, rep: int, silent: bool, stats: dict):
                     # cannot produce.
                     event = f"|-heal|{who}|{min(268, p1_hp + drain)}/268{tail}"
                     stats["p1_heal_rewrites"] += 1
+                    stats.setdefault("lines", []).append(event)
                 out.append(event)
             branch["events"] = out
         return json.dumps(report)
@@ -330,6 +331,7 @@ def measure_matrix(row: dict, reps: list[int]) -> dict:
             "arms_touched": stats["arms"],
             "p1_heal_lines_rewritten": stats["p1_heal_rewrites"],
         }
+        saturating = []
         for rep in reps:
             cell = {}
             for silent in (False, True):
@@ -340,7 +342,23 @@ def measure_matrix(row: dict, reps: list[int]) -> dict:
                     if reread_row(_observation(row, roll))[0] == "matched"
                 ]
                 cell["renderer_fixed" if silent else "renderer_shipping"] = matched
+                # Census, not inference: a representative saturates iff the repricer
+                # actually wrote a `268/268` line for it.
+                if silent and any("|268/268|" in line for line in stats.get("lines", [])):
+                    saturating.append(rep)
+            cell["matched_count_renderer_fixed"] = len(cell["renderer_fixed"])
             result["columns"][str(rep)] = cell
+        result["saturating_representatives"] = sorted(saturating)
+        result["representatives_tested"] = sorted(reps)
+        # The saturation claim is a census only if every band member was a row.
+        result["band_fully_covered"] = set(_BAND) <= set(reps)
+        # The principled "snap the off-fan representative to the nearest fan member"
+        # rule is a TIE here: 144 and 146 are both distance 1 from 145.
+        result["nearest_fan_members_to_the_shipping_representative"] = sorted(
+            d for d in _BAND if abs(d - _SHIPPING_REP) == min(
+                abs(x - _SHIPPING_REP) for x in _BAND
+            )
+        )
     finally:
         pokezero_search.branch_events = real
     return result
@@ -525,7 +543,8 @@ def main() -> None:
         row = next(
             r for r in json.loads(args.row.read_text())["repros"] if r.get("seed") == SEED
         )
-        artifact["matrix"] = measure_matrix(row, [135, 136, 141, 144, 145, 146, 147, 155])
+        # The WHOLE band, plus the off-fan shipping representative: 15 rows x 14 columns.
+        artifact["matrix"] = measure_matrix(row, sorted({_SHIPPING_REP, *_BAND}))
 
     text = json.dumps(artifact, indent=2, sort_keys=True)
     if args.out:

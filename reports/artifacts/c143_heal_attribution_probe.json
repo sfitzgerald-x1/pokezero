@@ -37,8 +37,10 @@
   "engine_fingerprint": "c72e6523d8de6f64090c9d9160a493ce5253662a65debc7f4229e88d9bb23761",
   "fixture_seed": 7717,
   "matrix": {
+    "band_fully_covered": true,
     "columns": {
       "135": {
+        "matched_count_renderer_fixed": 2,
         "renderer_fixed": [
           135,
           136
@@ -46,41 +48,97 @@
         "renderer_shipping": []
       },
       "136": {
+        "matched_count_renderer_fixed": 2,
         "renderer_fixed": [
           135,
           136
         ],
         "renderer_shipping": []
       },
+      "138": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          138
+        ],
+        "renderer_shipping": []
+      },
+      "139": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          139
+        ],
+        "renderer_shipping": []
+      },
       "141": {
+        "matched_count_renderer_fixed": 1,
         "renderer_fixed": [
           141
         ],
         "renderer_shipping": []
       },
+      "143": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          143
+        ],
+        "renderer_shipping": []
+      },
       "144": {
+        "matched_count_renderer_fixed": 1,
         "renderer_fixed": [
           144
         ],
         "renderer_shipping": []
       },
       "145": {
+        "matched_count_renderer_fixed": 0,
         "renderer_fixed": [],
         "renderer_shipping": []
       },
       "146": {
+        "matched_count_renderer_fixed": 1,
         "renderer_fixed": [
           146
         ],
         "renderer_shipping": []
       },
       "147": {
+        "matched_count_renderer_fixed": 1,
         "renderer_fixed": [
           147
         ],
         "renderer_shipping": []
       },
+      "149": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          149
+        ],
+        "renderer_shipping": []
+      },
+      "151": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          151
+        ],
+        "renderer_shipping": []
+      },
+      "152": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          152
+        ],
+        "renderer_shipping": []
+      },
+      "154": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          154
+        ],
+        "renderer_shipping": []
+      },
       "155": {
+        "matched_count_renderer_fixed": 1,
         "renderer_fixed": [
           155
         ],
@@ -145,8 +203,29 @@
       "155": 27
     },
     "mirror_injective": true,
+    "nearest_fan_members_to_the_shipping_representative": [
+      144,
+      146
+    ],
     "observed_roll": 146,
     "observed_roll_in_fan": true,
+    "representatives_tested": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      145,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155
+    ],
     "residual_lethal_band": [
       135,
       136,
@@ -162,6 +241,10 @@
       152,
       154,
       155
+    ],
+    "saturating_representatives": [
+      135,
+      136
     ],
     "shipping_mirror": 37,
     "shipping_mirror_achievable": false,

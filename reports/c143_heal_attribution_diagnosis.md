@@ -177,12 +177,13 @@ threshold* (108, a fan member). Here the threshold is skipped and the arm is mea
 
 **And 145 is not in its own fan, so its mirror 37 is not achievable by any roll.** Measured through
 the unmodified shipped `evaluate_boundary_strict`, rows = representative, columns = the 14 rolls
-Showdown can throw — eight representatives × 14 columns = 112 cells:
+Showdown can throw — **fifteen** representatives (every band member plus the off-fan shipping
+value) × 14 columns = **210 cells**:
 
-| representative | mirror | drain overflows the seeder's max HP | renderer as shipped | renderer with the drain rendered `[silent]` |
+| representative | mirror | saturates the seeder's max HP | renderer as shipped | renderer with the drain rendered `[silent]` |
 |---|---|---|---|---|
 | **145 (shipping)** | 37 — unachievable | n/a | 0 of 14 | **0 of 14** |
-| 141, 144, 146, 147, 155 | 41, 38, 36, 35, 27 | no | 0 of 14 | **1 of 14 — its own column, each** |
+| the twelve non-saturating band members | 44 … 27 | no | 0 of 14 | **1 of 14 — its own column, each** |
 | 135, 136 | 47, 46 | **yes** | 0 of 14 | **2 of 14 — columns 135 *and* 136, both** |
 
 Control, non-vacuous: the repricer at 145 with the shipping label reproduces the recorded misses
@@ -192,23 +193,62 @@ active as `unknown5`; the rewrite counters exist so that failure cannot recur si
 
 **The last row of that table is a correction to my own first draft, and it came out of fixing the
 probe.** The repricer originally did not clamp the mirror at max HP and synthesised an impossible
-`270/268`. With the clamp in place, representatives 135 and 136 — the only two whose mirror overflows
-Moltres' 268 from 223 — each price **two** columns, not one, because a heal saturating at max HP is
-relabelled `heal_to_full` by `damage_component_events`, which moves it out of the exact bucket into
-the tolerant roll-scaled one (ledger H8's `[0.92·eng − 1, 1.09·eng + 1]` window). So the exact
-diagonal holds only where the mirror does **not** saturate.
+`270/268`. With the clamp in place, representatives 135 and 136 each price **two** columns, not one.
+
+**Which rule does that — corrected, and my own measurement is what refutes the first answer.** A
+saturating heal is relabelled `heal_to_full` by `damage_component_events`, and revisions 1–2 of this
+report said the promoted component then falls into "ledger H8's `[0.92·eng − 1, 1.09·eng + 1]`
+window". **That is the wrong rule, and it is wrong in a way the measurement already contradicted:**
+H8's window around the engine's cap of 45 is `[40.40, 50.05]`, which admits **five** achievable
+mirrors — 47, 46, 44, 43 and 41 — and I measured **two**.
+
+The binding rule is the `_to_full` branch of `roll_components_agree`
+(`scripts/engine_transition_differential.py:984-1020`), which `continue`s out of the loop and so never
+reaches any later window. Two tests, both keyed on the slot's damage difference
+`|49 − 45| = 4` — the observed and engine Fire Blast rolls:
+
+1. the magnitude bound, `abs(abs(obs) − abs(eng)) > _damage_difference + 1` → reject, i.e. the mirror
+   must lie in `[40, 50]`;
+2. **the direction rule**, `if _obs_damage > _eng_damage and abs(obs) < abs(eng): return False` — since
+   `49 > 45`, the arm that took *more* damage has the deeper deficit, so the observed mirror must be
+   **≥ 45**.
+
+Together: `[45, 50]`. Intersected with the 14 achievable mirrors that leaves exactly **{47, 46}**.
+Measured directly against the shipped function — `m=44,43,41` rejected, `m=45,46,47` accepted — so the
+count of two is the direction rule's, not a window's.
+
+This tolerance belongs to the roll-inherited-cap family the ledger tracks as `I3_roll_inherited`
+(**H19**, and still unadjudicated); its bound was derived in the code comment quoted above, not in H8.
+*(A review named this "B.4 / I3"; `B.4` appears nowhere in this repository's `reports/`, so I cite only
+the label I could open.)* **H8 is a different mechanism** — the `pre_legal`-absent proportional
+fallback — and its own cell says "UNKNOWN how much" matched mass rides on it while prescribing a
+settling measurement. Attaching these cells to it would have inflated its reach in the durable ledger.
+
+> **This is the same failure mode as revision 1's blocker, reintroduced in the very section that
+> withdrew it.** Revision 1 was blocked for measuring the wrong path behind a claim that narrows a
+> merged bound; revision 2 named the wrong rule behind the same claim, in the paragraph that reported
+> the correction. Both times the *number* was right and the *mechanism* was unverified, and both times
+> the fix was to open the function rather than reason about which window "must" apply. Recording it
+> here because a report that narrows other people's bounds has to be held to the standard it invokes.
+
+**The saturation claim is now a census, not a sample.** The matrix was re-run over the **whole
+14-roll band plus the off-fan shipping representative — 15 rows × 14 columns, 210 cells** — and
+saturation was read off the lines the repricer actually wrote rather than predicted: only
+representatives **135 and 136** produce a `|-heal|p1a: …|268/268|` line. They are therefore *the* two
+saturating members of the band, not merely the two that were tested. Every one of the other twelve
+prices exactly its own column.
 
 Read the columns together:
 
 * **The renderer defect alone is sufficient to keep this row divergent under the collapsed path** —
-  0 of 14 at every one of the **eight** representatives measured (135, 136, 141, 144, 145, 146, 147,
-  155). It is not cosmetic. Not tested at the six band values not in that set.
+  0 of 14 at **all fifteen** representatives, which is every member of the band plus the off-fan
+  shipping value. It is not cosmetic, and this is now exhaustive over the band rather than sampled.
 * **The representative defect alone is sufficient too** — 0 of 14 with the label fixed.
 * c140 §6a's bound ("any fixed representative prices exactly one") needs **two** scope conditions,
   both of which its own matrix satisfied without stating: the representative must be **inside the
-  fan**, and its mirror must **not saturate** the seeder's max HP. All seven of c140's band values
-  were fan members and none saturated. This instance exhibits both excluded cases: a non-fan
-  representative prices **zero**, and a saturating one prices **two**. The shipping engine is in the
+  fan**, and its mirror must **not saturate** the seeder's max HP. All seven of c140's band values were
+  fan members and none saturated. This instance exhibits both excluded cases: a non-fan representative
+  prices **zero**, and each of the two saturating ones prices **two**. The shipping engine is in the
   first, so it is **below** c140's bound rather than at it. That is a scoping correction to a merged
   claim, not a refutation of it.
 * **A third consequence, which the first draft of this report failed to draw.** Because 145 prices
@@ -223,6 +263,13 @@ Read the columns together:
   is as good as any other" is false, and an engine change that merely snapped the mean-priced
   representative to the nearest non-saturating fan member would be a rule change with a real, if
   unmeasured, upside. That is a candidate for the ledger, not for this PR.
+* **And the principled version of that snap does not even close this boundary — which is a stronger
+  reason to refuse than the two above.** The nearest fan members to 145 are **144 and 146, both at
+  distance 1: a tie**. Measured, `144` closes column 144 and `146` closes column 146, and Showdown
+  threw **146** — so exactly one arm of the tie closes this row and the other does not. Any rule that
+  picks 146 is choosing the tie-break *because* it fits the one observation available, on a spent
+  holdout, at `n = 1`. c140 §6a(iii) rejected precisely that move. So the 0 → 1 gain is real and the
+  refusal is **stronger**, not weaker, than the first revision's.
 
 ## 4. The second miss (`engine_only=[]`, 10.74 %) is not a third defect
 
@@ -254,12 +301,27 @@ any heal is compared, and the first revision of this report left them unmentione
 * **19.92 %** is the Fire-Blast-hit, Moltres-fully-paralysed arm, and it fails because the engine's
   **Fire Blast representative is 45 against the observed 49**.
 
-That last one is a **third roll collapse on this single boundary**, and it is the same mechanism as
-§3 one field over. Fire Blast into Moltres kills nothing, so no residual threshold applies at all and
-the entire 16-roll fan collapses to its integer mean: max 49, rolls
-`[41,41,42,42,43,44,44,45,45,46,46,47,48,48,49,49]`, sum 720, `720 // 16 = 45`. **The observed 49 is
-the fan's top value** and a member. So the boundary carries *two* independent mean-priced collapses —
-Flamethrower at 145 and Fire Blast at 45 — and either alone would block an arm.
+That last one is a **third roll collapse on this single boundary** — but it is a *different code path*
+from §3's, and revision 2 of this report presented the two as one convention. Corrected:
+
+* **§3's Flamethrower arm** genuinely is priced at the integer mean of a sub-fan, via
+  `compare_health_with_damage_multiples`' `total_less_than / num_less_than`: `2030 // 14 = 145`.
+* **Fire Blast takes the other branch.** Its whole fan is survivable, so the site is
+  `max_damage_dealt < defender_active.hp` (49 < 268), and that branch's rule is not a mean at all —
+  it is `regular_damage = (max_damage_dealt as f32 * 0.925) as i16`
+  (`generate_instructions.rs:4027`), i.e. **`49 × 0.925 = 45.325 → 45`**. Its own comment says why:
+  *"The non-crit roll can never kill here, so it keeps its average."*
+
+**Both rules return 45 on this fan, which is exactly why the wrong attribution survived review twice.**
+The fan is max 49, rolls `[41,42,42,43,43,44,44,45,45,46,46,47,47,48,48,49]`, and `720 // 16` is also
+45 — a coincidence of this boundary, not the rule. *(Revision 2 also mis-transcribed that list as
+`[41,41,42,42,43,44,44,45,45,46,46,47,48,48,49,49]`, which sums to 720 as well; the artifact's
+computation was right and only the prose was wrong. Two arithmetic coincidences in one paragraph is
+what let both errors through.)*
+
+**The observed 49 is the fan's top value** and a member. So the boundary carries *two* independent
+collapses — Flamethrower mean-priced at 145 and Fire Blast `0.925`-priced at 45 — and either alone
+would block an arm.
 
 This does not change the diagnosis: a boundary needs one matching arm, and §6 shows the enumerated
 oracle supplies one. It does mean the collapsed path's failure here is **over-determined**, which is
@@ -350,8 +412,9 @@ Ruled out **by measurement**:
   behaviour, reproduced on three generated boundaries, and the engine reproduces it too.
 * **An `hp < maxhp` guard as the renderer fix.** Moltres ends at 260/268; the guard cannot see the
   truncation.
-* **The renderer defect being cosmetic.** 0 of 14 columns at each of the eight representatives
-  measured, with it in place — and under enumeration it is the row's *sole* remaining failure (§6).
+* **The renderer defect being cosmetic.** 0 of 14 columns at each of the **fifteen** representatives
+  measured — the whole band plus the off-fan shipping value — and under enumeration it is the row's
+  *sole* remaining failure (§6).
 * **The representative defect being sufficient on its own to explain the class string.** With the
   label fixed the class becomes c140's, which is the point.
 * **Fire Blast / Flamethrower / burn / a burn interaction being required.** The generated
@@ -365,7 +428,12 @@ Ruled out **by measurement**:
 * **"A G33b gate closes nothing."** False as the first revision stated it. It closes nothing under the
   collapsed path and **closes this row under enumeration** (§6).
 * **"Any fan-member representative is as good as any other here."** False: the two whose mirror
-  saturates max HP price two columns, the rest price one (§3).
+  saturates max HP price two columns, the other twelve price one (§3) — a census over the whole band.
+* **H8's `[0.92·eng − 1, 1.09·eng + 1]` window as the rule admitting the second column.** It would
+  admit five columns; two were measured. The binding rule is the `_to_full` branch's direction test
+  (§3), measured directly against the shipped function.
+* **The Fire Blast representative being a fan mean.** It is `0.925 × max` on the
+  `max_damage_dealt < defender_active.hp` branch. Both happen to give 45 here (§4a).
 
 **Left uncertain, and stated as such:**
 
@@ -380,5 +448,5 @@ Ruled out **by measurement**:
   evidence they agree on this row and says nothing about any other.
 * The 14-roll band and the 7-roll band are two instances. Nothing here bounds how band width
   distributes over the pool, so "1 of 14" and "1 of 7" are two observations, not a rate.
-* Six of the fourteen band values were not used as representatives, and the two saturating ones are the
-  only members of their class that were.
+* Whether a **tie-break rule** for snapping an off-fan representative could be principled rather than
+  fitted. Here the tie is 144 versus 146 and only 146 closes the row (§3), so no rule was proposed.
