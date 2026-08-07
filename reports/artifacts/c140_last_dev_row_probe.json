@@ -737,8 +737,27 @@
    "rule": "floor(mean(band)), the survive arm's own convention",
    "survive_band_check": "floor(916/9) = 101, which is the representative the engine actually emits",
    "lethal_band": "floor(778/7) = 111 -> drain 26",
-   "verdict": "diverged"
-  }
+   "verdict": "diverged",
+   "source_confirmation": {
+    "band_arm_priced_at_the_threshold": "residual_disjoint_bands stores (threshold, band) and pushes the arm at `threshold` itself -- gen3/generate_instructions.rs",
+    "survive_arm_is_the_integer_mean": "survive_representative = average_below, and compare_health_with_damage_multiples returns (total_less_than / num_less_than) -- an integer mean of the sub-fan below the threshold. 916/9 = 101 exactly.",
+    "note": "so (iv) is confirmed at source rather than fitted to the observed -101.",
+    "alternative_rule_also_gives_111": "floor((min+max)/2) = floor((108+115)/2) = 111, so (iv) does not depend on which mean-like rule is chosen."
+   }
+  },
+  "controls": {
+   "rep108_rewrite_is_byte_identical_noop": true,
+   "why": "the rep=108 rewrite must reproduce the unpatched render exactly, or the diagonal cell at 108 would be an artifact of the rewrite machinery rather than of the engine. Asserted on the full rendered payload, sort_keys JSON."
+  },
+  "off_diagonal": {
+   "cells": 42,
+   "all_diverged": true,
+   "arms_per_cell": 14,
+   "reached_p2_comparison_with_predicted_pair": 42,
+   "predicted_pair": "observed_only=[('heal', min(29,137-r))] engine_only=[('heal', min(29,137-rep))]",
+   "consequence": "the residual-kill arm clears the p1 comparison in EVERY off-diagonal cell, so the cap-vs-cap identity (|obs|-|eng|) == (eng_direct-obs_direct) holds for every (rep, r) pair in the band, not only at rep=108. The p2 mirror heal is therefore the SOLE discriminator across the whole band."
+  },
+  "diagonal_is_definitional": "the 7 diagonal cells are a tautology, not a finding: with rep == r the engine arm's p1 components and its mirror heal are identical to the observation by construction, so the only live adjudication left is p2's direct damage roll, which the fan/window forgives. All the informative content is in the 42 off-diagonal cells."
  },
  "withdrawn_claims": [
   {

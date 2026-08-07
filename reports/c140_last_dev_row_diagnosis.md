@@ -28,9 +28,43 @@ program disposition is **"closed by enumeration, retained under the collapsed pa
 > box closed by calling 108 "the one roll of the seven that would have matched". **109 is.**
 >
 > The bound survives, and §6 now states it with the measurement that makes it stronger than the
-> universal it replaces. This matters beyond tidiness: `19000191/63` is one of the eight rows in
-> `reports/c105_retract_limit_overclaim.json`'s 8-for-8 retraction, filed as a limit by C111 v1 and
-> reduced to cause A7. It has now had four confident diagnoses and three of them were wrong.
+> universal it replaces.
+
+## Why this boundary keeps getting a correction box: the count, enumerated
+
+An earlier revision of this box wrote *"four confident diagnoses, three of them wrong"* and cited
+`reports/c105_retract_limit_overclaim.json` for the 8-for-8. Both were sloppy, and a report whose
+thesis is *derive the number, do not carry it* cannot carry an uncounted number in the paragraph
+making that argument. Enumerated, with citations, every one resolvable:
+
+| # | reading of `19000191/63` | where | retracted by |
+|---|---|---|---|
+| 1 | filed under `limit:` with no demonstration artifact | C99 — **second-hand**, see note | the C116 Phase 0 item 1 adjudication |
+| 2 | "parser overwrites a supplied source" as the row's cause | `c103_limit_readjudication.json` → `FINAL_RESULT.c104_class_parser_overwrites_a_supplied_source` | c103's own `SUPERSESSION_2026_08_04`: *"SUPERSEDED IN ITS PER-ROW CAUSES"* |
+| 3 | "a genuine comparison limit" | `c105_retract_limit_overclaim.json` → `so_three_of_the_seven_are_limits` | c105's own `SUPERSESSION_2026_08_04` |
+| 4 | `limit:` again, re-adjudicated | C111 **v1** | v2, reduced to cause A7 (`c111_residue_row_causes.md:91`) |
+| 5 | "the collapsed arm kept the surviving representative" (109 vs 101, Raichu at 22) | **c140 rev 1**, §1 | §1 of this revision — it named the survive arm, not the residual-kill arm at 108 |
+| 6 | "no representative closes this row" | **c140 rev 1**, §6 box | §6a of this revision, by measurement |
+
+**Six wrong readings, four of them by three separate earlier reports and two of them mine in this
+one.** Two caveats, because the table is the argument:
+
+- **#1 is second-hand.** No `c99_*` file exists under `reports/`. Membership is taken from
+  `docs/engine_fidelity_program_20260801.md`, which states the eight-row set and names
+  `19000008/54`, `19000191/63`, `19000198/33` as the three C111 v1 re-adjudicated — i.e. this row is
+  in both sets. I could not open the primary source, and say so rather than counting it silently.
+- **c104 is deliberately *not* in the table.** Its supersession reads *"CAUSE STILL STANDS"*, and the
+  parser overwrite it identifies is real and still open (ledger H7). What this report adds is that
+  the overwrite is **not the operative cause here**: it is happening on this very row — Showdown
+  supplies `[from] Leech Seed` and the observation carries the bare `capped_lethal` — and the p1
+  comparison **passes anyway** (§4, counterfactual A2). c104 was describing a real defect at an era
+  when the engine's representative was `−106`; it is not what keeps this row open today.
+
+**The correct citation for the 8-for-8** is the C116 Phase 0 item 1 adjudication, documented at
+`docs/engine_fidelity_program_20260801.md` ("Established by the independent adjudication that closed
+that report"). c105 only *records* it, in a supersession note, and c105's own conclusion was the
+opposite — it called this row a genuine limit. Citing c105 for the retraction of a claim c105 made
+was the wrong attribution even though the membership is right.
 
 No engine or harness change ships with this report. The only non-documentation edit is two entries
 added to `_MENTION_ALLOWLIST` in `tests/test_roll_enumeration_scope.py`, because that gate is a
@@ -203,6 +237,16 @@ Leech Seed transfers that capped amount to the other side, where it arrives as a
 `|-heal| … |[silent]|`, gets `source = "heal"`, and is compared **exactly**. One physical quantity,
 two buckets, depending on which side of the field it lands on.
 
+**And the obvious third route — re-label the mirror so it carries its cause — is closed at the
+source.** Showdown emits **no `[from] Leech Seed` heal line at all**: the drain renders silently
+(`sim/battle.ts:2293-2296`, `case 'leechseed'`, reached from `data/moves.ts:10218-10221`), which is
+`reports/c131_leechseed_heal_label.md` change 4 — a report that records asserting the opposite label
+as one of its own errors. So both sides render a bare `heal` **by design**, and no parser change can
+recover the attribution from the protocol; the information is not in it. That completes the domain:
+the mirror can be re-bucketed (§7b) or the arm can be re-priced (§6a, §7a, §7c), but it cannot be
+re-labelled. *(Cited second-hand: Showdown is not vendored in this repo, so this rests on c131's
+citation rather than on a file I opened.)*
+
 So there are two true statements and they are not in conflict:
 
 1. **The engine emits no arm at the observed roll**, and the observed roll is in its own fan. Engine
@@ -261,7 +305,31 @@ Showdown threw. (`observation(109)` reproduces the recorded protocol byte-for-by
 | **rep 113** | · | · | · | · | · | **MATCH** | · |
 | **rep 115** | · | · | · | · | · | · | **MATCH** |
 
-**The matrix is the identity.** A representative matches iff it equals the roll thrown. So:
+**Two controls, without which the matrix proves less than it looks:**
+
+* **The rewrite machinery is a no-op at 108.** Re-pricing to `rep = 108` reproduces the unpatched
+  render **byte for byte** (asserted on the full payload). Without this, the diagonal cell at 108
+  could be an artifact of the rewrite rather than of the engine.
+* **No synthesised observation is malformed.** `observation(109)` reproduces the recorded protocol
+  byte for byte, and a review ran all seven synthesised observations against the **enumerated** build
+  and got seven matches — so every column is a boundary the engine can actually produce.
+
+**The matrix is the identity** — but half of it is a tautology and should be labelled as such.
+
+> **The diagonal is definitional, not a discovery.** With `rep == r` the engine arm's p1 components
+> and its mirror heal are *identical to the observation by construction*, so the only live
+> adjudication left is p2's direct damage roll, which the fan forgives. **All the informative content
+> is in the 42 off-diagonal cells.**
+
+And those 42 carry more than "diverged". In **every one** the residual-kill arm reaches the p2
+comparison and fails there with exactly the predicted pair,
+`observed_only=[('heal', 137−r)] engine_only=[('heal', 137−rep)]` — 42 of 42, asserted, 14 arms per
+cell. Reaching p2 means the p1 comparison **passed**, so the cap-vs-cap identity
+`(|obs_cap| − |eng_cap|) == (eng_direct − obs_direct)` holds for **every** `(rep, r)` pair in the
+band, not merely at the shipping 108. That is what the bound actually needs: the mirror heal is the
+**sole discriminator across the whole band**, provably, rather than at one point.
+
+So:
 
 **(i) The bound.** Any fixed representative prices **exactly one** of the seven lethal rolls —
 asserted on all seven rows, not inferred. This is what steps (a)–(c) of the withdrawn box actually
@@ -278,13 +346,21 @@ attractive is that the dev window happens to contain a boundary where Showdown t
 engine constant because it closes an observed row is exactly what the dev/holdout split exists to
 forbid — and this row is a single observation, `n = 1`.
 
-**(iv) The principled rule does not close it either — measured.** The survive arm's representative is
-not chosen arbitrarily: it is `floor(mean(surviving rolls))`, and
-`floor((97+98+100+101+102+103+104+105+106)/9) = floor(916/9) = 101`, which is exactly the `−101` the
-engine emits. Applying the *same* convention to the lethal band gives
-`floor((108+109+110+111+112+113+115)/7) = floor(778/7) = 111` → drain 26 → **diverged**. So the row is
-not closable by any rule the engine already follows; only by a hand-picked constant, which (iii)
-rules out.
+**(iv) The principled rule does not close it either — measured, and confirmed at source.** The two
+conventions are visible in `gen3/generate_instructions.rs`, so this is not fitted to the observed
+`−101`:
+
+* `residual_disjoint_bands` stores `(threshold, band)` and prices the band arm at the **threshold
+  itself** — which is why the shipping representative is 108.
+* `survive_representative = average_below`, and `compare_health_with_damage_multiples` returns
+  `total_less_than / num_less_than` — an **integer mean of the sub-fan below the threshold**. That
+  gives `916/9 = 101` exactly, reproducing the `−101` the engine emits.
+
+Applying the survive arm's own rule to the lethal band gives
+`floor((108+109+110+111+112+113+115)/7) = floor(778/7) = 111` → drain 26 → **diverged** (measured).
+The result does not depend on which mean-like rule is chosen: `floor((min+max)/2) = floor(223/2)` is
+also **111**. So the row is not closable by any rule the engine already follows — only by a
+hand-picked constant, which (iii) rules out.
 
 **The correctly scoped falsifier, and what happened to it.** §9 and the PR body of the first revision
 named it properly: *a collapsed-path arm, from any engine change keeping one arm per residual
@@ -418,6 +494,11 @@ Ruled out by measurement:
 * **"Blanket `heal` widening is harmless."** It blesses two impossible mirrors.
 * **"No representative closes this row."** Overturned by measurement, in this report's own second
   revision. Representative 109 closes it. What survives is the bound in §6a.
+* **Re-labelling the mirror.** Showdown emits no `[from] Leech Seed` heal line at all, so the
+  attribution is not in the protocol to recover (§5; cited second-hand via c131 change 4).
+* **The parser overwrite (c104 / ledger H7) as this row's cause.** The overwrite is happening here
+  and the p1 comparison passes regardless — measured, §4 counterfactual A2. The defect is real and
+  still open; it is not what keeps this row divergent.
 
 Left uncertain, and stated as such:
 
