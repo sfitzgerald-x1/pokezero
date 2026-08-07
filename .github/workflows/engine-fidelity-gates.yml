@@ -329,11 +329,22 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_differential_denominator \
             tests.test_denominator_adoption -v 2>&1 | tee /tmp/denominator.log
-          # The real-driver acceptance needs corpus/golden-v4, which CI does not carry, so it
-          # SKIPS here by design -- unittest still counts a skip in "Ran N", so the count is 17
-          # either way. Asserting on it keeps a silent shrink from passing.
-          if ! grep -qE 'Ran 17 tests' /tmp/denominator.log; then
+          # CI does NOT execute the real-driver acceptance -- it needs corpus/golden-v4,
+          # which is gitignored, so it skips here. That is the layer which caught the
+          # round-1 bug in #1154, and it runs only on a developer machine. Said plainly
+          # rather than as reassurance.
+          #
+          # The skip COUNT is pinned as well as the ran-count, for the reason the
+          # "Engine binding boundary pins" step above gives: a future `skipIf` would
+          # otherwise keep `Ran N` green while disarming the acceptance entirely -- the
+          # "guard nothing runs" pattern this file already documents twice, and the very
+          # reason this step exists.
+          if ! grep -qE 'Ran 25 tests' /tmp/denominator.log; then
             echo "::error::denominator pins changed count; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/denominator.log; then
+            echo "::error::denominator skip set changed; expected exactly the 5 real-driver tests"
             exit 1
           fi
 

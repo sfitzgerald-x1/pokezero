@@ -20,7 +20,9 @@ So the rule this module mechanizes:
 1. publish ``boundaries_measured`` — the count the harness actually compared, not the count the
    corpus contains;
 2. **hard-fail when it is zero**, because a run that measured nothing is not a pass; and
-3. assert ``matched + diverged == measured``, so every attempt is accounted for.
+3. assert ``matched + diverged == measured``, so every attempt is accounted for; and
+4. assert ``measured + skipped == contained`` whenever both are supplied — the rule that
+   actually bites.
 
 **What rule 3 actually does, stated narrowly after review.** In ``leaf_vs_reality`` the
 pre-existing identity ``compared == exact + divergent`` held *by definition* — ``compared`` was
@@ -35,8 +37,23 @@ accounting is sound — and "the partition closes on all four" is therefore a st
 the code's shape, not a measurement. Reading it as verification would be the
 instrument-that-cannot-move error this repo has made repeatedly.
 
-Rule 2 is the one doing work today. It is also the one a caller cannot fake by deriving
-``measured`` from the sum: if nothing was measured, the sum is zero too.
+**Rule 4 is the falsifiable one, and it exists because rule 3 is not.** Rule 3 sits entirely
+on one side of the skip decision, so an increment adjacent to its classification can never
+violate it. Rule 4 SPANS that decision: every boundary the corpus contains was either compared
+or skipped, exactly once. It mechanically detects both bugs review found in this PR's first
+round, neither of which needed a forced-skip driver or a fixture to catch:
+
+- the counter placed above the skip decision (``fidelity_gate_events``): 1271 + 315 = 1586
+  against 1271 contained → FAIL;
+- a boundary counted into BOTH ``attempted`` and ``skipped`` (``leaf_vs_reality``'s
+  ``no_golden_row`` path): 956 + 316 = 1272 against 1271 → FAIL.
+
+It is skipped when either figure is absent, so callers that cannot supply them still work —
+but supplying them turns ``contained`` and ``skipped`` from display strings into load-bearing
+arguments, which is the point.
+
+Rules 2 and 4 are the ones doing work. Rule 2 also cannot be faked by deriving ``measured``
+from the sum: if nothing was measured, the sum is zero too.
 """
 from __future__ import annotations
 
@@ -69,6 +86,20 @@ class DenominatorReport:
                     else "Check the skip reasons."
                 )
             )
+        if self.contained is not None and self.skipped is not None:
+            accounted = self.measured + self.skipped
+            if accounted != self.contained:
+                out.append(
+                    f"{self.label}: boundaries_measured + skipped ({self.measured} + "
+                    f"{self.skipped} = {accounted}) != boundaries contained "
+                    f"({self.contained}) — {abs(self.contained - accounted)} boundaries were "
+                    + (
+                        "counted twice (compared AND skipped)"
+                        if accounted > self.contained
+                        else "neither compared nor skipped"
+                    )
+                    + "."
+                )
         total = self.matched + self.diverged
         if total != self.measured:
             out.append(

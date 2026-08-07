@@ -157,8 +157,12 @@ class DenominatorAcceptanceTest(unittest.TestCase):
     def test_an_unclassified_attempt_also_fails(self) -> None:
         """Rule 3, end to end: a boundary attempted and never classified must not pass.
 
-        This is the half that a caller deriving `measured` from `matched + diverged` would
-        lose, so it is pinned against the real harnesses rather than only the helper.
+        Note what this is and is not: after the round-1 fixes all four increments sit
+        adjacent to their classification, so no harness can actually PRODUCE this state. It
+        drives real `main()`s, but it is helper arithmetic in a harness costume — a guard
+        against a future refactor, not evidence about today's accounting. Rule 4
+        (`measured + skipped == contained`) is the one that bites, and it is pinned in
+        tests/test_differential_denominator.py against both round-1 bugs.
         """
         for name, _skipped, healthy in HARNESSES:
             with self.subTest(harness=name):
@@ -184,10 +188,46 @@ class RealDriverAcceptanceTest(unittest.TestCase):
     """
 
     CORPUS = REPO_ROOT / "corpus" / "golden-v4"
+    TABLES = REPO_ROOT / "corpus" / "encoder_tables_v4.json"
 
     def setUp(self) -> None:
-        if not (self.CORPUS / "rows.jsonl").exists():
+        if not (self.CORPUS / "rows.jsonl").exists() or not self.TABLES.exists():
             self.skipTest(f"no corpus at {self.CORPUS}; regenerate per C112's provenance block")
+
+    def test_leaf_root_parity_fails_when_every_boundary_skips(self) -> None:
+        """Forced by making the encoder unconstructible, so every row lands in a skip."""
+        module = importlib.import_module("leaf_root_parity")
+        import pokezero_search
+
+        def boom(*_a, **_k):
+            raise RuntimeError("forced by the acceptance test")
+
+        with mock.patch.object(pokezero_search, "LeafEncoder", boom):
+            self.assertEqual(
+                module.main(["--corpus", str(self.CORPUS), "--tables", str(self.TABLES)]), 1
+            )
+
+    def test_prior_mapping_assert_fails_when_every_boundary_skips(self) -> None:
+        module = importlib.import_module("prior_mapping_assert")
+        import pokezero_search
+
+        def boom(*_a, **_k):
+            raise RuntimeError("forced by the acceptance test")
+
+        with mock.patch.object(pokezero_search, "LeafEncoder", boom):
+            self.assertEqual(
+                module.main(["--corpus", str(self.CORPUS), "--tables", str(self.TABLES)]), 1
+            )
+
+    def test_leaf_vs_reality_fails_on_a_genuine_schema_mismatch(self) -> None:
+        """No patch at all: a v3 corpus against v4 tables skips 1008/1008 for real."""
+        module = importlib.import_module("leaf_vs_reality")
+        v3_corpus = REPO_ROOT / "corpus" / "golden-v2"
+        if not (v3_corpus / "rows.jsonl").exists():
+            self.skipTest("no corpus/golden-v2")
+        self.assertEqual(
+            module.main(["--corpus", str(v3_corpus), "--tables", str(self.TABLES)]), 1
+        )
 
     def test_fidelity_gate_events_fails_when_every_boundary_skips(self) -> None:
         module = importlib.import_module("fidelity_gate_events")

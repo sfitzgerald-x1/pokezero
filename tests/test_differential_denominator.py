@@ -81,6 +81,55 @@ class PartitionTest(unittest.TestCase):
         self.assertEqual(len(report.failures), 2)
 
 
+class SpanningRuleTest(unittest.TestCase):
+    """Rule 4 — the one that is not structurally forced.
+
+    Rule 3 sits entirely on one side of the skip decision, so an increment adjacent to its
+    classification can never violate it (true at all four adoption sites). Rule 4 spans that
+    decision, and it catches both bugs this PR's first review round found.
+    """
+
+    def test_it_catches_a_counter_placed_above_the_skip_decision(self) -> None:
+        """Round-1 `fidelity_gate_events`: `attempted` incremented before `drive_boundary`,
+        so it equalled the contained count while 315 boundaries were skipped."""
+        report = check_denominator(
+            "gv4", measured=1271, matched=459, diverged=812, contained=1271, skipped=315
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("counted twice", " ".join(report.failures))
+
+    def test_it_catches_a_boundary_counted_as_both_compared_and_skipped(self) -> None:
+        """Round-1 `leaf_vs_reality`: the `no_golden_row` path incremented `attempted` and
+        then `skip:no_golden_row`."""
+        report = check_denominator(
+            "gv4", measured=956, matched=39, diverged=917, contained=1271, skipped=316
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("counted twice", " ".join(report.failures))
+
+    def test_it_catches_a_boundary_that_is_neither_compared_nor_skipped(self) -> None:
+        report = check_denominator(
+            "gv4", measured=956, matched=39, diverged=917, contained=1271, skipped=314
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("neither compared nor skipped", " ".join(report.failures))
+
+    def test_the_real_shape_passes(self) -> None:
+        self.assertTrue(
+            check_denominator(
+                "gv4", measured=956, matched=39, diverged=917, contained=1271, skipped=315
+            ).ok
+        )
+
+    def test_it_is_skipped_when_either_figure_is_absent(self) -> None:
+        """Callers that cannot supply contained/skipped must keep working."""
+        for kwargs in ({"contained": 1271}, {"skipped": 315}, {}):
+            with self.subTest(**kwargs):
+                self.assertTrue(
+                    check_denominator("c", measured=956, matched=39, diverged=917, **kwargs).ok
+                )
+
+
 class RenderTest(unittest.TestCase):
     def test_the_denominator_line_carries_the_numbers_a_reader_needs(self) -> None:
         line = check_denominator(
