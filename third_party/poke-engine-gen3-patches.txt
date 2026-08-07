@@ -1355,5 +1355,6 @@ poke-engine-gen3-a11-bellydrum-fail-clauses.patch
 # outside the set and its switch correctly proceeds. Two earlier attempts each
 # implemented one direction only and were withdrawn on their falsifiers; both are
 # now pinned by Showdown scenarios and engine tests. Predictions and measurements:
-# reports/rust-fidelity/switch_cancel_prediction_v3.md (external).
+# reports/c136_faint_cancels_prediction.md, with the four sweeps it cites at
+# reports/artifacts/c136_faintcancels_{main,fix}_{dev,holdout}_sweep.json.
 poke-engine-gen3-faint-cancels-opposing-switch.patch

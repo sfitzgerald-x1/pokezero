@@ -107,3 +107,53 @@ fn without_a_faint_both_switches_happen() {
         "with nothing fainting there is nothing to cancel"
     );
 }
+
+/// THE v1 REGRESSION PIN, and the direction that cost the most.
+///
+/// The first attempt at this mechanism tested `either active is at hp <= 0`. That is
+/// also true of a side entering the ply already owing a replacement, whose active is a
+/// 0-HP Pokemon awaiting a switch — so it cancelled forced replacements, leaving the
+/// wrong Pokemon in and desynchronising every later residual: dev 2 -> 40, holdout
+/// 3 -> 42, 78 rows opened to close 1. Only the sweep caught it, because the synthetic
+/// double switch that shipped with it had nobody fainting and so never reproduced it.
+///
+/// Here BOTH sides owe a replacement and side two's replacement dies to Spikes on
+/// entry. Side one's replacement must still be performed: it was never a *queued*
+/// action in Showdown's sense, it is a fresh request phase, so `cancelAction` cannot
+/// reach it. The guard survives this because a 0-HP active that was already down is not
+/// *newly* fainted.
+///
+/// Without this the failure mode is unpinned and only a 200-game sweep would catch its
+/// return, which is exactly the situation the fixture layer exists to end.
+#[test]
+fn a_forced_replacement_is_never_cancelled_even_when_the_other_one_dies_on_entry() {
+    let mut state = State::default();
+
+    state.side_one.force_switch = true;
+    state.side_two.force_switch = true;
+    state.side_one.pokemon[PokemonIndex::P0].hp = 0;
+    state.side_two.pokemon[PokemonIndex::P0].hp = 0;
+    state.side_two.side_conditions.spikes = 1;
+
+    let incoming = &mut state.side_two.pokemon[PokemonIndex::P1];
+    incoming.maxhp = 80;
+    incoming.hp = 10; // dies to the 80 / 8 = 10 Spikes hit
+
+    assert_eq!(
+        only_branch(generate(
+            &mut state,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            &MoveChoice::Switch(PokemonIndex::P1),
+        )),
+        vec![
+            "ToggleSideTwoForceSwitch".to_string(),
+            "Switch SideTwo: P0 -> P1".to_string(),
+            "Damage SideTwo: 10".to_string(),
+            "ToggleSideOneForceSwitch".to_string(),
+            "Switch SideOne: P0 -> P1".to_string(),
+            "ToggleSideTwoForceSwitch".to_string(),
+        ],
+        "side one's forced replacement must still happen. Dropping \
+         `Switch SideOne: P0 -> P1` here is the v1 defect that opened 78 rows to close 1."
+    );
+}
