@@ -534,25 +534,37 @@ rather than by the greps — which is fine, but it is a property of the shell, a
 
 C144 (#1163) merged into `main` while this work was in flight and added
 `tests/test_boundary_verdict_partition.py`, which pins the number of committed sweep artifacts
-**exactly** — `_EXPECTED_SWEEP_ARTIFACTS = 70` — because a floor was the one fail-open in its own
-mutation battery. The four bisect artifacts here take it to **74**, so the gate failed until bumped.
+**exactly** — not as a floor, because a floor was the one fail-open in its own mutation battery. The
+four bisect artifacts here raise that count, so the gate failed until the pin was re-derived. #1159
+then merged and moved the same line again, making the collision three-way.
 
-Bumping an exactness pin is the shape that deserves suspicion, so it was not done by arithmetic. The
-selector was re-run over both trees: `origin/main` selects **exactly 70**, matching the pin, this
-branch selects **74**, and the set difference is exactly the four `c145_g19100170_*.json` files with
-**nothing removed** — so this is an addition, not the disappearance the pin exists to catch.
-`c145_settling_branch_dump.json` is correctly *not* selected: it carries no top-level
-`boundaries_measured`. All four then pass the checker itself rather than merely the count, closing the
-four-term identity — `79 + 2 + 0 + 0 == 81` at the two pre-fix commits and `81 + 0 + 0 + 0 == 81` at
-the two post-fix ones.
+**The numbers are deliberately not restated here.** An earlier revision of this section quoted the
+count, the base, the delta and the liveness check inline, and every one of those figures was
+superseded by the #1159 merge while the prose kept asserting them as current — a report stating
+superseded pin values as fact is the exact failure this program keeps paying for, and restating them
+again would only reschedule it. **The authoritative record is the comment block above
+`_EXPECTED_SWEEP_ARTIFACTS` in `tests/test_boundary_verdict_partition.py`**, which is versioned with
+the pin it describes and therefore cannot drift from it.
 
-And the bumped pin was confirmed still live, by the same standard §5.4 applies to my own guard: set to
-73 it fails with `AssertionError: 74 != 73`; at 74 the module is `Ran 23 tests … OK`. A bump that
-silently disarmed the pin would look identical from the diff.
+What belongs here is the *method*, which does not go stale:
 
-`#1159` also bumps that line, to 71 from its own 70. The edits conflict, and the resolution is
-neither `71 + 4` nor `74 + 1`: re-derive from the merged corpus, which is the only reading an
-exactness pin is worth anything under. Noted in the file and on the PR.
+- Bumping an exactness pin is the shape that deserves suspicion, so it was **never** done by
+  arithmetic. The selector — top-level `boundaries_measured` and nothing else — was re-run over both
+  trees, and the bump was accepted only because the set difference is exactly the four
+  `c145_g19100170_*.json` files with **nothing removed**. A member that silently stops carrying the
+  key drops *out* of the corpus, which is this pin's fail-open, and pure addition would mask it.
+- The directory count and the corpus count move **independently** and neither may cross-check the
+  other: `c145_settling_branch_dump.json` sits in `reports/artifacts/` and is correctly *not*
+  selected, carrying no top-level `boundaries_measured`, as do #1159's `c141_final_holdout_replay.json`
+  and #1161's two `c143` artifacts. That an arithmetic guess happened to agree with the selector at
+  this merge is a coincidence of this merge, recorded as one.
+- All four c145 members pass the **checker**, not merely the count, closing the four-term identity:
+  `79 + 2 + 0 + 0 == 81` at the two pre-fix commits and `81 + 0 + 0 + 0 == 81` at the two post-fix
+  ones.
+- The re-derived pin was confirmed still **live**, by the same standard §5.4 applies to my own guard:
+  set one lower it fails with the corpus-size `AssertionError`; at the measured value the module is
+  green, exit code captured directly. A bump that silently disarmed the pin would look identical in
+  the diff, so this check is not optional.
 
 ---
 
@@ -577,9 +589,14 @@ exactness pin is worth anything under. Noted in the file and on the PR.
 - It does not re-derive the 200-game holdout censuses. It reads the two that `main` already ships
   and re-derives, independently, the `dc6e1e19` engine fingerprint they carry.
 - It does not measure `27609063`, and says why that is sound rather than a gap (§3).
-- On §4.5: it **does** now settle what the difference is (a missing `|-fail|` line, with no volatile
-  applied and the stall counter measured at 0 on both the boundary and its single-variable control),
-  having previously and wrongly claimed a follow-on mispricing. What it does **not** measure is the
+- On §4.5: it **does** now settle what the difference is — a missing `|-fail|` line, with **no
+  volatile applied and the stall counter left at 0 on the boundary itself**, having previously and
+  wrongly claimed a follow-on mispricing. ⚠ An earlier revision of this bullet said the counter was 0
+  "on both the boundary **and its single-variable control**", which **inverts the control**: on the
+  control the volatile *is* applied and the counter *does* go to 1, and that contrast is the entire
+  reason the control exists. Read the wrong way it turns a discriminating experiment into a claim that
+  the machinery never fires at all. It is true only of the shared *pre-state*, where it is trivial.
+  §4.5's body and `c138` §7 item 7 both state it correctly. What it does **not** measure is the
   *incidence* — whether any shape exists where the omission costs more than a protocol line — which is
   why the item goes to the ledger's §7 rather than §3. The unrecorded-ness of `willAct` is asserted
   from `git grep … origin/main -- .` over all tracked files, twice widened (once for
