@@ -1,16 +1,11 @@
 # C134 — roll enumeration as a flag-gated reference oracle (C116 Phase 2)
 
-**Status: MEASURED, with a PER-ROW result on one question.** The falsifier did not fire and
-both windows reach zero divergent rows under the oracle. The wrong-fan control — six
-confounds deep, three retractions recorded below — now runs on a zero-contamination branch
-set across a displacement scan, and the answer differs by row: on `19000074/27` and
-`19100191/5` the closure is **not value-driven** and survives 12x–106x displacement; on
-`19000191/63` and `19100107/135` it is **undetermined**, because two equally valid
-perturbations disagree and the disagreement is not ordered by displacement. Details, and
-the correction this forces to the merged #1152, in §"Nothing opened" is weak on its own. The prediction was committed in `0733abe7` before any sweep on this branch
-was started; the post-rebase re-registration below was committed in `21178990`, before the
-sweeps that test it, which are the four artifacts landing with this section. The ordering
-between "what I expected" and "what I measured" is a property of the history.
+**Status: MEASURED on the post-#1152 base, and the residue is nearly gone.** Re-run on the
+71-patch build after #1152 merged: dev **1 -> 0**, holdout **0 -> 0**, nothing opened. Six
+of the seven rows this branch ever measured have been closed in the SHIPPING engine by
+other work (#1144, #1148, #1152); one remains. The wrong-fan control is down to a single
+subject and its verdict there is UNDETERMINED. The shipping engine now matches where
+enumeration used to be the only thing that did.
 
 **This document was retitled and its disposition reversed after independent review.** The
 first version adopted enumeration *for the differential harness*. That was wrong, and the
@@ -211,292 +206,143 @@ from the collapsed set and holdout reads 4 -> 2.) Everything else — coverage p
 ## Measurement
 
 Four sweeps, 200 games each, **one build**, `POKEZERO_ENUMERATE_ROLLS` the only variable.
-Run from a **clean checkout of `f35c5928`**, the commit carrying the code. Every record
-carries `"source_tree": "clean"`, so that is a property of the artifact rather than a
-claim here. (An earlier attempt at this re-run was discarded and restarted: a commit was
-made while it was in flight, so its records would have stamped `clean` for a tree that
-changed underneath them. Nothing but the sweeps' own output artifacts was written to the
-tree during the run that produced these numbers.)
-
-| artifact | window | roll path | `enumerate_rolls` in the artifact |
-| --- | --- | --- | --- |
-| `reports/artifacts/c134_collapsed_dev_sweep.json` | dev 19000000 | collapsed | `false` |
-| `reports/artifacts/c134_enumerated_dev_sweep.json` | dev 19000000 | enumerated | `true` |
-| `reports/artifacts/c134_collapsed_holdout_sweep.json` | holdout 19100000 | collapsed | `false` |
-| `reports/artifacts/c134_enumerated_holdout_sweep.json` | holdout 19100000 | enumerated | `true` |
+Run from a **clean checkout of `6d390acb`** on the **71-patch** build `44ee1430`, after
+#1152 merged. Every record carries `"source_tree": "clean"`.
 
 | window | | collapsed | enumerated |
 | --- | --- | --- | --- |
-| dev | `transitions_diverged` | 2 | **0** |
+| dev 19000000 | `transitions_diverged` | **1** | **0** |
 | dev | `boundaries_measured / full_round` | 15503 / 15968 | 15503 / 15968 |
 | dev | `gating_exact / gating_support_based` | 14156 / 1347 | 14156 / 1347 |
 | dev | `engine_errors` | 0 | 0 |
-| holdout | `transitions_diverged` | **2** | **0** |
+| holdout 19100000 | `transitions_diverged` | **0** | **0** |
 | holdout | `boundaries_measured / full_round` | 15579 / 16155 | 15579 / 16155 |
 | holdout | `gating_exact / gating_support_based` | 14148 / 1431 | 14148 / 1431 |
 | holdout | `engine_errors` | 0 | 0 |
 
-All four: `build_check: gated`, `acceptance_eligible: true`, engine fingerprint
-`e97e661eaf9fb3b1…` (**one** distinct value across all four), `source_commit` `f35c5928`
-(**one** distinct value), `source_tree: clean`. Coverage is identical between
-configurations on each window in the strong form: not merely the same *number* of
-boundaries measured, but `gating_exact` and `gating_support_based` identical too.
+All four: `build_check: gated`, `acceptance_eligible: true`, **one** engine fingerprint
+`44ee1430708cbb55…`, **one** `source_commit`. Coverage identical between configurations on
+each window, including the gating split. Final holdout (`>= 19200000`) untouched.
 
-The reserved final holdout (`>= 19200000`) was not touched.
+Sole surviving collapsed row: `19000191/63`, `component_magnitude:heal`. Enumeration closes
+it; nothing opened.
 
-### Where this DEPARTS from the registered prediction, and why
+### #1152 CLOSED THIS RESIDUE IN THE SHIPPING ENGINE
 
-The prediction (`0733abe7`) said the two rows surviving on holdout would be
-`component_missing_in_engine:itemleftovers` at `19100170/71` and `/72`, described as
-"a harness defect, not a roll defect; a separate fix is in flight for them".
+`10856e0e` merged while this branch was in review — the crit-straddle sub-split and the
+status-aware residual threshold, which change the shipping collapsed cascade on exactly the
+mechanism behind `limit:roll_divergent_lethality`. Measured here, not read off its report:
 
-**That fix landed.** #1148 (C139, Encore against the post-Transform moveset) closed
-exactly those two rows —
-`reports/c139_encore_transform_move_index_results.md` registers them by name and measures
-`component_missing_in_engine:itemleftovers` 2 → 0. Main was merged into this branch, so
-they are gone from the **collapsed** baseline here. Holdout collapsed therefore reads 2,
-not 4, and enumeration takes it to **0**.
+| row | class | collapsed BEFORE (`f35c5928`) | collapsed NOW (`6d390acb`) |
+| --- | --- | --- | --- |
+| `19000074/27` | `component_missing_in_engine:sandstorm` | diverged | **closed by #1152** |
+| `19100107/135` | `limit:roll_divergent_lethality` | diverged | **closed by #1152** |
+| `19100191/5` | `limit:roll_divergent_lethality` | diverged | **closed by #1152** |
+| `19000191/63` | `component_magnitude:heal` | diverged | still diverged |
 
-Stated as a departure rather than presented as a better result: enumeration did not close
-those two rows, another PR did, and the evidence that it was not enumeration is that they
-are absent from the collapsed sweep as well. The post-rebase re-registration's claim about
-`19100180/24` also held — that row is likewise absent from the collapsed baseline, closed
-by #1144.
+**The holdout window now has no divergent rows at all**, in either configuration. The
+enumeration-versus-collapsed comparison is no longer measurable there: there is nothing
+left to compare.
+
+That these rows are closed by #1152 rather than by anything here is checkable in one
+direction — they are absent from the **collapsed** sweep, which is the shipping path.
+
+### The registered prediction, and every departure from it
+
+The prediction (`0733abe7`) said dev 2 → 0 and holdout 4 → 2, with two surviving
+`itemleftovers` rows. Measured: dev **1 → 0**, holdout **0 → 0**. Every departure is a base
+change landing on main while this branch was in review, and each is verifiable the same
+way — the row is gone from the **collapsed** baseline, so enumeration did not close it:
+
+| row | closed by | not by |
+| --- | --- | --- |
+| `19100180/24` | #1144 (faint cancels the queued action) | enumeration |
+| `19100170/71`, `/72` | #1148 / C139 (Encore vs. post-Transform moveset) | enumeration |
+| `19000074/27`, `19100107/135`, `19100191/5` | #1152 / C138 (collapse-class engine fixes) | enumeration |
+
+Six of the seven rows this branch ever measured were closed in the shipping engine by other
+work. One remains.
 
 ### The falsifier: NOTHING OPENED
 
-Rows keyed `(seed, step)`, from the committed `repros` arrays; each sweep reports
-`repros_complete: true`, so these are full divergent sets and not samples.
-
 | window | closed by enumeration | opened by enumeration |
 | --- | --- | --- |
-| dev | `19000074/27` (`component_missing_in_engine:sandstorm`), `19000191/63` (`component_magnitude:heal`) | **none** |
-| holdout | `19100107/135`, `19100191/5` (both `limit:roll_divergent_lethality`) | **none** |
+| dev | `19000191/63` (`component_magnitude:heal`) | **none** |
+| holdout | — (nothing was divergent) | **none** |
 
-Strict subset on both windows, and both windows reach zero. **The falsifier did not
-fire.** Re-derivable from the committed artifacts:
+Strict subset on both windows; both sweeps report `repros_complete: true`. **The falsifier
+did not fire** — but note how little it now carries: on holdout it is vacuous, and on dev it
+is one row.
 
-```sh
-python - <<'EOF'
-import json
-def rows(p):
-    d = json.load(open(p)); assert d["repro_retention"]["repros_complete"]
-    return {(r["seed"], r["step"]) for r in d["repros"]}
-for w in ("dev", "holdout"):
-    c = rows(f"reports/artifacts/c134_collapsed_{w}_sweep.json")
-    e = rows(f"reports/artifacts/c134_enumerated_{w}_sweep.json")
-    print(w, "opened:", sorted(e - c), "closed:", sorted(c - e))
-EOF
-```
+### The wrong-fan control now has ONE subject, and it is the undetermined one
 
-### "Nothing opened" is weak on its own — and the reason is the MATCHER, not the fan
+Everything below this heading was built on a four-row divergent set. **Three of those rows
+no longer exist.** The analysis is kept as a record of how the instrument was validated —
+six confounds, each of which produced a plausible verdict for a reason unrelated to the
+property under test — but it describes a base the shipping engine has moved past, and none
+of its conclusions transfer to the current one.
 
-**TWO RETRACTIONS.**
+Re-run against the new repro set (`reports/artifacts/c134_wrong_fan_control.json`), one row:
 
-1. An earlier revision claimed "cardinality of that order does not buy acceptance; the
-   values do", and that the closures were "measured as a fix rather than merely consistent
-   with one". **Withdrawn** — that control was confounded (below).
-2. The revision after it claimed a value-only control was **impossible** on these rows.
-   **Also withdrawn, and it was the more damaging error**: the experiment is well posed, it
-   has now been run, and it answers.
+| arm | `19000191/63` |
+| --- | --- |
+| collapsed | diverged (14) |
+| enumerated | matched (1015) |
+| `only_visible` (legal values) | matched (957) |
+| wrong fan, NEAREST non-legal | **matched** |
+| wrong fan, capped @2% | **diverged** |
+| wrong fan, FAR | **diverged** |
+| `isolable_only` (drop trailing-faint, values LEGAL) | diverged (551) |
+| `drop_only_legacy` | diverged (377) |
 
-The question is real. `evaluate_boundary_strict` returns `matched` on the **first** rendered
-branch that matches, and enumeration multiplies the branch count 8.5x–72.5x on the rows it
-closes. More branches is more chances to match.
+**Verdict: UNDETERMINED**, unchanged. Two equally valid zero-contamination value-only
+perturbations disagree, and the disagreement is not ordered by displacement — the NEAREST
+arm at 10.6% matches while the 2%-capped arm at 1.95% diverges.
 
-| window | row | collapsed | enumerated | factor |
-| --- | --- | --- | --- | --- |
-| dev | `19000074/27` | 3 | 29 | 9.7x |
-| dev | `19000191/63` | 14 | 1015 | 72.5x |
-| holdout | `19100107/135` | 8 | 544 | 68.0x |
-| holdout | `19100191/5` | 4 | 34 | 8.5x |
+**The two rows this branch established as robustly not value-driven were `19000074/27` and
+`19100191/5`. Both are among the rows #1152 closed.** The positive finding left with its
+subjects; what survives is the row where nothing was established. Stated plainly rather
+than reconciled.
 
-#### Confound 4: the drop, not the remap
+`the_control_has_subjects` is now a required verdict. Without it every check is an
+`all(...)` over the closed rows and `all([])` is `True`, so the whole battery would have
+gone green while measuring nothing — the same false-green shape this control has already
+produced six other ways.
 
-The superseded control dropped every branch it could not remap — 6, 580, 176 and 5
-branches, 57% of the fan on `19000191/63` — and read "diverged". The `drop_only_legacy`
-arm deletes **the same set** and leaves the survivors' values **legal and untouched**:
+### What this leaves
 
-| row | superseded wrong_fan | `drop_only_legacy` (same drop, LEGAL values) |
-| --- | --- | --- |
-| `19000074/27` | diverged (23) | **diverged** (22) |
-| `19000191/63` | diverged (435) | **diverged** (377) |
-| `19100107/135` | diverged (368) | **diverged** (352) |
-| `19100191/5` | diverged (29) | **diverged** (28) |
-
-Same verdicts with correct values. The remap contributed nothing; the control was measuring
-"delete the closing branch and the row reopens", which is true of any branch set.
-
-#### The impossibility claim was false
-
-The previous revision asserted that a branch whose target survives the move and faints
-later from a residual "cannot be given a different roll without changing whether it
-faints". That is wrong, and the counter-construction is one line of policy: **remap
-upward only.** If the target reached the residual at HP `h` and died, the residual removed
-at least `h`; at `h − δ` it still dies. The `0 fnt` line is never touched, every other
-reading on that target moves by the same δ, and the outcome class is preserved by
-monotonicity.
-
-Implemented — `_shiftable_readings` tolerates a trailing faint, `_remap_branch` accepts
-only `candidate > damage` on such branches — `remap_failed` collapses **6 / 406 / 112 / 5
-→ 0 / 0 / 0 / 0** and whole-fan contamination falls from 24% / 46% / 24% / 18% to
-3.4% / 5.7% / 3.1% / 2.9%. Only the directly-lethal `0 fnt`-on-the-move branches are
-irreducible; that half of the earlier argument was right and stands.
-
-#### Route (a), run where contamination is exactly ZERO
-
-Restricting to the **visible-amount** branches removes the irreducible remainder entirely,
-and this branch's own measurement says that is where the closing branch lives:
-`only_visible` matches on every row while `only_lethal` diverges on every row. So: fix that
-branch set, remap every value off the legal roll set, change nothing else.
-
-Zero legal values is verified by **re-extracting the emitted move-damage values from the
-payload the matcher receives** and intersecting with the legal fan — not by trusting the
-remapper's bookkeeping, which would not notice a silent no-op.
-
-Every arm below holds the branch set fixed (28 / 957 / 528 / 33), remaps everything
-(`remap_failed = 0`), and emits no legal value.
-
-| arm | max displacement | `19000074/27` | `19000191/63` | `19100107/135` | `19100191/5` |
-| --- | --- | --- | --- | --- | --- |
-| NEAREST non-legal | 6.7 / 10.6 / 2.7 / 0.5 % | matched | matched | matched | matched |
-| FAR capped @2% | 1.9 / 1.95 / 1.93 / 1.79 % | matched | **diverged** | **diverged** | matched |
-| FAR capped @5% | ~4.7–5.0 % | matched | **diverged** | **diverged** | matched |
-| FAR capped @10% | ~9.2–10.0 % | matched | **diverged** | **diverged** | matched |
-| FAR capped @20% | ~18.9–19.9 % | matched | **diverged** | **diverged** | matched |
-| FAR uncapped | 106x / 13.9x / 13.9x / 12.4x | matched | **diverged** | **diverged** | matched |
-
-**CORRECTION.** A previous revision of this section said the two rows that reopen "need
-~14x displacement" and attributed it to the matcher's `0.92·|eng| − 1 … 1.09·|eng| + 1`
-fallback window. **Both are false.** They reopen at **1.9%**, about 700x smaller, which the
-±9% window cannot explain. The error came from running only the two extremes and reading a
-threshold into the gap between them.
-
-#### Confound 6: the verdict is not a function of displacement
-
-The NEAREST/FAR split does **not** reconcile the two runs, and treating it as a
-displacement threshold was itself a confound of the same family as the previous five.
-
-On `19000191/63`, NEAREST at **10.6%** gives *matched* while the 2%-capped arm at **1.95%**
-gives *diverged*. **The smaller perturbation is the stricter one.** A quantity that is not
-monotone in displacement is not a function of displacement.
-
-What actually differs is *which* branches moved and *in which direction*, and the mechanism
-is measured rather than guessed. A remap shifts every later HP reading on the target by the
-same δ, which normally leaves the following component's magnitude untouched. **Except when
-the branch ends in a faint.** There the last reading is pinned at `0 fnt`, so the capped
-residual becomes `previous + δ` and moves with the value by construction.
-
-That is not a defect in the remap; it is unavoidable. And it is exactly where the closing
-branch lives:
-
-| row | visible branches | of which TRAILING-FAINT | `only_visible` (legal) | `isolable_only` — same set minus trailing-faint, values LEGAL |
-| --- | --- | --- | --- | --- |
-| `19000074/27` | 28 | 6 | matched | **diverged** (22) |
-| `19000191/63` | 957 | 406 | matched | **diverged** (551) |
-| `19100107/135` | 528 | 112 | matched | **diverged** (416) |
-| `19100191/5` | 33 | 5 | matched | **diverged** (28) |
-
-Dropping the trailing-faint branches — with every surviving value left **legal** — reopens
-every row. **So the closing branch is a trailing-faint branch on all four rows, and no
-value-only perturbation of it exists**: changing its move damage necessarily changes its
-capped residual too. (The other disqualifier, a reading at max HP reclassifying a heal
-between `*_to_full` and plain, is measured at **0** branches on all four rows.)
-
-This is the refined, true version of the impossibility claim that was withdrawn above. The
-withdrawn version said the branch could not be *remapped*; it can. What it cannot be is
-perturbed in **one component at a time** — and the collateral component is structural,
-which is why the recommendation below sharpens rather than changes.
-
-#### What is established, PER ROW
-
-The previous revision pooled these into "the closures are not value-driven … it is
-measured". That over-read two rows onto four. Scoped:
-
-| row | verdict | basis |
-| --- | --- | --- |
-| `19000074/27` | **not value-driven, robustly** | matched under every arm, from 1.9% to **106x** displacement |
-| `19100191/5` | **not value-driven, robustly** | matched under every arm, from 0.5% to **12.4x** displacement |
-| `19000191/63` | **undetermined** | two equally valid zero-contamination value-only perturbations give opposite answers at comparable displacement, and the disagreement is not ordered by it |
-| `19100107/135` | **undetermined** | same |
-
-On the two robust rows, a fan carrying no legal roll value — every value 12x–106x away from
-any legal roll — still earns acceptance. Nothing about the branch's damage value is doing
-the work there.
-
-On the other two, nothing is established either way. The arms that reopen them also move
-the capped residual, so their divergence is not attributable to the move value.
-
-#### Why: the matcher does not test the branch's value
-
-This is a property of the matcher rather than of enumeration. In `roll_components_agree`
-(`scripts/engine_transition_differential.py`):
-
-```python
-# ``legal`` is an ADDITIONAL accept path, never a veto.
-if legal is not None and magnitude in legal:
-    continue
-```
-
-`magnitude` is `abs(observed)` — the value **Showdown** produced — and `legal` comes from
-`branch_component_legal_rolls`, derived from `calculate_damage` on the **state**. So when
-the observed damage is a legal roll (always, Showdown having rolled it), the component is
-accepted **whatever the engine branch's damage says**. That is why the two robust rows
-survive 106x displacement.
-
-**So a value-based wrong-fan control is the wrong instrument.** What enumeration multiplies
-is branch **structure** — which components appear, and the lethality/residual pattern — and
-structure is what the acceptance rule actually reads: component counts
-(`len(observed) != len(engine)` routes to `_roll_cascade_equivalent`), the
-`selected_direct_event` crit flag, and whether `support` exists at all. Confound 6 sharpens
-this rather than softening it: the perturbation that *does* move the two undetermined rows
-is itself structural — it moves the capped residual — which is further evidence that
-structure, not value, is the operative variable.
-
-**A structural control is the experiment to build next.** Perturb the component pattern
-(present/absent, lethal/non-lethal, capped/uncapped) while holding damage magnitudes at
-legal values, and pair it with a drop control on the identical branch set.
-
-#### What stands, and what does not
-
-* **Stands:** enumeration closes four rows and opens none, on both windows, with coverage
-  and gating counters identical between configurations. A fact about the artifacts.
-* **Stands:** the closing branch is a visible-amount, trailing-faint branch on all four
-  rows.
-* **Established on two of four rows** (`19000074/27`, `19100191/5`): the closure is **not**
-  value-driven.
-* **Undetermined on the other two** (`19000191/63`, `19100107/135`).
-* **Not established anywhere:** whether the closures are *correct*. They are structural,
-  and no structural control has been run.
-  `reports/c133_collapsed_roll_disposition.md` §3/§7 and
+* **Enumeration and the shipping cascade now agree on both windows except one row**, and on
+  that row enumeration closes and the collapsed path does not. That is the entire
+  remaining delta.
+* **The shipping engine now matches where enumeration used to be the only thing that did.**
+  That is the honest summary of #1144, #1148 and #1152 against this residue, and it is the
+  outcome the oracle was supposed to enable rather than a loss.
+* **The lottery question is moot on five of six rows** because the rows are gone, and
+  **undetermined on the sixth**. No structural control was run; that remains the experiment
+  to build if anyone needs to settle it.
+* `reports/c133_collapsed_roll_disposition.md` §3/§7 and
   `reports/c135_roll_divergent_lethality_adjudication.md` §2-3 remain the account of why
-  each row is an engine gap — read, not measured.
+  each row was an engine gap — and #1152 acted on exactly that account, which is the
+  strongest available corroboration of it.
 
-#### Correction to the merged #1152
+### Correction to the merged #1152
 
-**#1152 merged as `10856e0e` carrying the over-generalised claim**, taken from an earlier
-revision of this document. The scoping above supersedes it: not-value-driven is established
-on `19000074/27` and `19100191/5` and **undetermined** on `19000191/63` and
-`19100107/135`.
+#1152 (`10856e0e`) cites "enumeration also closes these rows" as sweep-side corroboration,
+taken from an earlier revision of this document which claimed the closures were measured
+not to be value-driven on all four rows. **That claim was over-generalised and is
+withdrawn**: it held on two rows and was undetermined on two, and the two it held on are now
+closed in the shipping engine, so the corroboration cannot be re-derived on the current
+base at all.
 
-**#1152's own correctness does not depend on this.** Its primary argument is a 480-state
+**#1152's own correctness does not depend on it.** Its primary argument is a 480-state
 differential against a partition-independent enumeration, with all residual error localised
-to the f32 comparator; that stands untouched. Only the secondary "enumeration also closes
-these rows" corroboration is affected, and only on two of the four rows. Recorded here
-rather than left silently wrong in the merged record.
-
-Confounds found in this one control, in order: a shift too large for a low-HP defender; a
-clamped shift that overlapped the legal fan; a run that perturbed only `p2a` when the row
-diverged on `p1`; a drop of unremappable branches that produced the entire result; a helper
-deleted by an edit that turned a whole arm into `skip_lossy(0)` while still emitting a tidy
-artifact; and a displacement threshold read off two extremes without the intermediate scan
-that would have shown it non-monotone. Six. Every one produced a plausible verdict for a
-reason unrelated to the property under test, and each was found by an isolating arm rather
-than by reading the code.
+to the f32 comparator; that stands untouched, and this branch's re-measurement independently
+reproduces its headline result (holdout 2 → 0, dev 2 → 1). Only the secondary sweep-side
+corroboration is affected.
 
 `strict:sleeptalk_union_branch` moves 126 → 617 (dev) and 105 → 612 (holdout), reproducing
 the movement c137 §4 recorded as unexplained. Explained by the same mechanism: it is
-incremented **once per rendered branch**, so it tracks branch multiplicity, not boundary
+incremented once per rendered BRANCH, so it tracks branch multiplicity, not boundary
 population. Every per-BOUNDARY counter is unchanged.
 
 ### Adopt-everywhere: re-measured, and still rejected
@@ -548,14 +394,19 @@ Bonemerang, two hits, defender at full HP so nothing clamps or merges:
 and in every branch the two `Damage` instructions are **equal** — one roll, reused. A
 paired negative control requires the collapsed path to disagree.
 
-### The oracle has no consumer yet
+### The oracle HAS a consumer now
 
-Stated plainly: **the oracle currently pins only itself.** The only `flag="1"` uses in the
-tree are the four self-pins in `tests/test_roll_enumeration_scope.py` (fan structure,
-secondary composition, multi-hit, and the runtime negative control), plus the
-`--enumerate-rolls` comparison sweeps and the wrong-fan control. The payoff written into
-the patch manifest — enumeration as an exact oracle for the collapsed path's mass recipes
-— is **deferred to the c133 §3 / c135 §5 engine fixes, landing separately as #1152**.
+A previous revision said it pinned only itself. **#1152 changed that.** It landed
+`scripts/collapsed_arm_mass_oracle.py` and `tests/test_collapsed_arm_mass_oracle.py`, which
+compare the shipping engine's outcome-mass functional three ways: a pin regenerated
+out-of-process against an **enumerating build**, an independent pure-Python enumeration, and
+the shipping engine. All three must agree.
+
+That is the payoff written into this patch's manifest entry, landing — and it is why the
+patch is worth keeping now that the differential residue it was measured against is
+essentially closed. The oracle's value was never the sweep comparison; it was making a
+wrong collapsed mass recipe fail a test instead of surviving review, and that is now a CI
+step.
 
 ### Gates
 
@@ -564,7 +415,7 @@ All run locally against the build the sweeps used (`e97e661eaf9fb3b1`, 69 patche
 | gate | result |
 | --- | --- |
 | `tests.test_poke_engine_patch_stack` — clean-room replay vs. verified 0.0.47 sdist | **4 tests, OK**; 69 patches, all `git-apply`, no fuzz |
-| `tests.test_roll_enumeration_scope` — the runtime scope gate | **17 tests, OK** (was 14; +3 for discovered surfaces and the alias pins) |
+| `tests.test_roll_enumeration_scope` — the runtime scope gate | **17 tests, OK** |
 | `tests.test_branch_mass_reconstruction` — the mass gate | **6 tests, OK** |
 | `tests.test_engine_transition_checkpoint_provenance` | **19 tests, OK** (was 15; +4 for `source_tree`) |
 | `tests.test_transition_differential_matcher` | **53 tests, OK** (was 52; +1 for the wrong-fan remap) |
@@ -572,11 +423,12 @@ All run locally against the build the sweeps used (`e97e661eaf9fb3b1`, 69 patche
 | `tests.test_engine_search_no_panic` — spawns a real SEARCH child, the leak path review demonstrated | **1 test, OK** (179.2 s) |
 | `tests.test_cert_sweep_readout_contract` | **39 tests, OK** |
 | `tests.test_cert_historical_attestation` | **3 tests, OK** |
-| `tests.test_engine_world_encore_transform` (arrived with the merge) | **18 tests, OK** |
+| `tests.test_engine_world_encore_transform` | **18 tests, OK** |
+| `tests.test_collapsed_arm_mass_oracle` (#1152's oracle consumer) | **7 tests, OK** |
 | `cargo test --release`, `RUSTFLAGS="-C debug-assertions=yes"`, `rust/pokezero-search` | **416 passed, 0 failed**, 34 suites, exit 0 |
 | `cargo test third_party/poke-engine-src --features gen3 --test test_gen3` | **28 passed, 0 failed**, exit 0 |
-| `scripts/engine_behavioral_probes.py`, flag off (the shipping path, and what CI runs) | **38 probes, 38 PASS**, exit 0 |
-| `scripts/engine_behavioral_probes.py`, flag on | 24 PASS / 14 FAIL, exit 1 — see below |
+| `scripts/engine_behavioral_probes.py`, flag off (the shipping path, and what CI runs) | **40 probes, 40 PASS**, exit 0 (38 -> 40 with #1152's two) |
+| `scripts/engine_behavioral_probes.py`, flag on | 24 PASS / 16 FAIL, exit 1 — see below |
 | `scripts/c134_wrong_fan_control.py` | **exit 1 — by design.** All preconditions pass across every arm (branch set fixed, zero legal values emitted, nothing failed to remap); it exits on `every_closed_row_is_value_independent`, FALSE because two of four rows are undetermined. Not in any workflow |
 | Also green | `test_single_seat_coverage_bound` (3), `test_drag_limit_is_a_last_resort` (3), `test_a1_residuals_already_ran` (13), `test_sleep_talk_phaze_drag` (7), `test_instruction_event_mapping` (21), `test_crit_kill_split_patch` (8), `test_rest_sleep_refund_boundary` (6), `test_rest_sleep_refund_write_side` (6), `test_engine_stat_attestation` (16), `test_roll_cascade_predicate` (29), `test_matcher_tolerance_promotion` (32), `test_c26_archival_recalibration` (11) |
 
@@ -590,7 +442,7 @@ so it is RED on main before this branch touches anything. The module is in no wo
 belongs to the certification lifecycle owner, and re-stamping it from this PR would hide
 the drift rather than surface it.
 
-**The 14 probes that fail under the flag** are all arm-STRUCTURE assertions
+**The 16 probes that fail under the flag** are all arm-STRUCTURE assertions
 (`residual-partition-*`, `pending-read-*`, `ordered-walk-*`, `case-a-*`), each a variant of
 *expected 4 branches, got 18*. They assert the collapsed cascade's partition shape; under
 enumeration the fan is enumerated, not partitioned. Masses are correct throughout and the
@@ -624,26 +476,28 @@ idiom, not a dodge — passed it.
 ## Disposition
 
 **Enumeration lands as a default-off reference oracle. The differential is NOT switched to
-it.** The falsifier did not fire; both windows reach zero divergent rows under the oracle
-and neither opens anything; coverage and identity are unchanged.
+it.** On the post-#1152 base the falsifier did not fire, nothing opened, coverage and
+identity are unchanged, and the shipping engine's divergent set on these two windows is a
+single dev row.
 
-**What this branch establishes about the closures, per row.** On `19000074/27` and
-`19100191/5` they are **not value-driven**: a fan carrying no legal roll value is accepted
-at up to 106x displacement, because `evaluate_boundary_strict` tests the OBSERVED magnitude
-against a STATE-derived legal set and never against the branch's own damage. On
-`19000191/63` and `19100107/135` nothing is established — the arms that reopen them also
-move the capped residual, so their divergence is not attributable to the move value.
-What enumeration multiplies is branch STRUCTURE, and no structural control has been run —
-that is the experiment the next person should build.
+What changed under this branch's feet, and what it means:
 
-This does not block landing the oracle, which is default-off and consumed by nothing that
-ships. It does mean the oracle is **not yet authoritative about these four rows**, and
-that #1152 should not lean on "enumeration closes them" as corroboration.
+* **The residue is closed in the shipping engine.** #1144, #1148 and #1152 closed six of
+  the seven rows this branch ever measured. The holdout window has none left. That is the
+  right outcome and the one the program wanted — closing rows in the engine that ships
+  rather than in the instrument, which is precisely the reversal `reports/c137` argued for.
+* **The oracle now has its consumer.** `tests/test_collapsed_arm_mass_oracle.py` compares
+  the shipping engine's outcome-mass functional against an enumerated pin and an
+  independent Python enumeration. That, not the sweep comparison, was always the point.
+* **The remaining analytical question is undetermined and now nearly moot.** The one
+  surviving row, `19000191/63`, is the row the wrong-fan control could not decide; the two
+  rows it did decide are gone. No structural control was run.
 
-Still open, unchanged by this branch:
+Still open:
 
-* **The engine fixes in c133 §3 and c135 §5 are un-cancelled and land as #1152.** Closing
-  those rows in the SHIPPING engine is the remedy; this branch supplies the oracle that
-  makes a wrong mass recipe fail a test instead of surviving review.
-* **The f32 comparator (C116 M5)** still executes in search and is untouched here.
+* **`19000191/63`** (`component_magnitude:heal`) — enumeration closes it, the collapsed
+  path does not, and whether that closure is value-driven is undetermined.
+  `reports/c133` §3 disposes of it as a representative mis-pricing rather than a missing
+  arm.
+* **The f32 comparator (C116 M5)** still executes in search, untouched here.
 * Enumeration's **production-config** (depth 2 / 256 sims) throughput cost is unmeasured.

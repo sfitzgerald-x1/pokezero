@@ -259,6 +259,9 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/armoracle.log; then
             echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
+            exit 1
+          fi
+
       # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
       # tests; NOTHING that ships takes that path, the transition differential very
       # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s

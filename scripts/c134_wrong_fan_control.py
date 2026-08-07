@@ -809,6 +809,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     verdicts = {
+        # NO SUBJECTS IS NOT A PASS. Every verdict below is an ``all(...)`` over the closed
+        # rows, and ``all([])`` is True -- so once #1152 closed this residue in the shipping
+        # engine the whole battery would have gone green while measuring nothing. That is
+        # the exact false-green shape this control has already produced five other ways.
+        "the_control_has_subjects": len(closed) > 0,
         "reproduced_collapsed_divergence": all(
             r["collapsed"]["verdict"] == "diverged" for r in rows
         ),
