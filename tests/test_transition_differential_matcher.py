@@ -826,18 +826,22 @@ if __name__ == "__main__":  # pragma: no cover
 class WrongFanControlMap(unittest.TestCase):
     """Pins the remap behind ``scripts/c134_wrong_fan_control.py``.
 
-    That script answers the question the sweep cannot: enumeration closes four rows
-    while inflating the branch count 8.5x-72.5x, and ``evaluate_boundary_strict``
+    That script attempts the question the sweep cannot answer: enumeration closes four
+    rows while inflating the branch count 8.5x-72.5x, and ``evaluate_boundary_strict``
     accepts on the FIRST matching branch, so "nothing opened" is consistent with a real
-    fix AND with a lottery. The control gives the matcher a fan of comparable
-    cardinality whose values are NOT legal rolls, and requires the rows to stay
-    divergent.
+    fix AND with a lottery.
 
-    The whole control rests on the remap being an honest wrong fan, so the remap is
-    pinned here rather than trusted. Two earlier versions were not honest and the
-    measurement said so: a constant down-shift by the fan width dropped every branch on
-    a low-HP defender, and clamping that shift left the "wrong" fan OVERLAPPING the
-    legal one, i.e. still containing correct rolls.
+    **The control is currently INCONCLUSIVE and the script exits non-zero.** It is kept,
+    and this pin is kept, because the remap is still the honest-wrong-fan primitive any
+    future version needs, and because four separate confounds have already been found in
+    it -- a constant down-shift that dropped every branch on a low-HP defender, a clamped
+    shift whose "wrong" fan overlapped the legal one, a run that perturbed only ``p2a``
+    when the row diverged on ``p1``, and finally the drop of unremappable branches doing
+    the entire work. Each produced the expected verdict for a reason unrelated to the
+    property under test.
+
+    What is pinned here is narrow and true: given a legal fan, the remap produces an
+    injective, same-cardinality, disjoint, nearby wrong fan.
     """
 
     @staticmethod

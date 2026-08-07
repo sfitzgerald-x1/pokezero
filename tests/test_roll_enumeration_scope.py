@@ -521,9 +521,14 @@ def module_scope_env_writes(source: str, filename: str = "<probe>") -> list[int]
     """Line numbers where module-level code writes ``POKEZERO_ENUMERATE_ROLLS``.
 
     AST rather than substring, because a substring check matches the prose in the module
-    docstring that EXPLAINS the defect and goes red on a clean file. Only module-level
-    executable code is walked: function and class bodies run when something calls them,
-    which is the explicit per-run act this whole design is built around.
+    docstring that EXPLAINS the defect and goes red on a clean file.
+
+    What is walked is everything that RUNS AT IMPORT. Function bodies are skipped -- they
+    run when something calls them, which is the explicit per-run act this whole design is
+    built around. Class bodies are NOT skipped: a class body executes at import like any
+    other module-level statement, so ``class C: os.environ["<flag>"] = "1"`` is an
+    import-time enabler. An earlier version of this check skipped ``ClassDef`` alongside
+    ``FunctionDef`` and justified it with a sentence that was simply wrong about Python.
 
     THREE alias families are resolved, because review broke the first version on two of
     them and only one of the two was adversarial:
@@ -614,10 +619,10 @@ def module_scope_env_writes(source: str, filename: str = "<probe>") -> list[int]
     _WRITE_METHODS = {"setdefault", "__setitem__", "update", "pop", "popitem", "clear"}
     offenders: list[int] = []
     for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for node in ast.walk(statement):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if isinstance(node, ast.Call):
                 func = node.func
@@ -627,8 +632,21 @@ def module_scope_env_writes(source: str, filename: str = "<probe>") -> list[int]
                     isinstance(func, ast.Attribute)
                     and func.attr in _WRITE_METHODS
                     and is_environ(func.value)
-                    and any(
-                        names_the_flag(a) or mapping_mentions_flag(a) for a in node.args
+                    and (
+                        any(
+                            names_the_flag(a) or mapping_mentions_flag(a)
+                            for a in node.args
+                        )
+                        # ``update`` also takes KEYWORDS: ``update(FLAG="1")`` names the
+                        # variable directly, and ``update(**{FLAG: "1"})`` hides it in a
+                        # splatted dict. Neither appears in ``node.args``, so a check that
+                        # only walked positional arguments missed both while ``update``
+                        # sat in _WRITE_METHODS looking covered.
+                        or any(
+                            keyword.arg == ENV_FLAG
+                            or (keyword.arg is None and mapping_mentions_flag(keyword.value))
+                            for keyword in node.keywords
+                        )
                     )
                 ):
                     offenders.append(node.lineno)
@@ -1122,6 +1140,13 @@ class RollEnumerationMentionLedger(unittest.TestCase):
             "putenv": f'import os\nos.putenv("{flag}", "1")\n',
             "putenv imported directly": f'from os import putenv\nputenv("{flag}", "1")\n',
             "augmented merge": f'import os\nos.environ |= {{"{flag}": "1"}}\n',
+            "update with a keyword": f'import os\nos.environ.update({flag}="1")\n',
+            "update with a splatted dict": (
+                f'import os\nos.environ.update(**{{"{flag}": "1"}})\n'
+            ),
+            "class body (executes at import)": (
+                f'import os\nclass C:\n    os.environ["{flag}"] = "1"\n'
+            ),
         }
         for label, source in positives.items():
             with self.subTest(form=label):
