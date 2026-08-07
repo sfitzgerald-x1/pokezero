@@ -178,7 +178,7 @@ class ForcedNoMoveMapsTest(unittest.TestCase):
     The crate displays `MoveChoice::None` as "No Move" for a locked slot; Showdown's request for
     a recharge turn offers exactly one candidate, named `recharge`. Two vocabularies, one forced
     action. Until this mapping existed the decision fell to `_fallback(..., "choices_unmapped")`
-    -- a counter engine_search.py:674-676 requires at zero independently of the fallback rate,
+    -- a counter engine_search.py:673-675 requires at zero independently of the fallback rate,
     with the cause mislabelled `all_unmapped_legality_mismatch`.
 
     Before the symmetry change these worlds failed construction earlier (Showdown sets

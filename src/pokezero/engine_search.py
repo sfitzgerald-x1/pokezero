@@ -2244,7 +2244,7 @@ class EngineMctsPolicy:
                     # `depth_tactics_probe.py` already carried this translation ("No Move" ->
                     # "none"); `_map_choices` never got it, so before this the decision fell to
                     # `_fallback(..., "choices_unmapped")` -- a counter this file states at
-                    # :674-676 must be zero independently of the fallback rate, and with the cause
+                    # :673-675 must be zero independently of the fallback rate, and with the cause
                     # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
                     # `_recharging_slots` went symmetric and these worlds started building at all.
                     index = move_index_by_id.get("recharge")
