@@ -98,13 +98,17 @@ defect rather than a research one: H11's *class* was correctly marked UNKNOWN un
 the error is the negative, asserted over `reports/` as a whole from a search that missed a file
 merged in the range the same cell was pointing at.
 
-This effort has recorded three previous instances of a report claiming a first-ever observation that
-was already written down elsewhere in the repo; this is a fourth instance of the same family, in the
-mirror-image form — a claimed *absence* rather than a claimed *first*. I am not claiming the four
-share a cause: I did not re-examine the other three, and this one's specific shape (the missed file
-was merged **inside the commit range the same cell cites**) is a property of this instance only.
-What generalises is the cheap countermeasure, which would have caught it: `git grep <the row id>`
-over the head being described, before writing any negative about the record.
+This is an instance of a family this effort keeps hitting — a report asserting that something is
+absent from, or first in, the record when it is already written down. **I am deliberately not
+attaching a count to that family here.** I was handed one and did not verify it, and repeating an
+unverified figure is the same defect one level up; anyone who needs the tally should re-derive it
+rather than cite this sentence.
+
+What does generalise is the countermeasure, which is cheap and would have caught this one:
+`git grep <the row id>` over **every tracked file** at the head being described, before writing any
+negative about the record. Not a directory list — scoping a grep to chosen directories and reporting
+the result as repo-wide is itself one of this program's recorded errors, and §4.5 and §5.1 below both
+show the narrower version of my own searches missing files that the tracked-file version found.
 
 ---
 
@@ -288,11 +292,29 @@ outcome moves any HP, the strict matcher compares damage components only, and bo
 at `d27316b6` and at `0afb2dcc`. The follow-on mispricing is a **next**-turn effect and I did not
 sweep for it.
 
-I grepped `reports/`, `docs/`, `scripts/`, `src/` and `rust/pokezero-search/src/` for
-`protect_fail|protectfail|consecutive` and found no record of the `willAct` clause; that is the
-scope of my search, not a claim about the repository. Deliberately **not** filed as a ledger row:
-that needs a pool-reachability check under the C125/C138 standing rule, which I have not run. Filed
-here as an observation with its mechanism identified, for whoever takes it.
+**Is the `willAct` clause already recorded?** My first search was
+`protect_fail|protectfail|consecutive` over five named directories, and that was too narrow — it
+would have missed a file that names the clause without those tokens. Widened to every tracked file:
+
+```
+git grep -l -iE "willact|will_act|protect_fail|protectfail|stallingmove" origin/main -- .
+  docs/observation_v3_spec.md
+  docs/silent_noop_sweep_plan.md
+  src/pokezero/showdown.py
+  third_party/poke-engine-gen3-protect-floor.patch
+```
+
+All four are about the **stall ladder**, which is the half that is *not* the cause here.
+`docs/observation_v3_spec.md:76-96` derives the consecutive-successful-stall streak in detail and
+notes `stallingMove: true` in passing; `silent_noop_sweep_plan.md:246` lists "consecutive-use
+mechanics" as scope; `showdown.py` reconstructs the counter; the patch caps the ladder at 1/8. **None
+of the four records the `!!this.queue.willAct()` conjunct** — the clause that actually fired. That is
+the widest glob I can run and its exact result, rather than a claim about the repository from a
+directory-scoped search.
+
+Deliberately **not** filed as a ledger row: that needs a pool-reachability check under the C125/C138
+standing rule, which I have not run. Filed here as an observation with its mechanism identified, for
+whoever takes it.
 
 ---
 
@@ -306,12 +328,30 @@ the mechanism directly:
 `test_the_fixture_really_is_the_spurious_one_move_snapshot` guards against the vacuous pass by
 asserting the pre-Transform row really does hold exactly one enabled move.
 
-But a case-insensitive `grep -ci encore` against each of the three workflow files at `1a929c57`
-returns **0, 0 and 0**, and the file appears in no `python -m unittest` invocation in any of them
-(I enumerated all 16). Repo-wide, `test_engine_world_encore_transform` is referenced only from two
-c139 reports and one `engine_world.py` comment — nothing in `.github/`, `scripts/`, `pyproject.toml`
-or any shell script runs it. `src/pokezero/**` *is* in the `mass-gate` path filter, so
-a PR touching `engine_world.py` triggers the workflow — the workflow just never runs this file.
+But **nothing executes it.** The widest search I can run, over every *tracked* file rather than a
+chosen directory list — the mistake this program has made before by scoping a grep to one directory
+and reporting the result as repo-wide:
+
+```
+git grep -l -E "test_engine_world_encore_transform|encore_transform" origin/main -- .
+  reports/c134_enumerate_rolls_oracle.md
+  reports/c139_encore_transform_move_index_prediction.md
+  reports/c139_encore_transform_move_index_results.md
+  src/pokezero/engine_world.py
+
+git grep -l -E "test_engine_world_encore_transform" origin/main \
+  -- '*.yml' '*.yaml' '*.sh' '*.toml' '*.cfg' '*.ini' '*.mk' 'Makefile*' '*.py'
+  src/pokezero/engine_world.py          <- a source COMMENT, not a runner
+```
+
+Three reports name the file (c134's gate table and both c139 reports) and one source comment cites
+it. No workflow, no shell script, no `pyproject.toml`, no Makefile, no Python entry point runs it.
+Corroborating from the other direction: a case-insensitive `grep -ci encore` against each of the
+three workflow files at `1a929c57` returns **0, 0 and 0**, and the file appears in none of the 16
+`python -m unittest` invocations across them (enumerated, not sampled).
+
+`src/pokezero/**` *is* in the `mass-gate` path filter, so a PR touching `engine_world.py` triggers
+the workflow — the workflow just never ran this file.
 
 This PR adds a `mass-gate` step that runs the module, asserts the test count, and fails on any
 `skipped`, following the pattern the A5 step already establishes in the same workflow ("Without
@@ -373,6 +413,28 @@ test above it.
 | `1a929c57` + slot-0 mutant | `5fa147ff…` | **RED** — 9/22 fail; the pin on `0 != 2` |
 | `d27316b6`, real post-fix code | `fdbf5937…` | GREEN — `Ran 22 tests, OK`, 0 skipped |
 | `1a929c57` + this PR | `5fa147ff…` | GREEN — `Ran 22 tests, OK`, 0 skipped |
+
+### 5.4 The new CI guard fires — constructed, not read off the branch
+
+A guard added in another PR in this effort turned out to be dead code, so this one is not asserted
+from its source text. The step's shell body was extracted verbatim and driven against a synthetic
+log for each case it must catch, under `bash -e` — GitHub's default for `run:`, and this workflow
+sets no `shell:` and no `defaults:` block that would change it:
+
+| constructed case | step exit | which guard fired |
+|---|---|---|
+| `Ran 22 tests` / `OK` | 0 | none — passes, as it must |
+| `Ran 21 tests` (a pin deleted) | 1 | `::error::expected 22 tests; the suite shrank or grew` |
+| `Ran 23 tests` (a pin added) | 1 | same count guard |
+| `Ran 22 tests` / `OK (skipped=4)` | 1 | `::error::an Encore-on-transform pin SKIPPED` |
+| a pin genuinely failing (non-zero exit) | 1 | **the pipeline itself**, under `-e`, before any grep |
+
+The last row is the one worth spelling out, because my first harness got it wrong: driven with a
+`cat` that always exits 0, a log containing both `FAILED (failures=1)` and `Ran 22 tests` slipped
+through both greps. Re-run with a stand-in that exits non-zero the way `python -m unittest` does, the
+step aborts at the pipeline with exit 1 and never reaches the guards. So the hole is closed by `-e`
+rather than by the greps — which is fine, but it is a property of the shell, and reading the two
+`grep -q` lines alone would have suggested a gap that is not there and hidden the reason there isn't.
 
 ---
 
