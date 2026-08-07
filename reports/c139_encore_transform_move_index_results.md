@@ -7,7 +7,7 @@
 > diagnosed. Where the two disagree, the merged table wins — `19100180/24` appears as remaining
 > residue in the base-relative table and was closed on `main` by #1144, not by this fix.
 
-Outcome of `reports/c137_encore_transform_move_index_prediction.md`, which was registered
+Outcome of `reports/c139_encore_transform_move_index_prediction.md`, which was registered
 **before** any of these numbers were measured (commit `05aef35f`, one commit ahead of the base
 `aeaee2b1`, adding nothing but the prediction).
 
@@ -24,7 +24,7 @@ generic "probably fine" was not good enough; the merged state had never been mea
 
 Branch merged with `origin/main` (merge commit `1edb98e9`, a real merge — no force-push, no
 rewritten history). Engine rebuilt at the merged state. Prediction registered before the sweeps in
-`reports/c137_encore_transform_move_index_prediction.md` § "Second prediction".
+`reports/c139_encore_transform_move_index_prediction.md` § "Second prediction".
 
 **Result: the prediction holds on every sweep clause. Nothing opened. Dev did not move.**
 

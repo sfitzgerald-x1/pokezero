@@ -89,8 +89,8 @@ sweeps' `boundaries_full_round`, `boundaries_measured`, `engine_errors` and full
 are unchanged, `skip:world_unsupported:encore_move_unknown` included (holdout 1, dev 2). Nothing
 opened on either sweep.
 
-Full tables in `reports/c137_encore_transform_move_index_results.md`. Artifacts:
-`reports/artifacts/c137_encore_transform_{dev,holdout}_sweep.json` (after) against
+Full tables in `reports/c139_encore_transform_move_index_results.md`. Artifacts:
+`reports/artifacts/c139_encore_transform_{dev,holdout}_sweep.json` (after) against
 `reports/artifacts/c137_base_{dev,holdout}_sweep.json` (before, re-derived because no
 `c136_faintcancels_fix_*` baseline exists on `main`), cross-checked against
 `reports/artifacts/c137_base_pristine_{dev,holdout}_sweep.json`, which were produced in a
@@ -183,5 +183,5 @@ Two failure modes are specific to this re-measurement and would each be a real f
 Neither re-measurement-specific failure mode occurred: both target rows are still open on the merged
 base (so this fix is not redundant with #1144), and nothing opened on `19100170` or elsewhere.
 
-Recorded in `reports/c137_encore_transform_move_index_results.md`. The base-relative artifacts are
+Recorded in `reports/c139_encore_transform_move_index_results.md`. The base-relative artifacts are
 **kept**: they remain the evidence for the mechanism.
