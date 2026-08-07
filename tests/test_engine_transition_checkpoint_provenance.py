@@ -203,5 +203,85 @@ class CheckpointProvenanceTests(unittest.TestCase):
         )
 
 
+class RollPathProvenanceTests(unittest.TestCase):
+    """C116 Phase 2: which roll path a shard ran on, and who may merge with whom.
+
+    One BUILD serves the collapsed cascade and the enumerated oracle, selected at
+    runtime. So ``source_commit``, ``engine_fingerprint`` and ``image_commit`` are
+    identical between the two configurations by design, and this field is the only
+    thing that can tell a collapsed shard from an enumerated one.
+    """
+
+    @staticmethod
+    def _record(enumerate_rolls: bool | None) -> dict:
+        provenance = {
+            "source_commit": "a" * 40,
+            "engine_fingerprint": "b" * 64,
+            "image_commit": "c" * 40,
+        }
+        if enumerate_rolls is not None:
+            provenance["enumerate_rolls"] = enumerate_rolls
+        return {"provenance": provenance}
+
+    def test_import_does_not_select_a_roll_path(self) -> None:
+        """Importing the differential must leave the process configuration alone.
+
+        The module used to run ``os.environ.setdefault`` at import, which made every
+        importer -- this test module included -- an enabler for its whole process and
+        every child of it. The behavioural proof lives in
+        ``tests/test_roll_enumeration_scope.py``; this is the cheap unit-level echo.
+        """
+        self.assertFalse(runner.ENUMERATE_ROLLS)
+
+    def test_merge_refuses_shards_from_different_roll_paths(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            runner._merged_roll_path([self._record(False), self._record(True)])
+        self.assertIn("DIFFERENT roll paths", str(caught.exception))
+
+    def test_merge_derives_the_roll_path_from_the_records(self) -> None:
+        self.assertTrue(
+            runner._merged_roll_path([self._record(True), self._record(True)])
+        )
+        self.assertFalse(
+            runner._merged_roll_path([self._record(False), self._record(False)])
+        )
+
+    def test_a_record_predating_the_field_counts_as_collapsed(self) -> None:
+        """Absent is collapsed as a matter of HISTORY, not as a lenient default.
+
+        Records written before the field existed came out of builds with no enumerated
+        path compiled into them at all.
+        """
+        self.assertFalse(runner._merged_roll_path([self._record(None)]))
+        with self.assertRaises(ValueError):
+            runner._merged_roll_path([self._record(None), self._record(True)])
+
+    def test_the_merged_report_labels_itself_from_the_shards(self) -> None:
+        """Not from the merging PROCESS, which ran no games and made no engine call."""
+        record = {
+            "schema": runner.CHECKPOINT_SCHEMA,
+            "build_check": "gated",
+            "seed": 1000,
+            "seconds": 1.0,
+            "counters": {"boundaries_measured": 1, "transition:matched": 1},
+            "repros": [],
+            "provenance": self._record(True)["provenance"],
+        }
+        merged = runner.build_report(
+            [record],
+            elapsed=None,
+            approximate_sleep=None,
+            matcher=None,
+            keep_repro=0,
+            enumerate_rolls=runner._merged_roll_path([record]),
+        )
+        self.assertTrue(merged["enumerate_rolls"])
+        self.assertFalse(
+            runner.ENUMERATE_ROLLS,
+            "the merging process itself stayed on the collapsed default, so this label "
+            "could only have come from the records",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

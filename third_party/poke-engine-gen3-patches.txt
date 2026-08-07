@@ -1358,3 +1358,27 @@ poke-engine-gen3-a11-bellydrum-fail-clauses.patch
 # reports/c136_faint_cancels_prediction.md, with the four sweeps it cites at
 # reports/artifacts/c136_faintcancels_{main,fix}_{dev,holdout}_sweep.json.
 poke-engine-gen3-faint-cancels-opposing-switch.patch
+
+# C116 Phase 2 -- a FLAG-GATED REFERENCE ORACLE, consumed by tests and by nothing
+# that ships. Enumerate-then-merge behind the RUNTIME env flag
+# POKEZERO_ENUMERATE_ROLLS, which is OFF by default, so with the flag unset this
+# patch is behaviourally a no-op and EVERY process -- search, training, and the
+# transition differential -- keeps the collapsed partition cascade bit-identically.
+# When the flag is on, each chance branch emits one arm per distinct
+# floor(max * r / 100) for r in 85..=100 at mass 1/16 (pre-merged on equal
+# integers) instead of choosing a representative roll, and
+# residual_lethality_threshold is not called at all.
+#
+# A runtime flag rather than a cargo feature, deliberately: one build serves both
+# paths, so every collapsed-vs-enumerated comparison is single-variable.
+#
+# NOT adopted for the differential, and that reversal is the point. An earlier
+# revision of this branch switched the differential to the enumerated path; review
+# established that a differential running enumerated certifies a configuration
+# production never takes, so the fidelity gate would stop measuring the shipping
+# engine. Enumeration is instead an EXACT ORACLE for the collapsed path's masses:
+# a wrong collapsed recipe stops being something review has to catch by reading and
+# becomes a test that fails. Adopt-EVERYWHERE was separately measured and rejected
+# on throughput. Decision: reports/c137_phase2_enumerate_decision.md. Prediction and
+# sweeps: reports/c134_enumerate_rolls_oracle.md.
+poke-engine-gen3-enumerate-damage-rolls.patch

@@ -26,19 +26,18 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 67-patch stack. The Rest-refund emission patch
-# moves generate_instructions.rs (switch path plus the wake arms) and
-# choice_effects.rs (the Rest arm); white-herb already moved
-# generate_instructions.rs and items.rs. So two of the four digests below changed
-# with this patch and two did NOT: items.rs and abilities.rs are byte-identical
-# to their pre-emission values. Those two unchanged digests are the drift control
-# -- vendored-source drift would have moved all four, so an update that leaves
-# them fixed is a measurement rather than a paste. Every digest here is
-# read off a REPLAY of the stack into a scratch tree, never off the vendored
-# tree on disk -- the build rewrites that tree, so pinning it can pin a stale
-# preimage (which it once did, and shipped a red gate).
+# Post-patch content pins for the 69-patch stack. The roll-enumeration patch
+# (C116 Phase 2, the flag-gated oracle) touches generate_instructions.rs and NOTHING else,
+# so exactly ONE of the four digests below moved and three did not. Those three
+# are the drift control -- vendored-source drift, or a patch landing at the wrong
+# offset, would have moved more than the single file the patch names. An update
+# that leaves items.rs, abilities.rs and choice_effects.rs byte-identical is a
+# measurement rather than a paste. Every digest here is read off a REPLAY of the
+# stack into a scratch tree, never off the vendored tree on disk -- the build
+# rewrites that tree, so pinning it can pin a stale preimage (which it once did,
+# and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "183e5a5bd714e4189df7ad4d8226674bf81cb35d5b629f0e77cf65c5bb370a4c",
+    "src/gen3/generate_instructions.rs": "d9a7c5597c79cd8db30f28884be4000a06faf6a1f0f920118e5cd74e98bb0b0c",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",
@@ -120,7 +119,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-11:]],
+                [entry.name for entry in applied[-12:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -133,6 +132,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-hitcount-ko-threshold.patch",
                     "poke-engine-gen3-a11-bellydrum-fail-clauses.patch",
                     "poke-engine-gen3-faint-cancels-opposing-switch.patch",
+                    "poke-engine-gen3-enumerate-damage-rolls.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

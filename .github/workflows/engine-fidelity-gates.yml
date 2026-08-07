@@ -91,6 +91,12 @@ jobs:
             # workflow's FILTERS and no step. A guard nothing runs. Found by review
             # of #1113.
             tests/test_engine_stat_attestation.py
+            # C116 Phase 2's scope gate. Listed for the same reason as the entries
+            # above: a PR whose only change is adding a file to the mention ledger,
+            # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
+            # touches nothing else -- so without this line the gate that would object
+            # is not even a trigger.
+            tests/test_roll_enumeration_scope.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -218,12 +224,39 @@ jobs:
           # cannot notice a DELETED test: removing three of four leaves the step
           # green, which is the "reads PASS while asserting less than intended"
           # shape this workflow's header forbids. Found by review of #1081.
-          if ! grep -qE 'Ran 5 tests' /tmp/massgate.log; then
-            echo "::error::expected 5 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 6 tests' /tmp/massgate.log; then
+            echo "::error::expected 6 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/massgate.log; then
             echo "::error::the mass gate SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
+      # tests; NOTHING that ships takes that path, the transition differential very
+      # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s
+      # per midgame_3v3 decision at depth 4 / 1024 sims, and a differential running
+      # enumerated certifies a code path production never takes, which silently blinds
+      # the 200-game fidelity gate to the surface that actually ships.
+      #
+      # The gate is BEHAVIOURAL, after review defeated the textual version: a file
+      # containing only `import engine_transition_differential` mentioned no flag,
+      # matched no allowlist, and enabled enumeration process-wide (and in every child)
+      # while the scan stayed green. Each check now spawns a child, imports a surface
+      # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
+      # latched per process by a OnceLock, so an in-process toggle would measure
+      # whichever path happened to be latched first.
+      - name: Roll-enumeration scope gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_roll_enumeration_scope -v 2>&1 | tee /tmp/enumscope.log
+          if ! grep -qE 'Ran 14 tests' /tmp/enumscope.log; then
+            echo "::error::expected 14 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/enumscope.log; then
+            echo "::error::the scope gate SKIPPED; it must never skip"
             exit 1
           fi
 

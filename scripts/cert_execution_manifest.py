@@ -193,12 +193,18 @@ def validate_execution_manifest_schema(payload: object) -> list[str]:
             records = _strict_int(checkpoint.get("records"))
             if records is None or records <= 0:
                 errors.append(f"{label}.checkpoint.records is not a positive integer")
-            provenance = mapping(checkpoint.get("resume_provenance"), f"{label}.checkpoint.resume_provenance", ("source_commit", "engine_fingerprint", "image_commit"))
+            # ``enumerate_rolls`` is REQUIRED, not optional. The three hash fields
+            # beside it are identical between the engine's two roll paths -- one
+            # build serves both, selected at runtime -- so a manifest that omits it
+            # attests an identity that does not determine the behaviour it measured.
+            provenance = mapping(checkpoint.get("resume_provenance"), f"{label}.checkpoint.resume_provenance", ("source_commit", "engine_fingerprint", "image_commit", "enumerate_rolls"))
             if provenance is not None:
                 for field, pattern in (("source_commit", _GIT_RE), ("engine_fingerprint", _SHA256_RE), ("image_commit", _GIT_RE)):
                     value = provenance.get(field)
                     if not isinstance(value, str) or not pattern.fullmatch(value):
                         errors.append(f"{label}.checkpoint.resume_provenance.{field} is malformed")
+                if not isinstance(provenance.get("enumerate_rolls"), bool):
+                    errors.append(f"{label}.checkpoint.resume_provenance.enumerate_rolls is malformed")
     return errors
 
 
@@ -626,9 +632,29 @@ def _checkpoint(path: Path, *, report: Mapping[str, Any]) -> tuple[dict[str, Any
             raise ValueError(f"{path}: checkpoint has mixed or malformed {label} provenance")
         return next(iter(unique))
 
+    def one_roll_path() -> bool:
+        """The single roll path every record ran on. Absent means collapsed.
+
+        C116 Phase 2 put an enumerate-then-merge path in the same BUILD as the
+        collapsed cascade, selected at runtime. So ``source_commit``,
+        ``engine_fingerprint`` and ``image_commit`` -- every field ``one_hash``
+        covers -- are identical between the two configurations BY DESIGN, and a
+        shard set mixing them would pass all three. This is the only field that
+        can tell them apart, which is exactly why it has to be checked.
+
+        Records written before the field existed carry no enumerated path in their
+        build at all, so absent is collapsed as a matter of history.
+        """
+
+        values = {bool(value.get("enumerate_rolls", False)) for value in provenance_rows}
+        if len(values) != 1:
+            raise ValueError(f"{path}: checkpoint has mixed or malformed roll-path provenance")
+        return next(iter(values))
+
     source_commit = one_hash("source_commit", _GIT_RE, "source")
     fingerprint = one_hash("engine_fingerprint", _SHA256_RE, "engine")
     image_commit = one_hash("image_commit", _GIT_RE, "image")
+    enumerate_rolls = one_roll_path()
     if not _GIT_RE.fullmatch(source_commit):
         raise ValueError(f"{path}: checkpoint has mixed or malformed source provenance")
     evidence["records"] = len(records)
@@ -636,6 +662,7 @@ def _checkpoint(path: Path, *, report: Mapping[str, Any]) -> tuple[dict[str, Any
         "source_commit": source_commit,
         "engine_fingerprint": fingerprint,
         "image_commit": image_commit,
+        "enumerate_rolls": enumerate_rolls,
     }
     return evidence, image_commit
 
