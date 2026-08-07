@@ -2,28 +2,43 @@
 
 After #1144, #1148 and #1152, `19000191/63` (`component_magnitude:heal`) is the only divergent
 row on either window: dev 1/15,503, holdout 0/15,579
-(`reports/artifacts/c138_collapsefix_merged_{dev,holdout}_sweep.json`).
+(`reports/artifacts/c134_collapsed_{dev,holdout}_sweep.json`, the sweeps #1149 committed).
 
 **Disposition: ENGINE gap. Not a limit — the falsifier fires, measured.** The remedy that works is
-enumeration, which was measured to close it on a build made for this report. The collapsed
+enumeration, measured on main's shipped oracle at both the row and the sweep level. The collapsed
 representative path cannot close it without becoming per-roll enumeration inside the lethal band,
 and the reason is a measured injectivity, not an argument. The recommended program disposition is
 therefore **"closed by enumeration, retained under the collapsed path"**.
 
-No engine or harness change ships with this report.
+No engine or harness change ships with this report. The only non-documentation edit is two entries
+added to `_MENTION_ALLOWLIST` in `tests/test_roll_enumeration_scope.py`, because that gate is a
+ledger of every tracked file naming `POKEZERO_ENUMERATE_ROLLS` and this report and its artifact
+both do. Neither is on an import path and neither sets the flag; the runtime-scope gate that
+actually measures leakage is untouched and passes.
 
 ## 0. Provenance
 
 | | |
 |---|---|
-| shipping build | fingerprint `e65044f6c8c3917acb9aae155898d6b4b78bcaf154615ce688f1ae77ed86c044`, 70 patches, source `eaef463a` |
-| sweep the row comes from | `c138_collapsefix_merged_dev_sweep.json`, fingerprint `e65044f6…` — **the same fingerprint**, so the replay is on the engine that produced the row |
-| enumeration build | fingerprint `e3f442a0183f370f382ecd596d90d6a3150a33ef8a41fa329ddda7e04c767a8f`, 71 patches, `POKEZERO_ENUMERATE_ROLLS=1` |
+| replay build | fingerprint `44ee1430708cbb55033f5c7f1234b4bf9699009e6ba6d9a972ba442df615d652`, **71 patches**, source `6be52191` (current main) |
+| sweep the row comes from | `c134_collapsed_dev_sweep.json`, engine fingerprint `44ee1430…` — **the same fingerprint**, so the replay is on the engine that produced the row |
+| both roll paths | **one build**. Since #1149 put `poke-engine-gen3-enumerate-damage-rolls.patch` in the manifest, `POKEZERO_ENUMERATE_ROLLS` selects the path at process start (the flag is a `OnceLock`, so one process is one engine). The collapsed and enumerated measurements below are therefore single-variable by construction. |
 | every number below | `reports/artifacts/c140_last_dev_row_probe.json` |
 
-Both builds were produced by `scripts/build_search_crate_engine.sh` with the exit code captured
-directly (`exit=0` on both). Replays go through `cert_sweep_reread.reread_row`, which calls the
-shipped `evaluate_boundary_strict` — nothing here reimplements the comparator.
+The build was produced by `scripts/build_search_crate_engine.sh` with the exit code captured
+directly (`exit=0`); all 71 patches applied via git-apply. Replays go through
+`cert_sweep_reread.reread_row`, which calls the shipped `evaluate_boundary_strict` — nothing here
+reimplements the comparator.
+
+> **An earlier revision of this report was written against `eaef463a` and reported that the
+> enumerate patch no longer applied, bundling a rebase as an inert unlisted patch file plus two
+> local build steps. That was stale on arrival.** #1149 (`6be52191`) landed the same rebase and
+> resolved the #1152 collision *better*: it **dropped** the `residual_threshold_opt` hunk rather
+> than porting it, because that hunk disabled the residual mirror unconditionally while enumerating
+> only under a narrower guard — giving a flag-on search process a third never-measured
+> configuration, the defect c137 §2 named. The oracle is buildable on main today. The rebase, the
+> extra steps and the digest bump are withdrawn. Every measurement below was re-run on `44ee1430`
+> rather than carried forward, and the results are unchanged.
 
 ## 1. The boundary, component by component
 
@@ -108,7 +123,7 @@ derived by hand: `lethal_band.injective = true` in the artifact).
 Census of what the shipping engine actually emits for the p2 `heal` component across all 14 arms:
 
 ```
-{29: 93.9063 %}          — one value, plus "absent" on the crit arms where Raichu never reaches the residual
+{29: 93.9062 %}          — one value, plus "absent" on the crit arms where Raichu never reaches the residual
 ```
 
 **28 is not reachable by any arm the shipping engine can emit on this boundary.**
@@ -173,15 +188,19 @@ So there are two true statements and they are not in conflict:
 
 ## 6. Enumeration closes it; the collapsed path cannot
 
-The enumeration build, single-variable (same build, same seeds, flag off versus on):
+Single-variable on **one** build (`44ee1430`), same row, flag off versus on:
 
 | | branches | mass sum | p2 `heal` magnitudes emitted | verdict |
 |---|---|---|---|---|
-| flag **off** (control) | 14 | 100.000000 % | `{29: 93.9062 %}` | **diverged** — misses identical to the shipping build |
+| flag **off** (control) | 14 | 100.000000 % | `{29: 93.9062 %}` | **diverged** — misses identical to the sweep's |
 | flag **on** | 1015 | 100.000000 % | `{22: 5.7129, 24: 5.7129, 25: 5.7129, 26: 5.7129, 27: 5.7129, 28: 5.7129, 29: 59.6289}` | **matched** |
 
-The off-control matters: it shows the rebased patch is inert when the flag is clear, so the closure
-is attributable to enumeration and not to the rebase. The emitted masses are coherent. 2.5 % of the
+This is the per-row form of a closure #1149 already measured at sweep scale on the same
+fingerprint — `c134_collapsed_dev_sweep.json` 1 diverged versus `c134_enumerated_dev_sweep.json`
+**0**, both at 15,503 boundaries measured, holdout 0 → 0. The two measurements are independent in
+method (per-row replay versus a 200-game sweep) and agree.
+
+The emitted masses are coherent. 2.5 % of the
 boundary is Tangela fully paralysed and never striking — exactly Thunderbolt's 10 % paralysis times
 gen-3's 25 % immobilisation — leaving 97.5 % on which Hidden Power lands; `1/16` of that is the crit
 arm at 6.0938 %, and the remaining `97.5 × 15/16 = 91.40625 %` splits into sixteen equal non-crit
@@ -258,7 +277,7 @@ tolerance: the heal is reclassified only when it equals the `capped_lethal` the 
 from the observed HP trace* on the opposite slot. Falsify the heal and the identity breaks, the
 reclassification does not fire, and the exact comparison rejects it. Over the 68 distinct retained
 transition repros committed under `reports/artifacts/` (deduplicated on `(seed, step)`, re-read on
-`e65044f6`), C closes exactly this row and nothing else: 64 → 65 matched, 4 → 3 diverged, none
+`44ee1430`), C closes exactly this row and nothing else: 64 → 65 matched, 4 → 3 diverged, none
 newly diverged. That census is small and historically biased and should not be read as strong
 evidence of safety.
 
@@ -283,36 +302,7 @@ window's steady state is **1 divergence in 15,503 boundaries under the collapsed
 the oracle**, and that gap is a known, bounded, understood property of collapsing a fan — not an
 open defect to keep chasing.
 
-## 9. Operational finding: the enumerate spike patch no longer applies
-
-`third_party/poke-engine-gen3-enumerate-damage-rolls.patch` **fails to apply on current main**:
-
-```
-ERROR: both strict applicators rejected poke-engine-gen3-enumerate-damage-rolls.patch
-error: patch failed: src/gen3/generate_instructions.rs:3457
-1 out of 3 hunks failed while patching 'src/gen3/generate_instructions.rs'
-```
-
-#1152's status-aware-threshold patch replaced `let residual_threshold_opt =
-residual_lethality_threshold(...)` with `let residual_thresholds =
-residual_lethality_thresholds(state, &attacking_side, choice)`, and the spike's second hunk is
-authored against the old binding. Since C137 makes enumeration the program's *reference oracle*, an
-oracle that cannot be built is a live problem, not a curiosity.
-
-`third_party/poke-engine-gen3-enumerate-damage-rolls-rebased.patch` is added here with the rebase.
-It is **not** in `third_party/poke-engine-gen3-patches.txt` and is therefore inert — exactly like its
-un-rebased sibling. To build the oracle:
-
-1. append the patch name to `third_party/poke-engine-gen3-patches.txt`;
-2. set `PATCHED_TARGET_TREE_SHA256` in `scripts/apply_poke_engine_patches.py` to
-   `8386e653da668cdcc76073d7ebff5631146b8a0f26cbe044ac36d26b005ec81c`;
-3. build into a **separate** venv, then run with `POKEZERO_ENUMERATE_ROLLS=1` — the flag is a
-   `OnceLock`, so one process is one engine.
-
-Both changes are local to the oracle checkout and must not land on main, which is why they are not
-in this branch.
-
-## 10. What was ruled out, and what is left uncertain
+## 9. What was ruled out, and what is left uncertain
 
 Ruled out by measurement:
 
