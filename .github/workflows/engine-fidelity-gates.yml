@@ -72,6 +72,10 @@ jobs:
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
             src/pokezero/**
+            # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
+            # closed. Listed so a PR that ONLY weakens the pin file still trips this
+            # workflow -- and note the file was previously run by no step at all.
+            tests/test_engine_world_encore_transform.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -664,6 +668,31 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/dragpin.log; then
             echo "::error::a classifier pin SKIPPED"
+            exit 1
+          fi
+
+      # C145: the Encore-on-a-transformed-active pins. These shipped with #1148 and
+      # NO workflow ran them -- `grep -rn encore .github/workflows/` returned nothing
+      # across all three files, so the pin that closed `19100170/71-72` was inert. The
+      # same shape the two steps above condemn, one PR later. `src/pokezero/**` is
+      # already in this workflow's path filter, so a change to `engine_world.py`
+      # triggers the job; it just never ran this file.
+      # Includes LockIndexToResidualBlockTests, which renders the CONSTRUCTED world
+      # and is the only assertion tying the lock index to Showdown's
+      # `|-heal|...|[from] item: Leftovers` line. It imports pokezero_search
+      # UNGUARDED for that reason -- a skip here retires the pin silently.
+      # Red/green measured in reports/c145_itemleftovers_row_adjudication.md §5.3.
+      - name: Encore-on-transform world-construction pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_world_encore_transform -v 2>&1 \
+            | tee /tmp/encoretransform.log
+          if ! grep -qE 'Ran 22 tests' /tmp/encoretransform.log; then
+            echo "::error::expected 22 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/encoretransform.log; then
+            echo "::error::an Encore-on-transform pin SKIPPED; they must never skip"
             exit 1
           fi
 
