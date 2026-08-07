@@ -82,6 +82,16 @@ a row count.
 
 ## Outcome
 
-Recorded in the PR body and in `reports/artifacts/c137_encore_transform_{dev,holdout}_sweep.json`
-(after) against `reports/artifacts/c137_base_{dev,holdout}_sweep.json` (before, re-derived at
-the base commit above because no `c136_faintcancels_fix_*` baseline exists on `main`).
+**CONFIRMED on every clause; the falsifier did not fire.** Holdout `diverged` 5 -> 3 and `matched`
+15574 -> 15576, with `component_missing_in_engine:itemleftovers` 2 -> 0 and the two closed rows
+being exactly `19100170/71` and `19100170/72`. Dev did not move on a single counter. Both
+sweeps' `boundaries_full_round`, `boundaries_measured`, `engine_errors` and full skip histograms
+are unchanged, `skip:world_unsupported:encore_move_unknown` included (holdout 1, dev 2). Nothing
+opened on either sweep.
+
+Full tables in `reports/c137_encore_transform_move_index_results.md`. Artifacts:
+`reports/artifacts/c137_encore_transform_{dev,holdout}_sweep.json` (after) against
+`reports/artifacts/c137_base_{dev,holdout}_sweep.json` (before, re-derived because no
+`c136_faintcancels_fix_*` baseline exists on `main`), cross-checked against
+`reports/artifacts/c137_base_pristine_{dev,holdout}_sweep.json`, which were produced in a
+separate worktree of the base commit and agree on every counter.
