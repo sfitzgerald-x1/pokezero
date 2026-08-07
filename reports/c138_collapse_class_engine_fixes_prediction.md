@@ -1,5 +1,13 @@
 # C138 — the two collapse-class engine fixes, registered before any post-fix measurement
 
+> **Two documents carry the number C138.** This one, and
+> `reports/c138_known_gaps_ledger.md` (Phase 4 item 14), which landed on main in #1151
+> while this branch was open. They are different items and neither supersedes the other;
+> the number is reused, the filenames are not. The ledger's **G6** and **G7** are the two
+> gaps this document's fixes close, and are annotated there. Renumbering this one after
+> the fact was rejected: it is cited by two commit messages and by the patch manifest, and
+> a dangling citation in a commit message is worse than a shared prefix.
+
 Registered 2026-08-06, before either patch was built or installed. The baseline in §2 was
 re-derived from the base commit on this branch's own build; no figure here is carried
 forward from another document.
@@ -202,4 +210,117 @@ carry `534ac8dc`, which is this document, and the (A)+(B) sweeps carry `cf055326
 44.531250 % against 30.615234 % (13.92 points), `nested-thresholds` 0.000000 % against
 2.783203 % (2.78 points) — and `min-would-destroy-an-arm` and `collapsed-fan-control` were
 GREEN. After (A) the crit fixture went green and the two status fixtures stayed red; after
-(B) all five are green. The two controls never moved.
+(B) all five are green. The two controls never moved. (The matrix grew to seven
+after review; §8 is that story. These five are the ones that existed when this
+measurement was taken.)
+
+## 8. Oracle coverage of the four partition sites — appended after review
+
+**The first version of the oracle reached two of the four sites it guards, and nothing said
+so.** Review found it the right way — by mutation, not by reading: an off-by-one in the arm
+price at Case A, and again at the crit-fan-that-cannot-kill site, left all five fixtures
+GREEN. `test_the_fixture_matrix_is_the_expected_size` pinned `len == 5`, which froze the
+absence in place. The engine was not unguarded — both sites are held by pre-existing
+behavioural probes, and both of those *did* go red under the same mutations — but the new
+instrument, the one advertised as preventing a fourth wrong recipe, did not cover half the
+sites the branch edits.
+
+Two fixtures close it, and coverage is now a machine-checked property
+(`test_every_partition_site_is_covered`) rather than a comment: each fixture declares its
+`site`, and the test asserts the mapping onto `PARTITION_SITES` is total. A fifth site
+would fail it until a fixture reached it.
+
+| site | ceiling | fixtures | what the fixture pins |
+|---|---|---|---|
+| `case-a` (`ko_max >= hp && ko_min < hp`) | `hp` | **`case-a-nested-ko-ceiling`** | three-level nest: KO 222, sand 207, Toxic 192, over the fan `[189 … 223]`. Bands 1 / 7 / 6 and a survive arm of 2. The only fixture where the KO threshold acts as the band ceiling — the correction this branch makes to c135 §5 |
+| `case-b-noncrit` | unbounded | `a8-burn-secondary`, `nested-thresholds`, `min-would-destroy-an-arm`, `collapsed-fan-control` | A8's declining pre-move mirror; two bands with an unbounded ceiling; the union-not-minimum control; the collapsed-fan negative control |
+| `case-b-crit-straddle` | `hp` | `crit-straddle-sand` | the site fix (A) adds, on the shape of dev `19000074/27` |
+| `case-b-crit-nokill` | unbounded | **`crit-fan-cannot-kill-sand`** | crit fan `[207 … 244]` topping out below 250 HP, threshold 235 inside it and above the non-crit fan's 122, so it isolates the site |
+
+### The mutation runs, which are what prove the fixtures reach their sites
+
+Each mutation is a one-line change to the arm price at one site, built and installed on top
+of this branch in a scratch clone. "Fixtures RED" is the complete list; every other fixture
+stayed green in each run. The mutations are inlined here rather than committed as files, so
+they are reproducible without adding a build input that looks like a shipped patch — apply
+either to `src/gen3/generate_instructions.rs` after the full stack:
+
+```
+ case-a           let residual_per_hit = if hit_count > 1 { … } else {
+-                     *residual_threshold
++                     *residual_threshold - 1
+                  };
+
+ crit-nokill  -   extra_branches.push((k, *crit_residual_threshold));
+              +   extra_branches.push((k, *crit_residual_threshold - 1));
+```
+
+| mutation | oracle fixtures RED | gap | pre-existing probe |
+|---|---|---|---|
+| Case A arm priced `t − 1` | **`case-a-nested-ko-ceiling`** only | 61.523438 % vs 32.812500 %, **28.71 points** | `case-a-partitions-three-ways` also RED: `[103, 104, 120]` for `[103, 105, 120]` |
+| crit-fan-cannot-kill arm priced `t − 1` | **`crit-fan-cannot-kill-sand`** only | 100.000004 % vs 98.593754 %, **1.41 points** | `residual-mass-crit-fan-only` also RED: KO mass 0.0000 % for 0.7031 % |
+
+That "only" is the reproduction of the review finding: under both mutations the five original
+fixtures pass. The two new ones are the whole of the coverage gained.
+
+**What the functional still cannot see, stated rather than left to be discovered.** Outcome
+mass is blind to an arm priced one *above* its threshold: `t + 1` still leaves the defender
+at or below zero after the residual, so no cell moves. That direction is a real mispricing
+and is caught by the transition differential (it changes the rendered damage), not here. The
+detectable direction is `t − 1`, which flips the arm from lethal to surviving, and the band
+counts, which move mass between cells. Both mutations above are of the detectable kind by
+construction.
+
+## 9. Re-measured on main + this branch — appended after review
+
+The sweeps in §7 were taken against base `2ec0cb13`. Main has since advanced by four
+commits, one of which (#1148) changes `rust/pokezero-search/src/events.rs` — a fingerprint
+input — so those artifacts no longer describe the build that would land. Main was **merged
+in** rather than rebased onto, so the published branch keeps its history and no force-push
+was needed.
+
+The §7 artifacts are kept: they are the evidence for the *mechanism*, isolated to one
+variable each. The pair below is the evidence for *what lands*. Both sides of it were
+measured here rather than carried forward — including the "before", which is a **different
+number from §2's** and would have been wrong if assumed.
+
+| | build | dev `19,000,000–199` | holdout `19,100,000–199` |
+|---|---|---|---|
+| main `f876803e` | `fdbf59379399b944`, 68 patches | 2 diverged | **2** diverged |
+| main + this branch | `e65044f6c8c3917a`, 70 patches | **1** | **0** |
+
+Complete `divergence_classes` census:
+
+| window | class | main | main + this |
+|---|---|---|---|
+| dev | `component_magnitude:heal` (`19000191/63`) | 1 | 1 |
+| dev | `component_missing_in_engine:sandstorm` (`19000074/27`) | 1 | **0** |
+| holdout | `limit:roll_divergent_lethality` (`19100107/135`, `19100191/5`) | 2 | **0** |
+
+`boundaries_full_round` 15,968 / 16,155, `boundaries_measured` 15,503 / 15,579,
+`gating_exact` 14,156 / 14,148, `gating_support_based` 1,347 / 1,431, `engine_errors` 0 and
+`matched + diverged == measured` — identical across all four runs and to every run in §7, so
+merging #1148 perturbed nothing this measures. Artifacts:
+`reports/artifacts/c138_collapsefix_{mainhead,merged}_{dev,holdout}_sweep.json`
+(`mainhead` = main at `f876803e`; the `main` pair is §2's base `2ec0cb13`).
+
+**Holdout's before-count is 2, not §2's 4, and this is worth stating because assuming it
+would have produced a wrong table.** The two `component_missing_in_engine:itemleftovers`
+rows at `19100170/71,72` closed on main between `2ec0cb13` and `f876803e` — by #1148, not by
+anything here. This branch's contribution on top of current main is therefore exactly its
+two mechanisms: `19000074/27` on dev and both `limit:roll_divergent_lethality` rows on
+holdout.
+
+> A process note, because it nearly went the other way. The first attempt at this "before"
+> measurement swept a scratch clone at `origin/main` — but that clone's `origin` is a *local
+> path*, so the ref was stale and it actually built `6b7e16f7`, two commits **behind** §2's
+> base. It reported dev 2 / holdout 4, which looks exactly like a correct answer and is not
+> one. It was caught by reading `source_commit` out of the artifact rather than trusting the
+> checkout, and the measurement was redone against the SHA. The committed artifacts carry
+> `source_commit f876803e`.
+
+**The holdout window goes to zero.** The surviving dev row is `19000191/63`
+(`component_magnitude:heal`), which **neither of these two fixes targets**: c133 §3 disposes
+of it as an arm that exists but whose representative mis-prices a roll-dependent Leech Seed
+drain, needing enumeration or a matcher change. It is **G8** in
+`reports/c138_known_gaps_ledger.md`, and it stays open.

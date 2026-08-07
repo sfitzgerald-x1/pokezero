@@ -64,6 +64,7 @@ import poke_engine as pe  # noqa: E402
 
 from collapsed_arm_mass_oracle import (  # noqa: E402
     FIXTURES,
+    PARTITION_SITES,
     build_state,
     outcome_masses,
     reconstruct_outcome_masses,
@@ -173,19 +174,46 @@ class CollapsedArmMassOracleTests(unittest.TestCase):
 
     def test_the_fixture_matrix_is_the_expected_size(self) -> None:
         """CI counts test METHODS, not fixtures: every assertion above runs under
-        ``subTest`` inside one method, so four of the five CASES could be deleted
+        ``subTest`` inside one method, so six of the seven fixtures could be deleted
         with everything green. This is the guard one level down."""
 
-        self.assertEqual(len(FIXTURES), 5)
+        self.assertEqual(len(FIXTURES), 7)
         self.assertEqual(
             sorted(f.exercises for f in FIXTURES),
             [
+                "crit-fan-residual-unbounded-ceiling",
                 "crit-straddle-residual",
-                "disjoint-bands",
+                "disjoint-bands-unbounded-ceiling",
+                "ko-threshold-is-the-band-ceiling",
                 "negative-control",
                 "status-aware-threshold",
                 "union-not-minimum",
             ],
+        )
+
+    def test_every_partition_site_is_covered(self) -> None:
+        """The gap this closes, and why it is asserted rather than commented.
+
+        The first version of this file had five fixtures reaching only TWO of the
+        four sites the branch edits. Nothing said so: `case-a` and
+        `case-b-crit-nokill` were simply absent, and the size pin froze the
+        absence in place. Review found it by MUTATION -- an off-by-one in the arm
+        price at each of those two sites left every fixture GREEN.
+
+        So coverage is now a machine-checked property of the matrix. If a fifth
+        partition site is ever added, this fails until a fixture reaches it.
+        """
+
+        covered = {fixture.site for fixture in FIXTURES if fixture.site in PARTITION_SITES}
+        missing = sorted(set(PARTITION_SITES) - covered)
+        self.assertEqual(
+            missing, [],
+            f"no fixture reaches {missing}; an off-by-one there would leave this "
+            f"whole file GREEN. Sites reached: {sorted(covered)}",
+        )
+        self.assertEqual(
+            sorted({f.site for f in FIXTURES}), sorted(PARTITION_SITES),
+            "a fixture names a site that is not one of the four partition sites",
         )
 
     def test_the_matrix_is_not_vacuous(self) -> None:
@@ -203,14 +231,13 @@ class CollapsedArmMassOracleTests(unittest.TestCase):
             max_regular = pe.calculate_damage(state, fixture.move, "splash", False)[0][0]
             max_crit = pe.calculate_damage(state, fixture.move, "splash", True)[0][1]
             regular_fan, crit_fan = _fan(max_regular), _fan(max_crit)
-            base = _threshold(fixture, fixture.status)
-            burn = _threshold(fixture, "burn")
             shapes[fixture.label] = {
                 "regular_fan": (regular_fan[0], regular_fan[-1]),
                 "crit_fan": (crit_fan[0], crit_fan[-1]),
                 "hp": fixture.hp,
-                "pre_move_threshold": base,
-                "burn_threshold": burn,
+                "pre_move_threshold": _threshold(fixture, fixture.status),
+                "burn_threshold": _threshold(fixture, "burn"),
+                "toxic_threshold": _threshold(fixture, "toxic"),
             }
 
         crit = shapes["crit-straddle-sand"]
@@ -270,6 +297,55 @@ class CollapsedArmMassOracleTests(unittest.TestCase):
             f"the negative control has a pending residual, so it is not a control: {control}",
         )
         self.assertLess(control["regular_fan"][1], control["hp"], f"{control}")
+
+        # The two fixtures added after review found the coverage gap. Each is the
+        # ONLY one reaching its site, so if either drifts off that site the site
+        # goes unguarded again while every test here still reads PASS.
+        case_a = shapes["case-a-nested-ko-ceiling"]
+        self.assertLessEqual(
+            case_a["hp"], case_a["regular_fan"][-1],
+            f"the NON-crit fan must reach the defender's HP or this is not case-a "
+            f"at all -- it would fall through to Case B: {case_a}",
+        )
+        self.assertLess(
+            case_a["regular_fan"][0], case_a["hp"],
+            f"the fan must STRADDLE hp, not clear it entirely: {case_a}",
+        )
+        self.assertIsNotNone(case_a["pre_move_threshold"])
+        self.assertIsNotNone(case_a["toxic_threshold"])
+        self.assertLess(
+            case_a["toxic_threshold"], case_a["pre_move_threshold"],
+            f"the two thresholds coincide, so no band structure exists under the "
+            f"KO ceiling: {case_a}",
+        )
+        self.assertTrue(
+            case_a["regular_fan"][0]
+            < case_a["toxic_threshold"]
+            < case_a["pre_move_threshold"]
+            < case_a["hp"],
+            f"the three-level nest is not intact -- both thresholds must sit "
+            f"strictly between the fan floor and the KO threshold, which is what "
+            f"makes hp the band CEILING here: {case_a}",
+        )
+
+        crit_nokill = shapes["crit-fan-cannot-kill-sand"]
+        self.assertLess(
+            crit_nokill["crit_fan"][-1], crit_nokill["hp"],
+            f"the crit fan can kill on the hit, so this reaches the crit-STRADDLE "
+            f"site instead and the fourth site stays unguarded: {crit_nokill}",
+        )
+        self.assertIsNotNone(crit_nokill["pre_move_threshold"])
+        self.assertTrue(
+            crit_nokill["crit_fan"][0]
+            < crit_nokill["pre_move_threshold"]
+            <= crit_nokill["crit_fan"][-1],
+            f"the residual threshold is not inside the crit fan: {crit_nokill}",
+        )
+        self.assertGreater(
+            crit_nokill["pre_move_threshold"], crit_nokill["regular_fan"][-1],
+            f"the NON-crit fan reaches the threshold too, so this does not isolate "
+            f"the crit site: {crit_nokill}",
+        )
 
 
 if __name__ == "__main__":

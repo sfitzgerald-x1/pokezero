@@ -82,15 +82,44 @@ class CollapseFixture:
     weather: str
     special_attack: int
     special_defense: int
-    # What the fixture is FOR. Asserted structurally by the test so a fixture that
-    # stops exercising its site fails by name instead of quietly passing.
+    attack: int
+    defense: int
+    # WHICH PARTITION SITE this fixture reaches. There are four, and the test
+    # asserts every one of them appears -- coverage is machine-checked rather than
+    # left to be re-derived by mutation, which is how the first version's gap was
+    # found. See PARTITION_SITES.
+    site: str
+    # What the fixture is FOR, within that site. Asserted structurally by the test
+    # so a fixture that stops exercising its shape fails by name.
     exercises: str
 
 
-#: The attacker never varies except in Special Attack, and is Ground/Flying so it
-#: is immune to the sandstorm the weather fixtures need. The defender is
-#: Normal/Flying: not Fire (so burn lands), not Poison or Steel, and not
-#: Ground/Rock/Steel (so sand chips it).
+#: The four places `generate_instructions_from_move` partitions a damage fan.
+#: Named here so the coverage assertion can be written against a list rather than
+#: against whatever the fixtures happen to reach.
+#:
+#:   case-a               `ko_max_damage >= hp && ko_min_damage < hp` -- the fan
+#:                        straddles the hit-KO threshold. A KO arm already exists,
+#:                        so `hp` is the band CEILING.
+#:   case-b-noncrit       Case B's non-crit fan, which cannot kill on the hit.
+#:                        Unbounded ceiling.
+#:   case-b-crit-straddle Case B's crit fan when it straddles the hit-KO
+#:                        threshold. Ceiling `hp`, like case-a.
+#:   case-b-crit-nokill   Case B's crit fan when it cannot kill either. Unbounded.
+#:
+#: An off-by-one at any one of these must turn some fixture RED; §"coverage" in
+#: the test asserts the mapping is total, and the report records the mutation runs
+#: that prove each fixture actually reaches its site.
+PARTITION_SITES = (
+    "case-a",
+    "case-b-noncrit",
+    "case-b-crit-straddle",
+    "case-b-crit-nokill",
+)
+
+#: The attacker is Ground/Flying so it is immune to the sandstorm the weather
+#: fixtures need. The defender is Normal/Flying: not Fire (so burn lands), not
+#: Poison or Steel (so Toxic lands), and not Ground/Rock/Steel (so sand chips it).
 FIXTURES: tuple[CollapseFixture, ...] = (
     # (A) The crit-straddle site. Rock Slide's non-crit max is 122 against 230 HP,
     # so Case B is taken; the crit fan
@@ -101,8 +130,8 @@ FIXTURES: tuple[CollapseFixture, ...] = (
         label="crit-straddle-sand",
         move="rockslide", accuracy=0.9,
         hp=230, maxhp=244, status="none", item="none", weather="sand",
-        special_attack=120, special_defense=125,
-        exercises="crit-straddle-residual",
+        special_attack=120, special_defense=125, attack=170, defense=145,
+        site="case-b-crit-straddle", exercises="crit-straddle-residual",
     ),
     # (B) A8 in its pure form: unstatused defender holding Leftovers, no weather,
     # so the PRE-MOVE mirror declines and the split never fires today. Sacred
@@ -113,8 +142,8 @@ FIXTURES: tuple[CollapseFixture, ...] = (
         label="a8-burn-secondary",
         move="sacredfire", accuracy=0.95,
         hp=120, maxhp=244, status="none", item="leftovers", weather="none",
-        special_attack=200, special_defense=125,
-        exercises="status-aware-threshold",
+        special_attack=200, special_defense=125, attack=170, defense=145,
+        site="case-b-noncrit", exercises="status-aware-threshold",
     ),
     # (B) The NESTED case, which is the only one that exercises the disjoint-band
     # rule as a rule. Sandstorm gives a pre-move threshold of 237 and the burn
@@ -131,8 +160,8 @@ FIXTURES: tuple[CollapseFixture, ...] = (
         label="nested-thresholds",
         move="sacredfire", accuracy=0.95,
         hp=252, maxhp=255, status="none", item="none", weather="sand",
-        special_attack=200, special_defense=57,
-        exercises="disjoint-bands",
+        special_attack=200, special_defense=57, attack=170, defense=145,
+        site="case-b-noncrit", exercises="disjoint-bands-unbounded-ceiling",
     ),
     # (B) The control the MINIMUM-over-statuses recipe fails. The pre-move
     # threshold 104 is inside the fan; the burn threshold 88 is below the fan's
@@ -145,8 +174,8 @@ FIXTURES: tuple[CollapseFixture, ...] = (
         label="min-would-destroy-an-arm",
         move="sacredfire", accuracy=0.95,
         hp=112, maxhp=128, status="none", item="none", weather="sand",
-        special_attack=200, special_defense=125,
-        exercises="union-not-minimum",
+        special_attack=200, special_defense=125, attack=170, defense=145,
+        site="case-b-noncrit", exercises="union-not-minimum",
     ),
     # Negative control: nothing pending, no reachable residual, so the fan stays
     # collapsed and only a crit kills. A matrix of straddles alone cannot tell a
@@ -155,8 +184,54 @@ FIXTURES: tuple[CollapseFixture, ...] = (
         label="collapsed-fan-control",
         move="rockslide", accuracy=0.9,
         hp=160, maxhp=244, status="none", item="none", weather="none",
-        special_attack=120, special_defense=125,
-        exercises="negative-control",
+        special_attack=120, special_defense=125, attack=170, defense=145,
+        site="case-b-noncrit", exercises="negative-control",
+    ),
+    # (A)+(B) CASE A, with a THREE-LEVEL nest: the KO threshold, a pre-move
+    # sandstorm threshold, and a lower Toxic threshold from the move's own
+    # secondary. This is the only fixture that reaches the case-a site, and the
+    # only one where the KO threshold acts as the band CEILING -- the correction
+    # this branch makes to c135 section 5's recipe. `nested-thresholds` exercises
+    # two bands with an UNBOUNDED ceiling; this exercises two bands under a KO
+    # arm, which is different arithmetic.
+    #
+    # Poison Fang (30 % badly poison) at 223 max into 222/240 HP in sand:
+    #   fan floor 189 < 222 <= 223  -> case-a (the fan straddles the hit KO)
+    #   sand -15                    -> pre-move threshold 207
+    #   sand -15 then toxic -15     -> status-aware threshold 192
+    #   189 < 192 < 207 < 222
+    # Bands: KO #{>= 222} = 1, [207, 222) = 7, [192, 207) = 6, survive = 2. The
+    # four arms land on four DISTINCT outcomes -- dead on the hit, dead to sand,
+    # dead only if the Toxic lands, and alive either way -- so the outcome-mass
+    # functional sees all three boundaries at once. Pricing the top band at
+    # #{>= 207} = 8 rather than 7 would steal the KO roll, which is exactly the
+    # double-count c133 section 4 warns about.
+    CollapseFixture(
+        label="case-a-nested-ko-ceiling",
+        move="poisonfang", accuracy=1.0,
+        hp=222, maxhp=240, status="none", item="none", weather="sand",
+        special_attack=120, special_defense=125, attack=390, defense=60,
+        site="case-a", exercises="ko-threshold-is-the-band-ceiling",
+    ),
+    # (B) The CRIT FAN THAT CANNOT KILL -- the fourth site, which no other fixture
+    # here reaches. Rock Slide into 250/255 HP in sand: the crit fan [207 .. 244]
+    # tops out BELOW the defender's HP, so the crit-straddle arm is not taken and
+    # the sibling `else` runs instead.
+    #   122 < 250                   -> Case B
+    #   crit max 244 < 250          -> the crit fan cannot kill on the hit either
+    #   sand -15                    -> threshold 235, inside the crit fan
+    #   235 > 122                   -> the NON-crit fan cannot reach it, so this
+    #                                  fixture isolates the crit site
+    # Four of the sixteen crit rolls are residual-lethal and nothing else on the
+    # boundary faints, so the entire faint mass is this one arm: 0.9 * 1/16 * 4/16
+    # = 1.40625 %. An arm priced one below the threshold leaves the defender on
+    # 1 HP and the whole faint mass disappears.
+    CollapseFixture(
+        label="crit-fan-cannot-kill-sand",
+        move="rockslide", accuracy=0.9,
+        hp=250, maxhp=255, status="none", item="none", weather="sand",
+        special_attack=120, special_defense=125, attack=170, defense=145,
+        site="case-b-crit-nokill", exercises="crit-fan-residual-unbounded-ceiling",
     ),
 )
 
@@ -186,7 +261,7 @@ def build_state(fixture: CollapseFixture, *, hp: int | None = None,
         id="gligar", level=81,
         types=("ground", "flying"), base_types=("ground", "flying"),
         hp=205, maxhp=205, ability="none", item="none",
-        attack=170, defense=160, special_attack=fixture.special_attack,
+        attack=fixture.attack, defense=160, special_attack=fixture.special_attack,
         special_defense=130, speed=250,
         moves=[pe.Move(id=attacker_move, pp=16), pe.Move(id="splash", pp=16)],
     )
@@ -194,7 +269,7 @@ def build_state(fixture: CollapseFixture, *, hp: int | None = None,
         id="fearow", level=81,
         types=("normal", "flying"), base_types=("normal", "flying"),
         hp=defender_hp, maxhp=fixture.maxhp, ability="none", item=fixture.item,
-        attack=170, defense=145, special_attack=110,
+        attack=170, defense=fixture.defense, special_attack=110,
         special_defense=fixture.special_defense,
         speed=100, status=defender_status,
         moves=[pe.Move(id="splash", pp=16)],
@@ -276,7 +351,10 @@ def _secondary_status(fixture: CollapseFixture) -> tuple[str, float]:
     is a flinch, which changes no HP.
     """
 
-    return {"sacredfire": ("burn", 0.5)}.get(fixture.move, ("none", 0.0))
+    return {
+        "sacredfire": ("burn", 0.5),
+        "poisonfang": ("toxic", 0.3),
+    }.get(fixture.move, ("none", 0.0))
 
 
 def reconstruct_outcome_masses(fixture: CollapseFixture) -> dict[str, float]:
