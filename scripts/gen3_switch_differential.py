@@ -482,6 +482,11 @@ def _shedinja():  # 1 max HP: the Spikes minimum-damage clamp
                           moves=("Splash",))
 
 
+def _faint_cancel_lead():  # spe 130, outruns Skarmory's 70 so its switch resolves first
+    return FixturePokemon(species="Jolteon", ability="Volt Absorb", item="None",
+                          moves=("Splash",))
+
+
 def _pursuit_hunter():  # Dark attacker holding Leftovers, so the ply's residual is visible
     return FixturePokemon(species="Houndoom", ability="Flash Fire", item="Leftovers",
                           moves=("Pursuit", "Splash"))
@@ -1019,6 +1024,81 @@ def _spec(name):
             expect={"landing_hp": "0 fnt", "fainted": True},
             landmark=lambda L: _has(L, "|switch|p2a: Shedinja"),
             landmark_desc="Shedinja switched into the hazard")
+
+    if name in ("faintcancelsopposingswitch", "faintcancelsopposingswitchcontrol"):
+        # C134 §4. The OTHER half of the rule the Pursuit pair pins, and the premise
+        # two withdrawn patches were built on without ever testing it directly.
+        #
+        # Showdown's `faintMessages` (`sim/battle.ts:2609-2618`) runs
+        # `queue.cancelAction(pokemon)` over every active in gen <= 3 singles, so a
+        # faint cancels the opponent's already-submitted SWITCH and never re-offers
+        # it. Confirmed here: p1 lays Spikes, both sides then switch, p2's Jolteon
+        # (spe 130) outruns Skarmory (spe 70) so its switch resolves first, and its
+        # incoming 1-HP Shedinja dies on entry. p1's Skarmory -> Blissey switch then
+        # does NOT happen, and the block ends at `|faint|` with no `|upkeep`.
+        #
+        # This is the shape of holdout row `19100180/24`.
+        #
+        # Read this pair TOGETHER with `pursuitkoswitcher`. They look contradictory
+        # and are not, and the precise reason matters for anyone writing the engine
+        # guard. The single rule is:
+        #
+        #     a faint cancels the queued action of every STILL-ACTIVE Pokemon.
+        #
+        # `getAllActive()` (`sim/battle.ts:1362-1371`) skips fainted Pokemon, so a
+        # Pursuit victim is never in the cancellation set at all -- it is outside the
+        # rule's domain rather than an exception to it, and its switch resolves
+        # because `switchIn` bails to 'pursuitfaint' and the gen<=4 branch unshifts
+        # the action back at priority -101. Stating it as "a rule and an exception"
+        # is looser than the source and invites a guard with a special case in it.
+        # A guard that implements only one of these two fixtures is wrong in the
+        # other's direction, which is exactly how both previous attempts failed --
+        # v1 in this direction, v2 in Pursuit's.
+        fainting = name == "faintcancelsopposingswitch"
+        incoming = _shedinja() if fainting else _snorlax()
+        incoming_species = "Shedinja" if fainting else "Snorlax"
+        return dict(
+            p1=[_skarmory(), _blissey()], p2=[_faint_cancel_lead(), incoming],
+            turns=[("move spikes", "move splash"),
+                   ("switch 2", "switch 2")],
+            measured=1, setup_step=0,
+            # A shape assertion on step 0, NOT a gate that can fire: Spikes is
+            # `accuracy: true` (`data/moves.ts`) and is used once against a side
+            # holding zero layers, so `onSideRestart`'s `layers >= 3` bail is
+            # unreachable and this can never skip a seed. It documents what the
+            # measured ply depends on. An earlier revision called it "a real gate",
+            # which was simply false.
+            setup_landed=lambda L: _has(L, "|-sidestart|p2: PokeZero p2|Spikes"),
+            facts=lambda L: {
+                "incoming_fainted": _has(L, f"|faint|p2a: {incoming_species}"),
+                # The queued switch belonging to the side that did NOT faint.
+                "opposing_switch_happened": _has(L, "|switch|p1a: Blissey"),
+                # NOT caused by the cancellation, and the distinction was measured:
+                # reorder the switches so the opposing switch is NOT cancelled and
+                # `upkeep_ran` is still False. The block defers because the fainting
+                # side owes a forced replacement -- the mechanism `faintresiduals`
+                # already pins -- independently of whether anything was cancelled.
+                # Confirmed in the other direction by `pursuitkoswitcher`, which has a
+                # faint, no cancellation, the replacement satisfied in-ply, and a
+                # residual that DOES run. Asserted here as a co-observation that the
+                # two mechanisms compose, never as evidence of cancellation.
+                "upkeep_ran": _has(L, "|upkeep"),
+            },
+            expect={
+                "incoming_fainted": fainting,
+                "opposing_switch_happened": not fainting,
+                "upkeep_ran": not fainting,
+            },
+            landmark=(
+                (lambda L: _has(L, "|faint|p2a: Shedinja"))
+                if fainting
+                else (lambda L: _has(L, "|-damage|p2a: Snorlax|404/461|[from] Spikes"))
+            ),
+            landmark_desc=(
+                "the incoming Pokemon died to Spikes on entry"
+                if fainting
+                else "the incoming Pokemon took Spikes and survived"
+            ))
 
     if name in ("pursuitkoswitcher", "pursuitnokocontrol"):
         # C134 §4, the queue-semantics fixture pack. Pursuit is the ONE case where a
@@ -2377,6 +2457,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "partialtrapsubstitute",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
              "pursuitkoswitcher", "pursuitnokocontrol",
+             "faintcancelsopposingswitch", "faintcancelsopposingswitchcontrol",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
              "confusionbatonpass", "confusionbatonpasscontrol",
