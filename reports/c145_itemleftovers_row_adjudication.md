@@ -138,7 +138,13 @@ PYTHONPATH=src python scripts/engine_transition_differential.py \
 | `d27316b6` (**#1148**) | 88 | 81 | **81** | **0** | `{}` |
 | `662d9db8` (this branch, on `1a929c57`) | 88 | 81 | 81 | 0 | `{}` |
 
-`matched + diverged == boundaries_measured` on every line: `79 + 2 == 81`, `81 + 0 == 81`. The skip
+The boundary verdict partition closes on every line — and in its **four-term** form, because the
+two-term reading is exactly what C144 refuted and this PR is rebased onto C144:
+`matched + diverged + engine_errors + skip:strict_all_branches_lossy == boundaries_measured`, i.e.
+`79 + 2 + 0 + 0 == 81` at the two pre-fix commits and `81 + 0 + 0 + 0 == 81` at the two post-fix
+ones. A previous revision of this line asserted the two-term form. It gave the right answers *only*
+because both other terms happen to be 0 in this game, which is the coincidence C144 exists to stop
+anyone relying on. The skip
 histogram is **byte-identical** across all four — `skip:single_seat_boundary` 8,
 `skip:unmappable_choice:struggle_not_submittable` 6, `world_prestate_mismatch:p1_status` 1 — as is
 the gating histogram. So the two boundaries were not converted into skips; they became `matched`.
@@ -204,18 +210,23 @@ Switch SideTwo: P2 -> P3
 SetLastUsedMove SideTwo: Move(M2) -> Switch(P3)
 Damage SideTwo: 36            <- Spikes on the switch-in
 DecrementPP SideOne: M0 1     <- M0 is Body Slam, not Protect
-Damage SideTwo: 65            <- exactly Delcatty's remaining HP
+Damage SideTwo: 65            <- lethal: Delcatty was at 65 after Spikes
 ToggleSideTwoForceSwitch      <- it fainted
 ```
 
 and there the instruction list **ends**. There is no residual phase at all.
 
 That is the whole row. The Encored lock is a *forced* choice, so the phantom Body Slam is not a
-mispriced alternative — it is the only thing the engine can do. Its damage lands as
-`capped_lethal`, equal to the target's remaining HP (65 of 65 at step 71; 2 of 2 at step 72, where
-the switch-in is a 2-HP Typhlosion). The faint arms `end_of_turn_is_deferred`, which defers the
-entire residual block to the forced-replacement boundary, and **both** sides' Leftovers ticks
-disappear from a turn on which Showdown emitted them.
+mispriced alternative — it is the only thing the engine can do. The load-bearing fact is simply that
+it was **lethal**: the switch-in had taken Spikes down to 65 at step 71 and was a 2-HP Typhlosion at
+step 72, and Body Slam off Delcatty's copied stats kills from there. The faint arms
+`end_of_turn_is_deferred`, which defers the entire residual block to the forced-replacement boundary,
+and **both** sides' Leftovers ticks disappear from a turn on which Showdown emitted them.
+
+The component is labelled `capped_lethal`, and I am **not** offering "its magnitude equals the
+target's remaining HP" as corroboration, as an earlier revision did.
+`engine_transition_differential.py:551` *constructs* that component as `-remaining`, so **every**
+lethal capped hit reads that way by definition. It is true and it is evidence of nothing.
 
 Per-component, straight from the dump:
 
@@ -230,7 +241,11 @@ The recorded miss is `pct=100.00: p1 attributed components differ: observed_only
 16)] engine_only=[]`, which names p1 only. **That is the matcher's report order, not the extent of
 the loss.** `evaluate_boundary_strict` iterates slots `("p1", "p2")` and `break`s on the first
 failure, so p2's lost tick at step 71 was never compared. The dump shows it lost too. Anyone
-sizing this class from the miss string alone would undercount it by half.
+sizing this class from the miss string alone undercounts it — **by up to half, at boundaries where
+both sides tick.** Scoped deliberately, because the stronger form is false: Showdown emits 2 ticks at
+step 71 against 1 named, but only 1 at step 72 (Typhlosion holds no item), where the miss is
+therefore complete. Across the class as observed that is **3 lost against 2 named — a third, not a
+half.** Re-derived from `c145_settling_branch_dump.json`, not from the sentence it replaced.
 
 ### 4.3 One field, and the row becomes a component-identical match
 
@@ -290,16 +305,40 @@ consecutive-Protect stall ladder. **It is not**, and the distinction matters:
   ladder is the second conjunct and never ran.** p2 switched, a switch resolves before the move
   phase, so by the time Protect executes nothing is left to act, `willAct()` is false, and Protect
   fails on that clause alone. Consistent with the `[still]` tag on the `|move|` line.
-- The vendored engine has no `willAct` equivalent — `grep will_act|willAct` over
-  `src/gen3/generate_instructions.rs` returns nothing — so it renders the Protect as succeeding.
-  `side_conditions.protect += 1` (`:5428`) then fires, which is the part that is not free: a
-  successful Protect the real sim failed **climbs the ladder**, and the engine will price the *next*
-  Protect at 1/2 where Showdown prices it at 1.
+- ⚠ **RETRACTED, and this is the correction that matters.** A previous revision of this section said
+  the engine "renders the Protect as succeeding", that `side_conditions.protect += 1`
+  (`generate_instructions.rs:5428`) "then fires", and that the engine therefore prices the next
+  Protect at 1/2 against Showdown's 1. **All three are false, refuted by measurement on the recorded
+  state.** I reached them by reading line 5428 instead of reading the instruction stream I already
+  had in hand — and the effect was to *invent* an engine bug and point the next reader at it.
 
-Why this costs nothing at *these* boundaries: p1's move is Protect against a switch, so neither
-outcome moves any HP, the strict matcher compares damage components only, and both boundaries match
-at `d27316b6` and at `662d9db8`. The follow-on mispricing is a **next**-turn effect and I did not
-sweep for it.
+  Measured (`fdbf5937…` build, recorded `19100170/71` state, lock corrected to `move:3`,
+  `poke_engine.generate_instructions`). **The actual boundary, p1 `protect` / p2 switches:**
+
+  ```
+  Switch SideTwo: P2 -> P3 · SetLastUsedMove SideTwo · Damage SideTwo: 36
+  DecrementPP SideOne: M3 1 · Heal SideOne: 16
+  ChangeVolatileStatusDuration SideOne ENCORE: 1 · Heal SideTwo: 18
+  ```
+
+  **No `ApplyVolatileStatus PROTECT`. No `ChangeSideCondition Protect`.** Single-variable control,
+  only p2's choice changed from a switch to a move:
+
+  ```
+  DecrementPP SideOne: M3 1 · ApplyVolatileStatus SideOne: PROTECT · …
+  RemoveVolatileStatus SideOne: PROTECT · ChangeSideCondition SideOne Protect: 1
+  ```
+
+  So the increment at `:5428` is reached only when the PROTECT volatile was applied, and on this
+  shape it is not. **The ladder stays at 0, exactly as in Showdown, and there is no follow-on
+  mispricing.** Behaviourally the engine *does* have the `willAct` equivalent here; the token search
+  found no `willAct` because the gate is expressed differently, not because the behaviour is absent.
+
+**What the difference actually is, then:** the engine omits Showdown's `|-fail|p1a: Ditto` on a
+Protect the opponent's switch pre-empted. No volatile is applied, the stall counter does not move,
+and no HP changes on either side — so on this shape it is a **protocol-render difference and nothing
+more**, and both boundaries match at `d27316b6` and at `662d9db8`. I have not measured whether any
+shape exists where it is more than that.
 
 **Is the `willAct` clause already recorded?** My first search was
 `protect_fail|protectfail|consecutive` over five named directories, and that was too narrow — it
@@ -317,13 +356,34 @@ All four are about the **stall ladder**, which is the half that is *not* the cau
 `docs/observation_v3_spec.md:76-96` derives the consecutive-successful-stall streak in detail and
 notes `stallingMove: true` in passing; `silent_noop_sweep_plan.md:246` lists "consecutive-use
 mechanics" as scope; `showdown.py` reconstructs the counter; the patch caps the ladder at 1/8. **None
-of the four records the `!!this.queue.willAct()` conjunct** — the clause that actually fired. That is
-the widest glob I can run and its exact result, rather than a claim about the repository from a
-directory-scoped search.
+of the four records the `!!this.queue.willAct()` conjunct.**
 
-Deliberately **not** filed as a ledger row: that needs a pool-reachability check under the C125/C138
-standing rule, which I have not run. Filed here as an observation with its mechanism identified, for
-whoever takes it.
+That glob was still the wrong shape, though, and a second widening is what a reader actually wants.
+The repo *does* have prior art on "a Showdown **queue predicate** the engine lacks" — it is filed under
+the sibling `willMove`, which `willact|will_act` cannot match:
+
+```
+git grep -n "queue\.will" origin/main -- .        # 5 tracked files
+  docs/engine_fidelity_findings.md:472
+  rust/pokezero-search/tests/gen3_encore_fidelity.rs:21
+  scripts/gen3_switch_differential.py:1712
+  third_party/poke-engine-gen3-encore-duration.patch:102
+  third_party/poke-engine-gen3-patches.txt:254
+```
+
+All five are the Encore-duration compensation for `if (!this.queue.willMove(target)) duration++` — a
+different predicate, and an *implemented* one. So the negative survives: `willAct` appears nowhere.
+But `queue\.will` is the search term for this family, and stating only the narrower one would have
+left a reader believing the repo had never met a queue predicate before.
+
+**Why this is not filed as a §3 ledger row, corrected.** I first wrote that it "needs a
+pool-reachability check", which is true but understates it: the ledger's own C125 standing rule
+(`reports/c138_known_gaps_ledger.md:560`) *forbids* a §3 entry without a recorded reachability check,
+so filing would have broken the rule rather than merely run ahead of it. Its correct home is §7's
+undetermined list — not C125-gated, and exactly where "observed, mechanism known, incidence
+unmeasured" belongs. It is filed there by this PR, which matters because this PR also *removes* an
+item from §7 (H11's) and a §7 that only ever shrinks is a ledger of blind spots losing its blind
+spots by attrition.
 
 ---
 
@@ -494,14 +554,25 @@ exactness pin is worth anything under. Noted in the file and on the PR.
   §1 (`:49`) and §8 (`:586`) — and item 1 keeps its number, so no reference breaks.
 - The **UNKNOWN roster in §1** drops from four rows to three: H8, H12 and H19. H11 is no longer
   UNKNOWN.
+- **§7 gains an item as well as losing one** — the incidence of the missing Protect `|-fail|` line
+  (§4.5), as new item 7, with its own settling measurement and the note that C125 (§8) is why it is
+  not a §3 row. Recorded as a §7 entry precisely because this PR removes one: a list of blind spots
+  that only ever shrinks is losing them by attrition rather than by resolution. Net §7 count is
+  unchanged at nine.
 
 ## 7. What this does not claim
 
 - It does not re-derive the 200-game holdout censuses. It reads the two that `main` already ships
   and re-derives, independently, the `dc6e1e19` engine fingerprint they carry.
 - It does not measure `27609063`, and says why that is sound rather than a gap (§3).
-- It does not settle the Protect stall-counter observation of §4.5, and does not assert that
-  observation is unrecorded — only that a named grep over five named directories did not find it.
+- On §4.5: it **does** now settle what the difference is (a missing `|-fail|` line, with no volatile
+  applied and the stall counter measured at 0 on both the boundary and its single-variable control),
+  having previously and wrongly claimed a follow-on mispricing. What it does **not** measure is the
+  *incidence* — whether any shape exists where the omission costs more than a protocol line — which is
+  why the item goes to the ledger's §7 rather than §3. The unrecorded-ness of `willAct` is asserted
+  from `git grep … origin/main -- .` over all tracked files, twice widened (once for
+  `willact|will_act|protect_fail|protectfail|stallingmove`, once for `queue\.will`), not from a
+  directory list.
 - It says nothing about the four other rows of the C116 item 12 set. Row 4 is the subject; rows
   1–3 and 5 are elsewhere.
 - No sweep at or above `19_200_000` was run. The final holdout is untouched by this report.
