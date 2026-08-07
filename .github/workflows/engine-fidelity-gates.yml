@@ -67,6 +67,15 @@ jobs:
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
             tests/test_crit_kill_split_patch.py
+            # C138's enumeration oracle: the fixtures and the shipping-engine
+            # comparison, the module that builds both, and the PINNED enumerated
+            # truth. All three are listed. The artifact especially: a PR whose only
+            # change is regenerating it is exactly the shape its own README warns
+            # against ("NEVER regenerate it from the shipping build to make a test
+            # pass"), and without this entry that PR would skip the gate.
+            tests/test_collapsed_arm_mass_oracle.py
+            scripts/collapsed_arm_mass_oracle.py
+            tests/data/collapsed_arm_mass_oracle.json
             tests/test_drag_limit_is_a_last_resort.py
             # Imported by the differential (engine_transition_differential.py:105).
             scripts/fidelity_gate_events.py
@@ -224,6 +233,26 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/massgate.log; then
             echo "::error::the mass gate SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # C138. The mass gate above compares ONE scalar -- total KO mass -- against a
+      # reconstruction that has no notion of a secondary, which is precisely the
+      # axis cause A8 lives on. This compares the full outcome-mass functional,
+      # mass per (defender faints?, defender's end status), against ENUMERATED
+      # truth from the roll-enumeration build, cross-checked against an independent
+      # Python enumeration so a wrong oracle cannot bless a wrong recipe.
+      - name: Collapsed-arm mass oracle
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_collapsed_arm_mass_oracle -v 2>&1 \
+            | tee /tmp/armoracle.log
+          if ! grep -qE 'Ran 7 tests' /tmp/armoracle.log; then
+            echo "::error::expected 7 oracle tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/armoracle.log; then
+            echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
             exit 1
           fi
 

@@ -893,6 +893,110 @@ def probe_case_a_three_way() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# The CRIT-STRADDLE residual sub-split (c133 §3, dev row 19000074/27).
+#
+# When the crit fan straddles the hit-KO threshold while the non-crit fan does
+# not, Case B split the crit mass into kill / non-kill and never consulted the
+# residual threshold. The residual sub-split therefore existed at Case A and at
+# the crit fan that CANNOT kill, and was missing from exactly this site.
+#
+# Seed 19000074 step 27: the priced crit fan is
+# [214,216,219,221,224,226,229,231,234,236,239,241,244,246,249,252] against 244 HP
+# with a sandstorm threshold of 229. Showdown rolled 241 -- roll 96, a member of
+# the engine's own fan -- while the engine emitted arms only at 244 (the HP) and
+# 227 (the mean of the twelve non-KO rolls, not a fan member at all).
+#
+# Fixture: Fearow 230/244 in sand, Rock Slide, non-crit fan [103, 122], crit fan
+# [207, 244].
+#   122 < 230                 -> Case B (the non-crit fan cannot kill)
+#   207 < 230 <= 244          -> the CRIT fan straddles the hit-KO threshold
+#   sand -15                  -> h* = 16, residual threshold 215
+#   207 < 215 < 230           -> the surviving crit sub-fan straddles it too
+#   215 > 122                 -> the non-crit fan cannot reach it, so this
+#                                fixture isolates the crit site
+# So four move damages must appear: 112 (the collapsed non-crit representative),
+# 210 (crit, survives both), 215 (crit, residual-lethal) and 230 (crit, hit KO).
+# Three -- with 217 in place of 210/215 -- is the collapsed crit sub-fan.
+# ---------------------------------------------------------------------------
+def probe_crit_straddle_residual_split() -> None:
+    def move_damages(weather):
+        def build(move):
+            attacker = pe.Pokemon(
+                id="gligar", level=81,
+                types=("ground", "flying"), base_types=("ground", "flying"),
+                hp=205, maxhp=205, ability="none", item="none",
+                attack=170, defense=160, special_attack=120,
+                special_defense=130, speed=250,
+                moves=[pe.Move(id=move, pp=16)],
+            )
+            defender = pe.Pokemon(
+                id="fearow", level=81,
+                types=("normal", "flying"), base_types=("normal", "flying"),
+                hp=230, maxhp=244, ability="none", item="none",
+                attack=170, defense=145, special_attack=110,
+                special_defense=125, speed=100, status="none",
+                moves=[pe.Move(id="splash", pp=16)],
+            )
+            return pe.State(
+                side_one=pe.Side(active_index="0", pokemon=[attacker] + [_dummy()] * 5),
+                side_two=pe.Side(active_index="0", pokemon=[defender] + [_dummy()] * 5),
+                weather=weather, terrain="none", trick_room=False,
+            )
+
+        # The residual tick, measured from a turn where neither side attacks.
+        # Needed to identify the MISS arm: with no Leftovers there is no heal to
+        # break on, so the miss arm's first `Damage SideTwo` IS the sand tick and
+        # would otherwise read as a fourth roll. Rock Slide also flinches 30 %,
+        # so a branch count is unusable here too.
+        quiet = pe.generate_instructions(build("splash"), "splash", "splash")[0]
+        tick = [
+            int(str(i).split(": ")[1])
+            for i in quiet.instruction_list
+            if str(i).startswith("Damage SideTwo")
+        ]
+        tick = tick[0] if tick else None
+
+        seen = set()
+        for b in pe.generate_instructions(build("rockslide"), "rockslide", "splash"):
+            hits = [
+                int(str(i).split(": ")[1])
+                for i in b.instruction_list
+                if str(i).startswith("Damage SideTwo")
+            ]
+            if not hits:
+                continue
+            if len(hits) == 1 and hits[0] == tick:
+                continue  # the miss arm: the residual tick and nothing else
+            seen.add(hits[0])
+        return sorted(seen)
+
+    partitioned = move_damages("sand")
+    _report(
+        "crit-straddle-partitions-three-ways",
+        partitioned == [112, 210, 215, 230],
+        f"the surviving crit sub-fan straddles the residual threshold 215, so the "
+        f"crit-straddle site must emit survives-both (210), residual-lethal (215) "
+        f"and hit-lethal (230) alongside the collapsed non-crit 112: got "
+        f"{partitioned}. A 217 in place of 210 and 215 is the mean of the ten "
+        f"non-KO crit rolls -- the sub-fan collapsed without consulting the "
+        f"residual threshold.",
+    )
+
+    # Control: the same fixture with no weather. The crit-KILL split must still
+    # fire (that is C27, not this patch), so exactly three damages and no residual
+    # arm. This is what isolates the residual sub-split as the variable rather
+    # than the crit straddle itself.
+    control = move_damages("none")
+    _report(
+        "crit-straddle-control-has-no-residual-arm",
+        control == [112, 217, 230],
+        f"with no residual pending the crit straddle must split only kill / "
+        f"non-kill: expected [112, 217, 230], got {control}. If this equals the "
+        f"sand case the fixture is not measuring the residual sub-split at all.",
+    )
+
+
 def _print_build_identity() -> None:
     stamp = Path(sys.prefix) / ".engine-build-fingerprint.json"
     if stamp.exists():
@@ -918,6 +1022,7 @@ def main() -> int:
     probe_pending_read_sees_this_calls_mutations()
     probe_residual_ordered_walk()
     probe_case_a_three_way()
+    probe_crit_straddle_residual_split()
     if FAILURES:
         print(f"\n{len(FAILURES)} probe(s) FAILED — the installed wheel does "
               "not behave like the 33-patch engine. Rebuild before measuring.")
