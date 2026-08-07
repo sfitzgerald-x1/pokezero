@@ -217,19 +217,40 @@ Together: `[45, 50]`. Intersected with the 14 achievable mirrors that leaves exa
 Measured directly against the shipped function — `m=44,43,41` rejected, `m=45,46,47` accepted — so the
 count of two is the direction rule's, not a window's.
 
-This tolerance belongs to the roll-inherited-cap family the ledger tracks as `I3_roll_inherited`
-(**H19**, and still unadjudicated); its bound was derived in the code comment quoted above, not in H8.
-*(A review named this "B.4 / I3"; `B.4` appears nowhere in this repository's `reports/`, so I cite only
-the label I could open.)* **H8 is a different mechanism** — the `pre_legal`-absent proportional
-fallback — and its own cell says "UNKNOWN how much" matched mass rides on it while prescribing a
-settling measurement. Attaching these cells to it would have inflated its reach in the durable ledger.
+**This tolerance is not an implementation detail — it is an adjudicated design decision**, recorded in
+`docs/engine_divergence_ledger_20260728.md` **§B.4** (`:1005`, where `magnitude:heal` was filed
+UNRESOLVED with two hypotheses) and **§C.2** (`:1278`, *"The move-heal class (B.4) was a matcher
+defect — verdict"*), which settles it: *"a heal that **caps at max HP** restores `maxhp − hp`, so its
+magnitude is set by whatever damage landed earlier in the same turn — it inherits that hit's roll"*,
+and the fix is *"only the magnitude is relaxed, and only in the capped direction (clipping can only
+reduce, so the test is an **inequality, not a window**)"*. C.2's own worked case is seed 1310001 step
+72 — Showdown healed **251** from 2 HP, the engine **247** from 6 HP, same mechanic, different Surf
+roll — which is the same case the code comment I quoted above names as "the motivating Rest case, 251
+vs 247". Same lineage, and C.2 records the class as *gone from the residue*.
+
+So C.2's "inequality, not a window" is the direct, adjudicated refutation of the H8 attribution I had
+written: the admitting rule was **designed** not to be a window. The family label
+`I3_roll_inherited` (**H19**) is where the ledger still tracks the *unadjudicated remainder* of this
+shape, and `reports/c101_i3_painsplit_tolerance_derivation.json:43` ties the two together, citing
+"ledger B.4" beside the same code site; `reports/c9_decomposition.json` and
+`reports/c12_decomposition.json` each cite the "B.4/C.2 family" three times. Calling the rule merely
+"unadjudicated" understated how settled it is, and that is corrected here.
+
+**H8 is a different mechanism** — the `pre_legal`-absent proportional fallback — and its own cell says
+"UNKNOWN how much" matched mass rides on it while prescribing a settling measurement. Attaching these
+cells to it would have inflated its reach in the durable ledger.
 
 > **This is the same failure mode as revision 1's blocker, reintroduced in the very section that
-> withdrew it.** Revision 1 was blocked for measuring the wrong path behind a claim that narrows a
-> merged bound; revision 2 named the wrong rule behind the same claim, in the paragraph that reported
-> the correction. Both times the *number* was right and the *mechanism* was unverified, and both times
-> the fix was to open the function rather than reason about which window "must" apply. Recording it
-> here because a report that narrows other people's bounds has to be held to the standard it invokes.
+> withdrew it — and then a third time, in the sentence that congratulated itself for avoiding it.**
+> Revision 1 was blocked for measuring the wrong path behind a claim that narrows a merged bound;
+> revision 2 named the wrong rule behind the same claim, in the paragraph reporting that correction;
+> revision 3 declined to cite `B.4` on the ground that it "appears nowhere in this repository's
+> `reports/`" — a true statement about the directory I searched and a false one about the repository,
+> since B.4 and its verdict C.2 live in `docs/`. **Refusing to cite an unopened label was the right
+> instinct; scoping the search to one directory and then reporting the result as a property of the repo
+> was the same error in a new costume** — a negative asserted more broadly than it was measured, in the
+> section about not asserting what you have not opened. Every one of the three had the right number and
+> the wrong mechanism, and every one was fixed by opening the file rather than reasoning about it.
 
 **The saturation claim is now a census, not a sample.** The matrix was re-run over the **whole
 14-roll band plus the off-fan shipping representative — 15 rows × 14 columns, 210 cells** — and
