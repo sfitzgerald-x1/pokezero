@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -2849,6 +2849,73 @@
+@@ -2849,6 +2849,79 @@
      }
  
      if choice.category == MoveCategory::Switch {
@@ -52,6 +52,12 @@
 +        // `pursuitnokocontrol` in scripts/gen3_switch_differential.py; engine side
 +        // pinned by tests/gen3_pursuit_switch_continues.rs and
 +        // tests/gen3_faint_cancels_opposing_switch.rs.
++        // The `first_move` gate is INERT under today's call graph: for this arm
++        // `incoming_instructions` is `StateInstructions::default()` exactly when
++        // `first_move` is true, so nothing can have newly fainted. It is retained
++        // as documentation of when a cancellation is even conceivable, and so that
++        // this fails safe if a refactor ever gives the first action a preamble.
++        // Do not delete it as redundant, and do not trust it to be doing work.
 +        if !choice.first_move {
 +            let side_one_down_before = state.side_one.get_active_immutable().hp <= 0;
 +            let side_two_down_before = state.side_two.get_active_immutable().hp <= 0;

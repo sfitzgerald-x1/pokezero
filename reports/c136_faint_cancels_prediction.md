@@ -1,7 +1,7 @@
 # Gen-3 faint cancels a queued switch — attempt 3, registered before any sweep
 
-Registered 2026-08-07, before the v3 patch exists. v1 and v2 both failed their falsifiers
-(`switch_cancel_prediction.md`, `switch_cancel_prediction_v2.md`). The difference this
+Registered 2026-08-06, before the v3 patch existed. v1 and v2 both failed their falsifiers
+(both external to this repository, and summarised below rather than cited). The difference this
 time is that the rule is no longer inferred from reading `battle.ts` — it is measured, on
 both sides, by fixtures that are merged or in review.
 
@@ -22,6 +22,32 @@ These are not in tension. They are one rule and one exception:
 
 **v1 implemented the rule and broke the exception's neighbours; v2 implemented something
 closer to the exception and broke the rule.** Neither had both measured.
+
+## WHAT SHIPPED DIFFERS FROM WHAT WAS REGISTERED — read this first
+
+**Amended 2026-08-06, before measuring, after review of the fixture PR.** The predicate
+registered below is **not** the predicate that shipped, and the registered one is
+**wrong**. This section is kept verbatim as history, because the value of a
+pre-registration is that it is not rewritten after the fact — but the tracked patch
+manifest cites this document as the description of the patch, so the difference has to be
+stated at the top rather than left for a reader to discover.
+
+| | predicate |
+|---|---|
+| registered below | `!choice.first_move && !force_switch` read **before** the batch, then *the opponent* newly fainted |
+| **shipped** | `!choice.first_move`, then **someone** newly fainted **and this side is still standing**, both read **after** the batch |
+
+The registered version fails on a **double KO**. Real gen3 line, measured: Pursuit KOs
+the switcher while the switcher's Rough Skin kills the hunter on the same hit. Both
+actives faint, `getAllActive()` is empty, and Showdown cancels nothing — the switch still
+happens. A pre-batch `force_switch` reading sees a side that does not *yet* owe a
+replacement, cancels, and drops the switch.
+
+That difference is invisible to every other gate: the registered predicate passes all the
+other pins **and both 200-game sweeps**, because the shape occurs in neither window. It is
+caught only by `a_double_ko_cancels_nothing_because_nobody_is_left_standing` in
+`rust/pokezero-search/tests/gen3_faint_cancels_opposing_switch.rs`, which exists because
+review found this gap. **Do not "restore" the code to match the section below.**
 
 ## The v3 guard
 
@@ -57,7 +83,7 @@ Why each clause, tied to a measured failure rather than a theory:
 
 `main` `6b6fb368`, fingerprint-verified (`67 patches, 07a3290d11ca14ec`). Identical to the
 `54e06fe8` measurement, so main's advance moved nothing. Artifacts:
-`rust-fidelity-pass-2/artifacts/baseline_6b6fb368_{dev,holdout}.json`.
+`reports/artifacts/c136_faintcancels_main_{dev,holdout}_sweep.json`.
 
 | window | measured | full_round | diverged |
 |---|---|---|---|

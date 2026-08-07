@@ -22,10 +22,12 @@
 //! implemented one direction each and were withdrawn on their falsifiers: one cancelled
 //! forced replacements (78 rows opened to close 1), the other cancelled Pursuit.
 
+use poke_engine::choices::Choices;
+use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::state::MoveChoice;
 use poke_engine::instruction::StateInstructions;
-use poke_engine::state::{PokemonIndex, State};
+use poke_engine::state::{PokemonIndex, PokemonMoveIndex, State};
 
 fn generate(
     state: &mut State,
@@ -155,5 +157,58 @@ fn a_forced_replacement_is_never_cancelled_even_when_the_other_one_dies_on_entry
         ],
         "side one's forced replacement must still happen. Dropping \
          `Switch SideOne: P0 -> P1` here is the v1 defect that opened 78 rows to close 1."
+    );
+}
+
+/// THE DOUBLE-KO PIN, and the only shape that separates the shipped guard from a
+/// plausible wrong one.
+///
+/// Pursuit KOs the switcher, and the switcher's Rough Skin kills the hunter on the same
+/// hit. BOTH actives faint, so `getAllActive()` is empty and Showdown cancels nothing —
+/// the switch still happens. Verified in real gen3 Showdown, which emits the Pursuit
+/// hint, both faints, and then `|switch|p1a: Snorlax`.
+///
+/// This is why the guard's still-standing test is read AFTER the faint batch. A
+/// pre-batch `force_switch` reading — which is what an earlier draft of the registered
+/// prediction specified — sees a side that does not YET owe a replacement, cancels, and
+/// drops the switch. Substituting that predicate yields
+/// `[Damage SideOne: 1, Damage SideTwo: 5, ToggleSideOneForceSwitch,
+///   ToggleSideTwoForceSwitch]`: no switch.
+///
+/// Review established that predicate passes ALL the other pins and BOTH 200-game sweeps,
+/// because this shape occurs in neither window. Without this test the repository cannot
+/// tell the two apart, and a maintainer "restoring" the code to match the prediction doc
+/// would get a green board and a wrong guard. That is exactly how three previous
+/// versions of this mechanism shipped or nearly shipped.
+#[test]
+fn a_double_ko_cancels_nothing_because_nobody_is_left_standing() {
+    let mut state = State::default();
+
+    let hunter = &mut state.side_two.pokemon[PokemonIndex::P0];
+    hunter.replace_move(PokemonMoveIndex::M0, Choices::PURSUIT);
+    hunter.maxhp = 80;
+    hunter.hp = 5; // Rough Skin deals 80 / 16 = 5, exactly lethal
+
+    let outgoing = &mut state.side_one.pokemon[PokemonIndex::P0];
+    outgoing.maxhp = 300;
+    outgoing.hp = 1; // Pursuit deals 1, exactly lethal
+    outgoing.ability = Abilities::ROUGHSKIN;
+
+    assert_eq!(
+        only_branch(generate(
+            &mut state,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+        )),
+        vec![
+            "Damage SideOne: 1".to_string(),
+            "Damage SideTwo: 5".to_string(),
+            "ChangeAbility SideOne: -50".to_string(),
+            "Switch SideOne: P0 -> P1".to_string(),
+            "ToggleSideTwoForceSwitch".to_string(),
+        ],
+        "with both actives fainted nothing is still standing, so getAllActive() is empty \
+         and Showdown cancels nothing. Dropping `Switch SideOne: P0 -> P1` here is what a \
+         pre-batch force_switch reading does, and no other test or sweep catches it."
     );
 }
