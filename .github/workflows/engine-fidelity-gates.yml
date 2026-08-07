@@ -84,7 +84,7 @@ jobs:
             # workflow (via the .patch and patches.txt globs) but the suite holding its
             # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
-            # Pins `Ran 7 tests` and a no-skip guard on the pyo3 binding boundary.
+            # Pins `Ran 6 tests` and a no-skip guard on the pyo3 binding boundary.
             # Omitting it is self-defeating: a PR that adds a skipIf or drops the
             # nonzero assertion touches only this file, so the gate that would
             # catch it never runs. Found by review of #1108.
