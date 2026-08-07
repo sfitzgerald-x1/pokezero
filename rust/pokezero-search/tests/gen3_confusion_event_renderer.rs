@@ -996,8 +996,14 @@ fn the_engine_marks_which_immobilizer_aborted_the_attract_branch() {
 
 /// ...and the renderer now NAMES it instead of refusing the world.
 ///
-/// This is the coverage half of the fix. `attract_empty_tail_ambiguous` was measured at
-/// ~46% of the remaining search-fallback residue, and every branch in it was thrown away.
+/// This is the coverage half of the fix: every branch in `attract_empty_tail_ambiguous` was
+/// thrown away. On the validation holdout (seeds 19,100,000-19,100,199, 200 games, 15,579
+/// measured boundaries, engine fingerprint 5fa147ffa325c887) that class was ALL THREE of the
+/// three `strict:lossy_render` refusals -- artifact
+/// `reports/artifacts/c142_rumpfix_holdout_sweep.json` -- and the dev window
+/// 19,000,000-19,000,199 had none. The census, and the withdrawal of the unsourced "~46% of
+/// the remaining search-fallback residue" that stood in this sentence through two revisions,
+/// are in `third_party/poke-engine-gen3-patches.txt` under the marker patch's entry.
 ///
 /// Mutants this kills: deleting the renderer arm (no `|cant|` line); deleting the engine
 /// push (the branch has no marker, so `attract_marked_branch` panics); rendering a `|move|`
@@ -1444,6 +1450,161 @@ fn no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more() {
             }
         }
     }
+}
+
+/// THE BRANCH SET CHANGES, and this is the pin for the part that changes.
+///
+/// "A pure marker, so it cannot move the leaf distribution" was too strong, and it hid the
+/// mechanism. `combine_duplicate_instructions` merges branches with EQUAL instruction lists,
+/// and before the markers every empty delta was equal to every other empty delta -- so the
+/// Attract-immobilized branch, the fully-paralyzed branch, and an accuracy miss with no
+/// observable effect were ONE branch. That merge is exactly what destroyed the attribution.
+/// Marking them un-merges them, which is the fix rather than a side effect of it.
+///
+/// Measured base-vs-head by vendoring both stacks and dumping
+/// `generate_instructions_from_move_pair` on these two fixtures:
+///
+///   Tackle, attracted + paralyzed
+///     base `origin/main` e0a23e4e (71 patches)   2 branches:  62.5 `[]`  / 37.5 hit
+///     head (72 patches)                          3 branches:  50.0 Attract / 12.5 Paralysis
+///                                                             / 37.5 hit
+///   Thunder (70% accuracy), attracted + paralyzed  -- a THREE-way merge on base
+///     base                                       3 branches:  73.75 `[]` / 18.375 / 7.875
+///     head                                       5 branches:  50.0 Attract / 12.5 Paralysis
+///                                                             / 11.25 `[]` / 18.375 / 7.875
+///
+/// PRESERVED: total mass, every leaf STATE (each immobilized branch is still an empty delta,
+/// so it lands where it always landed), and the union of the merged mass -- 50.0 + 12.5 ==
+/// 62.5 and 50.0 + 12.5 + 11.25 == 73.75, the exact figures base carried in one branch.
+/// NOT PRESERVED: the branch count, or any per-branch mass inside the old merged branch.
+/// Both halves are asserted below, because a future edit could satisfy either alone.
+///
+/// The residual `[]` on the Thunder fixture is load-bearing in the other direction: a miss
+/// is genuinely not an immobilization, so it must stay unmarked. If a future edit marked
+/// everything with an empty delta, the count would still be 5 and the masses still right,
+/// which is why the empty branch is asserted to be empty rather than merely counted.
+///
+/// DISCRIMINATION, measured by construction rather than argued -- two independent mutations of
+/// the vendored `generate_instructions.rs`, each turning this test red:
+///   * E7, paralysis block moved ABOVE the Attract block: the Tackle split becomes 37.5/25.0.
+///   * E8, `fully_paralyzed_instruction.update_percentage(0.25)` -> `0.5`, order unchanged,
+///     tags unchanged: the split becomes 50.0/25.0 and the union stops being 62.5.
+/// NOT a sole killer, and recorded as such: `attract_and_paralysis_each_render_their_own_cant_tag`
+/// also reddens under both, and `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`
+/// under E8. What is unique to this test is the FACT it records -- `grep` for `62.5`, `73.75`
+/// or a branch-count assertion on an attracted/paralyzed fan finds nothing else anywhere in
+/// either suite, so the de-collapse itself was undocumented and unasserted before it.
+#[test]
+fn the_markers_de_collapse_what_combine_duplicate_instructions_had_merged() {
+    fn marked(
+        branches: &[StateInstructions],
+        reason: ImmobilizeReason,
+    ) -> Vec<&StateInstructions> {
+        branches
+            .iter()
+            .filter(|branch| {
+                branch.instruction_list.iter().any(|instruction| {
+                    matches!(instruction, Instruction::MoveImmobilized(marker)
+                        if marker.side_ref == SideReference::SideTwo
+                            && marker.reason == reason)
+                })
+            })
+            .collect()
+    }
+    fn only(branches: Vec<&StateInstructions>, what: &str) -> f32 {
+        assert_eq!(
+            branches.len(),
+            1,
+            "expected exactly one {what} branch, got {branches:?}"
+        );
+        branches[0].percentage
+    }
+    fn empty(branches: &[StateInstructions]) -> Vec<&StateInstructions> {
+        branches
+            .iter()
+            .filter(|branch| branch.instruction_list.is_empty())
+            .collect()
+    }
+    fn mass(branches: &[StateInstructions]) -> f32 {
+        branches.iter().map(|branch| branch.percentage).sum()
+    }
+
+    // TWO-WAY: the two immobilizers and nothing else with an empty delta.
+    let mut state = attracted_state(Choices::TACKLE, false);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    let branches = generate(&mut state);
+    assert_eq!(
+        branches.len(),
+        3,
+        "base merged the two immobilized empty deltas into ONE branch (2 total); both \
+         markers split them (3 total): {branches:?}"
+    );
+    let attract = only(marked(&branches, ImmobilizeReason::Attract), "Attract-marked");
+    let paralysis = only(
+        marked(&branches, ImmobilizeReason::Paralysis),
+        "Paralysis-marked",
+    );
+    assert!(
+        (attract - 50.0).abs() < 1e-3,
+        "Attract is rolled FIRST (onBeforeMove priority 2 vs paralysis 1), so it keeps the \
+         undivided 1/2 -- 37.5 here means paralysis was rolled before it: {branches:?}"
+    );
+    assert!(
+        (paralysis - 12.5).abs() < 1e-3,
+        "paralysis is rolled only on the half Attract let through, so 1/2 * 1/4 -- 25.0 here \
+         means it was rolled first: {branches:?}"
+    );
+    assert!(
+        (attract + paralysis - 62.5).abs() < 1e-3,
+        "the union must equal the single collapsed branch base carried: {branches:?}"
+    );
+    assert!(
+        empty(&branches).is_empty(),
+        "with only the two immobilizers live, every empty delta is marked: {branches:?}"
+    );
+    assert!(
+        (mass(&branches) - 100.0).abs() < 1e-3,
+        "de-collapsing must conserve mass: {branches:?}"
+    );
+
+    // THREE-WAY: Thunder is 70% accurate in gen3, so a miss is a third empty delta -- and it
+    // must stay UNMARKED, because a miss is not an immobilization.
+    let mut miss_state = attracted_state(Choices::THUNDER, false);
+    miss_state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    let miss_branches = generate(&mut miss_state);
+    assert_eq!(
+        miss_branches.len(),
+        5,
+        "base merged Attract, paralysis AND the miss into one 73.75% branch (3 total); the \
+         markers split the two immobilizers out and leave the miss (5 total): {miss_branches:?}"
+    );
+    let miss_attract = only(
+        marked(&miss_branches, ImmobilizeReason::Attract),
+        "Attract-marked",
+    );
+    let miss_paralysis = only(
+        marked(&miss_branches, ImmobilizeReason::Paralysis),
+        "Paralysis-marked",
+    );
+    let unmarked = empty(&miss_branches);
+    let miss = only(unmarked, "unmarked empty-delta (the miss)");
+    assert!(
+        (miss_attract - 50.0).abs() < 1e-3 && (miss_paralysis - 12.5).abs() < 1e-3,
+        "the immobilizer masses do not depend on the move's accuracy: {miss_branches:?}"
+    );
+    assert!(
+        (miss - 11.25).abs() < 1e-3,
+        "the miss is 1/2 * 3/4 * 3/10 and carries NO marker, because a miss is not an \
+         immobilization: {miss_branches:?}"
+    );
+    assert!(
+        (miss_attract + miss_paralysis + miss - 73.75).abs() < 1e-3,
+        "the union must equal the single collapsed branch base carried: {miss_branches:?}"
+    );
+    assert!(
+        (mass(&miss_branches) - 100.0).abs() < 1e-3,
+        "de-collapsing must conserve mass: {miss_branches:?}"
+    );
 }
 
 /// Each immobilizer renders its OWN `|cant|` tag, and the tags are not interchangeable.

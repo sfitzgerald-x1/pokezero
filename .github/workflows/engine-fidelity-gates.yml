@@ -399,6 +399,54 @@ jobs:
             }
           done
 
+      # The engine's --lib target: the `#[cfg(test)] mod`s inside
+      # third_party/poke-engine-src/src/. `--test test_gen3` above selects ONE
+      # integration target and compiles nothing under src/, so the FIVE unit tests
+      # there ran in no workflow at all -- `state.rs`'s
+      # `rest_sleep_pending_refund_tests` (four, added by #1105 alongside the step
+      # above) and `instruction.rs`'s `test_instruction_size`. That is the same defect
+      # the step above is named for, one cargo TARGET down instead of one crate down.
+      #
+      # Found by review of #1166. The three immobilizer-marker tests were MOVED out of
+      # `src/state.rs` into `tests/test_gen3.rs` so the step above would run them,
+      # which fixes those three and leaves the hole. This closes the hole.
+      # `test_instruction_size` is the one that matters most for that patch: it is the
+      # only assertion anywhere on `size_of::<Instruction>()`, and a new variant is
+      # exactly what moves it.
+      #
+      # PROVEN RED BY CONSTRUCTION, not by reading this file. The body below was
+      # extracted verbatim from this YAML and run against a live patched tree:
+      #   * unmutated -> exit 0 at 5/5.
+      #   * `rest_sleep_pending_refund_tests` deleted -> exit 1 (count 1). Caught ONLY
+      #     here: `--test test_gen3` stays 32/32 green and the crate suite stays green
+      #     above its floor, so before this step those four pins were deletable with
+      #     every gate green.
+      #   * one pin renamed, count still 5 -> exit 1 on the named-pin arm.
+      - name: Engine lib suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --lib 2>&1 \
+            | tee /tmp/gen3lib.log
+          if ! grep -qE '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+              /tmp/gen3lib.log; then
+            echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+          # And NAME them, for the reason the step above gives: a total can be
+          # restored by unrelated tests. Both arms measured red by construction.
+          for pin in \
+            instruction::test::test_instruction_size \
+            state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
+            state::rest_sleep_pending_refund_tests::refund_round_trips_without_a_pre_transform \
+            state::rest_sleep_pending_refund_tests::zero_refund_is_omitted_from_serialization \
+            state::rest_sleep_pending_refund_tests::a_pre_field_serialization_still_parses; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/gen3lib.log || {
+              echo "::error::engine lib pin did not run: $pin"
+              exit 1
+            }
+          done
+
       # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
       # #1105: adding a field to the engine's Pokemon broke the wheel build, and
       # nothing local caught it because `cargo test -p pokezero-search` never
@@ -754,8 +802,14 @@ jobs:
           # said 429, counted off a run that still had a scratch probe file in `tests/`. A
           # floor ABOVE the total fails CI on every PR, which is the one arithmetic error in
           # this block that would have been caught immediately -- unlike a floor below it.
-          if [ "${passed:-0}" -lt 428 ]; then
-            echo "::error::expected >= 428 crate tests, got ${passed:-0}"
+          # 428 -> 429 with the de-collapse pin added in review. MEASURED on a clean
+          # tree with no scratch probe in `tests/` -- the same mistake the note above
+          # records -- and cross-checked against the base commit: a separate
+          # `origin/main` e0a23e4e worktree with its own 71-patch vendor reports 423,
+          # and `comm` over the two test-NAME sets shows +6 with nothing removed, which
+          # a total alone cannot see.
+          if [ "${passed:-0}" -lt 429 ]; then
+            echo "::error::expected >= 429 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -775,6 +829,14 @@ jobs:
           # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
           # blocked. Deleting all ten and letting the total be restored by unrelated tests is
           # exactly the hole the floor cannot see.
+          #
+          # `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged` (added in
+          # review) is the ONLY test anywhere that records the branch-set change the markers
+          # actually make -- `grep` for `62.5`, `73.75` or a branch-count assertion on an
+          # attracted/paralyzed fan finds nothing else in either suite. It is not a sole
+          # killer and is not claimed as one: two mutations were measured against it, the
+          # paralysis/Attract ordering swap and full-paralysis 1/4 -> 1/2, and two other
+          # tests redden under those too.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -795,7 +857,8 @@ jobs:
                      a_paralyzed_attackers_cant_par_is_marked_not_inferred_from_an_empty_tail \
                      events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
                      events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
-                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted; do
+                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
+                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

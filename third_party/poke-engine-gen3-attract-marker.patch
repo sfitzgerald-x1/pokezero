@@ -1,6 +1,6 @@
 --- a/src/instruction.rs
 +++ b/src/instruction.rs
-@@ -105,6 +105,57 @@
+@@ -105,6 +105,61 @@
      ToggleSideOneForceSwitch,
      ToggleSideTwoForceSwitch,
      ToggleTerastallized(ToggleTerastallizedInstruction),
@@ -30,8 +30,12 @@
 +    /// this patch. `reject_attribution_unsafe` aborts the WHOLE WORLD, not the
 +    /// branch, so as long as the paralysis sibling of a marked Attract branch is
 +    /// still an anonymous empty delta, the renderer still refuses it and the world
-+    /// still falls back. Attract alone took the refusing branches from two to one
-+    /// and the fallback rate from N to N.
++    /// still falls back. Attract alone took the refusing branches on the dominant
++    /// sub-case from two to ONE -- 50.0% newly rendered, 12.5% still refusing -- and
++    /// one refusing branch aborts the world just as completely as two, so it moved
++    /// the fallback rate by NOTHING. (An earlier revision of this comment ended
++    /// "from N to N", an unfilled placeholder. The measured claim is the branch
++    /// count; no campaign-scale fallback rate is asserted here, before or after.)
 +    MoveImmobilized(MoveImmobilizedInstruction),
 +}
 +
@@ -90,14 +94,22 @@
      pub new_types: (PokemonType, PokemonType),
 --- a/src/state.rs
 +++ b/src/state.rs
-@@ -2141,6 +2141,15 @@
+@@ -2141,6 +2141,23 @@
              Instruction::ChangeTransformSnapshot(instruction) => {
                  self.set_transform_snapshot(&instruction.side_ref, instruction.taking);
              }
-+            // pokezero gen3 fidelity fix (Attract immobilization attribution):
++            // pokezero gen3 fidelity fix (move-time immobilizer attribution):
 +            // PURE MARKER, NO-OP BY DESIGN. It records why a branch has an empty
 +            // delta; writing any state here would make the branch stop being an
-+            // empty delta and change the leaf distribution the search prices.
++            // empty delta and move a LEAF STATE.
++            //
++            // Note the distinction the DE-COLLAPSE note in
++            // `gen3/generate_instructions.rs` draws, because it is easy to read
++            // that note as licence to relax this one. The markers deliberately
++            // change the branch SET -- an attracted+paralyzed attacker's single
++            // merged 62.5% branch becomes 50.0% + 12.5% -- and deliberately do NOT
++            // change any leaf state or the total mass. A state effect here breaks
++            // the second half, which nothing else guards.
 +            //
 +            // The arm is written out rather than folded into a catch-all because
 +            // this match has no catch-all -- which is the property that makes the
@@ -139,7 +151,7 @@
      //
      // Ordering: Showdown gen3 resolves Attract's onBeforeMove at priority 2
      // (data/moves.ts `attract` condition), which runs AFTER confusion (priority 3)
-@@ -3035,6 +3037,41 @@
+@@ -3035,6 +3037,77 @@
      {
          let mut immobilized_instruction = incoming_instructions.clone();
          immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
@@ -148,18 +160,54 @@
 +        // branch pushed a few lines below, because "the move did not happen" has
 +        // no state representation. The renderer therefore could not name which
 +        // immobilizer fired and refused the whole world
-+        // (`attract_empty_tail_ambiguous`, ~46% of the remaining search
-+        // fallback). This patch's predecessor conceded the defect in its own
-+        // comment: "both immobilized branches carry the same empty delta".
++        // (`attract_empty_tail_ambiguous`). This patch's predecessor conceded the
++        // defect in its own comment: "both immobilized branches carry the same
++        // empty delta".
 +        //
-+        // A LOSSY DOWNGRADE WAS MEASURED AND REJECTED, so do not replace this
-+        // with one. Paralysis does not dominate: over 3,344 era-63 attract
-+        // slug-occurrences, pure `paralyzed` was 1,284 (38.4%) and contaminated
-+        // joints 2,060 (61.6%), and the `|cant|` reason tag is load-bearing
-+        // downstream -- `src/pokezero/public_action_capture.py` keys public
-+        // actions as `cant:{reason}`, so `cant:Attract` and `cant:par` are
-+        // DIFFERENT action ids. Guessing one for the other is not a rounding
-+        // error, it is a different action.
++        // HOW BIG THAT REFUSED CLASS WAS, cited rather than asserted. On the
++        // validation holdout -- seeds 19,100,000-19,100,199, 200 games, 15,579
++        // measured boundaries, engine fingerprint 5fa147ffa325c887 -- it was ALL
++        // THREE of the three `strict:lossy_render` refusals, i.e. the entire
++        // lossy-render residue of that window and 0.019% of its boundaries; the
++        // dev window 19,000,000-19,000,199 (15,503 boundaries) had NONE.
++        // Artifact: `reports/artifacts/c142_rumpfix_holdout_sweep.json`, the only
++        // committed sweep that breaks the 3 down by marker; the count reproduces
++        // on all 30 holdout-window sweeps in the committed corpus, across 21
++        // engine fingerprints. Full census, and the WITHDRAWAL of the unsourced
++        // "~46% of the remaining search fallback" that stood here through two
++        // revisions, in `third_party/poke-engine-gen3-patches.txt`.
++        //
++        // DE-COLLAPSE, and it is the point rather than a side effect. Both
++        // immobilized branches were empty deltas, so
++        // `combine_duplicate_instructions` MERGED them -- with each other and with
++        // any same-shaped miss or no-op. Measured, 71-patch base vs 72-patch head,
++        // side two attracted + paralyzed: Tackle goes from 2 branches (62.5% empty
++        // + 37.5% hit) to 3 (50.0% Attract + 12.5% Paralysis + 37.5% hit); Thunder,
++        // whose 30% miss is a third empty delta, goes from 3 to 5 with the miss left
++        // deliberately UNMARKED. Total mass, leaf states and the union of the merged
++        // mass are preserved (50.0 + 12.5 == 62.5, + 11.25 == 73.75); the branch
++        // count and per-branch masses are not. The paralysis comment below records
++        // that while both branches were empty deltas their ORDER was invisible in
++        // the leaf distribution -- the reason the attract patch once called a
++        // misordering benign, before it turned out to corrupt the confusion counter.
++        // It is visible now: rolling paralysis first moves the split to 37.5/25.0,
++        // and `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged`
++        // goes red.
++        //
++        // A LOSSY DOWNGRADE TO `|cant|..|par|` IS REJECTED, so do not replace this
++        // with one -- and the rejection does NOT rest on a frequency claim. An
++        // earlier revision cited "era-63, 3,344 attract slug-occurrences, pure
++        // `paralyzed` 1,284 (38.4%), contaminated joints 2,060 (61.6%)"; no
++        // artifact in the repo carries those numbers and no era-63 artifact exists,
++        // so they are WITHDRAWN. What holds regardless of frequency:
++        // `src/pokezero/public_action_capture.py:74` keys public actions as
++        // `cant:{reason}`, so `cant:Attract` and `cant:par` are DIFFERENT action
++        // ids downstream -- guessing one for the other is not a rounding error, it
++        // is a different action -- and a wrong reason label can manufacture a false
++        // MATCH in the differential, which
++        // `reports/c56_excluded_branch_census.json` rules out as strictly worse
++        // than the refusal it would replace. Moot now that BOTH immobilizers carry
++        // a marker: there is nothing left to guess, so nothing to downgrade.
 +        //
 +        // Pushed AFTER the clone's percentage update and NOT applied to `state`:
 +        // the marker is a pure no-op (see `State::apply_one_instruction`), and

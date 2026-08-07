@@ -1416,33 +1416,137 @@ poke-engine-gen3-status-aware-residual-threshold.patch
 # sweeps: reports/c134_enumerate_rolls_oracle.md.
 poke-engine-gen3-enumerate-damage-rolls.patch
 
-# gen3 Attract IMMOBILIZATION ATTRIBUTION. Adds `Instruction::MoveImmobilized`
-# (+ `ImmobilizeReason`, apply/reverse both no-ops) and pushes it into the
-# Attract-immobilized branch that `poke-engine-gen3-attract.patch` created.
+# gen3 MOVE-TIME IMMOBILIZER ATTRIBUTION. Adds `Instruction::MoveImmobilized`
+# (+ `ImmobilizeReason`, apply/reverse both no-ops) and pushes it into BOTH of
+# gen3's move-time immobilizer branches -- the Attract-immobilized branch that
+# `poke-engine-gen3-attract.patch` created, and the fully-paralyzed branch.
 #
-# THE DEFECT IT CLOSES: that branch was `incoming_instructions.clone()` with an
-# EMPTY delta, so it was byte-identical to the fully-paralyzed branch pushed a
-# few lines below -- "the move did not happen" has no state representation. The
-# renderer therefore could not say WHICH immobilizer fired and refused the whole
-# world (`attract_empty_tail_ambiguous`, ~46% of the remaining search-fallback
-# residue). The attract patch conceded it in its own comment: "both immobilized
+# THE DEFECT IT CLOSES: both branches were `incoming_instructions.clone()` with an
+# EMPTY delta, so they were byte-identical to each other -- "the move did not
+# happen" has no state representation -- and `combine_duplicate_instructions`
+# MERGED them, along with any same-shaped miss or no-op. The renderer therefore
+# could not say WHICH immobilizer fired: it refused the attracted case
+# (`attract_empty_tail_ambiguous`) and guessed the paralyzed one from probability
+# mass. The attract patch conceded it in its own comment: "both immobilized
 # branches carry the same empty delta".
 #
-# A pure marker, so it cannot move the leaf distribution: apply and reverse are
-# both no-ops, and the branch keeps exactly its 1/2 mass. The alternative -- a
-# lossy downgrade to `|cant|..|par|` -- was MEASURED and rejected: paralysis does
-# not dominate (era-63, 3,344 attract slug-occurrences: pure `paralyzed` 38.4%,
-# contaminated joints 61.6%) and `src/pokezero/public_action_capture.py` keys
-# public actions as `cant:{reason}`, so `cant:Attract` and `cant:par` are
-# DIFFERENT action ids downstream.
+# HOW BIG THE REFUSED CLASS WAS -- the census, cited, because the code comments
+# point here rather than restate it.
+#
+#   * Validation holdout, seeds 19,100,000-19,100,199, 200 games, 15,579 measured
+#     boundaries, engine fingerprint 5fa147ffa325c887: `attract_empty_tail_ambiguous`
+#     accounted for ALL THREE of the three `strict:lossy_render` refusals. 100% of
+#     that window's lossy-render residue, 0.019% of its measured boundaries.
+#     `reports/artifacts/c142_rumpfix_holdout_sweep.json` is the ONLY committed
+#     sweep that breaks the 3 down by marker
+#     (`strict:lossy_render_marker:attract_empty_tail_ambiguous: 3`). Its
+#     `source_commit` does not resolve and its tree was dirty --
+#     `reports/c142_rump_branch_adjudication.md` discloses that and why the numbers
+#     still stand -- so the COUNT is taken from `c142_base_holdout_sweep.json`, same
+#     window and fingerprint, `source_tree: clean`, `source_commit ce962c6e` which
+#     resolves.
+#   * Dev window, seeds 19,000,000-19,000,199, 15,503 measured boundaries: NONE.
+#     The counter is absent entirely (`c142_{base,rumpfix}_dev_sweep.json`).
+#   * The 3 is a property of the window, not of one build. Over the widest glob
+#     available -- `reports/*.json` plus `reports/artifacts/*.json` selected on a
+#     top-level `boundaries_measured`, 79 files, the corpus
+#     `tests/test_boundary_verdict_partition.py` pins -- ALL 30 sweeps on the
+#     validation-holdout window report `strict:lossy_render` at exactly 3, across 21
+#     distinct engine fingerprints and 14 campaigns from c121 to c142, and ALL 29
+#     dev-window sweeps do not carry the counter at all.
+#   * It was also the LARGEST marker in the one census that ranked them:
+#     `reports/c56_excluded_branch_census.json` puts it at 123 of the 218 markers on
+#     excluded branches that would have matched (56.4%), against 39 / 29 / 27 for the
+#     other three, and names it as the one to take next. That census is era-56 and is
+#     NOT re-measured here.
+#   * NOT a claim about the spent final holdout at 19,200,060, where
+#     `c141_final_holdout_sweep.json` reports `strict:lossy_render` at 14 over 16,274
+#     boundaries and no per-marker split exists.
+#
+# WITHDRAWN: earlier revisions of this entry, of the patch's own comment and of a
+# crate test's doc comment said "~46% of the remaining search-fallback residue". No
+# artifact carries that figure and no measurement above yields it: 3/3 is 100%,
+# 3/15,579 is 0.019%, 123/218 is 56.4%, 90/366 is 24.6%. The glob, written into the
+# sentence: `git grep -l 46%` over the WHOLE tree returns SEVEN files -- three
+# unrelated `docs/checkpoint_trait_tracking_report*.html`, one report, and the three
+# carrying this withdrawal (this file, the patch, and
+# `gen3_confusion_event_renderer.rs`). Scoped to `reports/`, exactly ONE:
+# `reports/c58_residue_partition.json`, where 46% means something else entirely --
+# 157 of 341 rows "that no instrument fix can clear" -- and where the SAME FILE then
+# retracts even that ("does not survive ... by arithmetic rather than by the evidence
+# I cited"). That is the likeliest origin and it was never about this class. Recorded
+# rather than quietly deleted: the figure was about to be frozen into engine source,
+# where it would have outlived every report that could refute it. The commit that
+# introduced the paralysis marker stated the figure had been removed; it had been
+# removed from `events.rs` only, and survived in three other places.
+#
+# APPLY AND REVERSE ARE NO-OPS, so no mass moves and no leaf STATE moves. But the
+# markers DO change the branch SET, deliberately, and an earlier revision of this
+# entry denied it ("a pure marker, so it cannot move the leaf distribution"). The
+# merge is what destroyed the attribution, so un-merging it IS the fix. Measured
+# base-vs-head, side two attracted + paralyzed:
+#
+#   Tackle    base 2 branches (62.5 `[]` / 37.5 hit)
+#             head 3 branches (50.0 Attract / 12.5 Paralysis / 37.5 hit)
+#   Thunder   base 3 branches (73.75 `[]` / 18.375 / 7.875)
+#             head 5 branches (50.0 Attract / 12.5 Paralysis / 11.25 `[]` / 18.375
+#                              / 7.875)
+#
+# Total mass, leaf states and the union of the merged mass are all preserved
+# (50.0 + 12.5 == 62.5; + 11.25 == 73.75). The branch count and per-branch masses
+# are not. The residual `[]` on the Thunder fixture is the accuracy miss, which must
+# stay UNMARKED because a miss is not an immobilization. Pinned by
+# `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged`.
+#
+# A useful consequence: the paralysis comment in `generate_instructions.rs` records
+# that while both immobilized branches carried an empty delta the ORDER of the two
+# immobilizers was invisible in the leaf distribution -- the reason the attract patch
+# once called a misordering benign, before it turned out to corrupt the confusion
+# counter. It is visible now: rolling paralysis first moves the Tackle split to
+# 37.5/25.0 and the pin above goes red.
+#
+# THE LOSSY DOWNGRADE TO `|cant|..|par|` IS REJECTED, and the rejection does not
+# rest on a frequency claim. An earlier revision cited "era-63, 3,344 attract
+# slug-occurrences: pure `paralyzed` 38.4%, contaminated joints 61.6%". No artifact
+# in this repo carries those numbers, and there is no era-63 artifact to carry them:
+# `git grep -lE 'era[-_ ]63'` over the whole tree returns four files, two of them
+# this withdrawal and two of them forward-looking notes about the era that will
+# measure this fix, and `ls reports reports/artifacts` matches nothing era-63-shaped.
+# Era shard reports are cluster-PVC aggregates that are not committed, as
+# `src/pokezero/public_action_capture.py`'s own comment records of era 57.
+# WITHDRAWN. Two grounds that ARE sourceable, neither depending on how often
+# paralysis co-occurs:
+#
+#   * `src/pokezero/public_action_capture.py:74` keys public actions as
+#     `cant:{reason or 'unknown'}`, so `cant:Attract` and `cant:par` are DIFFERENT
+#     action ids downstream. Guessing one for the other is not a rounding error, it
+#     is a different action.
+#   * a wrong reason label can manufacture a false MATCH in the transition
+#     differential, and `reports/c56_excluded_branch_census.json`
+#     (`what_this_does_NOT_license`) rules that out as policy: "Admitting an
+#     ambiguous branch to the comparison could manufacture false MATCHES, which is
+#     worse than a false divergence because it hides a real difference." A downgrade
+#     is exactly that trade, and it is worse than the refusal it replaced.
+#
+# Moot in any case now that BOTH immobilizers are marked: there is nothing left to
+# downgrade, because there is nothing left to guess.
 #
 # LAST in the stack, and it must stay after `poke-engine-gen3-attract.patch`: it
 # rewrites that patch's push site, and the surrounding text has since been
 # changed by later patches (the OBLIVIOUS guard, the confusion-ladder rewrite
 # that moved paralysis below Attract). Authored against the fully-patched tree.
 #
-# Touches THREE files, not the four the `rest-sleep-pending-refund` template
-# touches: `poke-engine-py/src/lib.rs` needs NO change, because this adds no
+# Touches FOUR files -- `src/instruction.rs`, `src/state.rs`,
+# `src/gen3/generate_instructions.rs` and `tests/test_gen3.rs. Counted from the
+# patch's own `+++` headers rather than recalled, and the same count corrected an
+# earlier revision of this entry, which said THREE. The engine's unit-test modules
+# live in `src/`, which is the `--lib` target; the three marker tests sit in
+# `tests/test_gen3.rs` instead because that is the target CI runs.
+#
+# The comparison with the `rest-sleep-pending-refund` template is about WHICH files,
+# not how many: that patch touches three (`src/state.rs`, `src/instruction.rs`,
+# `poke-engine-py/src/lib.rs`) and the third is the one that matters here.
+# `poke-engine-py/src/lib.rs` needs NO change, because this adds no
 # `Pokemon`/`State` field for `PyPokemon` to construct. `PyInstruction` is an
 # opaque wrapper whose only method is a `{:?}` repr, so the new variant crosses
 # the binding with no arm to add (verified: the pyo3 crate compiles unchanged).
