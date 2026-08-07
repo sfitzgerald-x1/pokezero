@@ -1038,6 +1038,11 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         "scripts/c134_wrong_fan_control.py",
         # The measurement record.
         "reports/c134_enumerate_rolls_oracle.md",
+        # THE ORACLE'S FIRST REAL CONSUMER, landed by #1152. It regenerates
+        # tests/data/collapsed_arm_mass_oracle.json out-of-process against an
+        # enumerating build; the test that reads the pin never sets the flag,
+        # because the OnceLock makes one process one engine permanently.
+        "scripts/collapsed_arm_mass_oracle.py",
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:
