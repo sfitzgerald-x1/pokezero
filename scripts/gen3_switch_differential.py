@@ -492,8 +492,8 @@ def _level_one_victim():  # dies to anything, and not Ghost, so Explosion connec
                           moves=("Splash",), level=1)
 
 
-def _crunch_killer():  # KOs the frail lead with a single move, faulting only one side
-    return FixturePokemon(species="Houndoom", ability="Flash Fire", item="Leftovers",
+def _crunch_killer():  # KOs the frail lead with a single move, fainting only one side
+    return FixturePokemon(species="Houndoom", ability="Flash Fire", item="None",
                           moves=("Crunch", "Splash"))
 
 
@@ -1098,8 +1098,16 @@ def _spec(name):
                 # never compares it.
                 "p2_waits": not double,
             },
-            landmark=lambda L: _has(L, "|faint|p1a:"),
-            landmark_desc="the ply produced at least one faint")
+            # The landmark is the SHAPE the arms differ on -- one faint versus two --
+            # rather than a restatement of `p1_fainted`, which `expect` already covers.
+            landmark=lambda L: (
+                len([line for line in L if line.startswith("|faint|")]) == (2 if double else 1)
+            ),
+            landmark_desc=(
+                "both actives fainted on the same ply"
+                if double
+                else "exactly one active fainted"
+            ))
 
     if name in ("faintcancelsopposingswitch", "faintcancelsopposingswitchcontrol"):
         # C134 §4. The OTHER half of the rule the Pursuit pair pins, and the premise
