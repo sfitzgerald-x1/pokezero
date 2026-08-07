@@ -1,55 +1,59 @@
 #!/usr/bin/env python
 """WRONG-FAN CONTROL: does enumeration close those rows for its VALUES, or its COUNT?
 
-**As of today this control is INCONCLUSIVE, and it exits non-zero to say so.** The
-question it was built to answer is OPEN. Read the verdicts, not the intent.
+**ANSWER: neither. Acceptance does not read the branch's damage value at all.** A fan
+carrying no legal roll value earns acceptance on all four rows, and on two of them even
+when every value is 12x-106x away from any legal roll. The script still exits non-zero,
+because ``only_visible_wrong_fan_kept_every_closed_row_divergent`` is the property it was
+built to demonstrate and that property is FALSE.
 
-THE QUESTION. ``evaluate_boundary_strict`` accepts a boundary as soon as ANY rendered
-branch matches, and enumeration multiplies the branch count 8.5x-72.5x on the rows it
-closes. So "nothing opened, four rows closed" is consistent with a real fix AND with a
-lottery: more branches is more chances to match, whatever the branches say.
+THE QUESTION. ``evaluate_boundary_strict`` accepts as soon as ANY rendered branch matches,
+and enumeration multiplies the branch count 8.5x-72.5x on the rows it closes. So "nothing
+opened, four rows closed" is consistent with a real fix AND with a lottery.
 
-WHAT THIS SCRIPT MEASURES. Each row is adjudicated by the SAME matcher on the SAME
-recorded inputs, under several branch-set manipulations:
+THE ARMS. Each row is adjudicated by the SAME matcher on the SAME recorded inputs:
 
-  collapsed          the shipped cascade                    -- reproduces the artifact
-  enumerated         the oracle, untouched                  -- reproduces the closure
-  wrong_fan          branch set HELD FIXED, move-damage
-                     values remapped off the legal roll set
-  drop_only          drop only the branches whose amount is
-                     hidden by a faint; values left LEGAL
-  drop_only_legacy   drop the set a SUPERSEDED version of
-                     this control dropped; values left LEGAL
-  only_lethal        keep only hidden-amount branches
-  only_visible       keep only visible-amount branches
+  collapsed                    the shipped cascade            -- reproduces the artifact
+  enumerated                   the oracle, untouched          -- reproduces the closure
+  wrong_fan                    whole fan, set HELD FIXED,
+                               values remapped off the legal
+                               roll set
+  drop_only                    drop only hidden-amount
+                               branches; values left LEGAL
+  drop_only_legacy             drop the set a SUPERSEDED
+                               version dropped; values LEGAL
+  only_lethal                  keep only hidden-amount branches
+  only_visible                 keep only visible-amount branches
+  only_visible_wrong_fan       only_visible, then remap every
+                               value off the legal set
+  only_visible_wrong_fan_far   the same, pushed to the far end
+                               of each branch's feasible window
 
-WHY IT IS INCONCLUSIVE, measured rather than argued.
+WHY only_visible IS THE WELL-POSED SUBSET. A branch whose target faints ON THE MOVE renders
+as ``0 fnt``; the amount is not in the protocol, so that branch is compatible with every
+lethal roll including the legal ones and cannot be made "wrong". Restricting to
+visible-amount branches removes that remainder entirely -- and it is where the closing
+branch lives, since ``only_visible`` matches on every row while ``only_lethal`` diverges on
+every row.
 
-1. The superseded version of this control dropped every branch it could not remap and
-   read "diverged" on all four rows. ``drop_only_legacy`` deletes the same set and leaves
-   the survivors' values LEGAL -- and still reads **diverged** on all four rows. So that
-   verdict came from the DROP, not the remap. It measured nothing about values. Review
-   found this; it is re-derived here rather than quoted.
+A branch that survives the move and faints LATER from a residual is NOT irreducible, though
+an earlier version of this script claimed it was. Remap it UPWARD: if it reached the
+residual at HP h and died, at h-delta it still dies, because the residual removed at least
+h. The ``0 fnt`` line is untouched and the outcome class is preserved by monotonicity.
 
-2. Holding the branch set FIXED and varying only the values -- what the control should
-   have done from the start -- reads **matched** on all four rows. But the wrong fan is
-   contaminated: between 21% and 46% of its branches are still compatible with a legal
-   roll, because on these rows the roll value DETERMINES the outcome class. A branch whose
-   target faints renders as ``0 fnt``, which is compatible with every lethal roll
-   including the legal ones; a branch whose target faints later from a residual cannot be
-   given a different roll without changing whether it faints, which is not a value-only
-   perturbation but a different branch.
+WHAT THE RESULT MEANS. ``roll_components_agree`` accepts a roll-scaled component when the
+OBSERVED magnitude is in a legal roll set derived from the STATE -- "an ADDITIONAL accept
+path, never a veto" -- so the branch's own value is consulted only through a +/-9%
+proportional fallback. A value-based wrong fan is therefore the wrong instrument. What
+enumeration multiplies is branch STRUCTURE, and that is what a discriminating control would
+have to perturb.
 
-   These four rows are ``limit:roll_divergent_lethality`` and its neighbours. Lethality is
-   the mechanism under test, so "hold the outcome class fixed and vary the value" is not
-   merely hard here -- it is not well defined.
-
-So the control neither establishes that the closures are value-driven nor that they are
-cardinality-driven. ``wrong_fan_contains_no_legal_values`` is the precondition that would
-make its verdict interpretable, and it is FALSE.
-
-EXIT CODE. 0 only if every verdict holds, i.e. only if the control actually discriminated.
-It does not, so this exits 1. Do not cite it as passing.
+FIVE CONFOUNDS were found in this one script: a shift too large for a low-HP defender, a
+clamped shift that overlapped the legal fan, a run that perturbed only ``p2a`` when the row
+diverged on ``p1``, a drop of unremappable branches that produced the entire result, and a
+helper deleted by an edit that turned a whole arm into ``skip_lossy(0)`` while still
+emitting a tidy artifact. The last is why ``_adjudicate`` now RAISES on any
+``branch_events`` error rather than inheriting the differential's fail-soft behaviour.
 
 Usage::
 
@@ -182,16 +186,25 @@ def wrong_fan_map(legal: list[int]) -> dict[int, int]:
     return mapping
 
 
-def _shiftable_readings(branch: dict, target: str) -> list[tuple[int, int, int]] | None:
-    """``(event_index, current_hp, max_hp)`` for every reading a remap would move.
+def _shiftable_readings(
+    branch: dict, target: str
+) -> tuple[list[tuple[int, int, int]], bool] | None:
+    """``([(event_index, current_hp, max_hp)], trailing_faint)`` for a remap.
 
     The move-damage line and every later HP reading for the same target: the harness
     reconstructs components from CONSECUTIVE readings, so moving one line alone would
     corrupt the next component as well as the one intended.
+
+    A trailing ``0 fnt`` is TOLERATED and reported, not treated as a failure. It marks a
+    branch where the target survived the move and died to a residual. Such a branch is
+    still remappable -- upward only -- see ``_remap_branch``. An earlier version returned
+    ``None`` here, which dropped 6/406/112/5 branches across the four rows and led this
+    document to claim, wrongly, that those branches were irreducible.
     """
 
     readings: list[tuple[int, int, int]] = []
     shifting = False
+    trailing_faint = False
     for index, line in enumerate(branch.get("events") or []):
         parts = line.split("|")
         if len(parts) < 4 or not parts[2].startswith(target):
@@ -205,30 +218,45 @@ def _shiftable_readings(branch: dict, target: str) -> list[tuple[int, int, int]]
             shifting = True
         hp = _HP_FIELD.match(parts[3])
         if not hp:
+            if parts[3].endswith("fnt") and readings:
+                # The target dies here. The line carries no amount, so there is nothing
+                # to shift, and nothing after it can move either.
+                trailing_faint = True
+                break
             return None
         readings.append((index, int(hp.group(1)), int(hp.group(2))))
-    return readings or None
+    if not readings:
+        return None
+    return readings, trailing_faint
 
 
-def _remap_branch(branch: dict, target: str, legal: set[int], preferred: int | None) -> bool:
+def _remap_branch(
+    branch: dict, target: str, legal: set[int], preferred: int | None, *, far: bool = False
+) -> bool:
     """Rewrite this branch's move damage to a value that is NOT a legal roll.
 
-    ``preferred`` is the fan-wide injective choice; it is used when it FITS. When it does
-    not, the nearest feasible non-legal value is used instead, and the branch is only
-    reported as failed when no such value exists at all.
+    ``preferred`` is the fan-wide injective choice; it is used when it FITS, otherwise the
+    nearest feasible non-legal value is used, and the branch fails only when no such value
+    exists.
 
-    That fallback is the fix for the confound review found. The previous version applied
-    one fan-wide delta and DROPPED any branch where it overflowed the HP range -- 580 of
-    1015 branches on 19000191/63. Review's ``drop_only`` arm then showed the drop, not the
-    remap, produced the entire result. Worse, the version after that kept those branches
-    UNCHANGED, i.e. still carrying legal rolls, which is the opposite failure. A branch
-    must end up holding a non-legal value; nothing may be dropped and nothing may be left
-    legal.
+    TRAILING-FAINT BRANCHES ARE REMAPPED UPWARD ONLY, and that is what makes them
+    tractable. If the target reached the residual at HP ``h`` and died, the residual
+    removed at least ``h``; dealing MORE move damage brings it to the residual at
+    ``h - delta < h``, where the same residual still kills. The faint is preserved by
+    monotonicity, the ``0 fnt`` line is never touched, and every other reading on that
+    target moves by the same delta -- so the outcome class is identical and only the value
+    changed. Downward would be unsound: less damage can leave the target above the
+    residual and turn a faint into a survival, which is a different branch rather than a
+    different value.
+
+    This is the construction the report previously called impossible. It is not, and the
+    measurement is in ``reports/artifacts/c134_wrong_fan_control.json``.
     """
 
-    readings = _shiftable_readings(branch, target)
-    if readings is None:
+    found = _shiftable_readings(branch, target)
+    if found is None:
         return False
+    readings, trailing_faint = found
     _, first_hp, first_max = readings[0]
     damage = first_max - first_hp
     # Feasible shift window: every moved reading must stay strictly above 0 (no branch may
@@ -238,13 +266,26 @@ def _remap_branch(branch: dict, target: str, legal: set[int], preferred: int | N
     min_delta, max_delta = 1 - lowest, headroom
 
     candidates: list[int] = []
-    if preferred is not None:
-        candidates.append(preferred)
-    for offset in range(1, 4 * max(4, len(legal)) + 1):
-        candidates.extend((damage + offset, damage - offset))
+    if far:
+        # FAR variant. The nearest non-legal integer sits within a point or two of a legal
+        # roll, i.e. comfortably inside the matcher's proportional fallback window
+        # (0.92x-1.09x of the engine's value). A fan that is "wrong but adjacent" therefore
+        # cannot separate the two accept paths. This walks the feasible window from its
+        # extremes INWARD, so the value lands as far from any legal roll as the branch
+        # physically allows.
+        for delta in sorted(range(min_delta, max_delta + 1), key=lambda d: -abs(d)):
+            candidates.append(damage - delta)
+    else:
+        if preferred is not None:
+            candidates.append(preferred)
+        for offset in range(1, 4 * max(4, len(legal)) + 1):
+            candidates.extend((damage + offset, damage - offset))
 
     for candidate in candidates:
         if candidate <= 0 or candidate in legal:
+            continue
+        if trailing_faint and candidate <= damage:
+            # Upward only. See the docstring: downward can undo the faint.
             continue
         delta = damage - candidate
         if not (min_delta <= delta <= max_delta) or delta == 0:
@@ -262,13 +303,16 @@ def _remap_branch(branch: dict, target: str, legal: set[int], preferred: int | N
 def _legacy_remap_feasible(branch: dict, target: str, mapping: dict[int, int]) -> bool:
     """Would the SUPERSEDED single-candidate remap have worked on this branch?
 
-    The superseded control took one fan-wide value per legal roll and dropped the branch
-    if applying it left the HP range. Reproduced verbatim so ``drop_only_legacy`` deletes
-    exactly the set that control deleted.
+    The superseded control took one fan-wide value per legal roll, could not see past a
+    trailing faint at all, and DROPPED the branch whenever either failed. Reproduced
+    verbatim so ``drop_only_legacy`` deletes exactly the set that control deleted.
     """
 
-    readings = _shiftable_readings(branch, target)
-    if readings is None:
+    found = _shiftable_readings(branch, target)
+    if found is None:
+        return False
+    readings, trailing_faint = found
+    if trailing_faint:
         return False
     _, first_hp, first_max = readings[0]
     damage = first_max - first_hp
@@ -284,6 +328,7 @@ def _legacy_remap_feasible(branch: dict, target: str, mapping: dict[int, int]) -
 MODES = (
     "collapsed", "enumerated", "wrong_fan",
     "drop_only", "drop_only_legacy", "only_lethal", "only_visible",
+    "only_visible_wrong_fan", "only_visible_wrong_fan_far",
 )
 
 
@@ -379,7 +424,22 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
             shift_report["drop_only_dropped"] = shift_report.get("drop_only_dropped", 0) + sum(hidden)
             return json.dumps(payload)
 
-        # mode == "wrong_fan": VARY VALUES ONLY. The branch set is held FIXED.
+        # mode in the wrong-fan family: VARY VALUES ONLY.
+        #
+        # ``only_visible_wrong_fan`` first restricts to visible-amount branches. That
+        # subset carries ZERO irreducible contamination -- there is no ``0 fnt``-on-the-
+        # move branch left to be compatible with every lethal roll -- so it is the branch
+        # set on which a value-only control is actually well posed. The premise is this
+        # branch's own measurement: ``only_visible`` matches on every row and
+        # ``only_lethal`` diverges on every row, so the closing branch lives here.
+        if mode in {"only_visible_wrong_fan", "only_visible_wrong_fan_far"}:
+            branches = [b for b, h in zip(branches, hidden) if not h]
+            payload["branches"] = branches
+            classes = {
+                target: [_branch_damage_class(branch, target) for branch in branches]
+                for target in targets
+            }
+            hidden = [False] * len(branches)
         #
         # Nothing is dropped. A hidden-valued branch is kept UNCHANGED, and that is not a
         # concession: the renderer emits ``0 fnt``, so every lethal roll produces a
@@ -421,7 +481,10 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
                     continue
                 legal_set = set(mapping)
                 damage = _branch_move_damage(branch, target)
-                if _remap_branch(branch, target, legal_set, mapping.get(damage)):
+                if _remap_branch(
+                    branch, target, legal_set, mapping.get(damage),
+                    far=mode.endswith("_far"),
+                ):
                     moved = True
                 else:
                     failed += 1
@@ -456,6 +519,40 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
             shift_report.get("branches_compatible_with_a_legal_roll", 0) + still_legal
         )
         shift_report["branches_total"] = shift_report.get("branches_total", 0) + len(branches)
+
+        # INDEPENDENT RE-EXTRACTION. The counter above is derived from the same bookkeeping
+        # that did the remapping, so it would not notice a remap that silently no-opped.
+        # This re-reads the EMITTED values straight out of the payload the matcher will
+        # receive and intersects them with the legal fan -- the same check a reviewer would
+        # run from outside, computed here so the artifact carries it.
+        emitted_legal: dict[str, list[int]] = {}
+        displacement = 0.0
+        for target in targets:
+            legal_fan = set(shifts.get(target) or {})
+            if not legal_fan:
+                continue
+            emitted = {
+                value
+                for branch in branches
+                if (value := _branch_move_damage(branch, target)) is not None
+            }
+            overlap = sorted(emitted & legal_fan)
+            if overlap:
+                emitted_legal[target] = overlap
+            # How far the wrong values actually sit from the nearest legal roll, as a
+            # fraction. The matcher's fallback accept path is a proportional window of
+            # about +/-9% around the engine's value, so a displacement well inside that
+            # cannot separate "value matters" from "value is ignored".
+            for value in emitted:
+                nearest = min(abs(value - legal) for legal in legal_fan)
+                displacement = max(displacement, nearest / max(value, 1))
+        shift_report["max_relative_displacement"] = round(
+            max(displacement, shift_report.get("max_relative_displacement", 0.0)), 4
+        )
+        shift_report["emitted_values_still_legal"] = {
+            **shift_report.get("emitted_values_still_legal", {}),
+            **emitted_legal,
+        }
         return json.dumps(payload)
 
     pokezero_search.branch_events = patched
@@ -476,6 +573,15 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
         )
     finally:
         pokezero_search.branch_events = real_branch_events
+    # FAIL LOUDLY. ``evaluate_boundary_strict`` catches every exception out of
+    # ``branch_events`` and counts it, then falls through to ``skip_lossy`` when no branch
+    # survives. That is right for the differential and wrong for this script: a bug in the
+    # patched callback would look like a clean "this boundary is unmeasurable" verdict.
+    # It already did once -- a helper deleted by an edit turned the whole drop_only_legacy
+    # arm into skip_lossy(0) and the run still produced a tidy artifact.
+    errors = {k: v for k, v in counts.items() if k.startswith("strict:branch_events_error")}
+    if errors:
+        raise RuntimeError(f"{mode}: the patched branch_events raised {errors}")
     return verdict, branch_count, misses[:3]
 
 
@@ -530,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
         ("collapsed", "0"), ("enumerated", "1"), ("wrong_fan", "1"),
         ("drop_only", "1"), ("drop_only_legacy", "1"),
         ("only_lethal", "1"), ("only_visible", "1"),
+        ("only_visible_wrong_fan", "1"), ("only_visible_wrong_fan_far", "1"),
     ):
         environment = dict(os.environ)
         environment["POKEZERO_ENUMERATE_ROLLS"] = flag
@@ -581,6 +688,9 @@ def main(argv: list[str] | None = None) -> int:
             else "n/a (no move damage to remap)"
         )
 
+    def shift_of(row: dict, mode: str) -> dict:
+        return row.get("shift", {}).get(mode, {})
+
     verdicts = {
         # Sanity: reproduce the committed artifact before perturbing anything.
         "reproduced_collapsed_divergence": all(
@@ -589,40 +699,35 @@ def main(argv: list[str] | None = None) -> int:
         "reproduced_enumerated_closure": all(
             r["enumerated"]["verdict"] == "matched" for r in closed
         ),
-        # The branch set must be HELD FIXED. This is the property whose absence
-        # confounded the first three versions of this control: they dropped every
-        # hidden-valued branch, and the DROP -- not the remap -- produced the result.
+        # The branch set must be HELD FIXED in both value-only arms. This is the property
+        # whose absence confounded the first versions of this control: they dropped every
+        # branch they could not remap, and the DROP produced the result.
         "wrong_fan_held_the_branch_set_fixed": all(
             r["wrong_fan"]["branches"] == r["enumerated"]["branches"] for r in rows
         ),
-        "no_remap_failed": all(
-            r.get("shift", {}).get("wrong_fan", {}).get("remap_failed", 0) == 0 for r in rows
+        "only_visible_wrong_fan_held_its_branch_set_fixed": all(
+            r["only_visible_wrong_fan"]["branches"] == r["only_visible"]["branches"]
+            for r in rows
         ),
-        # Strictness, policed with ALL of both properties. The earlier version used
-        # any(disjoint) and ignored same_cardinality, which was weaker than the per-row
-        # control_strength label it was supposed to be enforcing.
-        "every_closed_row_strictly_remapped": all(
-            r["control_strength"] == "strict" for r in closed
-        ),
-        # PRECONDITION for the discriminating result to mean anything: the wrong fan must
-        # contain NO legal roll values. If it does, a "matched" verdict is uninterpretable
-        # (a correct branch could be doing the matching) and a "diverged" verdict is
-        # unearned. Measured, not assumed.
-        "wrong_fan_contains_no_legal_values": all(
-            r.get("shift", {}).get("wrong_fan", {}).get(
-                "branches_compatible_with_a_legal_roll", 1
-            ) == 0
+        # PRECONDITION, and on only_visible it now PASSES. Independently re-extracted from
+        # the emitted payload, not read off the remapper's own bookkeeping.
+        "only_visible_wrong_fan_emits_no_legal_value": all(
+            shift_of(r, "only_visible_wrong_fan").get("emitted_values_still_legal", {}) == {}
             for r in closed
         ),
-        # THE DISCRIMINATING RESULT, if the precondition above holds.
-        "wrong_fan_kept_every_closed_row_divergent": all(
-            r["wrong_fan"]["verdict"] == "diverged" for r in closed
+        "only_visible_wrong_fan_remapped_everything": all(
+            shift_of(r, "only_visible_wrong_fan").get("remap_failed", 1) == 0
+            for r in closed
         ),
-        # THE ISOLATING DIAGNOSTIC. drop_only applies the OLD control's branch-set
-        # reduction with LEGAL values. If it also comes back divergent, the old verdict
-        # was produced by the drop and said nothing about values.
-        "drop_only_still_matches": all(
-            r["drop_only"]["verdict"] == "matched" for r in closed
+        # THE ISOLATING DIAGNOSTIC that condemned the superseded control: drop the same
+        # set with LEGAL values and the rows still reopen, so the drop did the work.
+        "drop_only_legacy_reproduces_the_superseded_verdict": all(
+            r["drop_only_legacy"]["verdict"] == "diverged" for r in closed
+        ),
+        # THE ANSWER. On a zero-contamination fan carrying no legal roll value at all,
+        # does acceptance survive? Where it does, the closure is NOT value-driven.
+        "only_visible_wrong_fan_kept_every_closed_row_divergent": all(
+            r["only_visible_wrong_fan"]["verdict"] == "diverged" for r in closed
         ),
     }
     payload = {"rows": rows, "verdicts": verdicts}

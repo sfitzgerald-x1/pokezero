@@ -1,11 +1,13 @@
 # C134 — roll enumeration as a flag-gated reference oracle (C116 Phase 2)
 
-**Status: MEASURED, with one question left OPEN.** The falsifier did not fire and both
-windows reach zero divergent rows under the oracle. The wrong-fan control that was meant
-to show the closures are value-driven rather than a cardinality lottery is **confounded and
-withdrawn** — see the retraction in §"Nothing opened" is weak on its own. Whether these
-closures are a real fix or an artefact of a 9x-72x larger branch set is **not settled by
-this branch**. The prediction was committed in `0733abe7` before any sweep on this branch
+**Status: MEASURED, with an adverse result on one question.** The falsifier did not fire
+and both windows reach zero divergent rows under the oracle. But the wrong-fan control —
+after four confounds and one false impossibility claim, both retracted below — now runs
+cleanly on a zero-contamination branch set and shows that **the closures are NOT
+attributable to the branch damage values**: a fan containing no legal roll value at all
+still earns acceptance on all four rows, and on two of them at 12x–106x displacement. The
+reason is a property of the matcher, not of enumeration, and it is in
+§"Nothing opened" is weak on its own. The prediction was committed in `0733abe7` before any sweep on this branch
 was started; the post-rebase re-registration below was committed in `21178990`, before the
 sweeps that test it, which are the four artifacts landing with this section. The ordering
 between "what I expected" and "what I measured" is a property of the history.
@@ -287,21 +289,20 @@ for w in ("dev", "holdout"):
 EOF
 ```
 
-### "Nothing opened" is weak on its own — and the control meant to fix that FAILED
+### "Nothing opened" is weak on its own — and the reason is the MATCHER, not the fan
 
-**RETRACTION.** An earlier revision of this section claimed "cardinality of that order does
-not buy acceptance; the values do", and the abstract claimed the closures were "measured as
-a fix rather than merely consistent with one". **Both are withdrawn.** The control they
-rested on was confounded. The lottery question below is **OPEN**.
+**TWO RETRACTIONS.**
+
+1. An earlier revision claimed "cardinality of that order does not buy acceptance; the
+   values do", and that the closures were "measured as a fix rather than merely consistent
+   with one". **Withdrawn** — that control was confounded (below).
+2. The revision after it claimed a value-only control was **impossible** on these rows.
+   **Also withdrawn, and it was the more damaging error**: the experiment is well posed, it
+   has now been run, and it answers.
 
 The question is real. `evaluate_boundary_strict` returns `matched` on the **first** rendered
-branch that matches (`scripts/engine_transition_differential.py`, the `if ok: return
-"matched"` inside the per-branch loop), and enumeration multiplies the branch count. More
-branches is more chances to match, so a subset relation is close to what you would expect
-**even if enumeration were wrong**.
-
-The size of the effect, by replaying each divergent row's own `engine_states` through
-`pokezero_search.branch_events` in both configurations:
+branch that matches, and enumeration multiplies the branch count 8.5x–72.5x on the rows it
+closes. More branches is more chances to match.
 
 | window | row | collapsed | enumerated | factor |
 | --- | --- | --- | --- | --- |
@@ -310,80 +311,121 @@ The size of the effect, by replaying each divergent row's own `engine_states` th
 | holdout | `19100107/135` | 8 | 544 | 68.0x |
 | holdout | `19100191/5` | 4 | 34 | 8.5x |
 
-#### How the control failed, and how that was established
+#### Confound 4: the drop, not the remap
 
-`scripts/c134_wrong_fan_control.py` adjudicates each row with the same matcher on the same
-recorded inputs under several branch-set manipulations. Artifact:
-`reports/artifacts/c134_wrong_fan_control.json`. **It exits 1.**
+The superseded control dropped every branch it could not remap — 6, 580, 176 and 5
+branches, 57% of the fan on `19000191/63` — and read "diverged". The `drop_only_legacy`
+arm deletes **the same set** and leaves the survivors' values **legal and untouched**:
 
-| row | collapsed | enumerated | wrong_fan (set FIXED, values varied) | drop_only_legacy (same drop, values LEGAL) |
-| --- | --- | --- | --- | --- |
-| `19000074/27` | diverged (3) | matched (29) | **matched** (29) | **diverged** (22) |
-| `19000191/63` | diverged (14) | matched (1015) | **matched** (1015) | **diverged** (377) |
-| `19100107/135` | diverged (8) | matched (544) | **matched** (544) | **diverged** (352) |
-| `19100191/5` | diverged (4) | matched (34) | **matched** (34) | **diverged** (28) |
+| row | superseded wrong_fan | `drop_only_legacy` (same drop, LEGAL values) |
+| --- | --- | --- |
+| `19000074/27` | diverged (23) | **diverged** (22) |
+| `19000191/63` | diverged (435) | **diverged** (377) |
+| `19100107/135` | diverged (368) | **diverged** (352) |
+| `19100191/5` | diverged (29) | **diverged** (28) |
 
-**The superseded control's result came from a DROP, not from the values.** It dropped every
-branch it could not remap — 6, 580, 176 and 5 branches, 57% of the fan on `19000191/63` —
-and read "diverged". The `drop_only_legacy` arm deletes the same set and leaves the
-survivors' values **legal and untouched**, and still reads **diverged** on all four rows.
-So the earlier verdict was "delete the closing branch and the row reopens", which is true of
-any branch set and silent on whether the values are right. Review identified this; the arm
-above re-derives it here rather than quoting it.
+Same verdicts with correct values. The remap contributed nothing; the control was measuring
+"delete the closing branch and the row reopens", which is true of any branch set.
 
-**Holding the branch set fixed and varying only the values reads `matched` on all four
-rows — and that is not evidence of a lottery either, because the fan is contaminated:**
+#### The impossibility claim was false
 
-| row | branches | still compatible with a legal roll | share |
+The previous revision asserted that a branch whose target survives the move and faints
+later from a residual "cannot be given a different roll without changing whether it
+faints". That is wrong, and the counter-construction is one line of policy: **remap
+upward only.** If the target reached the residual at HP `h` and died, the residual removed
+at least `h`; at `h − δ` it still dies. The `0 fnt` line is never touched, every other
+reading on that target moves by the same δ, and the outcome class is preserved by
+monotonicity.
+
+Implemented — `_shiftable_readings` tolerates a trailing faint, `_remap_branch` accepts
+only `candidate > damage` on such branches — `remap_failed` collapses **6 / 406 / 112 / 5
+→ 0 / 0 / 0 / 0** and whole-fan contamination falls from 24% / 46% / 24% / 18% to
+3.4% / 5.7% / 3.1% / 2.9%. Only the directly-lethal `0 fnt`-on-the-move branches are
+irreducible; that half of the earlier argument was right and stands.
+
+#### Route (a), run where contamination is exactly ZERO
+
+Restricting to the **visible-amount** branches removes the irreducible remainder entirely,
+and this branch's own measurement says that is where the closing branch lives:
+`only_visible` matches on every row while `only_lethal` diverges on every row. So: fix that
+branch set, remap every value off the legal roll set, change nothing else.
+
+Zero legal values is verified by **re-extracting the emitted move-damage values from the
+payload the matcher receives** and intersecting with the legal fan per row per target — not
+by trusting the remapper's own bookkeeping, which would not notice a silent no-op.
+
+| row | `only_visible` (legal values) | wrong fan, NEAREST non-legal | wrong fan, FAR |
 | --- | --- | --- | --- |
-| `19000074/27` | 29 | 7 | 24% |
-| `19000191/63` | 1015 | 464 | 46% |
-| `19100107/135` | 544 | 128 | 24% |
-| `19100191/5` | 34 | 6 | 18% |
+| `19000074/27` | matched (28) | **matched** (0.07x) | **matched** (**106x**) |
+| `19000191/63` | matched (957) | **matched** (0.11x) | diverged (13.9x) |
+| `19100107/135` | matched (528) | **matched** (0.03x) | diverged (13.9x) |
+| `19100191/5` | matched (33) | **matched** (0.01x) | **matched** (**12.4x**) |
 
-#### Why route (a) is not achievable on these rows
+Parenthesised figure is the maximum displacement of an emitted value from the nearest legal
+roll, as a fraction of the value. Both wrong-fan columns emit **no legal roll value at
+all**, independently re-extracted.
 
-The obvious repair — remap a lethal branch onto a *disjoint lethal* value instead of
-dropping it — does not close the gap, and the reason is structural rather than a coding
-problem:
+**A fan containing no legal roll value earns acceptance on all four rows, and on two of
+them it still does when every value is 12x–106x away from any legal roll.** The closures
+are **not** attributable to the branch damage values.
 
-* A branch whose target faints **on the move** renders as `0 fnt`. The amount is not in the
-  protocol, so every lethal roll produces a byte-identical branch. Remapping it onto another
-  lethal value is a no-op at the only layer the matcher can see, and the branch stays
-  compatible with the legal lethal rolls.
-* A branch whose target survives the move and faints **later from a residual** cannot be
-  given a different roll without changing whether it faints. That is not a value-only
-  perturbation; it is a different branch, and synthesising the engine's downstream
-  rendering for it by hand would introduce a fresh confound.
+#### Why: the matcher does not test the branch's value
 
-These four rows are `limit:roll_divergent_lethality` and its neighbours. **Lethality is the
-mechanism under test**, so "hold the outcome class fixed and vary the value" is not merely
-awkward here — it is not well defined. Restricting the control to rows with zero
-contamination (route (c)) leaves **zero rows**, so there are no valid subjects.
+This is the useful part, and it is a property of the matcher rather than of enumeration.
+In `roll_components_agree` (`scripts/engine_transition_differential.py`):
 
-#### What still stands, and what does not
+```python
+# ``legal`` is an ADDITIONAL accept path, never a veto.
+if legal is not None and magnitude in legal:
+    continue
+```
+
+`magnitude` is `abs(observed)` — the value **Showdown** produced — and `legal` comes from
+`branch_component_legal_rolls`, derived from `calculate_damage` on the **state**. So when
+the observed damage is a legal roll (which it always is, Showdown having rolled it), the
+component is accepted **whatever the engine branch's damage says**. The branch's value only
+enters through the fallback window `0.92·|eng| − 1 ≤ magnitude ≤ 1.09·|eng| + 1`, which is
+why the two rows that reopen only do so once the values are pushed ~14x out.
+
+**So a value-based wrong-fan control is the wrong instrument entirely.** What enumeration
+multiplies is branch **structure** — which components appear, and the lethality/residual
+pattern — and structure is what the acceptance rule actually reads: component counts
+(`len(observed) != len(engine)` routes to `_roll_cascade_equivalent`), the
+`selected_direct_event` crit flag, and whether `support` exists at all. A discriminating
+control has to perturb *that*, not the numbers. That is the experiment the next person
+should build, and this document could not have identified it without running the wrong one
+four times.
+
+#### What stands, and what does not
 
 * **Stands:** enumeration closes four rows and opens none, on both windows, with coverage
-  and gating counters identical between configurations. That is a fact about the artifacts.
-* **Stands:** the closing branch is a *visible-amount* branch, not a lethal one — the
-  `only_visible` arm matches on every row while `only_lethal` diverges on every row. So the
-  closure does depend on branches whose damage the protocol actually shows.
-* **Does NOT stand:** any claim that the sweep distinguishes a real fix from a lottery. It
-  does not, and this branch has not measured that.
-* What carries the correctness account remains the per-row mechanism analysis in
-  `reports/c133_collapsed_roll_disposition.md` §3/§7 and
-  `reports/c135_roll_divergent_lethality_adjudication.md` §2-3 — read, not measured.
+  and gating counters identical between configurations. A fact about the artifacts.
+* **Stands:** the closing branch is a visible-amount branch — `only_visible` matches on
+  every row, `only_lethal` diverges on every row.
+* **Established, and adverse:** on all four rows the closure survives a fan with no legal
+  roll value; on two rows it survives 12x–106x displacement. **The closures are not
+  value-driven.** This is not "open" — it is measured, and it does not support the reading
+  that enumeration closes these rows by supplying the right roll.
+* **Not established either way:** whether the closures are *correct*. They are structural,
+  and no structural control has been run. `reports/c133_collapsed_roll_disposition.md`
+  §3/§7 and `reports/c135_roll_divergent_lethality_adjudication.md` §2-3 remain the account
+  of why each row is an engine gap, and they are read, not measured.
+* **Consequence for #1152:** that PR closes these rows in the shipping engine and cites
+  "enumeration closes them" as sweep-side corroboration. Its primary argument — a 480-state
+  grid against a partition-independent enumeration — is unaffected, but **this
+  corroboration is weaker than it reads and should not be leaned on.**
 
-This is the fourth confound of the same family found in this one control (shift too large,
-shift clamped and overlapping, wrong side perturbed, and now the drop doing the work).
-Three were caught here; the fourth was caught by review. The pattern is worth naming: each
-version produced the expected verdict for a reason unrelated to the property being tested,
-and only an isolating arm — hold everything fixed except the one variable — exposed it.
+Five confounds were found in this one control: shift too large, shift clamped and
+overlapping, wrong side perturbed, the drop doing the work, and a deleted helper that
+turned an entire arm into `skip_lossy(0)` while still producing a tidy artifact. The last
+one is why the script now raises on any `branch_events` error instead of inheriting the
+differential's fail-soft behaviour. Every one produced a plausible verdict for a reason
+unrelated to the property under test.
 
 `strict:sleeptalk_union_branch` moves 126 → 617 (dev) and 105 → 612 (holdout), reproducing
 the movement c137 §4 recorded as unexplained. Explained by the same mechanism: it is
-incremented **once per rendered branch** in that loop, so it tracks branch multiplicity, not
-boundary population. Every per-BOUNDARY counter is unchanged.
+incremented **once per rendered branch**, so it tracks branch multiplicity, not boundary
+population. Every per-BOUNDARY counter is unchanged.
 
 ### Adopt-everywhere: re-measured, and still rejected
 
@@ -463,7 +505,7 @@ All run locally against the build the sweeps used (`e97e661eaf9fb3b1`, 69 patche
 | `cargo test third_party/poke-engine-src --features gen3 --test test_gen3` | **28 passed, 0 failed**, exit 0 |
 | `scripts/engine_behavioral_probes.py`, flag off (the shipping path, and what CI runs) | **38 probes, 38 PASS**, exit 0 |
 | `scripts/engine_behavioral_probes.py`, flag on | 24 PASS / 14 FAIL, exit 1 — see below |
-| `scripts/c134_wrong_fan_control.py` | **exit 1 — INCONCLUSIVE by design.** `wrong_fan_contains_no_legal_values` is false, so its verdict is uninterpretable; see the retraction above |
+| `scripts/c134_wrong_fan_control.py` | **exit 1 — by design.** Its preconditions all pass now (branch set fixed, zero legal values emitted, nothing failed to remap); the verdict it exits on, `only_visible_wrong_fan_kept_every_closed_row_divergent`, is FALSE, which is the adverse result itself. Not in any workflow |
 | Also green | `test_single_seat_coverage_bound` (3), `test_drag_limit_is_a_last_resort` (3), `test_a1_residuals_already_ran` (13), `test_sleep_talk_phaze_drag` (7), `test_instruction_event_mapping` (21), `test_crit_kill_split_patch` (8), `test_rest_sleep_refund_boundary` (6), `test_rest_sleep_refund_write_side` (6), `test_engine_stat_attestation` (16), `test_roll_cascade_predicate` (29), `test_matcher_tolerance_promotion` (32), `test_c26_archival_recalibration` (11) |
 
 **One pre-existing failure, not caused by this branch.**
@@ -513,12 +555,16 @@ idiom, not a dodge — passed it.
 it.** The falsifier did not fire; both windows reach zero divergent rows under the oracle
 and neither opens anything; coverage and identity are unchanged.
 
-**What this branch does NOT establish:** that the four closures are a real fix rather than
-a consequence of enumeration's 9x-72x larger branch set. The control built to settle that
-is confounded and its conclusion is withdrawn; route (a) is not well defined on these rows
-because lethality is the mechanism under test. The question is open, and closing it is a
-prerequisite for treating the oracle as authoritative about these rows — not for landing
-the oracle itself, which is default-off and consumed by nothing that ships.
+**What this branch establishes about the closures, and it is adverse:** they are **not
+value-driven**. A wrong fan carrying no legal roll value is accepted on all four rows, and
+at 12x–106x displacement on two of them, because `evaluate_boundary_strict` tests the
+OBSERVED magnitude against a STATE-derived legal set and never against the branch's own
+damage. What enumeration multiplies is branch STRUCTURE, and no structural control has
+been run — that is the experiment the next person should build.
+
+This does not block landing the oracle, which is default-off and consumed by nothing that
+ships. It does mean the oracle is **not yet authoritative about these four rows**, and
+that #1152 should not lean on "enumeration closes them" as corroboration.
 
 Still open, unchanged by this branch:
 

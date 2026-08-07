@@ -97,17 +97,171 @@
               "disjoint_from_legal": true
             }
           ],
-          "remapped": 22,
+          "remapped": 28,
           "kept_lethal_unchanged": 1,
-          "remap_failed": 6,
-          "branches_compatible_with_a_legal_roll": 7,
-          "branches_total": 29
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 1,
+          "branches_total": 29,
+          "max_relative_displacement": 0.0667,
+          "emitted_values_still_legal": {}
         },
         "drop_only": {
           "drop_only_dropped": 1
         },
         "drop_only_legacy": {
           "legacy_dropped": 7
+        },
+        "only_visible_wrong_fan": {
+          "shifts": [
+            {
+              "target": "p2a",
+              "legal_fan": [
+                107,
+                108,
+                109,
+                110,
+                112,
+                113,
+                114,
+                115,
+                117,
+                118,
+                119,
+                120,
+                122,
+                123,
+                124,
+                126,
+                214,
+                216,
+                219,
+                221,
+                224,
+                226,
+                229,
+                231,
+                234,
+                236,
+                239,
+                241
+              ],
+              "wrong_fan": [
+                104,
+                105,
+                106,
+                111,
+                116,
+                121,
+                125,
+                127,
+                128,
+                129,
+                130,
+                131,
+                132,
+                133,
+                134,
+                135,
+                215,
+                217,
+                220,
+                222,
+                225,
+                227,
+                230,
+                232,
+                235,
+                237,
+                240,
+                242
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 28,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 28,
+          "max_relative_displacement": 0.0667,
+          "emitted_values_still_legal": {}
+        },
+        "only_visible_wrong_fan_far": {
+          "shifts": [
+            {
+              "target": "p2a",
+              "legal_fan": [
+                107,
+                108,
+                109,
+                110,
+                112,
+                113,
+                114,
+                115,
+                117,
+                118,
+                119,
+                120,
+                122,
+                123,
+                124,
+                126,
+                214,
+                216,
+                219,
+                221,
+                224,
+                226,
+                229,
+                231,
+                234,
+                236,
+                239,
+                241
+              ],
+              "wrong_fan": [
+                104,
+                105,
+                106,
+                111,
+                116,
+                121,
+                125,
+                127,
+                128,
+                129,
+                130,
+                131,
+                132,
+                133,
+                134,
+                135,
+                215,
+                217,
+                220,
+                222,
+                225,
+                227,
+                230,
+                232,
+                235,
+                237,
+                240,
+                242
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 28,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 28,
+          "max_relative_displacement": 106.0,
+          "emitted_values_still_legal": {}
         }
       },
       "drop_only": {
@@ -135,6 +289,18 @@
         "inflation_vs_collapsed": 0.3
       },
       "only_visible": {
+        "verdict": "matched",
+        "branches": 28,
+        "first_misses": [],
+        "inflation_vs_collapsed": 9.3
+      },
+      "only_visible_wrong_fan": {
+        "verdict": "matched",
+        "branches": 28,
+        "first_misses": [],
+        "inflation_vs_collapsed": 9.3
+      },
+      "only_visible_wrong_fan_far": {
         "verdict": "matched",
         "branches": 28,
         "first_misses": [],
@@ -284,15 +450,287 @@
           ],
           "remapped": 957,
           "kept_lethal_unchanged": 58,
-          "remap_failed": 406,
-          "branches_compatible_with_a_legal_roll": 464,
-          "branches_total": 1015
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 58,
+          "branches_total": 1015,
+          "max_relative_displacement": 0.1059,
+          "emitted_values_still_legal": {
+            "p2a": [
+              64,
+              65,
+              66,
+              67,
+              68,
+              69,
+              70,
+              71,
+              72,
+              73,
+              74,
+              75,
+              76,
+              130,
+              131,
+              133,
+              134,
+              136,
+              137,
+              139,
+              140,
+              142,
+              143,
+              145,
+              146,
+              148,
+              149,
+              151,
+              153
+            ]
+          }
         },
         "drop_only": {
           "drop_only_dropped": 58
         },
         "drop_only_legacy": {
           "legacy_dropped": 638
+        },
+        "only_visible_wrong_fan": {
+          "shifts": [
+            {
+              "target": "p1a",
+              "legal_fan": [
+                209,
+                210,
+                212,
+                213,
+                214,
+                215,
+                216,
+                217,
+                218,
+                220,
+                221,
+                222,
+                223,
+                224,
+                225,
+                227
+              ],
+              "wrong_fan": [
+                205,
+                206,
+                207,
+                208,
+                211,
+                219,
+                226,
+                228,
+                229,
+                230,
+                231,
+                232,
+                233,
+                234,
+                235,
+                236
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            },
+            {
+              "target": "p2a",
+              "legal_fan": [
+                64,
+                65,
+                66,
+                67,
+                68,
+                69,
+                70,
+                71,
+                72,
+                73,
+                74,
+                75,
+                76,
+                130,
+                131,
+                133,
+                134,
+                136,
+                137,
+                139,
+                140,
+                142,
+                143,
+                145,
+                146,
+                148,
+                149,
+                151,
+                153
+              ],
+              "wrong_fan": [
+                60,
+                61,
+                62,
+                63,
+                77,
+                78,
+                79,
+                80,
+                81,
+                82,
+                83,
+                84,
+                85,
+                129,
+                132,
+                135,
+                138,
+                141,
+                144,
+                147,
+                150,
+                152,
+                154,
+                155,
+                156,
+                157,
+                158,
+                159,
+                160
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 957,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 957,
+          "max_relative_displacement": 0.1059,
+          "emitted_values_still_legal": {}
+        },
+        "only_visible_wrong_fan_far": {
+          "shifts": [
+            {
+              "target": "p1a",
+              "legal_fan": [
+                209,
+                210,
+                212,
+                213,
+                214,
+                215,
+                216,
+                217,
+                218,
+                220,
+                221,
+                222,
+                223,
+                224,
+                225,
+                227
+              ],
+              "wrong_fan": [
+                205,
+                206,
+                207,
+                208,
+                211,
+                219,
+                226,
+                228,
+                229,
+                230,
+                231,
+                232,
+                233,
+                234,
+                235,
+                236
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            },
+            {
+              "target": "p2a",
+              "legal_fan": [
+                64,
+                65,
+                66,
+                67,
+                68,
+                69,
+                70,
+                71,
+                72,
+                73,
+                74,
+                75,
+                76,
+                130,
+                131,
+                133,
+                134,
+                136,
+                137,
+                139,
+                140,
+                142,
+                143,
+                145,
+                146,
+                148,
+                149,
+                151,
+                153
+              ],
+              "wrong_fan": [
+                60,
+                61,
+                62,
+                63,
+                77,
+                78,
+                79,
+                80,
+                81,
+                82,
+                83,
+                84,
+                85,
+                129,
+                132,
+                135,
+                138,
+                141,
+                144,
+                147,
+                150,
+                152,
+                154,
+                155,
+                156,
+                157,
+                158,
+                159,
+                160
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 957,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 957,
+          "max_relative_displacement": 13.9286,
+          "emitted_values_still_legal": {}
         }
       },
       "drop_only": {
@@ -325,6 +763,22 @@
         "verdict": "matched",
         "branches": 957,
         "first_misses": [],
+        "inflation_vs_collapsed": 68.4
+      },
+      "only_visible_wrong_fan": {
+        "verdict": "matched",
+        "branches": 957,
+        "first_misses": [],
+        "inflation_vs_collapsed": 68.4
+      },
+      "only_visible_wrong_fan_far": {
+        "verdict": "diverged",
+        "branches": 957,
+        "first_misses": [
+          "pct=0.31: p1 roll-scaled components differ: observed=[('', -109), ('itemleftovers', 14), ('capped_lethal', -28)] engine=[('', 98), ('itemleftovers_to_full', 14)]",
+          "pct=0.31: p1 roll-scaled components differ: observed=[('', -109), ('itemleftovers', 14), ('capped_lethal', -28)] engine=[('', 98), ('itemleftovers_to_full', 14)]",
+          "pct=0.31: p1 roll-scaled components differ: observed=[('', -109), ('itemleftovers', 14), ('capped_lethal', -28)] engine=[('', 98), ('itemleftovers_to_full', 14)]"
+        ],
         "inflation_vs_collapsed": 68.4
       },
       "control_strength": "strict"
@@ -445,15 +899,222 @@
           ],
           "remapped": 528,
           "kept_lethal_unchanged": 16,
-          "remap_failed": 112,
-          "branches_compatible_with_a_legal_roll": 128,
-          "branches_total": 544
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 16,
+          "branches_total": 544,
+          "max_relative_displacement": 0.0268,
+          "emitted_values_still_legal": {
+            "p2a": [
+              221,
+              222,
+              223,
+              224,
+              225,
+              226,
+              245,
+              246,
+              247,
+              248,
+              249,
+              250,
+              251,
+              252,
+              253,
+              254
+            ]
+          }
         },
         "drop_only": {
           "drop_only_dropped": 16
         },
         "drop_only_legacy": {
           "legacy_dropped": 192
+        },
+        "only_visible_wrong_fan": {
+          "shifts": [
+            {
+              "target": "p1a",
+              "legal_fan": [
+                223,
+                225,
+                226,
+                228,
+                230,
+                232,
+                233,
+                235,
+                237,
+                238,
+                240,
+                242,
+                243,
+                245,
+                247,
+                249
+              ],
+              "wrong_fan": [
+                224,
+                227,
+                229,
+                231,
+                234,
+                236,
+                239,
+                241,
+                244,
+                246,
+                248,
+                250,
+                251,
+                252,
+                253,
+                254
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            },
+            {
+              "target": "p2a",
+              "legal_fan": [
+                221,
+                222,
+                223,
+                224,
+                225,
+                226,
+                245,
+                246,
+                247,
+                248,
+                249,
+                250,
+                251,
+                252,
+                253,
+                254
+              ],
+              "wrong_fan": [
+                219,
+                220,
+                227,
+                228,
+                229,
+                230,
+                242,
+                243,
+                244,
+                255,
+                256,
+                257,
+                258,
+                259,
+                260,
+                261
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 528,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 528,
+          "max_relative_displacement": 0.0268,
+          "emitted_values_still_legal": {}
+        },
+        "only_visible_wrong_fan_far": {
+          "shifts": [
+            {
+              "target": "p1a",
+              "legal_fan": [
+                223,
+                225,
+                226,
+                228,
+                230,
+                232,
+                233,
+                235,
+                237,
+                238,
+                240,
+                242,
+                243,
+                245,
+                247,
+                249
+              ],
+              "wrong_fan": [
+                224,
+                227,
+                229,
+                231,
+                234,
+                236,
+                239,
+                241,
+                244,
+                246,
+                248,
+                250,
+                251,
+                252,
+                253,
+                254
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            },
+            {
+              "target": "p2a",
+              "legal_fan": [
+                221,
+                222,
+                223,
+                224,
+                225,
+                226,
+                245,
+                246,
+                247,
+                248,
+                249,
+                250,
+                251,
+                252,
+                253,
+                254
+              ],
+              "wrong_fan": [
+                219,
+                220,
+                227,
+                228,
+                229,
+                230,
+                242,
+                243,
+                244,
+                255,
+                256,
+                257,
+                258,
+                259,
+                260,
+                261
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 528,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 528,
+          "max_relative_displacement": 13.8667,
+          "emitted_values_still_legal": {}
         }
       },
       "drop_only": {
@@ -486,6 +1147,22 @@
         "verdict": "matched",
         "branches": 528,
         "first_misses": [],
+        "inflation_vs_collapsed": 66.0
+      },
+      "only_visible_wrong_fan": {
+        "verdict": "matched",
+        "branches": 528,
+        "first_misses": [],
+        "inflation_vs_collapsed": 66.0
+      },
+      "only_visible_wrong_fan_far": {
+        "verdict": "diverged",
+        "branches": 528,
+        "first_misses": [
+          "pct=0.29: p1 roll-scaled components differ: observed=[('', -159), ('capped_lethal', -31)] engine=[]",
+          "pct=0.16: p1 roll-scaled components differ: observed=[('', -159), ('itemleftovers', 15), ('capped_lethal', -31)] engine=[('', 64), ('itemleftovers_to_full', 15)]",
+          "pct=0.16: p1 roll-scaled components differ: observed=[('', -159), ('itemleftovers', 15), ('capped_lethal', -31)] engine=[('', 64), ('itemleftovers_to_full', 15)]"
+        ],
         "inflation_vs_collapsed": 66.0
       },
       "control_strength": "strict"
@@ -563,17 +1240,123 @@
               "disjoint_from_legal": true
             }
           ],
-          "remapped": 27,
+          "remapped": 32,
           "kept_lethal_unchanged": 1,
-          "remap_failed": 5,
-          "branches_compatible_with_a_legal_roll": 6,
-          "branches_total": 34
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 1,
+          "branches_total": 34,
+          "max_relative_displacement": 0.0053,
+          "emitted_values_still_legal": {}
         },
         "drop_only": {
           "drop_only_dropped": 1
         },
         "drop_only_legacy": {
           "legacy_dropped": 6
+        },
+        "only_visible_wrong_fan": {
+          "shifts": [
+            {
+              "target": "p2a",
+              "legal_fan": [
+                187,
+                189,
+                191,
+                193,
+                195,
+                198,
+                200,
+                202,
+                204,
+                206,
+                209,
+                211,
+                213,
+                215,
+                217,
+                220
+              ],
+              "wrong_fan": [
+                188,
+                190,
+                192,
+                194,
+                196,
+                199,
+                201,
+                203,
+                205,
+                207,
+                210,
+                212,
+                214,
+                216,
+                218,
+                221
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 32,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 33,
+          "max_relative_displacement": 0.0053,
+          "emitted_values_still_legal": {}
+        },
+        "only_visible_wrong_fan_far": {
+          "shifts": [
+            {
+              "target": "p2a",
+              "legal_fan": [
+                187,
+                189,
+                191,
+                193,
+                195,
+                198,
+                200,
+                202,
+                204,
+                206,
+                209,
+                211,
+                213,
+                215,
+                217,
+                220
+              ],
+              "wrong_fan": [
+                188,
+                190,
+                192,
+                194,
+                196,
+                199,
+                201,
+                203,
+                205,
+                207,
+                210,
+                212,
+                214,
+                216,
+                218,
+                221
+              ],
+              "same_cardinality": true,
+              "disjoint_from_legal": true
+            }
+          ],
+          "remapped": 32,
+          "kept_lethal_unchanged": 0,
+          "remap_failed": 0,
+          "branches_compatible_with_a_legal_roll": 0,
+          "branches_total": 33,
+          "max_relative_displacement": 12.3571,
+          "emitted_values_still_legal": {}
         }
       },
       "drop_only": {
@@ -606,6 +1389,18 @@
         "first_misses": [],
         "inflation_vs_collapsed": 8.2
       },
+      "only_visible_wrong_fan": {
+        "verdict": "matched",
+        "branches": 33,
+        "first_misses": [],
+        "inflation_vs_collapsed": 8.2
+      },
+      "only_visible_wrong_fan_far": {
+        "verdict": "matched",
+        "branches": 33,
+        "first_misses": [],
+        "inflation_vs_collapsed": 8.2
+      },
       "control_strength": "strict"
     }
   ],
@@ -613,10 +1408,10 @@
     "reproduced_collapsed_divergence": true,
     "reproduced_enumerated_closure": true,
     "wrong_fan_held_the_branch_set_fixed": true,
-    "no_remap_failed": false,
-    "every_closed_row_strictly_remapped": true,
-    "wrong_fan_contains_no_legal_values": false,
-    "wrong_fan_kept_every_closed_row_divergent": false,
-    "drop_only_still_matches": true
+    "only_visible_wrong_fan_held_its_branch_set_fixed": true,
+    "only_visible_wrong_fan_emits_no_legal_value": true,
+    "only_visible_wrong_fan_remapped_everything": true,
+    "drop_only_legacy_reproduces_the_superseded_verdict": true,
+    "only_visible_wrong_fan_kept_every_closed_row_divergent": false
   }
 }
