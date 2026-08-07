@@ -193,12 +193,15 @@ windows that can be. Two honest caveats:
   the bound is **1–10**.
 
   Those 4 are also the first `skip:strict_all_branches_lossy` in **the sweep-artifact
-  series**: the counter is absent from all 62 JSONs matching `reports/artifacts/*.json` on
-  this branch. It is **not** the first time it has ever fired, and an earlier draft of this
-  report said so. It reaches 372 in `reports/c32_fail_diagnosis.json`
-  (`coverage_diagnosis.coverage_reducing_skips`), 2 in both
-  `reports/c26_structural_probe_report.json` and `reports/c27_structural_probe_report.json`,
-  and 1 in the `c108` baseline. The claim came from
+  series**: the counter is absent from all **64** JSONs matching `reports/artifacts/*.json`
+  on this branch (glob re-run after the merge, not carried forward). It is **not** the first
+  time it has ever fired, and an earlier draft of this report said so. As hard counter values
+  it is **2** in `reports/c26_structural_probe_report.json` and **2** in
+  `reports/c27_structural_probe_report.json`. An older-era diagnosis,
+  `reports/c32_fail_diagnosis.json`, records the same phenomenon at **372** under the
+  differently named field `coverage_diagnosis.coverage_reducing_skips.strict_all_branches_lossy`
+  — corroborating, but not the counter itself, and worth distinguishing because the counter is
+  what the partition reads. The claim came from
   `reports/c138_known_gaps_ledger.md:268`/`:304`, which says "has never fired" and lists it
   among never-fired static counters; that is the ledger's error and it has now propagated into
   three separate PRs, including this one. **Do not cite it.** Correcting `c138` belongs to
@@ -315,6 +318,37 @@ Fixed as a **complement** — every verdict that is not `diverged` fails — rat
 of known-bad verdicts, so a future verdict is caught when it appears rather than when someone
 remembers to extend the list. Pinned in both directions, including an unknown future verdict.
 
+### 6.3 The withheld verdict is a term in C144's mechanized partition
+
+`main` gained #1163 (C144) while this branch was in review. C144 established that the boundary
+verdict partition is four-term, **mechanized** it as `verdict_partition_failures()`, and made
+`scripts/cert_sweep_readout.py` gate on it per shard. That turns this exit from a documentation
+question into an integration requirement: a report carrying a withheld boundary would not
+reconcile, and the gate would fail the shard.
+
+C144's own comment in `scripts/engine_transition_differential.py` says what to do — "count the
+escape explicitly … and add it to `VERDICT_PARTITION_SCALARS` or
+`VERDICT_PARTITION_COUNTERS`, rather than discovering the drift from a report that no longer
+reconciles". Done:
+
+- `VERDICT_PARTITION_SKIP_COUNTERS` generalises the single lossy name to the **tuple** of
+  post-measurement skip verdicts. `VERDICT_PARTITION_LOSSY_COUNTER` remains as an alias for
+  C144's consumers, documented as the first of the skip terms rather than the only one. The
+  identity is now five-term.
+- `cert_sweep_readout`'s `unadjudicated` sums **every** skip term. Crediting a withheld boundary
+  to the denominator would have understated `in_support_rate` by exactly the rows whose verdict
+  was withheld.
+- C144's structural pin was `len(COUNTERS) == len(SCALARS) + 1`, which a fifth term breaks. It
+  is rewritten against the skip tuple, so it keeps holding as that tuple grows and still fails
+  if the two vocabularies diverge — plus a new pin that the withheld term is in the partition
+  **and load-bearing** (dropping it goes red).
+- **One C144 claim is corrected**: that every `skip:*` counter other than the lossy one fires
+  *before* `boundaries_measured` increments. `skip:rump_branch_set` falsifies it. Membership in
+  the partition is decided by *when* a counter fires relative to `boundaries_measured`, never by
+  its prefix, and the comment now says so.
+
+Both windows' artifacts pass `verdict_partition_failures()` on both sides of the comparison.
+
 ### Blast radius
 
 - **Direction.** The change can only move boundaries **out of** `transition:diverged` into a
@@ -368,24 +402,38 @@ Generated / replayed evidence, none of it fitted to the reserved window:
   `tests/test_matcher_tolerance_promotion.py`,
   `tests/test_engine_transition_checkpoint_provenance.py`, `tests/test_public_invariant.py`,
   `tests/test_c26_archival_recalibration.py` — pass.
-- Two pre-existing failures (`test_c26_damage_composition_readout`,
-  `test_engine_terminal_residual_roll_limit`) were confirmed failing on a clean `cc6ce904`
-  worktree before this patch; they are not caused by it. `test_selfplay` and
-  `test_golden_corpus_scenarios` need NumPy, which is absent from this venv.
+- `tests/test_boundary_verdict_partition.py` — #1163's suite, extended (see §6.3) and passing,
+  including its exact artifact-count pin. That pin **fired on the merge**, which is what an
+  exact count is for; it was re-derived by running the selector over the merged tree rather
+  than by adding four, and then confirmed still live by checking that both 73 and 75 fail.
+
+**Full-suite failure delta, measured rather than characterised.** The earlier "7 pre-existing
+failures" figure was from a `-k`-filtered selection and should not have been stated as if it
+described the suite. Over the whole suite (`--ignore` the one module whose *collection* needs
+NumPy), distinct failing ids: **84 at the merge base, 85 at this branch's head**. The single
+difference is
+`test_golden_corpus_scenarios::test_key_scenarios_search_or_fail_closed_with_known_reasons`,
+and it is **flaky, not caused by this branch**: run in isolation it failed 1 of 6 times at the
+base and 2 of 6 at head. The large standing population is environmental — NumPy and Torch are
+absent from this venv, which accounts for the `test_neural_*`, `test_selfplay`, `test_dataset`
+and `test_engine_env` families. Within the differential/certification area this branch actually
+touches, the failing set is **identical at base and head**.
 
 ### Sweeps
 
 Prediction registered before measuring in `reports/c142_rump_branch_prediction.md`
 (commit `11bca7eb`). 200 games per window, `--matcher strict`, roll enumeration off (the
-shipping path). Baseline from a `git worktree` at `cc6ce904`, same venv and same engine
+shipping path). Baseline from a `git worktree` at the merge base `ce962c6e`, same venv and same engine
 `.so` — the build check reported a content-fingerprint match on both sides, so the two runs
 differ only by the patch. **No run at or above seed 19,200,000.**
 
-Both patched sweeps were **re-taken after review** on the final code, so the artifacts describe
-what ships rather than an earlier revision; the counter tables below are unchanged from the
-first pair, and the baseline was untouched by the review changes.
+**All four sweeps were re-taken twice.** Once after the first review round, and again after
+merging `main`: that merge moved the engine patch set, the build gate **refused to measure on
+the stale build** (fingerprint `c72e6523d8de6f64` installed against `5fa147ffa325c887` at
+HEAD), and the run was redone after a rebuild. The counter tables below are unchanged across
+all three takes, which is the useful part — the result does not depend on the engine revision.
 
-Engine fingerprint `c72e6523d8de6f64` on all four runs, `enumerate_rolls: false` on all four;
+Engine fingerprint `5fa147ffa325c887` on all four runs, `enumerate_rolls: false` on all four;
 the provenance records differ only in `source_commit`/`source_tree`, as they must. The
 baseline also reproduces `main`'s shipped numbers exactly — `boundaries_measured` 15,503 on
 dev and 15,579 on the validation holdout, identical to
@@ -397,7 +445,7 @@ Artifacts: `c142_base_dev_sweep.json`, `c142_rumpfix_dev_sweep.json`,
 
 **Dev `19,000,000–199`, 200 games**
 
-| counter | baseline `cc6ce904` | + this patch |
+| counter | baseline `ce962c6e` | + this patch |
 |---|---|---|
 | `boundaries_full_round` | 15968 | 15968 |
 | `boundaries_measured` | 15503 | 15503 |
@@ -415,7 +463,7 @@ divergent row is unchanged in identity and class: `19000191/63`,
 
 **Validation holdout `19,100,000–199`, 200 games**
 
-| counter | baseline `cc6ce904` | + this patch |
+| counter | baseline `ce962c6e` | + this patch |
 |---|---|---|
 | `boundaries_full_round` | 16155 | 16155 |
 | `boundaries_measured` | 15579 | 15579 |
@@ -471,22 +519,30 @@ the sweeps are a safety result, not a confirmation. See §8.
   gen3 Double-Edge: the `[1,3]` fraction, the `floor`, the min-1 clamp and the cap. Volt
   Tackle (1 set) and the `[1,4]` moves (0 sets) were not exercised against Showdown here.
 
-## 9. Owed after #1163 lands
+## 9. The ledger residue, now closed
 
 `reports/c138_known_gaps_ledger.md` is the source of the false "never fired" claim about
-`skip:strict_all_branches_lossy` (§5), and the same claim has now surfaced independently in
-three PRs, which is what a shared wrong premise looks like. **#1163 is correcting `c138` H14
-and merges ahead of this branch, so that edit is not duplicated here** — doing so would
-conflict.
+`skip:strict_all_branches_lossy` (§5), which surfaced independently in three PRs — what a
+shared wrong premise looks like. #1163 corrected the **H14 cell** and did not reach the
+**summary list** two paragraphs below it, so the merged file contradicted itself: H14 read
+"REACHED, three times over" while the list still published the counter under "Never-fired
+static counters (10)", annotated "(H14)".
 
-What this branch still owes, to be done *after* rebasing onto the merged #1163 and by opening
-the merged file rather than assuming which lines it touched:
+Fixed here, and only there. Matched on the list's text rather than a line number, because three
+PRs are editing that file in sequence and every line number quoted during this review has since
+moved.
 
-- `c138_known_gaps_ledger.md:304` lists `skip:strict_all_branches_lossy` among never-fired
-  static counters. If #1163's correction does not reach `:304`, fix it there and nowhere else.
+**The count was re-derived, not decremented.** Each of the other nine names was searched for a
+nonzero value across all 260 committed JSONs under `reports/`; all nine remain absent, so
+10 − 1 = **9** is measured rather than asserted. `engine_error` in particular is still genuinely
+never-fired, which is what H14's own closing sentence says.
 
-#1163 also touches `docs/engine_divergence_ledger_20260728.md` and
-`scripts/engine_transition_differential.py` — both files this branch modifies — and its subject
-is the same four-term boundary identity as the Rule 2 amendment in §6. That amendment is
-expected to become redundant with #1163's version and should be dropped in favour of it at
-rebase rather than merged alongside it.
+The `docs/engine_divergence_ledger_20260728.md` Rule 2 conflict resolved in favour of #1163's
+mechanized C144 correction, with a C142 addition recording that the identity is now five-term
+and that **the mechanized form, not the prose, is the thing to extend** when the next
+post-measurement exit is added.
+
+One process note, disclosed rather than left in the reflog: `main` was **merged** into this
+branch, not rebased onto. An earlier local rebase was performed and then undone before any
+push — the published tip `c893c7df` is still an ancestor of this branch's head, so no
+force-push was needed and no published history was rewritten.
