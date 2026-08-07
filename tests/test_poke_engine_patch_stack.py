@@ -26,8 +26,8 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 70-patch stack. Both collapse-class patches
-# touch generate_instructions.rs ONLY, so exactly one of the four digests
+# Post-patch content pins for the 71-patch stack. The two collapse-class patches and the
+# roll-enumeration patch all touch generate_instructions.rs ONLY, so exactly one of the four digests
 # below moved and three did NOT: items.rs, abilities.rs and choice_effects.rs are
 # byte-identical to their pre-split values. Those three unchanged digests are the
 # drift control -- vendored-source drift would have moved all four, so an update
@@ -36,7 +36,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "cc724044a1dbf2688fa90efad0b9af6887341d553f89dbdeedcfc8c6a5118eeb",
+    "src/gen3/generate_instructions.rs": "256401fb7ecc289221c14a3179911e6e72016477c63f215b9063a50c7c05e79d",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",
@@ -118,7 +118,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-13:]],
+                [entry.name for entry in applied[-14:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -133,6 +133,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-faint-cancels-opposing-switch.patch",
                     "poke-engine-gen3-crit-straddle-residual-split.patch",
                     "poke-engine-gen3-status-aware-residual-threshold.patch",
+                    "poke-engine-gen3-enumerate-damage-rolls.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
