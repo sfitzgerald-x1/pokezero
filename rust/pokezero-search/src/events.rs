@@ -2480,7 +2480,63 @@ fn render_move_phase(
     }
 
     if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
-        if !deterministic_noop && move_could_act {
+        // PARALYSIS MUST ACTUALLY BE THE DOMINANT OUTCOME, which is what the comment above
+        // claims and what this branch did not check.
+        //
+        // The justification for rendering `|cant|..|par` over a miss is that "the paralysis
+        // outcome carries the larger probability mass". That is CONDITIONAL, and the branch was
+        // not. With the engine merging the full-para branch into any same-delta branch:
+        //
+        //     P(par)  = 0.25                      (the paralysis roll)
+        //     P(miss) = 0.75 * (1 - accuracy)     (it acted, then missed)
+        //
+        // They cross at accuracy = 2/3. BELOW that, the miss is MORE likely and this branch
+        // rendered the minority outcome -- erasing a `|move|` reveal and suppressing a PP
+        // decrement the fold tracks. Measured: Dynamic Punch and Zap Cannon at 50% give
+        // P(miss) = 0.375 against P(par) = 0.25; Sing, Supersonic and Grass Whistle at 55%
+        // give 0.338; the OHKO moves at 30% give 0.525. Thunder and Blizzard at 70% give
+        // 0.225, so those were correct all along.
+        //
+        // `empty_tail_can_be_accuracy_miss` was already computed ~120 lines above and simply
+        // not consulted here.
+        //
+        // The masses are compared EXPLICITLY rather than hard-coding the 2/3 threshold, so the
+        // condition is visible in the code and moves correctly if either probability is ever
+        // re-derived. `PARALYSIS_ROLL` mirrors the engine's own constant.
+        const PARALYSIS_ROLL: f32 = 0.25;
+        let paralysis_dominates = if empty_tail_can_be_accuracy_miss {
+            let miss_mass = (1.0 - PARALYSIS_ROLL) * (1.0 - choice.accuracy / 100.0);
+            PARALYSIS_ROLL > miss_mass
+        } else if volatile_empty_tail_ambiguous {
+            // THE OTHER EMPTY-DELTA COMPETITOR, and review found this arm asserting it cannot
+            // exist -- while the arm's own PR was about exactly that mistake.
+            //
+            // Between the paralysis roll and the accuracy roll the engine has one more chance
+            // split: the consecutive-Protect stall fail, mass `0.75 * (1 - 0.5^min(n,3))`,
+            // whose branch is an empty-delta terminal of the same shape as paralysis. Measured
+            // against par's flat 0.25:
+            //
+            //     n=1  0.375   n=2  0.5625   n>=3  0.65625
+            //
+            // At n>=3 that is 2.6:1 AGAINST paralysis -- a wider margin than any row this
+            // change was written to fix (the worst there is the OHKO moves at 2.1:1). So the
+            // first version of this gate repaired the smaller instance and shipped a comment
+            // denying the larger one.
+            //
+            // `volatile_empty_tail_ambiguous` is computed ~200 lines above and is already
+            // consumed by the sibling ATTRACT branch for precisely this purpose. Not
+            // consulting it here was the same defect this change criticises in the original
+            // author, committed in the fix for it.
+            //
+            // It also explains why attract is safe from this competitor and paralysis was not:
+            // attract checks the predicate, paralysis did not.
+            false
+        } else {
+            // No competing empty-delta branch: neither an accuracy miss nor a stall fail, so
+            // paralysis really is the only explanation left.
+            true
+        };
+        if !deterministic_noop && move_could_act && paralysis_dominates {
             out.lines.push(format!("|cant|{attacker_ident}|par"));
             return;
         }
@@ -2518,8 +2574,10 @@ fn render_move_phase(
     // shows no effect on the defender, with deterministic causes (immunity,
     // protect, absorb) ruled out. NOTE: for a paralyzed/frozen attacker the
     // engine merges the full-para branch with the miss branch — that case
-    // never reaches here (the prelude renders |cant| first), so the residual
-    // ambiguity is para-vs-miss only, documented in the module docs.
+    // USED to never reach here, because the prelude rendered |cant| unconditionally. It now
+    // reaches here whenever the miss carries the larger mass -- below 2/3 accuracy -- which is
+    // the point of the dominance gate above. The unreachability claim outlived the code that
+    // made it true, and review caught it still standing in the commit that falsified it.
     let mut missed = false;
     if choice.target == MoveTarget::Opponent
         && !status_fail
