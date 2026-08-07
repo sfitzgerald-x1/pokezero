@@ -90,8 +90,11 @@ got=877 want=0` as if it characterized all five.
 `leaf_vs_reality` **also catches it**: defect class **123 → 125**, `EXIT=1` both before and
 after. Its denominator line is unchanged (956+315, diverged 917), and an earlier revision of
 this report read that line and wrongly concluded the whole gate was unmoved. The exit *bit* does
-not flip because that gate was already red at 123 on a clean crate; the gating quantity is
-`defect_rows` (`scripts/leaf_vs_reality.py:1062`), not the 917.
+not flip because that gate was already red at 123 on a clean crate; the gating quantity is `defect_rows` —
+`return 1 if (defect_rows != 0 or matchup_arm_failed or denominator) else 0` in
+`scripts/leaf_vs_reality.py` — not the 917. (Cited by expression, not line: this reference has
+now been invalidated TWICE by the very commit introducing it, once by the caveat edit and once
+by a rewrap two lines away.)
 
 ## Limits — read these before quoting the table
 
@@ -112,6 +115,15 @@ two independent bullets, which read as two defects.
 
 Because the old gates were already at `diverged 1` on a clean crate, the injection moved them
 `1 → 5`, and never moved their **verdict** at all.
+
+**This exercises the SELF side only.** The opponent side has been live since before this work.
+(Restored: an earlier revision carried this limit, and the rewrite that added the one-battle
+limit dropped it.)
+
+**Catchability depends on the SHAPE of the wrong write, not just on its being wrong.** This
+corpus discriminates only because the two sides' recharge states differ on those 5 rows. A
+self-side bug that read the self side with a different defect -- a wrong party index, say --
+has no guarantee of being caught here at all.
 
 **Why no self-side injection can do better on this corpus.** The recorded action and the parser
 tracker disagree on exactly one row of `corpus/golden-v4`, and it is opponent-side. On the self
