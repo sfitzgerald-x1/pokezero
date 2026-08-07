@@ -301,12 +301,26 @@ Every one of these is a gap in coverage *by definition*: the code has an exit fo
 program has never seen it fire. Listed rather than summarised, because "we have no rows for X"
 is only meaningful if X is named.
 
-**Never-fired static counters (10):** `abort:no_legal_action`, `skip:no_action_candidates`,
-`skip:world_error:no_constructible_candidate`, `skip:strict_all_branches_lossy` (H14),
+**Never-fired static counters (9):** `abort:no_legal_action`, `skip:no_action_candidates`,
+`skip:world_error:no_constructible_candidate`,
 `strict:no_damage_rolls` (H8), `strict:branch_event_legal_error:BranchLegalRollError` — whose
 raise-site messages are all unexercised and are not distinguishable in the key anyway —
 `engine_error`, `world_prestate_mismatch:side_conditions`, and the two structurally
 unreachable `divergence_class` values `mapper_lossy` and `no_usable_branch`.
+
+⚠ **CORRECTED 2026-08-07 (C142).** This list said **10** and included
+`skip:strict_all_branches_lossy` (H14) — cross-referencing the very cell that, as of C144's
+correction above, now reads **"REACHED, three times over"**. The list and H14 contradicted each
+other two paragraphs apart, and #1163 fixed H14 without reaching here. Removed, and the count
+re-derived rather than decremented on assertion: each of the other nine names was searched for a
+nonzero value across all 260 committed JSONs under `reports/`, and all nine are still absent, so
+10 − 1 = **9** is the measured figure. The refutation rests on hard counter values —
+`reports/c26_structural_probe_report.json` and `reports/c27_structural_probe_report.json` carry
+`skip:strict_all_branches_lossy` at **2** apiece — not on narration. (An older-era diagnosis,
+`reports/c32_fail_diagnosis.json`, records the same phenomenon at **372** under the differently
+named field `coverage_diagnosis.coverage_reducing_skips.strict_all_branches_lossy`; it is
+corroborating rather than the counter itself.) `engine_error` remains genuinely never-fired,
+which is what H14's own closing sentence says. See `reports/c142_rump_branch_adjudication.md`.
 
 **Never-fired dynamic families (6):** `skip:no_materialization:{Exc}`,
 `skip:world_error:{Exc}`, `strict:branch_events_error:{Exc}`, `engine_error:{Exc}:{detail}`,

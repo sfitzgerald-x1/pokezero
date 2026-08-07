@@ -59,7 +59,7 @@ from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     CHECKPOINT_SCHEMA,
     checkpoint_report_binding_failures,
-    VERDICT_PARTITION_LOSSY_COUNTER,
+    VERDICT_PARTITION_SKIP_COUNTERS,
     verdict_partition_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
@@ -1606,8 +1606,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     #
     # `matched` is used directly rather than as `measured - diverged`: the subtraction
     # form is exactly the two-term identity C144 falsified.
+    # Every post-measurement skip verdict, not just the lossy one: C142's
+    # `skip:rump_branch_set` is a boundary the harness explicitly declined to judge, so
+    # crediting it to the denominator would understate `in_support_rate` by exactly the
+    # rows whose verdict was withheld.
     unadjudicated = (
-        aggregate_counters.get(VERDICT_PARTITION_LOSSY_COUNTER, 0) + agg["engine_errors"]
+        sum(aggregate_counters.get(name, 0) for name in VERDICT_PARTITION_SKIP_COUNTERS)
+        + agg["engine_errors"]
     )
     adjudicated = max(1, agg["boundaries_measured"] - unadjudicated)
     games = max(1, agg["games"])

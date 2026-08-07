@@ -180,7 +180,7 @@ across every sweep artifact in the repo:
 |---|---|---|---|
 | dev `19,000,000–199` | **0** (counter absent from all 27 dev artifacts) | 0 | 1 |
 | validation holdout `19,100,000–199` | **3** (identical on every artifact `c121`→`c138`) | 0 | 0 |
-| final holdout `19,200,060–259` (`c141`) | **14** | 0 | 2 → corrected to **1** |
+| final holdout `19,200,060–259` (`c141`) | **14** | **4** | 2 → corrected to **1** |
 
 The population is largest exactly where it cannot be re-measured, and it is invisible on both
 windows that can be. Two honest caveats:
@@ -190,9 +190,19 @@ windows that can be. Two honest caveats:
   the reserved window**, which is forbidden. It can be bounded: that window also records
   `skip:strict_all_branches_lossy: 4`, and each of those 4 boundaries consumed at least one
   of the 14 drops, so at most 10 remain for rump boundaries. With the one proven by replay,
-  the bound is **1–10**. (Incidentally, those 4 are the first time
-  `skip:strict_all_branches_lossy` has ever fired — `reports/c138_known_gaps_ledger.md` H14
-  lists it as reachable-in-principle but never observed. It is now observed.)
+  the bound is **1–10**.
+
+  Those 4 are also the first `skip:strict_all_branches_lossy` in **the sweep-artifact
+  series**: the counter is absent from all 62 JSONs matching `reports/artifacts/*.json` on
+  this branch. It is **not** the first time it has ever fired, and an earlier draft of this
+  report said so. It reaches 372 in `reports/c32_fail_diagnosis.json`
+  (`coverage_diagnosis.coverage_reducing_skips`), 2 in both
+  `reports/c26_structural_probe_report.json` and `reports/c27_structural_probe_report.json`,
+  and 1 in the `c108` baseline. The claim came from
+  `reports/c138_known_gaps_ledger.md:268`/`:304`, which says "has never fired" and lists it
+  among never-fired static counters; that is the ledger's error and it has now propagated into
+  three separate PRs, including this one. **Do not cite it.** Correcting `c138` belongs to
+  #1163 — see §8 for the residue this branch still owes after that lands.
 - The 14-versus-3 jump is unexplained. The two windows differ by only ~4 % in boundaries
   measured (16,274 vs 15,579), so it is not a denominator effect. It may be window variance;
   nothing here establishes a trend from three points, and the dev-window row the ledger cites
@@ -260,15 +270,33 @@ line).
 
 They go in a **separate** `withheld_repros` list, not in `repros`. That was the original
 objection to retaining them and it is answered rather than overridden: `repros`' completeness
-contract is `repros_retained == transitions_diverged`, which `scripts/cert_sweep_reread.py`
-enforces, and a second population beside it leaves that identity exactly as it was.
-`repro_retention` now declares both, symmetrically:
+contract is `repros_retained == transitions_diverged`, which `scripts/cert_sweep_reread.py:128-132`
+enforces with a hard `raise`, and a second population beside it leaves that identity exactly as
+it was. `repro_retention` **declares** both symmetrically:
 
 | | divergences | withheld |
 |---|---|---|
 | population size | `transitions_diverged` | `verdicts_withheld` |
 | rows retained | `repros_retained` | `withheld_retained` |
 | complete? | `repros_complete` | `withheld_complete` |
+
+**Declaration is not enforcement, and the symmetry stops there.** Two gaps, both stated rather
+than papered over:
+
+- `withheld_complete` is written but checked nowhere. `scripts/cert_sweep_readout.py:884` and
+  `:1465-1466` require `repros_complete is True` at shard level and have no withheld twin, so a
+  truncated withheld population would not fail a readout. The count is still visible
+  (`verdicts_withheld` vs `withheld_retained` in the artifact), so the truncation is legible —
+  it is simply not gated.
+- Nothing committed replays a withheld row end to end.
+  `cert_sweep_reread.load_retained_rows` (`:125`, `:133-136`) takes only `data["repros"]` entries
+  with `kind == "transition_diverged"`, so withheld rows are **replay-capable** — pinned by a
+  round-trip through the matcher from the payload alone in
+  `tests/test_rump_branch_adjudication.py` — without a CLI consumer that does it.
+
+Both are follow-ups on the certification gates rather than on this exit, and both are cheaper
+to do once a withheld population actually exists to gate. The property that mattered for the
+block — that a withheld row carries enough state to be diagnosed at all — holds now.
 
 `withheld_repros` is in `checkpoint_report_binding_failures`' field list, so a stale report
 that dropped the withheld population fails certification instead of passing quietly. Records
@@ -311,15 +339,25 @@ remembers to extend the list. Pinned in both directions, including an unknown fu
 
 Generated / replayed evidence, none of it fitted to the reserved window:
 
-- `tests/test_rump_branch_adjudication.py` — 13 pins on synthetic branch data. The control
+- `tests/test_rump_branch_adjudication.py` — 15 pins on synthetic branch data. The control
   (full set → `matched`); the withheld verdict and its recorded mass; marker attribution;
   unchanged sensitivity when nothing is dropped; `skip_lossy` precedence; a **minority** drop
   (6.25 % dropped, 93.75 % surviving) that a majority threshold would let through; an
   unpriceable branch (`BranchLegalRollError`) counting as a drop; the withheld payload carrying
   every field a replay consumes; a round trip that re-adjudicates from the payload alone back
   to `skip_rump`; `repros_retained == transitions_diverged` untouched while the withheld row
-  survives; a report that drops `withheld_repros` failing certification; and both compatibility
-  halves — a pre-C142 *record* still aggregating and a pre-C142 *report* still certifying.
+  survives; a report that drops `withheld_repros` — in **both** the emptied and the *absent*
+  form, the latter being the only one the compatibility default governs and therefore the only
+  one that discriminates it from a broken default; both compatibility halves (a pre-C142
+  *record* still aggregating, a pre-C142 *report* still certifying); a **lost candidate state**
+  withholding and reporting its surviving mass as `unknown` rather than as a computed 100 %;
+  and every candidate state failing still taking the older all-lossy exit.
+
+  Three of these are mutation-verified rather than merely green: a `dropped_mass > 50.0`
+  threshold fails the minority pin; deleting `unrendered_states += 1` fails the lost-state pin;
+  and defaulting the compatibility checks to the aggregate
+  (`report.get("withheld_repros", aggregate["withheld_repros"])`) fails the absent-form pin.
+  Each was applied, run, and reverted.
 - `tests/test_cert_sweep_reread.py` — 5 new pins on the `--expect diverged` gate: `diverged`
   passes; `matched`, `skip_rump`, `skip_lossy` and an unknown future verdict all fail.
 - `scripts/gen3_recoil_differential.py` — **committed**, so the recoil ground truth is
@@ -432,3 +470,23 @@ the sweeps are a safety result, not a confirmation. See §8.
 - **No claim is made that the engine's recoil is correct in general.** What is measured is
   gen3 Double-Edge: the `[1,3]` fraction, the `floor`, the min-1 clamp and the cap. Volt
   Tackle (1 set) and the `[1,4]` moves (0 sets) were not exercised against Showdown here.
+
+## 9. Owed after #1163 lands
+
+`reports/c138_known_gaps_ledger.md` is the source of the false "never fired" claim about
+`skip:strict_all_branches_lossy` (§5), and the same claim has now surfaced independently in
+three PRs, which is what a shared wrong premise looks like. **#1163 is correcting `c138` H14
+and merges ahead of this branch, so that edit is not duplicated here** — doing so would
+conflict.
+
+What this branch still owes, to be done *after* rebasing onto the merged #1163 and by opening
+the merged file rather than assuming which lines it touched:
+
+- `c138_known_gaps_ledger.md:304` lists `skip:strict_all_branches_lossy` among never-fired
+  static counters. If #1163's correction does not reach `:304`, fix it there and nowhere else.
+
+#1163 also touches `docs/engine_divergence_ledger_20260728.md` and
+`scripts/engine_transition_differential.py` — both files this branch modifies — and its subject
+is the same four-term boundary identity as the Rule 2 amendment in §6. That amendment is
+expected to become redundant with #1163's version and should be dropped in favour of it at
+rebase rather than merged alongside it.

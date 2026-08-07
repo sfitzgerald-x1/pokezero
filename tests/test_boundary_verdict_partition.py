@@ -1,14 +1,24 @@
-"""The boundary verdict partition is FOUR-term, and this module refuses the two-term form.
+"""The boundary verdict partition is FIVE-term, and this module refuses the two-term form.
 
 `transitions_matched + transitions_diverged == boundaries_measured` was asserted as a
 property of the transition differential across `reports/` and `docs/` for the whole
 C111-C141 era. It is false. `boundaries_measured` increments as the last statement of
 `_prepare_boundary`, so a boundary that reached the matcher is inside it; `run_game`
-then routes that boundary to exactly one of FOUR counters, and two of them are neither
+then routes that boundary to exactly one of FIVE counters, and three of them are neither
 `matched` nor `diverged`:
 
     transitions_matched + transitions_diverged + engine_errors
-        + counters["skip:strict_all_branches_lossy"]  ==  boundaries_measured
+        + counters["skip:strict_all_branches_lossy"]
+        + counters["skip:rump_branch_set"]  ==  boundaries_measured
+
+C144 established the first four. The fifth, `skip:rump_branch_set`, arrives with C142
+(`reports/c142_rump_branch_adjudication.md`): a boundary whose branch set was left
+incomplete before comparison has its verdict WITHHELD rather than adjudicated. It is
+added here rather than discovered later because C144's own comment in
+`scripts/engine_transition_differential.py` said to, and because it falsifies C144's
+sentence that every `skip:*` counter other than the lossy one fires before
+`boundaries_measured` increments. Membership is decided by WHEN a counter fires, never
+by its prefix.
 
 The two extra terms were 0 on the dev and validation-holdout windows the era iterated
 against, which is the only reason the two-term form ever appeared to hold. It is broken
@@ -18,7 +28,7 @@ lossy 2 apiece) and on C141's final-holdout sweep (lossy 4, PR #1159).
 
 WHAT THIS MODULE PINS, and why each pin is not vacuous:
 
-1. The four-term identity closes on EVERY committed sweep artifact. Discovered by glob,
+1. The identity closes on EVERY committed sweep artifact. Discovered by glob,
    not by a hardcoded list, so a new artifact that violates it is caught without anyone
    remembering to add it here.
 2. The two-term form FAILS on the named counterexamples. This is the anti-vacuity pin:
@@ -53,6 +63,7 @@ from engine_transition_differential import (  # noqa: E402
     VERDICT_PARTITION_COUNTERS,
     VERDICT_PARTITION_LOSSY_COUNTER,
     VERDICT_PARTITION_SCALARS,
+    VERDICT_PARTITION_SKIP_COUNTERS,
     verdict_partition_failures,
 )
 
@@ -103,8 +114,11 @@ _C141 = {
 #
 # Committing a new sweep artifact means bumping this number. That is the point: it makes the
 # new artifact pass through the checker deliberately rather than by default. C141's
-# final-holdout sweep lands with PR #1159 and takes it to 71.
-_EXPECTED_SWEEP_ARTIFACTS = 70
+# final-holdout sweep lands with PR #1159 and takes it to 75.
+#
+# C142 committed four (`c142_{base,rumpfix}_{dev,holdout}_sweep.json`) and took it from
+# 70 to 74. The pin fired on the rebase, which is the whole point of an exact count.
+_EXPECTED_SWEEP_ARTIFACTS = 74
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:
@@ -324,13 +338,45 @@ class VerdictPartitionFailuresTests(unittest.TestCase):
         self.assertTrue(any("counters" in text for text in failures))
 
     def test_the_counter_vocabulary_matches_the_scalar_vocabulary_in_order(self) -> None:
-        # The two name tuples describe the same partition. If a future edit adds a fifth
+        # The two name tuples describe the same partition. If a future edit adds a
         # verdict to one and not the other, the identity silently splits in two.
+        #
+        # Written against `VERDICT_PARTITION_SKIP_COUNTERS` rather than `+ 1` because
+        # C142 added the fifth term (`skip:rump_branch_set`) and the `+ 1` form would
+        # have had to be edited for it — which is fine when the edit is deliberate and
+        # useless as a pin when it is not. This form keeps holding as the skip tuple
+        # grows and still fails if the two vocabularies diverge.
         self.assertEqual(
             len(VERDICT_PARTITION_COUNTERS),
-            len(VERDICT_PARTITION_SCALARS) + 1,
+            len(VERDICT_PARTITION_SCALARS) + len(VERDICT_PARTITION_SKIP_COUNTERS),
         )
-        self.assertEqual(VERDICT_PARTITION_COUNTERS[-1], VERDICT_PARTITION_LOSSY_COUNTER)
+        self.assertEqual(
+            VERDICT_PARTITION_COUNTERS[len(VERDICT_PARTITION_SCALARS):],
+            VERDICT_PARTITION_SKIP_COUNTERS,
+        )
+        self.assertEqual(
+            VERDICT_PARTITION_LOSSY_COUNTER, VERDICT_PARTITION_SKIP_COUNTERS[0]
+        )
+
+    def test_the_withheld_verdict_is_IN_the_partition(self) -> None:
+        """C142's `skip:rump_branch_set` fires after `boundaries_measured` increments and
+        removes the boundary from both `transition:*` tallies, so omitting it would make
+        every report carrying one fail to reconcile — the drift C144's own comment told
+        the next author to prevent."""
+
+        self.assertIn("skip:rump_branch_set", VERDICT_PARTITION_SKIP_COUNTERS)
+        self.assertIn("skip:rump_branch_set", VERDICT_PARTITION_COUNTERS)
+        report = {
+            "boundaries_measured": 100,
+            "transitions_matched": 90,
+            "transitions_diverged": 4,
+            "engine_errors": 0,
+            "counters": {VERDICT_PARTITION_LOSSY_COUNTER: 2, "skip:rump_branch_set": 4},
+        }
+        self.assertEqual(verdict_partition_failures(report), [])
+        # And it is load-bearing: drop the term and the identity must go red.
+        without = {**report, "counters": {VERDICT_PARTITION_LOSSY_COUNTER: 2}}
+        self.assertTrue(verdict_partition_failures(without))
 
 
 class ReadoutGatesOnThePartitionTests(unittest.TestCase):

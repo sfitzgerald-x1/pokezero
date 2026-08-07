@@ -109,14 +109,34 @@ _MINORITY_CRIT_ARM = {
 }
 
 
-def _adjudicate(branches, *, bases=(59, 118)):
+class _FailingRenderer:
+    """Renders the Nth candidate state and raises on the rest.
+
+    `states` is the hidden-counter candidate list, so "one state renders, another
+    raises" is the ORDINARY shape of a render failure. The reviewer's measurement
+    of this shape is what showed the first guard reported a guessed 100 %.
+    """
+
+    def __init__(self, branches_by_call):
+        self._calls = list(branches_by_call)
+        self._index = 0
+
+    def branch_events(self, *_args, **_kwargs):
+        payload = self._calls[self._index] if self._index < len(self._calls) else None
+        self._index += 1
+        if payload is None:
+            raise RuntimeError("branch render failed for this candidate state")
+        return json.dumps({"branches": payload})
+
+
+def _adjudicate(branches, *, bases=(59, 118), renderer=None, states=1):
     saved_search, saved_engine = etd.pokezero_search, etd.poke_engine
-    etd.pokezero_search = _FakeBranchRenderer(branches)
+    etd.pokezero_search = renderer if renderer is not None else _FakeBranchRenderer(branches)
     etd.poke_engine = _FakeEngine(bases)
     counts: Counter = Counter()
     try:
         verdict, misses, branch_count = etd.evaluate_boundary_strict(
-            states=[_FakeState()],
+            states=[_FakeState() for _ in range(states)],
             slot_sides={"p1": "side_one", "p2": "side_two"},
             choices={"p1": "doubleedge", "p2": "batonpass"},
             party_display={"p1": ["Attacker"], "p2": ["Target"]},
@@ -271,6 +291,61 @@ class RumpBranchSetWithholdsTheVerdict(unittest.TestCase):
             any(k.startswith("strict:branch_event_legal_error") for k in counts)
         )
 
+    def test_a_LOST_CANDIDATE_STATE_withholds_and_reports_the_mass_as_unknown(self) -> None:
+        """Path 3, which was entirely unpinned: deleting its flag left all tests
+        green, and its `unknown` branch was dead code.
+
+        One state renders and misses, the other raises. The first version computed
+        `surviving / enumerated_mass` over only the state that DID render and
+        printed "100 of 100 enumerated mass survived (100.00%)" — a guessed 100 %
+        over an enumeration that lost a whole state, which is the same defect the
+        guard exists to prevent. The denominator is unknowable here, so it must be
+        reported as unknown, not computed.
+        """
+
+        missing_arm = {
+            "percentage": 100.0,
+            "lossy": [],
+            "events": [
+                "|",
+                "|move|p1a: Attacker|Double-Edge|p2a: Target",
+                "|-damage|p2a: Target|48/100",
+                "|-damage|p1a: Attacker|183/200|[from] Recoil|[of] p2a: Target",
+                "|-damage|p1a: Attacker|175/200|[from] psn",
+                "|",
+                "|upkeep",
+                "|turn|2",
+            ],
+        }
+        verdict, misses, _count, counts = _adjudicate(
+            None, renderer=_FailingRenderer([[missing_arm], None]), states=2
+        )
+        self.assertEqual(verdict, "skip_rump")
+        self.assertEqual(counts["skip:rump_branch_set"], 1)
+        self.assertEqual(counts["strict:branch_events_error:RuntimeError"], 1)
+        self.assertEqual(counts["strict:diverged_on_full_branch_set"], 0)
+        # The number must NOT be reported, because it is not known.
+        self.assertEqual(counts["skip:rump_branch_set_surviving_decile:unknown"], 1)
+        self.assertEqual(counts["skip:rump_branch_set_surviving_decile:10"], 0)
+        self.assertIn("1 of 2 candidate states failed to render", misses[0])
+        self.assertIn("UNKNOWN", misses[0])
+        self.assertNotIn("100.00%", misses[0])
+
+    def test_every_candidate_state_failing_is_the_all_lossy_exit(self) -> None:
+        """The boundary of path 3, and the reason its old `enumerated_mass == 0`
+        branch was unreachable: with nothing rendered, `usable_branches == 0` and
+        the older all-lossy return fires first. Pinned so the two exits keep their
+        precedence."""
+
+        verdict, misses, _count, counts = _adjudicate(
+            None, renderer=_FailingRenderer([None, None]), states=2
+        )
+        self.assertEqual(verdict, "skip_lossy")
+        self.assertEqual(counts["strict:branch_events_error:RuntimeError"], 2)
+        self.assertEqual(counts["skip:rump_branch_set"], 0)
+        self.assertEqual(counts["skip:rump_branch_set_surviving_decile:unknown"], 0)
+        self.assertEqual(misses, ["every branch rendered lossy"])
+
     def test_every_arm_lossy_still_takes_the_older_all_lossy_exit(self) -> None:
         """`skip_lossy` predates this change and keeps precedence: it is the
         stronger statement (nothing was rendered at all)."""
@@ -416,10 +491,36 @@ class WithheldRowsStayReplayable(unittest.TestCase):
             keep_repro=25,
         )
         self.assertEqual(mod.checkpoint_report_binding_failures([record], report), [])
-        report["withheld_repros"] = []
-        failures = mod.checkpoint_report_binding_failures([record], report)
+
+        # FORM 1: present and emptied.
+        emptied = json.loads(json.dumps(report))
+        emptied["withheld_repros"] = []
+        emptied["repro_retention"]["withheld_retained"] = 0
+        failures = mod.checkpoint_report_binding_failures([record], emptied)
         self.assertIn(
             "report withheld_repros does not match the checkpoint aggregate", failures
+        )
+        self.assertIn(
+            "report repro_retention.withheld_retained does not match the checkpoint aggregate",
+            failures,
+        )
+
+        # FORM 2: ABSENT -- the only form the compatibility default governs, and
+        # therefore the only form that discriminates the shipped default from a
+        # broken one. Form 1 alone passes even under
+        # `report.get("withheld_repros", aggregate["withheld_repros"])`, which
+        # re-opens the hole completely: a report that simply omits both keys over a
+        # non-empty aggregate would return zero failures.
+        absent = json.loads(json.dumps(report))
+        del absent["withheld_repros"]
+        del absent["repro_retention"]["withheld_retained"]
+        failures = mod.checkpoint_report_binding_failures([record], absent)
+        self.assertIn(
+            "report withheld_repros does not match the checkpoint aggregate", failures
+        )
+        self.assertIn(
+            "report repro_retention.withheld_retained does not match the checkpoint aggregate",
+            failures,
         )
 
     def test_a_pre_C142_REPORT_without_the_key_still_certifies(self) -> None:

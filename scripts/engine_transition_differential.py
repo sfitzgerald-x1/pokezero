@@ -2030,13 +2030,27 @@ def evaluate_boundary_strict(
     #   1. the lossy-render filter        (the measured case)
     #   2. `BranchLegalRollError`         (per-branch support could not be priced)
     #   3. `strict:branch_events_error`   (a whole candidate state failed to render)
-    # Only (1) has a knowable mass; (3) loses the branch list itself, so the
-    # surviving fraction is reported as unknown rather than guessed. Neither (2)
-    # nor (3) has ever appeared in any artifact in `reports/artifacts/`, so this
-    # is a fail-closed guard on unexercised paths, not a fix to a live number.
+    #
+    # (1) and (2) drop a branch whose mass is known, so they accumulate into
+    # `dropped_mass`. (3) loses the branch LIST, so its mass is not merely zero,
+    # it is unknown -- and `states` is the hidden-counter candidate list, so
+    # losing one of several is the ordinary shape of (3), not a corner. The first
+    # version of this guard reported an `unknown` fraction only when
+    # `enumerated_mass == 0`, which is unreachable (a zero mass implies
+    # `usable_branches == 0`, and the all-lossy return fires first), while the
+    # REACHABLE case -- one state lost, another rendered -- printed
+    # "100 of 100 enumerated mass survived (100.00%)". That is a guessed 100 %
+    # over an incomplete enumeration: the same defect the guard exists to
+    # prevent, in the same direction, one layer up. `unrendered_states` is
+    # therefore counted separately and forces the `unknown` report whenever it
+    # is non-zero.
+    #
+    # Neither (2) nor (3) appears in any of the sweep artifacts committed under
+    # `reports/artifacts/`, so both are fail-closed guards on paths this
+    # program has not observed rather than fixes to a live number.
     enumerated_mass = 0.0
     dropped_mass = 0.0
-    enumeration_incomplete = False
+    unrendered_states = 0
     for state in states:
         try:
             rendered = json.loads(
@@ -2048,7 +2062,7 @@ def evaluate_boundary_strict(
             raise
         except BaseException as error:  # noqa: BLE001
             counts[f"strict:branch_events_error:{type(error).__name__}"] += 1
-            enumeration_incomplete = True
+            unrendered_states += 1
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
@@ -2111,7 +2125,6 @@ def evaluate_boundary_strict(
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
                 dropped_mass += float(branch.get("percentage") or 0.0)
-                enumeration_incomplete = True
                 continue
             usable_branches += 1
             engine_components = damage_component_events(
@@ -2209,6 +2222,12 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
+    # DERIVED, not carried. The previous form assigned a separate boolean at each
+    # of the three sites, which is one unpinnable duplicate per site: deleting the
+    # assignment inside the state-render handler left every test green. Each of
+    # the two accumulators below is now the single source of truth for its own
+    # path, so removing either increment changes an observable number.
+    enumeration_incomplete = dropped_mass > 0.0 or unrendered_states > 0
     if enumeration_incomplete:
         # SOME branch was left uncompared and nothing that survived reproduced
         # the observation. The branch that would have may be one of those, so the
@@ -2226,7 +2245,21 @@ def evaluate_boundary_strict(
         # with a MINORITY drop, which is the case a threshold would let through.
         surviving = enumerated_mass - dropped_mass
         counts["skip:rump_branch_set"] += 1
-        if enumerated_mass > 0.0:
+        if unrendered_states or enumerated_mass <= 0.0:
+            # A candidate state produced no branch list at all, so the
+            # denominator is not `enumerated_mass` -- it is `enumerated_mass`
+            # plus an unknown amount. Any fraction computed here would be an
+            # overstatement, and at one lost state out of two it would read
+            # "100.00%". Report the loss instead of a number.
+            counts["skip:rump_branch_set_surviving_decile:unknown"] += 1
+            note = (
+                f"rump branch set: {unrendered_states} of {len(states)} candidate "
+                f"states failed to render, so the enumerated denominator is "
+                f"incomplete and the surviving fraction is UNKNOWN "
+                f"(dropped {dropped_mass:.4g} of the {enumerated_mass:.4g} that did "
+                f"enumerate); verdict withheld"
+            )
+        else:
             # Decile of surviving mass, so "how much of its mass did the withheld
             # verdict have" is answerable from the artifact alone.
             counts[
@@ -2237,14 +2270,6 @@ def evaluate_boundary_strict(
                 f"rump branch set: {surviving:.4g} of {enumerated_mass:.4g} enumerated "
                 f"mass survived the branch filters "
                 f"({surviving / enumerated_mass:.2%}); verdict withheld"
-            )
-        else:
-            # A whole candidate state failed to render, so there is no branch list
-            # to take a fraction of. Reported as unknown rather than as 0 %.
-            counts["skip:rump_branch_set_surviving_decile:unknown"] += 1
-            note = (
-                "rump branch set: enumeration incomplete and no branch list "
-                "available; surviving mass unknown; verdict withheld"
             )
         return "skip_rump", [note, *ordered], branch_total
     # Reaching here means every enumerated branch was rendered and compared, so
@@ -3068,10 +3093,15 @@ def checkpoint_report_aggregate(
 # PER-BRANCH or PER-STATE tallies within one boundary -- C141's holdout has
 # `strict:lossy_render` 14 against only 4 boundaries that lost every branch.
 # `gating:*` partitions the measured set a second, independent way, and
-# `divergence_class:*` partitions `transition:diverged` alone. Every `skip:*` counter
-# OTHER than `skip:strict_all_branches_lossy` fires before `boundaries_measured`
-# increments and belongs to the coverage reconciliation instead
-# (`tests/test_single_seat_coverage_bound.py`).
+# `divergence_class:*` partitions `transition:diverged` alone.
+#
+# The remaining `skip:*` counters -- every one not in
+# `VERDICT_PARTITION_SKIP_COUNTERS` -- fire BEFORE `boundaries_measured` increments and
+# belong to the coverage reconciliation instead
+# (`tests/test_single_seat_coverage_bound.py`). C144 wrote this as "every `skip:*` other
+# than `skip:strict_all_branches_lossy`", which C142's `skip:rump_branch_set` falsifies:
+# it is a `skip:*` that fires after. The membership test is WHEN the counter fires
+# relative to `boundaries_measured`, never the counter's prefix.
 # ---------------------------------------------------------------------------------------------
 
 # The four verdict terms as a report PUBLISHES them: three top-level scalars and one
@@ -3079,7 +3109,19 @@ def checkpoint_report_aggregate(
 # published identity was read as two-term for so long -- the other three are right
 # there in the summary block and the fourth has to be dug out of `counters`.
 VERDICT_PARTITION_SCALARS = ("transitions_matched", "transitions_diverged", "engine_errors")
-VERDICT_PARTITION_LOSSY_COUNTER = "skip:strict_all_branches_lossy"
+# The post-measurement SKIP verdicts, which have no top-level scalar and must be dug
+# out of `counters`. C144 shipped this as a single name; C142 added the second, doing
+# exactly what C144's own instruction above said to do rather than letting the
+# identity drift. Both fire AFTER `boundaries_measured` has incremented and both take
+# the boundary out of every `transition:*` tally, which is the membership test for
+# this tuple -- not the counter's prefix.
+VERDICT_PARTITION_SKIP_COUNTERS = (
+    "skip:strict_all_branches_lossy",
+    "skip:rump_branch_set",
+)
+# Retained as the name C144's consumers import. It is the FIRST of the skip terms, no
+# longer the only one; code that needs the whole partition must use the tuple.
+VERDICT_PARTITION_LOSSY_COUNTER = VERDICT_PARTITION_SKIP_COUNTERS[0]
 # The same partition in the internal counter vocabulary `run_game` increments, in
 # report-field order. `checkpoint_report_binding_failures` is what binds the two
 # vocabularies together; this function does not re-check that binding.
@@ -3087,21 +3129,21 @@ VERDICT_PARTITION_COUNTERS = (
     "transition:matched",
     "transition:diverged",
     "engine_error",
-    VERDICT_PARTITION_LOSSY_COUNTER,
+    *VERDICT_PARTITION_SKIP_COUNTERS,
 )
 
 
 def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "report") -> list[str]:
-    """Return every way the four-term boundary verdict partition fails to close.
+    """Return every way the boundary verdict partition fails to close.
 
     Empty means it closes. Callers OR this into their own gate; it never lowers an
     exit code.
 
     Reads ``transitions_matched``, ``transitions_diverged``, ``engine_errors`` and
     ``boundaries_measured`` from the report's top level and
-    ``counters['skip:strict_all_branches_lossy']`` from its counter dump. The lossy
-    counter is the only term allowed to default -- to 0, because a Counter dump omits
-    unseen keys and the non-strict matcher never emits it at all. Everything else is
+    every name in ``VERDICT_PARTITION_SKIP_COUNTERS`` from its counter dump. The skip
+    counters are the only terms allowed to default -- to 0, because a Counter dump omits
+    unseen keys and the non-strict matcher never emits them at all. Everything else is
     REFUSED when absent or non-integer rather than defaulted, because defaulting
     ``boundaries_measured`` to 0 would let the identity close on an unreadable
     report, which is the instrument-that-cannot-move failure this repo keeps
@@ -3126,16 +3168,14 @@ def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "repor
         terms[name] = value
     counters = report.get("counters")
     if not isinstance(counters, Mapping):
-        out.append(f"{label}: counters is not an object, so the lossy verdict cannot be read")
+        out.append(f"{label}: counters is not an object, so the skip verdicts cannot be read")
     else:
-        lossy = counters.get(VERDICT_PARTITION_LOSSY_COUNTER, 0)
-        if type(lossy) is not int or lossy < 0:
-            out.append(
-                f"{label}: counter {VERDICT_PARTITION_LOSSY_COUNTER!r} is {lossy!r}, "
-                "not a non-negative int"
-            )
-        else:
-            terms[VERDICT_PARTITION_LOSSY_COUNTER] = lossy
+        for name in VERDICT_PARTITION_SKIP_COUNTERS:
+            value = counters.get(name, 0)
+            if type(value) is not int or value < 0:
+                out.append(f"{label}: counter {name!r} is {value!r}, not a non-negative int")
+            else:
+                terms[name] = value
     if out:
         return out
     accounted = sum(terms.values())
