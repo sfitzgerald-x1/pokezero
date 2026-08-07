@@ -51,6 +51,15 @@ carry for `dc6e1e19`. Each worktree got its own `.venv` and its own build, so
 `third_party/poke-engine-src` was vendored per tree by step `[1/8]`; nothing here was measured
 against a tree a bare `git checkout` had left stale.
 
+**`main` moved twice under this work, and every `1a929c57` below is left as written.** The branch was
+cut at `1a929c57`, C143 (#1161) then C144 (#1163) landed, and the branch was rebased onto `ce962c6e`.
+The mutant run and the `--check`ed build in §5 were genuinely taken at `1a929c57`, so restating them
+as `ce962c6e` would be false. What licenses carrying them across is measured, not assumed:
+`git diff a4e42034 HEAD -- rust/ third_party/` is **empty**, `--check` returns the same
+`5fa147ffa325c887…` on the rebased tree, and the `19100170` sweep returns the identical 88 / 81 / 81 / 0
+after C144's +189-line change to `engine_transition_differential.py`. The head-commit row of §3 and its
+artifact were re-derived on the rebased tree rather than carried.
+
 **The sweep window.** `19100170` is in the validation holdout (`19100000–19100199`), which is
 sweepable. Nothing here ran at or above `19_200_000`; `FINAL_HOLDOUT_SEED_FLOOR`
 (`scripts/engine_transition_differential.py:3085`) was never approached and
@@ -127,7 +136,7 @@ PYTHONPATH=src python scripts/engine_transition_differential.py \
 | `2ec0cb13` (range start) | 88 | 81 | 79 | **2** | `component_missing_in_engine:itemleftovers` 2 |
 | `dc6e1e19` (`d27316b6`'s parent) | 88 | 81 | 79 | **2** | `component_missing_in_engine:itemleftovers` 2 |
 | `d27316b6` (**#1148**) | 88 | 81 | **81** | **0** | `{}` |
-| `0afb2dcc` (this branch, on `1a929c57`) | 88 | 81 | 81 | 0 | `{}` |
+| `662d9db8` (this branch, on `1a929c57`) | 88 | 81 | 81 | 0 | `{}` |
 
 `matched + diverged == boundaries_measured` on every line: `79 + 2 == 81`, `81 + 0 == 81`. The skip
 histogram is **byte-identical** across all four — `skip:single_seat_boundary` 8,
@@ -289,7 +298,7 @@ consecutive-Protect stall ladder. **It is not**, and the distinction matters:
 
 Why this costs nothing at *these* boundaries: p1's move is Protect against a switch, so neither
 outcome moves any HP, the strict matcher compares damage components only, and both boundaries match
-at `d27316b6` and at `0afb2dcc`. The follow-on mispricing is a **next**-turn effect and I did not
+at `d27316b6` and at `662d9db8`. The follow-on mispricing is a **next**-turn effect and I did not
 sweep for it.
 
 **Is the `willAct` clause already recorded?** My first search was
