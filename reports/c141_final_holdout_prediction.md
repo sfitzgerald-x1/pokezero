@@ -146,15 +146,18 @@ property that makes a pre-registration worth anything.
 I wrote that both rows were shapes the ledger does not contain. **Both halves were false.**
 
 Both classes were already in the committed corpus. Re-derived here over the whole corpus —
-glob `reports/**/*.json` (recursive, 254 files), inspecting **every** `divergence_classes`
-block at any depth rather than only the top level:
+glob `reports/**/*.json` (recursive, **255** files on this commit), inspecting **every**
+`divergence_classes` block at any depth rather than only the top level:
 
 | class | `reports/artifacts/` | `reports/*.json` | **total** | **predating this sweep** |
 |---|---|---|---|---|
 | `roll_scaled_component` | 13 | 14 | **27** | **26** |
 | `component_mismatch:*` | 13 | 11 | **24** | **23** |
 
-(The "predating" column subtracts only `c141_final_holdout_sweep.json`, which carries both.)
+(The "predating" column subtracts only `c141_final_holdout_sweep.json`, which carries both. The
+file count was stated as 254 when the recount was run and is **255** as committed — the same
+commit adds `c141_final_holdout_replay.json`. That file carries no `divergence_classes` block,
+so it changes the denominator of the glob and none of the four derived counts.)
 
 An earlier version of this line said "nine committed artifacts"; a later commit claimed to fix
 it to **12** and never edited the line. Both were wrong, and in the same way: they globbed only
@@ -243,10 +246,12 @@ then, two lines later, called this window the first live firing. Both could not 
 citation was the thing that refuted the claim.
 
 So what is actually true, and all that is claimed here: **this is the first firing in the
-`reports/artifacts` sweep series** — of the 56 sweep artifacts in that directory carrying a
-`counters` block, **55 carry `skip:strict_all_branches_lossy` at 0 and only this one is
-nonzero**. It is **not** the first firing in the repo, and it is not a discovery about the
-instrument.
+`reports/artifacts` sweep series.** `reports/artifacts/` holds **59** JSON files, of which
+**56** carry a `counters` block with `boundaries_measured` — the other three are not sweeps
+(`c134_wrong_fan_control.json`, `c140_last_dev_row_probe.json`, and the replay artifact this
+commit adds). Of those 56, **55 carry `skip:strict_all_branches_lossy` at 0 and only this one
+is nonzero, at 4.** It is **not** the first firing in the repo, and it is not a discovery about
+the instrument.
 
 The ledger's own standing **rule 2** (`:6767-6770`) states the identity in a **three**-term
 form, omitting `engine_error`; that is corrected in #1163, not here.
