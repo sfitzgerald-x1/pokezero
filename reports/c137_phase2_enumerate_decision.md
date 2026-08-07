@@ -1,154 +1,167 @@
-# C137 — C116 Phase 2 decision: adopt roll enumeration for the differential harness only
+# C137 — C116 Phase 2 decision: enumeration is the oracle, not the fix
 
-The decision C116 assigned and the program has deferred since C119. It is taken here
-because the measurement C116 required now exists. C119 declined for a reason that was
-correct at the time and is now stale; §2 says why.
+**This document was rewritten after independent review, and the decision changed.** The
+first version chose "adopt enumeration for the differential harness only" and, on that
+basis, cancelled two engine fixes the program had already specced. That was wrong, and
+the way it was wrong is instructive enough to keep on the record: §5.
 
-**Decision: option (b), adopt for the differential harness only.** Not a compromise
-between (a) and (c) — the three measurements separate cleanly and each option is decided
-by one of them.
+**Decision: enumeration ships as a flag-gated reference oracle, used to validate the
+collapsed path. The differential keeps measuring the shipping configuration. The engine
+fixes in c133 §3 and c135 §5 are un-cancelled and should be implemented, with their
+masses checked against the oracle.**
 
-## 1. What was measured
+## 1. What the spike measured, and what it did not
 
-Runtime flag `POKEZERO_ENUMERATE_ROLLS`, read once via `OnceLock`, off by default, and
-deliberately **not** a cargo feature — so one build serves both paths and every
-comparison below is single-variable. The enumerated path emits one arm per distinct
-`floor(max * r / 100)` for `r ∈ 85..=100` at mass `1/16`, pre-merged on equal integers,
-bypassing the Case A / Case B partition cascade and not calling the residual-threshold
-mirror at all.
+All numbers re-derived from `spike_artifacts/`; the two demonstrations were re-run,
+because they have **no committed artifact** — a gap that let a wrong number survive into
+the first version of this document (§5).
 
-This generalises a mechanism the engine **already ships**: the 32-arm enumeration used
-for `pending_hp_reading_move` (Flail, Reversal, Substitute, Belly Drum, Pain Split). It
-is not a new idea, it is an existing one applied to the general case.
+**Enumeration is exact where the collapsed path is not.** Charizard Fire Blast into a
+defender that survives every roll, reconstructed independently in Python:
 
-### Acceptance criterion 1 — secondaries compose (C119's objection)
-
-C119 objected that `count/16` cannot express a probabilistic secondary. It composes for
-free, because `run_move` fans *each* arm through `get_instructions_from_secondaries`, so
-masses become `count/16 × branch probability` **by construction** — there is no recipe to
-hand-derive. Charizard Fire Blast (85 acc, 10 % burn, 1/16 crit) into a defender that
-survives every roll, reconstructed independently in Python from `calculate_damage`'s two
-scalars:
-
-| | branches | predicted (damage × burn) cells matched |
+| | branches | predicted damage × burn cells matched |
 |---|---|---|
-| collapsed | 5 | **0 of 64** — the whole non-crit fan is one arm at 145, a value no legal roll deals |
-| enumerated | 34 | **64 of 64**, to 1e-9; masses sum to 100 |
+| collapsed | 5 | **0 of 64** — the fan collapses to a single arm at 145, and no legal roll deals 145 |
+| enumerated | **65** | **64 of 64** to 1e-9 |
 
-### Acceptance criterion 2 — A8's ordering concern evaporates
+**A8's ordering defect is real and enumeration prices it correctly.** Defender 206/404,
+burn tick 50, non-crit rolls 133–157; of 32 outcomes, 16 lethal on the hit, 1 lethal only
+if the burn lands, 15 never lethal:
 
-A8 worried that the residual threshold is evaluated before secondaries resolve. That is
-a property of the **mirror**, and this deletes the mirror. Fixture where the burn the
-move itself inflicts is what kills the low rolls (defender 206/404, tick 50, non-crit
-rolls 133–157): of 32 outcomes, 16 lethal on the hit, **1 lethal only if the burn lands**,
-15 never lethal.
+| | independent KO mass |
+|---|---|
+| truth | 5.810547 % |
+| collapsed engine | **5.312500 %** — short by exactly the burn-dependent roll |
+| enumerated | **5.810547 %, delta 0** |
 
-| | independent KO mass | engine |
-|---|---|---|
-| truth | 5.810547 % | — |
-| collapsed | | **5.312500 %** — short by exactly the burn-dependent roll |
-| enumerated | | **5.810547 %, delta 0** |
+**Residue, both windows, 200 games, one build, flag the only variable:** dev 2 → 0,
+holdout 4 → 2, nothing opened, boundaries and gating counters identical, `engine_errors`
+0 on all four.
 
-The relocation question does not exist to be answered: per-roll outcomes are computed
-where they happen. The arm at damage 157 + burn carries a tick the engine clamped 50 → 49
-to land exactly on 0 HP.
+**Throughput, and the correction that matters.** Measured at **depth 4 / 1024 sims**:
+`midgame_3v3` 2.38 ms → 8,881.75 ms per decision, 3,732×, with 229× the leaf evaluations.
+**Production is `search_depth: 2`, `search_sims: 256`** (`src/pokezero/engine_search.py`),
+and enumeration is gated on `depth < DAMAGE_BRANCH_DEPTH = 2`
+(`rust/pokezero-search/src/tree.rs`), so at production depth there is nothing *below* the
+enumerated plies for the fan-out to multiply through. **The production-config regression
+is unmeasured**, and is plausibly one to two orders of magnitude smaller. The first
+version of this document called 8.9 s "the production config". It is not.
 
-### Measurement (i) — residue, both windows, 200 games each
+## 2. Why "adopt for the harness only" is the wrong decision
 
-Same build, same seeds; `boundaries_measured` and `boundaries_full_round` match to the
-unit, confirming identical trajectories.
+**It closes the rows in the instrument, not in the engine.** The four collapse-class rows
+stop being *reported*. The crit-straddle gap and the A8 pre-secondary threshold read
+remain in the engine that ships, at plies 1–2, which is exactly where they move KO pricing
+at decision margins.
 
-| window | | full_round | measured | diverged | engine_errors |
-|---|---|---|---|---|---|
-| dev `19,000,000–199` | collapsed | 15,968 | 15,503 | **2** | 0 |
-| dev | **enumerated** | 15,968 | 15,503 | **0** | 0 |
-| holdout `19,100,000–199` | collapsed | 16,155 | 15,579 | **4** | 0 |
-| holdout | **enumerated** | 16,155 | 15,579 | **2** | 0 |
+**And it stops the fidelity gate from testing the shipping path.** These are demonstrably
+different engines. From the spike's own bench file, same position, same five seeds:
 
-**Nothing opened on either window.** Closed: `19000074/27` (crit-straddle),
-`19000191/63` (collapsed lethal arm), `19100107/135` and `19100191/5` (both
-`limit:roll_divergent_lethality`). That is **all four collapse-class rows**, matching
-C134 §3's "up to 4 of 5". The remaining two are the `itemleftovers` pair at `19100170`,
-which enumeration does not touch and which has its own harness fix.
+```
+collapsed:  ember, ember, tackle, tackle, ember     (argmax unstable)
+enumerated: tackle, tackle, tackle, tackle, tackle
+```
 
-Harness cost: 705 s / 707 s enumerated against 743 s / 746 s collapsed, all four run
-concurrently on one box. **Enumeration is free for the harness** — the sweep is
-Node-bound, not `generate_instructions`-bound.
+A differential running enumerated certifies the configuration that plays `tackle` while
+production plays `ember`. Every fidelity claim would then attest a code path production
+never takes, and a regression in the collapsed damage-branch or residual-partition
+surface — the surface that ships — becomes invisible to the 200-game gate.
 
-### Measurement (ii) — mass gate
+**The artifact cannot even record which path ran.** The four sweep JSONs contain zero
+occurrences of the flag, and `engine_fingerprint`, `source_commit` and `build_check` are
+byte-identical between the on and off runs. A certification sweep would attest a
+fingerprint that does not determine the behaviour it measured. That is a direct cost of
+the single-build design the first version presented as an unalloyed virtue.
 
-All mass assertions pass under the flag. One test fails,
-`test_matrix_is_not_vacuous`, and it is **not** a mass error: it asserts that at least one
-fixture leaves a fan collapsed, as its own negative control. Under enumeration no fan is
-ever collapsed, so the assertion is unsatisfiable by construction. Under harness-only the
-collapsed configuration still exists, so the control is re-expressed against it rather
-than weakened.
+**"Zero throughput risk by construction" was backwards.** The property that makes the risk
+zero is *default-off*, not *runtime env read*. A cargo feature would make search
+enumeration impossible by construction; a process-global `OnceLock` read makes it possible
+by accident. Worse, the patch disables the mirror **unconditionally**
+(`residual_threshold_opt = if enumerate_damage_rolls() { None } else { … }`) while
+enumerating only under the additional `branch_on_damage && fixed_damage.is_none()`. A
+searching process with the flag set therefore gets, at every ply `depth >= 2`, a **third
+configuration that has never been measured**: collapsed representative *and* no residual
+partition.
 
-`engine_behavioral_probes.py` under the flag: 24 pass, 14 fail. All six
-`residual-mass-*` probes — the independent-reconstruction family — pass. Every one of the
-14 failures is an arm-**structure** assertion reading "expected 4 branches, got 18", with
-correct masses. Those 14 encode the collapse and would need rewriting **only under
-adopt-everywhere**; under harness-only search keeps the collapse and they stay green.
+## 3. The decision, and why it is better than either original option
 
-### Measurement (iii) — search throughput, depth 4 / 1024 sims
+The alternative the first version never argued against is the one the program already had
+on its books:
 
-| position | collapsed | enumerated | ms/decision |
-|---|---|---|---|
-| minimal_1v1 | 3.32 M sims/s | 18,888 | 0.31 → 54.2 |
-| **midgame_3v3** | 431 K sims/s | **115** | **2.38 → 8,881.8** |
-| endgame_straddle | 3.76 M sims/s | 788,654 | 0.27 → 1.30 |
+- `reports/c133_collapsed_roll_disposition.md`: `19000074/27` is an **engine fix, ~15
+  lines, mirroring existing code**; the A8 pair is an **engine fix — make the threshold
+  status-aware**.
+- `reports/c135_roll_divergent_lethality_adjudication.md` §5 gives the corrected recipe:
+  one residual-kill arm per distinct threshold, priced at its own `tᵢ`, with
+  **disjoint-band** masses — explicitly *not* the minimum over statuses, which c133 §4
+  shows destroys an arm the engine emits today.
 
-Two independent baseline runs bracket each other, so the ratios are not a load artifact.
-The production-representative position regresses **~3,700×**, to 8.9 seconds per
-decision, with 229× the leaf evaluations — despite the existing mitigation that
-`branch_on_damage = depth < DAMAGE_BRANCH_DEPTH` already restricts enumeration to plies
-1–2 plus deep-KO straddles.
+Those close the same four rows **in the shipping engine**, at the same zero throughput
+cost, and they leave the differential measuring what production runs.
 
-## 2. Why each option is decided, and why C119 is stale
+The obvious objection is that this family has already burned **three wrong hand-derived
+mass recipes**, which is why C134 §3 froze it. That objection is now answerable, and this
+is the spike's real contribution:
 
-- **(a) adopt everywhere — rejected on measurement.** 8.9 s per decision at the
-  production config is not a tuning problem.
-- **(c) reject — cannot beat (b).** Rejecting costs the four rows (b) closes, and (b)'s
-  throughput risk is **zero by construction**: the flag is a runtime env read on one
-  build, so search takes the collapsed path bit-identically. A reject case would have to
-  beat "four of five residue rows retired at no throughput cost", and nothing does.
-- **(b) adopt harness-only — taken.**
+> **Enumeration is an exact oracle for the collapsed path's masses.** For any fixture,
+> enumerate the fan and compare the collapsed arms' masses against the enumerated truth.
+> A wrong recipe stops being something review has to catch by reading, and becomes a test
+> that fails.
 
-C119 scoped this honestly for its era: 2 of 25 rows firmly absorbed, 3 conditional, 20
-untouched — "about a fifth", and it was right to keep burning rows instead. That is now
-stale by survivorship: the 20 untouched rows were the ones fixable by other means, and
-they got fixed. What remains is dominated by the class enumeration is best at. C119's own
-pre-registered prediction (2 firm, up to 5) was conservative in the direction it said it
-would be.
+That is precisely what was missing when the three recipes were wrong. It is a better use
+of the spike than replacing the measurement, because it makes the *engine* correct rather
+than making the instrument stop noticing.
 
-## 3. What this decision also settles
+**So:** enumeration lands behind its default-off flag as a reference implementation,
+consumed by tests. The differential is **not** switched to it. c133 §3 and c135 §5 are
+un-cancelled, and each must be validated against the oracle and swept on both windows with
+a registered "nothing opened" falsifier before it is believed.
 
-- **The two `limit:roll_divergent_lethality` rows do not need a written demonstration.**
-  They close. C134 §3 anticipated "enumeration fixes them or *constitutes* the
-  demonstration"; the measurement says fixes. See `reports/c135_…` §7.
-- **The queued crit-straddle sub-split for `19000074/27` should not be written**, and the
-  status-aware threshold sketched in c135 §5 should not be implemented. Enumeration
-  closes both rows without either.
-- **The C134 §3 freeze has served its purpose and lifts.** It was correctly placed: this
-  family had already burned three wrong hand-derived mass recipes, and the freeze
-  prevented a fourth.
+## 4. What remains open
 
-## 4. What this does NOT settle, stated
+- **The engine fixes are not written.** This document only un-cancels them.
+- **The enumerated path has no arm-structure or mass pin of its own.** If it is used as an
+  oracle, it must be pinned, or a wrong oracle silently blesses a wrong recipe. The
+  unpinned multi-hit semantic change — enumeration applies a per-hit roll shared across
+  hits, replacing the collapsed path's total→per-hit conversion — is exactly what that
+  hole would hide.
+- **The f32 comparator (C116 M5) still executes in search**, and is untouched by any of
+  this. Re-derived independently from the shipped expression over max_damage 1..400: 173
+  max values where the top rung lands below `floor(max)`, **195 kill-count mismatches, 195
+  undercounts, 0 overcounts**, 22 at interior thresholds; at max = 120 with threshold 108
+  it counts 10 kill rolls against a true 11. Closing it needs C116(c)'s integer rewrite.
+- **`counters.strict:sleeptalk_union_branch` moved 126 → 617 (dev) and 105 → 612
+  (holdout)** between the two spike configurations. Probably branch multiplicity, but
+  "identical trajectories" is asserted elsewhere and this is the one non-gating counter
+  that moved fivefold. Unexplained.
 
-- **The f32 comparator (C116 M5) still executes in search.** Harness-only removes it from
-  the fidelity path entirely — no fidelity claim passes through
-  `compare_health_with_damage_multiples` again — but it still runs during search. M5 was
-  re-derived independently from the shipped expression over max_damage 1..400: **173** max
-  values where the top rung lands below `floor(max)`, **195** `(max, threshold)`
-  kill-count mismatches, 22 at interior thresholds, **195 undercounts and 0 overcounts**;
-  at max = 120 with threshold 108 it counts 10 kill rolls against a true 11. Every C115 /
-  C116 figure confirmed. Closing it fully needs C116(c)'s remedy — rewrite the
-  comparator's body in integers as `max * r // 100` — which is a small change to one
-  function and independent of this decision.
-- **Multi-hit semantics changed on the enumerated path** and were not separately pinned:
-  enumeration applies a per-hit roll shared across hits, replacing the collapsed path's
-  total→per-hit conversion. No multi-hit row was in either residue and no fixture
-  regressed, but this is arguably a fix to the filed "multi-hit shared damage roll" gap
-  and should be confirmed as one rather than assumed.
-- **`test_matrix_is_not_vacuous` must be re-expressed, not deleted**, and the
-  re-expression must still be able to fail.
+## 5. How the first version of this document went wrong
+
+Kept because the failure is more useful than the conclusion.
+
+1. **It argued against a strawman.** It framed option (c) as "reject and buy nothing", so
+   "nothing beats four rows at no throughput cost" followed trivially. The real
+   alternative — implement the two specced engine fixes — closes the same rows in the
+   shipping build, and the document then *cancelled those fixes* citing a measurement that
+   never touched search.
+2. **It said "at the production config" for a depth-4/1024 measurement.** Production is
+   depth 2 / 256. The heading was honest; the sentence that rejected option (a) was not.
+3. **It reported 34 branches for the enumerated Fire Blast fixture. The answer is 65.**
+   34 is the *other* demonstration's branch count. It is self-refuting — 64 cells cannot
+   be filled by 34 branches, since each branch maps to one cell — and it survived because
+   the demonstrations have no committed artifact while the PR body claimed every figure
+   came from one.
+4. **The survivorship argument was misattributed and wrong.** C119 annotates every "no" by
+   *class* — "it cannot change a move-legality predicate, a renderer tag, a
+   boundary-pairing marker, or a missing mechanic" — never by tractability, and **11 of
+   the 20 rows were already marked fixed in C119's own table**. The claim that C119's
+   prediction was "conservative" is also false: it registered 2 holdout rows firmly and
+   exactly 2 closed. That reading was reached by pooling dev and holdout into a
+   holdout-scoped prediction.
+5. **Smaller:** seven `residual-mass-*` probes, not six; only 3 of the 14 failures are
+   branch-count assertions; and `19000191/63` was labelled with the superseded C111/C115
+   "collapsed lethal arm" diagnosis that c133 explicitly corrected.
+
+The through-line is that every one of these overstated the case for the conclusion the
+document had already reached. The measurements were sound; the argument built on them was
+not, and it was not adversarial against itself.
