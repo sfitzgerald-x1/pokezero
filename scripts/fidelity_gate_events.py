@@ -122,6 +122,57 @@ def load_corpus(corpus_dir: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, ...]:
+    """`recharging_slots` as PRODUCTION builds it, for a world anchored at ``seat``.
+
+    Why this exists. The four differential harnesses used to derive `recharging` for BOTH slots
+    from the RECORDED CHOSEN CANDIDATE -- if the action taken was the `recharge` pseudo-move, the
+    slot was locked. That is circular: the gate seeds its world from the very thing the gate is
+    checking, so its world is guaranteed to agree. Both leaf.rs and leaf_vs_reality.py carry
+    standing comments warning that the gates would therefore RATIFY a symmetric self-side write
+    rather than catch a bad one.
+
+    Production does something different. `engine_search.py::_recharging_slots` locks the OPPONENT
+    slot only, and reads it from the parser's own `must_recharge` tracker surfaced as
+    `opponent_must_recharge` -- never from what the mon chose. `depth_tactics_probe.py` already
+    builds its world this way, via `policy._recharging_slots(context)`; it was the only script
+    that did. This is that rule, expressed against a corpus row instead of a PolicyContext.
+
+    Mirrored deliberately, including the asymmetry: our OWN slot is never locked, even when the
+    same metadata says `self_must_recharge` is true. That is production's real behaviour and the
+    modelling gap this harness change exists to make visible -- the root world lets our own
+    recharging mon pick any move. Once `_recharging_slots` is made symmetric, this helper follows
+    it, and the gates will then be able to hold the encoder to the symmetric truth.
+
+    KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
+    signal from the round-indexed public action record when the tracker key is ABSENT. This
+    returns `()` there instead. On corpus/golden-v4 the tracker is present on 1208 of 1295
+    decision rows; for the other 87 this is fail-open, which is also where production's own
+    fallback lands when the record is unavailable, but the two are not identical.
+    """
+    opponent = "p2" if seat == "p1" else "p1"
+    if isinstance(anchor_metadata, Mapping):
+        tracked = anchor_metadata.get("opponent_must_recharge")
+        if tracked is True:
+            return (opponent,)
+        # An explicit False is a public PROOF of no lock, exactly as production treats it.
+    return ()
+
+
+def anchor_observation_metadata(row: Any) -> Any:
+    """The row's observation metadata, whether the harness holds dicts or record objects.
+
+    leaf_vs_reality and fidelity_gate_events index corpus rows as Mappings; leaf_root_parity and
+    prior_mapping_assert hold parsed record objects. One accessor so the four call sites are the
+    same line.
+    """
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        return row.get("observation_metadata")
+    return getattr(row, "observation_metadata", None)
+
+
 def chosen_candidate(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
     index = row.get("chosen_action_index")
     for candidate in row.get("observation_metadata", {}).get("action_candidates") or ():
@@ -453,16 +504,15 @@ def drive_boundary(
     # Publicly-derivable engine flags (mirrors the live policy's derivation):
     # a "recharge" forced choice marks the slot as MUSTRECHARGE; a Truant mon
     # that publicly ACTED in the last completed turn loafs this turn.
-    recharging = []
-    for slot in ("p1", "p2"):
-        row = decisions.get((battle_id, round_n, slot))
-        candidate = chosen_candidate(row) if row is not None else None
-        if (
-            candidate is not None
-            and candidate.get("kind") == "move"
-            and normalize_id(str(candidate.get("move_id") or "")) == "recharge"
-        ):
-            recharging.append(slot)
+    # PRODUCTION's derivation, not the recorded candidate's. Deriving `recharging` from the
+    # chosen action seeded this gate's world from the thing the gate is checking, so the world
+    # could only ever agree -- the "would ratify a symmetric write rather than catch a bad one"
+    # warning that leaf.rs and leaf_vs_reality.py both carry. See
+    # fidelity_gate_events.production_recharging_slots.
+    recharging = production_recharging_slots(
+        anchor_observation_metadata(decisions.get((battle_id, round_n, seat))),
+        seat,
+    )
     truant = truant_loaf_slots(history_lines, payload, teams)
 
     override = BattleStartOverride(player_teams={"p1": packed["p1"], "p2": packed["p2"]})
