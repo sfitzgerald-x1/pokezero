@@ -2011,6 +2011,18 @@ def evaluate_boundary_strict(
     misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
+    # Probability mass this verdict is entitled to speak for. The matcher's
+    # semantics are EXISTENTIAL -- "some enumerated branch reproduces the
+    # observation" -- so a branch dropped by the lossy-render filter makes the
+    # existential UNVERIFIABLE, not false. Adjudicating anyway evaluates the
+    # boundary on a rump branch set and can report a matched boundary as
+    # divergent; measured on the retained row 19200131/129, where the 93.75%
+    # non-crit arm was dropped as `attract_empty_tail_ambiguous:paralyzed+
+    # cannot_act` and the surviving 6.25% CRIT arm supplied the only comparison
+    # (its capped-lethal recoil -32 against the observed non-crit recoil -18).
+    # That boundary matches on its full branch set.
+    enumerated_mass = 0.0
+    dropped_mass = 0.0
     for state in states:
         try:
             rendered = json.loads(
@@ -2043,6 +2055,7 @@ def evaluate_boundary_strict(
         for branch in branches:
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
+            enumerated_mass += float(branch.get("percentage") or 0.0)
             lossy = list(branch.get("lossy") or [])
             # A branch whose ONLY defect is the known Sleep Talk callee-identity
             # gap is still usable: its damage is real, only its attribution is
@@ -2063,6 +2076,13 @@ def evaluate_boundary_strict(
             # verified nothing -- disqualifies it.
             if not branch_render_is_usable(lossy):
                 counts["strict:lossy_render"] += 1
+                dropped_mass += float(branch.get("percentage") or 0.0)
+                # Subcase, so the drop is attributable. The single
+                # undifferentiated `strict:lossy_render` counter is why the
+                # marker behind 19200131/129 had to be recovered by replay
+                # rather than read off the artifact.
+                for marker in sorted(set(lossy)):
+                    counts[f"strict:lossy_render_marker:{marker.split(':')[0]}"] += 1
                 continue
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
@@ -2171,6 +2191,41 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
+    if dropped_mass > 0.0:
+        # SOME branch was dropped and nothing that survived reproduced the
+        # observation. The branch that did may be one of the dropped ones, so
+        # the only honest verdict is "unmeasurable on this render", counted in
+        # its own bucket and NEVER folded into `transition:diverged`.
+        #
+        # Deliberately mass-blind. A threshold ("only skip when the majority was
+        # dropped") would be a tuned constant guarding a semantic question: the
+        # existential is unverifiable at ANY positive dropped mass. The surviving
+        # fraction is recorded instead of gating on it, so the population stays
+        # visible and can be attacked by making the renderer lossless rather than
+        # by choosing a number.
+        surviving = enumerated_mass - dropped_mass
+        counts["skip:rump_branch_set"] += 1
+        # Decile of surviving mass, so "how much of its mass did the withheld
+        # verdict have" is answerable from the artifact alone.
+        counts[
+            f"skip:rump_branch_set_surviving_decile:"
+            f"{int(10 * surviving / enumerated_mass)}"
+        ] += 1
+        return (
+            "skip_rump",
+            [
+                f"rump branch set: {surviving:.4g} of {enumerated_mass:.4g} enumerated "
+                f"mass survived the lossy-render filter "
+                f"({surviving / enumerated_mass:.2%}); verdict withheld",
+                *ordered,
+            ],
+            branch_total,
+        )
+    # Reaching here means every enumerated branch was rendered and compared, so
+    # this divergence rests on 100 % of the enumerated mass. Counted so the
+    # invariant `transition:diverged == strict:diverged_on_full_branch_set` is
+    # checkable from the artifact rather than asserted in prose.
+    counts["strict:diverged_on_full_branch_set"] += 1
     return "diverged", ordered, branch_total
 
 
@@ -2392,6 +2447,16 @@ def run_game(
 
         if verdict == "skip_lossy":
             counts["skip:strict_all_branches_lossy"] += 1
+            continue
+        if verdict == "skip_rump":
+            # `skip:rump_branch_set` is incremented inside the matcher. The row
+            # is NOT retained in `repros`: that list's completeness contract is
+            # `repros_retained == transitions_diverged` (checked by
+            # scripts/cert_sweep_reread.py), and mixing a second population into
+            # it would break the contract rather than extend it. The seed/step
+            # is recorded as a counter key instead, which keeps every withheld
+            # boundary replayable without touching the checkpoint schema.
+            counts[f"skip:rump_branch_set_row:{seed}/{steps}"] += 1
             continue
         counts[f"transition:{verdict}"] += 1
         if verdict == "diverged":

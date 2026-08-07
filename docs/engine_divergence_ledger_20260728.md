@@ -6768,6 +6768,14 @@ Rules:
    skip:strict_all_branches_lossy == boundaries_measured` on both sides. Summing
    all `skip:*` does **not** reconcile (it is 2,322 here); that one counter is
    the one in the identity.
+
+   **Amended by C142** (`reports/c142_rump_branch_adjudication.md`): the second
+   outcome above — *some* branches lossy — is no longer adjudicated. It exits as
+   `skip:rump_branch_set`, so the identity now carries a fourth term:
+   `transition:matched + transition:diverged + skip:strict_all_branches_lossy +
+   skip:rump_branch_set == boundaries_measured`. `transition:diverged ==
+   strict:diverged_on_full_branch_set` is the accompanying invariant: every
+   reported divergence rests on 100 % of its enumerated mass.
 3. Baseline and test must differ **only** by the patch under test, and you must
    be able to **show** that from the artifacts. Record `engine_fingerprint`
    *and* a hash of the counter-computing harness, then exhibit the
