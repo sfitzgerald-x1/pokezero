@@ -1891,7 +1891,26 @@ fn render_move_phase(
                     // and 86.4% of the abort channel, and aborts are ~76% of fallback.
                     // ONE predicate decides refuse-vs-count, so the decision is testable
                     // without reaching an arm the engine cannot currently produce.
-                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail, side) {
+                    // THE TWO STATE FACTS the tail cannot supply, read once. Both are
+                    // public: Showdown announces `|-singleturn|...|Protect` on use, and an
+                    // absorb ability announces itself when it fires. Reading them fabricates
+                    // no belief. See `protect_blocked_marker_side` for why BOTH are needed.
+                    let (defender_protected, defender_has_absorb_ability) = {
+                        let d = match other_side(side) {
+                            SideReference::SideOne => &sim.state.side_one,
+                            SideReference::SideTwo => &sim.state.side_two,
+                        };
+                        (
+                            d.volatile_statuses
+                                .contains(&PokemonVolatileStatus::PROTECT),
+                            absorb_ability_can_emit_a_zero_heal(
+                                d.get_active_immutable().ability),
+                        )
+                    };
+                    if !sleeptalk_refusal_is_unsafe_with_protect(
+                        &ident, &called_tail, side,
+                        defender_protected, defender_has_absorb_ability,
+                    ) {
                         out.mark_lossy_subcase(
                             SLEEPTALK_LOSSY_TAG,
                             sleeptalk_subcase_slug(&ident),
@@ -1909,7 +1928,10 @@ fn render_move_phase(
                         // measurement could not rank them.
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
-                            &ambiguous_unrenderable_slug(&called_tail, side),
+                            &ambiguous_unrenderable_slug_with_protect(
+                                &called_tail, side,
+                                defender_protected, defender_has_absorb_ability,
+                            ),
                         );
                     } else if let SleepTalkIdent::NoneMatched(shapes) = ident {
                         // ONE SLUG PER OBSERVED SHAPE. `attribution_unsafe_label` sorts and
@@ -2082,6 +2104,21 @@ fn render_move_phase(
                             let ident = ctx.active_ident(sim.state, dmg.side_ref);
                             out.lines
                                 .push(format!("|-activate|{ident}|Substitute|[damage]"));
+                        } else if let Some(protected_side) = protect_blocked_marker_side(
+                            &called_tail, index, side,
+                            defender_protected, defender_has_absorb_ability,
+                        ) {
+                            // RENDER the Protect activation. Era 62 measured this shape at
+                            // 3,365 worlds -- 33.0% of world failures and the whole of the
+                            // `heal` family, which turned out to contain no drain, no absorb,
+                            // no Pain Split and no Liquid Ooze.
+                            //
+                            // Residuals first, same contract as the Boost, Switch and
+                            // substitute arms.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let ident = ctx.active_ident(sim.state, protected_side);
+                            out.lines.push(format!("|-activate|{ident}|Protect"));
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
                             // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
                             // `[from]` tag, which is what Showdown emits for Recover,
@@ -3171,9 +3208,22 @@ fn sleeptalk_refusal_is_unsafe(
     // on the DEFENDER is an absorb ability and is not. See `heal_is_a_direct_self_heal`.
     attacker: SideReference,
 ) -> bool {
+    // FAIL-CLOSED default, as everywhere else in this chain: no Protect, assume an absorb
+    // ability. That is the pre-existing behaviour exactly.
+    sleeptalk_refusal_is_unsafe_with_protect(ident, tail, attacker, false, true)
+}
+
+fn sleeptalk_refusal_is_unsafe_with_protect(
+    ident: &SleepTalkIdent,
+    tail: &[Instruction],
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> bool {
     match ident {
         // Proven transition; unsafe only if the walk would silently drop part of it.
-        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail, attacker),
+        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable_with_protect(
+            tail, attacker, defender_protected, defender_has_absorb_ability),
         // The renderer could not reproduce the engine's tail at all, so any description
         // built on it may be wrong. Always unsafe.
         SleepTalkIdent::NoneMatched(_) => true,
@@ -3243,12 +3293,22 @@ fn sleeptalk_refusal_is_unsafe(
 /// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
 /// loses nothing that the named path would have shown.
 fn ambiguous_tail_is_fully_renderable(tail: &[Instruction], attacker: SideReference) -> bool {
+    ambiguous_tail_is_fully_renderable_with_protect(tail, attacker, false, true)
+}
+
+fn ambiguous_tail_is_fully_renderable_with_protect(
+    tail: &[Instruction],
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> bool {
     // DEFINED as "nothing blocks it", so the predicate and the diagnostic below cannot
     // disagree about which instructions are renderable. They were two independent
     // matches in the first version, and this file already records what that costs: the
     // renderer and `engine_transition_differential.py` held opposite views of the
     // sleeptalk contract for two eras with nothing to notice. One list, one answer.
-    unrenderable_tail_families(tail, attacker).is_empty()
+    unrenderable_tail_families_with_protect(
+        tail, attacker, defender_protected, defender_has_absorb_ability).is_empty()
 }
 
 /// Fixed slug order, so the emitted key is stable across runs and aggregators can sum
@@ -3543,6 +3603,81 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
     })
 }
 
+/// Can this ability produce the ZERO-HEAL absorb no-op that the Protect marker must not be
+/// confused with?
+///
+/// NARROWER than `is_absorb_ability` on purpose. That set includes `FLASHFIRE`, which sets a
+/// VOLATILE and never a heal (`gen3/abilities.rs`), so it cannot emit this shape at all --
+/// including it would refuse Protect-blocked worlds for a Flash Fire defender and buy nothing.
+/// The producer at `gen3/generate_instructions.rs:1367-1375` needs `health_recovered == 0`
+/// from a heal-carrying absorb, which in gen3 is Water Absorb and Volt Absorb. Dry Skin
+/// carries one too but appears only in gen9 data.
+fn absorb_ability_can_emit_a_zero_heal(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::WATERABSORB | Abilities::VOLTABSORB | Abilities::DRYSKIN
+    )
+}
+
+/// Is this instruction a PROTECT-BLOCKED branch marker that the walk can render?
+///
+/// gen3 emits a zero-amount `Heal` from exactly TWO sites, and BOTH push on the DEFENDER,
+/// so the side does not discriminate:
+///
+///   * `gen3/generate_instructions.rs:3436-3444` -- the Protect-blocked branch, gated on
+///     `blocked_by_protect` and pushed on `attacking_side.get_other_side()`. Its own comment:
+///     "Mark only the successful accuracy branch so protocol rendering can emit Protect
+///     instead of collapsing both outcomes." Showdown's line is `|-activate|<target>|Protect`.
+///   * `gen3/generate_instructions.rs:1367-1375` -- a full-HP absorb activation, kept as "a
+///     reversible no-op so event consumers can keep the public histories distinct". Its line
+///     is an ABILITY activation, not Protect.
+///
+/// Rendering Protect for the second would FABRICATE a line, which is the defect that hit the
+/// substitute-break arm and the boost arm before it. So the discriminator is a STATE fact the
+/// tail cannot supply: the defender holds `PokemonVolatileStatus::PROTECT`. That is public --
+/// Showdown announces `|-singleturn|...|Protect` when Protect is used -- so reading it
+/// fabricates no belief.
+///
+/// FAIL-CLOSED on both axes, and the absorb axis is LOAD-BEARING rather than paranoia.
+///
+/// Without the volatile: None, tail keeps refusing, pre-existing behaviour.
+///
+/// With an absorb ability on the defender: also None. An earlier version of this doc said
+/// "Protect strips the move before an absorb could fire, so the combination should be
+/// unreachable" -- FALSE, and in a way that matters. The guard tests ability PRESENCE, not
+/// firing, so any Water Absorb or Volt Absorb mon that uses Protect lands here routinely.
+/// Those worlds stay refused. That is a real, ongoing cost, not a theoretical one.
+///
+/// It is still the right trade. The absorb abilities deliberately RESTORE `flags.protect`
+/// (gen3/abilities.rs), so a protect-bypassing Electric or Water move would leave
+/// `blocked_by_protect == false` with the volatile still present -- a zero `Heal` that is NOT
+/// a Protect marker while PROTECT is set. The absorb axis is what catches that. Refusing a
+/// renderable tail costs one refused world; rendering a wrong line corrupts a searched one.
+///
+/// EQUIVALENT-MUTANT NOTE. Hardcoding `defender_protected = true` survives the suite, and
+/// that is expected rather than a coverage gap: producer 2 requires an absorb ability, so the
+/// absorb axis already refuses every tail the PROTECT axis would. The two guards overlap in
+/// the currently-reachable space. The PROTECT read earns its place against the
+/// flags.protect-restoration case above, which no gen3 move reaches today.
+fn protect_blocked_marker_side(
+    tail: &[Instruction],
+    index: usize,
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> Option<SideReference> {
+    if !defender_protected || defender_has_absorb_ability {
+        return None;
+    }
+    match tail.get(index) {
+        Some(Instruction::Heal(heal)) if heal.heal_amount == 0 => {
+            let defender = other_side(attacker);
+            (heal.side_ref == defender).then_some(defender)
+        }
+        _ => None,
+    }
+}
+
 /// Which SUB-CASE of the `heal` family a REFUSED HP-increase belongs to.
 ///
 /// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 final, 64/64 shards:
@@ -3624,11 +3759,34 @@ fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> 
 /// here instead of silently classifying as one more `unclassified`, which on the largest
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
+/// FAIL-CLOSED wrapper. Keeps the three-argument shape for the TESTS -- there are no
+/// production callers left, they all moved to the `_with_protect` form -- and passes
+/// `defender_protected: false` / `defender_has_absorb_ability: true` -- the
+/// combination that renders NOTHING and preserves the pre-existing refusal exactly. Only the
+/// production walk, which can read the live state, calls the `_with_protect` form.
 fn unrenderable_family_at(
     tail: &[Instruction],
     index: usize,
     attacker: SideReference,
 ) -> Option<&'static str> {
+    unrenderable_family_at_with_protect(tail, index, attacker, false, true)
+}
+
+fn unrenderable_family_at_with_protect(
+    tail: &[Instruction],
+    index: usize,
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> Option<&'static str> {
+    // RENDERED NOW when the state says Protect. Checked before the match so the zero-Heal
+    // reaches `heal_subcase` only when it is NOT a renderable Protect marker -- otherwise the
+    // classifier would report a blocking family for a tail the walk successfully renders, and
+    // `ambiguous_tail_is_fully_renderable` would keep refusing it.
+    if protect_blocked_marker_side(tail, index, attacker, defender_protected,
+                                   defender_has_absorb_ability).is_some() {
+        return None;
+    }
     // `get`, not `tail[index]`. Every caller is in bounds today, but an out-of-bounds index
     // would PANIC, and this file spends a long comment below on why that specific outcome is
     // the worst one available: pyo3 maps a Rust panic to `PanicException`, which derives from
@@ -3843,6 +4001,15 @@ fn unrenderable_tail_families(
     tail: &[Instruction],
     attacker: SideReference,
 ) -> Vec<&'static str> {
+    unrenderable_tail_families_with_protect(tail, attacker, false, true)
+}
+
+fn unrenderable_tail_families_with_protect(
+    tail: &[Instruction],
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> Vec<&'static str> {
     let mut families: Vec<&'static str> = Vec::new();
     for index in 0..tail.len() {
         // An UNREGISTERED token degrades to `unclassified` here, which is in both the
@@ -3860,7 +4027,8 @@ fn unrenderable_tail_families(
         // forgets `UNRENDERABLE_FAMILY_ORDER`, and the release wheel aborts mid-campaign.
         // Now that path yields a measurable `unclassified` bucket instead, and the test
         // below still fails in CI so the omission is caught before it ships.
-        if let Some(family) = unrenderable_family_at(tail, index, attacker) {
+        if let Some(family) = unrenderable_family_at_with_protect(
+            tail, index, attacker, defender_protected, defender_has_absorb_ability) {
             let family = registered_family_or_unclassified(family, UNRENDERABLE_FAMILY_ORDER);
             if !families.contains(&family) {
                 families.push(family);
@@ -3885,7 +4053,22 @@ fn unrenderable_tail_families(
 /// `mark_attribution_unsafe_subcase` asserts it and
 /// `engine_transition_differential.py` matches the bare tag exactly.
 fn ambiguous_unrenderable_slug(tail: &[Instruction], attacker: SideReference) -> String {
-    let families = unrenderable_tail_families(tail, attacker);
+    ambiguous_unrenderable_slug_with_protect(tail, attacker, false, true)
+}
+
+fn ambiguous_unrenderable_slug_with_protect(
+    tail: &[Instruction],
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> String {
+    // THE SAME FACTS THE WALK USED. An earlier version called the fail-closed 2-arg form, so a
+    // tail where the Protect marker is now RENDERED but something else still blocks would be
+    // keyed `...:heal_zero_marker` -- naming a family the walk no longer refuses. Era 63 would
+    // then rank a closed family as open. The PR's own risk note predicts exactly this
+    // population: worlds whose FIRST refuser was the marker and whose second is something else.
+    let families = unrenderable_tail_families_with_protect(
+        tail, attacker, defender_protected, defender_has_absorb_ability);
     // Unreachable: this slug is only built when the tail is NOT fully renderable, which
     // is defined as a non-empty family list. Named rather than emitting a bare trailing
     // colon so a future edit that breaks that correspondence shows up in the measurement.
@@ -8825,6 +9008,137 @@ mod none_matched_shape_tests {
                 "{shape:?} did not round-trip through the bitset alone"
             );
         }
+    }
+
+    /// The PROTECT marker: rendered only when the state proves it, refused otherwise.
+    ///
+    /// Era 62 measured this shape at 3,365 worlds -- 33.0% of world failures and the ENTIRE
+    /// `heal` family. It is a TWO-PRODUCER shape (Protect-blocked branch vs full-HP absorb
+    /// no-op) and both producers push a zero `Heal` on the DEFENDER, so every one of these
+    /// cases turns on the state facts rather than the tail.
+    #[test]
+    fn the_protect_marker_renders_only_when_the_state_proves_it() {
+        let zero_heal_on_defender = [Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideTwo,
+            heal_amount: 0,
+        })];
+        let atk = SideReference::SideOne;
+
+        // PROTECTED, no absorb ability -> RENDERABLE, and it names the DEFENDER.
+        assert_eq!(
+            protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, true, false),
+            Some(SideReference::SideTwo)
+        );
+        // ...and the classifier must then report NOTHING blocking, or the walk renders the
+        // line while the tail still refuses -- the two would disagree about one tail.
+        assert_eq!(
+            unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, true, false),
+            None
+        );
+        assert!(ambiguous_tail_is_fully_renderable_with_protect(
+            &zero_heal_on_defender, atk, true, false
+        ));
+
+        // NO PROTECT VOLATILE -> refuse. This is the pre-existing behaviour and the
+        // fail-closed default every three-argument caller still gets.
+        assert_eq!(
+            protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, false, false),
+            None
+        );
+        assert_eq!(
+            unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, false, false),
+            Some("heal_zero_marker")
+        );
+        assert_eq!(
+            unrenderable_family_at(&zero_heal_on_defender, 0, atk),
+            Some("heal_zero_marker"),
+            "the three-argument wrapper must keep refusing -- it is what every REMAINING \
+             caller uses, and they are all tests: production moved to _with_protect"
+        );
+
+        // ABSORB ABILITY PRESENT -> refuse EVEN WITH the volatile. This combination is
+        // ROUTINE, not unreachable: the guard tests ability PRESENCE, not firing, so any
+        // Water Absorb or Volt Absorb mon that uses Protect lands here and stays refused.
+        // An earlier version of this comment called it unreachable, which was false and is
+        // corrected in `protect_blocked_marker_side`'s doc -- this copy was missed.
+        // The axis is still right: absorb abilities RESTORE `flags.protect`, so a
+        // protect-bypassing move would leave `blocked_by_protect == false` with the volatile
+        // set. Refusing a renderable tail costs one world; rendering `Protect` over an
+        // ability activation corrupts a searched one.
+        assert_eq!(
+            protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, true, true),
+            None
+        );
+        assert_eq!(
+            unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, true, true),
+            Some("heal_zero_marker")
+        );
+    }
+
+    /// The marker is the DEFENDER's, and only a ZERO heal.
+    ///
+    /// Both producers push on `get_other_side()` / the target, so a zero `Heal` on the
+    /// ATTACKER is neither of them and must not be dressed as Protect. And a NON-zero heal is
+    /// an ordinary heal whose own arms already decide it.
+    #[test]
+    fn the_protect_marker_is_defender_side_and_zero_amount_only() {
+        let atk = SideReference::SideOne;
+        let on_attacker = [Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 0,
+        })];
+        assert_eq!(
+            protect_blocked_marker_side(&on_attacker, 0, atk, true, false),
+            None,
+            "a zero heal on the ATTACKER is neither producer"
+        );
+        let nonzero_on_defender = [Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideTwo,
+            heal_amount: 30,
+        })];
+        assert_eq!(
+            protect_blocked_marker_side(&nonzero_on_defender, 0, atk, true, false),
+            None,
+            "a POSITIVE heal on the defender is an absorb, not a Protect marker"
+        );
+        // Out of bounds returns None rather than panicking: pyo3 maps a panic to
+        // PanicException, which escapes `except Exception` and kills the campaign worker.
+        assert_eq!(protect_blocked_marker_side(&on_attacker, 9, atk, true, false), None);
+
+        // NEGATIVE heal on the defender is Liquid Ooze, not a Protect marker. Pins `== 0`
+        // against `<= 0`, which survived the mutation battery: era 62 measured
+        // heal_liquidooze at zero so it is unreachable today, but widening the test would
+        // dress a Liquid Ooze tail as Protect the moment one appears.
+        let liquid_ooze = [Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideTwo,
+            heal_amount: -40,
+        })];
+        assert_eq!(
+            protect_blocked_marker_side(&liquid_ooze, 0, atk, true, false),
+            None,
+            "a NEGATIVE heal is Liquid Ooze; the marker is zero-amount only"
+        );
+    }
+
+    /// The absorb set is exactly the abilities that can emit a zero `Heal`.
+    ///
+    /// Pins both directions, because both mutations survived. Narrowing it drops the guard
+    /// for a real producer and would render Protect over a Water Absorb activation; widening
+    /// it back to `is_absorb_ability` re-adds FLASHFIRE, which sets a VOLATILE and never a
+    /// heal, refusing Protect-blocked worlds for a Flash Fire defender and buying nothing.
+    #[test]
+    fn the_absorb_guard_covers_exactly_the_zero_heal_producers() {
+        for a in [Abilities::WATERABSORB, Abilities::VOLTABSORB, Abilities::DRYSKIN] {
+            assert!(
+                absorb_ability_can_emit_a_zero_heal(a),
+                "{a:?} carries a heal and CAN emit the zero-heal no-op"
+            );
+        }
+        assert!(
+            !absorb_ability_can_emit_a_zero_heal(Abilities::FLASHFIRE),
+            "FLASHFIRE sets a volatile and never a heal, so guarding on it is pure loss"
+        );
+        assert!(!absorb_ability_can_emit_a_zero_heal(Abilities::NONE));
     }
 
     /// Containment is checked on FULL instruction equality, not on variant alone.

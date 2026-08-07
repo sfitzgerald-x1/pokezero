@@ -2484,3 +2484,212 @@ fn the_emitted_none_matched_shape_comes_from_the_real_aggregation() {
         );
     }
 }
+
+/// A Protect-blocked Sleep Talk callee renders `|-activate|<target>|Protect`.
+///
+/// END-TO-END through the real render path, which is the point. The unit tests for
+/// `protect_blocked_marker_side` exercise a pure function; review demonstrated that
+/// DELETING THE ENTIRE WALK ARM left all 418 tests green, and that lowercasing the
+/// keyword or hardcoding the PROTECT read also survived. Every one of those mutants
+/// has to die here or the behaviour change is unverified.
+///
+/// The shape: the sleeper calls a protect-flagged move via Sleep Talk, the defender is
+/// behind Protect, so gen3 pushes a zero-amount `Heal` on the DEFENDER as a branch
+/// marker (generate_instructions.rs, gated on `blocked_by_protect`). Before this fix
+/// that marker refused the whole world as `ambiguous_unrenderable:heal_zero_marker`.
+#[test]
+fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    // TWO protect-flagged damaging moves, which is what makes the callee AMBIGUOUS and so
+    // routes this through the UNNAMED-CALLEE WALK rather than the named path. Protect
+    // STRIPS the move, so both candidates regenerate the identical tail -- just the
+    // zero-amount `Heal` marker -- and `identify_sleep_talk_called` cannot tell them apart.
+    //
+    // That is not a contrivance, it is the mechanism behind the whole 3,365-world class:
+    // Protect makes every protect-flagged callee look the same, which is exactly why these
+    // worlds were ambiguous and refused. A FIRST VERSION of this fixture gave the sleeper
+    // ONE callee, which `identify_sleep_talk_called` named -- so the NAMED path rendered
+    // Protect, the fixture passed, and deleting the entire new walk arm still passed.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    // THE DISCRIMINATOR, set explicitly. This is the state fact the tail cannot supply
+    // and the whole safety argument rests on: without it the marker is indistinguishable
+    // from a full-HP absorb activation, whose line is an ABILITY activation.
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+
+    let branches = generate(&mut state);
+    let mut saw_protect = false;
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        if events.contains("Protect") {
+            saw_protect = true;
+            // EXACT string, not a substring match on "Protect". A lowercased keyword or a
+            // dropped `-activate` both survived review's mutation battery precisely
+            // because nothing asserted the literal.
+            assert!(
+                events.contains("|-activate|p1a: Lead|Protect"),
+                "expected the exact Protect activation line, got:\n{events}"
+            );
+        }
+    }
+    assert!(
+        saw_protect,
+        "no branch rendered a Protect line -- the walk arm did not fire. Branches: {}",
+        branches.len()
+    );
+    // AND it must be the UNNAMED path. If a callee gets NAMED, the named renderer emits the
+    // Protect line and this fixture would pass with the new arm deleted -- which is exactly
+    // what the first version did.
+    //
+    // AND the world must actually be RECLAIMED. This is the PR's headline benefit and it was
+    // unverified: `sleeptalk_refusal_is_unsafe` only chooses WHICH tag is emitted, and the
+    // walk renders either way -- so reverting it to the fail-closed form left every world
+    // still refused with the whole suite green (review's M19). The tag is the only thing
+    // that distinguishes "rendered and searched" from "rendered and thrown away".
+    let mut checked = 0;
+    for branch in &branches {
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
+        if events.contains("Protect") {
+            assert!(
+                !events.contains("[from] Sleep Talk"),
+                "the callee was NAMED, so the named path rendered Protect and this fixture \
+                 proves nothing about the walk arm:\n{events}"
+            );
+            assert!(
+                r.attribution_unsafe.is_empty(),
+                "the Protect marker is rendered but the world is STILL REFUSED as \
+                 attribution-unsafe, so the fix reclaims nothing: {r:?}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no branch reached the tag assertion");
+}
+
+/// WITHOUT the PROTECT volatile, no Protect line is rendered.
+///
+/// The negative half, and the one that pins the SAFETY ARGUMENT. The positive fixture
+/// always sets the volatile, so hardcoding `defender_protected = true` survives it --
+/// review's M14. This is the case that mutant breaks: a zero-amount `Heal` with no
+/// Protect in state is the OTHER producer, a full-HP absorb activation, whose line is an
+/// ABILITY activation. Rendering `|-activate|...|Protect` there fabricates a line in a
+/// searched world, which is the defect that hit the substitute-break and boost arms.
+#[test]
+fn without_the_protect_volatile_no_protect_line_is_invented() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    // NO PROTECT volatile inserted -- that is the whole point.
+
+    let branches = generate(&mut state);
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        assert!(
+            !events.contains("Protect"),
+            "a Protect line was invented with no PROTECT volatile in state:\n{events}"
+        );
+    }
+}
+
+/// PRODUCER 2, the one that would be FABRICATED over: a full-HP absorb activation.
+///
+/// This is the case the whole absorb guard exists for, and review showed it was untested:
+/// hardcoding BOTH guards true made this exact branch emit `|-activate|...|Protect` with the
+/// entire suite green. A Water Absorb defender at full HP takes a Water move and gen3 pushes
+/// a zero-amount `Heal` on it -- byte-identical to the Protect marker, on the same side --
+/// but the line it owes is an ABILITY activation, not Protect.
+///
+/// No PROTECT volatile here, and the defender holds WATERABSORB, so BOTH axes of the guard
+/// must hold for nothing to be rendered.
+#[test]
+fn a_full_hp_absorb_activation_is_never_dressed_as_protect() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::WATERGUN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::BUBBLE);
+    // The OTHER producer: a heal-carrying absorb ability on a full-HP defender.
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+    let maxhp = state.side_one.get_active().maxhp;
+    state.side_one.get_active().hp = maxhp;
+
+    let branches = generate(&mut state);
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        assert!(
+            !events.contains("Protect"),
+            "a full-HP absorb activation was dressed as Protect -- this is the fabricated \
+             line the absorb guard exists to prevent:\n{events}"
+        );
+    }
+}
+
+/// PROTECT *and* an absorb ability: refuse. The over-refusal, pinned as deliberate.
+///
+/// A Water Absorb mon that uses Protect hits this routinely -- it is not a corner case, and
+/// review measured it as a real ongoing cost: those worlds stay refused even though the
+/// marker is almost certainly a genuine Protect block. The guard is kept anyway because the
+/// absorb abilities RESTORE `flags.protect` (gen3/abilities.rs), so a protect-bypassing Water
+/// or Electric move would leave `blocked_by_protect == false` with PROTECT still set -- a
+/// zero `Heal` that is NOT a Protect marker while the volatile says otherwise.
+///
+/// Pinning it as a TEST rather than a comment because hardcoding the absorb read to `false`
+/// at the call site survived every other fixture (review's M14b). Without this, the axis
+/// could be silently deleted.
+#[test]
+fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+    // BOTH conditions true at once. The positive fixture has PROTECT and no absorb; this
+    // adds the absorb, and the expected outcome flips from rendered to refused.
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+
+    let branches = generate(&mut state);
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        assert!(
+            !events.contains("Protect"),
+            "with a heal-carrying absorb ability present the marker is ambiguous and must \
+             be refused, not guessed:\n{events}"
+        );
+    }
+}
