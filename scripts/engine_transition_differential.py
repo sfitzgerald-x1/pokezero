@@ -2868,6 +2868,43 @@ def checkpoint_report_aggregate(
 #     transition:matched + transition:diverged + engine_error
 #         + skip:strict_all_branches_lossy  ==  boundaries_measured
 #
+# WHY IT IS EXHAUSTIVE, exactly. `boundaries_measured` has ONE increment site in the
+# whole repo (`_prepare_boundary`, `counts["boundaries_measured"] += 1`), and the verdict
+# domain is closed at three values -- `evaluate_boundary_strict` and `evaluate_boundary`
+# return only "matched", "diverged" and "skip_lossy" -- so the DYNAMIC key
+# `f"transition:{verdict}"` cannot mint a fifth term. `_prepare_boundary` has a second
+# caller (`scripts/attest_materialized_damage_stats.py`), which is harmless only because
+# it passes a THROWAWAY `Counter()` and never publishes a report; give it the live counter
+# and the identity breaks there, silently, with no verdict ever recorded.
+#
+# ------------------------------------------------------------------------------------
+# THE SEAM: a FIFTH path exists, and the identity survives it only by an accident of
+# error handling. Say which accident, because it is load-bearing and reversible.
+#
+# Between the increment and the verdict there is a stretch of code that is NOT inside the
+# matcher's `try`: `env.step(actions)`, `_fold(cumulative)`, the `active_changed`
+# comprehension, the deliberate re-raise of `KeyboardInterrupt`/`SystemExit` from the
+# matcher's handler, and `classify_divergence` on the diverged path. An exception from any
+# of those escapes `run_game` with `boundaries_measured` already incremented and no
+# verdict counted -- a genuine fifth outcome.
+#
+# It is not a partition violation TODAY for one reason and one reason only: `counts` is a
+# LOCAL `Counter` created at the top of `run_game`, and the sweep loop calls `run_game`
+# with NO try/except around it. So a game that raises anywhere in that stretch propagates
+# out and its counts are discarded WHOLESALE -- the increment never reaches a checkpoint
+# record or a report. The partition holds because the evidence is thrown away, not because
+# the path cannot be taken.
+#
+# THE CHANGE THAT BREAKS IT, named so it is recognisable in review: "salvage the partial
+# counts so a long sweep does not lose a game" -- i.e. wrapping the `run_game` call in
+# try/except and recording `counts` anyway, or hoisting `counts` out of `run_game` so the
+# caller owns it. Either makes the identity FIVE-term instantly, and the new term has no
+# name because nothing counts it. If you make that change, count the escape explicitly
+# (e.g. `boundary_abandoned_after_measure`) and add it to VERDICT_PARTITION_SCALARS or
+# VERDICT_PARTITION_COUNTERS, rather than discovering the drift from a report that no
+# longer reconciles.
+# ------------------------------------------------------------------------------------
+#
 # The two-term form `matched + diverged == boundaries_measured` was asserted as a
 # property of this instrument across reports/ and docs/ and is FALSE. It held on most
 # windows only because both extra terms were 0 there, and it is measurably broken on

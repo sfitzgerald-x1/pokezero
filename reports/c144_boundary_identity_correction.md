@@ -77,8 +77,9 @@ Item 5 of the audit: is `skip:strict_all_branches_lossy` the only counter that s
 other, and the corrected identity includes it.**
 
 Derived from `run_game`, which is the only place a prepared boundary can go. After
-`_prepare_boundary` returns non-`None`, control reaches exactly four outcomes and nothing else
-(`KeyboardInterrupt`/`SystemExit` re-raise and kill the process, producing no report):
+`_prepare_boundary` returns non-`None`, control reaches exactly four **counted** outcomes — plus a
+fifth, **uncounted** one that never reaches a report, which §2a is entirely about and which must be
+read alongside this table rather than after it:
 
 | outcome | counter | in `boundaries_measured` | in a `transition:*` tally |
 |---|---|---|---|
@@ -91,6 +92,67 @@ Derived from `run_game`, which is the only place a prepared boundary can go. Aft
 on all 70 committed artifacts, so the omission has never been exercised — the same accident that
 kept the two-term form alive. The four-term identity is therefore **complete**, not patched: it
 is a case analysis of `run_game`, not an empirical fit.
+
+**Two facts make the case analysis airtight, and both are worth stating because each is a thing a
+future change could take away.** First, `boundaries_measured` has **exactly one increment site in
+the whole repo** and the verdict domain is **closed at three values** — `evaluate_boundary_strict`
+and `evaluate_boundary` return only `"matched"`, `"diverged"` and `"skip_lossy"` — so the *dynamic*
+key `f"transition:{verdict}"`, which looks like it could mint a term, cannot. Second,
+`_prepare_boundary` has a **second caller**, `scripts/attest_materialized_damage_stats.py`, which
+increments `boundaries_measured` and never records a verdict. It is harmless only because it passes
+a throwaway `Counter()` and publishes no report. Hand it the live counter and the identity breaks
+there silently.
+
+## 2a. The seam: the fifth path, and the accident that hides it
+
+A fifth path out of a measured boundary **does** exist, and the identity survives it only by an
+accident of error handling. An invariant that holds by accident should say which accident.
+
+Between the increment and the verdict there is a stretch of `run_game` that is **not** inside the
+matcher's `try`: `env.step(actions)`, `_fold(cumulative)`, the `active_changed` comprehension, the
+deliberate re-raise of `KeyboardInterrupt`/`SystemExit` out of the matcher's own handler, and
+`classify_divergence` on the diverged path. An exception from any of those escapes `run_game` with
+`boundaries_measured` already incremented and **no verdict counted** — a genuine fifth outcome, and
+one with no counter of its own.
+
+It is not a partition violation today for exactly one reason: **`counts` is a local `Counter`,
+created at the top of `run_game`, and the sweep loop calls `run_game` with no `try`/`except` around
+it.** A game that raises anywhere in that stretch propagates out and its counts are discarded
+*wholesale* — the increment never reaches a checkpoint record or a report. The partition holds
+because the evidence is thrown away, not because the path cannot be taken.
+
+**The change that breaks it, named so it is recognisable in review:** *"salvage the partial counts
+so a long sweep doesn't lose a game"* — wrapping the `run_game` call in `try`/`except` and recording
+`counts` anyway, or hoisting `counts` out of `run_game` so the caller owns it. Either makes the
+identity **five-term instantly**, and the fifth term has no name because nothing counts it. Anyone
+making that change must count the escape explicitly (`boundary_abandoned_after_measure` or
+similar) and add it to `VERDICT_PARTITION_SCALARS` / `VERDICT_PARTITION_COUNTERS`, rather than
+discovering the drift later from a report that no longer reconciles. The same note is in the block
+comment above `verdict_partition_failures`, where the person making the change will actually be.
+
+**Both halves of the accident are now pinned, not merely described.**
+`test_the_seam_that_hides_the_fifth_path_is_still_in_place` asserts, by parsing the source rather
+than grepping it, that `counts` is still local to `run_game` (not a caller-owned parameter) and that
+the single `run_game` call site is not inside a `try` with `except` handlers. A bare `try`/`finally`
+— which is what is there today, closing the checkpoint handle — passes; adding handlers around the
+call does not. Both mutations were built and both go red, and the failure message names the escape
+that would have to be counted. The pin does not prove the escape unreachable; it proves the two
+conditions that make it harmless cannot be removed silently.
+
+## 2b. What still is not defended, stated plainly
+
+A **code-level** break of the partition inside `run_game` — making `transition:matched` simply stop
+incrementing, say — is caught today **only by the `differential_sha256` byte pin in
+`reports/certification_contract_lifecycle.json`, not semantically.** That pin fires on *any* edit to
+the differential and is re-stamped as routine, so a future PR could break the partition and
+re-stamp the pin green in the same commit. Nothing in the test suite would object.
+
+The runtime self-check at both of `main`'s report-emitting exits is the real defence: it evaluates
+the identity against the report the run actually produced, so a mutated counter shows up as a
+`COUNTER INTEGRITY` failure and a nonzero exit on the first real sweep. That is a *runtime* guard,
+not a CI one, and this note exists so nobody mistakes the byte pin for the semantic guard it is
+not. Closing the gap properly would need a synthetic-boundary harness that drives `run_game`
+end to end; that is not attempted here.
 
 **Counters that look like they belong in the identity and must not be added.** Every one of
 these is inside the measured region, and none of them is a boundary verdict:
@@ -174,11 +236,44 @@ the first mechanized form of it.
   `transitions_matched / (boundaries_measured - unadjudicated)`, with `boundaries_adjudicated`
   and `boundaries_unadjudicated` published beside it so the denominator adjustment is visible.
   On a run with no lossy verdict and no engine error the number is unchanged.
-- `tests/test_boundary_verdict_partition.py` — 18 pins, including three anti-vacuity ones: that
-  the artifact corpus it loops over is non-empty, that some committed artifact actually carries a
-  nonzero lossy counter, and that `c26`/`c27` still **refute** the two-term form. Without the
-  last one the module would pass identically in the repo state that produced the defect.
+- `tests/test_boundary_verdict_partition.py` — **23 pins**, including four anti-vacuity ones: the
+  globbed artifact corpus is pinned at an **exact** size (not a floor); some committed artifact
+  really carries a nonzero lossy counter; every artifact in the corpus carries every verdict
+  scalar; and `c26`/`c27` still **refute** the two-term form. Without the last, the module would
+  pass identically in the repo state that produced the defect.
+
+  > **The corpus selector was the one fail-open in review's ten-mutation battery, and it is
+  > fixed here.** The selector required all three verdict scalars to be present, so it filtered on
+  > exactly the keys the checker refuses: deleting `engine_errors` from
+  > `reports/artifacts/c134_collapsed_dev_sweep.json` made that artifact **leave the corpus**
+  > instead of failing it, and the whole 190-test suite stayed green. With a `> 40` floor against
+  > 70 artifacts there were 29 more it could have eaten silently. Membership is now decided by
+  > `boundaries_measured` alone — a key the checker does *not* validate — malformedness is the
+  > checker's job, and the count is exact so a disappearance is a failure in its own right. The
+  > reviewer's exact mutation now produces three distinct failures.
 - `.github/workflows/engine-fidelity-gates.yml` — a `Boundary verdict partition` step with a
   pinned test count and a no-skip guard, plus filter entries for the test module,
   `cert_sweep_readout.py`, and the two counterexample artifacts, so deleting a counterexample
   cannot go green.
+
+## 5. The pin that certifies this was already stale
+
+`reports/certification_contract_lifecycle.json`'s `successor_pending_identity.differential_sha256`
+was **broken before this PR touched anything**, and the record it carries was materially
+incomplete. Bisected and confirmed independently:
+
+- last accurate at **#1032** (`5d7f2ed0`, 2026-08-02);
+- **broken by #1054** (`5475b2da`, 2026-08-03), so
+  `tests/test_c26_damage_composition_readout.py::test_production_matcher_is_not_the_rejected_experiment`
+  has been **red on `main` since 2026-08-03**;
+- **seven** merged PRs touched the differential in between — #1054, #1059, #1086, #1107, #1122,
+  #1135, #1149 — for a net **+470 / −12** lines;
+- **four** of those are matcher or classifier changes whose classification effect was never
+  declared at the pin: **#1054** (movepainsplit inherits the damage roll, 35 → 31), **#1059**
+  (faint-without-damage synthesis and the Air Lock speed guard, 21 → 13), **#1086** (demote the
+  drag limit to a last resort), **#1107** (forced-replacement ply runs no residual phase).
+
+Re-deriving the hash here repairs the test, but the delta from `8f83a11f` **absorbs all four of
+those undeclared changes**, so re-stamping this pin is not the routine no-op it looks like. That
+whole record now lives in the artifact's own `why_pinned` field rather than only in a PR
+description — which is the point of a repo whose thesis is that untested prose goes stale silently.

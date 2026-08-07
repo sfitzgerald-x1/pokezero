@@ -90,8 +90,33 @@ _C141 = {
 }
 
 
+# The number of committed sweep artifacts, pinned EXACTLY rather than as a floor.
+#
+# A floor was the one fail-open in review's ten-mutation battery. The selector below used
+# to require all three of VERDICT_PARTITION_SCALARS to be present, which meant it filtered
+# on exactly the keys the checker refuses: deleting `engine_errors` from
+# `c134_collapsed_dev_sweep.json` dropped that artifact out of the corpus instead of
+# failing it, and the whole 190-test suite stayed green -- with `> 40` against 70 artifacts
+# there were 29 more it could have silently eaten. Membership is now decided by a key the
+# checker does NOT validate, and the count is exact so a disappearance is a failure even if
+# some future selector regains a filter.
+#
+# Committing a new sweep artifact means bumping this number. That is the point: it makes the
+# new artifact pass through the checker deliberately rather than by default. C141's
+# final-holdout sweep lands with PR #1159 and takes it to 71.
+_EXPECTED_SWEEP_ARTIFACTS = 70
+
+
 def _sweep_reports() -> list[tuple[str, dict]]:
-    """Every committed JSON that is shaped like a differential sweep report."""
+    """Every committed JSON that is shaped like a differential sweep report.
+
+    Selected on the presence of `boundaries_measured` ALONE -- deliberately, and see
+    `_EXPECTED_SWEEP_ARTIFACTS` above for why. A report missing a verdict scalar stays IN
+    the corpus and is refused by `verdict_partition_failures`; it does not quietly leave.
+    Verified at the time of writing: every committed JSON with a top-level
+    `boundaries_measured` also carries all three scalars, so this selector picks out the
+    same 70 files the stricter one did.
+    """
 
     found: list[tuple[str, dict]] = []
     for pattern in ("reports/*.json", "reports/artifacts/*.json"):
@@ -102,8 +127,6 @@ def _sweep_reports() -> list[tuple[str, dict]]:
                 continue
             if not isinstance(loaded, dict):
                 continue
-            if not all(key in loaded for key in VERDICT_PARTITION_SCALARS):
-                continue
             if "boundaries_measured" not in loaded:
                 continue
             found.append((os.path.relpath(path, REPO), loaded))
@@ -111,9 +134,51 @@ def _sweep_reports() -> list[tuple[str, dict]]:
 
 
 class VerdictPartitionOverCommittedArtifactsTests(unittest.TestCase):
-    def test_the_corpus_of_sweep_artifacts_is_not_empty(self) -> None:
-        # Pin 1 is a loop. A loop over nothing passes.
-        self.assertGreater(len(_sweep_reports()), 40)
+    def test_the_corpus_of_sweep_artifacts_is_exactly_the_expected_size(self) -> None:
+        # Pin 1 below is a loop, and a loop over nothing passes. A floor is not enough
+        # either: an artifact silently leaving the corpus must be a failure, not slack.
+        found = _sweep_reports()
+        self.assertEqual(
+            len(found), _EXPECTED_SWEEP_ARTIFACTS,
+            "the committed sweep-artifact corpus changed size. If an artifact was added, "
+            "bump _EXPECTED_SWEEP_ARTIFACTS. If one vanished or stopped carrying a "
+            "top-level boundaries_measured, that is the fail-open this pin exists to "
+            f"catch. Found: {sorted(name for name, _ in found)}",
+        )
+
+    def test_every_artifact_in_the_corpus_carries_every_verdict_scalar(self) -> None:
+        # The selector no longer filters on these, so their absence has to be asserted
+        # somewhere. Here, plus the checker itself, which refuses rather than skips.
+        for name, report in _sweep_reports():
+            with self.subTest(artifact=name):
+                for field in VERDICT_PARTITION_SCALARS:
+                    self.assertIn(
+                        field, report,
+                        f"{name}: a sweep report without {field} cannot be adjudicated, "
+                        "and must not be able to leave the corpus by omitting it",
+                    )
+
+    def test_the_counter_and_scalar_vocabularies_agree_on_every_artifact(self) -> None:
+        # VERDICT_PARTITION_COUNTERS' job. The two tuples name the SAME partition in two
+        # vocabularies -- `run_game`'s internal counter keys and the report's published
+        # scalars -- and `checkpoint_report_binding_failures` only binds them on the
+        # checkpoint-merge path, so a plain shard's binding is otherwise unchecked.
+        for name, report in _sweep_reports():
+            counters = report.get("counters")
+            if not isinstance(counters, dict):
+                continue
+            with self.subTest(artifact=name):
+                for scalar, counter in zip(
+                    VERDICT_PARTITION_SCALARS, VERDICT_PARTITION_COUNTERS
+                ):
+                    # A bare KeyError here would still be red, but it would name the
+                    # missing key and not the drift. Fail with the message instead.
+                    self.assertIn(scalar, report, f"{name}: no published {scalar}")
+                    self.assertEqual(
+                        report[scalar], counters.get(counter, 0),
+                        f"{name}: published {scalar} disagrees with counters[{counter!r}], "
+                        "so the two vocabularies for one partition have drifted",
+                    )
 
     def test_the_four_term_partition_closes_on_every_committed_artifact(self) -> None:
         for name, report in _sweep_reports():
@@ -412,6 +477,93 @@ class DifferentialSelfCheckIsArmedTests(unittest.TestCase):
             len(calls), 2,
             "main() has two report-emitting paths (the --merge-from path and the sweep "
             "path) and each must self-check its own report",
+        )
+
+    def test_the_seam_that_hides_the_fifth_path_is_still_in_place(self) -> None:
+        """The identity survives the fifth path by an accident. Pin the accident.
+
+        Between the `boundaries_measured` increment and the verdict there is a stretch of
+        `run_game` outside the matcher's `try` -- `env.step`, `_fold`, the `active_changed`
+        comprehension, the re-raised KeyboardInterrupt/SystemExit, `classify_divergence`.
+        An escape from any of those leaves the boundary measured with NO verdict: a real
+        fifth outcome that nothing counts.
+
+        It is not a partition violation only because (a) `counts` is a LOCAL Counter in
+        `run_game`, not a caller-owned one, and (b) the sweep loop does not catch
+        exceptions from `run_game`, so a crashing game's counts are discarded wholesale.
+        Take either away -- most plausibly by "salvaging partial counts so a long sweep
+        does not lose a game" -- and the identity is five-term instantly.
+
+        So both halves of the accident are asserted here rather than left as a comment.
+        This is a SOURCE pin and does not prove the escape is unreachable; it proves the
+        two conditions that currently make it harmless have not been removed silently.
+        """
+        import ast
+
+        source = (REPO / "scripts" / "engine_transition_differential.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+
+        run_game = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "run_game"
+        )
+        # (a) `counts` is created inside run_game and is not a parameter.
+        params = {
+            arg.arg for arg in run_game.args.args + run_game.args.kwonlyargs
+        }
+        self.assertNotIn(
+            "counts", params,
+            "run_game now takes `counts` from its caller, so a crashing game's partial "
+            "counts can outlive it. Count the post-measurement escape explicitly and add "
+            "it to the verdict partition -- see C144 §2a.",
+        )
+        local = [
+            node for node in run_game.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "counts"
+        ]
+        self.assertEqual(
+            len(local), 1,
+            "run_game must create its own `counts`; that locality is what discards the "
+            "increment when a game raises after being measured (C144 §2a)",
+        )
+
+        # (b) the sweep loop does not CATCH exceptions from run_game. A bare try/finally
+        # is fine and is what is there today (it closes the checkpoint handle); a try with
+        # `except` handlers around the call is what would salvage the counts.
+        main = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+
+        def contains(node, target) -> bool:
+            return any(child is target or contains(child, target)
+                       for child in ast.iter_child_nodes(node))
+
+        calls = [
+            node for node in ast.walk(main)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "run_game"
+        ]
+        self.assertEqual(len(calls), 1, "expected exactly one run_game call site in main")
+        call = calls[0]
+        catching = [
+            node for node in ast.walk(main)
+            if isinstance(node, ast.Try)
+            and node.handlers
+            and any(contains(stmt, call) or stmt is call for stmt in node.body)
+        ]
+        self.assertEqual(
+            catching, [],
+            "the run_game call is now inside a try/except, so a game that raises AFTER "
+            "boundaries_measured incremented can have its partial counts recorded. That "
+            "makes the boundary verdict partition five-term. Count the escape (e.g. "
+            "`boundary_abandoned_after_measure`) and add it to VERDICT_PARTITION_SCALARS "
+            "or VERDICT_PARTITION_COUNTERS -- see C144 §2a.",
         )
 
     def test_both_report_paths_fold_the_partition_into_the_exit_code(self) -> None:
