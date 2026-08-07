@@ -72,14 +72,37 @@ _RESULT_SCHEMA = "pokezero.foundation-train-result.v1"
 
 
 def _boot_identity() -> str:
-    """A value that is stable for this pod and changes when it restarts."""
-    for candidate in ("/proc/sys/kernel/random/boot_id", "/etc/machine-id"):
-        try:
-            return Path(candidate).read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-    # No /proc (a developer machine, a test): fall back to this process's start time, which is
-    # still stable for the life of the agent and distinct across restarts.
+    """Who owns a claim: an identity that is stable for THIS POD and changes when it is replaced.
+
+    THE POD, NOT THE NODE, and the difference is the whole correctness of claim ownership.
+
+    This previously read /proc/sys/kernel/random/boot_id, which is NOT namespaced -- it is the
+    host's, and changes only when the node reboots. Two consequences, both bad:
+
+      * two agents on one node (a same-node replacement, or co-resident pods) got the IDENTICAL
+        owner, so a new agent treated another pod-life's claim as its own and evaluated that
+        claim's `trainer_pgid` in a DIFFERENT PID namespace, where the integer means something
+        else entirely. A collision makes the release path SIGKILL an unrelated group -- and a
+        recorded pgid of 1 would take the pod's own serving processes down.
+      * the /etc/machine-id fallback is EMPTY BY DESIGN in most Debian-derived images, so
+        `.strip()` yielded "" and every agent shared the owner "".
+
+    In Kubernetes the container hostname IS the pod name: unique per pod, stable across agent
+    restarts inside it, and different for every replacement. That is exactly the semantics the
+    ownership model assumes, so it is what the model should read.
+    """
+    hostname = os.environ.get("HOSTNAME", "").strip()
+    if hostname:
+        return hostname
+    try:
+        node = os.uname().nodename.strip()
+    except Exception:
+        node = ""
+    if node:
+        return node
+    # No hostname at all (a bare test harness): fall back to something unique to this process, and
+    # never to a shared constant -- a shared owner is worse than an over-specific one, because it
+    # lets one agent adopt and kill another's work.
     return f"pid{os.getpid()}-{int(time.time())}"
 
 

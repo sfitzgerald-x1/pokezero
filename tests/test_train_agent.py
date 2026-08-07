@@ -372,6 +372,59 @@ class TrainAgentRestartTest(unittest.TestCase):
                 self.fail(f"a temporary result file was left behind: {stray}")
 
 
+class ClaimOwnershipTest(unittest.TestCase):
+    """Who owns a claim. The entire ownership model rests on this one value."""
+
+    def test_the_owner_is_pod_scoped_not_node_scoped(self) -> None:
+        """It must identify THIS POD, not the machine under it.
+
+        The original read /proc/sys/kernel/random/boot_id, which is not namespaced: it is the
+        host's and changes only on node reboot. Two agents on one node -- a same-node replacement,
+        or co-resident pods -- therefore got the IDENTICAL owner, so one would treat another
+        pod-life's claim as its own and evaluate that claim's trainer_pgid in a DIFFERENT PID
+        namespace, where the number means something else. A collision makes the release path SIGKILL
+        an unrelated group; a recorded pgid of 1 would kill the pod's own serving processes.
+        """
+        import pokezero.train_agent as agent_module
+
+        original = os.environ.get("HOSTNAME")
+        try:
+            os.environ["HOSTNAME"] = "infsvc-run-abc-7f9c4d5b6c-x2p9q"
+            self.assertEqual(
+                agent_module._boot_identity(), "infsvc-run-abc-7f9c4d5b6c-x2p9q",
+                "the owner is not the pod identity, so two pods on one node can share it",
+            )
+            # An EMPTY value must never be accepted: /etc/machine-id is empty by design in most
+            # Debian-derived images, and an empty owner is shared by every agent that reads it --
+            # strictly worse than an over-specific one, because it lets an agent adopt and kill
+            # another's work.
+            os.environ["HOSTNAME"] = "   "
+            fallback = agent_module._boot_identity()
+            self.assertTrue(fallback.strip(), "an empty owner was accepted")
+        finally:
+            if original is None:
+                os.environ.pop("HOSTNAME", None)
+            else:
+                os.environ["HOSTNAME"] = original
+
+    def test_two_pods_never_share_an_owner(self) -> None:
+        """The property that matters, stated directly rather than inferred from the mechanism."""
+        import pokezero.train_agent as agent_module
+
+        original = os.environ.get("HOSTNAME")
+        try:
+            os.environ["HOSTNAME"] = "pod-a"
+            first = agent_module._boot_identity()
+            os.environ["HOSTNAME"] = "pod-b"
+            second = agent_module._boot_identity()
+            self.assertNotEqual(first, second)
+        finally:
+            if original is None:
+                os.environ.pop("HOSTNAME", None)
+            else:
+                os.environ["HOSTNAME"] = original
+
+
 class TrainAgentEntrypointTest(unittest.TestCase):
     def test_the_module_runs_as_a_command(self) -> None:
         """The pod invokes this as `python -m pokezero.train_agent`; that path must work."""
