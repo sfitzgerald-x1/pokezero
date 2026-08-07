@@ -133,9 +133,29 @@ of 124 is **asserted** anywhere — the numeral appears only in this withdrawal 
 BOUNDARY count. 110 + 14 colliding with it was a coincidence, not a measurement. Four consecutive edits to this paragraph each fixed the wrong
 sentence and left the composition unread.
 
-**Note on "the 124".** 124 is `class_rows.state`, a count of BOUNDARIES; 138 is the sum of
-per-family boundary incidences, which this document calls rows. They are different units and
-the Units section forbids juxtaposing them, so the coverage claim is stated over rows only.
+**Note on "the 124", and why it is now 122.** 124 is `class_rows.state`, a count of BOUNDARIES;
+138 is the sum of per-family boundary incidences, which this document calls rows. They are
+different units and the Units section forbids juxtaposing them, so the coverage claim is stated
+over rows only.
+
+**The number moved twice after this ledger was written, both times because a cause here was
+closed.** Do not read 124 as a live figure:
+
+| when | `class_rows.state` | why |
+|---|---|---|
+| at ledger time | **124** | as attributed below |
+| after #1156 | 123 | P4 closed — the candidate-derived block this ledger cites as P4's fix site was replaced wholesale |
+| after the P3 freeze lift | **122** | P3 closed — see its section |
+
+Measured at the tree that carries this correction, `python scripts/leaf_vs_reality.py --corpus
+corpus/golden-v4 --tables corpus/encoder_tables_v4.json`:
+`DEFECT-CLASS (state+turn) divergent boundaries: 122`.
+
+Lifting the P3 freeze also cleared **2 of the 3** rows in the `engine_model` class's
+`self_team/CATEGORY_VOLATILE_OFFSET` family: those were attributed to `volatile:encore` (id 864)
+but were mustrecharge displacing the volatile written at that offset. `engine_model` boundaries
+went 31 -> 30. An attribution in an excuse class was wrong for the same reason a defect-class
+attribution was.
 
 On `golden-v2`: **119 of 119 rows** — P1 (**90** = 17+17+4+4+23+23+2), P2 (24) and P5 (5). P3, P4 and P6 do not surface
 there. Scenarios: **10 of 10**, all **P5**, the same recharge-request Choice lock, corroborated on
@@ -149,22 +169,22 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 
 | class | rows (v4 / gv2 / scen) | cause | disposition |
 |---|---|---|---|
-| `NUMERIC_SELF_WISH_TURNS` | 17 / 17 / 0 | **P1** root-frozen md passthrough | harness fix |
-| `NUMERIC_OPP_WISH_TURNS` | 17 / 17 / 0 | **P1** | harness fix |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF` | 6 / 4 / 0 | **P1** | harness fix |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP` | 6 / 4 / 0 | **P1** | harness fix |
-| `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | harness fix |
-| `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | harness fix |
-| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | harness fix |
+| `NUMERIC_SELF_WISH_TURNS` | 17 / 17 / 0 | **P1** root-frozen md passthrough | **production** — `leaf.rs` |
+| `NUMERIC_OPP_WISH_TURNS` | 17 / 17 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF` | 6 / 4 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP` | 6 / 4 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | **production** — `leaf.rs` |
 | `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | encoder fix |
 | `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | encoder fix |
-| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | production + gate fix → **task 4** |
-| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | harness fix |
-| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | harness fix |
-| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **P5** | harness fix |
-| `legal_action_mask` action0 | 1 / 1 / 0 | **P5** | harness fix |
-| `legal_action_mask` action1 | 1 / 1 / 2 | **P5** | harness fix |
-| `legal_action_mask` action3 | 1 / 1 / 2 | **P5** | harness fix |
+| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | **CLOSED** — gates #1156, freeze lifted in `leaf.rs` (this branch) |
+| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | **CLOSED** — #1156 replaced the candidate-derived block |
+| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | **production** — `engine_world.py` |
+| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action0 | 1 / 1 / 0 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action1 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action3 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
 | `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | encoder fix |
 | `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | encoder fix |
 
@@ -508,10 +528,38 @@ family, so the second row's boundary is unverified; the id-877 reading rests on 
 **Disposition: production + gate fix → task 4**, and these 2 rows are its measured incidence —
 **not** the 8 an earlier revision claimed.
 
+**CLOSED.** The gate half landed in #1156 (`production_recharging_slots`, all four gates) and the
+symmetry half in the same PR (`_recharging_slots` returns our own slot from the parser's
+`self_must_recharge`). The freeze itself is now lifted in `leaf.rs`: both sides derive the flag
+from the branch's own `volatile_statuses`.
+
+Why the freeze had to go rather than merely being allowed to stay: making `_recharging_slots`
+symmetric meant `engine_search` started BUILDING self-recharge worlds that previously failed
+closed as `self_request_state_unsupported`, so the stale root flag became reachable in production
+search at depth > 0 where it never had been. The symmetry fix turned a dormant defect into a live
+one; leaving it would have been strictly worse than before task 4.
+
+Measured after the lift, same producing command as above:
+
+- the id-877 self-side family is **gone** (2 rows -> 0);
+- `class_rows.state` 123 -> **122**;
+- `leaf_root_parity` stays at **diverged 0** — depth-0 parity is intact, which was the freeze's
+  entire rationale and the thing that had to be checked;
+- and 2 of the 3 `engine_model` `self_team/CATEGORY_VOLATILE_OFFSET` rows cleared too — they were
+  attributed to `volatile:encore` (864) but were mustrecharge displacing the offset.
+
+The second row's boundary was unverified when this section was written (the artifact stores one
+example per family). The lift clearing exactly 2 rows confirms both were id-877.
+
 ## P4 — `recharging` is never seeded on a faint-replacement round (1 row)
 
 `CATEGORY_VOLATILE_OFFSET` (opponent) at `1009#[18,19]`, seat p1, direction **inverted**: got 0 /
 want 877 — the leaf *lost* a recharge reality still has.
+
+**CLOSED by #1156**, incidentally rather than deliberately: this section's named fix site,
+`scripts/leaf_vs_reality.py:430-439`, is the candidate-derived block that task 4 replaced
+wholesale with `production_recharging_slots`. Round 18 has no p2 decision row, so the candidate
+rule could not see p2's lock; the parser tracker can. `class_rows.state` 124 -> 123.
 
 **[CORRECTION]** An earlier revision called this "the opponent mirror" of P3 and then "the engine
 consumes the recharge a ply early". Neither: the recharge was **never in the world to consume**.

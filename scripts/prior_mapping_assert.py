@@ -40,8 +40,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import pokezero_search  # noqa: E402
 
-from pokezero.dex import load_showdown_dex_cached, normalize_id  # noqa: E402
 from pokezero.env import BattleStartOverride  # noqa: E402
+from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
     battle_spec_from_payload,
@@ -62,14 +62,6 @@ from fidelity_gate_events import (  # noqa: E402
 )
 from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
 from differential_denominator import check_denominator, gate as denominator_gate
-
-
-def chosen_candidate_from_row(row: Any) -> Mapping[str, Any] | None:
-    index = row.chosen_action_index
-    for candidate in row.observation_metadata.get("action_candidates") or ():
-        if candidate.get("action_index") == index:
-            return candidate
-    return None
 
 
 def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, Any]:

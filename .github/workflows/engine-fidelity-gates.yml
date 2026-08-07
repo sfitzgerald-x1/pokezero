@@ -113,6 +113,14 @@ jobs:
             scripts/fidelity_gate_events.py
             tests/test_differential_denominator.py
             tests/test_denominator_adoption.py
+            # The spread-gate provenance pin. Listed with a STEP below, and the step is
+            # honest that it cannot execute the assertions: the pin needs a pokemon-showdown
+            # checkout, CI builds none, and the default root is outside the repo and
+            # untracked -- so all 6 skip here. Without this entry a PR that DELETES the pin
+            # trips no workflow at all, which is the failure mode this file forbids twice and
+            # which this very pin was subject to for four commits after #1123.
+            tests/test_spread_gate_provenance.py
+            tests/_showdown_root.py
             # C116 Phase 2's scope gate. Listed for the same reason as the entries
             # above: a PR whose only change is adding a file to the mention ledger,
             # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
@@ -447,6 +455,30 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
+      - name: Spread-gate provenance pin (shape only -- CANNOT run here)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_spread_gate_provenance -v 2>&1 | tee /tmp/spreadgate.log
+          # READ THIS BEFORE TRUSTING A GREEN. Every assertion in this file is SKIPPED in CI.
+          # The pin drives a real randbats set source, CI builds no Showdown (two steps in this
+          # job say so), and the default root is outside the repo and untracked. So this step
+          # verifies SHAPE only: that the pin still exists, still has 6 tests, and still skips
+          # for the stated reason rather than silently shrinking.
+          #
+          # That is worth a step anyway. Between #1123 and this commit the file was in no
+          # filter and no step, so deleting it outright would have tripped nothing -- the
+          # "guard nothing runs" pattern this workflow's header forbids, applied to the guard
+          # that pins checkpoint provenance in both directions. The assertions are exercised on
+          # a developer machine with POKEZERO_SHOWDOWN_ROOT set; see reports/ for the red runs.
+          if ! grep -qE 'Ran 6 tests' /tmp/spreadgate.log; then
+            echo "::error::spread-gate pin changed count; the two-way provenance test shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=6\)' /tmp/spreadgate.log; then
+            echo "::error::expected all 6 to skip here; if they RAN, CI gained a Showdown checkout and this step's disclaimer is now wrong"
+            exit 1
+          fi
+
       - name: Final-holdout guard pins
         run: |
           set -o pipefail

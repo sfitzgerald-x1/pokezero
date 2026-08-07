@@ -24,6 +24,14 @@ So the rule this module mechanizes:
 4. assert ``measured + skipped == contained`` whenever both are supplied — the rule that
    actually bites.
 
+**What ``contained`` means, precisely, because the label overstates it.** It is whatever the
+caller counts as its universe, and that is NOT the same unit at all four sites:
+``leaf_vs_reality`` and ``fidelity_gate_events`` pass same-seat BOUNDARIES (1271 on golden-v4),
+while ``leaf_root_parity`` and ``prior_mapping_assert`` pass decision ROWS (1295). Both are right
+for their own harness — rule 4 only requires ``measured`` and ``skipped`` to be counted in the
+same unit as ``contained`` — but the phrase "boundaries contained" in the failure message is
+wrong for two of the four, and it is the HARNESS's universe, not the corpus's.
+
 **What rule 3 actually does, stated narrowly after review.** In ``leaf_vs_reality`` the
 pre-existing identity ``compared == exact + divergent`` held *by definition* — ``compared`` was
 assigned that sum — so it carried no information and was nonetheless cited as evidence. This

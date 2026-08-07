@@ -28,7 +28,7 @@ made me soften three "pinned two-way" claims to:
 
 > no test or measurement shows a gate catching an end-to-end bad write
 
-That is the gap this closes. No code change — this is a measurement.
+That is the gap this closes. This is a measurement; the only source edits are comments and one docs row, no behaviour.
 
 ## The injected write
 
@@ -150,6 +150,17 @@ fixtures.
 
 ## Disposition
 
-No code change. C112's **P3 stays open**: `leaf.rs`'s self-side MUSTRECHARGE volatile is still
-root-frozen, and this run is evidence that when someone lifts it, the gates will hold the
-implementation honest — the property #1156 claimed and could not previously show.
+No behavioural change here — comments and one docs row.
+
+**C112's P3 was open when this ran, and is now closed.** At the time of this measurement
+`leaf.rs` still root-froze the self-side MUSTRECHARGE volatile, and this run was the evidence
+that the gates could hold an implementation honest once someone lifted it — the property #1156
+claimed and could not previously show.
+
+An audit then pointed out the sharper consequence: because #1156 made `engine_search` BUILD
+self-recharge worlds that previously failed closed, the stale root flag became **reachable in
+production search** at depth > 0 where it never had been. The symmetry fix turned a dormant
+defect live. The freeze is therefore lifted in the follow-up (both sides now derive from the
+branch's own `volatile_statuses`), verified exactly as this report's method prescribes:
+`leaf_root_parity` stays at `diverged 0` — depth-0 parity, the freeze's entire rationale — while
+the id-877 self-side family goes 2 rows to 0 and `class_rows.state` goes 123 to 122.

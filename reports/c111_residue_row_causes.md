@@ -335,3 +335,37 @@ partition in this stack.
 
 Filed as **A7** and queued alongside the Case A three-way partition, not off to one
 side as something the methodology cannot reach.
+
+---
+
+## Note from C112 (belief-surface follow-on) — filed, not fixed
+
+`reports/c112_leaf_state_divergence_ledger.md` ledgered the leaf-vs-reality state divergences on
+`corpus/golden-v4`. Three classes it encountered are owned **here and by the rust-fidelity lane**,
+so it recorded them as skip counts and deliberately did not attribute or fix them. C112 said "a
+note belongs in those ledgers"; this is that note, filed late — it was owed at C112's merge and
+was not written until an audit caught the omission.
+
+What C112 saw, and nothing more:
+
+- **`self_moveset_mismatch`** — 11 skips on the scenarios corpus. Not attributed, not touched.
+- **Residue rows** — appear only as skip counts in C112's tables.
+- **Sleep Talk.** C112 has a cause named **P6**, `NUMERIC_SLEEP_TURNS` (self and opponent, 1 row
+  each), and it *is* Sleep-Talk-adjacent, so read it before assuming an overlap. It is a
+  **different mechanism** from this lane's `sleeptalk_called_unidentified:ambiguous_unrenderable`:
+  P6 is `LeafMeta.sleep` not modelling gen3's `time += skippedTime` turn refund. C112 dispositioned
+  it "encoder fix" and changed no code. If this lane's owner judges P6 to belong here instead, it
+  is yours — C112 has no claim on it.
+
+Nothing in these classes was modified by that work: the three commits that touched C112's
+material (`d57a26ac`, `8eacf0da`, `61a1e946`) are docs and reports only, zero code.
+
+**Provenance of the counts, stated exactly.** The `self_moveset_mismatch` figure of 11 is
+C112's, from the **scenarios** corpus, not golden-v4 — quoted from
+`reports/c112_leaf_state_divergence_ledger.md` rather than re-measured here. The golden-v4 run
+(`python scripts/leaf_vs_reality.py --corpus corpus/golden-v4 --tables
+corpus/encoder_tables_v4.json`) reports no `self_moveset_mismatch` skips at all; its skip classes
+are `no_branch_match` 42 and `world_unsupported:{materialization_blocker 250,
+substitute_health_unknown 14, encore_move_unknown 6, pending_baton_pass 3}`. An earlier draft of
+this note attached the golden-v4 command to the scenarios figure, which is the mis-citation this
+lane's own conventions exist to prevent.
