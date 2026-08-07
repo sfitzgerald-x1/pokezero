@@ -68,6 +68,7 @@ from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 
 from fidelity_gate_events import chosen_candidate, truant_loaf_slots  # noqa: E402
 from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
+from differential_denominator import check_denominator, gate as denominator_gate
 
 FIXED_TOKEN_BLOCKS = (
     ("field", 0, 1),
@@ -253,6 +254,12 @@ def run_corpus(
                         "got": got[index].item(),
                         "want": want[index].item(),
                     }
+        # Counted after the skip decision and BEFORE classification, so it is independent
+        # of the exact/divergent pair. Deriving it from their sum makes the partition
+        # identity unfalsifiable — the tautology `leaf_vs_reality` shipped and then cited
+        # as evidence (C112). An attempt that reaches here and never classifies leaves
+        # matched + diverged < measured, which is what rule 3 is for.
+        counts["attempted"] += 1
         if cells_divergent == 0:
             counts["exact"] += 1
         else:
@@ -330,7 +337,19 @@ def main(argv=None) -> int:
     driven_exact = all(
         report["counts"].get("divergent", 0) == 0 for report in reports
     )
-    return 0 if driven_exact else 1
+    # The denominator rule. `driven_exact` is `all(divergent == 0)`, which is VACUOUSLY TRUE
+    # over zero rows -- this harness would exit 0 on a run that compared nothing.
+    denominator = denominator_gate([
+        check_denominator(
+            str(report["corpus"]),
+            measured=report["counts"].get("attempted", 0),
+            matched=report["counts"].get("exact", 0),
+            diverged=report["counts"].get("divergent", 0),
+            skipped=sum(v for k, v in report["counts"].items() if k.startswith("skip")),
+        )
+        for report in reports
+    ])
+    return 1 if (not driven_exact or denominator) else 0
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import pokezero_search  # noqa: E402
 
 from pokezero.dex import load_showdown_dex, normalize_id  # noqa: E402
+from differential_denominator import check_denominator, gate as denominator_gate
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -620,6 +621,10 @@ def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
     for (battle_id, seat), chain in sorted(corpus["fold_chains"].items()):
         history: list[str] = list(chain[0].get("event_slice") or ())
         for row_n, row_next in zip(chain, chain[1:]):
+            # Independent of the status classification below, for the reason in
+            # scripts/differential_denominator.py: a boundary that is driven and never lands
+            # in `stats` leaves matched + diverged < measured.
+            stats["attempted"] += 1
             result = drive_boundary(
                 corpus=corpus,
                 battle_id=battle_id,
@@ -668,7 +673,21 @@ def main(argv=None) -> int:
             print(f"   {key:40s} {value}")
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
-    return 0
+    # This function previously ended `return 0` UNCONDITIONALLY -- a gate that could not fail.
+    # The denominator rule is now the one thing it does gate on; classifying the non-`a`
+    # statuses is a separate question this change deliberately does not decide.
+    return denominator_gate([
+        check_denominator(
+            str(report["corpus"]),
+            measured=report["counts"].get("attempted", 0),
+            matched=report["counts"].get("a", 0),
+            diverged=sum(
+                v for k, v in report["counts"].items() if k not in ("a", "attempted")
+            ),
+            contained=report.get("row_pair_boundaries"),
+        )
+        for report in reports
+    ])
 
 
 if __name__ == "__main__":
