@@ -47,6 +47,13 @@ because "0 engine errors" alone reads as "nothing anomalous".
 `matched + diverged == boundaries_measured` on both. The holdout divergence rate is
 **3.53×** the dev window's.
 
+> **[CORRECTION 2026-08-07 — C144.]** That is the **two-term** form and it is not an
+> instrument property; the identity is four-term (`+ engine_errors +
+> skip:strict_all_branches_lossy`). Both artifacts here live in `/tmp` and were never
+> committed, so the lossy counter cannot be re-derived for these two runs — the
+> reconciliation above is unverifiable rather than wrong, and the 3.53× ratio does not
+> depend on it. See `reports/c144_boundary_identity_correction.md`.
+
 **This is C116's M6, confirmed rather than feared.** The entire 208 → 7 era iterated
 against seeds 19000000–19000199, and no holdout existed anywhere in the program. The
 plan said the stopping condition "can be satisfied by a window overfit"; it can, and

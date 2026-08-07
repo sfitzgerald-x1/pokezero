@@ -83,6 +83,14 @@ Row level: dev closed exactly `19000112/32`; **nothing opened in either window**
 closed and opened nothing. Identity `matched + diverged == boundaries` holds on all four rows.
 Artifacts committed as `reports/artifacts/c126_whiteherb_{dev,holdout}_sweep.json`.
 
+> **[CORRECTION 2026-08-07 — C144.]** The identity is four-term, not two-term:
+> `matched + diverged + engine_errors + skip:strict_all_branches_lossy ==
+> boundaries_measured`. It closes in two terms on these rows **only because
+> `skip:strict_all_branches_lossy` is 0 on all four committed artifacts** (re-derived:
+> dev 15,220 + 4 + 0 + 0 = 15,224; holdout 15,385 + 11 + 0 + 0 = 15,396, on both the
+> plain and `_extended` pairs). Stated as a general property it is false —
+> `reports/c144_boundary_identity_correction.md`.
+
 Residue is now **dev 4 / holdout 11**, reported as an outcome.
 
 ## 5b. Self-review found the reachability argument false, and it is fixed

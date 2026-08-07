@@ -97,7 +97,17 @@ Holdout reads 4, not the 5 c133 §7 cites, because `19100180/24` closed in betwe
 
 Also predicted, on all four post-fix runs: `boundaries_measured` and
 `boundaries_full_round` unchanged at 15,503 / 15,968 (dev) and 15,579 / 16,155 (holdout);
-`engine_errors: 0`; the identity `matched + diverged == measured` holding.
+`engine_errors: 0`; the boundary verdict partition closing.
+
+> **[CORRECTION 2026-08-07 — C144.]** This clause was registered as
+> `matched + diverged == measured`, a **two-term** form that is not a property of the
+> instrument. The registered clause should have been the four-term identity
+> `matched + diverged + engine_errors + skip:strict_all_branches_lossy == measured`. The
+> distinction is not academic for a *prediction*: a run that lost boundaries to the
+> lossy verdict would have violated the two-term clause and been read as falsifying the
+> fix, when in fact only the clause was wrong. §7 and §9 below record it closing on all
+> ten runs, and it does — with `skip:strict_all_branches_lossy` at 0 on every committed
+> artifact in both windows. See `reports/c144_boundary_identity_correction.md`.
 
 Rows that must **survive** every run, because none of them is either mechanism:
 
@@ -194,7 +204,10 @@ Complete `divergence_classes` census across all six runs:
 **Every clause of §3 held and no clause of §4 fired.** The three predicted rows closed and
 no other row moved; `boundaries_measured` is 15,503 / 15,579 and `boundaries_full_round`
 15,968 / 16,155 on all six runs; `engine_errors` is 0 on all six; and
-`matched + diverged == measured` on all six. Nothing opened on either window, under either
+the verdict partition closes on all six — `matched + diverged + engine_errors +
+skip:strict_all_branches_lossy == measured`, with the last two terms at 0 (C144; the
+two-term form this line originally quoted is not an instrument property). Nothing opened
+on either window, under either
 fix. The gating counters are also unmoved — `gating_exact` 14,156 / 14,148 and
 `gating_support_based` 1,347 / 1,431 across all six — so the measured population was not
 perturbed, which is the check that would catch a closure obtained by shrinking the
@@ -299,7 +312,9 @@ Complete `divergence_classes` census:
 
 `boundaries_full_round` 15,968 / 16,155, `boundaries_measured` 15,503 / 15,579,
 `gating_exact` 14,156 / 14,148, `gating_support_based` 1,347 / 1,431, `engine_errors` 0 and
-`matched + diverged == measured` — identical across all four runs and to every run in §7, so
+a closing verdict partition (`matched + diverged + engine_errors +
+skip:strict_all_branches_lossy == measured`, last two terms 0 — C144) — identical across
+all four runs and to every run in §7, so
 merging #1148 perturbed nothing this measures. Artifacts:
 `reports/artifacts/c138_collapsefix_{mainhead,merged}_{dev,holdout}_sweep.json`
 (`mainhead` = main at `f876803e`; the `main` pair is §2's base `2ec0cb13`).

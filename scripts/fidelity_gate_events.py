@@ -145,9 +145,14 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
 
     The gate is still NOT candidate-derived, which is the property that matters: both sides come
     from the parser tracker, so the gate's world is independent of the action the gate is
-    checking. Symmetry restored what is MEASURED; independence is what MAKES CATCHING POSSIBLE.
-    Those are different properties and this helper needs both. The tests pin the derivation, not
-    an end-to-end catch -- that would need an engine rebuilt with a bad write in it.
+    checking. Symmetry restored what is MEASURED; independence is what makes catching possible.
+    Those are different properties and this helper needs both.
+
+    Shown end-to-end in reports/c141_recharge_gate_injection_proof.md: a wrong self-side write
+    compiled into leaf.rs takes leaf_root_parity from diverged 0 to 5 at an unchanged
+    denominator. Read the report's limits section before quoting it -- the pre-task-4 gates
+    caught 4 of those 5, because this corpus has no self-side row where the recorded action and
+    the tracker disagree.
 
     KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
     signal from the round-indexed public action record when the tracker key is ABSENT. This
