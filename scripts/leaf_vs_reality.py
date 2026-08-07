@@ -100,6 +100,7 @@ from fidelity_gate_events import (  # noqa: E402
 # divergences ledger claims `state`/`turn` are "pinned at ZERO by the gate's exit code": that
 # claim has been vacuous for as long as the gate could not start.
 from leaf_root_parity import bitwise_equal, block_of, column_names  # noqa: E402
+from differential_denominator import check_denominator, gate as denominator_gate
 
 # Column families that are EXPECTED to diverge one boundary ahead, with the
 # reason each is expected (kept explicit — the honest-classification rule).
@@ -763,6 +764,13 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
             if status != "ok":
                 counts[status] += 1
                 continue
+            # Counted HERE -- after the skip decision, before the comparison runs -- so it is
+            # independent of exact/divergent. Deriving it from their sum would make the
+            # partition identity unfalsifiable, which is the tautology this harness already
+            # shipped once (`compared` was assigned `exact + divergent` and then cited as
+            # evidence). An attempt that reaches here and never classifies makes
+            # matched + diverged < measured, which is the whole point.
+            # NB: counted after the `no_golden_row` skip below, not here -- see that site.
             buffers, _turn, tags = payload
             golden_row = golden_rows.get(
                 (battle_id, row_next["decision_round_index"], seat)
@@ -770,6 +778,11 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
             if golden_row is None:
                 counts["skip:no_golden_row"] += 1
                 continue
+            # Counted HERE: after every skip decision including this one, before the
+            # comparison. An earlier revision counted above the `no_golden_row` check, which
+            # made a benign missing row report as "attempted but never classified" -- a
+            # partition break that is really a skip, double-counted into `skipped` as well.
+            counts["attempted"] += 1
 
             # Opponent-membership tokens: revealed between the boundaries.
             want_numeric = numpy.ascontiguousarray(
@@ -1024,7 +1037,22 @@ def main(argv=None) -> int:
     )
     # Worst-excess and tightest-allowance are printed as DIAGNOSTICS only; the verdict above is the
     # per-corpus one.
-    return 1 if defect_rows != 0 or matchup_arm_failed else 0
+    # The denominator rule, ORed in: it can only raise the exit code, never lower it.
+    denominator = denominator_gate([
+        check_denominator(
+            str(report["corpus"]),
+            measured=report["counts"].get("attempted", 0),
+            matched=report["counts"].get("exact", 0),
+            diverged=report["counts"].get("divergent", 0),
+            # Subscript, not .get: a renamed report key must CRASH rather than silently
+            # disable rule 4, the only load-bearing rule. `measured` above fails safe (a
+            # rename makes it 0 and rule 2 fires); this one would fail OPEN.
+            contained=report["boundaries"],
+            skipped=sum(v for k, v in report["counts"].items() if k.startswith("skip")),
+        )
+        for report in reports
+    ])
+    return 1 if (defect_rows != 0 or matchup_arm_failed or denominator) else 0
 
 
 if __name__ == "__main__":

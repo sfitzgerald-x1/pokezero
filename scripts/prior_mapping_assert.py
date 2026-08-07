@@ -57,6 +57,7 @@ from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
 from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
+from differential_denominator import check_denominator, gate as denominator_gate
 
 
 def chosen_candidate_from_row(row: Any) -> Mapping[str, Any] | None:
@@ -186,6 +187,12 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
         elif set(root_indices) != recorded:
             root_narrower_rows += 1
 
+        # Counted after the skip decision and BEFORE classification, so it is independent
+        # of the exact/divergent pair. Deriving it from their sum makes the partition
+        # identity unfalsifiable — the tautology `leaf_vs_reality` shipped and then cited
+        # as evidence (C112). An attempt that reaches here and never classifies leaves
+        # matched + diverged < measured, which is what rule 3 is for.
+        counts["attempted"] += 1
         if problems:
             counts["mismatch"] += 1
             for problem in problems:
@@ -237,7 +244,22 @@ def main(argv=None) -> int:
     if args.json:
         args.json.write_text(json.dumps(reports, indent=2, sort_keys=True) + "\n")
     clean = all(report["counts"].get("mismatch", 0) == 0 for report in reports)
-    return 0 if clean else 1
+    # The denominator rule. `clean` is `all(mismatch == 0)`, vacuously true over zero rows.
+    denominator = denominator_gate([
+        check_denominator(
+            str(report["corpus"]),
+            measured=report["counts"].get("attempted", 0),
+            matched=report["counts"].get("exact", 0),
+            diverged=report["counts"].get("mismatch", 0),
+            # Subscript, not .get: a renamed report key must CRASH rather than silently
+            # disable rule 4, the only load-bearing rule. `measured` above fails safe (a
+            # rename makes it 0 and rule 2 fires); this one would fail OPEN.
+            contained=report["rows"],
+            skipped=sum(v for k, v in report["counts"].items() if k.startswith("skip")),
+        )
+        for report in reports
+    ])
+    return 1 if (not clean or denominator) else 0
 
 
 if __name__ == "__main__":

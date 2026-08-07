@@ -100,6 +100,19 @@ jobs:
             # workflow's FILTERS and no step. A guard nothing runs. Found by review
             # of #1113.
             tests/test_engine_stat_attestation.py
+            # The denominator rule and the four harnesses that adopt it. Without these a PR
+            # that guts differential_denominator.py -- or moves an `attempted` counter back
+            # above a skip decision, which is exactly the bug review caught in #1154 --
+            # triggers no workflow at all. Added with a STEP below rather than filters alone,
+            # because a filter with no step is the "guard nothing runs" this file already
+            # documents twice.
+            scripts/differential_denominator.py
+            scripts/leaf_vs_reality.py
+            scripts/leaf_root_parity.py
+            scripts/prior_mapping_assert.py
+            scripts/fidelity_gate_events.py
+            tests/test_differential_denominator.py
+            tests/test_denominator_adoption.py
             # C116 Phase 2's scope gate. Listed for the same reason as the entries
             # above: a PR whose only change is adding a file to the mention ledger,
             # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
@@ -181,7 +194,14 @@ jobs:
           workspaces: rust/pokezero-search
 
       - name: Install build tooling
-        run: python -m pip install -e . maturin
+        # numpy is explicit rather than implied. It is an OPTIONAL dependency (the `neural`
+        # extra in pyproject.toml), but three of the four differential harnesses --
+        # leaf_vs_reality.py, leaf_root_parity.py and prior_mapping_assert.py -- `import numpy`
+        # at module level. Without it they cannot be IMPORTED here at all, so the denominator
+        # step's acceptance subtests errored for three of four harnesses on this step's first
+        # real CI run. Installing the extra itself would drag in torch for nothing; numpy alone
+        # is what the harnesses actually need.
+        run: python -m pip install -e . maturin numpy
 
       # The patch stack must apply at fuzz 0 and hash to its pins before anything is
       # built. This is also the tamper guard: PATCHED_TARGET_TREE_SHA256 rejects a
@@ -385,6 +405,30 @@ jobs:
           # adds skipIf would otherwise quietly disarm the whole file.
           if grep -q 'skipped' /tmp/boundary.log; then
             echo "::error::a binding boundary pin SKIPPED"
+            exit 1
+          fi
+
+      - name: Denominator rule
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_differential_denominator \
+            tests.test_denominator_adoption -v 2>&1 | tee /tmp/denominator.log
+          # CI does NOT execute the real-driver acceptance -- it needs corpus/golden-v4,
+          # which is gitignored, so it skips here. That is the layer which caught the
+          # round-1 bug in #1154, and it runs only on a developer machine. Said plainly
+          # rather than as reassurance.
+          #
+          # The skip COUNT is pinned as well as the ran-count, for the reason the
+          # "Engine binding boundary pins" step above gives: a future `skipIf` would
+          # otherwise keep `Ran N` green while disarming the acceptance entirely -- the
+          # "guard nothing runs" pattern this file already documents twice, and the very
+          # reason this step exists.
+          if ! grep -qE 'Ran 31 tests' /tmp/denominator.log; then
+            echo "::error::denominator pins changed count; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=6\)' /tmp/denominator.log; then
+            echo "::error::denominator skip set changed; expected exactly the 6 corpus-dependent tests"
             exit 1
           fi
 
