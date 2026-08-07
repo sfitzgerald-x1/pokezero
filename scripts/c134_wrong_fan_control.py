@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 """WRONG-FAN CONTROL: does enumeration close those rows for its VALUES, or its COUNT?
 
-**ANSWER: neither. Acceptance does not read the branch's damage value at all.** A fan
-carrying no legal roll value earns acceptance on all four rows, and on two of them even
-when every value is 12x-106x away from any legal roll. The script still exits non-zero,
-because ``only_visible_wrong_fan_kept_every_closed_row_divergent`` is the property it was
-built to demonstrate and that property is FALSE.
+**ANSWER, PER ROW.** On ``19000074/27`` and ``19100191/5`` acceptance does not read the
+branch's damage value at all: a fan carrying no legal roll value earns acceptance at up to
+106x displacement. On ``19000191/63`` and ``19100107/135`` it is UNDETERMINED -- two equally
+valid zero-contamination perturbations disagree, and the disagreement is NOT ordered by
+displacement, so it is not a function of the move value. The script exits non-zero because
+``every_closed_row_is_value_independent`` is FALSE, which is the honest per-row answer
+rather than a pooled one.
 
 THE QUESTION. ``evaluate_boundary_strict`` accepts as soon as ANY rendered branch matches,
 and enumeration multiplies the branch count 8.5x-72.5x on the rows it closes. So "nothing
@@ -28,6 +30,13 @@ THE ARMS. Each row is adjudicated by the SAME matcher on the SAME recorded input
                                value off the legal set
   only_visible_wrong_fan_far   the same, pushed to the far end
                                of each branch's feasible window
+  ovwf_cap2/5/10/20            the same, with displacement CAPPED at
+                               2/5/10/20 %, so the scan is not read off
+                               two extremes
+  isolable_only                only_visible minus every TRAILING-FAINT
+                               branch; values left LEGAL
+  isolable_only_wrong_fan      the same set, remapped, with the following
+                               component provably held fixed
 
 WHY only_visible IS THE WELL-POSED SUBSET. A branch whose target faints ON THE MOVE renders
 as ``0 fnt``; the amount is not in the protocol, so that branch is compatible with every
@@ -48,7 +57,7 @@ proportional fallback. A value-based wrong fan is therefore the wrong instrument
 enumeration multiplies is branch STRUCTURE, and that is what a discriminating control would
 have to perturb.
 
-FIVE CONFOUNDS were found in this one script: a shift too large for a low-HP defender, a
+SIX CONFOUNDS were found in this one script: a shift too large for a low-HP defender, a
 clamped shift that overlapped the legal fan, a run that perturbed only ``p2a`` when the row
 diverged on ``p1``, a drop of unremappable branches that produced the entire result, and a
 helper deleted by an edit that turned a whole arm into ``skip_lossy(0)`` while still
@@ -63,6 +72,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import re
@@ -231,7 +241,8 @@ def _shiftable_readings(
 
 
 def _remap_branch(
-    branch: dict, target: str, legal: set[int], preferred: int | None, *, far: bool = False
+    branch: dict, target: str, legal: set[int], preferred: int | None, *,
+    far: bool = False, far_cap: float | None = None, isolate: bool = False,
 ) -> bool:
     """Rewrite this branch's move damage to a value that is NOT a legal roll.
 
@@ -281,14 +292,31 @@ def _remap_branch(
         for offset in range(1, 4 * max(4, len(legal)) + 1):
             candidates.extend((damage + offset, damage - offset))
 
+    if isolate and trailing_faint:
+        # A trailing faint pins the final reading at 0, so the capped residual becomes
+        # ``previous + delta``: changing the move value NECESSARILY changes the following
+        # component. Such a branch cannot be perturbed in isolation.
+        return False
+
     for candidate in candidates:
         if candidate <= 0 or candidate in legal:
             continue
         if trailing_faint and candidate <= damage:
             # Upward only. See the docstring: downward can undo the faint.
             continue
+        if far_cap is not None:
+            nearest = min(abs(candidate - value) for value in legal)
+            if nearest / max(candidate, 1) > far_cap:
+                continue
         delta = damage - candidate
         if not (min_delta <= delta <= max_delta) or delta == 0:
+            continue
+        if isolate and any(
+            (hp == maximum) != (hp + delta == maximum) for _, hp, maximum in readings
+        ):
+            # A reading crossing the max-HP boundary reclassifies its component between
+            # ``*_to_full`` and a plain heal, and those take DIFFERENT acceptance rules.
+            # That is a structural change riding along with the value change.
             continue
         events = list(branch["events"])
         for index, hp, maximum in readings:
@@ -325,11 +353,27 @@ def _legacy_remap_feasible(branch: dict, target: str, mapping: dict[int, int]) -
     return all(0 < hp + delta <= maximum for _, hp, maximum in readings)
 
 
+_VISIBLE_SUBSET_MODES = frozenset(
+    {"only_visible_wrong_fan", "only_visible_wrong_fan_far",
+     "ovwf_cap2", "ovwf_cap5", "ovwf_cap10", "ovwf_cap20",
+     "isolable_only", "isolable_only_wrong_fan"}
+)
+
 MODES = (
     "collapsed", "enumerated", "wrong_fan",
     "drop_only", "drop_only_legacy", "only_lethal", "only_visible",
     "only_visible_wrong_fan", "only_visible_wrong_fan_far",
+    # Displacement-CAPPED far arms. If the verdict were a function of how far the values
+    # move, these would interpolate between NEAREST and FAR. They do not: review found the
+    # two rows that reopen do so at ~2%, not at the ~14x the previous revision claimed.
+    "ovwf_cap2", "ovwf_cap5", "ovwf_cap10", "ovwf_cap20",
+    # Component-ISOLATED arms: the move value moves and the FOLLOWING component provably
+    # does not, plus its own legal-valued drop control on the identical branch set.
+    "isolable_only", "isolable_only_wrong_fan",
 )
+
+# Percent caps parsed out of the ``ovwf_capN`` mode names.
+_CAP_MODES = {"ovwf_cap2": 0.02, "ovwf_cap5": 0.05, "ovwf_cap10": 0.10, "ovwf_cap20": 0.20}
 
 
 def _branch_damage_class(branch: dict, target: str) -> str:
@@ -432,7 +476,7 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
         # set on which a value-only control is actually well posed. The premise is this
         # branch's own measurement: ``only_visible`` matches on every row and
         # ``only_lethal`` diverges on every row, so the closing branch lives here.
-        if mode in {"only_visible_wrong_fan", "only_visible_wrong_fan_far"}:
+        if mode in _VISIBLE_SUBSET_MODES:
             branches = [b for b, h in zip(branches, hidden) if not h]
             payload["branches"] = branches
             classes = {
@@ -440,6 +484,52 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
                 for target in targets
             }
             hidden = [False] * len(branches)
+
+        if mode.startswith("isolable_only"):
+            # ISOLATE THE COMPONENT, not just the value. A remap shifts every later HP
+            # reading on the target by the same delta, so the FOLLOWING component's
+            # magnitude is normally preserved -- but not always. Two cases break it:
+            # a trailing faint pins the last reading at 0, so the capped residual becomes
+            # ``previous + delta``; and a reading sitting at max HP is reclassified between
+            # ``*_to_full`` and a plain heal, which take different acceptance rules.
+            #
+            # Those branches carry a STRUCTURAL change riding along with the value change,
+            # and a verdict that depends on them is not a verdict about the value. This
+            # arm keeps only the branches where neither happens, and ``isolable_only``
+            # is its LEGAL-valued control on the identical branch set -- the pairing that
+            # caught confound 4.
+            probe_shifts: dict[str, dict[int, int]] = {}
+            for target in targets:
+                legal = _move_damage_values(payload, target)
+                if legal:
+                    probe_shifts[target] = wrong_fan_map(legal)
+            keep = []
+            for branch in branches:
+                usable = True
+                for target, mapping in probe_shifts.items():
+                    if _branch_damage_class(branch, target) != "visible":
+                        continue
+                    trial = copy.deepcopy(branch)
+                    damage = _branch_move_damage(trial, target)
+                    if not _remap_branch(
+                        trial, target, set(mapping), mapping.get(damage), isolate=True
+                    ):
+                        usable = False
+                        break
+                if usable:
+                    keep.append(branch)
+            shift_report["isolable_dropped"] = shift_report.get("isolable_dropped", 0) + (
+                len(branches) - len(keep)
+            )
+            branches = keep
+            payload["branches"] = branches
+            classes = {
+                target: [_branch_damage_class(branch, target) for branch in branches]
+                for target in targets
+            }
+            hidden = [False] * len(branches)
+            if mode == "isolable_only":
+                return json.dumps(payload)
         #
         # Nothing is dropped. A hidden-valued branch is kept UNCHANGED, and that is not a
         # concession: the renderer emits ``0 fnt``, so every lethal roll produces a
@@ -483,7 +573,9 @@ def _adjudicate(repro: dict, mode: str, shift_report: dict) -> tuple[str, int, l
                 damage = _branch_move_damage(branch, target)
                 if _remap_branch(
                     branch, target, legal_set, mapping.get(damage),
-                    far=mode.endswith("_far"),
+                    far=mode.endswith("_far") or mode in _CAP_MODES,
+                    far_cap=_CAP_MODES.get(mode),
+                    isolate=mode.startswith("isolable_only"),
                 ):
                     moved = True
                 else:
@@ -637,6 +729,8 @@ def main(argv: list[str] | None = None) -> int:
         ("drop_only", "1"), ("drop_only_legacy", "1"),
         ("only_lethal", "1"), ("only_visible", "1"),
         ("only_visible_wrong_fan", "1"), ("only_visible_wrong_fan_far", "1"),
+        ("ovwf_cap2", "1"), ("ovwf_cap5", "1"), ("ovwf_cap10", "1"), ("ovwf_cap20", "1"),
+        ("isolable_only", "1"), ("isolable_only_wrong_fan", "1"),
     ):
         environment = dict(os.environ)
         environment["POKEZERO_ENUMERATE_ROLLS"] = flag
@@ -691,43 +785,78 @@ def main(argv: list[str] | None = None) -> int:
     def shift_of(row: dict, mode: str) -> dict:
         return row.get("shift", {}).get(mode, {})
 
+    _VALUE_ONLY_ARMS = (
+        "only_visible_wrong_fan", "ovwf_cap2", "ovwf_cap5", "ovwf_cap10", "ovwf_cap20",
+        "only_visible_wrong_fan_far",
+    )
+    for row in rows:
+        arms = {arm: row[arm]["verdict"] for arm in _VALUE_ONLY_ARMS}
+        row["value_only_arms"] = arms
+        # PER ROW, because the answer differs per row and a pooled statement over-reads it.
+        if all(v == "matched" for v in arms.values()):
+            row["conclusion"] = (
+                "NOT value-driven: every zero-contamination value-only perturbation, from "
+                f"{min(shift_of(row, a).get('max_relative_displacement', 0) for a in arms):.4g}x "
+                f"to {max(shift_of(row, a).get('max_relative_displacement', 0) for a in arms):.4g}x "
+                "displacement, still earns acceptance"
+            )
+        elif all(v == "diverged" for v in arms.values()):
+            row["conclusion"] = "value-sensitive under every arm"
+        else:
+            row["conclusion"] = (
+                "UNDETERMINED: arms disagree and the disagreement is NOT ordered by "
+                "displacement, so the verdict is not a function of the move value"
+            )
+
     verdicts = {
-        # Sanity: reproduce the committed artifact before perturbing anything.
         "reproduced_collapsed_divergence": all(
             r["collapsed"]["verdict"] == "diverged" for r in rows
         ),
         "reproduced_enumerated_closure": all(
             r["enumerated"]["verdict"] == "matched" for r in closed
         ),
-        # The branch set must be HELD FIXED in both value-only arms. This is the property
-        # whose absence confounded the first versions of this control: they dropped every
-        # branch they could not remap, and the DROP produced the result.
-        "wrong_fan_held_the_branch_set_fixed": all(
-            r["wrong_fan"]["branches"] == r["enumerated"]["branches"] for r in rows
+        "value_only_arms_held_their_branch_set_fixed": all(
+            r[arm]["branches"] == r["only_visible"]["branches"]
+            for r in rows for arm in _VALUE_ONLY_ARMS
         ),
-        "only_visible_wrong_fan_held_its_branch_set_fixed": all(
-            r["only_visible_wrong_fan"]["branches"] == r["only_visible"]["branches"]
-            for r in rows
+        "value_only_arms_emit_no_legal_value": all(
+            shift_of(r, arm).get("emitted_values_still_legal", {}) == {}
+            for r in closed for arm in _VALUE_ONLY_ARMS
         ),
-        # PRECONDITION, and on only_visible it now PASSES. Independently re-extracted from
-        # the emitted payload, not read off the remapper's own bookkeeping.
-        "only_visible_wrong_fan_emits_no_legal_value": all(
-            shift_of(r, "only_visible_wrong_fan").get("emitted_values_still_legal", {}) == {}
-            for r in closed
+        "value_only_arms_remapped_everything": all(
+            shift_of(r, arm).get("remap_failed", 1) == 0
+            for r in closed for arm in _VALUE_ONLY_ARMS
         ),
-        "only_visible_wrong_fan_remapped_everything": all(
-            shift_of(r, "only_visible_wrong_fan").get("remap_failed", 1) == 0
-            for r in closed
-        ),
-        # THE ISOLATING DIAGNOSTIC that condemned the superseded control: drop the same
-        # set with LEGAL values and the rows still reopen, so the drop did the work.
         "drop_only_legacy_reproduces_the_superseded_verdict": all(
             r["drop_only_legacy"]["verdict"] == "diverged" for r in closed
         ),
-        # THE ANSWER. On a zero-contamination fan carrying no legal roll value at all,
-        # does acceptance survive? Where it does, the closure is NOT value-driven.
-        "only_visible_wrong_fan_kept_every_closed_row_divergent": all(
-            r["only_visible_wrong_fan"]["verdict"] == "diverged" for r in closed
+        # CONFOUND 6, asserted so it cannot quietly stop being true. If the verdict were a
+        # function of displacement the arms would be ordered by it. On 19000191/63 the
+        # NEAREST arm at ~10.6% MATCHES while the 2%-capped arm DIVERGES: the smaller
+        # perturbation is the stricter one. What differs is not how far the move value
+        # moved but WHICH branches moved and in which direction.
+        "at_least_one_row_is_non_monotone_in_displacement": any(
+            r["only_visible_wrong_fan"]["verdict"] == "matched"
+            and r["ovwf_cap2"]["verdict"] == "diverged"
+            and shift_of(r, "only_visible_wrong_fan").get("max_relative_displacement", 0)
+            > shift_of(r, "ovwf_cap2").get("max_relative_displacement", 0)
+            for r in closed
+        ),
+        # WHY confound 6 exists, measured. The closing branch on every row is a
+        # TRAILING-FAINT branch: visible move damage, then death by residual. Its last
+        # reading is pinned at 0, so the capped-residual component is
+        # ``previous + delta`` and moves with the value by construction. Restricting to
+        # branches where the following component CAN be held fixed drops the closing
+        # branch, and the row reopens with legal values -- so no value-only perturbation
+        # of the closing branch exists at all.
+        "isolable_subset_excludes_the_closing_branch_on_every_row": all(
+            r["only_visible"]["verdict"] == "matched"
+            and r["isolable_only"]["verdict"] == "diverged"
+            for r in closed
+        ),
+        # The claim this script was built to test, now scoped per row rather than pooled.
+        "every_closed_row_is_value_independent": all(
+            r["conclusion"].startswith("NOT value-driven") for r in closed
         ),
     }
     payload = {"rows": rows, "verdicts": verdicts}

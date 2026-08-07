@@ -1,13 +1,13 @@
 # C134 — roll enumeration as a flag-gated reference oracle (C116 Phase 2)
 
-**Status: MEASURED, with an adverse result on one question.** The falsifier did not fire
-and both windows reach zero divergent rows under the oracle. But the wrong-fan control —
-after four confounds and one false impossibility claim, both retracted below — now runs
-cleanly on a zero-contamination branch set and shows that **the closures are NOT
-attributable to the branch damage values**: a fan containing no legal roll value at all
-still earns acceptance on all four rows, and on two of them at 12x–106x displacement. The
-reason is a property of the matcher, not of enumeration, and it is in
-§"Nothing opened" is weak on its own. The prediction was committed in `0733abe7` before any sweep on this branch
+**Status: MEASURED, with a PER-ROW result on one question.** The falsifier did not fire and
+both windows reach zero divergent rows under the oracle. The wrong-fan control — six
+confounds deep, three retractions recorded below — now runs on a zero-contamination branch
+set across a displacement scan, and the answer differs by row: on `19000074/27` and
+`19100191/5` the closure is **not value-driven** and survives 12x–106x displacement; on
+`19000191/63` and `19100107/135` it is **undetermined**, because two equally valid
+perturbations disagree and the disagreement is not ordered by displacement. Details, and
+the correction this forces to the merged #1152, in §"Nothing opened" is weak on its own. The prediction was committed in `0733abe7` before any sweep on this branch
 was started; the post-rebase re-registration below was committed in `21178990`, before the
 sweeps that test it, which are the four artifacts landing with this section. The ordering
 between "what I expected" and "what I measured" is a property of the history.
@@ -351,28 +351,86 @@ and this branch's own measurement says that is where the closing branch lives:
 branch set, remap every value off the legal roll set, change nothing else.
 
 Zero legal values is verified by **re-extracting the emitted move-damage values from the
-payload the matcher receives** and intersecting with the legal fan per row per target — not
-by trusting the remapper's own bookkeeping, which would not notice a silent no-op.
+payload the matcher receives** and intersecting with the legal fan — not by trusting the
+remapper's bookkeeping, which would not notice a silent no-op.
 
-| row | `only_visible` (legal values) | wrong fan, NEAREST non-legal | wrong fan, FAR |
-| --- | --- | --- | --- |
-| `19000074/27` | matched (28) | **matched** (0.07x) | **matched** (**106x**) |
-| `19000191/63` | matched (957) | **matched** (0.11x) | diverged (13.9x) |
-| `19100107/135` | matched (528) | **matched** (0.03x) | diverged (13.9x) |
-| `19100191/5` | matched (33) | **matched** (0.01x) | **matched** (**12.4x**) |
+Every arm below holds the branch set fixed (28 / 957 / 528 / 33), remaps everything
+(`remap_failed = 0`), and emits no legal value.
 
-Parenthesised figure is the maximum displacement of an emitted value from the nearest legal
-roll, as a fraction of the value. Both wrong-fan columns emit **no legal roll value at
-all**, independently re-extracted.
+| arm | max displacement | `19000074/27` | `19000191/63` | `19100107/135` | `19100191/5` |
+| --- | --- | --- | --- | --- | --- |
+| NEAREST non-legal | 6.7 / 10.6 / 2.7 / 0.5 % | matched | matched | matched | matched |
+| FAR capped @2% | 1.9 / 1.95 / 1.93 / 1.79 % | matched | **diverged** | **diverged** | matched |
+| FAR capped @5% | ~4.7–5.0 % | matched | **diverged** | **diverged** | matched |
+| FAR capped @10% | ~9.2–10.0 % | matched | **diverged** | **diverged** | matched |
+| FAR capped @20% | ~18.9–19.9 % | matched | **diverged** | **diverged** | matched |
+| FAR uncapped | 106x / 13.9x / 13.9x / 12.4x | matched | **diverged** | **diverged** | matched |
 
-**A fan containing no legal roll value earns acceptance on all four rows, and on two of
-them it still does when every value is 12x–106x away from any legal roll.** The closures
-are **not** attributable to the branch damage values.
+**CORRECTION.** A previous revision of this section said the two rows that reopen "need
+~14x displacement" and attributed it to the matcher's `0.92·|eng| − 1 … 1.09·|eng| + 1`
+fallback window. **Both are false.** They reopen at **1.9%**, about 700x smaller, which the
+±9% window cannot explain. The error came from running only the two extremes and reading a
+threshold into the gap between them.
+
+#### Confound 6: the verdict is not a function of displacement
+
+The NEAREST/FAR split does **not** reconcile the two runs, and treating it as a
+displacement threshold was itself a confound of the same family as the previous five.
+
+On `19000191/63`, NEAREST at **10.6%** gives *matched* while the 2%-capped arm at **1.95%**
+gives *diverged*. **The smaller perturbation is the stricter one.** A quantity that is not
+monotone in displacement is not a function of displacement.
+
+What actually differs is *which* branches moved and *in which direction*, and the mechanism
+is measured rather than guessed. A remap shifts every later HP reading on the target by the
+same δ, which normally leaves the following component's magnitude untouched. **Except when
+the branch ends in a faint.** There the last reading is pinned at `0 fnt`, so the capped
+residual becomes `previous + δ` and moves with the value by construction.
+
+That is not a defect in the remap; it is unavoidable. And it is exactly where the closing
+branch lives:
+
+| row | visible branches | of which TRAILING-FAINT | `only_visible` (legal) | `isolable_only` — same set minus trailing-faint, values LEGAL |
+| --- | --- | --- | --- | --- |
+| `19000074/27` | 28 | 6 | matched | **diverged** (22) |
+| `19000191/63` | 957 | 406 | matched | **diverged** (551) |
+| `19100107/135` | 528 | 112 | matched | **diverged** (416) |
+| `19100191/5` | 33 | 5 | matched | **diverged** (28) |
+
+Dropping the trailing-faint branches — with every surviving value left **legal** — reopens
+every row. **So the closing branch is a trailing-faint branch on all four rows, and no
+value-only perturbation of it exists**: changing its move damage necessarily changes its
+capped residual too. (The other disqualifier, a reading at max HP reclassifying a heal
+between `*_to_full` and plain, is measured at **0** branches on all four rows.)
+
+This is the refined, true version of the impossibility claim that was withdrawn above. The
+withdrawn version said the branch could not be *remapped*; it can. What it cannot be is
+perturbed in **one component at a time** — and the collateral component is structural,
+which is why the recommendation below sharpens rather than changes.
+
+#### What is established, PER ROW
+
+The previous revision pooled these into "the closures are not value-driven … it is
+measured". That over-read two rows onto four. Scoped:
+
+| row | verdict | basis |
+| --- | --- | --- |
+| `19000074/27` | **not value-driven, robustly** | matched under every arm, from 1.9% to **106x** displacement |
+| `19100191/5` | **not value-driven, robustly** | matched under every arm, from 0.5% to **12.4x** displacement |
+| `19000191/63` | **undetermined** | two equally valid zero-contamination value-only perturbations give opposite answers at comparable displacement, and the disagreement is not ordered by it |
+| `19100107/135` | **undetermined** | same |
+
+On the two robust rows, a fan carrying no legal roll value — every value 12x–106x away from
+any legal roll — still earns acceptance. Nothing about the branch's damage value is doing
+the work there.
+
+On the other two, nothing is established either way. The arms that reopen them also move
+the capped residual, so their divergence is not attributable to the move value.
 
 #### Why: the matcher does not test the branch's value
 
-This is the useful part, and it is a property of the matcher rather than of enumeration.
-In `roll_components_agree` (`scripts/engine_transition_differential.py`):
+This is a property of the matcher rather than of enumeration. In `roll_components_agree`
+(`scripts/engine_transition_differential.py`):
 
 ```python
 # ``legal`` is an ADDITIONAL accept path, never a veto.
@@ -382,45 +440,59 @@ if legal is not None and magnitude in legal:
 
 `magnitude` is `abs(observed)` — the value **Showdown** produced — and `legal` comes from
 `branch_component_legal_rolls`, derived from `calculate_damage` on the **state**. So when
-the observed damage is a legal roll (which it always is, Showdown having rolled it), the
-component is accepted **whatever the engine branch's damage says**. The branch's value only
-enters through the fallback window `0.92·|eng| − 1 ≤ magnitude ≤ 1.09·|eng| + 1`, which is
-why the two rows that reopen only do so once the values are pushed ~14x out.
+the observed damage is a legal roll (always, Showdown having rolled it), the component is
+accepted **whatever the engine branch's damage says**. That is why the two robust rows
+survive 106x displacement.
 
-**So a value-based wrong-fan control is the wrong instrument entirely.** What enumeration
-multiplies is branch **structure** — which components appear, and the lethality/residual
-pattern — and structure is what the acceptance rule actually reads: component counts
+**So a value-based wrong-fan control is the wrong instrument.** What enumeration multiplies
+is branch **structure** — which components appear, and the lethality/residual pattern — and
+structure is what the acceptance rule actually reads: component counts
 (`len(observed) != len(engine)` routes to `_roll_cascade_equivalent`), the
-`selected_direct_event` crit flag, and whether `support` exists at all. A discriminating
-control has to perturb *that*, not the numbers. That is the experiment the next person
-should build, and this document could not have identified it without running the wrong one
-four times.
+`selected_direct_event` crit flag, and whether `support` exists at all. Confound 6 sharpens
+this rather than softening it: the perturbation that *does* move the two undetermined rows
+is itself structural — it moves the capped residual — which is further evidence that
+structure, not value, is the operative variable.
+
+**A structural control is the experiment to build next.** Perturb the component pattern
+(present/absent, lethal/non-lethal, capped/uncapped) while holding damage magnitudes at
+legal values, and pair it with a drop control on the identical branch set.
 
 #### What stands, and what does not
 
 * **Stands:** enumeration closes four rows and opens none, on both windows, with coverage
   and gating counters identical between configurations. A fact about the artifacts.
-* **Stands:** the closing branch is a visible-amount branch — `only_visible` matches on
-  every row, `only_lethal` diverges on every row.
-* **Established, and adverse:** on all four rows the closure survives a fan with no legal
-  roll value; on two rows it survives 12x–106x displacement. **The closures are not
-  value-driven.** This is not "open" — it is measured, and it does not support the reading
-  that enumeration closes these rows by supplying the right roll.
-* **Not established either way:** whether the closures are *correct*. They are structural,
-  and no structural control has been run. `reports/c133_collapsed_roll_disposition.md`
-  §3/§7 and `reports/c135_roll_divergent_lethality_adjudication.md` §2-3 remain the account
-  of why each row is an engine gap, and they are read, not measured.
-* **Consequence for #1152:** that PR closes these rows in the shipping engine and cites
-  "enumeration closes them" as sweep-side corroboration. Its primary argument — a 480-state
-  grid against a partition-independent enumeration — is unaffected, but **this
-  corroboration is weaker than it reads and should not be leaned on.**
+* **Stands:** the closing branch is a visible-amount, trailing-faint branch on all four
+  rows.
+* **Established on two of four rows** (`19000074/27`, `19100191/5`): the closure is **not**
+  value-driven.
+* **Undetermined on the other two** (`19000191/63`, `19100107/135`).
+* **Not established anywhere:** whether the closures are *correct*. They are structural,
+  and no structural control has been run.
+  `reports/c133_collapsed_roll_disposition.md` §3/§7 and
+  `reports/c135_roll_divergent_lethality_adjudication.md` §2-3 remain the account of why
+  each row is an engine gap — read, not measured.
 
-Five confounds were found in this one control: shift too large, shift clamped and
-overlapping, wrong side perturbed, the drop doing the work, and a deleted helper that
-turned an entire arm into `skip_lossy(0)` while still producing a tidy artifact. The last
-one is why the script now raises on any `branch_events` error instead of inheriting the
-differential's fail-soft behaviour. Every one produced a plausible verdict for a reason
-unrelated to the property under test.
+#### Correction to the merged #1152
+
+**#1152 merged as `10856e0e` carrying the over-generalised claim**, taken from an earlier
+revision of this document. The scoping above supersedes it: not-value-driven is established
+on `19000074/27` and `19100191/5` and **undetermined** on `19000191/63` and
+`19100107/135`.
+
+**#1152's own correctness does not depend on this.** Its primary argument is a 480-state
+differential against a partition-independent enumeration, with all residual error localised
+to the f32 comparator; that stands untouched. Only the secondary "enumeration also closes
+these rows" corroboration is affected, and only on two of the four rows. Recorded here
+rather than left silently wrong in the merged record.
+
+Confounds found in this one control, in order: a shift too large for a low-HP defender; a
+clamped shift that overlapped the legal fan; a run that perturbed only `p2a` when the row
+diverged on `p1`; a drop of unremappable branches that produced the entire result; a helper
+deleted by an edit that turned a whole arm into `skip_lossy(0)` while still emitting a tidy
+artifact; and a displacement threshold read off two extremes without the intermediate scan
+that would have shown it non-monotone. Six. Every one produced a plausible verdict for a
+reason unrelated to the property under test, and each was found by an isolating arm rather
+than by reading the code.
 
 `strict:sleeptalk_union_branch` moves 126 → 617 (dev) and 105 → 612 (holdout), reproducing
 the movement c137 §4 recorded as unexplained. Explained by the same mechanism: it is
@@ -505,7 +577,7 @@ All run locally against the build the sweeps used (`e97e661eaf9fb3b1`, 69 patche
 | `cargo test third_party/poke-engine-src --features gen3 --test test_gen3` | **28 passed, 0 failed**, exit 0 |
 | `scripts/engine_behavioral_probes.py`, flag off (the shipping path, and what CI runs) | **38 probes, 38 PASS**, exit 0 |
 | `scripts/engine_behavioral_probes.py`, flag on | 24 PASS / 14 FAIL, exit 1 — see below |
-| `scripts/c134_wrong_fan_control.py` | **exit 1 — by design.** Its preconditions all pass now (branch set fixed, zero legal values emitted, nothing failed to remap); the verdict it exits on, `only_visible_wrong_fan_kept_every_closed_row_divergent`, is FALSE, which is the adverse result itself. Not in any workflow |
+| `scripts/c134_wrong_fan_control.py` | **exit 1 — by design.** All preconditions pass across every arm (branch set fixed, zero legal values emitted, nothing failed to remap); it exits on `every_closed_row_is_value_independent`, FALSE because two of four rows are undetermined. Not in any workflow |
 | Also green | `test_single_seat_coverage_bound` (3), `test_drag_limit_is_a_last_resort` (3), `test_a1_residuals_already_ran` (13), `test_sleep_talk_phaze_drag` (7), `test_instruction_event_mapping` (21), `test_crit_kill_split_patch` (8), `test_rest_sleep_refund_boundary` (6), `test_rest_sleep_refund_write_side` (6), `test_engine_stat_attestation` (16), `test_roll_cascade_predicate` (29), `test_matcher_tolerance_promotion` (32), `test_c26_archival_recalibration` (11) |
 
 **One pre-existing failure, not caused by this branch.**
@@ -555,12 +627,14 @@ idiom, not a dodge — passed it.
 it.** The falsifier did not fire; both windows reach zero divergent rows under the oracle
 and neither opens anything; coverage and identity are unchanged.
 
-**What this branch establishes about the closures, and it is adverse:** they are **not
-value-driven**. A wrong fan carrying no legal roll value is accepted on all four rows, and
-at 12x–106x displacement on two of them, because `evaluate_boundary_strict` tests the
-OBSERVED magnitude against a STATE-derived legal set and never against the branch's own
-damage. What enumeration multiplies is branch STRUCTURE, and no structural control has
-been run — that is the experiment the next person should build.
+**What this branch establishes about the closures, per row.** On `19000074/27` and
+`19100191/5` they are **not value-driven**: a fan carrying no legal roll value is accepted
+at up to 106x displacement, because `evaluate_boundary_strict` tests the OBSERVED magnitude
+against a STATE-derived legal set and never against the branch's own damage. On
+`19000191/63` and `19100107/135` nothing is established — the arms that reopen them also
+move the capped residual, so their divergence is not attributable to the move value.
+What enumeration multiplies is branch STRUCTURE, and no structural control has been run —
+that is the experiment the next person should build.
 
 This does not block landing the oracle, which is default-off and consumed by nothing that
 ships. It does mean the oracle is **not yet authoritative about these four rows**, and
