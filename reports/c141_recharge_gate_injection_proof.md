@@ -92,9 +92,10 @@ after. Its denominator line is unchanged (956+315, diverged 917), and an earlier
 this report read that line and wrongly concluded the whole gate was unmoved. The exit *bit* does
 not flip because that gate was already red at 123 on a clean crate; the gating quantity is `defect_rows` —
 `return 1 if (defect_rows != 0 or matchup_arm_failed or denominator) else 0` in
-`scripts/leaf_vs_reality.py` — not the 917. (Cited by expression, not line: this reference has
-now been invalidated TWICE by the very commit introducing it, once by the caveat edit and once
-by a rewrap two lines away.)
+`scripts/leaf_vs_reality.py` — not the 917. (Cited by expression, not line: the line
+reference drifted twice in two commits -- once when the caveat edit shifted it, and again when
+the commit FIXING it added a rewrap that shifted it further. A line number that goes stale in
+the act of being corrected is not worth carrying.)
 
 ## Limits — read these before quoting the table
 
@@ -116,14 +117,28 @@ two independent bullets, which read as two defects.
 Because the old gates were already at `diverged 1` on a clean crate, the injection moved them
 `1 → 5`, and never moved their **verdict** at all.
 
-**This exercises the SELF side only.** The opponent side has been live since before this work.
+**The injected write exercises the SELF side only.** The opponent side has been live since before this work.
 (Restored: an earlier revision carried this limit, and the rewrite that added the one-battle
 limit dropped it.)
 
 **Catchability depends on the SHAPE of the wrong write, not just on its being wrong.** This
-corpus discriminates only because the two sides' recharge states differ on those 5 rows. A
-self-side bug that read the self side with a different defect -- a wrong party index, say --
-has no guarantee of being caught here at all.
+corpus discriminates only because the two sides' recharge states differ on those 5 rows:
+divergence occurs iff `opponent_must_recharge != self_must_recharge` at the anchored row, which
+is true on exactly those 5 and nowhere else. Two reachable shapes this run would NOT have caught:
+
+- **Correct at depth 0, stale at depth > 0.** `leaf_root_parity` is a depth-0 gate by
+  construction -- its own header says the construction "must reproduce the production
+  observation EXACTLY" at zero branch steps -- so a write that is right at the root and goes
+  stale in the branch is structurally invisible to it. That is the current root-frozen behaviour
+  this report exists to discuss, and it is the shape a real P3 implementation is most likely to
+  get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123.
+- **Right side, wrong volatile.** Caught on 2 rows rather than 5 -- same corpus, weaker signal.
+
+(An earlier revision offered "a wrong party index" as the example. That defect cannot occur on
+this path: `volatile_statuses` is a side-level bitset (`state.rs:1213`), not per-mon, and the
+encoder consumes the scalar `{prefix}_must_recharge` gated on `candidate.active()` -- there is no
+index anywhere on it. The example came from the review and neither of us checked it until the
+pass that removed it.)
 
 **Why no self-side injection can do better on this corpus.** The recorded action and the parser
 tracker disagree on exactly one row of `corpus/golden-v4`, and it is opponent-side. On the self
