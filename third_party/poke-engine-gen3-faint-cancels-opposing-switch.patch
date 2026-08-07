@@ -1,0 +1,76 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2849,6 +2849,73 @@
+     }
+ 
+     if choice.category == MoveCategory::Switch {
++        // pokezero gen3 fidelity fix: A FAINT CANCELS THE QUEUED ACTION OF EVERY
++        // STILL-ACTIVE POKEMON -- switches included.
++        //
++        // Showdown's `faintMessages` (`sim/battle.ts:2609-2618`) runs
++        // `queue.cancelAction(pokemon)` over `getAllActive()` in gen <= 3 singles.
++        // This arm returned above every cancellation gate -- the
++        // opponent-owes-a-replacement gate, the attacker-fainted gate and
++        // `cannot_use_move`'s defender-fainted gate all sit BELOW it -- so a switch
++        // was the one action nothing could cancel. Holdout row `19100180/24`.
++        //
++        // THE PREDICATE IS THE SHOWDOWN RULE VERBATIM, NOT A RULE PLUS A SPECIAL
++        // CASE. `getAllActive()` (`sim/battle.ts:1362-1371`) filters on `!fainted`,
++        // and `faintMessages` marks the batch fainted BEFORE the cancellation loop,
++        // so anything that just died is already outside the set. Hence the two
++        // clauses below, and no Pursuit branch anywhere:
++        //
++        //   * someone newly fainted during this action phase, and
++        //   * THIS side's active is still standing afterwards.
++        //
++        // Both were measured against real gen3 Showdown, not inferred. Two earlier
++        // attempts had correct citations and were still wrong:
++        //
++        //   - Testing "either active is at hp <= 0" cancelled forced replacements,
++        //     whose active is a 0-HP Pokemon awaiting a switch: dev 2 -> 40,
++        //     holdout 3 -> 42, 78 rows opened to close 1. The "newly" half fixes it.
++        //   - Testing "either active NEWLY fainted" cancelled the Pursuit case, where
++        //     the Pokemon that died IS the switcher. Gen 2-4 continues that switch
++        //     (`battle.ts:2790-2796` re-queues it at priority -101, and Showdown
++        //     emits "Previously chosen switches continue in Gen 2-4 after a Pursuit
++        //     target faints"). The still-standing half fixes it, without naming
++        //     Pursuit: the switcher is the corpse, so it is not still-active.
++        //
++        // The still-standing test is read AFTER the batch deliberately. A pre-batch
++        // `force_switch` reading would cancel on a double KO (Explosion, Destiny
++        // Bond, recoil), where this side does not ALREADY owe a replacement but
++        // newly does -- and Showdown cancels nothing there, because `getAllActive()`
++        // is empty.
++        //
++        // SWITCH-ONLY BY DESIGN. The same rule cancels queued MOVES, and the engine
++        // already gets that right: with a lethal-Spikes switch-in opposite, a queued
++        // Drill Peck or Swords Dance emits no move instruction. Do not "generalise"
++        // this guard to moves -- they would be cancelled twice.
++        //
++        // Ground truth: scenarios `faintcancelsopposingswitch` /
++        // `faintcancelsopposingswitchcontrol` and `pursuitkoswitcher` /
++        // `pursuitnokocontrol` in scripts/gen3_switch_differential.py; engine side
++        // pinned by tests/gen3_pursuit_switch_continues.rs and
++        // tests/gen3_faint_cancels_opposing_switch.rs.
++        if !choice.first_move {
++            let side_one_down_before = state.side_one.get_active_immutable().hp <= 0;
++            let side_two_down_before = state.side_two.get_active_immutable().hp <= 0;
++            state.apply_instructions(&incoming_instructions.instruction_list);
++            let side_one_down_after = state.side_one.get_active_immutable().hp <= 0;
++            let side_two_down_after = state.side_two.get_active_immutable().hp <= 0;
++            state.reverse_instructions(&incoming_instructions.instruction_list);
++
++            let someone_newly_fainted = (!side_one_down_before && side_one_down_after)
++                || (!side_two_down_before && side_two_down_after);
++            let still_active_after = match attacking_side {
++                SideReference::SideOne => !side_one_down_after,
++                SideReference::SideTwo => !side_two_down_after,
++            };
++            if someone_newly_fainted && still_active_after {
++                final_instructions.push(incoming_instructions);
++                return;
++            }
++        }
+         generate_instructions_from_switch(
+             state,
+             choice.switch_id,
