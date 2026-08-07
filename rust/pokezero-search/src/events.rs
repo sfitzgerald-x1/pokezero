@@ -9052,14 +9052,18 @@ mod none_matched_shape_tests {
         assert_eq!(
             unrenderable_family_at(&zero_heal_on_defender, 0, atk),
             Some("heal_zero_marker"),
-            "the three-argument wrapper must keep refusing -- it is what every existing \
-             caller and test uses"
+            "the three-argument wrapper must keep refusing -- it is what every REMAINING \
+             caller uses, and they are all tests: production moved to _with_protect"
         );
 
-        // ABSORB ABILITY PRESENT -> refuse EVEN WITH the volatile. Protect should strip the
-        // move before an absorb could fire, so this combination should be unreachable -- but
-        // "should be" is exactly what the boost arm assumed twice and was wrong about.
-        // Refusing a rare renderable tail costs one world; rendering `Protect` over an
+        // ABSORB ABILITY PRESENT -> refuse EVEN WITH the volatile. This combination is
+        // ROUTINE, not unreachable: the guard tests ability PRESENCE, not firing, so any
+        // Water Absorb or Volt Absorb mon that uses Protect lands here and stays refused.
+        // An earlier version of this comment called it unreachable, which was false and is
+        // corrected in `protect_blocked_marker_side`'s doc -- this copy was missed.
+        // The axis is still right: absorb abilities RESTORE `flags.protect`, so a
+        // protect-bypassing move would leave `blocked_by_protect == false` with the volatile
+        // set. Refusing a renderable tail costs one world; rendering `Protect` over an
         // ability activation corrupts a searched one.
         assert_eq!(
             protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, true, true),
