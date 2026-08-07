@@ -168,6 +168,17 @@ remedy is not the status-aware threshold sketched in §5 but enumeration itself,
 deletes the mirror rather than repairing it. C134 §3 anticipated exactly this: "enumeration
 fixes them or *constitutes* the demonstration". The measurement says **fixes**.
 
+> **SUPERSEDED, 2026-08-07.** The scoping paragraph below was written under the first
+> version of the C116 Phase 2 decision, which chose harness-only adoption. That decision
+> was reversed after review: harness-only would close these rows in the measuring
+> instrument while leaving the defects in the shipping engine, and would stop the fidelity
+> gate testing the path production runs. The current decision is
+> `reports/c137_phase2_enumerate_decision.md`: enumeration ships as a flag-gated reference
+> **oracle**, the differential keeps measuring the shipping configuration, and the §5
+> sketch and the crit-straddle sub-split are **un-cancelled and should be implemented**,
+> validated against that oracle. The adjudication above is unaffected — both rows remain
+> engine gaps, not limits. Only the remedy changed.
+
 **Scope: the differential harness only.** "The remedy is enumeration" here means for the
 *fidelity comparison*, and must not be read as licensing enumeration in search. The other
 two acceptance measurements C134 §3 required are decisive against that and are recorded in
@@ -177,9 +188,9 @@ and the mass gate's `test_matrix_is_not_vacuous` fails under the flag — not a 
 disagreement, but because enumeration leaves no collapsed fan for the matrix's own negative
 control. C137 takes the resulting decision (adopt for the harness only).
 
-That also retires the sketch in §5 as the recommended fix. It should not be implemented;
+~~That also retires the sketch in §5 as the recommended fix. It should not be implemented;
 the crit-straddle sub-split queued for `19000074/27` should not be written either, for the
-same reason.
+same reason.~~ **Retracted — see the superseded notice above. Both fixes are back on.**
 
 Whatever implements this must register **"nothing opened"** as an explicit falsifier and
 sweep both windows before it is believed. The precedent is in c133 §7: the last engine
