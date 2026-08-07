@@ -1,0 +1,361 @@
+#!/usr/bin/env python
+"""C143 — every measurement behind `reports/c143_heal_attribution_diagnosis.md`.
+
+Three independent measurements, all reproducible from a clean checkout:
+
+1. ``showdown`` — three GENERATED gen3 Custom Game boundaries (no randbats seed, no
+   holdout) that isolate why the seeder's own Leftovers tick is missing from
+   `19200244/115`'s protocol. Gen 3 inherits gen 4's residual ordering, where
+   Leftovers is ``onResidualOrder 10 / subOrder 4`` and the Leech Seed volatile is
+   ``10 / subOrder 5`` — ONE speed-sorted bucket per Pokemon, not two global phases.
+   ``sim/battle.ts`` ends the bucket with ``this.faintMessages(); if (this.ended)
+   return;``, so a SLOWER seeder whose capped drain kills the opponent's LAST
+   Pokemon never reaches its own Leftovers slot.
+
+     A  slow seeder, victim IS the opponent's last mon  -> seeder Leftovers ABSENT
+     B  slow seeder, victim is NOT the last mon         -> seeder Leftovers PRESENT
+     C  fast seeder, victim IS the last mon             -> seeder Leftovers PRESENT
+
+   A and B differ in ONE bit: whether a spare Pokemon sits behind the victim.
+
+2. ``engine`` — the crate's branch renderer on the SAME two states as A and B. The
+   HP arithmetic is identical to Showdown's in both; only the attribution differs,
+   and only in A, where the bare silent drain comes back tagged
+   ``[from] item: Leftovers``.
+
+3. ``matrix`` — the recorded `19200244/115` row replayed against every roll its own
+   damage fan can throw in the residual-lethal band, crossed with candidate
+   collapsed representatives, through the UNMODIFIED shipped
+   ``evaluate_boundary_strict``. Separates the renderer defect from the G8
+   representative defect by measurement rather than by argument.
+
+The row's artifact is not on `main` (it lands with the C141 PR), so ``--row`` takes
+the path to the sweep JSON. Nothing here re-runs Showdown on any seed at or above
+19,200,000: the row is read from the committed artifact and replayed against the
+local engine, and every Showdown call is a generated Custom Game fixture.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "src"))
+sys.path.insert(0, str(_REPO / "scripts"))
+
+SEED = 19200244
+STEP = 115
+
+# --- part 1: generated Showdown boundaries ----------------------------------
+
+_TURNS = (
+    [("move leechseed", "move seismictoss")]
+    + [("move seismictoss", "move seismictoss")] * 4
+    + [("move splash", "move seismictoss")]
+)
+
+
+def _variants():
+    from pokezero.showdown_fixture import FixturePokemon
+
+    def seeder(species, ability):
+        return FixturePokemon(
+            species=species, ability=ability, item="Leftovers",
+            moves=("Leech Seed", "Seismic Toss", "Splash"),
+        )
+
+    victim = FixturePokemon(
+        species="Blissey", ability="Natural Cure", item="Leftovers",
+        moves=("Seismic Toss", "Splash"),
+    )
+    filler = FixturePokemon(
+        species="Misdreavus", ability="Levitate", item="None", moves=("Splash",),
+    )
+    return {
+        # name -> (p1 team, p2 team, predicted seeder-Leftovers disposition)
+        "A_slow_seeder_victim_is_last": ([seeder("Snorlax", "Immunity")], [victim], "absent"),
+        "B_slow_seeder_victim_not_last": (
+            [seeder("Snorlax", "Immunity")], [victim, filler], "after_mirror",
+        ),
+        "C_fast_seeder_victim_is_last": ([seeder("Suicune", "Pressure")], [victim], "before_drain"),
+    }
+
+
+def measure_showdown(seed: int) -> dict:
+    from pokezero.showdown_fixture import run_multi_turn_fixture
+
+    out = {}
+    for name, (p1, p2, predicted) in _variants().items():
+        result = run_multi_turn_fixture(p1_team=p1, p2_team=p2, turns=_TURNS, seed=seed)
+        if result.error_lines:
+            raise SystemExit(f"{name}: showdown reported errors {result.error_lines}")
+        lines = list(result.steps[-1].protocol_lines)
+        seeder_name = p1[0].species
+        drain_at = next(
+            (i for i, line in enumerate(lines) if "[from] Leech Seed" in line), None
+        )
+        lefto_at = next(
+            (
+                i for i, line in enumerate(lines)
+                if line.startswith(f"|-heal|p1a: {seeder_name}|")
+                and "[from] item: Leftovers" in line
+            ),
+            None,
+        )
+        if lefto_at is None:
+            observed = "absent"
+        elif drain_at is not None and lefto_at < drain_at:
+            observed = "before_drain"
+        else:
+            observed = "after_mirror"
+        out[name] = {
+            "protocol": lines,
+            "predicted_seeder_leftovers": predicted,
+            "observed_seeder_leftovers": observed,
+            "agrees": observed == predicted,
+            "terminal": result.terminal,
+        }
+    return out
+
+
+# --- part 2: the crate renderer on the same two positions -------------------
+
+def measure_engine() -> dict:
+    import pokezero_search
+    from pokezero.poke_engine_adapter import (
+        BattleSpec, MoveSpec, PokemonSpec, SideSpec, build_poke_engine_state,
+    )
+
+    def mon(ident, types, hp, maxhp, spe, moves, item=None, ability=None):
+        return PokemonSpec(
+            id=ident, level=100, types=types, hp=hp, maxhp=maxhp, attack=100, defense=100,
+            special_attack=100, special_defense=100, speed=spe, item=item, ability=ability,
+            moves=tuple(MoveSpec(id=m, pp=32) for m in moves),
+        )
+
+    def side(mons, volatiles=()):
+        return SideSpec(
+            pokemon=tuple(mons), active_index=0, side_conditions={}, boosts={},
+            volatile_statuses=tuple(volatiles), volatile_status_durations={},
+        )
+
+    def snorlax():
+        return mon("snorlax", ("normal",), 461, 461, 96,
+                   ("leechseed", "seismictoss", "splash"), item="leftovers", ability="immunity")
+
+    def blissey():
+        return mon("blissey", ("normal",), 6, 651, 146, ("seismictoss", "splash"),
+                   item="leftovers", ability="naturalcure")
+
+    def filler():
+        return mon("misdreavus", ("ghost",), 261, 261, 156, ("splash",), ability="levitate")
+
+    cases = {
+        "A_slow_seeder_victim_is_last": ([snorlax()], [blissey()]),
+        "B_slow_seeder_victim_not_last": ([snorlax()], [blissey(), filler()]),
+    }
+    out = {}
+    for name, (p1, p2) in cases.items():
+        state = build_poke_engine_state(
+            BattleSpec(side_one=side(p1), side_two=side(p2, volatiles=("leechseed",)))
+        ).to_string()
+        ctx = json.dumps({
+            "p1": [m.id.title() for m in p1], "p2": [m.id.title() for m in p2], "turn": 7,
+        })
+        report = json.loads(
+            pokezero_search.branch_events(state, "splash", "seismictoss", ctx, True, False)
+        )
+        branches = report.get("branches") or []
+        if len(branches) != 1:
+            raise SystemExit(f"{name}: expected one deterministic arm, got {len(branches)}")
+        events = list(branches[0]["events"])
+        drain = [e for e in events if e.startswith("|-heal|p1a: Snorlax|407/461")]
+        out[name] = {
+            "events": events,
+            "drain_line": drain[0] if drain else None,
+            "drain_is_silent": bool(drain) and drain[0].endswith("|[silent]"),
+        }
+    return out
+
+
+# --- part 3: the band-versus-representative matrix --------------------------
+
+_MAXHP, _HP0, _PRE_P1 = 407, 157, 219
+_CAP, _LEFT = _MAXHP // 8, _MAXHP // 16
+# The engine's own 16-roll fan for Flamethrower into this Wigglytuff, from
+# poke_engine.calculate_damage; asserted against the live engine below.
+_FAN = [135, 136, 138, 139, 141, 143, 144, 146, 147, 149, 151, 152, 154, 155, 157, 159]
+_BAND = [d for d in _FAN if d < _HP0]  # every non-KO roll is residual-lethal here
+_SHIPPING_REP = 145  # sum(_BAND) // len(_BAND)
+
+
+def _observation(row: dict, roll: int) -> dict:
+    after = _HP0 - roll
+    healed = after + _LEFT
+    drain = min(_CAP, healed)
+    assert healed <= _CAP, roll
+    new = copy.deepcopy(row)
+    new["protocol"] = [
+        "|", "|t:|1786096679",
+        "|move|p2a: Wigglytuff|Fire Blast|p1a: Moltres",
+        "|-resisted|p1a: Moltres",
+        f"|-damage|p1a: Moltres|{_PRE_P1}/268 par",
+        "|move|p1a: Moltres|Flamethrower|p2a: Wigglytuff",
+        f"|-damage|p2a: Wigglytuff|{after}/407 brn",
+        "|",
+        f"|-heal|p2a: Wigglytuff|{healed}/407 brn|[from] item: Leftovers",
+        "|-damage|p2a: Wigglytuff|0 fnt|[from] Leech Seed|[of] p1a: Moltres",
+        f"|-heal|p1a: Moltres|{_PRE_P1 + drain}/268 par|[silent]",
+        "|faint|p2a: Wigglytuff", "|", "|win|PokeZero p1",
+    ]
+    new["observed"] = dict(row["observed"])
+    new["observed"]["p1_hp"] = _PRE_P1 + drain
+    return new
+
+
+def _repricer(real, rep: int, silent: bool, stats: dict):
+    """Re-price the single non-KO Flamethrower arm to `rep`; arm count untouched.
+
+    Keys on the `p1a:`/`p2a:` prefixes rather than on species names: the replay
+    path renders side one's active as `unknown5`, and an earlier version of this
+    probe keyed on `Moltres` and silently rewrote nothing. `stats` exists so the
+    control cannot be vacuous.
+    """
+    after, healed = _HP0 - rep, _HP0 - rep + _LEFT
+    drain = min(_CAP, healed)
+    assert healed <= _CAP, rep
+
+    def patched(*args, **kwargs):
+        report = json.loads(real(*args, **kwargs))
+        for branch in report.get("branches") or []:
+            events = list(branch["events"])
+            if not any(
+                e.startswith("|-damage|p2a: ") and e.endswith(f"|{_HP0 - _SHIPPING_REP}/407")
+                for e in events
+            ):
+                continue
+            stats["arms"] += 1
+            out, p1_hp = [], None
+            for event in events:
+                if event.startswith("|-damage|p2a: ") and event.endswith(
+                    f"|{_HP0 - _SHIPPING_REP}/407"
+                ):
+                    event = event.replace(f"|{_HP0 - _SHIPPING_REP}/407", f"|{after}/407")
+                elif event.startswith("|-heal|p2a: ") and (
+                    f"|{_HP0 - _SHIPPING_REP + _LEFT}/407|[from] item: Leftovers" in event
+                ):
+                    event = event.replace(
+                        f"|{_HP0 - _SHIPPING_REP + _LEFT}/407|", f"|{healed}/407|"
+                    )
+                elif event.startswith("|-damage|p1a: "):
+                    p1_hp = int(event.split("|")[3].split("/")[0])
+                elif event.startswith("|-heal|p1a: ") and p1_hp is not None:
+                    who = event.split("|")[2]
+                    tail = "|[silent]" if silent else "|[from] item: Leftovers"
+                    event = f"|-heal|{who}|{p1_hp + drain}/268{tail}"
+                    stats["p1_heal_rewrites"] += 1
+                out.append(event)
+            branch["events"] = out
+        return json.dumps(report)
+
+    return patched
+
+
+def measure_matrix(row: dict, reps: list[int]) -> dict:
+    import poke_engine
+    import pokezero_search
+    from cert_sweep_reread import reread_row
+
+    state = poke_engine.State.from_string(row["engine_states"][0])
+    maxima = poke_engine.calculate_damage(state, "flamethrower", "fireblast", False)
+    fan = sorted({maxima[0][0] * r // 100 for r in range(85, 101)})
+    if fan != _FAN:
+        raise SystemExit(f"fan drifted: engine says {fan}, probe hard-codes {_FAN}")
+    if sum(_BAND) // len(_BAND) != _SHIPPING_REP:
+        raise SystemExit("band mean is no longer the shipping representative")
+
+    mirrors = {d: min(_CAP, _HP0 - d + _LEFT) for d in _BAND}
+    real = pokezero_search.branch_events
+    result = {
+        "fan": fan,
+        "observed_roll": _HP0 - 11,
+        "observed_roll_in_fan": (_HP0 - 11) in fan,
+        "residual_lethal_band": _BAND,
+        "mirror_heal_by_roll": mirrors,
+        "mirror_injective": len(set(mirrors.values())) == len(mirrors),
+        "shipping_representative": _SHIPPING_REP,
+        "shipping_representative_in_fan": _SHIPPING_REP in fan,
+        "shipping_mirror": min(_CAP, _HP0 - _SHIPPING_REP + _LEFT),
+        "columns": {},
+        "control": {},
+    }
+    result["shipping_mirror_achievable"] = (
+        result["shipping_mirror"] in set(mirrors.values())
+    )
+    try:
+        # Non-vacuous control: the repricer at the shipping representative with the
+        # shipping label must reproduce the recorded misses AND must have fired.
+        stats = {"arms": 0, "p1_heal_rewrites": 0}
+        pokezero_search.branch_events = _repricer(real, _SHIPPING_REP, False, stats)
+        _, misses, _ = reread_row(_observation(row, _HP0 - 11))
+        result["control"] = {
+            "misses_identical_to_recorded": list(misses) == list(row["branch_misses"]),
+            "arms_touched": stats["arms"],
+            "p1_heal_lines_rewritten": stats["p1_heal_rewrites"],
+        }
+        for rep in reps:
+            cell = {}
+            for silent in (False, True):
+                stats = {"arms": 0, "p1_heal_rewrites": 0}
+                pokezero_search.branch_events = _repricer(real, rep, silent, stats)
+                matched = [
+                    roll for roll in _BAND
+                    if reread_row(_observation(row, roll))[0] == "matched"
+                ]
+                cell["renderer_fixed" if silent else "renderer_shipping"] = matched
+            result["columns"][str(rep)] = cell
+    finally:
+        pokezero_search.branch_events = real
+    return result
+
+
+# --- entry point ------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--row", type=Path, help="sweep JSON containing the 19200244/115 repro")
+    parser.add_argument("--seed", type=int, default=7717, help="fixture seed for the generated boundaries")
+    parser.add_argument("--out", type=Path, help="write the artifact here")
+    parser.add_argument(
+        "--skip-showdown", action="store_true", help="engine-only run (no node bridge)"
+    )
+    args = parser.parse_args()
+
+    from engine_build_fingerprint import compute_fingerprint
+
+    artifact = {
+        "row": f"{SEED}/{STEP}",
+        "engine_fingerprint": compute_fingerprint()["fingerprint"],
+        "fixture_seed": args.seed,
+    }
+    if not args.skip_showdown:
+        artifact["showdown"] = measure_showdown(args.seed)
+    artifact["engine"] = measure_engine()
+    if args.row:
+        row = next(
+            r for r in json.loads(args.row.read_text())["repros"] if r.get("seed") == SEED
+        )
+        artifact["matrix"] = measure_matrix(row, [135, 141, 144, 145, 146, 147, 155])
+
+    text = json.dumps(artifact, indent=2, sort_keys=True)
+    if args.out:
+        args.out.write_text(text + "\n", encoding="utf-8")
+    print(text)
+
+
+if __name__ == "__main__":
+    main()
