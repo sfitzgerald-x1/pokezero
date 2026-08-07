@@ -247,12 +247,18 @@ jobs:
       # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
       # latched per process by a OnceLock, so an in-process toggle would measure
       # whichever path happened to be latched first.
+      #
+      # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
+      # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
+      # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
+      # reached by the pokezero-rollout console script. With an enabler there a real
+      # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
       - name: Roll-enumeration scope gate
         run: |
           set -o pipefail
           python -m unittest tests.test_roll_enumeration_scope -v 2>&1 | tee /tmp/enumscope.log
-          if ! grep -qE 'Ran 14 tests' /tmp/enumscope.log; then
-            echo "::error::expected 14 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 17 tests' /tmp/enumscope.log; then
+            echo "::error::expected 17 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/enumscope.log; then

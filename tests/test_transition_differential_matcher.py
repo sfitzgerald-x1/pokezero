@@ -821,3 +821,65 @@ if __name__ == "__main__":  # pragma: no cover
     # from direct execution -- found by the repo-wide structural guard in
     # tests/test_public_invariant.py.
     unittest.main()
+
+
+class WrongFanControlMap(unittest.TestCase):
+    """Pins the remap behind ``scripts/c134_wrong_fan_control.py``.
+
+    That script answers the question the sweep cannot: enumeration closes four rows
+    while inflating the branch count 8.5x-72.5x, and ``evaluate_boundary_strict``
+    accepts on the FIRST matching branch, so "nothing opened" is consistent with a real
+    fix AND with a lottery. The control gives the matcher a fan of comparable
+    cardinality whose values are NOT legal rolls, and requires the rows to stay
+    divergent.
+
+    The whole control rests on the remap being an honest wrong fan, so the remap is
+    pinned here rather than trusted. Two earlier versions were not honest and the
+    measurement said so: a constant down-shift by the fan width dropped every branch on
+    a low-HP defender, and clamping that shift left the "wrong" fan OVERLAPPING the
+    legal one, i.e. still containing correct rolls.
+    """
+
+    @staticmethod
+    def _map(legal):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "c134_wrong_fan_control_under_test",
+            REPO_ROOT / "scripts" / "c134_wrong_fan_control.py",
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.wrong_fan_map(legal)
+
+    def test_the_wrong_fan_is_disjoint_same_size_and_nearby(self) -> None:
+        fans = {
+            "contiguous": list(range(103, 123)),
+            "sparse crit+non-crit": [187, 189, 191, 193, 195, 198, 200, 202, 204, 206,
+                                     209, 211, 213, 215, 217, 220],
+            "low hp, span exceeds minimum": [5, 9, 14, 20, 27, 35, 44],
+            "singleton": [112],
+        }
+        for label, legal in fans.items():
+            with self.subTest(fan=label):
+                mapping = self._map(legal)
+                wrong = sorted(mapping.values())
+                self.assertEqual(
+                    len(wrong), len(legal), "the wrong fan must have the SAME cardinality"
+                )
+                self.assertEqual(len(set(wrong)), len(wrong), "the remap must be injective")
+                self.assertFalse(
+                    set(wrong) & set(legal),
+                    f"the wrong fan still contains legal rolls: {sorted(set(wrong) & set(legal))}",
+                )
+                self.assertTrue(all(value > 0 for value in wrong), "damage must stay positive")
+                # Nearby, so no branch gains or loses a faint and the control changes
+                # exactly one property: whether the values are legal rolls.
+                span = max(legal) - min(legal) + 1
+                for source, target in mapping.items():
+                    self.assertLessEqual(
+                        abs(target - source), span + len(legal),
+                        f"{source} -> {target} left the fan's magnitude range",
+                    )

@@ -71,20 +71,58 @@ ENV_FLAG = "POKEZERO_ENUMERATE_ROLLS"
 # OTHER pair of representatives would still be fewer, and would still be wrong.
 COLLAPSED_FAN = [112, 160]
 
-# Surfaces that must never take the enumerated path. The Python entries are imported in
-# a child and MEASURED; the Rust entry cannot be imported, so it keeps a textual check.
+# Surfaces that must never take the enumerated path.
 #
-# scripts/bench_multiply_search.py is here because it is the bench that produces the
-# throughput table this decision cites -- a bench that silently measured the enumerated
-# path would report a number for a configuration nobody runs. Review found it missing.
-_SEARCH_SURFACES = (
+# DISCOVERED LIVE, with a floor -- see ``search_surfaces()``. The first version of this
+# gate hardcoded a 5-tuple, and review defeated it by counting: 22 of 37 tracked modules
+# that touch the engine or the search crate were outside every probe. The one that
+# mattered was ``src/pokezero/engine_env.py``, the engine-as-environment self-play driver
+# that calls ``pokezero_search.env_step``, reached from the ``pokezero-rollout`` console
+# script through ``src/pokezero/rollout_cli.py``. With a module-scope enabler there, a
+# real search process came back ENUMERATED and this module still reported
+# ``Ran 14 tests ... OK``. Also outside: ``scripts/bench_leaf_search.py``,
+# ``hc_depth_grid.py``, ``depth_tactics_probe.py``, ``run_mcts_depth_eval.py``,
+# ``leaf_root_parity.py``, ``search_crate_branch_probe.py``, and
+# ``scripts/engine_behavioral_probes.py`` -- a gate this PR itself cites.
+#
+# A hardcoded tuple cannot enforce a property about a growing tree. It states the surfaces
+# someone remembered; the property is about the ones they did not.
+_UNIMPORTABLE_SEARCH_SURFACES = ("rust/pokezero-search/src/lib.rs",)
+
+# The named CORE. These get one child EACH, so a failure names a file instead of a set,
+# and each is asserted to still be inside the discovered set -- a core entry that stops
+# being discovered means the discovery predicate rotted.
+_CORE_SEARCH_SURFACES = (
+    # The search entry point.
     "src/pokezero/engine_search.py",
+    # The engine-as-environment driver review found uncovered: pokezero_search.env_step
+    # plus LeafEncoder, i.e. a real search process.
+    "src/pokezero/engine_env.py",
+    # The console script that reaches it (`pokezero-rollout`).
+    "src/pokezero/rollout_cli.py",
+    "scripts/bench_crate_search.py",
+    # The bench behind the throughput table this decision cites: a bench that silently
+    # measured the enumerated path would report a number for a configuration nobody runs.
+    "scripts/bench_multiply_search.py",
+    # A gate this PR cites for its own evidence.
+    "scripts/engine_behavioral_probes.py",
+)
+
+# Carried over from the hardcoded tuple this gate replaced. They are probed per file like
+# the core, but they are NOT required to be discovered: measured, they reference neither
+# the engine nor the search crate, directly or by console-script entry, so no honest
+# predicate reaches them. Keeping them probed costs one child each and keeps the coverage
+# the old tuple claimed; pretending discovery finds them would mean bending the predicate
+# to fit a list, which is the failure this gate exists to stop repeating.
+_LEGACY_SEARCH_SURFACES = (
     "src/pokezero/env.py",
     "src/pokezero/selfplay.py",
-    "scripts/bench_crate_search.py",
-    "scripts/bench_multiply_search.py",
 )
-_UNIMPORTABLE_SEARCH_SURFACES = ("rust/pokezero-search/src/lib.rs",)
+
+# Floor on the discovered search-surface set. Measured at 59 when this gate was written;
+# the floor sits below that so ordinary deletions do not trip it, but a predicate that
+# collapses does.
+_MIN_SEARCH_SURFACES = 45
 
 # The differential. It USED to enable the flag at module scope, which made every one of
 # its importers an enabler.
@@ -98,10 +136,25 @@ _DIFFERENTIAL = "scripts/engine_transition_differential.py"
 # make the check stricter, and a module that grows an import tomorrow is already covered.
 _MIN_DIFFERENTIAL_CONSUMERS = 24
 
-# Tracked modules that are known not to import cleanly in isolation for reasons
-# unrelated to this flag (heavy optional dependencies, ``__main__``-only wiring).
-# Empty today; an entry here is a scope reduction and needs a reason.
+# Tracked modules deliberately kept OUT of discovery. Empty today; an entry here is a
+# scope reduction and needs a reason, because a module listed here is a module this gate
+# does not cover.
 _IMPORT_PROBE_EXCLUSIONS: frozenset[str] = frozenset()
+
+# The ONLY tolerated reason a search surface may fail to import: an optional third-party
+# dependency that is not installed in this environment. Anything else -- a SyntaxError, a
+# missing FIRST-party module, an exception raised at import -- is a real failure and reds
+# the gate, because a module that cannot load is a module this gate does not cover.
+#
+# Tolerated rather than pinned by equality, deliberately: the set is a property of the
+# ENVIRONMENT, not of the tree, so pinning it would go red on any machine with a different
+# extras install. The floor below is what stops that tolerance becoming a hole.
+_OPTIONAL_IMPORT_DEPENDENCIES = frozenset({"numpy", "torch", "scipy", "matplotlib", "pandas"})
+
+# Floor on how many search surfaces were actually IMPORTED, not merely discovered.
+# Discovery can find 59 and still cover nothing if every import dies. Measured at 58 of
+# 59 locally, the one gap being ``scripts/bench_leaf_search.py`` under a torch-less venv.
+_MIN_IMPORTED_SEARCH_SURFACES = 40
 
 
 # ---------------------------------------------------------------------------------------------
@@ -114,12 +167,39 @@ _BURN_CHANCE = 0.10
 _CRIT_RATE = 1.0 / 16.0
 
 
-def _import_targets(relatives: list[str]) -> list[str]:
+def _module_name_for(relative: str) -> str:
+    """Dotted import name for a tracked path."""
+
+    parts = Path(relative).with_suffix("").parts
+    if parts[0] == "src":
+        # A package module: import it by its DOTTED name, the way production does.
+        # Importing it by file location would execute it outside its package and die
+        # on the first relative import -- and a module that cannot even load is not a
+        # measurement of what it does when it loads.
+        parts = parts[1:]
+    else:
+        # scripts/ and tests/ are flat sys.path roots for their own modules.
+        parts = parts[-1:]
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _import_targets(relatives: list[str]) -> tuple[list[str], dict[str, str]]:
     """Import each tracked path as a module, the way a test runner would.
 
     ``sys.path`` gets ``src``, ``scripts`` and ``tests`` the same way the importers
     themselves do, so a module that does ``from engine_transition_differential import
     ...`` resolves exactly as it does in a real run. Import order is the caller's.
+
+    Returns ``(imported, failed)``. An import that RAISES is recorded rather than
+    propagated, for two reasons. It must not abort the sweep -- one module with a
+    missing optional dependency would otherwise take every module after it out of
+    coverage silently. And a module that enabled the flag and *then* died still shows
+    up, because the fan is measured after this returns.
+
+    The caller asserts on ``failed``, so losing coverage is a visible, named event and
+    not a quiet shrink.
     """
 
     import importlib
@@ -129,22 +209,17 @@ def _import_targets(relatives: list[str]) -> list[str]:
         if candidate not in sys.path:
             sys.path.insert(0, candidate)
     imported: list[str] = []
+    failed: dict[str, str] = {}
     for relative in relatives:
-        parts = Path(relative).with_suffix("").parts
-        if parts[0] == "src":
-            # A package module: import it by its DOTTED name, the way production
-            # does. Importing it by file location would execute it outside its
-            # package and die on the first relative import -- and a module that
-            # cannot even load is not a measurement of what it does when it loads.
-            parts = parts[1:]
-        else:
-            # scripts/ and tests/ are flat sys.path roots for their own modules.
-            parts = parts[-1:]
-        if parts[-1] == "__init__":
-            parts = parts[:-1]
-        importlib.import_module(".".join(parts))
+        try:
+            importlib.import_module(_module_name_for(relative))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as error:  # noqa: BLE001
+            failed[relative] = f"{type(error).__name__}: {error}"
+            continue
         imported.append(relative)
-    return imported
+    return imported, failed
 
 
 def _fan_probe(imports: list[str] | None = None) -> dict[str, object]:
@@ -165,7 +240,7 @@ def _fan_probe(imports: list[str] | None = None) -> dict[str, object]:
     an engine helper for the enumeration; ``calculate_damage`` supplies two scalars.
     """
 
-    imported = _import_targets(imports or [])
+    imported, import_failures = _import_targets(imports or [])
 
     import poke_engine as pe
 
@@ -216,6 +291,7 @@ def _fan_probe(imports: list[str] | None = None) -> dict[str, object]:
     return {
         "flag": os.environ.get(ENV_FLAG),
         "imported": imported,
+        "import_failures": import_failures,
         "emitted_damages": sorted(emitted),
         "enumeration_reconstruction": reconstruction,
         "mass_total": total,
@@ -441,6 +517,211 @@ def _tracked_files() -> list[str]:
     return [name for name in listed.stdout.decode("utf-8").split("\0") if name]
 
 
+def module_scope_env_writes(source: str, filename: str = "<probe>") -> list[int]:
+    """Line numbers where module-level code writes ``POKEZERO_ENUMERATE_ROLLS``.
+
+    AST rather than substring, because a substring check matches the prose in the module
+    docstring that EXPLAINS the defect and goes red on a clean file. Only module-level
+    executable code is walked: function and class bodies run when something calls them,
+    which is the explicit per-run act this whole design is built around.
+
+    THREE alias families are resolved, because review broke the first version on two of
+    them and only one of the two was adversarial:
+
+    * the ``os`` MODULE -- ``import os``, ``import os as _os``;
+    * ``os.environ`` ITSELF -- ``from os import environ``, ``from os import environ as
+      E``, and a module-level ``environ = os.environ``. ``from os import environ`` is an
+      ordinary idiom, not a dodge, so a check blind to it is wrong on real code and not
+      merely gameable; and
+    * the flag NAME -- a module-level ``NAME = "POKEZERO_ENUMERATE_ROLLS"``.
+
+    The first version resolved only the third. ``import os as _os`` +
+    ``_os.environ.setdefault(...)`` and ``from os import environ`` +
+    ``environ.setdefault(...)`` both passed it, leaving nothing but the mention ledger --
+    which this module's own docstring calls "explicitly not what holds the line".
+    """
+
+    import ast
+
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError:
+        return []
+
+    os_modules: set[str] = set()
+    environ_objects: set[str] = set()
+    flag_names: set[str] = {ENV_FLAG}
+
+    for statement in ast.walk(tree):
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.asname:
+                    if alias.name == "os":
+                        os_modules.add(alias.asname)
+                # ``import os`` and ``import os.path`` both bind the root name ``os``.
+                elif alias.name == "os" or alias.name.startswith("os."):
+                    os_modules.add("os")
+        elif isinstance(statement, ast.ImportFrom) and statement.module == "os":
+            for alias in statement.names:
+                if alias.name == "environ":
+                    environ_objects.add(alias.asname or "environ")
+                elif alias.name == "putenv":
+                    environ_objects.add(f"putenv:{alias.asname or 'putenv'}")
+
+    def is_environ(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in environ_objects
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "environ"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in os_modules
+        )
+
+    # Module-level rebindings: ``environ = os.environ`` and ``NAME = "<flag>"``.
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if is_environ(statement.value):
+            environ_objects.update(
+                slot.id for slot in statement.targets if isinstance(slot, ast.Name)
+            )
+        elif isinstance(statement.value, ast.Constant) and statement.value.value == ENV_FLAG:
+            flag_names.update(
+                slot.id for slot in statement.targets if isinstance(slot, ast.Name)
+            )
+
+    def names_the_flag(node: ast.expr) -> bool:
+        if isinstance(node, ast.Constant):
+            return node.value == ENV_FLAG
+        return isinstance(node, ast.Name) and node.id in flag_names
+
+    def mapping_mentions_flag(node: ast.expr) -> bool:
+        return isinstance(node, ast.Dict) and any(
+            key is not None and names_the_flag(key) for key in node.keys
+        )
+
+    def is_putenv(func: ast.expr) -> bool:
+        if isinstance(func, ast.Name):
+            return f"putenv:{func.id}" in environ_objects
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr == "putenv"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in os_modules
+        )
+
+    _WRITE_METHODS = {"setdefault", "__setitem__", "update", "pop", "popitem", "clear"}
+    offenders: list[int] = []
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in ast.walk(statement):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(node, ast.Call):
+                func = node.func
+                if is_putenv(func) and any(names_the_flag(a) for a in node.args):
+                    offenders.append(node.lineno)
+                elif (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in _WRITE_METHODS
+                    and is_environ(func.value)
+                    and any(
+                        names_the_flag(a) or mapping_mentions_flag(a) for a in node.args
+                    )
+                ):
+                    offenders.append(node.lineno)
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                written = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for slot in written:
+                    if (
+                        isinstance(slot, ast.Subscript)
+                        and is_environ(slot.value)
+                        and names_the_flag(slot.slice)
+                    ):
+                        offenders.append(node.lineno)
+            elif isinstance(node, ast.AugAssign):
+                # ``os.environ |= {"<flag>": "1"}`` -- MutableMapping supports it.
+                if is_environ(node.target) and mapping_mentions_flag(node.value):
+                    offenders.append(node.lineno)
+                elif (
+                    isinstance(node.target, ast.Subscript)
+                    and is_environ(node.target.value)
+                    and names_the_flag(node.target.slice)
+                ):
+                    offenders.append(node.lineno)
+    return sorted(set(offenders))
+
+
+def _console_script_modules() -> list[str]:
+    """Every ``[project.scripts]`` entry point, as a tracked path under ``src/``.
+
+    Console scripts are the things that BECOME processes. ``src/pokezero/rollout_cli.py``
+    references neither ``poke_engine`` nor ``pokezero_search`` by name, and reaches
+    ``engine_env`` -- and therefore ``pokezero_search.env_step`` -- transitively, so a
+    text predicate alone would miss the exact entry point review used to break the old
+    gate.
+    """
+
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    modules: list[str] = []
+    in_scripts = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_scripts = stripped == "[project.scripts]"
+            continue
+        if not in_scripts or "=" not in stripped or stripped.startswith("#"):
+            continue
+        target = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+        dotted = target.split(":", 1)[0]
+        candidate = "src/" + dotted.replace(".", "/") + ".py"
+        if (ROOT / candidate).is_file():
+            modules.append(candidate)
+    return modules
+
+
+def search_surfaces() -> list[str]:
+    """Every tracked module that could put a real process on a roll path, discovered.
+
+    Two predicates, unioned:
+
+    * any tracked ``.py`` under ``src/pokezero/`` or ``scripts/`` whose text references
+      ``pokezero_search`` or ``poke_engine`` -- it touches the search crate or the
+      engine directly; and
+    * every ``[project.scripts]`` console script -- it becomes a process, whatever it
+      references by name.
+
+    Discovered rather than listed, because the property is about the modules nobody
+    remembered. The hardcoded five-tuple this replaces left 22 of 37 engine-touching
+    modules outside every probe, including a self-play driver that runs the search.
+    """
+
+    found: set[str] = set(_console_script_modules())
+    for name in _tracked_files():
+        if not name.endswith(".py"):
+            continue
+        if not (name.startswith("src/pokezero/") or name.startswith("scripts/")):
+            continue
+        if name in _IMPORT_PROBE_EXCLUSIONS:
+            continue
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "pokezero_search" in text or "poke_engine" in text:
+            found.add(name)
+    # This module's own probes import the differential deliberately; it is measured by
+    # its own test and is not a search surface.
+    found.discard(_DIFFERENTIAL)
+    return sorted(found)
+
+
 def _differential_consumers() -> list[str]:
     """Every tracked Python module that imports the differential, discovered live.
 
@@ -496,19 +777,89 @@ class RollEnumerationRuntimeScope(unittest.TestCase):
         """
         self._assert_collapsed(_run_probe("fan", flag=None), "the default build")
 
-    def test_no_search_surface_puts_the_engine_on_the_enumerated_path(self) -> None:
-        """Import each search surface in a child, then MEASURE. One child each.
+    def test_the_core_search_surfaces_are_still_discovered(self) -> None:
+        """The named core must remain INSIDE the discovered set.
 
-        One child per surface, not one for all of them: a single batch would go red on
-        the first enabler and name a set rather than a file.
+        Without this, a discovery predicate that quietly stopped matching
+        ``engine_env.py`` would shrink coverage back to roughly the hardcoded tuple
+        review defeated, and the count floor alone would not notice: the set would still
+        be large, just missing the module that matters.
         """
-        for relative in _SEARCH_SURFACES:
-            self.assertTrue((ROOT / relative).is_file(), f"missing search surface {relative}")
+        discovered = set(search_surfaces())
+        for relative in _CORE_SEARCH_SURFACES:
             with self.subTest(surface=relative):
-                self._assert_collapsed(
-                    _run_probe("fan", flag=None, imports=[relative]),
-                    f"importing {relative}",
+                self.assertTrue((ROOT / relative).is_file(), f"missing {relative}")
+                self.assertIn(
+                    relative,
+                    discovered,
+                    f"{relative} is no longer discovered as a search surface; the "
+                    "discovery predicate in search_surfaces() has rotted",
                 )
+
+    def test_no_core_search_surface_puts_the_engine_on_the_enumerated_path(self) -> None:
+        """Import each CORE surface in its own child, then MEASURE.
+
+        One child per surface here, not one for all of them: a batch goes red on the
+        first enabler and names a set rather than a file. The exhaustive sweep over the
+        discovered set is the next test.
+        """
+        for relative in _CORE_SEARCH_SURFACES + _LEGACY_SEARCH_SURFACES:
+            with self.subTest(surface=relative):
+                self.assertTrue((ROOT / relative).is_file(), f"missing {relative}")
+                result = _run_probe("fan", flag=None, imports=[relative])
+                self.assertEqual(
+                    result["import_failures"], {}, f"{relative} did not import"
+                )
+                self._assert_collapsed(result, f"importing {relative}")
+
+    def test_no_discovered_search_surface_enumerates(self) -> None:
+        """The exhaustive sweep: every discovered surface, one child, then MEASURE.
+
+        This is the assertion review's counter-example breaks. With a module-scope
+        enabler in ``src/pokezero/engine_env.py`` the old gate reported
+        ``Ran 14 tests ... OK``; this test imports that module along with every other
+        engine-touching module in the tree and reads the fan afterwards, so the enabler
+        shows up wherever it is.
+
+        Modules that fail to IMPORT are reported, not skipped silently -- losing one is
+        losing coverage, and the assertion below names which.
+        """
+        surfaces = search_surfaces()
+        self.assertGreaterEqual(
+            len(surfaces),
+            _MIN_SEARCH_SURFACES,
+            f"only {len(surfaces)} search surfaces discovered; the predicate in "
+            "search_surfaces() collapsed, so this sweep is weaker than the one reviewed",
+        )
+        result = _run_probe("fan", flag=None, imports=surfaces)
+
+        # Every failure must be a MISSING OPTIONAL DEPENDENCY and nothing else. A module
+        # that fails for any other reason is a module this gate silently stopped covering.
+        unexplained = {
+            name: reason
+            for name, reason in result["import_failures"].items()
+            if not any(
+                reason == f"ModuleNotFoundError: No module named '{dependency}'"
+                for dependency in _OPTIONAL_IMPORT_DEPENDENCIES
+            )
+        }
+        self.assertEqual(
+            unexplained,
+            {},
+            "these search surfaces failed to import for a reason other than a missing "
+            f"optional dependency: {unexplained}. Each one is outside this gate's "
+            "coverage until it loads.",
+        )
+        self.assertGreaterEqual(
+            len(result["imported"]),
+            _MIN_IMPORTED_SEARCH_SURFACES,
+            f"only {len(result['imported'])} of {len(surfaces)} search surfaces actually "
+            f"imported (skipped: {sorted(result['import_failures'])}). Discovery finding "
+            "them is not coverage; loading them is.",
+        )
+        self._assert_collapsed(
+            result, f"importing all {len(result['imported'])} discovered search surfaces"
+        )
 
     def test_importing_the_differential_does_not_enable_enumeration(self) -> None:
         """The regression pin for the defect this rework exists to fix.
@@ -542,6 +893,7 @@ class RollEnumerationRuntimeScope(unittest.TestCase):
             "set shrank, so this sweep is weaker than the one that was reviewed",
         )
         result = _run_probe("fan", flag=None, imports=consumers + [_DIFFERENTIAL])
+        self.assertEqual(result["import_failures"], {}, "a consumer did not import")
         self.assertEqual(sorted(result["imported"]), sorted(consumers + [_DIFFERENTIAL]))
         self._assert_collapsed(
             result, f"importing all {len(consumers)} differential consumers"
@@ -708,15 +1060,7 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         generalises it statically to the whole tree and names the mechanism, so a
         reintroduction fails with "you wrote os.environ at module scope" rather than
         with a fan mismatch in some unrelated file.
-
-        AST rather than substring, because the previous attempt at this check matched
-        the prose in the module docstring that EXPLAINS the defect and went red on a
-        clean file. What is walked is module-level executable code only: function and
-        class bodies are skipped, since those run when something calls them, which is
-        the explicit act this whole design is built around.
         """
-
-        import ast
 
         offenders: list[str] = []
         for name in _tracked_files():
@@ -726,56 +1070,12 @@ class RollEnumerationMentionLedger(unittest.TestCase):
             if not path.is_file():
                 continue
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8"), filename=name)
-            except (SyntaxError, UnicodeDecodeError, OSError):
+                source = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
                 continue
-            # Module-level ``NAME = "POKEZERO_ENUMERATE_ROLLS"`` aliases, resolved, so
-            # the check cannot be sidestepped by naming the constant. The version of
-            # this test that only matched string literals was mutation-tested and
-            # stayed GREEN against ``os.environ.setdefault(_ENUMERATE_ROLLS_ENV, "1")``,
-            # which is exactly the line the differential used to carry.
-            aliases = {ENV_FLAG}
-            for statement in tree.body:
-                if (
-                    isinstance(statement, ast.Assign)
-                    and isinstance(statement.value, ast.Constant)
-                    and statement.value.value == ENV_FLAG
-                ):
-                    aliases.update(
-                        slot.id for slot in statement.targets if isinstance(slot, ast.Name)
-                    )
-
-            def names_the_flag(node: ast.expr) -> bool:
-                if isinstance(node, ast.Constant):
-                    return node.value == ENV_FLAG
-                return isinstance(node, ast.Name) and node.id in aliases
-
-            for statement in tree.body:
-                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    continue
-                for node in ast.walk(statement):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                        continue
-                    if isinstance(node, ast.Call):
-                        target = ast.unparse(node.func)
-                        if target in {
-                            "os.environ.setdefault",
-                            "os.environ.__setitem__",
-                            "os.environ.update",
-                            "os.putenv",
-                        } and any(names_the_flag(argument) for argument in node.args):
-                            offenders.append(f"{name}:{node.lineno}")
-                        continue
-                    if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                        continue
-                    written = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    for slot in written:
-                        if (
-                            isinstance(slot, ast.Subscript)
-                            and ast.unparse(slot.value) == "os.environ"
-                            and names_the_flag(slot.slice)
-                        ):
-                            offenders.append(f"{name}:{node.lineno}")
+            offenders.extend(
+                f"{name}:{line}" for line in module_scope_env_writes(source, name)
+            )
         self.assertEqual(
             offenders,
             [],
@@ -784,6 +1084,66 @@ class RollEnumerationMentionLedger(unittest.TestCase):
             "through putenv, so the value is process-global and inherited by every "
             "child. Turning enumeration on has to be an explicit per-run act.",
         )
+
+    def test_the_ast_check_sees_through_every_alias_form(self) -> None:
+        """Pins the detector itself, on synthetic sources, form by form.
+
+        Running the detector over a clean tree proves only that it found nothing. Review
+        broke the first version by writing the two forms it could not see -- and one of
+        them, ``from os import environ``, is an ordinary idiom rather than a dodge, so
+        the check was wrong on real code and not merely gameable. Each row below is a
+        way to write the same defect.
+        """
+        flag = ENV_FLAG
+        positives = {
+            "import os": f'import os\nos.environ.setdefault("{flag}", "1")\n',
+            "import os as alias": f'import os as _os\n_os.environ.setdefault("{flag}", "1")\n',
+            "from os import environ": f'from os import environ\nenviron.setdefault("{flag}", "1")\n',
+            "from os import environ as alias": (
+                f'from os import environ as E\nE.setdefault("{flag}", "1")\n'
+            ),
+            "module-level environ rebinding": (
+                f'import os\nenv = os.environ\nenv["{flag}"] = "1"\n'
+            ),
+            "subscript assignment": f'import os\nos.environ["{flag}"] = "1"\n',
+            "subscript via alias": f'import os as _os\n_os.environ["{flag}"] = "1"\n',
+            "flag-name constant": (
+                f'import os\nFLAG = "{flag}"\nos.environ.setdefault(FLAG, "1")\n'
+            ),
+            "both aliased at once": (
+                f'from os import environ as E\nFLAG = "{flag}"\nE.setdefault(FLAG, "1")\n'
+            ),
+            "update with a dict": f'import os\nos.environ.update({{"{flag}": "1"}})\n',
+            "putenv": f'import os\nos.putenv("{flag}", "1")\n',
+            "putenv imported directly": f'from os import putenv\nputenv("{flag}", "1")\n',
+            "augmented merge": f'import os\nos.environ |= {{"{flag}": "1"}}\n',
+        }
+        for label, source in positives.items():
+            with self.subTest(form=label):
+                self.assertTrue(
+                    module_scope_env_writes(source),
+                    f"the AST check cannot see {label!r}; that form would ship an "
+                    "import-time enabler with this gate green",
+                )
+
+        negatives = {
+            # The explicit per-run act. Inside a function, so it runs when called.
+            "inside a function": (
+                f'import os\ndef go():\n    os.environ["{flag}"] = "1"\n'
+            ),
+            # Reading is fine; only writing makes an importer an enabler.
+            "module-level read": f'import os\nVALUE = os.environ.get("{flag}")\n',
+            # A different variable entirely.
+            "another variable": 'import os\nos.environ["PYTHONPATH"] = "x"\n',
+            # Prose naming the flag, which is what a substring check tripped on.
+            "docstring prose": f'"""We must never set {flag} at import."""\nimport os\n',
+        }
+        for label, source in negatives.items():
+            with self.subTest(form=label):
+                self.assertEqual(
+                    module_scope_env_writes(source), [],
+                    f"the AST check false-positives on {label!r}",
+                )
 
     def test_the_differential_exposes_the_explicit_opt_in(self) -> None:
         source = (ROOT / _DIFFERENTIAL).read_text(encoding="utf-8")

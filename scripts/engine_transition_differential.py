@@ -2660,9 +2660,12 @@ def _checkpoint_provenance() -> dict[str, str | bool | None]:
         # committed tree; review caught it by reading the patch list at the stamped
         # commit and finding no enumeration patch there.
         #
-        # Recorded, not enforced: sweeping a dirty tree is the normal way to measure a
-        # change before committing it, and a hard failure would only teach people to
-        # pass a skip flag. What must not happen is a dirty sweep being INDISTINGUISHABLE
+        # Recorded, not enforced -- and that is enforced in turn. It is listed in
+        # ``_DESCRIPTIVE_PROVENANCE_KEYS``, so ``_resume_provenance_failures`` ignores it:
+        # a 200-game crash-safe sweep must stay resumable across an unrelated edit, and
+        # the first version of this field silently broke that by riding a whole-dict
+        # comparison. Sweeping a dirty tree is the normal way to measure a change before
+        # committing it; what must not happen is a dirty sweep being INDISTINGUISHABLE
         # from a clean one in the artifact.
         "source_tree": _source_tree_state(),
         "engine_fingerprint": fingerprint,
@@ -2720,16 +2723,41 @@ def _merged_roll_path(records: Sequence[Mapping[str, Any]]) -> bool:
     return next(iter(observed)) if observed else False
 
 
+# Provenance keys that are DESCRIPTIVE, not part of resume identity.
+#
+# ``source_tree`` says whether the checkout was clean when a record was written. It is
+# recorded so a dirty sweep cannot pass as a clean one -- but it must not gate a resume.
+# The comparison below is a whole-dict ``!=``, so leaving it in made a 200-game crash-safe
+# sweep unresumable the moment anyone touched a tracked file between the crash and the
+# restart: clean checkpoint, edit a README, resume, exit 1. That is exactly the outcome the
+# field's own comment says it avoids, and review found the contradiction.
+#
+# Excluded rather than dropped: a clean/dirty flip is still visible, because every distinct
+# provenance blob is carried into the report's ``checkpoint_provenance.distinct``.
+_DESCRIPTIVE_PROVENANCE_KEYS = frozenset({"source_tree"})
+
+
+def _resume_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a provenance record that a resume must MATCH."""
+
+    return {
+        key: value
+        for key, value in provenance.items()
+        if key not in _DESCRIPTIVE_PROVENANCE_KEYS
+    }
+
+
 def _resume_provenance_failures(
     records: Sequence[Mapping[str, Any]], current: Mapping[str, str | bool | None]
 ) -> list[str]:
     failures: list[str] = []
+    expected = _resume_identity(current)
     for index, record in enumerate(records, start=1):
         provenance = record.get("provenance")
         if not isinstance(provenance, Mapping):
             failures.append(f"checkpoint record {index} has no resume provenance")
             continue
-        if dict(provenance) != dict(current):
+        if _resume_identity(provenance) != expected:
             failures.append(f"checkpoint record {index} provenance differs from this resume")
     return failures
 
