@@ -404,13 +404,26 @@ two are required), not on a restatement of the index. The index assertion is del
 **last** in that test so its failure message names the symptom rather than duplicating the index
 test above it.
 
+The mutant run is **paired with its own control in the same worktree**, because a mutation run
+without one proves nothing about which change caused the red. Control: the shipped 22-test file with
+`engine_world.py` *unmutated* → `Ran 22 tests … OK`. Then the one-line mutation, with
+`git diff --stat` showing `src/pokezero/engine_world.py | 2 +-` as the only source change →
+`FAILED (failures=9)`. Same worktree, same interpreter, same test bytes
+(`md5 3f9f871ea0bd27ef75081861035347fe`, checked against the shipped file on every run).
+
+My first attempt at that control was invalid and is recorded rather than quietly replaced: I reverted
+the mutation with `git stash`, which also reverted the copied test file, so the "control" ran `main`'s
+**18**-test version and its `Ran 18 tests … OK` said nothing about the new 4. Reverting only
+`engine_world.py` gives the real control above.
+
 **(c) Green, and not by skipping.** `Ran 22 tests … OK` at `1a929c57` + this PR, and `Ran 22 tests
-… OK` with the file copied into a clean `d27316b6` worktree. No `skipped` in either run.
+… OK` with the shipped file copied into a clean `d27316b6` worktree whose engine
+`--check`s as `fdbf5937…`. No `skipped` in either run.
 
 | where | engine | result |
 |---|---|---|
 | `dc6e1e19`, real pre-fix code | `fdbf5937…` | **RED** — `move:0`, faint, zero Leftovers events |
-| `1a929c57` + slot-0 mutant | `5fa147ff…` | **RED** — 9/22 fail; the pin on `0 != 2` |
+| `1a929c57` + slot-0 mutant | `5fa147ff…` | **RED** — 9/22 fail, the pin on `0 != 2`; same-worktree unmutated control `Ran 22 tests, OK` |
 | `d27316b6`, real post-fix code | `fdbf5937…` | GREEN — `Ran 22 tests, OK`, 0 skipped |
 | `1a929c57` + this PR | `5fa147ff…` | GREEN — `Ran 22 tests, OK`, 0 skipped |
 
