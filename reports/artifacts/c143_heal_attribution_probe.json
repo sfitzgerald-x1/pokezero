@@ -1,0 +1,318 @@
+{
+  "engine": {
+    "A_slow_seeder_victim_is_last": {
+      "drain_is_silent": false,
+      "drain_line": "|-heal|p1a: Snorlax|407/461|[from] item: Leftovers",
+      "events": [
+        "|",
+        "|move|p2a: Blissey|seismictoss|p1a: Snorlax",
+        "|-damage|p1a: Snorlax|361/461",
+        "|move|p1a: Snorlax|splash||[still]",
+        "|",
+        "|-heal|p2a: Blissey|46/651|[from] item: Leftovers",
+        "|-damage|p2a: Blissey|0 fnt|[from] Leech Seed",
+        "|faint|p2a: Blissey",
+        "|-heal|p1a: Snorlax|407/461|[from] item: Leftovers",
+        "|upkeep"
+      ]
+    },
+    "B_slow_seeder_victim_not_last": {
+      "drain_is_silent": true,
+      "drain_line": "|-heal|p1a: Snorlax|407/461|[silent]",
+      "events": [
+        "|",
+        "|move|p2a: Blissey|seismictoss|p1a: Snorlax",
+        "|-damage|p1a: Snorlax|361/461",
+        "|move|p1a: Snorlax|splash||[still]",
+        "|",
+        "|-heal|p2a: Blissey|46/651|[from] item: Leftovers",
+        "|-damage|p2a: Blissey|0 fnt|[from] Leech Seed",
+        "|faint|p2a: Blissey",
+        "|-heal|p1a: Snorlax|407/461|[silent]",
+        "|-heal|p1a: Snorlax|435/461|[from] item: Leftovers",
+        "|upkeep"
+      ]
+    }
+  },
+  "engine_fingerprint": "c72e6523d8de6f64090c9d9160a493ce5253662a65debc7f4229e88d9bb23761",
+  "fixture_seed": 7717,
+  "matrix": {
+    "band_fully_covered": true,
+    "columns": {
+      "135": {
+        "matched_count_renderer_fixed": 2,
+        "renderer_fixed": [
+          135,
+          136
+        ],
+        "renderer_shipping": []
+      },
+      "136": {
+        "matched_count_renderer_fixed": 2,
+        "renderer_fixed": [
+          135,
+          136
+        ],
+        "renderer_shipping": []
+      },
+      "138": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          138
+        ],
+        "renderer_shipping": []
+      },
+      "139": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          139
+        ],
+        "renderer_shipping": []
+      },
+      "141": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          141
+        ],
+        "renderer_shipping": []
+      },
+      "143": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          143
+        ],
+        "renderer_shipping": []
+      },
+      "144": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          144
+        ],
+        "renderer_shipping": []
+      },
+      "145": {
+        "matched_count_renderer_fixed": 0,
+        "renderer_fixed": [],
+        "renderer_shipping": []
+      },
+      "146": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          146
+        ],
+        "renderer_shipping": []
+      },
+      "147": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          147
+        ],
+        "renderer_shipping": []
+      },
+      "149": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          149
+        ],
+        "renderer_shipping": []
+      },
+      "151": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          151
+        ],
+        "renderer_shipping": []
+      },
+      "152": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          152
+        ],
+        "renderer_shipping": []
+      },
+      "154": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          154
+        ],
+        "renderer_shipping": []
+      },
+      "155": {
+        "matched_count_renderer_fixed": 1,
+        "renderer_fixed": [
+          155
+        ],
+        "renderer_shipping": []
+      }
+    },
+    "control": {
+      "arms_touched": 3,
+      "misses_identical_to_recorded": true,
+      "p1_heal_lines_rewritten": 2
+    },
+    "fan": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155,
+      157,
+      159
+    ],
+    "fire_blast_third_collapse": {
+      "accuracy_miss_mass_pct": 15.0,
+      "fan": [
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49
+      ],
+      "max": 49,
+      "observed_roll": 49,
+      "observed_roll_in_fan": true,
+      "representative": 45
+    },
+    "mirror_heal_by_roll": {
+      "135": 47,
+      "136": 46,
+      "138": 44,
+      "139": 43,
+      "141": 41,
+      "143": 39,
+      "144": 38,
+      "146": 36,
+      "147": 35,
+      "149": 33,
+      "151": 31,
+      "152": 30,
+      "154": 28,
+      "155": 27
+    },
+    "mirror_injective": true,
+    "nearest_fan_members_to_the_shipping_representative": [
+      144,
+      146
+    ],
+    "observed_roll": 146,
+    "observed_roll_in_fan": true,
+    "representatives_tested": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      145,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155
+    ],
+    "residual_lethal_band": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155
+    ],
+    "saturating_representatives": [
+      135,
+      136
+    ],
+    "shipping_mirror": 37,
+    "shipping_mirror_achievable": false,
+    "shipping_representative": 145,
+    "shipping_representative_in_fan": false
+  },
+  "row": "19200244/115",
+  "showdown": {
+    "A_slow_seeder_victim_is_last": {
+      "agrees": true,
+      "observed_seeder_leftovers": "absent",
+      "predicted_seeder_leftovers": "absent",
+      "protocol": [
+        "|",
+        "|move|p2a: Blissey|Seismic Toss|p1a: Snorlax",
+        "|-damage|p1a: Snorlax|361/461",
+        "|move|p1a: Snorlax|Splash|p1a: Snorlax",
+        "|-nothing",
+        "|",
+        "|-heal|p2a: Blissey|46/651|[from] item: Leftovers",
+        "|-damage|p2a: Blissey|0 fnt|[from] Leech Seed|[of] p1a: Snorlax",
+        "|-heal|p1a: Snorlax|407/461|[silent]",
+        "|faint|p2a: Blissey",
+        "|",
+        "|win|PokeZero p1"
+      ],
+      "terminal": true
+    },
+    "B_slow_seeder_victim_not_last": {
+      "agrees": true,
+      "observed_seeder_leftovers": "after_mirror",
+      "predicted_seeder_leftovers": "after_mirror",
+      "protocol": [
+        "|",
+        "|move|p2a: Blissey|Seismic Toss|p1a: Snorlax",
+        "|-damage|p1a: Snorlax|361/461",
+        "|move|p1a: Snorlax|Splash|p1a: Snorlax",
+        "|-nothing",
+        "|",
+        "|-heal|p2a: Blissey|46/651|[from] item: Leftovers",
+        "|-damage|p2a: Blissey|0 fnt|[from] Leech Seed|[of] p1a: Snorlax",
+        "|-heal|p1a: Snorlax|407/461|[silent]",
+        "|faint|p2a: Blissey",
+        "|-heal|p1a: Snorlax|435/461|[from] item: Leftovers",
+        "|upkeep"
+      ],
+      "terminal": false
+    },
+    "C_fast_seeder_victim_is_last": {
+      "agrees": true,
+      "observed_seeder_leftovers": "before_drain",
+      "predicted_seeder_leftovers": "before_drain",
+      "protocol": [
+        "|",
+        "|move|p1a: Suicune|Splash|p1a: Suicune",
+        "|-nothing",
+        "|move|p2a: Blissey|Seismic Toss|p1a: Suicune",
+        "|-damage|p1a: Suicune|241/341",
+        "|",
+        "|-heal|p1a: Suicune|262/341|[from] item: Leftovers",
+        "|-heal|p2a: Blissey|46/651|[from] item: Leftovers",
+        "|-damage|p2a: Blissey|0 fnt|[from] Leech Seed|[of] p1a: Suicune",
+        "|-heal|p1a: Suicune|308/341|[silent]",
+        "|faint|p2a: Blissey",
+        "|",
+        "|win|PokeZero p1"
+      ],
+      "terminal": true
+    }
+  }
+}

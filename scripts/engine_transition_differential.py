@@ -2390,6 +2390,11 @@ def run_game(
                 )
             continue
 
+        # THE THIRD VERDICT. `boundaries_measured` has ALREADY incremented for this
+        # boundary (`_prepare_boundary`'s last statement), so a boundary that leaves
+        # here is inside the denominator and outside both `transition:*` tallies.
+        # This is the term that makes the boundary verdict partition four-term, not
+        # two-term -- see `verdict_partition_failures` below.
         if verdict == "skip_lossy":
             counts["skip:strict_all_branches_lossy"] += 1
             continue
@@ -2843,6 +2848,170 @@ def checkpoint_report_aggregate(
         "boundaries_measured": measured,
         "repros": repros,
     }
+
+
+# ---------------------------------------------------------------------------------------------
+# THE BOUNDARY VERDICT PARTITION, and the false two-term identity it replaces.
+#
+# `boundaries_measured` increments as the LAST statement of `_prepare_boundary`, after
+# every skip path there has already returned `None`. So it counts boundaries that
+# reached the matcher. Exactly FOUR things can then happen to such a boundary in
+# `run_game`, and each one is counted exactly once:
+#
+#   1. the matcher raises (pyo3 panics included)  -> `engine_error`
+#   2. no branch survived the strict render       -> `skip:strict_all_branches_lossy`
+#   3. the boundary matched                       -> `transition:matched`
+#   4. the boundary diverged                      -> `transition:diverged`
+#
+# so the identity is FOUR-TERM:
+#
+#     transition:matched + transition:diverged + engine_error
+#         + skip:strict_all_branches_lossy  ==  boundaries_measured
+#
+# WHY IT IS EXHAUSTIVE, exactly. `boundaries_measured` has ONE increment site in the
+# whole repo (`_prepare_boundary`, `counts["boundaries_measured"] += 1`), and the verdict
+# domain is closed at three values -- `evaluate_boundary_strict` and `evaluate_boundary`
+# return only "matched", "diverged" and "skip_lossy" -- so the DYNAMIC key
+# `f"transition:{verdict}"` cannot mint a fifth term. `_prepare_boundary` has a second
+# caller (`scripts/attest_materialized_damage_stats.py`), which is harmless only because
+# it passes a THROWAWAY `Counter()` and never publishes a report; give it the live counter
+# and the identity breaks there, silently, with no verdict ever recorded.
+#
+# ------------------------------------------------------------------------------------
+# THE SEAM: a FIFTH path exists, and the identity survives it only by an accident of
+# error handling. Say which accident, because it is load-bearing and reversible.
+#
+# Between the increment and the verdict there is a stretch of code that is NOT inside the
+# matcher's `try`: `env.step(actions)`, `_fold(cumulative)`, the `active_changed`
+# comprehension, the deliberate re-raise of `KeyboardInterrupt`/`SystemExit` from the
+# matcher's handler, and `classify_divergence` on the diverged path. An exception from any
+# of those escapes `run_game` with `boundaries_measured` already incremented and no
+# verdict counted -- a genuine fifth outcome.
+#
+# It is not a partition violation TODAY for one reason and one reason only: `counts` is a
+# LOCAL `Counter` created at the top of `run_game`, and the sweep loop calls `run_game`
+# with NO try/except around it. So a game that raises anywhere in that stretch propagates
+# out and its counts are discarded WHOLESALE -- the increment never reaches a checkpoint
+# record or a report. The partition holds because the evidence is thrown away, not because
+# the path cannot be taken.
+#
+# THE CHANGE THAT BREAKS IT, named so it is recognisable in review: "salvage the partial
+# counts so a long sweep does not lose a game" -- i.e. wrapping the `run_game` call in
+# try/except and recording `counts` anyway, or hoisting `counts` out of `run_game` so the
+# caller owns it. Either makes the identity FIVE-term instantly, and the new term has no
+# name because nothing counts it. If you make that change, count the escape explicitly
+# (e.g. `boundary_abandoned_after_measure`) and add it to VERDICT_PARTITION_SCALARS or
+# VERDICT_PARTITION_COUNTERS, rather than discovering the drift from a report that no
+# longer reconciles.
+# ------------------------------------------------------------------------------------
+#
+# The two-term form `matched + diverged == boundaries_measured` was asserted as a
+# property of this instrument across reports/ and docs/ and is FALSE. It held on most
+# windows only because both extra terms were 0 there, and it is measurably broken on
+# committed artifacts: `reports/c26_structural_probe_report.json` and
+# `reports/c27_structural_probe_report.json` (lossy 2 each) and C141's final-holdout
+# sweep (lossy 4). See `reports/c144_boundary_identity_correction.md`.
+#
+# Counters that must NOT be folded in, because they are not boundary verdicts:
+# `strict:lossy_render`, `strict:sleeptalk_union_branch`, `strict:no_damage_rolls`,
+# `strict:branch_events_error:*` and `strict:branch_event_legal_error:*` are
+# PER-BRANCH or PER-STATE tallies within one boundary -- C141's holdout has
+# `strict:lossy_render` 14 against only 4 boundaries that lost every branch.
+# `gating:*` partitions the measured set a second, independent way, and
+# `divergence_class:*` partitions `transition:diverged` alone. Every `skip:*` counter
+# OTHER than `skip:strict_all_branches_lossy` fires before `boundaries_measured`
+# increments and belongs to the coverage reconciliation instead
+# (`tests/test_single_seat_coverage_bound.py`).
+# ---------------------------------------------------------------------------------------------
+
+# The four verdict terms as a report PUBLISHES them: three top-level scalars and one
+# counter. The lossy term has no top-level scalar, which is a large part of why the
+# published identity was read as two-term for so long -- the other three are right
+# there in the summary block and the fourth has to be dug out of `counters`.
+VERDICT_PARTITION_SCALARS = ("transitions_matched", "transitions_diverged", "engine_errors")
+VERDICT_PARTITION_LOSSY_COUNTER = "skip:strict_all_branches_lossy"
+# The same partition in the internal counter vocabulary `run_game` increments, in
+# report-field order. `checkpoint_report_binding_failures` is what binds the two
+# vocabularies together; this function does not re-check that binding.
+VERDICT_PARTITION_COUNTERS = (
+    "transition:matched",
+    "transition:diverged",
+    "engine_error",
+    VERDICT_PARTITION_LOSSY_COUNTER,
+)
+
+
+def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "report") -> list[str]:
+    """Return every way the four-term boundary verdict partition fails to close.
+
+    Empty means it closes. Callers OR this into their own gate; it never lowers an
+    exit code.
+
+    Reads ``transitions_matched``, ``transitions_diverged``, ``engine_errors`` and
+    ``boundaries_measured`` from the report's top level and
+    ``counters['skip:strict_all_branches_lossy']`` from its counter dump. The lossy
+    counter is the only term allowed to default -- to 0, because a Counter dump omits
+    unseen keys and the non-strict matcher never emits it at all. Everything else is
+    REFUSED when absent or non-integer rather than defaulted, because defaulting
+    ``boundaries_measured`` to 0 would let the identity close on an unreadable
+    report, which is the instrument-that-cannot-move failure this repo keeps
+    rediscovering.
+    """
+
+    if not isinstance(report, Mapping):
+        return [f"{label}: report is not an object, so the verdict partition cannot be checked"]
+    out: list[str] = []
+    measured = report.get("boundaries_measured")
+    if type(measured) is not int or measured < 0:
+        out.append(
+            f"{label}: boundaries_measured is {measured!r}, not a non-negative int, so the "
+            "verdict partition cannot be checked"
+        )
+    terms: dict[str, int] = {}
+    for name in VERDICT_PARTITION_SCALARS:
+        value = report.get(name)
+        if type(value) is not int or value < 0:
+            out.append(f"{label}: {name} is {value!r}, not a non-negative int")
+            continue
+        terms[name] = value
+    counters = report.get("counters")
+    if not isinstance(counters, Mapping):
+        out.append(f"{label}: counters is not an object, so the lossy verdict cannot be read")
+    else:
+        lossy = counters.get(VERDICT_PARTITION_LOSSY_COUNTER, 0)
+        if type(lossy) is not int or lossy < 0:
+            out.append(
+                f"{label}: counter {VERDICT_PARTITION_LOSSY_COUNTER!r} is {lossy!r}, "
+                "not a non-negative int"
+            )
+        else:
+            terms[VERDICT_PARTITION_LOSSY_COUNTER] = lossy
+    if out:
+        return out
+    accounted = sum(terms.values())
+    if accounted != measured:
+        breakdown = " + ".join(f"{name}={value}" for name, value in terms.items())
+        gap = abs(measured - accounted)
+        # Direction is diagnostic, so name BOTH causes rather than guessing. A tally
+        # exceeding the denominator is what a two-term writer produces (the missing
+        # verdict never entered `boundaries_measured`); a denominator exceeding the
+        # tally is what a new uncounted post-measurement exit produces.
+        cause = (
+            f"{gap} more verdicts than measured boundaries — either a boundary was "
+            "counted under two verdicts, or boundaries_measured was derived from a "
+            "partition that omits a term"
+            if accounted > measured
+            else f"{gap} measured boundaries carry no verdict — either a verdict "
+            "counter is missing from this tally, or run_game grew a post-measurement "
+            "exit that nothing counts"
+        )
+        out.append(
+            f"{label}: the boundary verdict partition does not close — {breakdown} = "
+            f"{accounted} against boundaries_measured {measured}; {cause}. The identity "
+            "is four-term (matched + diverged + engine_errors + "
+            "skip:strict_all_branches_lossy); a two-term reading of it is the C144 defect."
+        )
+    return out
 
 
 def checkpoint_report_binding_failures(
@@ -3340,7 +3509,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json:
             Path(args.json).write_text(json.dumps(report, indent=2))
             print(f"-> {args.json}")
-        return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
+        # SELF-CHECK on the instrument, after the artifact is written so no compute is
+        # lost. If the verdict partition does not close, the counters in the file just
+        # written do not account for every boundary the merge measured, and no number in
+        # it is safe to quote. C144.
+        partition = verdict_partition_failures(report, label="merged report")
+        for reason in partition:
+            print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
+        return 1 if (
+            report["transitions_diverged"] or report["engine_errors"] or partition
+        ) else 0
 
     if args.resume and not args.checkpoint:
         parser.error("--resume requires --checkpoint")
@@ -3447,7 +3625,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
         print(f"-> {args.json}")
-    return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
+    # SELF-CHECK on the instrument, after the artifact is written so a long sweep loses
+    # nothing. See the merge path above and C144.
+    partition = verdict_partition_failures(report, label="report")
+    for reason in partition:
+        print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
+    return 1 if (
+        report["transitions_diverged"] or report["engine_errors"] or partition
+    ) else 0
 
 
 if __name__ == "__main__":

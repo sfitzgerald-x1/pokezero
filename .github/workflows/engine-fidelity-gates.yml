@@ -56,6 +56,15 @@ jobs:
             # The coverage-bound pins. Listed so a PR that only weakens them still
             # trips this workflow.
             tests/test_single_seat_coverage_bound.py
+            # C144's boundary verdict partition. The COVERAGE partition above and this
+            # VERDICT partition are different partitions of different sets, and
+            # conflating them is what produced the false two-term identity. Listed with
+            # a STEP below, and with its two counterexample artifacts, so a PR that
+            # deletes either one cannot go green without tripping this workflow.
+            tests/test_boundary_verdict_partition.py
+            scripts/cert_sweep_readout.py
+            reports/c26_structural_probe_report.json
+            reports/c27_structural_probe_report.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -491,6 +500,29 @@ jobs:
             exit 1
           fi
 
+      # The VERDICT partition, which is a different partition from the coverage one
+      # above and was asserted with the wrong number of terms for the whole
+      # C111-C141 era: `matched + diverged == boundaries_measured` is FALSE, because
+      # `engine_error` and `skip:strict_all_branches_lossy` are both counted after
+      # `boundaries_measured` has already incremented. reports/c144.
+      - name: Boundary verdict partition
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_boundary_verdict_partition -v 2>&1 \
+            | tee /tmp/verdict.log
+          if ! grep -qE 'Ran 23 tests' /tmp/verdict.log; then
+            echo "::error::expected 23 verdict-partition pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. The module's anti-vacuity pins -- that the
+          # artifact corpus is non-empty, and that c26/c27 still REFUTE the two-term
+          # form -- are the only reason the rest of it means anything, so a skipIf
+          # added to either must be a red gate rather than a quieter green one.
+          if ! grep -qE '^OK$' /tmp/verdict.log; then
+            echo "::error::verdict-partition pins did not report a clean OK"
+            exit 1
+          fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
@@ -660,15 +692,34 @@ jobs:
           # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          if [ "${passed:-0}" -lt 366 ]; then
-            echo "::error::expected >= 366 crate tests, got ${passed:-0}"
+          # Floor RAISED 366 -> 423 with #1157, which is the EXACT current total. A floor
+          # set below the total is the same blindness the comment above describes: at 366 it
+          # would have absorbed every Protect pin with 55 to spare, and at 420 it still
+          # absorbed the three UNIT pins -- deleting exactly those three lands on 420 and
+          # passes, while they are the sole killers of five mutants. Set it to the total and
+          # raise it deliberately when tests are added.
+          if [ "${passed:-0}" -lt 423 ]; then
+            echo "::error::expected >= 423 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
+          # The Protect-marker pins (#1157). This arm RENDERS a protocol line into a
+          # SEARCHED world, and its two failure modes are opposite: fabricate a Protect
+          # line over a full-HP absorb activation, or render the line but leave the world
+          # refused so nothing is reclaimed. Review demonstrated BOTH with the suite green
+          # before these fixtures existed -- deleting the entire walk arm passed 418/418.
+          # Named here because the count gate cannot see four tests vanish out of 421.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
-                     the_dragged_arm_precedes_the_generic_defender_damage_arm; do
+                     the_dragged_arm_precedes_the_generic_defender_damage_arm \
+                     a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line \
+                     without_the_protect_volatile_no_protect_line_is_invented \
+                     a_full_hp_absorb_activation_is_never_dressed_as_protect \
+                     protect_plus_an_absorb_ability_refuses_rather_than_guessing \
+                     events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
+                     events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
+                     events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

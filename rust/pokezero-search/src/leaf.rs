@@ -1308,14 +1308,29 @@ impl LeafContext {
         // root flag through verbatim is correct there. Interior nodes are fine either way — the
         // engine applies MUSTRECHARGE itself during simulation.
         //
-        // BEWARE when revisiting: the depth-0 gate cannot catch this. leaf_root_parity.py
-        // (and leaf_vs_reality.py, prior_mapping_assert.py, fidelity_gate_events.py) derive
-        // `recharging` for BOTH slots from the recorded chosen candidate, so the gate's world
-        // carries self-side MUSTRECHARGE and would agree with a symmetric write rather than
-        // test it. Making the self side live requires teaching _recharging_slots to return our
-        // slot too (which also closes a real modelling gap: today the production root world
-        // lets our recharging mon pick any move) and that changes search-world construction,
-        // where engine_world.py treats mustrecharge as a hard lock like `trapped`.
+        // STATUS UPDATE: both blockers named above are now cleared, and this freeze is the
+        // remaining half. (1) _recharging_slots IS symmetric — it returns our own slot from the
+        // parser's `self_must_recharge`, the same tracker that feeds the opponent side — so the
+        // root world now carries the volatile and deriving the self flag from volatile_statuses
+        // would no longer write `false` at depth 0. (The comment this replaces said the old
+        // asymmetry "lets our recharging mon pick any move". Review falsified that: Showdown
+        // sets `trapped: true` on a recharge request, so engine_world rejected those worlds as
+        // `self_request_state_unsupported` and search failed CLOSED. Our recharge turns were
+        // unsearchable, not mis-searched.) (2) The
+        // four gates no longer derive `recharging` from the recorded chosen candidate; they use
+        // fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and
+        // reads the tracker, so they can CATCH a bad self-side write. Shown end-to-end, not just
+        // at the derivation: reports/c141_recharge_gate_injection_proof.md injects a wrong
+        // self-side write HERE (wired to the opponent's volatile), rebuilds, and measures
+        // leaf_root_parity going diverged 0 -> 5 at an unchanged denominator, back to 0 on revert.
+        // Narrower than it sounds: the pre-task-4 gates also caught 4 of those 5, because the
+        // recorded action and the tracker disagree on exactly one corpus row and it is
+        // opponent-side. tests/test_recharge_gate_derivation.py covers what the corpus cannot.
+        //
+        // So the self side can be made live here. It has NOT been, in this change: that is a
+        // rust-side edit needing an engine rebuild, and it is the follow-on rather than
+        // something to fold in silently. What has changed is that it is no longer blocked and
+        // no longer unverifiable.
         md.insert(
             "opponent_must_recharge".into(),
             json!(opp_side

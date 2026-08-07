@@ -55,7 +55,11 @@ from pokezero.golden_corpus_fold import iter_fold_records  # noqa: E402
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT  # noqa: E402
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 
-from fidelity_gate_events import truant_loaf_slots  # noqa: E402
+from fidelity_gate_events import (  # noqa: E402
+    anchor_observation_metadata,
+    production_recharging_slots,
+    truant_loaf_slots,
+)
 from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
 from differential_denominator import check_denominator, gate as denominator_gate
 
@@ -106,16 +110,17 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
         payload = row.public_materialization
         teams = {slot: unpack_team(packed[slot]) for slot in ("p1", "p2")}
 
-        recharging = []
-        for slot in ("p1", "p2"):
-            other = decisions.get((row.battle_id, row.decision_round_index, slot))
-            candidate = chosen_candidate_from_row(other) if other is not None else None
-            if (
-                candidate is not None
-                and candidate.get("kind") == "move"
-                and normalize_id(str(candidate.get("move_id") or "")) == "recharge"
-            ):
-                recharging.append(slot)
+        # PRODUCTION's derivation, not the recorded candidate's. Deriving `recharging` from the
+        # chosen action seeded this gate's world from the thing the gate is checking, so the world
+        # could only ever agree -- the "would ratify a symmetric write rather than catch a bad one"
+        # warning that leaf.rs and leaf_vs_reality.py both carry. See
+        # fidelity_gate_events.production_recharging_slots.
+        recharging = production_recharging_slots(
+            anchor_observation_metadata(
+                decisions.get((row.battle_id, row.decision_round_index, row.player_id))
+            ),
+            row.player_id,
+        )
         truant = truant_loaf_slots(history_at_row.get(array_row_index) or [], payload, teams)
 
         override = BattleStartOverride(player_teams={"p1": packed["p1"], "p2": packed["p2"]})
