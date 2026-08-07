@@ -238,8 +238,9 @@ overclaim this section previously carried. Verified against artifacts:
 Both have sat in this repo, committed, with the counter nonzero. And the closed-PR-#1037 pair
 recorded in `docs/engine_divergence_ledger_20260728.md:6720-6726` carries it at **1** on the
 baseline — described in that same section as "live on main today" — and **40** on the patch.
-This report cited that very section two paragraphs earlier for the 40-row instance and then
-called this window the first live firing, which cannot both be true.
+The previous version of this section cited that very ledger passage for the 40-row instance and
+then, two lines later, called this window the first live firing. Both could not be true, and the
+citation was the thing that refuted the claim.
 
 So what is actually true, and all that is claimed here: **this is the first firing in the
 `reports/artifacts` sweep series** — of the 56 sweep artifacts in that directory carrying a
