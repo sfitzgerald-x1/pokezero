@@ -9,7 +9,7 @@ falsifier fires.
 > **The `limit:` prefix is a classifier emission, not an adjudication.** The repo has
 > already retracted the contrary reading — `scripts/family_bucket_audit.py` buckets this
 > family as "engine-gap (partially resolved)", and
-> `reports/artifacts/c105_retract_limit_overclaim.json` records the limit claim as
+> `reports/c105_retract_limit_overclaim.json` records the limit claim as
 > 8-for-8 falsified. This measurement corroborates that retraction rather than resting
 > on it.
 
@@ -27,9 +27,12 @@ unmodified `evaluate_boundary_strict`.
 | `19100107/135` | diverged (8 branches), misses identical to the artifact | **matched** (8 branches) |
 | `19100191/5` | diverged (4 branches), misses identical to the artifact | **matched** (4 branches) |
 
-The engine's existing partition machinery, once handed a threshold, emits an arm at
-exactly the observed roll. That is a `matched` verdict from the shipped comparator, not
-an argument about one.
+The engine's existing partition machinery, once handed a threshold, emits a
+residual-kill arm **at the threshold**. On `19100107/135` that threshold *is* the observed
+roll (159). On `19100191/5` it is **not**: the arm sits at 211 and the observation is 215,
+and the `matched` verdict there comes from the comparator's cap-vs-cap identity rather
+than from an arm at the observed roll — see §3, which works that case through. Either way
+the verdict is produced by the shipped comparator, not by an argument about one.
 
 ## 2. Both rows are one mechanism
 
@@ -44,7 +47,7 @@ alive.
 | observed | −215, brn, +14, capped −24, faint | −159, brn, +15, capped −31, faint |
 | non-crit fan max | 220 | 170 |
 | **observed roll** | **215 = roll 98** | **159 = roll 94** |
-| engine representative | 203 = `(220 × 0.925)` | 157 = `(170 × 0.925)` |
+| engine representative | 203 = `(220 × 0.925) as i16` (truncated from 203.5) | 157 = `(170 × 0.925) as i16` (from 157.25) |
 | crit fan minimum | 374 (≥ hp 225) | 290 (≥ hp 175) |
 
 The observation is a **member of the engine's own priced fan** in both rows, and the
@@ -133,8 +136,32 @@ emits today.
   which is independent of the representative — but the fallback window
   `[0.92·eng − 1, 1.09·eng + 1]` is not, and it applies whenever `pre_legal` is
   unavailable. How much matched mass rides on that fallback is **unmeasured**.
+- **`19100191/5`'s match rides on the cap-vs-cap identity, not on an exact arm.** §3
+  derives it; it belongs in this list too, because it is the weaker of the two matches and
+  a reader skimming §1 should not miss it.
 - `19000074/27` and `19000191/63`, the other two rows in the collapsed-roll family, were
   outside this assignment and are not adjudicated here.
+
+## 7. Update: the freeze has lifted, and enumeration closes both rows
+
+The C134 §3 enumeration spike has since produced its measurement, which supersedes §5's
+"the fix is deliberately not implemented here". Measured on both windows with the
+enumerate flag on, same build, same seeds:
+
+| window | collapsed | enumerated |
+|---|---|---|
+| dev `19,000,000–199` | 2 diverged | **0** |
+| holdout `19,100,000–199` | 4 diverged | **2** |
+
+The two rows adjudicated here — `19100107/135` and `19100191/5` — **both close**, and
+nothing opened on either window. So the disposition stands as *engine gap*, and the
+remedy is not the status-aware threshold sketched in §5 but enumeration itself, which
+deletes the mirror rather than repairing it. C134 §3 anticipated exactly this: "enumeration
+fixes them or *constitutes* the demonstration". The measurement says **fixes**.
+
+That also retires the sketch in §5 as the recommended fix. It should not be implemented;
+the crit-straddle sub-split queued for `19000074/27` should not be written either, for the
+same reason.
 
 Whatever implements this must register **"nothing opened"** as an explicit falsifier and
 sweep both windows before it is believed. The precedent is in c133 §7: the last engine
