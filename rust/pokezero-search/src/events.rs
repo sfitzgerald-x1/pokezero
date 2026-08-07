@@ -1903,7 +1903,8 @@ fn render_move_phase(
                         (
                             d.volatile_statuses
                                 .contains(&PokemonVolatileStatus::PROTECT),
-                            is_absorb_ability(d.get_active_immutable().ability).is_some(),
+                            absorb_ability_can_emit_a_zero_heal(
+                                d.get_active_immutable().ability),
                         )
                     };
                     if !sleeptalk_refusal_is_unsafe_with_protect(
@@ -1927,7 +1928,10 @@ fn render_move_phase(
                         // measurement could not rank them.
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
-                            &ambiguous_unrenderable_slug(&called_tail, side),
+                            &ambiguous_unrenderable_slug_with_protect(
+                                &called_tail, side,
+                                defender_protected, defender_has_absorb_ability,
+                            ),
                         );
                     } else if let SleepTalkIdent::NoneMatched(shapes) = ident {
                         // ONE SLUG PER OBSERVED SHAPE. `attribution_unsafe_label` sorts and
@@ -3599,6 +3603,22 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
     })
 }
 
+/// Can this ability produce the ZERO-HEAL absorb no-op that the Protect marker must not be
+/// confused with?
+///
+/// NARROWER than `is_absorb_ability` on purpose. That set includes `FLASHFIRE`, which sets a
+/// VOLATILE and never a heal (`gen3/abilities.rs`), so it cannot emit this shape at all --
+/// including it would refuse Protect-blocked worlds for a Flash Fire defender and buy nothing.
+/// The producer at `gen3/generate_instructions.rs:1367-1375` needs `health_recovered == 0`
+/// from a heal-carrying absorb, which in gen3 is Water Absorb and Volt Absorb. Dry Skin
+/// carries one too but appears only in gen9 data.
+fn absorb_ability_can_emit_a_zero_heal(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::WATERABSORB | Abilities::VOLTABSORB | Abilities::DRYSKIN
+    )
+}
+
 /// Is this instruction a PROTECT-BLOCKED branch marker that the walk can render?
 ///
 /// gen3 emits a zero-amount `Heal` from exactly TWO sites, and BOTH push on the DEFENDER,
@@ -3618,12 +3638,27 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 /// Showdown announces `|-singleturn|...|Protect` when Protect is used -- so reading it
 /// fabricates no belief.
 ///
-/// FAIL-CLOSED on both axes. Without the volatile this returns None and the tail keeps
-/// refusing, which is the pre-existing behaviour. And an absorb ability on the defender also
-/// returns None even WITH the volatile: Protect strips the move before an absorb could fire,
-/// so the combination should be unreachable, but "should be" is what the boost arm assumed
-/// and it was wrong twice. Refusing a rare renderable tail costs one refused world; rendering
-/// a wrong line corrupts a searched one.
+/// FAIL-CLOSED on both axes, and the absorb axis is LOAD-BEARING rather than paranoia.
+///
+/// Without the volatile: None, tail keeps refusing, pre-existing behaviour.
+///
+/// With an absorb ability on the defender: also None. An earlier version of this doc said
+/// "Protect strips the move before an absorb could fire, so the combination should be
+/// unreachable" -- FALSE, and in a way that matters. The guard tests ability PRESENCE, not
+/// firing, so any Water Absorb or Volt Absorb mon that uses Protect lands here routinely.
+/// Those worlds stay refused. That is a real, ongoing cost, not a theoretical one.
+///
+/// It is still the right trade. The absorb abilities deliberately RESTORE `flags.protect`
+/// (gen3/abilities.rs), so a protect-bypassing Electric or Water move would leave
+/// `blocked_by_protect == false` with the volatile still present -- a zero `Heal` that is NOT
+/// a Protect marker while PROTECT is set. The absorb axis is what catches that. Refusing a
+/// renderable tail costs one refused world; rendering a wrong line corrupts a searched one.
+///
+/// EQUIVALENT-MUTANT NOTE. Hardcoding `defender_protected = true` survives the suite, and
+/// that is expected rather than a coverage gap: producer 2 requires an absorb ability, so the
+/// absorb axis already refuses every tail the PROTECT axis would. The two guards overlap in
+/// the currently-reachable space. The PROTECT read earns its place against the
+/// flags.protect-restoration case above, which no gen3 move reaches today.
 fn protect_blocked_marker_side(
     tail: &[Instruction],
     index: usize,
@@ -4017,7 +4052,22 @@ fn unrenderable_tail_families_with_protect(
 /// `mark_attribution_unsafe_subcase` asserts it and
 /// `engine_transition_differential.py` matches the bare tag exactly.
 fn ambiguous_unrenderable_slug(tail: &[Instruction], attacker: SideReference) -> String {
-    let families = unrenderable_tail_families(tail, attacker);
+    ambiguous_unrenderable_slug_with_protect(tail, attacker, false, true)
+}
+
+fn ambiguous_unrenderable_slug_with_protect(
+    tail: &[Instruction],
+    attacker: SideReference,
+    defender_protected: bool,
+    defender_has_absorb_ability: bool,
+) -> String {
+    // THE SAME FACTS THE WALK USED. An earlier version called the fail-closed 2-arg form, so a
+    // tail where the Protect marker is now RENDERED but something else still blocks would be
+    // keyed `...:heal_zero_marker` -- naming a family the walk no longer refuses. Era 63 would
+    // then rank a closed family as open. The PR's own risk note predicts exactly this
+    // population: worlds whose FIRST refuser was the marker and whose second is something else.
+    let families = unrenderable_tail_families_with_protect(
+        tail, attacker, defender_protected, defender_has_absorb_ability);
     // Unreachable: this slug is only built when the tail is NOT fully renderable, which
     // is defined as a non-empty family list. Named rather than emitting a bare trailing
     // colon so a future edit that breaks that correspondence shows up in the measurement.
@@ -9049,6 +9099,41 @@ mod none_matched_shape_tests {
         // Out of bounds returns None rather than panicking: pyo3 maps a panic to
         // PanicException, which escapes `except Exception` and kills the campaign worker.
         assert_eq!(protect_blocked_marker_side(&on_attacker, 9, atk, true, false), None);
+
+        // NEGATIVE heal on the defender is Liquid Ooze, not a Protect marker. Pins `== 0`
+        // against `<= 0`, which survived the mutation battery: era 62 measured
+        // heal_liquidooze at zero so it is unreachable today, but widening the test would
+        // dress a Liquid Ooze tail as Protect the moment one appears.
+        let liquid_ooze = [Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideTwo,
+            heal_amount: -40,
+        })];
+        assert_eq!(
+            protect_blocked_marker_side(&liquid_ooze, 0, atk, true, false),
+            None,
+            "a NEGATIVE heal is Liquid Ooze; the marker is zero-amount only"
+        );
+    }
+
+    /// The absorb set is exactly the abilities that can emit a zero `Heal`.
+    ///
+    /// Pins both directions, because both mutations survived. Narrowing it drops the guard
+    /// for a real producer and would render Protect over a Water Absorb activation; widening
+    /// it back to `is_absorb_ability` re-adds FLASHFIRE, which sets a VOLATILE and never a
+    /// heal, refusing Protect-blocked worlds for a Flash Fire defender and buying nothing.
+    #[test]
+    fn the_absorb_guard_covers_exactly_the_zero_heal_producers() {
+        for a in [Abilities::WATERABSORB, Abilities::VOLTABSORB, Abilities::DRYSKIN] {
+            assert!(
+                absorb_ability_can_emit_a_zero_heal(a),
+                "{a:?} carries a heal and CAN emit the zero-heal no-op"
+            );
+        }
+        assert!(
+            !absorb_ability_can_emit_a_zero_heal(Abilities::FLASHFIRE),
+            "FLASHFIRE sets a volatile and never a heal, so guarding on it is pure loss"
+        );
+        assert!(!absorb_ability_can_emit_a_zero_heal(Abilities::NONE));
     }
 
     /// Containment is checked on FULL instruction equality, not on variant alone.
