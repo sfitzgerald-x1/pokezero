@@ -1872,14 +1872,52 @@ class EngineMctsPolicy:
 
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
         observation_metadata = getattr(context.observation, "metadata", None)
+
+        # OUR OWN slot, from the same parser tracker. Until this existed the world was
+        # asymmetric: only the opponent could be locked, so a root world in which OUR active
+        # must recharge offered it every move in its moveset. The sim's own request offers
+        # exactly one (`recharge`), so search was choosing over actions the server would have
+        # rejected, and the encoder's self-side MUSTRECHARGE volatile was root-frozen because
+        # deriving it live would have contradicted a world that never carried it.
+        #
+        # `self_must_recharge` is the same `must_recharge` tracker that feeds
+        # `opponent_must_recharge`, published per seat, so this is one parser truth applied to
+        # both sides rather than a second derivation that can disagree with the first. Measured
+        # on corpus/golden-v4: 1208 decision-row pairs where seat X's `self_must_recharge`
+        # equals seat Y's `opponent_must_recharge`, zero disagreements.
+        self_slot: tuple[str, ...] = ()
+        if isinstance(observation_metadata, Mapping):
+            if observation_metadata.get("self_must_recharge") is True:
+                self_slot = (context.player_id,)
+
         if isinstance(observation_metadata, Mapping):
             tracked = observation_metadata.get("opponent_must_recharge")
             if tracked is True:
-                return (opponent_slot,)
+                return self_slot + (opponent_slot,)
             if tracked is False:
                 # An explicit False from the tracker is a public PROOF of no lock, not an absent
                 # signal — do not let the weaker fallback manufacture one behind it.
-                return ()
+                return self_slot
+        if self_slot:
+            # The self side is settled by the tracker; the opponent side is not, so fall
+            # through to the reconstruction below and let it decide only the opponent. The
+            # fallback returns early in several places, so carry the self lock into each.
+            return self_slot + self._opponent_recharging_fallback(context, opponent_slot)
+        return self._opponent_recharging_fallback(context, opponent_slot)
+
+    def _opponent_recharging_fallback(
+        self, context: PolicyContext, opponent_slot: str
+    ) -> tuple[str, ...]:
+        """The pre-tracker reconstruction, for observations whose metadata predates the pack.
+
+        Extracted verbatim from `_recharging_slots` when the self side became live: its several
+        early returns each meant "no OPPONENT lock", and once our own slot can also be locked
+        those returns must no longer be able to discard it. Keeping them here and prefixing the
+        self lock at the call site is what makes that structurally impossible, rather than a
+        thing to remember at eight separate return statements.
+
+        Strictly weaker than the tracker, never stronger, so it can only fail to add a lock.
+        """
         trajectory = getattr(context, "trajectory", None)
         round_index = getattr(context, "decision_round_index", None)
         if trajectory is None or not isinstance(round_index, int):

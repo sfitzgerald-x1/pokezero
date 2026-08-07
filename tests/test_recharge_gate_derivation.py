@@ -146,19 +146,60 @@ class TheFixedGateCatchesItTest(unittest.TestCase):
             anchor_observation_metadata(self.decisions.get(("b", 7, seat))), seat
         )
 
-    def test_the_fixed_rule_does_not_lock_our_own_slot(self) -> None:
-        """Mirrors production: `_recharging_slots` returns the opponent slot or nothing."""
-        self.assertNotIn("p2", self._fixed("p2"))
+    def test_the_fixed_rule_locks_our_own_slot_from_the_TRACKER(self) -> None:
+        """Symmetric now, and sourced from the parser rather than the action.
 
-    def test_and_therefore_CATCHES_the_symmetric_write(self) -> None:
-        """THE ACCEPTANCE. The same injected write now diverges from the gate's world."""
-        injected_self_side_write = True
-        world_says = "p2" in self._fixed("p2")
-        self.assertNotEqual(
-            world_says,
-            injected_self_side_write,
-            "the fixed gate must DISAGREE with a self-side write, i.e. be able to catch it",
+        Step 1 of this change made the gate mirror production's ASYMMETRY (opponent only), so
+        that a symmetric self-side write would diverge. Step 3 made production itself symmetric,
+        so the gate follows. Symmetry is not a return to ratification: what made the old gate
+        unable to catch anything was that it read the RECORDED ACTION, so it agreed with whatever
+        the encoder had been told. This reads the tracker, which no encoder write can move.
+        """
+        self.assertIn("p2", self._fixed("p2"))
+
+    def test_it_catches_a_write_that_CONTRADICTS_the_tracker_true_case(self) -> None:
+        """THE ACCEPTANCE, direction A: encoder writes `true`, tracker says false."""
+        self.decisions[("b", 7, "p2")] = _row(
+            seat="p2", self_mr=False, opp_mr=False, chose_recharge=True
         )
+        injected_write = True  # a bad self-side MUSTRECHARGE write
+        self.assertNotEqual(
+            "p2" in self._fixed("p2"),
+            injected_write,
+            "gate must disagree with a `true` write on a mon the tracker says is free",
+        )
+
+    def test_it_catches_a_write_that_CONTRADICTS_the_tracker_false_case(self) -> None:
+        """THE ACCEPTANCE, direction B: encoder writes `false`, tracker says true.
+
+        Both directions matter. A gate that only caught spurious locks would still miss the
+        staleness this whole area is about -- a genuinely recharging mon written as free.
+        """
+        injected_write = False  # setUp has self_must_recharge True
+        self.assertNotEqual(
+            "p2" in self._fixed("p2"),
+            injected_write,
+            "gate must disagree with a `false` write on a genuinely recharging mon",
+        )
+
+    def test_and_the_old_rule_caught_NEITHER(self) -> None:
+        """Non-vacuity for both directions above, against the rule actually replaced.
+
+        The old rule read the recorded action, so for each bad write there is a corpus row on
+        which it AGREES with that write -- which is what 'would ratify rather than catch' meant.
+        """
+        # `true` write, tracker false, but the action record says recharge -> old rule agrees.
+        spurious = {
+            ("b", 7, "p2"): _row(seat="p2", self_mr=False, opp_mr=False, chose_recharge=True),
+            ("b", 7, "p1"): _row(seat="p1", self_mr=False, opp_mr=False, chose_recharge=False),
+        }
+        self.assertIn("p2", _candidate_derived_recharging(None, spurious, "b", 7))
+        # `false` write, tracker true, but the action record says otherwise -> old rule agrees.
+        stale = {
+            ("b", 7, "p2"): _row(seat="p2", self_mr=True, opp_mr=False, chose_recharge=False),
+            ("b", 7, "p1"): _row(seat="p1", self_mr=False, opp_mr=False, chose_recharge=False),
+        }
+        self.assertNotIn("p2", _candidate_derived_recharging(None, stale, "b", 7))
 
     def test_it_still_locks_the_opponent_when_the_tracker_says_so(self) -> None:
         """Non-vacuity: the fix is not 'lock nothing', which would catch everything trivially.
@@ -172,7 +213,9 @@ class TheFixedGateCatchesItTest(unittest.TestCase):
         self.decisions[("b", 7, "p2")] = _row(
             seat="p2", self_mr=True, opp_mr=True, chose_recharge=True
         )
-        self.assertEqual(self._fixed("p2"), ("p1",))
+        # Scoped to the OPPONENT slot: our own is separately locked by self_must_recharge now
+        # that the helper is symmetric, and this case is about the opponent side.
+        self.assertIn("p1", self._fixed("p2"))
 
     def test_it_is_keyed_off_the_tracker_not_the_action(self) -> None:
         """The property that makes the gate independent of what it is checking.
@@ -189,7 +232,7 @@ class TheFixedGateCatchesItTest(unittest.TestCase):
     def test_an_explicit_false_is_proof_of_no_lock(self) -> None:
         """Production treats an explicit False as public proof, not an absent signal."""
         self.decisions[("b", 7, "p2")]["observation_metadata"]["opponent_must_recharge"] = False
-        self.assertEqual(self._fixed("p2"), ())
+        self.assertNotIn("p1", self._fixed("p2"))
 
     def test_an_absent_tracker_fails_open(self) -> None:
         """Recorded because it is a real divergence from production, not a design choice.
@@ -200,20 +243,22 @@ class TheFixedGateCatchesItTest(unittest.TestCase):
         fallback lands when the record is unavailable, but the two are not identical.
         """
         del self.decisions[("b", 7, "p2")]["observation_metadata"]["opponent_must_recharge"]
-        self.assertEqual(self._fixed("p2"), ())
+        self.assertNotIn("p1", self._fixed("p2"))
 
 
 class BothDirectionsHoldTogetherTest(unittest.TestCase):
-    def test_the_two_rules_disagree_on_exactly_the_self_side(self) -> None:
+    def test_the_rules_differ_wherever_the_action_record_lies(self) -> None:
         """The whole change, in one assertion.
 
-        Old and new must differ on our own slot and agree on the opponent's. If a future edit
-        makes them agree everywhere, either the fix was reverted or the gate went back to
-        candidate-derivation, and this goes red.
+        Old and new agree whenever the recorded action happens to match the tracker -- which is
+        every row of corpus/golden-v4, measured: the two sources pick out the same 2 rows, so
+        this change is a NO-OP on the current corpus and its value cannot be shown by rerunning
+        it. It can only be shown where they diverge, which is here.
         """
+        # Tracker says our mon must recharge; the action record says it did something else.
         decisions = {
-            ("b", 7, "p2"): _row(seat="p2", self_mr=True, opp_mr=True, chose_recharge=True),
-            ("b", 7, "p1"): _row(seat="p1", self_mr=True, opp_mr=True, chose_recharge=True),
+            ("b", 7, "p2"): _row(seat="p2", self_mr=True, opp_mr=False, chose_recharge=False),
+            ("b", 7, "p1"): _row(seat="p1", self_mr=False, opp_mr=False, chose_recharge=False),
         }
         old = set(_candidate_derived_recharging(None, decisions, "b", 7))
         new = set(
@@ -221,10 +266,9 @@ class BothDirectionsHoldTogetherTest(unittest.TestCase):
                 anchor_observation_metadata(decisions.get(("b", 7, "p2"))), "p2"
             )
         )
-        self.assertEqual(old, {"p1", "p2"}, "old rule locked both slots off the action record")
-        self.assertEqual(new, {"p1"}, "new rule locks the opponent only, as production does")
-        self.assertEqual(old - new, {"p2"}, "they must differ on exactly our own slot")
-
+        self.assertEqual(old, set(), "old rule believed the action record")
+        self.assertEqual(new, {"p2"}, "new rule believes the parser tracker")
+        self.assertNotEqual(old, new)
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

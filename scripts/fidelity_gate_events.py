@@ -138,11 +138,15 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
     builds its world this way, via `policy._recharging_slots(context)`; it was the only script
     that did. This is that rule, expressed against a corpus row instead of a PolicyContext.
 
-    Mirrored deliberately, including the asymmetry: our OWN slot is never locked, even when the
-    same metadata says `self_must_recharge` is true. That is production's real behaviour and the
-    modelling gap this harness change exists to make visible -- the root world lets our own
-    recharging mon pick any move. Once `_recharging_slots` is made symmetric, this helper follows
-    it, and the gates will then be able to hold the encoder to the symmetric truth.
+    SYMMETRIC, following production. `_recharging_slots` now locks our own slot too, from
+    `self_must_recharge` -- the same tracker, published per seat. Before that it locked only the
+    opponent, so a root world in which our own active must recharge offered it every move while
+    the sim's request offered exactly one.
+
+    The gate is still NOT candidate-derived, which is the property that matters: both sides come
+    from the parser tracker, so the gate's world is independent of the action the gate is
+    checking. Symmetry restored what is MEASURED; independence is what lets the gate catch a bad
+    write. Those are different properties and this helper needs both.
 
     KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
     signal from the round-indexed public action record when the tracker key is ABSENT. This
@@ -151,12 +155,17 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
     fallback lands when the record is unavailable, but the two are not identical.
     """
     opponent = "p2" if seat == "p1" else "p1"
-    if isinstance(anchor_metadata, Mapping):
-        tracked = anchor_metadata.get("opponent_must_recharge")
-        if tracked is True:
-            return (opponent,)
-        # An explicit False is a public PROOF of no lock, exactly as production treats it.
-    return ()
+    if not isinstance(anchor_metadata, Mapping):
+        return ()
+    slots: list[str] = []
+    # Our OWN slot, now that _recharging_slots is symmetric. Both sides come from the same
+    # parser `must_recharge` tracker, published per seat.
+    if anchor_metadata.get("self_must_recharge") is True:
+        slots.append(seat)
+    # An explicit False is a public PROOF of no lock, exactly as production treats it.
+    if anchor_metadata.get("opponent_must_recharge") is True:
+        slots.append(opponent)
+    return tuple(slots)
 
 
 def anchor_observation_metadata(row: Any) -> Any:
