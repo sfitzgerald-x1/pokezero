@@ -2445,3 +2445,53 @@ fn par_is_rendered_only_where_it_outweighs_the_miss() {
         );
     }
 }
+
+/// The OTHER empty-delta competitor: a paralyzed attacker stalling on consecutive Protect.
+///
+/// The first version of the dominance gate had `else { true }` — "no miss to compete with, so
+/// paralysis is the only explanation left" — and review showed that is false. Between the
+/// paralysis roll and the accuracy roll the engine has one more chance split: the
+/// consecutive-Protect stall fail, mass `0.75 * (1 - 0.5^min(n,3))`, an empty-delta terminal
+/// of the same shape as the paralysis branch. Against par's flat 0.25:
+///
+///     n=1  0.375      n=2  0.5625      n>=3  0.65625
+///
+/// At n>=3 that is **2.6:1 against paralysis** — a wider margin than any case the gate was
+/// written to fix (the worst being the OHKO moves at 2.1:1). So the fix repaired the smaller
+/// instance of the defect while asserting the larger one could not exist.
+///
+/// This arm had ZERO coverage: mutating that `true` to `false` passed all 32 suites while
+/// measurably changing output. Protect is 100% accuracy, so neither accuracy fixture reaches
+/// the arm.
+#[test]
+fn a_paralyzed_stall_fail_is_not_narrated_as_paralysis() {
+    let mut state = confused_state(Choices::PROTECT);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    // Three consecutive Protects already used: the stall fail carries 0.65625 against
+    // paralysis's 0.25, so paralysis is decisively NOT the dominant explanation.
+    state.side_two.side_conditions.protect = 3;
+
+    let branches = generate(&mut state);
+    let mut saw_branch = false;
+    for branch in &branches {
+        let r = rendered(&mut state.clone(), branch);
+        if r.lines.is_empty() {
+            continue;
+        }
+        saw_branch = true;
+        assert!(
+            !r.lines.iter().any(|l| l == "|cant|p2a: Opponent|par"),
+            "with three consecutive Protects the stall fail is 0.65625 against paralysis's \
+             0.250 -- narrating paralysis picks the minority by 2.6:1: {:?}",
+            r.lines
+        );
+    }
+    assert!(
+        saw_branch,
+        "VACUOUS: the fixture produced no rendered branch, so the arm never ran"
+    );
+}
