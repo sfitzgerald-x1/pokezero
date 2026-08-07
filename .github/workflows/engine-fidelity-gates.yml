@@ -84,7 +84,7 @@ jobs:
             # workflow (via the .patch and patches.txt globs) but the suite holding its
             # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
-            # Pins `Ran 6 tests` and a no-skip guard on the pyo3 binding boundary.
+            # Pins `Ran 7 tests` and a no-skip guard on the pyo3 binding boundary.
             # Omitting it is self-defeating: a PR that adds a skipIf or drops the
             # nonzero assertion touches only this file, so the gate that would
             # catch it never runs. Found by review of #1108.
@@ -247,8 +247,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_collapsed_arm_mass_oracle -v 2>&1 \
             | tee /tmp/armoracle.log
-          if ! grep -qE 'Ran 6 tests' /tmp/armoracle.log; then
-            echo "::error::expected 6 oracle tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 7 tests' /tmp/armoracle.log; then
+            echo "::error::expected 7 oracle tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/armoracle.log; then
