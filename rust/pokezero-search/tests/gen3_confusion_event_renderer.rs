@@ -2446,52 +2446,43 @@ fn par_is_rendered_only_where_it_outweighs_the_miss() {
     }
 }
 
-/// The OTHER empty-delta competitor: a paralyzed attacker stalling on consecutive Protect.
+/// Paralysis with NO competing empty-delta branch must still narrate `|cant|..|par`.
 ///
-/// The first version of the dominance gate had `else { true }` — "no miss to compete with, so
-/// paralysis is the only explanation left" — and review showed that is false. Between the
-/// paralysis roll and the accuracy roll the engine has one more chance split: the
-/// consecutive-Protect stall fail, mass `0.75 * (1 - 0.5^min(n,3))`, an empty-delta terminal
-/// of the same shape as the paralysis branch. Against par's flat 0.25:
+/// This pins the regression an earlier version of this change nearly shipped. That version
+/// gated the branch on `volatile_empty_tail_ambiguous` being false — blanket, not mass-aware —
+/// so Protect on the FIRST turn of a stall lost its `|cant|..|par`. The stall-fail mass there
+/// is `0.75 * (1 - 0.5^0)` = **zero**: paralysis is 100% of that branch, and the render was
+/// already correct.
 ///
-///     n=1  0.375      n=2  0.5625      n>=3  0.65625
+/// It would have replaced a correct line with an INVENTED `|move|`, and that is not cosmetic —
+/// the fold acts on a `|move|`, setting `stay.moved` and incrementing `stayed_and_attacked`,
+/// writing false data into counters the search consumes. Every 100%-accuracy volatile move was
+/// affected: Protect/Detect/Endure at counter 0, Focus Energy, Ingrain, Confuse Ray, Mean Look,
+/// Taunt, Torment, Yawn.
 ///
-/// At n>=3 that is **2.6:1 against paralysis** — a wider margin than any case the gate was
-/// written to fix (the worst being the OHKO moves at 2.1:1). So the fix repaired the smaller
-/// instance of the defect while asserting the larger one could not exist.
-///
-/// This arm had ZERO coverage: mutating that `true` to `false` passed all 32 suites while
-/// measurably changing output. Protect is 100% accuracy, so neither accuracy fixture reaches
-/// the arm.
+/// Review also found that nothing pinned this path — mutating the final `else { true }` to
+/// `false` survived the whole suite, which is precisely why the regression could ship silently.
 #[test]
-fn a_paralyzed_stall_fail_is_not_narrated_as_paralysis() {
+fn paralysis_with_no_competing_branch_still_narrates_par() {
     let mut state = confused_state(Choices::PROTECT);
     state
         .side_two
         .volatile_statuses
         .remove(&PokemonVolatileStatus::CONFUSION);
     state.side_two.get_active().status = PokemonStatus::PARALYZE;
-    // Three consecutive Protects already used: the stall fail carries 0.65625 against
-    // paralysis's 0.25, so paralysis is decisively NOT the dominant explanation.
-    state.side_two.side_conditions.protect = 3;
+    // Counter at ZERO: no consecutive-Protect stall fail to compete with.
+    state.side_two.side_conditions.protect = 0;
 
     let branches = generate(&mut state);
-    let mut saw_branch = false;
+    let mut saw_par = false;
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        if r.lines.is_empty() {
-            continue;
+        if r.lines.iter().any(|l| l == "|cant|p2a: Opponent|par") {
+            saw_par = true;
         }
-        saw_branch = true;
-        assert!(
-            !r.lines.iter().any(|l| l == "|cant|p2a: Opponent|par"),
-            "with three consecutive Protects the stall fail is 0.65625 against paralysis's \
-             0.250 -- narrating paralysis picks the minority by 2.6:1: {:?}",
-            r.lines
-        );
     }
     assert!(
-        saw_branch,
-        "VACUOUS: the fixture produced no rendered branch, so the arm never ran"
+        saw_par,
+        "with the stall counter at 0 the competitor mass is 0 and paralysis is the whole          branch, so `|cant|..|par` must still be rendered"
     );
 }

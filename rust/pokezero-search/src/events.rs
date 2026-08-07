@@ -32,8 +32,13 @@
 //! Some real-protocol distinctions are NOT recoverable from the instruction
 //! stream, because the engine itself merges outcomes with identical deltas
 //! (`combine_duplicate_instructions`):
-//! - full-paralysis vs. miss (both: empty delta) — rendered as `|cant|..|par`
-//!   (the usually-larger probability mass), documented ambiguity;
+//! - full-paralysis vs. an empty-delta competitor — rendered as `|cant|..|par` ONLY when
+//!   paralysis's flat 0.25 outweighs the competitor. Against an accuracy MISS at
+//!   `0.75 * (1 - accuracy)` that crossover is 2/3, and below it the renderer falls through
+//!   and narrates the miss. A SECOND competitor is known and NOT yet handled: the
+//!   consecutive-Protect stall fail, and a volatile that cannot apply — both empty-delta,
+//!   both able to exceed 0.25. Documented ambiguity, and the fall-through guess is unmarked,
+//!   so the residual is not currently countable;
 //! - the KO-straddle branch conflates "high roll" and "crit" at the level of
 //!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
 //!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
@@ -2507,33 +2512,33 @@ fn render_move_phase(
         let paralysis_dominates = if empty_tail_can_be_accuracy_miss {
             let miss_mass = (1.0 - PARALYSIS_ROLL) * (1.0 - choice.accuracy / 100.0);
             PARALYSIS_ROLL > miss_mass
-        } else if volatile_empty_tail_ambiguous {
-            // THE OTHER EMPTY-DELTA COMPETITOR, and review found this arm asserting it cannot
-            // exist -- while the arm's own PR was about exactly that mistake.
-            //
-            // Between the paralysis roll and the accuracy roll the engine has one more chance
-            // split: the consecutive-Protect stall fail, mass `0.75 * (1 - 0.5^min(n,3))`,
-            // whose branch is an empty-delta terminal of the same shape as paralysis. Measured
-            // against par's flat 0.25:
-            //
-            //     n=1  0.375   n=2  0.5625   n>=3  0.65625
-            //
-            // At n>=3 that is 2.6:1 AGAINST paralysis -- a wider margin than any row this
-            // change was written to fix (the worst there is the OHKO moves at 2.1:1). So the
-            // first version of this gate repaired the smaller instance and shipped a comment
-            // denying the larger one.
-            //
-            // `volatile_empty_tail_ambiguous` is computed ~200 lines above and is already
-            // consumed by the sibling ATTRACT branch for precisely this purpose. Not
-            // consulting it here was the same defect this change criticises in the original
-            // author, committed in the fix for it.
-            //
-            // It also explains why attract is safe from this competitor and paralysis was not:
-            // attract checks the predicate, paralysis did not.
-            false
         } else {
-            // No competing empty-delta branch: neither an accuracy miss nor a stall fail, so
-            // paralysis really is the only explanation left.
+            // No ACCURACY-MISS competitor, so paralysis wins that comparison.
+            //
+            // A SECOND empty-delta competitor exists and is deliberately LEFT UNFIXED here,
+            // because a first attempt at it was a regression and half a fix was worse than
+            // none. Recorded in full so the next attempt starts from the measurement:
+            //
+            //   * The consecutive-Protect stall fail carries `0.75 * (1 - 0.5^min(n,3))` --
+            //     0.375 at n=1, 0.5625 at n=2, 0.65625 at n>=3 against paralysis's flat 0.25,
+            //     so from the first repeat it dominates, 2.6:1 by n>=3.
+            //   * A volatile that CANNOT APPLY is the same shape: Leech Seed at 90% on an
+            //     already-seeded target splits par 0.25 / miss 0.075 / hit-but-no-op 0.675 --
+            //     2.7:1, WIDER than the Protect case.
+            //
+            // The attempted fix was `else if volatile_empty_tail_ambiguous { false }`, and it
+            // failed twice over. It sat AFTER the miss check, so it never ran below 100%
+            // accuracy -- exactly where the competitor is largest, leaving the Leech Seed case
+            // untouched. And it was blanket rather than mass-aware, so Protect at n=0, where
+            // the stall mass is ZERO and paralysis is 100% of the branch, went from a correct
+            // `|cant|..|par` to an INVENTED `|move|` line. That is not cosmetic: the fold acts
+            // on it, setting `stay.moved` and incrementing `stayed_and_attacked`, writing false
+            // data into counters the search consumes. 0% wrong became 100% wrong for every
+            // 100%-accuracy volatile move.
+            //
+            // A correct fix must (a) be consulted regardless of accuracy and (b) compare the
+            // competitor's ACTUAL mass, as the arm above does for the miss -- not assume a
+            // competitor exists merely because a volatile is present.
             true
         };
         if !deterministic_noop && move_could_act && paralysis_dominates {
