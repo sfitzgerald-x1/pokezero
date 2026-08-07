@@ -473,6 +473,14 @@ def battle_spec_from_payload(
 
     built_sides: dict[str, SideSpec] = {}
     party_species: dict[str, tuple[str, ...]] = {}
+    # Encore locks that could not be expressed as a slot index yet, because the
+    # active's moveset is about to be replaced by `_apply_transform`.
+    pending_encore_locks: dict[str, str] = {}
+    self_active_request_moves = payload.get("selfActiveMoves")
+    if not isinstance(self_active_request_moves, Sequence) or isinstance(
+        self_active_request_moves, str
+    ):
+        self_active_request_moves = None
     for slot in _PLAYER_SLOTS:
         side_payload = sides_payload.get(slot)
         if not isinstance(side_payload, Mapping):
@@ -482,7 +490,7 @@ def battle_spec_from_payload(
             raise EngineWorldUnsupported("override_side_missing", f"override has no packed team for {slot!r}")
         team = unpack_team(packed)
         is_self_slot = slot == self_player
-        built_sides[slot], species_order = _build_side_spec(
+        built_sides[slot], species_order, pending_encore = _build_side_spec(
             slot=slot,
             side_payload=side_payload,
             team=team,
@@ -510,9 +518,14 @@ def battle_spec_from_payload(
             must_recharge=slot in (recharging_slots or ()),
             truant_loafs=slot in (truant_slots or ()),
             transformed_active=slot in (transformed_slots or {}),
+            self_active_request_moves=(
+                self_active_request_moves if is_self_slot else None
+            ),
             rng=rng,
         )
         party_species[slot] = species_order
+        if pending_encore is not None:
+            pending_encore_locks[slot] = pending_encore
 
     self_order = payload.get("selfTeamOrder")
     if isinstance(self_order, Sequence) and not isinstance(self_order, str):
@@ -525,6 +538,11 @@ def battle_spec_from_payload(
 
     if transformed_slots:
         built_sides = _apply_transform(built_sides, transformed_slots)
+
+    # AFTER the copy, never before: the slot index an Encore lock resolves to is
+    # only meaningful against the moveset the engine will actually read.
+    if pending_encore_locks:
+        built_sides = _apply_encore_locks(built_sides, pending_encore_locks)
 
     if self_trapped:
         _require_world_reproduces_trap(built_sides, dex=dex, self_player=self_player)
@@ -962,8 +980,17 @@ def _build_side_spec(
     baton_passing: bool = False,
     opponent_committed_pending: bool = False,
     transformed_active: bool = False,
+    self_active_request_moves: Sequence[Mapping[str, Any]] | None = None,
     rng: Any | None = None,
-) -> tuple[SideSpec, tuple[str, ...]]:
+) -> tuple[SideSpec, tuple[str, ...], str | None]:
+    """Build one side. The third return value is a DEFERRED Encore lock.
+
+    A transformed active's moveset is replaced by ``_apply_transform`` after
+    this function returns, so its Encore lock cannot be expressed as a slot
+    index yet. The move ID is handed back instead, for ``_apply_encore_locks``
+    to bind against the final moveset. ``None`` for every other side.
+    """
+
     item_overrides = dict(current_item_overrides or {})
     blockers = _undischarged_materialization_blockers(
         side_payload.get("materializationBlockers"),
@@ -1401,7 +1428,64 @@ def _build_side_spec(
     if last_used_move_id == "switch":
         last_used_move_id = "switch"
     volatile_durations: dict[str, int] = {}
-    if "encore" in volatiles:
+    pending_encore_move: str | None = None
+    if "encore" in volatiles and transformed_active:
+        # DEFERRED, because this active's moveset is about to be REPLACED.
+        #
+        # Showdown locks Encore by move ID; the engine locks by move SLOT INDEX
+        # (`last_used_move = move:<i>`). Resolving that index here would resolve
+        # it against the PRE-Transform moveset, and `_apply_transform` (called
+        # from `battle_spec_from_payload` right after this function returns)
+        # then swaps the donor's moveset in underneath it -- so the surviving
+        # index names a move nobody encored. Resolve an ID now; `_apply_encore_locks`
+        # binds it to a slot once the final moveset exists.
+        #
+        # `_active_row_moves` must NOT be consulted for a transformed active.
+        # That row is deliberately the pre-Transform snapshot:
+        # `local_showdown.actor_move_states_from_request_history` skips requests
+        # taken while transformed so that PP stays honest. For a gen3 randbats
+        # Ditto it is the single move `transform` -- and a ONE-move list
+        # satisfies the self-seat "exactly one enabled move identifies the lock"
+        # rule SPURIOUSLY, yielding slot 0 for every such Encore. Measured on
+        # holdout `19100170/71-72`: Showdown Encored Protect (donor slot 3), the
+        # world locked donor slot 0 (Body Slam), and the phantom KO made
+        # `end_of_turn_is_deferred` suppress the whole residual block.
+        #
+        # The id-keyed sources, in preference order:
+        #   * `encored_move` -- the caller's publicly-observed lock (opponent seat).
+        #   * `selfActiveMoves` -- the RAW request's usable moveset, which for a
+        #     transformed active lists the COPIED moves with Encore's disable
+        #     pattern already applied, so its single enabled entry IS the lock.
+        #   * `sides[slot]["lastUsedMove"]` -- the parser's public last executed
+        #     move, which under an active Encore is the encored move.
+        #
+        # The last two are SELF-SEAT ONLY, but note that deferral itself is not:
+        # a transformed OPPONENT takes this path too, and that CHANGES ITS
+        # COVERAGE. Before deferral its `encored_move` was matched against the
+        # transformer's own moveset -- Ditto's `[transform]` -- so a real lock
+        # like `protect` was absent and construction raised, a counted
+        # `encore_move_unknown` skip. It now resolves against the copy and
+        # builds. That is the correct world rather than a refusal, and an id the
+        # copy does not contain still fails closed, but it can turn a skip into
+        # a measured boundary. Unobserved in the dev/holdout windows; pinned by
+        # tests/test_engine_world_encore_transform.py
+        # ::EncoreOnATransformedOpponentTests.
+        pending_encore_move = normalize_id(encored_move) if encored_move else None
+        if pending_encore_move is None and is_self:
+            pending_encore_move = _sole_enabled_move_id(self_active_request_moves)
+            if pending_encore_move is None and last_used_move_id not in (None, "switch"):
+                pending_encore_move = last_used_move_id
+        if pending_encore_move is None:
+            raise EngineWorldUnsupported(
+                "encore_move_unknown",
+                f"side {slot!r} is encored while transformed but the locked move "
+                "cannot be determined",
+            )
+        # `last_used_move` stays empty here on purpose: `_apply_encore_locks` is
+        # the single writer for a deferred lock, and leaving a placeholder would
+        # give the field two writers that must agree.
+        volatile_durations["encore"] = 1
+    elif "encore" in volatiles:
         active_specs = party[active_index].moves
         encored_index = _resolve_encored_move_index(
             active_specs,
@@ -1503,6 +1587,7 @@ def _build_side_spec(
             volatile_status_durations=volatile_durations,
         ),
         tuple(species_order),
+        pending_encore_move,
     )
 
 
@@ -1518,6 +1603,51 @@ def _active_row_moves(side_payload: Mapping[str, Any]) -> list[Mapping[str, Any]
     return None
 
 
+def _sole_enabled_move_id(rows: Sequence[Mapping[str, Any]] | None) -> str | None:
+    """The one enabled move id in a request-shaped move list, or None.
+
+    Encore's request signature: every move except the locked one is reported
+    ``disabled``. Exactly one enabled entry therefore names the lock, and any
+    other count means these rows do not identify it. Callers must satisfy
+    themselves that the rows describe the CURRENT usable moveset -- a
+    pre-Transform snapshot can hold a single move for reasons that have nothing
+    to do with Encore, which is precisely how this rule was once satisfied
+    spuriously.
+    """
+
+    if not rows:
+        return None
+    enabled = [
+        normalize_id(str(row.get("id")))
+        for row in rows
+        if isinstance(row, Mapping)
+        and isinstance(row.get("id"), str)
+        and not bool(row.get("disabled"))
+    ]
+    if len(enabled) == 1:
+        return enabled[0]
+    return None
+
+
+def _move_index_by_id(move_specs: Sequence[Any], move_id: str) -> int | None:
+    """Slot of ``move_id`` in the constructed move order, or None.
+
+    The ``hiddenpower*`` prefix tolerance is deliberate: the request names the
+    typed variant (``hiddenpowerground70``) while a sampled spec may carry a
+    differently-typed one, and gen3 has at most one Hidden Power slot, so the
+    prefix is unambiguous within a single moveset.
+    """
+
+    target = normalize_id(move_id)
+    for index, spec in enumerate(move_specs):
+        spec_id = normalize_id(spec.id)
+        if spec_id == target:
+            return index
+        if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
+            return index
+    return None
+
+
 def _resolve_encored_move_index(
     move_specs: Sequence[Any],
     *,
@@ -1529,32 +1659,59 @@ def _resolve_encored_move_index(
     Self side: the request marks every non-encored move disabled, so exactly
     one enabled move identifies the lock. Opponent side: the caller passes the
     publicly-observed last move (``encored_move``).
+
+    This is the NON-transformed path only. A transformed active defers to
+    ``_apply_encore_locks``, because ``move_specs`` here predates the copy.
     """
 
     if encored_move:
-        target = normalize_id(encored_move)
-        for index, spec in enumerate(move_specs):
-            spec_id = normalize_id(spec.id)
-            if spec_id == target:
-                return index
-            if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
-                return index
+        return _move_index_by_id(move_specs, encored_move)
+    target = _sole_enabled_move_id(rows_for_active)
+    if target is None:
         return None
-    if rows_for_active:
-        enabled = [
-            normalize_id(str(move.get("id")))
-            for move in rows_for_active
-            if isinstance(move.get("id"), str) and not bool(move.get("disabled"))
-        ]
-        if len(enabled) == 1:
-            target = enabled[0]
-            for index, spec in enumerate(move_specs):
-                spec_id = normalize_id(spec.id)
-                if spec_id == target:
-                    return index
-                if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
-                    return index
-    return None
+    return _move_index_by_id(move_specs, target)
+
+
+def _apply_encore_locks(
+    sides: Mapping[str, SideSpec],
+    pending: Mapping[str, str],
+) -> dict[str, SideSpec]:
+    """Bind each DEFERRED Encore lock to a slot in the final moveset.
+
+    Runs after ``_apply_transform``, so ``active.moves`` is the donor's copied
+    set and the index this writes is the one the engine will read.
+
+    Fail-closed on purpose, and identically to the non-deferred path: an id that
+    is not in the copied moveset means the world cannot express the lock, so it
+    refuses to build rather than inventing one. Falling back to slot 0 here is
+    exactly the defect this function exists to remove.
+
+    ORDERING, which deferral does change for a transformed side. The
+    "no id at all" refusal still fires inside ``_build_side_spec``, before
+    ``self_world_mismatch`` and ``transform_unexpressible``, exactly as it always
+    did. But the "id absent from the moveset" refusal now fires HERE, i.e. AFTER
+    both of those. So a transformed side that would fail both checks is now
+    attributed to the earlier one. Non-transformed sides are unaffected, and the
+    measured skip histogram is unchanged on both 200-game windows.
+    """
+
+    updated = dict(sides)
+    for slot, move_id in pending.items():
+        side = updated.get(slot)
+        if side is None or not side.pokemon:
+            raise EngineWorldUnsupported(
+                "encore_move_unknown", f"side {slot!r} has no built side to encore"
+            )
+        active = side.pokemon[side.active_index]
+        index = _move_index_by_id(active.moves, move_id)
+        if index is None:
+            raise EngineWorldUnsupported(
+                "encore_move_unknown",
+                f"side {slot!r} is encored on {move_id!r}, absent from the "
+                f"post-Transform moveset {[spec.id for spec in active.moves]}",
+            )
+        updated[slot] = replace(side, last_used_move=f"move:{index}")
+    return updated
 
 
 def _resolved_ability(mon: Any, row: Mapping[str, Any] | None) -> str | None:
