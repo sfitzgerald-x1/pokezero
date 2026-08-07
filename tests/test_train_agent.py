@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pokezero.train_agent import (  # noqa: E402
     claim_next_request,
+    record_running_trainer,
     release_stale_claims,
     run_training_attempt,
     serve_queue,
@@ -105,8 +106,13 @@ class TrainAgentQueueTest(unittest.TestCase):
         """
         with TemporaryDirectory() as root:
             pid_file = Path(root) / "grandchild.pid"
-            # A child that spawns a long-lived grandchild and then waits.
-            script = f"( sleep 120 & echo $! > {pid_file}; wait )"
+            # The grandchild TRAPS SIGTERM, so only the SIGKILL escalation can end it. With a
+            # plain `sleep` this test passed even with the escalation deleted entirely -- the
+            # grandchild died politely on TERM and the assertion never exercised the code it
+            # claimed to. A trainer that ignores TERM while holding GPU memory is the real case.
+            script = (
+                f"( trap '' TERM; sleep 120 & echo $! > {pid_file}; wait )"
+            )
             started = time.monotonic()
             code = run_training_attempt(script, deadline_seconds=2)
             elapsed = time.monotonic() - started
@@ -156,6 +162,90 @@ class TrainAgentRestartTest(unittest.TestCase):
             # And it is genuinely runnable again, not merely moved.
             self.assertEqual(serve_queue(queue, owner="boot-A", once=True), 1)
 
+    def test_a_claim_is_not_released_while_its_trainer_is_still_running(self) -> None:
+        """The reproduced double-trainer, asserted so it cannot come back.
+
+        Independent review demonstrated this end to end: the agent is killed mid-train, but its
+        child was detached into a new session so it keeps training; the supervisor respawns the
+        agent within 5s; `release_stale_claims` returned the claim to pending WITHOUT asking whether
+        a trainer was still alive; the new agent forked a second trainer. Two processes then wrote
+        the same iteration-NNNN/transformer-policy.pt, both with --delete-cache-after-read on the
+        same shards.
+
+        The sibling test below asserts an ABANDONED claim IS released -- the two together are the
+        actual contract: release when nothing is running, never while something is.
+        """
+        with TemporaryDirectory() as root:
+            queue = Path(root) / "train-queue"
+            write_request(queue, 31, "true")
+            claimed = claim_next_request(queue, "boot-A")
+            self.assertIsNotNone(claimed)
+            # A live process stands in for the orphaned trainer.
+            stand_in = subprocess.Popen(["sleep", "60"])
+            try:
+                record_running_trainer(queue, "train-0031", stand_in.pid)
+                self.assertEqual(
+                    release_stale_claims(queue, "boot-A"), [],
+                    "released a claim whose trainer is still running, so a second trainer would "
+                    "start on the same checkpoint path",
+                )
+                self.assertFalse((queue / "pending" / "train-0031.json").exists())
+            finally:
+                stand_in.kill()
+                stand_in.wait()
+            # Once it is gone, the claim becomes releasable again.
+            record_running_trainer(queue, "train-0031", stand_in.pid)
+            self.assertEqual(release_stale_claims(queue, "boot-A"), ["train-0031.json"])
+
+    def test_the_forked_trainer_is_death_linked_to_the_agent(self) -> None:
+        """PR_SET_PDEATHSIG, which closes the double-trainer at its source rather than papering
+        over it: an orphaned trainer must not outlive the agent that owns its claim.
+
+        Skipped off Linux, where prctl does not exist and the claim liveness record is the only
+        layer -- which is precisely why both layers exist.
+        """
+        if not sys.platform.startswith("linux"):
+            self.skipTest("PR_SET_PDEATHSIG is Linux-only")
+        with TemporaryDirectory() as root:
+            pid_file = Path(root) / "child.pid"
+            stand_in = Path(root) / "agent_stand_in.py"
+            src = str(Path(__file__).resolve().parents[1] / "src")
+            stand_in.write_text(
+                "import sys, time, pathlib, threading\n"
+                "sys.path.insert(0, %r)\n"
+                "from pokezero.train_agent import run_training_attempt\n"
+                "def note(pid):\n"
+                "    pathlib.Path(%r).write_text(str(pid))\n"
+                "threading.Thread(\n"
+                "    target=run_training_attempt, args=('sleep 60', 60),\n"
+                "    kwargs=dict(on_start=note), daemon=True).start()\n"
+                "time.sleep(30)\n" % (src, str(pid_file)),
+                encoding="utf-8",
+            )
+            agent = subprocess.Popen([sys.executable, str(stand_in)])
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not pid_file.exists():
+                time.sleep(0.1)
+            self.assertTrue(pid_file.exists(), "the trainer never started")
+            child = int(pid_file.read_text().strip())
+            agent.kill()
+            agent.wait()
+            gone_by = time.monotonic() + 15
+            alive = True
+            while time.monotonic() < gone_by:
+                try:
+                    os.kill(child, 0)
+                except OSError:
+                    alive = False
+                    break
+                time.sleep(0.2)
+            if alive:
+                try:
+                    os.kill(child, 9)
+                except OSError:
+                    pass
+            self.assertFalse(alive, f"trainer {child} outlived the agent that owned its claim")
+
     def test_a_claim_held_by_another_pod_is_never_reaped_here(self) -> None:
         """The dangerous direction, and the reason release is scoped to our own boot identity.
 
@@ -192,15 +282,39 @@ class TrainAgentRestartTest(unittest.TestCase):
             self.assertTrue((queue / "failed" / "train-0014.json.malformed").exists())
 
     def test_results_are_published_indivisibly(self) -> None:
-        """The controller polls for these files; a truncated one would be read as authoritative."""
+        """The controller polls for these files; a truncated one would be read as authoritative.
+
+        Asserted through os.replace, not by checking for leftover dotfiles. The dotfile check alone
+        is satisfied by a plain open()+write, so it passed with the atomic publish removed entirely.
+        What must be true is that the target only ever appears complete, i.e. it arrives by rename
+        from a fully written temp.
+        """
+        import pokezero.train_agent as agent_module
+
+        renames: list[tuple[str, str]] = []
+        real_replace = os.replace
+
+        def recording_replace(src, dst):
+            renames.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
         with TemporaryDirectory() as root:
             queue = Path(root) / "train-queue"
             write_request(queue, 15, "true")
-            serve_queue(queue, once=True)
+            agent_module.os.replace = recording_replace
+            try:
+                serve_queue(queue, once=True)
+            finally:
+                agent_module.os.replace = real_replace
+            result = queue / "done" / "train-0015.json"
+            payload = json.loads(result.read_text())
+            self.assertEqual(payload["schema_version"], "pokezero.foundation-train-result.v1")
+            self.assertTrue(
+                any(dst == str(result) for _, dst in renames),
+                "the result was not published by rename, so a reader can observe it half-written",
+            )
             for stray in (queue / "done").glob(".*"):
                 self.fail(f"a temporary result file was left behind: {stray}")
-            payload = json.loads((queue / "done" / "train-0015.json").read_text())
-            self.assertEqual(payload["schema_version"], "pokezero.foundation-train-result.v1")
 
 
 class TrainAgentEntrypointTest(unittest.TestCase):

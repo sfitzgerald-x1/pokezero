@@ -46,6 +46,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -177,6 +178,44 @@ def claim_next_request(queue: Path, owner: str) -> TrainRequest | None:
     return None
 
 
+def _claim_token_path(queue: Path, stem: str) -> Path:
+    return queue / "claimed" / f"{stem}.claim.json"
+
+
+def record_running_trainer(queue: Path, stem: str, pid: int | None) -> None:
+    """Note in the claim whether a trainer process is currently alive for it.
+
+    The second layer under PR_SET_PDEATHSIG, and the one that works where prctl does not (no Linux,
+    or a child that outran the prctl call). Without it, an agent restart releases its own claim
+    while an orphaned trainer is still writing the iteration, and the next agent starts a second
+    trainer on the same checkpoint path.
+    """
+    token = _claim_token_path(queue, stem)
+    try:
+        payload = json.loads(token.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    payload["trainer_pid"] = pid
+    try:
+        _write_json_atomic(token, payload)
+    except OSError:
+        pass
+
+
+def _process_is_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
 def release_stale_claims(queue: Path, owner: str) -> list[str]:
     """Return claims this pod previously owned to pending, and report what was released.
 
@@ -194,6 +233,13 @@ def release_stale_claims(queue: Path, owner: str) -> list[str]:
             continue
         if payload.get("owner") != owner:
             continue
+        # REFUSE to release while our previous trainer is still running. This is the case that
+        # produced two concurrent trainers on one iteration: the agent dies, its detached child
+        # keeps training, the supervisor respawns the agent within seconds, and a naive release
+        # hands the same iteration to a second fork. Leaving the claim in place lets the surviving
+        # trainer finish; if it never does, the controller's own bound decides.
+        if _process_is_alive(payload.get("trainer_pid")):
+            continue
         request_path = claimed / f"{token.name[: -len('.claim.json')]}.json"
         try:
             if request_path.exists():
@@ -205,7 +251,40 @@ def release_stale_claims(queue: Path, owner: str) -> list[str]:
     return released
 
 
-def run_training_attempt(script: str, deadline_seconds: int, *, log: Path | None = None) -> int:
+def _child_preexec() -> None:  # pragma: no cover - runs only in the forked child
+    """Detach into a new session AND die with the agent.
+
+    Two things, and the second exists because the first creates the hazard. `setsid` is what lets
+    the deadline signal the whole tree, but it also means the child is NOT killed when the agent
+    dies -- it is reparented to init and keeps training. The supervisor then respawns the agent,
+    which releases its own claim, and a SECOND trainer starts on the same iteration, writing the
+    same `iteration-NNNN/transformer-policy.pt` while the first is still writing it. That was
+    reproduced, not theorised.
+
+    PR_SET_PDEATHSIG closes it at the source: the kernel SIGKILLs this child the moment its parent
+    thread dies, so an orphaned trainer cannot outlive the agent that owns its claim. The agent is
+    single-threaded, which is what makes the parent-THREAD semantics safe here.
+
+    Linux only, and best-effort: on any platform without prctl this is a no-op and the claim's
+    liveness record (see `claim_next_request`) is what prevents the double-trainer.
+    """
+    os.setsid()
+    try:
+        import ctypes
+
+        PR_SET_PDEATHSIG = 1
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+    except Exception:
+        pass
+
+
+def run_training_attempt(
+    script: str,
+    deadline_seconds: int,
+    *,
+    log: Path | None = None,
+    on_start: "Callable[[int], None] | None" = None,
+) -> int:
     """Run one training attempt as a child process; return its exit code.
 
     The child gets its own process GROUP so the deadline kill reaches the whole tree. Training
@@ -223,8 +302,12 @@ def run_training_attempt(script: str, deadline_seconds: int, *, log: Path | None
         process = subprocess.Popen(
             ["bash", "-c", script],
             stdout=stream, stderr=subprocess.STDOUT if stream else None,
-            start_new_session=True,
+            # setsid + PR_SET_PDEATHSIG together; see _child_preexec. Not start_new_session=True,
+            # which gives the session without the death-linkage that makes it safe.
+            preexec_fn=_child_preexec,
         )
+        if on_start is not None:
+            on_start(process.pid)
         try:
             return process.wait(timeout=deadline_seconds)
         except subprocess.TimeoutExpired:
@@ -246,16 +329,30 @@ def _terminate_group(process: subprocess.Popen) -> None:
         group = os.getpgid(process.pid)
     except OSError:
         return
-    for signal_number, grace in ((signal.SIGTERM, 15.0), (signal.SIGKILL, 5.0)):
-        try:
-            os.killpg(group, signal_number)
-        except OSError:
-            return
-        deadline = time.monotonic() + grace
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                return
-            time.sleep(0.2)
+    # TERM the group, wait for the DIRECT child, then KILL the group unconditionally.
+    #
+    # The escalation is not conditional on the child surviving, which is the bug this replaced: a
+    # child that dies politely on SIGTERM used to return early, so grandchildren that ignore
+    # SIGTERM were never killed at all -- they survived holding GPU memory, which is the exact
+    # cascade this function exists to prevent. Killing an already-empty group is a harmless ESRCH.
+    try:
+        os.killpg(group, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        time.sleep(0.2)
+    try:
+        os.killpg(group, signal.SIGKILL)
+    except OSError:
+        pass
+    # Reap the direct child so it cannot linger as a zombie while the next attempt starts.
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def serve_queue(
@@ -290,7 +387,11 @@ def serve_queue(
         for attempt in range(1, request.max_attempts + 1):
             started = time.time()
             log = None if log_dir is None else log_dir / f"train-{request.iteration:04d}.log"
-            code = run_training_attempt(request.script, request.deadline_seconds, log=log)
+            code = run_training_attempt(
+                request.script, request.deadline_seconds, log=log,
+                on_start=lambda pid: record_running_trainer(queue, request.path.stem, pid),
+            )
+            record_running_trainer(queue, request.path.stem, None)
             attempts.append(
                 {
                     "attempt": attempt,
