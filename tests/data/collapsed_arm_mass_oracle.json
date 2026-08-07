@@ -1,0 +1,98 @@
+{
+  "_README": "Enumerated ground truth for tests/test_collapsed_arm_mass_oracle.py. One arm per distinct floor(max*r/100), r in 85..=100, mass 1/16, with lethality resolved inside run_move. Regenerate with scripts/collapsed_arm_mass_oracle.py --write from a build carrying poke-engine-gen3-enumerate-damage-rolls.patch. NEVER regenerate it from the shipping build to make a test pass: it is the reference.",
+  "fixtures": {
+    "a8-burn-secondary": {
+      "accuracy": 0.95,
+      "exercises": "status-aware-threshold",
+      "hp": 120,
+      "item": "leftovers",
+      "label": "a8-burn-secondary",
+      "maxhp": 244,
+      "move": "sacredfire",
+      "special_attack": 200,
+      "special_defense": 125,
+      "status": "none",
+      "weather": "none"
+    },
+    "collapsed-fan-control": {
+      "accuracy": 0.9,
+      "exercises": "negative-control",
+      "hp": 160,
+      "item": "none",
+      "label": "collapsed-fan-control",
+      "maxhp": 244,
+      "move": "rockslide",
+      "special_attack": 120,
+      "special_defense": 125,
+      "status": "none",
+      "weather": "none"
+    },
+    "crit-straddle-sand": {
+      "accuracy": 0.9,
+      "exercises": "crit-straddle-residual",
+      "hp": 230,
+      "item": "none",
+      "label": "crit-straddle-sand",
+      "maxhp": 244,
+      "move": "rockslide",
+      "special_attack": 120,
+      "special_defense": 125,
+      "status": "none",
+      "weather": "sand"
+    },
+    "min-would-destroy-an-arm": {
+      "accuracy": 0.95,
+      "exercises": "union-not-minimum",
+      "hp": 112,
+      "item": "none",
+      "label": "min-would-destroy-an-arm",
+      "maxhp": 128,
+      "move": "sacredfire",
+      "special_attack": 200,
+      "special_defense": 125,
+      "status": "none",
+      "weather": "sand"
+    },
+    "nested-thresholds": {
+      "accuracy": 0.95,
+      "exercises": "disjoint-bands",
+      "hp": 252,
+      "item": "none",
+      "label": "nested-thresholds",
+      "maxhp": 255,
+      "move": "sacredfire",
+      "special_attack": 200,
+      "special_defense": 57,
+      "status": "none",
+      "weather": "sand"
+    }
+  },
+  "functional": "probability mass in percent per (defender faints?, defender end status)",
+  "outcome_masses": {
+    "a8-burn-secondary": {
+      "alive|burn": 30.615234375,
+      "alive|none": 49.531250953674316,
+      "faint|burn": 13.916015625,
+      "faint|none": 5.9375
+    },
+    "collapsed-fan-control": {
+      "alive|none": 94.37500381469727,
+      "faint|none": 5.625
+    },
+    "crit-straddle-sand": {
+      "alive|none": 95.78125384449959,
+      "faint|none": 4.218750044703484
+    },
+    "min-would-destroy-an-arm": {
+      "alive|none": 32.832032203674316,
+      "faint|burn": 44.53125,
+      "faint|none": 22.63671875
+    },
+    "nested-thresholds": {
+      "alive|burn": 2.783203125,
+      "alive|none": 43.964844703674316,
+      "faint|burn": 41.748046875,
+      "faint|none": 11.50390625
+    }
+  }
+}

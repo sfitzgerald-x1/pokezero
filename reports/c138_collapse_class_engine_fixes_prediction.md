@@ -161,3 +161,45 @@ so the sweep attributes each closure to the fix that produced it. c133 §7 is th
 attribution matters: the last engine fix in this residue had a correct mechanism, a verified
 Showdown citation, a red-on-main pin and green unit gates, and still opened 38 dev / 40
 holdout rows against its single closure.
+
+## 7. Outcome — appended 2026-08-06, AFTER both sweep pairs
+
+Everything above this line is the registration and is unedited; this section is the
+result. Artifacts:
+`reports/artifacts/c138_collapsefix_{main,critstraddle,statusaware}_{dev,holdout}_sweep.json`.
+
+| build | fingerprint | dev diverged | holdout diverged |
+|---|---|---|---|
+| base `2ec0cb13` | `907bea70abd1bf86` | 2 | 4 |
+| + (A) crit-straddle | `0ef5a787452292a3` | **1** | 4 |
+| + (A) + (B) status-aware | `2688583a7bd134ab` | 1 | **2** |
+
+Complete `divergence_classes` census across all six runs:
+
+| window | class | base | after (A) | after (A)+(B) |
+|---|---|---|---|---|
+| dev | `component_magnitude:heal` (`19000191/63`) | 1 | 1 | 1 |
+| dev | `component_missing_in_engine:sandstorm` (`19000074/27`) | **1** | **0** | 0 |
+| holdout | `component_missing_in_engine:itemleftovers` (`19100170/71,72`) | 2 | 2 | 2 |
+| holdout | `limit:roll_divergent_lethality` (`19100107/135`, `19100191/5`) | 2 | 2 | **0** |
+
+**Every clause of §3 held and no clause of §4 fired.** The three predicted rows closed and
+no other row moved; `boundaries_measured` is 15,503 / 15,579 and `boundaries_full_round`
+15,968 / 16,155 on all six runs; `engine_errors` is 0 on all six; and
+`matched + diverged == measured` on all six. Nothing opened on either window, under either
+fix. The gating counters are also unmoved — `gating_exact` 14,156 / 14,148 and
+`gating_support_based` 1,347 / 1,431 across all six — so the measured population was not
+perturbed, which is the check that would catch a closure obtained by shrinking the
+denominator.
+
+Each post-fix sweep carries the `source_commit` of the commit *before* it, so the
+registration order is checkable from the artifacts rather than asserted: the (A) sweeps
+carry `534ac8dc`, which is this document, and the (A)+(B) sweeps carry `cf055326`, which is
+(A).
+
+§5's oracle prediction also held. On the base engine the three target fixtures were RED —
+`crit-straddle-sand` 94.375004 % against 95.781254 % (1.41 points), `a8-burn-secondary`
+44.531250 % against 30.615234 % (13.92 points), `nested-thresholds` 0.000000 % against
+2.783203 % (2.78 points) — and `min-would-destroy-an-arm` and `collapsed-fan-control` were
+GREEN. After (A) the crit fixture went green and the two status fixtures stayed red; after
+(B) all five are green. The two controls never moved.

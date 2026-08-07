@@ -1374,3 +1374,20 @@ poke-engine-gen3-faint-cancels-opposing-switch.patch
 # reports/c138_collapse_class_engine_fixes_prediction.md; sweeps at
 # reports/artifacts/c138_collapsefix_{main,critstraddle}_{dev,holdout}_sweep.json.
 poke-engine-gen3-crit-straddle-residual-split.patch
+
+# The status-aware residual threshold (cause A8), and the disjoint-band mass rule
+# it forces. `residual_lethality_threshold` read the defender's PRE-MOVE state, so
+# a Fire move's own burn secondary was invisible and the split never fired: closes
+# holdout rows 19100107/135 (Sacred Fire into Roselia) and 19100191/5 (Fire Blast
+# into Ninjask), where the observed roll is a member of the engine's own fan and
+# dies to the burn tick. `choice` is now passed in so secondaries are visible, and
+# the thresholds form a UNION -- not a minimum, which c133 section 4 measures
+# destroying an arm the engine emits today. Because the thresholds are nested, each
+# arm carries the DISJOINT band #{rolls in [t_i, t_i+1)} priced at its own t_i,
+# with the KO threshold participating as the ceiling wherever a KO arm exists;
+# per-arm #{rolls >= t_i} double-counts and overflows 16/16. Applied at all four
+# partition sites. reports/c135_roll_divergent_lethality_adjudication.md sections
+# 2-3 and 5, reports/c133_collapsed_roll_disposition.md section 4. Predictions and
+# measurements: reports/c138_collapse_class_engine_fixes_prediction.md, artifacts
+# at reports/artifacts/c138_collapsefix_{main,critstraddle,statusaware}_{dev,holdout}_sweep.json.
+poke-engine-gen3-status-aware-residual-threshold.patch
