@@ -397,6 +397,14 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "noop",
     "paralyzed",
     "volatile",
+    // the `heal` sub-cases. PREFIXED for the same reason the `shape_*` tokens are: this
+    // vocabulary is shared across every lossy tag and `assert_subcase_vocabulary` validates
+    // per token with no tag scoping, so registering bare `drain` or `defender` would weaken
+    // the gate for unrelated families.
+    "heal_paindmg",
+    "heal_liquidooze",
+    "heal_defender",
+    "heal_drain_or_shellbell",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -3239,6 +3247,19 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     "statrecalc",
     "status",
     "sleepcounter",
+    // The `heal` SUB-CASES, kept adjacent to the bare token so composite keys stay
+    // readable. `heal` itself remains, as the honest remainder -- see `heal_subcase`.
+    //
+    // ERA-OVER-ERA DRIFT, stated because the `boost` note above understated exactly this:
+    // every key containing `heal` MOVES with this change, and unlike the `boost` case the
+    // volume is NOT zero -- era 61 measured 3,199. `ambiguous_unrenderable:heal` becomes
+    // `…:heal_drain_or_shellbell` and friends, so an era-over-era diff keyed on the bare
+    // token will read the old class as vanished and the new ones as novel. It is one class
+    // being partitioned, and the SUM is the quantity that is comparable across the boundary.
+    "heal_paindmg",
+    "heal_liquidooze",
+    "heal_defender",
+    "heal_drain_or_shellbell",
     "heal",
     // `substitute` is deliberately ABSENT, for the same reason as `boost` and by the same
     // rule: `DamageSubstitute` was its ONLY producer and the walk now renders it, so the
@@ -3462,11 +3483,72 @@ fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: Side
         return false;
     }
     // No damage to the OTHER side anywhere in the tail, or this is drain.
-    !tail.iter().any(|other| match other {
+    !tail_damages_the_foe(tail, attacker)
+}
+
+/// Does this tail damage the side that is NOT the attacker?
+///
+/// Factored out so `heal_is_a_direct_self_heal` (which REFUSES on it) and `heal_subcase`
+/// (which CLASSIFIES on it) cannot drift apart. Two copies of this predicate would let the
+/// admit-set and the diagnostic disagree about the same tail, which is the failure mode
+/// where a bucket named `drain` does not contain the tails the renderer treats as drain --
+/// and the ranking built on it sends the fix to the wrong place.
+fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
+    tail.iter().any(|other| match other {
         Instruction::Damage(dmg) => dmg.side_ref != attacker && dmg.damage_amount > 0,
         Instruction::DamageSubstitute(dmg) => dmg.side_ref != attacker,
         _ => false,
     })
+}
+
+/// Which SUB-CASE of the `heal` family a REFUSED HP-increase belongs to.
+///
+/// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 partial: 3,199
+/// world failures, 25.0% of all world-failure classes) and it survived the partial close
+/// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
+/// heal on the attacker with no foe damage -- so everything here is one of the three
+/// cases its doc block names, and the ranking cannot say which without this split.
+///
+/// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
+/// of refused tails is byte-identical to before. Nothing here changes what is searched.
+///
+/// The `drain_or_shellbell` name is deliberately honest about an ambiguity the tail cannot
+/// resolve. Both a drain move and a SHELLBELL holder produce `[foe damage, attacker heal]`,
+/// and poke-engine models both in gen3 (`src/gen3/items.rs` SHELLBELL). Showdown renders
+/// them differently -- `[from] drain|[of] <foe>` versus `[from] item: Shell Bell` -- and the
+/// second is an ITEM REVEAL. Guessing between them would FABRICATE a belief, which the
+/// render arm's own comment states is worse than refusing. So this bucket is named for what
+/// is actually known, and disambiguating it needs the candidate move set or the item, not
+/// the tail.
+fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> &'static str {
+    match tail.get(index) {
+        // The engine spells an HP INCREASE as a NEGATIVE `Damage` (Pain Split). A distinct
+        // producer from `Heal`, and one whose protocol line differs, so it is worth its own
+        // bucket even though the walk drops the same thing for both.
+        Some(Instruction::Damage(dmg)) if dmg.damage_amount < 0 => "heal_paindmg",
+        // A NEGATIVE `Heal` is Liquid Ooze; the named path renders it as `-damage`.
+        Some(Instruction::Heal(heal)) if heal.heal_amount < 0 => "heal_liquidooze",
+        Some(Instruction::Heal(heal)) if heal.heal_amount > 0 => {
+            if heal.side_ref != attacker {
+                // A heal on the DEFENDER inside our move phase is an absorb ability
+                // (Volt Absorb, Water Absorb), whose line is an ABILITY reveal.
+                "heal_defender"
+            } else if tail_damages_the_foe(tail, attacker) {
+                "heal_drain_or_shellbell"
+            } else {
+                // UNREACHABLE from the classifier: a positive attacker heal with no foe
+                // damage is exactly what `heal_is_a_direct_self_heal` admits, so it
+                // returns `None` before reaching here. Kept as the honest remainder
+                // rather than an `unreachable!()`, because a panic in this crate is
+                // mapped by pyo3 to `PanicException` -- past `except Exception` -- and
+                // kills the campaign worker instead of producing a measurable key.
+                "heal"
+            }
+        }
+        // Zero-amount heals and any future producer. Deliberately NOT silent: the
+        // remainder stays rankable, which is what let this family be found at all.
+        _ => "heal",
+    }
 }
 
 /// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
@@ -3536,7 +3618,14 @@ fn unrenderable_family_at(
         //
         // A heal-direction `Damage` lands with `Heal` because what the walk drops is
         // identical: an HP INCREASE. That grouping IS by protocol line, so it stays.
-        Instruction::Damage(_) | Instruction::Heal(_) => Some("heal"),
+        //
+        // SUB-CASED, not widened. `heal_subcase` only ever returns a blocking family, so
+        // the refused set is unchanged -- this splits the bucket for ranking, it does not
+        // admit anything. See `heal_subcase` for why the drain bucket keeps its ambiguous
+        // name instead of guessing between drain and Shell Bell.
+        Instruction::Damage(_) | Instruction::Heal(_) => {
+            Some(heal_subcase(tail, index, attacker))
+        }
         // RENDERED NOW, so no longer a blocker. The unnamed-callee walk emits the
         // `|-boost|`/`|-unboost|` line above, which is the whole reason this family existed:
         // a bare `[Boost]` tail is fully expressible and must not refuse a world. Moving an
@@ -5772,7 +5861,7 @@ mod tests {
                     side_ref: SideReference::SideTwo,
                     heal_amount: 40,
                 }),
-                "heal",
+                "heal_defender",
             ),
             (
                 // The load-bearing sign case: `Damage` is SIGNED, and negative is the
@@ -5782,7 +5871,7 @@ mod tests {
                     side_ref: SideReference::SideOne,
                     damage_amount: -130,
                 }),
-                "heal",
+                "heal_paindmg",
             ),
             (
                 // NOT a boost family any more -- see the admitted list above. Kept here only
@@ -5928,6 +6017,27 @@ mod tests {
                 "silent",
             ),
             (
+                // LIQUID OOZE: a NEGATIVE `Heal`, which the named path renders as
+                // `-damage`, not `-heal`. Blocked standalone, so it belongs here and
+                // not in `blocked_in_tail`.
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: -40,
+                }),
+                "heal_liquidooze",
+            ),
+            (
+                // The bare `heal` REMAINDER must keep a representative of its own, or a
+                // mutation collapsing every sub-case back onto it would pass. A
+                // zero-amount `Heal` is neither positive nor negative, so it reaches the
+                // fall-through arm.
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 0,
+                }),
+                "heal",
+            ),
+            (
                 // NOT `pp`: there is no `-pp` line in the protocol. `silent` says the
                 // truth -- no public line on any path.
                 Instruction::DecrementPP(DecrementPPInstruction {
@@ -5975,6 +6085,24 @@ mod tests {
             ],
             0,
             "boost",
+        ),
+        (
+            // DRAIN SHAPE. The `Heal` ALONE is admitted -- it is a direct self-heal --
+            // so this belongs here rather than in `blocked`, and the loop's
+            // "same instruction without the tail must stay admitted" assertion is the
+            // one that proves the discrimination is a property of the TAIL.
+            vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 60,
+                }),
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 30,
+                }),
+            ],
+            1,
+            "heal_drain_or_shellbell",
         )];
         // THE HEAL PREDICATE, pinned in all four directions it discriminates on. This family
         // is only PARTIALLY closed, and each clause is what keeps a mis-tagged `-heal` -- which
@@ -5996,13 +6124,14 @@ mod tests {
         // 2. DRAIN: same heal, but the tail damages the foe. Needs `[from] drain|[of] ..`.
         assert_eq!(
             unrenderable_family_at(&[foe_damage, self_heal.clone()], 1, SideReference::SideOne),
-            Some("heal"),
-            "damage to the foe plus a heal on the attacker is DRAIN, not a direct heal"
+            Some("heal_drain_or_shellbell"),
+            "damage to the foe plus a heal on the attacker is DRAIN-SHAPED, not a direct \
+             heal -- and the tail alone cannot tell drain from a Shell Bell holder"
         );
         // 3. ABSORB ABILITY: the heal is on the defender. Needs `[from] ability: X`.
         assert_eq!(
             unrenderable_family_at(std::slice::from_ref(&self_heal), 0, SideReference::SideTwo),
-            Some("heal"),
+            Some("heal_defender"),
             "a heal on the DEFENDER is an absorb ability, not a direct heal"
         );
         // 4. LIQUID OOZE: a negative heal, which the named path renders as `-damage`.
@@ -6015,7 +6144,7 @@ mod tests {
                 0,
                 SideReference::SideOne
             ),
-            Some("heal"),
+            Some("heal_liquidooze"),
             "a NEGATIVE heal is Liquid Ooze and renders as damage, not as a heal"
         );
 
@@ -6270,6 +6399,16 @@ mod tests {
                 "statrecalc",
                 "status",
                 "sleepcounter",
+                // DELIBERATE reorder, per this test's own instruction to say so. The `heal`
+                // family is PARTITIONED into sub-cases; the bare token survives as the
+                // remainder. Unlike the "substitute" removal below, this one DOES move
+                // real keys: era 61 measured 3,199 world failures under `heal`, and every
+                // one of them now reports a sub-case instead. The sum across the five
+                // tokens is what compares to the old bare count.
+                "heal_paindmg",
+                "heal_liquidooze",
+                "heal_defender",
+                "heal_drain_or_shellbell",
                 "heal",
                 // "substitute" removed by hand: its only producer, `DamageSubstitute`, is
                 // now rendered. Every token AFTER it keeps its relative order, so no slug
