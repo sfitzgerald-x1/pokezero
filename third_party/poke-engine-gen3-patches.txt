@@ -1358,3 +1358,19 @@ poke-engine-gen3-a11-bellydrum-fail-clauses.patch
 # reports/c136_faint_cancels_prediction.md, with the four sweeps it cites at
 # reports/artifacts/c136_faintcancels_{main,fix}_{dev,holdout}_sweep.json.
 poke-engine-gen3-faint-cancels-opposing-switch.patch
+
+# The crit-straddle residual sub-split. When the CRIT fan straddles the KO
+# threshold, Case B partitioned it into crit-kill and crit-survive and never
+# consulted the residual threshold -- so the residual sub-split existed at two of
+# the three partition sites and was missing from the third. Closes dev row
+# 19000074/27, where the priced crit fan is
+# [214,216,219,221,224,226,229,231,234,236,239,241,244,246,249,252] against 244 HP
+# with a sandstorm threshold of 229: Showdown rolled 241, a member of the engine's
+# own fan, while the engine emitted arms only at 244 (the HP) and 227 (the mean of
+# the twelve non-KO rolls, not a fan member). Mirrors Case A's identity exactly --
+# the KO threshold is the band ceiling, so the residual band is
+# #{rolls in [229, 244)} and the hit-lethal rolls stay with the KO arm.
+# reports/c133_collapsed_roll_disposition.md section 3. Prediction registered at
+# reports/c138_collapse_class_engine_fixes_prediction.md; sweeps at
+# reports/artifacts/c138_collapsefix_{main,critstraddle}_{dev,holdout}_sweep.json.
+poke-engine-gen3-crit-straddle-residual-split.patch
