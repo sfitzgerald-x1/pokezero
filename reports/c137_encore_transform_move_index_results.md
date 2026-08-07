@@ -1,11 +1,136 @@
 # C137 Results: the Encore lock now indexes the post-Transform moveset
 
+> **Read this first.** There are two measurements here. The **authoritative residue table is the
+> merged one** (§ "Re-measured on current main"), which describes `main` + this fix. The
+> base-relative tables that follow it describe `aeaee2b1` + this fix and are **kept deliberately**:
+> they are the evidence for the *mechanism*, measured against the commit where the defect was
+> diagnosed. Where the two disagree, the merged table wins — `19100180/24` appears as remaining
+> residue in the base-relative table and was closed on `main` by #1144, not by this fix.
+
 Outcome of `reports/c137_encore_transform_move_index_prediction.md`, which was registered
 **before** any of these numbers were measured (commit `05aef35f`, one commit ahead of the base
 `aeaee2b1`, adding nothing but the prediction).
 
 **Prediction confirmed on every clause. The falsifier did not fire: nothing opened, dev did not
 move, no boundary count changed, and the skip histogram is identical on both sweeps.**
+
+## Re-measured on current main — the authoritative table
+
+Raised by review as a non-blocking note and promoted to a pre-merge gate: `main` moved
+`aeaee2b1` -> `dc6e1e19` (six commits) after the original measurement, and one of them (#1144,
+`6b7e16f7`) changes **exactly the faint / queued-action semantics** that decide when
+`end_of_turn_is_deferred` fires — which is the mechanism through which this defect manifests. A
+generic "probably fine" was not good enough; the merged state had never been measured.
+
+Branch merged with `origin/main` (merge commit `1edb98e9`, a real merge — no force-push, no
+rewritten history). Engine rebuilt at the merged state. Prediction registered before the sweeps in
+`reports/c137_encore_transform_move_index_prediction.md` § "Second prediction".
+
+**Result: the prediction holds on every sweep clause. Nothing opened. Dev did not move.**
+
+### Build identity
+
+The rebuild yields engine fingerprint
+`fdbf59379399b94447c029d402d837b1738ec6e6bba4bfe8992a38fd30528875`, **not** the
+`e8047b56...` that #1144's own artifacts carry. That was predicted wrongly and the prediction file
+records the miss rather than dropping it. The cause is identified and benign: the fingerprint hashes
+the search crate's own sources, and `rust/pokezero-search/src/events.rs` changed on `main` *after*
+#1144 (+581/-62, from #1142 and #1150). `e8047b56` is #1144's fingerprint, not current `main`'s.
+
+The check that actually matters replaces it and holds: `scripts/engine_build_fingerprint.py --print`
+returns the identical `fdbf5937...` for a clean checkout of `dc6e1e19` and for this merged branch,
+computed from tracked bytes. **This branch introduces no engine change.** (68 patches, not 69 — the
+review note's count was one high.)
+
+### The merged base reproduces #1144's own measurement exactly
+
+Before trusting a new baseline, it is checked against the one `main` already ships. My independent
+re-derivation at `dc6e1e19` agrees with `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`
+on **every counter, every divergence class, and every skip bucket**, on both windows — zero deltas.
+
+Worth noting because it was flagged as a risk in the prediction and did *not* materialise: #1142 and
+#1150 are classifier changes (they split the `heal` family and split `shape_length` by containment),
+so a *relabel* of dev's `component_magnitude:heal` row was possible at constant totals. It did not
+happen; the class name is unchanged.
+
+### Merged dev, seed-start 19000000, 200 games — no change whatsoever
+
+| | merged base `dc6e1e19` | + this fix |
+|---|---|---|
+| `boundaries_full_round` | 15968 | 15968 |
+| `boundaries_measured` | 15503 | 15503 |
+| `matched` | 15501 | 15501 |
+| `diverged` | 2 | 2 |
+| `engine_errors` | 0 | 0 |
+
+`matched + diverged == boundaries_measured`: `15501 + 2 == 15503`, both sides.
+`divergence_classes` (complete census): `component_magnitude:heal` 1 -> 1,
+`component_missing_in_engine:sandstorm` 1 -> 1. Not one counter in the dev report differs.
+
+### Merged holdout, seed-start 19100000, 200 games
+
+| | merged base `dc6e1e19` | + this fix |
+|---|---|---|
+| `boundaries_full_round` | 16155 | 16155 |
+| `boundaries_measured` | 15579 | 15579 |
+| `matched` | 15575 | **15577** |
+| `diverged` | 4 | **2** |
+| `engine_errors` | 0 | 0 |
+
+`matched + diverged == boundaries_measured`: `15575 + 4 == 15579` before, `15577 + 2 == 15579` after.
+
+`divergence_classes` (complete census):
+
+| class | merged base | + this fix |
+|---|---|---|
+| `component_missing_in_engine:itemleftovers` | **2** | **0** |
+| `limit:roll_divergent_lethality` | 2 | 2 |
+
+`component_extra_in_engine:spikes` is **already absent on the merged base** — #1144 closed
+`19100180/24`, and this PR does not claim it. The complete residue, `repros` being well under the
+`keep_repro` = 25 cap on both sides:
+
+```
+merged base dc6e1e19:  19100107/135 limit:roll_divergent_lethality
+                       19100170/71  component_missing_in_engine:itemleftovers   <- closed by this fix
+                       19100170/72  component_missing_in_engine:itemleftovers   <- closed by this fix
+                       19100191/5   limit:roll_divergent_lethality
+merged + this fix:     19100107/135 limit:roll_divergent_lethality
+                       19100191/5   limit:roll_divergent_lethality
+```
+
+The two rows that close are the same two as at the original base. The interaction hypothesis —
+that #1144's faint/queued-action change might already alter when `end_of_turn_is_deferred` fires on
+`19100170/71-72`, making this fix redundant — is **not** what happened: both rows are still open on
+the merged base and are still closed by this fix.
+
+### Merged skip histogram — unchanged by the fix, both windows
+
+| bucket | dev base | dev +fix | holdout base | holdout +fix |
+|---|---|---|---|---|
+| `skip:single_seat_boundary` | 1742 | 1742 | 1813 | 1813 |
+| `skip:unmappable_choice:struggle_not_submittable` | 118 | 118 | 233 | 233 |
+| `skip:world_unsupported:encore_move_unknown` | 2 | 2 | 1 | 1 |
+| `skip:world_unsupported:materialization_blocker` | 18 | 18 | 8 | 8 |
+| `skip:world_unsupported:self_request_state_unsupported` | 13 | 13 | — | — |
+| `skip:world_unsupported:volatile_unsupported` | 144 | 144 | 127 | 127 |
+
+Merged artifacts: `reports/artifacts/c137_merged_base_{dev,holdout}_sweep.json` and
+`reports/artifacts/c137_merged_encore_transform_{dev,holdout}_sweep.json`.
+
+### Naming note
+
+`main`'s #1147 also uses the `C137` prefix (`reports/c137_phase2_enumerate_decision.md`). The two
+are unrelated; the label was claimed concurrently on both branches. Filenames do not collide and the
+already-reviewed artifact names are left alone rather than churned.
+
+---
+
+## The original, base-relative measurement (mechanism evidence)
+
+Everything below describes `aeaee2b1` + this fix, at engine fingerprint `07a3290d...`. It is
+retained because it is the evidence for the mechanism at the commit where the defect was diagnosed.
+For the current residue, use the merged table above.
 
 ## The baseline is the base commit, verified by fingerprint
 
@@ -209,6 +334,16 @@ unchanged on both windows.
   407 passed / 0 failed / 1 ignored (the pre-existing `a_near_full_hp_seeder_still_over_books_the_drain_slot`).
 
 No run touched the reserved final holdout; the highest seed measured is `19100199`.
+
+### Gates re-run at the merged state
+
+- `tests.test_poke_engine_patch_stack`, `tests.test_branch_mass_reconstruction`,
+  `tests.test_final_holdout_guard`, `tests.test_engine_world`,
+  `tests.test_engine_world_encore_transform`: **132 tests, OK**.
+- `RUSTFLAGS="-C debug-assertions=yes" cargo test` in `rust/pokezero-search`: **exit 0, 34 suites,
+  416 passed / 0 failed / 1 ignored** — up from 33 suites / 407 passed at the original base, the
+  increase being #1144's `gen3_faint_cancels_opposing_switch.rs` and the `events.rs` work from
+  #1142/#1150.
 
 The review-driven additions are documentation and tests only. All 78 code objects in
 `src/pokezero/engine_world.py` are byte-identical to the version the sweeps ran against once

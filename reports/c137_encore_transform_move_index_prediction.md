@@ -166,5 +166,22 @@ Two failure modes are specific to this re-measurement and would each be a real f
 
 ## Outcome
 
-Recorded below and in `reports/c137_encore_transform_move_index_results.md`. The base-relative
-artifacts are **kept**: they remain the evidence for the mechanism.
+**Every sweep clause CONFIRMED. Nothing opened; dev did not move; the falsifier did not fire.**
+
+- Clause 1 (fingerprint `e8047b56`) — **falsified, and left standing above rather than deleted.**
+  The rebuild gives `fdbf5937...`; `events.rs` moved on `main` after #1144. The substantive
+  replacement holds: clean `dc6e1e19` and this merged branch compute the identical fingerprint from
+  tracked bytes.
+- Clause 2 — confirmed. The merged-base re-derivation matches
+  `c136_faintcancels_fix_{dev,holdout}_sweep.json` on every counter, class and skip bucket, both
+  windows, zero deltas. The feared `heal` relabel from #1142/#1150 did not occur.
+- Clause 3 — confirmed. Holdout `diverged` 4 -> 2, `matched` 15575 -> 15577,
+  `itemleftovers` 2 -> 0, `roll_divergent_lethality` 2 -> 2, `spikes` already 0 on the merged base.
+- Clause 4 — confirmed. Dev unchanged on every counter.
+- Clauses 5 and 6 — confirmed. Boundary counts, the identity, and both skip histograms unchanged.
+
+Neither re-measurement-specific failure mode occurred: both target rows are still open on the merged
+base (so this fix is not redundant with #1144), and nothing opened on `19100170` or elsewhere.
+
+Recorded in `reports/c137_encore_transform_move_index_results.md`. The base-relative artifacts are
+**kept**: they remain the evidence for the mechanism.
