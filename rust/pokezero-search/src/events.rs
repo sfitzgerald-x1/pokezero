@@ -3759,8 +3759,9 @@ fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> 
 /// here instead of silently classifying as one more `unclassified`, which on the largest
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
-/// FAIL-CLOSED wrapper. Keeps the three-argument shape every existing caller and test uses,
-/// and passes `defender_protected: false` / `defender_has_absorb_ability: true` -- the
+/// FAIL-CLOSED wrapper. Keeps the three-argument shape for the TESTS -- there are no
+/// production callers left, they all moved to the `_with_protect` form -- and passes
+/// `defender_protected: false` / `defender_has_absorb_ability: true` -- the
 /// combination that renders NOTHING and preserves the pre-existing refusal exactly. Only the
 /// production walk, which can read the live state, calls the `_with_protect` form.
 fn unrenderable_family_at(

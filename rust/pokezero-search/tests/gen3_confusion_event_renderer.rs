@@ -2551,16 +2551,31 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
     // AND it must be the UNNAMED path. If a callee gets NAMED, the named renderer emits the
     // Protect line and this fixture would pass with the new arm deleted -- which is exactly
     // what the first version did.
+    //
+    // AND the world must actually be RECLAIMED. This is the PR's headline benefit and it was
+    // unverified: `sleeptalk_refusal_is_unsafe` only chooses WHICH tag is emitted, and the
+    // walk renders either way -- so reverting it to the fail-closed form left every world
+    // still refused with the whole suite green (review's M19). The tag is the only thing
+    // that distinguishes "rendered and searched" from "rendered and thrown away".
+    let mut checked = 0;
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         if events.contains("Protect") {
             assert!(
                 !events.contains("[from] Sleep Talk"),
                 "the callee was NAMED, so the named path rendered Protect and this fixture \
                  proves nothing about the walk arm:\n{events}"
             );
+            assert!(
+                r.attribution_unsafe.is_empty(),
+                "the Protect marker is rendered but the world is STILL REFUSED as \
+                 attribution-unsafe, so the fix reclaims nothing: {r:?}"
+            );
+            checked += 1;
         }
     }
+    assert!(checked > 0, "no branch reached the tag assertion");
 }
 
 /// WITHOUT the PROTECT volatile, no Protect line is rendered.
@@ -2592,6 +2607,89 @@ fn without_the_protect_volatile_no_protect_line_is_invented() {
         assert!(
             !events.contains("Protect"),
             "a Protect line was invented with no PROTECT volatile in state:\n{events}"
+        );
+    }
+}
+
+/// PRODUCER 2, the one that would be FABRICATED over: a full-HP absorb activation.
+///
+/// This is the case the whole absorb guard exists for, and review showed it was untested:
+/// hardcoding BOTH guards true made this exact branch emit `|-activate|...|Protect` with the
+/// entire suite green. A Water Absorb defender at full HP takes a Water move and gen3 pushes
+/// a zero-amount `Heal` on it -- byte-identical to the Protect marker, on the same side --
+/// but the line it owes is an ABILITY activation, not Protect.
+///
+/// No PROTECT volatile here, and the defender holds WATERABSORB, so BOTH axes of the guard
+/// must hold for nothing to be rendered.
+#[test]
+fn a_full_hp_absorb_activation_is_never_dressed_as_protect() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::WATERGUN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::BUBBLE);
+    // The OTHER producer: a heal-carrying absorb ability on a full-HP defender.
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+    let maxhp = state.side_one.get_active().maxhp;
+    state.side_one.get_active().hp = maxhp;
+
+    let branches = generate(&mut state);
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        assert!(
+            !events.contains("Protect"),
+            "a full-HP absorb activation was dressed as Protect -- this is the fabricated \
+             line the absorb guard exists to prevent:\n{events}"
+        );
+    }
+}
+
+/// PROTECT *and* an absorb ability: refuse. The over-refusal, pinned as deliberate.
+///
+/// A Water Absorb mon that uses Protect hits this routinely -- it is not a corner case, and
+/// review measured it as a real ongoing cost: those worlds stay refused even though the
+/// marker is almost certainly a genuine Protect block. The guard is kept anyway because the
+/// absorb abilities RESTORE `flags.protect` (gen3/abilities.rs), so a protect-bypassing Water
+/// or Electric move would leave `blocked_by_protect == false` with PROTECT still set -- a
+/// zero `Heal` that is NOT a Protect marker while the volatile says otherwise.
+///
+/// Pinning it as a TEST rather than a comment because hardcoding the absorb read to `false`
+/// at the call site survived every other fixture (review's M14b). Without this, the axis
+/// could be silently deleted.
+#[test]
+fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+    // BOTH conditions true at once. The positive fixture has PROTECT and no absorb; this
+    // adds the absorb, and the expected outcome flips from rendered to refused.
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+
+    let branches = generate(&mut state);
+    for branch in &branches {
+        let events = render(&mut state, branch);
+        assert!(
+            !events.contains("Protect"),
+            "with a heal-carrying absorb ability present the marker is ambiguous and must \
+             be refused, not guessed:\n{events}"
         );
     }
 }
