@@ -482,6 +482,21 @@ def _shedinja():  # 1 max HP: the Spikes minimum-damage clamp
                           moves=("Splash",))
 
 
+def _electrode_boomer():  # Explosion faints the user, so one move KOs both actives
+    return FixturePokemon(species="Electrode", ability="Soundproof", item="None",
+                          moves=("Explosion", "Splash"))
+
+
+def _level_one_victim():  # dies to anything, and not Ghost, so Explosion connects
+    return FixturePokemon(species="Sunkern", ability="Chlorophyll", item="None",
+                          moves=("Splash",), level=1)
+
+
+def _crunch_killer():  # KOs the frail lead with a single move, faulting only one side
+    return FixturePokemon(species="Houndoom", ability="Flash Fire", item="Leftovers",
+                          moves=("Crunch", "Splash"))
+
+
 def _faint_cancel_lead():  # spe 130, outruns Skarmory's 70 so its switch resolves first
     return FixturePokemon(species="Jolteon", ability="Volt Absorb", item="None",
                           moves=("Splash",))
@@ -1024,6 +1039,67 @@ def _spec(name):
             expect={"landing_hp": "0 fnt", "fainted": True},
             landmark=lambda L: _has(L, "|switch|p2a: Shedinja"),
             landmark_desc="Shedinja switched into the hazard")
+
+    if name in ("replacementsingleseat", "replacementdoublefaint"):
+        # C134 §4, the last shapes in the queue-semantics pack, and the pair that
+        # bounds what the other fixtures can even be ABOUT.
+        #
+        # A withdrawn patch was built on the premise that a ply can have one side
+        # replacing a fainted Pokemon WHILE the other side voluntarily switches.
+        # Showdown never presents that. On a post-move-faint replacement ply the
+        # fainting side is asked `forceSwitch` and the survivor is told `wait` -- the
+        # ply is SINGLE-SEAT, which is exactly the mechanism behind the differential's
+        # ~87% coverage bound (reports/c132_single_seat_coverage_bound.md): single-seat
+        # boundaries are skipped before comparison, so that whole population is
+        # unmeasured.
+        #
+        # The ONE way both seats replace on the same boundary is a simultaneous double
+        # faint -- Explosion, Selfdestruct, Destiny Bond, recoil. Then both sides are
+        # asked `forceSwitch`, neither waits, `requested == {"p1","p2"}`, and the ply
+        # IS a measured full-round boundary. That is the shape a faint-cancellation
+        # guard has to survive: nothing is still standing, so Showdown cancels nothing
+        # (`getAllActive()` is empty).
+        #
+        # Asserted on the REQUESTS, not the protocol, because "who was asked to act"
+        # is invisible in the protocol log -- a seat that waits looks identical to a
+        # seat that acted and did nothing.
+        double = name == "replacementdoublefaint"
+        if double:
+            p1_team = [_electrode_boomer(), _blissey()]
+            p2_team = [_level_one_victim(), _snorlax()]
+            turns = [("move explosion", "move splash")]
+        else:
+            p1_team = [_shedinja(), _blissey()]
+            p2_team = [_crunch_killer(), _snorlax()]
+            turns = [("move splash", "move crunch")]
+        return dict(
+            p1=p1_team, p2=p2_team, turns=turns,
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "p1_fainted": _has(L, "|faint|p1a:"),
+                "p2_fainted": _has(L, "|faint|p2a:"),
+            },
+            request_facts=lambda R: {
+                "p1_must_replace": bool((R.get("p1") or {}).get("forceSwitch")),
+                "p2_must_replace": bool((R.get("p2") or {}).get("forceSwitch")),
+                "p1_waits": bool((R.get("p1") or {}).get("wait")),
+                "p2_waits": bool((R.get("p2") or {}).get("wait")),
+            },
+            expect={
+                # p1 faints in both arms; only the double-faint arm also fells p2.
+                "p1_fainted": True,
+                "p2_fainted": double,
+                "p1_must_replace": True,
+                "p2_must_replace": double,
+                "p1_waits": False,
+                # THE LOAD-BEARING ASSERTION. False here means both seats were asked,
+                # so the boundary is full-round and measured. True means the survivor
+                # was told to wait, so the boundary is single-seat and the differential
+                # never compares it.
+                "p2_waits": not double,
+            },
+            landmark=lambda L: _has(L, "|faint|p1a:"),
+            landmark_desc="the ply produced at least one faint")
 
     if name in ("faintcancelsopposingswitch", "faintcancelsopposingswitchcontrol"):
         # C134 §4. The OTHER half of the rule the Pursuit pair pins, and the premise
@@ -2458,6 +2534,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
              "pursuitkoswitcher", "pursuitnokocontrol",
              "faintcancelsopposingswitch", "faintcancelsopposingswitchcontrol",
+             "replacementsingleseat", "replacementdoublefaint",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
              "confusionbatonpass", "confusionbatonpasscontrol",
