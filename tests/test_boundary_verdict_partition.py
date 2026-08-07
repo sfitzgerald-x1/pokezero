@@ -102,9 +102,27 @@ _C141 = {
 # some future selector regains a filter.
 #
 # Committing a new sweep artifact means bumping this number. That is the point: it makes the
-# new artifact pass through the checker deliberately rather than by default. C141's
-# final-holdout sweep lands with PR #1159 and takes it to 71.
-_EXPECTED_SWEEP_ARTIFACTS = 70
+# new artifact pass through the checker deliberately rather than by default.
+#
+# 70 -> 71: `reports/artifacts/c141_final_holdout_sweep.json`, the C141 final-holdout sweep,
+# added by PR #1159. This is NOT a routine re-stamp -- it is the sweep whose lossy count of 4
+# forced this whole correction, and it is the THIRD corpus member to carry a nonzero
+# `skip:strict_all_branches_lossy`, and the first in the `reports/artifacts` sweep series.
+# `c26` and `c27` (lossy 2 each) were already in the corpus and are the pre-existing
+# counterexamples pinned above; c141 is emphatically NOT the first firing in this repo. Of the
+# 56 artifacts in `reports/artifacts/` carrying a `counters` block, 55 are at 0 and c141 alone
+# is nonzero -- which is the whole and only sense in which it is a first.
+#
+# `_C141`'s hardcoded values above are now redundant with the glob, since the artifact is
+# committed and selected; they are retained as an explicit named pin. Verified equal to the
+# committed artifact at bump time: 16274 / 16268 / 2 / 0, lossy 4.
+#
+# PR #1159 also adds `reports/artifacts/c141_final_holdout_replay.json`, which is deliberately
+# NOT in this corpus: it is a branch-level replay of two retained repros and carries no
+# top-level `boundaries_measured`, so the selector below excludes it. Verified, not assumed --
+# as is the fact that #1161's `c143_heal_attribution_probe.json`, which landed on main in the
+# same merge, is outside the selector too. The delta really is this one sweep artifact.
+_EXPECTED_SWEEP_ARTIFACTS = 71
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:
