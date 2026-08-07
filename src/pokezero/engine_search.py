@@ -1854,6 +1854,13 @@ class EngineMctsPolicy:
     def _recharging_slots(self, context: PolicyContext) -> tuple[str, ...]:
         """Slots publicly forced to recharge THIS turn (Hyper Beam landed last round).
 
+        BOTH SIDES, since the self side went live. Our own slot comes from
+        ``self_must_recharge`` and the opponent's from ``opponent_must_recharge`` -- two keys of
+        the ONE parser ``must_recharge`` tracker, published per seat. The notes below describe
+        the opponent side, whose reconstruction fallback predates the tracker; the self side has
+        no fallback and is tracker-only, so an observation without the key simply carries no self
+        lock.
+
         PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
         observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
         the ``|-mustrecharge|SLOT`` line the sim emits when a recharge move LANDS, which is
@@ -2237,7 +2244,7 @@ class EngineMctsPolicy:
                     # `depth_tactics_probe.py` already carried this translation ("No Move" ->
                     # "none"); `_map_choices` never got it, so before this the decision fell to
                     # `_fallback(..., "choices_unmapped")` -- a counter this file states at
-                    # :668-670 must be zero independently of the fallback rate, and with the cause
+                    # :674-676 must be zero independently of the fallback rate, and with the cause
                     # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
                     # `_recharging_slots` went symmetric and these worlds started building at all.
                     index = move_index_by_id.get("recharge")

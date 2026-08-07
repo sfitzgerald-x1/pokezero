@@ -1319,8 +1319,10 @@ impl LeafContext {
         // unsearchable, not mis-searched.) (2) The
         // four gates no longer derive `recharging` from the recorded chosen candidate; they use
         // fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and
-        // reads the tracker, so they can now CATCH a bad self-side write instead of ratifying
-        // it — pinned two-way in tests/test_recharge_gate_derivation.py.
+        // reads the tracker. That makes catching a bad self-side write POSSIBLE, where before it
+        // was not. Precisely: tests/test_recharge_gate_derivation.py pins the derivation two-way —
+        // a write contradicting the tracker disagrees with the gate's world — but no test yet
+        // shows a gate catching an end-to-end bad write, which needs a rebuild with one in it.
         //
         // So the self side can be made live here. It has NOT been, in this change: that is a
         // rust-side edit needing an engine rebuild, and it is the follow-on rather than

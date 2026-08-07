@@ -251,10 +251,15 @@ class BothDirectionsHoldTogetherTest(unittest.TestCase):
     def test_the_rules_differ_wherever_the_action_record_lies(self) -> None:
         """The whole change, in one assertion.
 
-        Old and new agree whenever the recorded action happens to match the tracker -- which is
-        every row of corpus/golden-v4, measured: the two sources pick out the same 2 rows, so
-        this change is a NO-OP on the current corpus and its value cannot be shown by rerunning
-        it. It can only be shown where they diverge, which is here.
+        CORRECTED after review: an earlier version of this docstring called the change "a NO-OP
+        on the current corpus" whose value "cannot be shown by rerunning it". Both are wrong, and
+        the PR's own table contradicts them. The two derivations disagree on exactly ONE row of
+        corpus/golden-v4 -- (1009, 18, p1), where the partner decision row is absent so the
+        candidate rule misses a lock the tracker sees -- and that row is why leaf_root_parity
+        goes 1 divergence to 0 and leaf_vs_reality's defect class goes 124 to 123.
+
+        The unit test below is still worth having: one corpus row is thin evidence for a
+        derivation rule, and this states the property directly.
         """
         # Tracker says our mon must recharge; the action record says it did something else.
         decisions = {

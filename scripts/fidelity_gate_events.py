@@ -145,8 +145,9 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
 
     The gate is still NOT candidate-derived, which is the property that matters: both sides come
     from the parser tracker, so the gate's world is independent of the action the gate is
-    checking. Symmetry restored what is MEASURED; independence is what lets the gate catch a bad
-    write. Those are different properties and this helper needs both.
+    checking. Symmetry restored what is MEASURED; independence is what MAKES CATCHING POSSIBLE.
+    Those are different properties and this helper needs both. The tests pin the derivation, not
+    an end-to-end catch -- that would need an engine rebuilt with a bad write in it.
 
     KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
     signal from the round-indexed public action record when the tracker key is ABSENT. This

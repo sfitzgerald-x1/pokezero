@@ -18,10 +18,12 @@ import unittest
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from pokezero import engine_search  # noqa: E402
 from pokezero.engine_search import (  # noqa: E402
     _ENGINE_FORCED_NO_MOVE_IDS,
     EngineMctsPolicy,
@@ -82,9 +84,14 @@ class SelfSideIsLiveTest(unittest.TestCase):
 class TheFallbackCannotDiscardTheSelfLockTest(unittest.TestCase):
     """Mutation 2: the reason the fallback was extracted at all.
 
-    The reconstruction has many early returns, each meaning "no OPPONENT lock". If the self lock
-    is not carried across them, a context that reaches the fallback loses it silently. Review
-    mutated exactly this and nothing failed.
+    The reconstruction has eleven early `return ()` statements, each meaning "no OPPONENT lock",
+    plus one success return. If the self lock is not carried across them, a context that reaches
+    the fallback loses it silently. Review mutated exactly this and nothing failed.
+
+    Coverage here is honest rather than complete: the early-return tests all exercise the FIRST
+    of the eleven. The success return is covered separately below, because review found a
+    mutation that discards the self lock only when the reconstruction succeeds -- surviving all
+    24 tests.
     """
 
     def test_self_lock_survives_when_the_tracker_omits_the_opponent(self) -> None:
@@ -94,8 +101,18 @@ class TheFallbackCannotDiscardTheSelfLockTest(unittest.TestCase):
         )
         self.assertIn("p1", got, "the fallback discarded our own lock")
 
-    def test_self_lock_survives_every_early_return_in_the_fallback(self) -> None:
-        """Each shape drives the reconstruction to a different early return."""
+    def test_self_lock_survives_the_fallbacks_first_early_return(self) -> None:
+        """CORRECTED after review: these three shapes all hit the SAME return.
+
+        The docstring used to claim "each shape drives the reconstruction to a different early
+        return". Review traced execution and found all three stop at the first of the eleven --
+        they differ only in which sub-condition of the same `if` fires. Ten returns are never
+        executed by this class.
+
+        One path is sufficient to kill the "drop the prefix at the call site" mutation, because
+        the prefix is a single expression -- but it is NOT sufficient in general, which is what
+        `test_self_lock_survives_when_the_fallback_SUCCEEDS` below exists to cover.
+        """
         shapes = {
             "no trajectory": _context(seat="p1", self_mr=True, round_index=4),
             "no round index": _context(seat="p1", self_mr=True, trajectory=object()),
@@ -116,6 +133,37 @@ class TheFallbackCannotDiscardTheSelfLockTest(unittest.TestCase):
         )
         self.assertEqual(got, ("p1",))
 
+    def test_self_lock_survives_when_the_fallback_SUCCEEDS(self) -> None:
+        """The gap review found: a mutation discarding the self lock ONLY on success.
+
+        `_r = fallback(...); return (self_slot + _r) if not _r else _r` survived all 24 tests,
+        because every other test in this class drives the reconstruction to an early `return ()`
+        -- where `self_slot + ()` and `()`-plus-prefix are indistinguishable. The discard is
+        visible only when the reconstruction actually PROVES an opponent lock, which is the
+        double-recharge boundary: both actives recharging at once.
+
+        Unreachable on corpus/golden-v4 (both tracker keys present on all 1295 rows, so the
+        fallback never runs there), but the fallback exists precisely for pre-pack contexts.
+        """
+        context = _context(seat="p1", self_mr=True, opp_mr=None, round_index=5)
+        context.trajectory = object()
+        context.observation.metadata.update(
+            {
+                "belief_view": {"opponent_pokemon": [{"species": "Snorlax", "active": True}]},
+                "recent_public_events": ["|move|p2a: Snorlax|Hyper Beam|p1a: Blissey"],
+            }
+        )
+        action = SimpleNamespace(kind="move", move_id="hyperbeam")
+        rounds = {4: SimpleNamespace(actions={"p2": action})}
+        with mock.patch.object(
+            engine_search, "public_action_rounds_from_trajectory_metadata", lambda _t: rounds
+        ):
+            got = EngineMctsPolicy._recharging_slots(_policy(), context)
+        # Non-vacuity first: if the fallback did NOT prove the opponent lock this test would be
+        # exercising an early return again and proving nothing.
+        self.assertIn("p2", got, "fallback did not reach its success return -- test is vacuous")
+        self.assertIn("p1", got, "the self lock was discarded on the fallback's success path")
+
     def test_and_a_free_mon_gains_nothing_from_the_fallback(self) -> None:
         """Non-vacuity for the whole class: these paths must still be able to return ()."""
         got = EngineMctsPolicy._recharging_slots(
@@ -130,7 +178,7 @@ class ForcedNoMoveMapsTest(unittest.TestCase):
     The crate displays `MoveChoice::None` as "No Move" for a locked slot; Showdown's request for
     a recharge turn offers exactly one candidate, named `recharge`. Two vocabularies, one forced
     action. Until this mapping existed the decision fell to `_fallback(..., "choices_unmapped")`
-    -- a counter engine_search.py:668-670 requires at zero independently of the fallback rate,
+    -- a counter engine_search.py:674-676 requires at zero independently of the fallback rate,
     with the cause mislabelled `all_unmapped_legality_mismatch`.
 
     Before the symmetry change these worlds failed construction earlier (Showdown sets
@@ -153,7 +201,15 @@ class ForcedNoMoveMapsTest(unittest.TestCase):
         self.assertEqual(dict(policy.stats.unmapped_choices), {})
 
     def test_the_bare_engine_token_resolves_too(self) -> None:
-        """`depth_tactics_probe` translates the display to "none"; accept either spelling."""
+        """Defensive only -- and review showed my original justification was wrong.
+
+        I said `depth_tactics_probe` translates the display to "none", so accept that spelling.
+        That translation runs display -> `MoveChoice::from_string`, a direction that never
+        reaches `_map_choices`. Every producer that DOES reach here (the poke_engine binding and
+        lib.rs:87 `move_display`) emits "No Move", so "none" is unreachable today. Kept as a
+        cheap guard against a future producer using the bare token, labelled as such rather than
+        as a claim about current behaviour.
+        """
         policy = _policy()
         self.assertEqual(
             EngineMctsPolicy._map_choices(policy, self._recharge_context(), {"none": 1.0}), 0
