@@ -95,3 +95,76 @@ Full tables in `reports/c137_encore_transform_move_index_results.md`. Artifacts:
 `c136_faintcancels_fix_*` baseline exists on `main`), cross-checked against
 `reports/artifacts/c137_base_pristine_{dev,holdout}_sweep.json`, which were produced in a
 separate worktree of the base commit and agree on every counter.
+
+---
+
+# Second prediction: the same fix re-measured on CURRENT main
+
+Registered **before** the re-measurement, on the same terms as the first. Raised by review as a
+non-blocking note and promoted to a pre-merge gate.
+
+`main` moved `aeaee2b1` -> `dc6e1e19` (six commits) after the measurement above. Two matter:
+
+- **`6b7e16f7` (#1144)** adds a 69th engine patch — a faint cancels the queued action of every
+  still-active Pokemon — which **closes `19100180/24`**, a row the after-table above lists as
+  remaining residue. It also changes the engine's `checkpoint_provenance` fingerprint from
+  `07a3290d...` to `e8047b56...`.
+- **`6a3a568c` (#1146)** re-adjudicates the two `roll_divergent_lethality` rows as engine gaps.
+  Documentation only; no row moves.
+
+Nothing is invalidated by this — the claim above is a differential at a declared base and
+fingerprint, `engine_world.py` and `engine_transition_differential.py` are untouched on `main`
+since that base, and the rows are disjoint. But the **merged** state has never been measured, and
+the interaction hypothesis is specific rather than generic: this defect manifests as a **phantom KO
+suppressing the entire residual block via `end_of_turn_is_deferred`**, and #1144 changes exactly
+the faint / queued-action semantics that decide when that deferral fires.
+
+## Prediction
+
+Merged base = `dc6e1e19` with no fix. Merged + fix = that plus this branch.
+
+1. ~~Rebuilding at the merged state reproduces engine fingerprint `e8047b56...`, the value #1144's
+   own artifacts carry.~~ **Checked first, and FALSIFIED — recorded here rather than quietly
+   dropped.** The rebuild yields `fdbf59379399b94447c029d402d837b1738ec6e6bba4bfe8992a38fd30528875`.
+   The cause is identified and benign: the fingerprint hashes the search crate's own sources, and
+   `rust/pokezero-search/src/events.rs` changed on `main` *after* #1144 (+581/-62, from #1142 and
+   #1150). So `e8047b56` is #1144's fingerprint, not current `main`'s. The substantive check
+   replaces it and **holds**: `scripts/engine_build_fingerprint.py --print` returns the identical
+   `fdbf5937...` for clean `dc6e1e19` and for this merged branch, from tracked bytes — so this
+   branch introduces no engine change. (68 patches, not 69; the count in the review note was one
+   high.)
+2. **The merged-base sweeps reproduce `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`
+   on every counter.** #1144 measured that state; an independent re-derivation should agree.
+   **Caveat now visible:** #1142 and #1150 are *classifier* changes — they split the `heal` family
+   into sub-cases and split `shape_length` by containment. Dev's residue contains
+   `component_magnitude:heal`, so a **relabel** of that row is possible without any row opening or
+   closing. If the merged-base census differs from `c136_faintcancels_fix_*` only by a class
+   *rename* at constant totals, that is #1142/#1150 and not this fix. It is also precisely why the
+   only valid comparison is merged-base vs merged-fix, never base vs merged-fix.
+3. **Holdout**: `diverged` **4 -> 2**, `matched` 15575 -> 15577. `component_missing_in_engine:itemleftovers`
+   **2 -> 0**; `limit:roll_divergent_lethality` stays 2; `component_extra_in_engine:spikes` is
+   **already 0 on the merged base** (closed by #1144, not by this fix — this PR must not claim it).
+4. **Dev**: unchanged at `diverged` 2, `matched` 15501, same two classes.
+5. `boundaries_full_round` / `boundaries_measured` unchanged by the fix on both windows, and
+   `matched + diverged == boundaries_measured` throughout.
+6. The skip histogram is unchanged by the fix on both windows, `encore_move_unknown` included.
+
+## Falsifier — unchanged in spirit, and now specifically about the interaction
+
+Withdraw rather than merge if **anything opens** on either window, if **dev moves at all**, if any
+**boundary count** changes across the fix, if the **skip histogram** moves, if `engine_errors`
+rises, or if the two closed rows are anything other than `19100170/71` and `19100170/72`.
+
+Two failure modes are specific to this re-measurement and would each be a real finding:
+
+- **Fewer than 2 rows close on holdout.** If #1144's faint/queued-action change already alters when
+  `end_of_turn_is_deferred` fires on `19100170/71-72`, the phantom KO may no longer suppress the
+  residual block, and this fix would be closing rows that main has already closed by other means —
+  i.e. the fix would be redundant rather than wrong.
+- **A row opens on `19100170` or elsewhere in the residual family.** That would be the two changes
+  interacting, and is the outcome this re-measurement exists to detect.
+
+## Outcome
+
+Recorded below and in `reports/c137_encore_transform_move_index_results.md`. The base-relative
+artifacts are **kept**: they remain the evidence for the mechanism.
