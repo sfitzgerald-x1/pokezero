@@ -1013,6 +1013,11 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         "tests/test_branch_mass_reconstruction.py",
         # This gate.
         "tests/test_roll_enumeration_scope.py",
+        # The wrong-fan control: selects a roll path per CHILD process to adjudicate
+        # the same boundary three ways. An analysis tool, run by hand, not on any
+        # import path -- and its own runtime behaviour is covered because
+        # scripts/ modules referencing poke_engine are discovered search surfaces.
+        "scripts/c134_wrong_fan_control.py",
         # The measurement record.
         "reports/c134_enumerate_rolls_oracle.md",
     }
