@@ -1839,7 +1839,7 @@ fn render_move_phase(
                     // and 86.4% of the abort channel, and aborts are ~76% of fallback.
                     // ONE predicate decides refuse-vs-count, so the decision is testable
                     // without reaching an arm the engine cannot currently produce.
-                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail) {
+                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail, side) {
                         out.mark_lossy_subcase(
                             SLEEPTALK_LOSSY_TAG,
                             sleeptalk_subcase_slug(&ident),
@@ -1857,7 +1857,7 @@ fn render_move_phase(
                         // measurement could not rank them.
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
-                            &ambiguous_unrenderable_slug(&called_tail),
+                            &ambiguous_unrenderable_slug(&called_tail, side),
                         );
                     } else {
                         out.mark_attribution_unsafe_subcase(
@@ -2021,6 +2021,50 @@ fn render_move_phase(
                             let ident = ctx.active_ident(sim.state, dmg.side_ref);
                             out.lines
                                 .push(format!("|-activate|{ident}|Substitute|[damage]"));
+                        } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
+                            // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
+                            // `[from]` tag, which is what Showdown emits for Recover,
+                            // Soft-Boiled, Moonlight, Synthesis and Morning Sun.
+                            //
+                            // BARE IS LOAD-BEARING, not laziness. The fold READS the tag:
+                            // `[from] item: Leftovers` is an item reveal and `[from] ability:
+                            // X` an ability reveal on the healed mon, whose own comment records
+                            // a live capture where a misread overwrote a protocol-confirmed
+                            // Pressure. Inventing a tag FABRICATES a belief, which is worse
+                            // than refusing. The predicate exists precisely to admit only the
+                            // shape whose correct tag is no tag.
+                            // TWO MUTANTS STILL SURVIVE HERE, stated rather than implied,
+                            // because an earlier version of this arm claimed a pin it did not
+                            // have and review caught exactly that:
+                            //
+                            //   * passing `0` instead of `index` to the predicate. Survives
+                            //     because in every fixture that reaches this arm the `Heal` IS
+                            //     at index 0 -- a gen3 Sleep Talk callee tail for a direct
+                            //     healing move contains nothing else. Killing it needs a tail
+                            //     with an instruction before the heal, which no reachable gen3
+                            //     callee produces.
+                            //   * deleting the re-baseline below. Survives because making it
+                            //     observable needs a same-side HP DECREASE later in the same
+                            //     tail, and the Leech Seed fixture written for it does not
+                            //     produce one -- the residual lands outside the callee tail.
+                            //     The sibling test records that non-firing rather than passing
+                            //     silently.
+                            //
+                            // Both are the same shape as the `emit_residuals!()` survivor the
+                            // substitute arm documents: unreachable-today rather than untested
+                            // in principle.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let ident = ctx.active_ident(sim.state, side);
+                            let condition = sim.hp_condition(side);
+                            out.lines.push(format!("|-heal|{ident}|{condition}"));
+                            // RE-BASELINE, which is the half of the deferral comment that was
+                            // already satisfied and the half this arm must not forget:
+                            // `emit_residuals!()` compares against `before[]`, so an unbaselined
+                            // increase would leave the next comparison reading a phantom
+                            // decrease. The `Switch` arm does the same thing for the same
+                            // reason.
+                            before[side_usize(side)] = sim.active_hp(side).0;
                         } else if let Some(break_side) = substitute_break_side(&called_tail, index) {
                             // SUBSTITUTE ONLY, matched through a helper rather than by
                             // destructuring the variant here ON PURPOSE. Every other volatile is
@@ -3057,10 +3101,18 @@ fn render_move_phase(
 /// `NoneMatched` is unreachable from any state the crate tests build, so nothing observed
 /// the routing. A synthesised test of the refusing SEAM did not help either, because the
 /// seam is downstream of the choice. A pure predicate is testable without reaching the arm.
-fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> bool {
+fn sleeptalk_refusal_is_unsafe(
+    ident: &SleepTalkIdent,
+    tail: &[Instruction],
+    // The ATTACKER's side, i.e. the sleeping mon that used Sleep Talk. Threaded in because
+    // renderability is not a property of the tail alone: a `Heal` on the attacker with no
+    // damage to the defender is a direct healing move and renderable, while the same `Heal`
+    // on the DEFENDER is an absorb ability and is not. See `heal_is_a_direct_self_heal`.
+    attacker: SideReference,
+) -> bool {
     match ident {
         // Proven transition; unsafe only if the walk would silently drop part of it.
-        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail),
+        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail, attacker),
         // The renderer could not reproduce the engine's tail at all, so any description
         // built on it may be wrong. Always unsafe.
         SleepTalkIdent::NoneMatched => true,
@@ -3129,13 +3181,13 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// bookkeeping for Counter/Mirror Coat damage accounting and last-move tracking, and the
 /// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
 /// loses nothing that the named path would have shown.
-fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
+fn ambiguous_tail_is_fully_renderable(tail: &[Instruction], attacker: SideReference) -> bool {
     // DEFINED as "nothing blocks it", so the predicate and the diagnostic below cannot
     // disagree about which instructions are renderable. They were two independent
     // matches in the first version, and this file already records what that costs: the
     // renderer and `engine_transition_differential.py` held opposite views of the
     // sleeptalk contract for two eras with nothing to notice. One list, one answer.
-    unrenderable_tail_families(tail).is_empty()
+    unrenderable_tail_families(tail, attacker).is_empty()
 }
 
 /// Fixed slug order, so the emitted key is stable across runs and aggregators can sum
@@ -3336,6 +3388,61 @@ fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
     })
 }
 
+/// Is this HP increase a DIRECT healing move on the attacker -- the one heal shape the walk
+/// can express -- rather than drain, an absorb ability, or Rest?
+///
+/// `heal` is the family for HP INCREASES, because `emit_residuals!()` is decreases-only by
+/// design (its own comment: "DECREASES ONLY, deliberately. Rendering the heal direction was
+/// shipped once and emitted lines for the wrong Pokemon; it needs the same per-side
+/// re-baselining this walk now has, plus its own pin."). Era-60 production ranks it second
+/// among the walk's gaps, at 117 records / 461 world failures.
+///
+/// # Why this is NOT a mirror of the boost or substitute fixes
+///
+/// A `-heal` line's `[from]` tag is not decoration: the FOLD READS IT. `belief.py` treats
+/// `[from] item: Leftovers` as an item reveal, and `[from] ability: X` as an ability reveal on
+/// the healed mon -- its comment records a live capture where misreading `[of]` pinned an
+/// ability on the attacker and overwrote a protocol-confirmed Pressure. So an invented tag
+/// FABRICATES a belief, which is worse than refusing. Four shapes exist and the named path
+/// distinguishes all four:
+///
+///   * drain (Absorb, Giga Drain): `|-heal|{attacker}|{cond}|[from] drain|[of] {defender}`
+///   * absorb ability (Volt/Water Absorb): `|-heal|{defender}|{cond}|[from] ability: X|[of] ..`
+///   * direct healing move (Recover, Soft-Boiled, Moonlight): BARE `|-heal|{ident}|{cond}`
+///   * Rest: `|-heal|{ident}|{cond} slp|[silent]`
+///
+/// Only the third is admitted here, and the discrimination is a property of the TAIL:
+///
+///   * The heal must be on the ATTACKER. A heal on the defender is an absorb ability.
+///   * The tail must carry NO damage to the defender. Damage plus a heal on the attacker is
+///     drain, whose line needs `[from] drain|[of] ..`.
+///   * The amount must be POSITIVE. A negative `Heal` is the engine's spelling for Liquid
+///     Ooze, which the named path renders as `-damage`, not `-heal`.
+///
+/// Rest needs no clause: its tail always carries `ChangeStatus` and `SetSleepTurns`, which are
+/// the still-blocked `status` and `sleepcounter` families, so those tails refuse regardless.
+/// That is a companion-blocks-it argument rather than a reachability one -- the companion is
+/// emitted by construction, the way the substitute break's `DamageSubstitute` is.
+///
+/// This is a PARTIAL close of the family, deliberately. The slug still reports `heal` for
+/// every tail this does not admit, so the remainder stays rankable instead of vanishing.
+fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: SideReference) -> bool {
+    let healed = match tail.get(index) {
+        // POSITIVE only: a negative `Heal` is Liquid Ooze and renders as `-damage`.
+        Some(Instruction::Heal(heal)) if heal.heal_amount > 0 => heal.side_ref,
+        _ => return false,
+    };
+    if healed != attacker {
+        return false;
+    }
+    // No damage to the OTHER side anywhere in the tail, or this is drain.
+    !tail.iter().any(|other| match other {
+        Instruction::Damage(dmg) => dmg.side_ref != attacker && dmg.damage_amount > 0,
+        Instruction::DamageSubstitute(dmg) => dmg.side_ref != attacker,
+        _ => false,
+    })
+}
+
 /// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
 /// instruction. `None` means the walk renders it (or correctly renders nothing).
 ///
@@ -3343,7 +3450,11 @@ fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
 /// here instead of silently classifying as one more `unclassified`, which on the largest
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
-fn unrenderable_family_at(tail: &[Instruction], index: usize) -> Option<&'static str> {
+fn unrenderable_family_at(
+    tail: &[Instruction],
+    index: usize,
+    attacker: SideReference,
+) -> Option<&'static str> {
     // `get`, not `tail[index]`. Every caller is in bounds today, but an out-of-bounds index
     // would PANIC, and this file spends a long comment below on why that specific outcome is
     // the worst one available: pyo3 maps a Rust panic to `PanicException`, which derives from
@@ -3366,6 +3477,11 @@ fn unrenderable_family_at(tail: &[Instruction], index: usize) -> Option<&'static
         // emits on `active_hp < before` only, so a heal-direction `Damage` renders
         // NOTHING -- see this function's caller doc for the reproduced C52-mirror defect.
         Instruction::Damage(damage) if damage.damage_amount >= 0 => None,
+        // A DIRECT self-heal is renderable; drain, an absorb ability and Liquid Ooze are not.
+        // The discrimination needs the whole tail and the attacker -- see
+        // `heal_is_a_direct_self_heal` for why, and for why this is a deliberately PARTIAL
+        // close of the family rather than a whole one.
+        Instruction::Heal(_) if heal_is_a_direct_self_heal(tail, index, attacker) => None,
         Instruction::Switch(_) => None,
         Instruction::SetLastUsedMove(_)
         | Instruction::ChangeDamageDealtDamage(_)
@@ -3541,7 +3657,10 @@ fn registered_family_or_unclassified(family: &'static str, order: &[&str]) -> &'
     }
 }
 
-fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
+fn unrenderable_tail_families(
+    tail: &[Instruction],
+    attacker: SideReference,
+) -> Vec<&'static str> {
     let mut families: Vec<&'static str> = Vec::new();
     for index in 0..tail.len() {
         // An UNREGISTERED token degrades to `unclassified` here, which is in both the
@@ -3559,7 +3678,7 @@ fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
         // forgets `UNRENDERABLE_FAMILY_ORDER`, and the release wheel aborts mid-campaign.
         // Now that path yields a measurable `unclassified` bucket instead, and the test
         // below still fails in CI so the omission is caught before it ships.
-        if let Some(family) = unrenderable_family_at(tail, index) {
+        if let Some(family) = unrenderable_family_at(tail, index, attacker) {
             let family = registered_family_or_unclassified(family, UNRENDERABLE_FAMILY_ORDER);
             if !families.contains(&family) {
                 families.push(family);
@@ -3583,8 +3702,8 @@ fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
 /// visible together. The prefix must remain `SLEEPTALK_LOSSY_TAG`, since
 /// `mark_attribution_unsafe_subcase` asserts it and
 /// `engine_transition_differential.py` matches the bare tag exactly.
-fn ambiguous_unrenderable_slug(tail: &[Instruction]) -> String {
-    let families = unrenderable_tail_families(tail);
+fn ambiguous_unrenderable_slug(tail: &[Instruction], attacker: SideReference) -> String {
+    let families = unrenderable_tail_families(tail, attacker);
     // Unreachable: this slug is only built when the tail is NOT fully renderable, which
     // is defined as a non-empty family list. Named rather than emitting a bare trailing
     // colon so a future edit that breaks that correspondence shows up in the measurement.
@@ -5144,7 +5263,11 @@ mod tests {
         //     of EVERY still-blocked family, that `ambiguous_tail_is_fully_renderable` returns
         //     FALSE. An "accept everything" predicate fails there on all of them.
         //   * `the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract` drives a real
-        //     Recover/Soft-Boiled ambiguity end to end and requires it to refuse under `heal`.
+        //     Mean Look/Spider Web ambiguity end to end and requires it to refuse under
+        //     `volatile`. It used to use Recover/Soft-Boiled and refuse under `heal`; the
+        //     direct-self-heal change admits exactly that shape, so the guard had to move to a
+        //     family that still blocks -- a knock-on the heal work predicted in advance rather
+        //     than discovered when the suite went red.
         // The pinned tuple below still catches any drift, in both directions: a refusal
         // REAPPEARING moves the 0 as loudly as a usable one moving the 237.
         assert_eq!(
@@ -5208,7 +5331,7 @@ mod tests {
     /// The refactor must not change WHICH branches are refused.
     ///
     /// `ambiguous_tail_is_fully_renderable` was an inline `matches!` pair and is now
-    /// defined as `unrenderable_tail_families(tail).is_empty()`. That is only a
+    /// defined as `unrenderable_tail_families(tail, attacker).is_empty()`. That is only a
     /// refactor if the admitted set is byte-identical -- widening it by one variant
     /// stops refusing a class of worlds, which is a behaviour change to the largest
     /// failure class in the program, and narrowing it starts refusing worlds that
@@ -5297,14 +5420,14 @@ mod tests {
         ];
         for (index, instruction) in admitted.iter().enumerate() {
             assert_eq!(
-                unrenderable_family_at(&admitted, index),
+                unrenderable_family_at(&admitted, index, SideReference::SideOne),
                 None,
                 "{instruction:?} was admitted by the previous allowlist and must stay \
                  admitted -- widening or narrowing this set changes which worlds refuse"
             );
         }
         assert!(
-            ambiguous_tail_is_fully_renderable(&admitted),
+            ambiguous_tail_is_fully_renderable(&admitted, SideReference::SideOne),
             "a tail built only from admitted instructions must be fully renderable"
         );
 
@@ -5327,7 +5450,7 @@ mod tests {
 
         // A real break: hit then removal. Showdown narrates `|-end|`, so this is renderable.
         assert!(
-            ambiguous_tail_is_fully_renderable(&[hit.clone(), removal.clone()]),
+            ambiguous_tail_is_fully_renderable(&[hit.clone(), removal.clone()], SideReference::SideOne),
             "a `DamageSubstitute` followed by the substitute removal IS a break and must be \
              renderable -- this is the whole point of the change"
         );
@@ -5338,20 +5461,20 @@ mod tests {
         // `|-end|` here is a phantom, and searching the world against a protocol log with an
         // extra line is the same defect class as one missing a line.
         assert_eq!(
-            unrenderable_family_at(&[removal.clone(), switch.clone()], 0),
+            unrenderable_family_at(&[removal.clone(), switch.clone()], 0, SideReference::SideOne),
             Some("volatile"),
             "a substitute removal with NO preceding same-side `DamageSubstitute` is a \
              switch-out cleanup, not a break, and must stay blocked"
         );
         assert!(
-            !ambiguous_tail_is_fully_renderable(&[removal.clone(), switch]),
+            !ambiguous_tail_is_fully_renderable(&[removal.clone(), switch], SideReference::SideOne),
             "a phaze tail must keep REFUSING -- review reproduced this rendering a phantom \
              `|-end|` end to end through `render_branch_events`"
         );
 
         // ORDER is load-bearing, not just presence: the hit must come BEFORE the removal.
         assert_eq!(
-            unrenderable_family_at(&[removal.clone(), hit.clone()], 0),
+            unrenderable_family_at(&[removal.clone(), hit.clone()], 0, SideReference::SideOne),
             Some("volatile"),
             "a removal that PRECEDES the hit is not a break that hit caused"
         );
@@ -5364,7 +5487,7 @@ mod tests {
         });
         assert_eq!(
             // index 1: the REMOVAL is the instruction under test here, not the hit.
-            unrenderable_family_at(&[other_side_hit, removal], 1),
+            unrenderable_family_at(&[other_side_hit, removal], 1, SideReference::SideOne),
             Some("volatile"),
             "a `DamageSubstitute` on the OTHER side does not make this removal a break"
         );
@@ -5375,8 +5498,13 @@ mod tests {
         // all, so `Heal(_) => None` left every test green.
         let blocked: Vec<(Instruction, &str)> = vec![
             (
+                // The DEFENDER's side, deliberately. An attacker-side heal with no damage
+                // to the defender is now a direct self-heal and RENDERS; this one is an
+                // absorb ability, whose Showdown line carries `[from] ability: X|[of] ..`,
+                // which the walk cannot construct without knowing the ability. So the family
+                // is partially closed and this representative is what remains of it.
                 Instruction::Heal(HealInstruction {
-                    side_ref: SideReference::SideOne,
+                    side_ref: SideReference::SideTwo,
                     heal_amount: 40,
                 }),
                 "heal",
@@ -5547,12 +5675,12 @@ mod tests {
         ];
         for (instruction, family) in &blocked {
             assert_eq!(
-                unrenderable_family_at(std::slice::from_ref(instruction), 0),
+                unrenderable_family_at(std::slice::from_ref(instruction), 0, SideReference::SideOne),
                 Some(*family),
                 "{instruction:?} must be blocked and classified as {family:?}"
             );
             assert!(
-                !ambiguous_tail_is_fully_renderable(std::slice::from_ref(instruction)),
+                !ambiguous_tail_is_fully_renderable(std::slice::from_ref(instruction), SideReference::SideOne),
                 "{instruction:?} carries an effect the walk drops, so its tail is not \
                  fully renderable"
             );
@@ -5583,6 +5711,49 @@ mod tests {
             0,
             "boost",
         )];
+        // THE HEAL PREDICATE, pinned in all four directions it discriminates on. This family
+        // is only PARTIALLY closed, and each clause is what keeps a mis-tagged `-heal` -- which
+        // FABRICATES a belief in the fold -- out of a searched world.
+        let self_heal = Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 40,
+        });
+        let foe_damage = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 30,
+        });
+        // 1. Direct self-heal: renders bare. The one admitted shape.
+        assert_eq!(
+            unrenderable_family_at(std::slice::from_ref(&self_heal), 0, SideReference::SideOne),
+            None,
+            "an attacker-side heal with no foe damage is a direct healing move"
+        );
+        // 2. DRAIN: same heal, but the tail damages the foe. Needs `[from] drain|[of] ..`.
+        assert_eq!(
+            unrenderable_family_at(&[foe_damage, self_heal.clone()], 1, SideReference::SideOne),
+            Some("heal"),
+            "damage to the foe plus a heal on the attacker is DRAIN, not a direct heal"
+        );
+        // 3. ABSORB ABILITY: the heal is on the defender. Needs `[from] ability: X`.
+        assert_eq!(
+            unrenderable_family_at(std::slice::from_ref(&self_heal), 0, SideReference::SideTwo),
+            Some("heal"),
+            "a heal on the DEFENDER is an absorb ability, not a direct heal"
+        );
+        // 4. LIQUID OOZE: a negative heal, which the named path renders as `-damage`.
+        assert_eq!(
+            unrenderable_family_at(
+                &[Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: -40,
+                })],
+                0,
+                SideReference::SideOne
+            ),
+            Some("heal"),
+            "a NEGATIVE heal is Liquid Ooze and renders as damage, not as a heal"
+        );
+
         // CROSS-SIDE control. Review's mutation replaced the predicate's
         // `switch.side_ref == boost.side_ref` with `true` and SURVIVED the whole suite, because
         // every fixture above pairs SideOne with SideOne. A cross-side pair must stay ADMITTED:
@@ -5600,7 +5771,7 @@ mod tests {
             }),
         ];
         assert_eq!(
-            unrenderable_family_at(&cross_side, 0),
+            unrenderable_family_at(&cross_side, 0, SideReference::SideOne),
             None,
             "a `Switch` on the OTHER side does not reset this side's boosts, so the boost \
              stays renderable"
@@ -5608,18 +5779,18 @@ mod tests {
 
         for (tail, index, family) in &blocked_in_tail {
             assert_eq!(
-                unrenderable_family_at(tail, *index),
+                unrenderable_family_at(tail, *index, SideReference::SideOne),
                 Some(*family),
                 "{tail:?} at {index} must be blocked as {family:?}"
             );
             assert!(
-                !ambiguous_tail_is_fully_renderable(tail),
+                !ambiguous_tail_is_fully_renderable(tail, SideReference::SideOne),
                 "{tail:?} carries an effect the walk drops, so it is not fully renderable"
             );
             // ...and the SAME instruction WITHOUT the tail context must stay admitted, or the
             // narrowing is a blanket revert of #1131 wearing a guard's clothes.
             assert_eq!(
-                unrenderable_family_at(std::slice::from_ref(&tail[*index]), 0),
+                unrenderable_family_at(std::slice::from_ref(&tail[*index]), 0, SideReference::SideOne),
                 None,
                 "{:?} alone is a move's own stat change and must stay renderable",
                 tail[*index]
@@ -5631,10 +5802,10 @@ mod tests {
             // outcome reinstating the token is supposed to prevent. Asserting the raw family
             // cannot see that, because the degradation happens one layer up.
             assert!(
-                ambiguous_unrenderable_slug(tail).ends_with(&format!(":{family}")),
+                ambiguous_unrenderable_slug(tail, SideReference::SideOne).ends_with(&format!(":{family}")),
                 "the composed slug must name {family:?} rather than degrade to \
                  `unclassified`: {}",
-                ambiguous_unrenderable_slug(tail)
+                ambiguous_unrenderable_slug(tail, SideReference::SideOne)
             );
         }
 
@@ -5687,7 +5858,7 @@ mod tests {
 
         // Two Boosts are ONE family token.
         assert_eq!(
-            unrenderable_tail_families(&[boost.clone(), second_boost]),
+            unrenderable_tail_families(&[boost.clone(), second_boost], SideReference::SideOne),
             vec!["statrecalc"],
             "repeated instructions in the same family must collapse to one token"
         );
@@ -5695,8 +5866,8 @@ mod tests {
         // FIXED order, not encounter order. `boost` precedes `status` in
         // UNRENDERABLE_FAMILY_ORDER, so both instruction orders give the same slug --
         // otherwise one composition splits across two keys and neither sums.
-        let forward = ambiguous_unrenderable_slug(&[boost.clone(), status.clone()]);
-        let reversed = ambiguous_unrenderable_slug(&[status, boost.clone()]);
+        let forward = ambiguous_unrenderable_slug(&[boost.clone(), status.clone()], SideReference::SideOne);
+        let reversed = ambiguous_unrenderable_slug(&[status, boost.clone()], SideReference::SideOne);
         assert_eq!(forward, reversed, "slug must not depend on instruction order");
         assert_eq!(
             forward,
@@ -5706,7 +5877,7 @@ mod tests {
         // The prefix is the CONTRACT tag. `engine_transition_differential.py` matches
         // the bare tag exactly, and `mark_attribution_unsafe_subcase` asserts this
         // relationship, so a slug that lost the prefix would panic in production.
-        assert!(ambiguous_unrenderable_slug(&[boost]).starts_with(SLEEPTALK_LOSSY_TAG));
+        assert!(ambiguous_unrenderable_slug(&[boost], SideReference::SideOne).starts_with(SLEEPTALK_LOSSY_TAG));
     }
 
     /// Every token the classifier can emit must be ORDERABLE and REGISTERED.
@@ -5758,7 +5929,7 @@ mod tests {
             }),
         ];
         for instruction in &reachable {
-            let family = unrenderable_family_at(std::slice::from_ref(instruction), 0)
+            let family = unrenderable_family_at(std::slice::from_ref(instruction), 0, SideReference::SideOne)
                 .expect("these representatives are all blocked families");
             assert!(
                 UNRENDERABLE_FAMILY_ORDER.contains(&family),
@@ -5934,7 +6105,7 @@ mod tests {
             side_ref: SideReference::SideOne,
             amount: 20,
         });
-        let families = unrenderable_tail_families(std::slice::from_ref(&boost));
+        let families = unrenderable_tail_families(std::slice::from_ref(&boost), SideReference::SideOne);
         assert_eq!(families, vec!["statrecalc"]);
         for family in &families {
             assert!(
@@ -5945,7 +6116,7 @@ mod tests {
         let mut out = RenderedEvents::default();
         out.mark_attribution_unsafe_subcase(
             SLEEPTALK_LOSSY_TAG,
-            &ambiguous_unrenderable_slug(std::slice::from_ref(&boost)),
+            &ambiguous_unrenderable_slug(std::slice::from_ref(&boost), SideReference::SideOne),
         );
         assert!(out.is_attribution_unsafe());
     }
@@ -5981,7 +6152,7 @@ mod tests {
             stat: PokemonBoostableStat::Defense,
             amount: 1,
         });
-        assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, &ambiguous_unrenderable_slug(&[boost]));
+        assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, &ambiguous_unrenderable_slug(&[boost], SideReference::SideOne));
     }
 
     /// The ROUTING decision, tested directly for every variant.
@@ -6013,12 +6184,12 @@ mod tests {
             damage_amount: -130,
         })];
         assert!(
-            !ambiguous_tail_is_fully_renderable(&heal_shaped),
+            !ambiguous_tail_is_fully_renderable(&heal_shaped, SideReference::SideOne),
             "a negative `damage_amount` is a HEAL and the walk drops it, so the tail is \
              NOT fully renderable"
         );
         assert!(
-            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped),
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped, SideReference::SideOne),
             "a heal-shaped ambiguous tail must REFUSE"
         );
         // Mixed sign refuses too: one dropped component is enough.
@@ -6032,31 +6203,32 @@ mod tests {
                 damage_amount: -130,
             }),
         ];
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed, SideReference::SideOne));
         // Zero is a no-op and stays admissible.
         assert!(!sleeptalk_refusal_is_unsafe(
             &SleepTalkIdent::Ambiguous,
             &[Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
                 damage_amount: 0,
-            })]
+            })],
+            SideReference::SideOne
         ));
 
         // Ambiguous: renderable is USABLE, unrenderable REFUSES.
-        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable));
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable, SideReference::SideOne));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable, SideReference::SideOne));
 
         // NoneMatched: unsafe either way. A renderable tail must NOT rescue it.
         assert!(
-            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &renderable),
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &renderable, SideReference::SideOne),
             "none_matched with a renderable tail must STILL refuse -- the tail is not the \
              defect, the renderer's failure to reproduce it is"
         );
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &unrenderable));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &unrenderable, SideReference::SideOne));
 
         // An empty tail is renderable by construction, so it must not rescue it either.
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &[]));
-        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[]));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &[], SideReference::SideOne));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[], SideReference::SideOne));
     }
 
     /// The refusing seam must still refuse `none_matched`, and must NOT refuse
