@@ -1044,7 +1044,10 @@ def main(argv=None) -> int:
             measured=report["counts"].get("attempted", 0),
             matched=report["counts"].get("exact", 0),
             diverged=report["counts"].get("divergent", 0),
-            contained=report.get("boundaries"),
+            # Subscript, not .get: a renamed report key must CRASH rather than silently
+            # disable rule 4, the only load-bearing rule. `measured` above fails safe (a
+            # rename makes it 0 and rule 2 fires); this one would fail OPEN.
+            contained=report["boundaries"],
             skipped=sum(v for k, v in report["counts"].items() if k.startswith("skip")),
         )
         for report in reports

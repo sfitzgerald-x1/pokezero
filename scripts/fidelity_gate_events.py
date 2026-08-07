@@ -650,6 +650,24 @@ def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
                         "detail": result.detail,
                     }
                 )
+    # The skip/measured split is a STRING-PREFIX convention spanning every BoundaryResult
+    # return site, and nothing else pins it. A new status without the `skip:` prefix silently
+    # moves boundaries out of `skipped` and into `measured`.
+    #
+    # Rule 4 does NOT catch that -- an earlier commit message claimed it would, and review
+    # falsified the claim: moving a boundary between the two buckets changes both sides of
+    # `measured + skipped == contained` by one each, so they cancel. Measured live, with a
+    # third of boundaries returning an unprefixed status: 1064 + 207 = 1271, all four rules
+    # green, 424 boundaries never driven and reported as divergences. Hence this assertion.
+    known = {"a", "b", "c", "attempted"}
+    unknown = {k for k in stats if k not in known and not k.startswith("skip:")}
+    if unknown:
+        raise AssertionError(
+            f"drive_boundary returned status(es) {sorted(unknown)} that are neither a known "
+            "verdict (a/b/c) nor `skip:`-prefixed. The denominator's skip/measured split is a "
+            "prefix convention; an unprefixed status inflates boundaries_measured and no "
+            "denominator rule can see it."
+        )
     total_pairs = sum(len(chain) - 1 for chain in corpus["fold_chains"].values() if len(chain) > 1)
     return {
         "corpus": str(corpus_dir),
@@ -689,7 +707,10 @@ def main(argv=None) -> int:
                 for k, v in report["counts"].items()
                 if k not in ("a", "attempted") and not k.startswith("skip:")
             ),
-            contained=report.get("row_pair_boundaries"),
+            # Subscript, not .get: a renamed report key must CRASH rather than silently
+            # disable rule 4, the only load-bearing rule. `measured` above fails safe (a
+            # rename makes it 0 and rule 2 fires); this one would fail OPEN.
+            contained=report["row_pair_boundaries"],
             skipped=sum(
                 v for k, v in report["counts"].items() if k.startswith("skip:")
             ),

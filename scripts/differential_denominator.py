@@ -133,6 +133,11 @@ class DenominatorReport:
             parts.append(f"{self.skipped} skipped")
         parts.append(f"matched {self.matched}")
         parts.append(f"diverged {self.diverged}")
+        if self.contained is None or self.skipped is None:
+            # Say so in the output. A downgraded run should not be inferable only from the
+            # ABSENCE of a phrase -- that is the silent-inertness shape this module exists
+            # to remove.
+            parts.append("rule 4 NOT CHECKED (contained/skipped not supplied)")
         return f"   [denominator] {self.label}: " + ", ".join(parts)
 
 
