@@ -262,19 +262,36 @@ this class before measuring, with a "nothing opened" falsifier, and confirmed it
 **Could it regress?** Yes, and the answer to "without a pin" is §5: the mechanism *is* pinnable, it
 *was* pinned, and the pin was not being executed anywhere. That gap is what this PR closes.
 
-### 4.5 One thing the settling measurement showed that this report does not settle
+### 4.5 A second, smaller difference the settling measurement exposed
 
-Showdown's protocol carries `|-fail|p1a: Ditto` — the consecutive-Protect stall roll failed — while
-the engine's `move:3` render is a single branch in which Protect succeeds. Neither line carries an
-HP delta, the strict matcher compares damage components only, and the boundary matches at
-`d27316b6` and at `1a929c57`, so this costs nothing at these two boundaries. It is not nothing in
-general: a *successful* Protect blocks damage a *failed* one does not. The machinery for it exists
-on both sides (`third_party/poke-engine-gen3-protect-floor.patch` caps the ladder at 1/8;
-`engine_world.py:1402` plumbs `side_payload["stallCounter"]` into `side_conditions["protect"]`), so
-the question is whether the counter was populated at this boundary, and I did not measure it. I
-grepped `reports/`, `docs/`, `scripts/`, `src/` and `rust/pokezero-search/src/` for
-`protect_fail|protectfail|consecutive` and found no record of it; that is the scope of my search,
-not a claim about the repository. Filed here as an observation to reproduce, not as a gap.
+Showdown's protocol carries `|-fail|p1a: Ditto` on both turns, while the corrected (`move:3`) render
+is a single 100 %-mass branch in which Protect **succeeds**. My first reading was that this was the
+consecutive-Protect stall ladder. **It is not**, and the distinction matters:
+
+- The reconstructed stall counter really is 0. Measured, not inferred: deserializing the recorded
+  states gives `side_one.side_conditions.protect == 0` at both boundaries. At 0 the ladder's chance
+  is 1, so the ladder cannot be what failed this Protect.
+- Showdown's own gen3 `protect.onPrepareHit` is
+  `return !!this.queue.willAct() && this.runEvent('StallMove', pokemon)` (`data/moves.ts`). **The
+  ladder is the second conjunct and never ran.** p2 switched, a switch resolves before the move
+  phase, so by the time Protect executes nothing is left to act, `willAct()` is false, and Protect
+  fails on that clause alone. Consistent with the `[still]` tag on the `|move|` line.
+- The vendored engine has no `willAct` equivalent — `grep will_act|willAct` over
+  `src/gen3/generate_instructions.rs` returns nothing — so it renders the Protect as succeeding.
+  `side_conditions.protect += 1` (`:5428`) then fires, which is the part that is not free: a
+  successful Protect the real sim failed **climbs the ladder**, and the engine will price the *next*
+  Protect at 1/2 where Showdown prices it at 1.
+
+Why this costs nothing at *these* boundaries: p1's move is Protect against a switch, so neither
+outcome moves any HP, the strict matcher compares damage components only, and both boundaries match
+at `d27316b6` and at `0afb2dcc`. The follow-on mispricing is a **next**-turn effect and I did not
+sweep for it.
+
+I grepped `reports/`, `docs/`, `scripts/`, `src/` and `rust/pokezero-search/src/` for
+`protect_fail|protectfail|consecutive` and found no record of the `willAct` clause; that is the
+scope of my search, not a claim about the repository. Deliberately **not** filed as a ledger row:
+that needs a pool-reachability check under the C125/C138 standing rule, which I have not run. Filed
+here as an observation with its mechanism identified, for whoever takes it.
 
 ---
 
