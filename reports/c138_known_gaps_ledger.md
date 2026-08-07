@@ -1,0 +1,466 @@
+# C138 — the known-gaps ledger, pool-reachability filtered
+
+C116 Phase 4 item 14. A **known gap** is a place where the engine, or the harness, is known
+to differ from gen3 Showdown or to be unable to express something — *whether or not any sweep
+row currently shows it*. The ledger's job is to make the program's blind spots explicit so a
+fidelity claim can be read honestly.
+
+> **On the C116 citation.** As in C121–C126 and C131–C136: the plan is not in this repository,
+> so it is provenance for why this document exists, never evidence for a claim.
+
+> **Relation to `reports/c125_known_gaps_ledger.md`.** C125 is the same item, scoped to six
+> candidates (three dropped, three carried). It is not superseded — its three carried rows
+> reappear here as G1, G2, G18 — but it is not the ledger item 14 asks for either. This is the
+> exhaustive pass. Where C125 and this document disagree, the disagreement is called out.
+
+---
+
+## 1. Method
+
+### 1.1 Reachability comes first
+
+The filter runs before classification, because several candidate gaps are unreachable in gen3
+random battles and would otherwise pad the ledger into uselessness. Every row below carries a
+reachability verdict **and the instrument that produced it**.
+
+Three verdicts, and only three:
+
+| verdict | meaning |
+|---|---|
+| **REACHABLE** | the shape can occur in gen3 randbats; the row then says whether a current sweep row shows it |
+| **UNREACHABLE** | measured absent from the pool, with the measurement stated |
+| **UNKNOWN** | not determined, with the exact measurement that would settle it named |
+
+"UNKNOWN with a named next measurement" is a better entry than a confident wrong
+classification. Six rows below are UNKNOWN and say so.
+
+### 1.2 Which instrument answers which question
+
+C124 established that `sets.json` is the wrong instrument for items. That holds, and this pass
+adds a second correction: `sets.json` is also the wrong instrument for **pairings**, because a
+gap that needs two things on the *same* Pokémon (Sleep Talk + Haze; Rest + Insomnia) is a
+per-**set** question, not a per-species one.
+
+| question | instrument | why |
+|---|---|---|
+| is a **move** reachable? | union of every set's `movepool` in `data/random-battles/gen3/sets.json` | 125 distinct move ids over 393 sets / 220 species |
+| is an **ability** reachable? | union of every set's `abilities` | 71 distinct; **narrower than the dex** — Marowak's dex abilities are Rock Head / Lightning Rod, but its sets list only Rock Head, and Lightning Rod is absent from the pool entirely |
+| is an **item** reachable? | `getItem` in `data/random-battles/gen3/teams.ts`, **never** `sets.json` | a gen3 `sets.json` entry has no item field at all |
+| is a **pairing** reachable? | per-**set** co-occurrence, not per-species | Haze (4 species) and Sleep Talk (40 species) are both reachable and never co-occur on one set |
+| does a mechanic exist in gen3 **at all**? | `Dex.mod('gen3').abilities.get(id)` / `.moves.get(id)` → `gen` and `isNonstandard` | Snow Warning reports `gen: 4, isNonstandard: "Future"` |
+
+### 1.3 What was measured, and how to reproduce it
+
+All measurements are against the vendored Showdown at
+`/Users/scott/workspace/pokerena/vendor/pokemon-showdown`, commit `f76228a1354b5d0f307ca2d16101294ad3a2308b`.
+
+**Static pool census** (`data/random-battles/gen3/sets.json`):
+
+```
+220 species keys · 393 sets · 125 distinct move ids · 71 distinct ability names
+roles: Setup Sweeper 65, Bulky Attacker 59, Fast Attacker 55, Wallbreaker 53,
+       Bulky Support 50, Staller 49, Berry Sweeper 23, Bulky Setup 21, Generalist 18
+```
+
+**Generative census** — 4,000 `gen3randombattle` teams (24,000 Pokémon) via
+`Teams.generate("gen3randombattle", {seed})` against `dist/sim/index.js`. This is the instrument
+that settles items, and it agrees exactly with reading `getItem`:
+
+```
+ITEMS — exactly 13 distinct, over 24,000 Pokémon
+  Leftovers 17355 · Choice Band 2984 · Petaya Berry 1042 · Salac Berry 1020
+  Lum Berry 466 · Liechi Berry 386 · Soul Dew 201 · White Herb 149
+  Thick Club 132 · Light Ball 102 · Stick 85 · Silk Scarf 41 · Twisted Spoon 37
+ABILITIES — 71 distinct, identical to the sets.json union
+MOVES     — 125 distinct, identical to the sets.json union
+NATURES   — unset on 12,000/12,000 Pokémon (i.e. neutral)
+LEVELS    — 66..100
+SPECIES   — all 220 sets.json keys generated within 8,000 teams; the 245 distinct
+            *names* seen are 220 keys plus 25 cosmetic Unown formes
+```
+
+The 13-item universe is **closed**, and closed for a structural reason, not a sampling one:
+gen3's `getItem` override returns on every path and ends `return 'Leftovers'`, so control never
+reaches the gen4/gen5 superclass. Reading the code and generating 24,000 mons give the same 13.
+That single fact retires a large block of candidate gaps at once — see §4.
+
+**Engine source.** `third_party/poke-engine-src/` is gitignored and regenerated, so it is cited
+by **symbol** throughout. For this pass it was rebuilt exactly as the repo does it:
+`poke-engine==0.0.47` sdist, sha256 verified by `scripts/verify_poke_engine_source.py` against
+`third_party/poke-engine-base-source.json`, then all 70 patches applied by
+`scripts/apply_poke_engine_patches.py` (exit 0, all applied).
+
+**Live histogram.** `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`, the
+newest committed post-fix pair. Both `build_check: gated`, `matcher: strict`, 200 games,
+source commit `aeaee2b1`, engine fingerprint `e8047b56…`. Seed windows `19,000,000–199` (dev)
+and `19,100,000–199` (holdout) — both below the `19,200,000` reserved holdout floor.
+
+### 1.4 Limits of this method
+
+Stated because the reachability filter is the load-bearing part and is easy to over-trust:
+
+- **Reachable is not the same as observed, and unobserved is not the same as absent.** Two
+  200-game windows are ~32k full-round boundaries. A shape with a 1-in-50,000 boundary
+  incidence is reachable and would show zero rows.
+- **The pool is pinned to one Showdown commit.** `sets.json` is upstream data and changes.
+  Every "0 of 220" below is a statement about `f76228a1`, not a theorem.
+- **UNREACHABLE-in-pool does not mean the engine is right.** It means the defect cannot be
+  reached *by this program's format*. Several rows below are unreachable and still real; they
+  are recorded so a later format change does not silently re-arm them.
+- **A per-set co-occurrence check answers "can one Pokémon have both", not "can the generator
+  actually pick both".** Sets have 4-move draws from larger movepools, so co-occurrence in a
+  movepool is an upper bound on reachability, and absence from every movepool is decisive. All
+  pairing verdicts below are of the decisive (absence) kind, except where the row says
+  otherwise.
+- **No engine was built and no new sweep was run for this document.** Every "currently
+  observed" column reads the committed c136 artifacts. Rows marked UNKNOWN are the ones where
+  that was not enough.
+
+---
+
+## 2. Coverage: the denominator every row below sits inside
+
+Re-derived from the c136 artifacts rather than carried from C132, whose table was computed on
+the older C131 artifacts:
+
+| window | all boundaries | single-seat, never compared | in-path exits | measured | measured / all |
+|---|---|---|---|---|---|
+| dev `19,000,000–199` | 17,710 | 1,742 (9.84 %) | 465 | 15,503 | **87.54 %** |
+| holdout `19,100,000–199` | 17,968 | 1,813 (10.09 %) | 576 | 15,579 | **86.70 %** |
+
+The full-round path reconciles exactly in both windows
+(`measured + in-path exits == boundaries_full_round`: 15,503 + 465 = 15,968; 15,579 + 576 =
+16,155), which is what makes 17,710 and 17,968 the real totals. The reported
+`measured_fraction_of_full_rounds` (0.9709 / 0.9643) divides by a denominator that excludes the
+single-seat population entirely.
+
+**This is itself gap H1 below**, and it is the gap that conditions every other row: a divergence
+count is a count over ~87 % of boundaries.
+
+---
+
+## 3. The ledger
+
+Classes: **E** engine differs from gen3 Showdown · **H** harness/instrument cannot measure or
+express · **R** renderer (the crate's protocol reconstruction) · **X** cross-cutting/process.
+
+Legend for *Observed*: **yes** = a row in the c136 dev or holdout artifact; **no** = zero rows
+in those windows; **n/a** = the gap is not of a kind the differential can emit a row for.
+
+### 3.1 Engine gaps — REACHABLE
+
+| # | Gap | Class | Reachability evidence | Observed |
+|---|---|---|---|---|
+| **G1** | **Stick's +2 crit ratio is not modelled.** The gen3 `Items` enum in the engine (`src/gen3/items.rs`, `define_enum_with_from_str! { Items { … } default = UNKNOWNITEM }`) has **no `STICK` variant** — `grep -c STICK` over the whole engine `src/` returns hits only for `STICKYHOLD`/`STICKYWEB`. Gen3 crit rate in `generate_instructions.rs` is `BASE_CRIT_CHANCE = 1/16`, modified only by `BATTLEARMOR`/`SHELLARMOR` and `choice.move_id.increased_crit_ratio()` — there is no item term. Showdown gen3: `stick.onModifyCritRatio` returns `critRatio + 2` when `user.species.id === "farfetchd"`, and `sim/battle-actions.ts` uses `critMult = [0,16,8,4,3,2]` for `gen <= 5`, so Return (`critRatio: 1`) goes from **1/16 to 1/4**. | E | **REACHABLE, and deterministic.** `getItem`: `if (species.id === 'farfetchd') return 'Stick';` — unconditional. Measured: **435 of 435** generated Farfetch'd held Stick over 20,000 teams. Farfetch'd's single set is `agility / batonpass / return / swordsdance`, so its only damaging move is the physical Return the boost applies to. | **no** |
+| **G2** | **Cross-side Leech Seed is not modelled.** The engine models only the defender's own seed; order 10.5 is cross-side and speed-major, so a faster seeder's drain is emitted at the *victim's* slot. Recorded in `reports/c115_program_state.md` §5 and in the engine's own doc comment at `gen3/generate_instructions.rs` (`"…LIQUIDOOZE it damages instead. Only the defender's own seed is modelled."`). | E | REACHABLE. `leechseed` on **12 of 220** species / 12 sets. | was yes (`19100014/35`, `19100193/46`); **no** in c136 — the *attribution* was fixed, the modelling gap was not |
+| **G3** | **`19100014/35`'s 10 % arm is a Leech-Seed-miss branch against a Showdown hit.** `reports/c131_leechseed_heal_label.md` §2: "no rendering change can make a miss branch reproduce a hit." Distinct sub-arm of G2. | E | REACHABLE (as G2). | no (row closed via its 90 % arm only) |
+| **G4** | **`compare_health_with_damage_multiples` accumulates the roll ladder in f32.** Re-derived here, not transcribed — see §5. | E | REACHABLE: it is on the KO-threshold split path for every damaging move. | no direct row; **it is the shared machinery under G6/G7 and both `limit:roll_divergent_lethality` rows** |
+| **G5** | **Wish heals the resolving *active*'s `maxhp/2`, not the *caster*'s.** `src/pokezero/engine_world.py` `_build_side_spec` (wish block): "The amount is IGNORED by poke-engine, which heals the resolving active's maxhp/2 — a known low-severity deviation from gen3 (true heal = the CASTER's maxhp/2)". | E | REACHABLE. `wish` on **16 of 220** species; **24 sets** pair `wish` with `protect`, the shape that most often survives to resolution on a different active. | no |
+| **G6** | **Residual-lethality threshold is read from the defender's *pre-move* state**, before the move's own secondary is known, so a Fire move's burn tick kills a defender the collapsed representative leaves alive. `reports/c135_roll_divergent_lethality_adjudication.md` §3. | E | REACHABLE: burn secondaries on `fireblast` (28 species), `sacredfire` (1), `willowisp` (7), `flamethrower` (15), `overheat` (4). | **yes** — `19100107/135`, `19100191/5` |
+| **G7** | **The crit-straddle path has no residual sub-split.** `reports/c133_collapsed_roll_disposition.md` §3: the crit population straddles both a KO threshold and a sand-lethality threshold, and the code splits only on KO. | E | REACHABLE. Requires a residual chip; in this pool sand is the dominant source, from Sand Stream on **Tyranitar** (all 3 of its sets) — see §4 R4 for why sand is the *only* chipping weather. | **yes** — `19000074/27` |
+| **G8** | **The collapsed lethal arm mis-prices a roll-dependent Leech Seed drain** (`hp_after_move + leftovers < maxhp/8` clamp). `reports/c111_residue_row_causes.md` Addendum 2. | E | REACHABLE (as G2, plus Leftovers, which is 72 % of all generated items). | **yes** — `19000191/63` |
+| **G9** | **Multi-hit moves share one damage roll across all hits.** `reports/c129_hitcount_ko_threshold.md` §6: Showdown rolls each hit independently (128 + 121 = 249 on `19100113/62`); the engine applies one roll to the whole move, so a two-hit move can only produce even totals. | E | **REACHABLE, but far narrower than it looks.** The pool's *only* multi-hit move is `bonemerang` (fixed 2 hits), on **Marowak alone**, on 1 of its 2 sets. Measured: 340 of 652 generated Marowak carried it. Every `[2,5]`-hit move (Bullet Seed, Rock Blast, Icicle Spear, Pin Missile, Fury Attack, Doubleslap, Comet Punch, Fury Swipes, Arm Thrust, Barrage, Spike Cannon) is **0 of 220**. | no (`19100113/62` closed by the hit-count partition, not by this) |
+| **G10** | **N1 — Case B's residual arms mix per-hit and total bases**, so a KO can be priced as a residual death. `reports/c129_hitcount_ko_threshold.md` §6. | E | REACHABLE only through G9's Bonemerang, since `hit_count > 1` is its precondition. | no |
+| **G11** | **N2 — the survive arm truncates**, under-dealing by up to `hit_count − 1` HP. Same source. | E | REACHABLE, same precondition as G10; magnitude bounded at 1 HP for a 2-hit move. | no |
+| **G12** | **`residual_phase_final_hp` models no Curse or Nightmare tick**, so the residual threshold is silently absent for those two sources. Same source. | E | **SPLIT.** Curse: REACHABLE — `curse` on **5 of 220** species. Nightmare: **UNREACHABLE** — `nightmare` is 0 of 220. | no |
+| **G13** | **A non-Ghost curser carries a spurious engine CURSE volatile** the real protocol never starts. `rust/pokezero-search/src/leaf.rs` `VOLATILE_MAP` doc: "the gen3 engine applies the base Curse choice … with no Ghost/non-Ghost split". | E | **REACHABLE, and it is the only reachable half.** All 5 Curse carriers are non-Ghost (Dunsparce Normal, Miltank Normal, Muk Poison, Regirock Rock, Snorlax Normal); **0 Ghost-type species in the pool carries `curse`**, so the *companion* deviation the same comment names — Ghost-curse target placement — is UNREACHABLE. | no |
+| **G14** | **Hustle + Choice Band truncates twice**, a real ±1 damage divergence. `src/pokezero/gen3_damage.py` `Gen3DamageContext.attack_direct_mods`. | E | **REACHABLE, and deterministic.** Hustle is on Delibird alone; Delibird's single movepool is 5 physical moves + Ice Beam, so `counter.get('Physical') >= 4` always holds. Measured: **550 of 550** generated Hustle holders held Choice Band. | no |
+| **G15** | **Sleep Talk's callee has `before_move` applied twice**, so a Sleep-Talk-called Fire/Ice move into a Thick Fat defender gets its base power quartered. `reports/c102_consumed_choice_double_mutation.json`; the crate's own note calls the dangerous direction "a false MATCH, not a divergence". | E/R | REACHABLE. `sleeptalk` 40 species; Thick Fat 6 species (Dewgong, Grumpig, Hariyama, Miltank, Snorlax, Walrein); Fire/Ice moves are widespread (`icebeam` 58, `flamethrower` 15, `fireblast` 28). | no — and c102 states the differential **cannot** see it, because the failure mode is a false match |
+| **G16** | **Lum Berry's cure fires at residual order 10.4 instead of immediately.** `third_party/poke-engine-gen3-residual-speed-order.patch`, on symbol `item_end_of_turn`: "LUM / CHESTO are a KNOWN, SEPARATE divergence … gen3 gives them no residual handler at all … the real fix is an immediate cure and is not attempted here." | E | **SPLIT.** Lum Berry: REACHABLE — 466 of 24,000 generated Pokémon. Chesto Berry: **UNREACHABLE** — not in the 13-item universe. | no |
+| **G17** | **Effect Spore's SLEEP third stays refused for a same-turn waking attacker.** `reports/c121_a5_wake_before_contact.md` §3. | E | REACHABLE. Effect Spore on Breloom and Parasect (2 of 220); requires a contact move into them from a mon waking that turn. | no |
+| **G18** | **White Herb's `onResidual` order-29 trigger is not wired.** `reports/c126_a6_white_herb.md` §5b. Needs a stat drop surviving to end-of-turn with no move, ability or switch in between. | E | REACHABLE, and the *holder* is deterministic: `getItem` returns White Herb unconditionally for `deoxys` and `deoxysattack` (149 of 24,000 generated). The order-29 *path* is the narrow part. | no |
+| **G19** | **The engine implements no Endless Battle Clause.** `src/pokezero/engine_env.py` module docstring: "Showdown ends a non-progressing game; the engine does not … Measured incidence with a random-legal policy: 2 of 120 seeds exceeded 1500 plies against a median of 80." | E | REACHABLE — the pool is full of recovery (`rest` 46, `recover` 16, `protect` 43, `toxic` 114) and Leftovers is 72 % of items. | n/a for the differential; it manifests as `abort:max_steps`, which is **1** in the c136 holdout |
+| **G20** | **Unrecognised volatile *and item* names deserialize silently to a default rather than failing.** `third_party/poke-engine-gen3-state-roundtrip.patch` records this for volatiles ("`from_str` has the same `default = NONE` fallback for UNRECOGNISED names"); the same macro gives `Items` `default = UNKNOWNITEM`, which is the mechanism by which G1 is *silent* rather than loud. | E | REACHABLE — G1 is a live instance of it. | no |
+| **G21** | **Opponent PP is always modelled as full.** `src/pokezero/engine_world.py` `_move_specs`: "Opponent PP decrements are not tracked publicly yet: full PP is a documented exemption." Interacts with Encore's PP-zero termination. | E/H | REACHABLE — every battle. | no |
+| **G22** | **Encore's elapsed-turn counter is seeded at a floor of 1.** `engine_world.py` `_build_side_spec` (encore block): the true elapsed count is not observable from the request. Gen3 Encore runs `this.random(3,7)`. | E/H | REACHABLE. `encore` on **16 of 220** species. | no directly; `skip:world_unsupported:encore_move_unknown` fires 2 dev / 1 holdout |
+| **G23** | **Substitute health after a surviving hit is unknowable, so the world fails closed.** `engine_world.py` `approximate_substitute_health`; `reports/c16_substitute_depletion_prediction.md`. | E/H | REACHABLE, and common. `substitute` on **75 of 220** species — the single most widespread non-`toxic` move in the pool. The exactly-derivable depletions it names (Seismic Toss reachable at 11 species; Night Shade, Dragon Rage, Sonic Boom all 0) are mostly unreachable. | **yes as an exit** — `limit:world_substitute_health_unknown` 131 dev / 139 holdout |
+| **G24** | **`approximate_sleep_turns` models an unannotated induced sleep as freshly asleep**, biasing wake-up odds late in a sleep. `engine_world.py` `_hp_and_status`. Default **ON**. | E/H | REACHABLE and dominant. `hypnosis` 11, `sleeppowder` 9, `spore` 3, `lovelykiss` 1, `yawn` 1 species. | **yes as widening** — `hidden_counter_support:sleep` 1,352 dev / 1,435 holdout, i.e. ~9 % of measured boundaries run under `gating:support` because of it |
+| **G25** | **`approximate_partial_trap_turns`: the engine models PARTIALLYTRAPPED with no duration counter at all**, so the trap is *unbounded* and one-sided in the trapper's favour. `engine_world.py` `_build_side_spec`. | E/H | **REACHABLE but vanishingly narrow.** The pool's only partial-trap move is `wrap`, on **Shuckle alone** (1 of 220). Bind, Clamp, Fire Spin, Whirlpool, Sand Tomb are all 0 of 220. | no |
+| **G26** | **`approximate_hidden_duration_volatiles`: confusion and Yawn duration are guessed.** `engine_world.py` `_build_side_spec`. Note the comment's confusion half ("never expires it inside a search") is **stale** — `third_party/poke-engine-gen3-confusion-duration.patch` added `chance_confusion_ends`. | E/H | REACHABLE, but both halves are one-producer thin: confusion only via Signal Beam's 10 % secondary on 3 species (G34), Yawn only on Swalot (1 of 220). Consequently `hidden_counter_support:confusion` fired **1 time in dev and 0 in holdout** across 400 games and 32,123 full-round boundaries — the whole confusion-widening machinery rests on that one observation. | 1 dev event |
+| **G27** | **`pending_hp_reading_move` is an enumeration that has been found short twice.** `reports/c96_unattributed_source_level_causes.json`, "recorded as an open question". | E | **SPLIT.** Pain Split (added in c128): REACHABLE, 4 species. Endeavor: **UNREACHABLE**, 0 of 220. Flail 1, Reversal 8, Substitute 75, Belly Drum 2 — all reachable. | no |
+| **G28** | **`branch_events` panics `Invalid rest_turns value: 32`** — a `PanicException` out of Rust that kills the calling process rather than recording a divergence. `reports/c49_search_crate_rest_turns_panic.json`. | E | **UNKNOWN.** The trigger state (`rest_turns` above the clamp) was reached in an older seed space (`s18600013/89`) and the crash mechanism is real, but I have not established whether a `rest_turns > 3` state is constructible from the *current* harness, which clamps at 3. **Settling measurement:** assert on `rest_turns` at every `build_poke_engine_state` call across a 200-game dev sweep and report the max. | no (`engine_error` is 0 in both windows) |
+| **G29** | **Trace copies the ability field only; no Start event fires**, so a Traced Intimidate never activates and a Traced Flash Fire's volatile can be wrong. `engine_world.py` `_build_pokemon_spec`; matches `third_party/poke-engine-gen3-trace-no-activation.patch`. | E | REACHABLE. Trace on Gardevoir and Porygon2 (2 of 220); Intimidate on 11 species, Flash Fire on 4. | no |
+| **G30** | **Pivot turns skip the turn's residuals entirely** (documented deviation). `rust/pokezero-search/src/events.rs` `finish_ply`. | E | REACHABLE via Baton Pass, **25 of 220** species — the pool's only pivot (U-turn is gen4). | no |
+
+### 3.2 Renderer gaps — REACHABLE
+
+| # | Gap | Class | Reachability evidence | Observed |
+|---|---|---|---|---|
+| **G31** | **Haze renders `-unboost` lines; Showdown emits `|-clearallboost|`.** `events.rs`, the five-producer note above `boost_may_be_a_switch_out_reset`: "No `clearallboost` exists anywhere in this crate, so the NAMED path is wrong for Haze too." Verified: `clearallboost` appears in the crate exactly twice, both inside that comment. The engine's gen3 `choice_effects.rs` `Choices::HAZE` emits two `state.reset_boosts` calls, i.e. `Boost` instructions. The gap is **one-sided**: the Python parser handles `-clearallboost` (`src/pokezero/showdown.py`, `tier2.py`, `silent_mutation_audit.py`), so the harness understands the line Showdown emits — only the crate cannot produce it. | R | **REACHABLE for direct Haze** — 4 of 220 species (Altaria, Crobat, Mantine, Weezing). The *Sleep-Talk-callee* half of the same note is **UNREACHABLE**: measured on this `sets.json`, **0 of 393 sets** pair `sleeptalk` with `haze` (also 0 with `psychup`, `roar`, `whirlwind`, `batonpass`) — independently reproducing the crate's "350 Sleep Talk sets, zero pair it" claim. | no |
+| **G32** | **Psych Up: same shape** (`|-copyboost|`). | R | **UNREACHABLE.** `psychup` is 0 of 220. Both the direct path and the Sleep-Talk path are dead. | no |
+| **G33** | **Known-open: the drain slot is booked from pre-residual HP.** `events.rs`, `#[ignore = "known open: drain slot booked from pre-residual HP; see doc comment"]` on `a_near_full_hp_seeder_still_over_books_the_drain_slot`. The comment itself says: "Zero occurrences in seeds 19000000-19000199, reachable in ordinary gen3 stall play." | R | REACHABLE (Leech Seed 12 species + Leftovers). | no |
+| **G34** | **Confusion self-damage is not tagged**, so the source sets differ and exact-component comparison rejects. `reports/c81_small_pure_families.json`. | R | **REACHABLE through exactly one producer.** Enumerated over the pool's 125 moves against `Dex.mod('gen3')`: the only move that can inflict confusion is **`signalbeam`** (10 % secondary), on **3 of 220** species — Venomoth, Ariados, Yanma. Every classical gen3 confuser (`confuseray`, `supersonic`, `swagger`, `flatter`, `sweetkiss`, `dynamicpunch`, `psybeam`, `teeterdance`) and every self-confusing move (`outrage`, `petaldance`, `thrash`) is **0 of 220**. That single 10 % secondary on three species is why `hidden_counter_support:confusion` fired once in 400 games. | no |
+| **G35** | **`|-crit|` is gated on an exact-value equality**, so the cross-check rejects an observed crit against the engine's own crit arm on identity rather than magnitude. `reports/c93_crit_tag_renderer_gap.json`, `"not_yet_implemented": true`; `reports/c77_i2_crit_arm_absence.json` notes 122 of 173 rows remain unexplained. | R | REACHABLE — crits occur on every damaging move at ≥ 1/16. | no |
+| **G36** | **HP-*rise* direction is not rendered in the residual walk** ("DECREASES ONLY, deliberately"), leaving C52's impossible component alive in mirror image. `events.rs` `render_move_phase`. | R | REACHABLE (Leftovers, Wish, Leech Seed drain, `synthesis`/`morningsun`/`moonlight`). | no |
+| **G37** | **Attract's empty-immobilization branch is indistinguishable from a fully-capped boost or a blocked stat drop** — 17 sub-cases. `events.rs` `volatile_empty_tail_ambiguous`; `reports/c56_excluded_branch_census.json` counts `attract_empty_tail_ambiguous` 123 and `attract_immobilization_source_unknown` 39. | R | **REACHABLE, but only via the ability route.** The move `attract` is **0 of 220**. Cute Charm is on **3 of 220** (Clefable, Delcatty, Wigglytuff) and applies `attract` on contact at 1/3 (`data/mods/gen3/abilities.ts` `cutecharm.onDamagingHit`). So Attract exists in this format solely as a Cute Charm proc. | no |
+| **G38** | **Sleep Talk's unnamed callee: the largest world-level refusal channel.** `events.rs` `unrenderable_family_at`; era 59 measured `sleeptalk_called_unidentified:ambiguous_unrenderable` at 8,149 world failures, 51.6 % of the abort channel. Five of the six allowlist entries have **no fixture** ("admitted on a structural argument"). | R | REACHABLE. `sleeptalk` on **40 of 220** species. | **yes as annotation** — `strict:sleeptalk_union_branch` 126 dev / 105 holdout |
+| **G39** | **The residual-order pin filters to `p1a`**, so a within-side sequence can be right while the cross-side interleaving is wrong. `events.rs`, test `end_of_turn_section_order_is_pinned_against_the_engine`. | R/X | REACHABLE — the residual phase is speed-major across both sides in every game. | n/a (test-coverage gap) |
+| **G40** | **Five unpinned exemptions in `weather_chips`**: ROCK, GROUND, STEEL (sand), ICE (hail), and the `hp <= 0` gate — each verified to leave the suite green when deleted. `reports/c131_leechseed_heal_label.md` §5. | R/X | ROCK/GROUND/STEEL: REACHABLE (sand, see R4). ICE/hail: **UNREACHABLE** (R2). | n/a |
+
+### 3.3 Harness / instrument gaps — REACHABLE
+
+| # | Gap | Class | Reachability evidence | Observed |
+|---|---|---|---|---|
+| **H1** | **The differential measures ~87 % of boundaries, not the ~96.6 % it reports.** Single-seat plies are counted in `skip:single_seat_boundary` and never in `boundaries_full_round`; the two sets are disjoint. `reports/c132_single_seat_coverage_bound.md`. | H | REACHABLE by construction. | **yes** — 1,742 dev / 1,813 holdout (§2) |
+| **H2** | **The single-seat pins cannot go red from a change to the counting logic** — they read four committed artifacts and import nothing from `scripts/`. The live-coupled pin is "filed, not done here." `c132` §5. | H | REACHABLE by construction. | n/a |
+| **H3** | **A deferred residual phase has been compared only in the double-faint case.** `c132` §3. | H | REACHABLE — Explosion (25 species), Selfdestruct (3), Destiny Bond (4) and recoil KOs all produce it. | n/a |
+| **H4** | **The differential compares *components*, not branch *masses*** — a whole defect class is structurally invisible to it. `reports/c115_program_state.md` §4. | H | REACHABLE by construction. **This is the channel G4 and G15 hide in.** | n/a |
+| **H5** | **Struggle cannot be submitted to the engine**, so those boundaries are dropped. `reports/c44_struggle_repair_probe.json`: "a genuine harness limitation needing engine-side support … should not be ranked as cheap." | H | REACHABLE. | **yes** — `skip:unmappable_choice:struggle_not_submittable` 118 dev / **233 holdout**, the largest single exit after substitute health |
+| **H6** | **`world_prestate_mismatch`: the constructed engine pre-state disagrees with Showdown's observed pre-state.** Re-derivation trap: the four sub-counters **sum to the parent**, so adding both double-counts. | H | REACHABLE. | **yes** — 39 dev / 68 holdout (`p1_hp` 6, `p1_status` 25, `p2_hp` 23, `p2_status` 14 in holdout) |
+| **H7** | **`capped_lethal` overwrites Showdown's supplied `[from]` attribution** in the parser. `reports/c104_capped_lethal_drops_attribution.json`: "CAUSE STILL STANDS; FIX STILL NOT IMPLEMENTED as of 2026-08-04." | H | REACHABLE — any lethal residual tick. | no direct row; it is the label mechanism behind G6/G8's miss text |
+| **H8** | **The comparator's fallback window `[0.92·eng − 1, 1.09·eng + 1]` carries unmeasured matched mass.** It applies whenever `pre_legal` is unavailable. `reports/c135` §6. | H | **UNKNOWN how much.** `strict:no_damage_rolls` — the counter that fires when `pre_legal` is None at the state level — is **0 in both windows**, which bounds the *state*-level fallback at zero but not the per-branch one. **Settling measurement:** count boundaries whose accept came from the window rather than exact fan membership, over a 200-game dev sweep. | partially — the counter is 0 |
+| **H9** | **Per-slot HP comparison is invalid on any boundary where the active changed.** `reports/c61_empty_engine_arm_census.json`: "37 of 108 rows here are uncomparable … roughly a third of the residue." | H | REACHABLE — **4 of the 6** c136 divergence rows carry `active_changed: true` on one side (`19000074/27`, `19100170/71`, `19100170/72`, `19100191/5`). | **yes**, structurally |
+| **H10** | **Repro retention caps at `keep_repro=25` and retains repros only for *divergent* boundaries**, so an adjacent matched boundary needed for a diagnosis is simply not in the artifact. `reports/c120_a1_marker_design.md` §2. | H | REACHABLE by construction. | n/a (both windows are under the cap: 2 and 4 retained) |
+| **H11** | **`19100170/71` and `19100170/72` are open divergent rows with no written cause anywhere in `reports/`.** Both are `component_missing_in_engine:itemleftovers`, `branch_count: 1`, `pct=100.00`, `p1: protect` against a p2 switch. | H/E | REACHABLE — observed. **Class UNKNOWN**: nothing in `reports/` diagnoses them, and their shape (a 100 %-mass single-branch Leftovers omission on a Protect turn) does not match any registered family. **Settling measurement:** replay both boundaries through `evaluate_boundary_strict` with the branch dump retained and compare the engine's residual plan against Showdown's `|-heal|…|[from] item: Leftovers` line. | **yes** |
+| **H12** | **The skip counters do not sum to the coverage shortfall** — `reports/c43_coverage_shortfall_diagnosis.json` measured ~7,224 rows invisible to any skip counter: "no repair list built from them can be complete." | H | **UNKNOWN whether it still holds.** c43 is an older era. In the c136 windows the full-round path reconciles *exactly* (§2), which is evidence against a residual invisible population **within the full-round path** — but says nothing about the single-seat population. **Settling measurement:** instrument the single-seat arm with the same exit taxonomy and re-run. | n/a |
+| **H13** | **`self_moveset_mismatch`, `transform_unexpressible`, `status_unsupported` and 33 other world-construction refusal reasons are defined and never fire in either window.** Full list in §3.5. | H | REACHABLE-in-principle for some (Transform is 2 of 220: Ditto, Mew), unreachable for others (Future Sight, 0 of 220 — see R1). | **no** — 36 of 40 `world_unsupported` reasons are 0 in both windows |
+| **H14** | **`skip:strict_all_branches_lossy` has never fired**, so C132's claim that it is "not an exit" has never been exercised live. Verified against the code: it increments at `run_game` *after* `_prepare_boundary` has already incremented `boundaries_measured`, so the claim is right — but it *is* an exit from the **verdict** tally, which C132 does not say. The identity that actually holds is `boundaries_measured == matched + diverged + engine_error + skip:strict_all_branches_lossy`. | H | REACHABLE-in-principle; `strict:lossy_render` (the per-branch precursor) fired 3 times in holdout without ever dropping *every* branch. | **no** |
+| **H15** | **Seven of the eight `unmappable_choice` reasons and 11 of 19 `divergence_class` values never fire.** Two `divergence_class` values are **structurally unreachable**: `mapper_lossy` (its verdict `continue`s before the classification line) and `no_usable_branch` (its trigger string exists nowhere in the repo). Four more (`boost_delta_support`, `status_support`, `faint_boundary`, `damage_band`) are reachable only through the `--matcher banded` path, which neither artifact used. | H | mixed. | **no** |
+| **H16** | **The dev window is overfit relative to holdout by 3.53×.** `reports/c117_validation_holdout_baseline.md` §1: "Any statement of the form 'the residue is 7' describes *one particular* 200-game window and must not be read as a fidelity rate." | X | REACHABLE by construction. | **yes** — dev 2 divergences vs holdout 4 on the same build |
+| **H17** | **`reports/c119_phase2_scoping.md`, `reports/c134…` and `reports/c137_phase2_enumerate_decision.md` are cited by merged reports and absent from `reports/`.** They are load-bearing: c135 §5/§7 rests on C134 §3's freeze and c137's adopt-for-harness-only decision. | X | n/a. | **yes** (verified by `ls`) |
+| **H18** | **Enumeration closes G6's rows but cannot be used in search**: depth-4/1024-sim throughput regresses 2.38 ms → 8,881.8 ms per decision, and the mass gate's `test_matrix_is_not_vacuous` fails under the flag. `reports/c135` §7. | X | REACHABLE. | n/a |
+| **H19** | **Four families were never adjudicated**: `LS_capped_lethal_shape` (the largest unresolved), `I2_matcher_accounting`, `I3_roll_inherited`, `I5_boundary_truncation`. `reports/c86_current_era_family_adjudication.json`. | H | **UNKNOWN whether they survive into the current era.** They were defined on an older seed space and none of their labels appears in the c136 counters. **Settling measurement:** re-run `scripts/family_bucket_audit.py` against the c136 artifacts and report which families still have rows. | no |
+| **H20** | **`scripts/engine_behavioral_probes.py` states the f32 top-rung count as 174.** The correct figure is **173** — see §5, where I re-derive it three ways. `reports/c115_program_state.md` has it right; the probe comment does not. | X | n/a — a documentation defect in shipped code. | n/a |
+
+### 3.4 Leaf / encoder gaps — from `reports/c112_leaf_state_divergence_ledger.md`
+
+| # | Gap | Class | Reachability evidence | Observed |
+|---|---|---|---|---|
+| **G41** | **P1 — root-frozen metadata passthrough.** `leaf.rs` clones the root row and mutates metadata in place, so every key the leaf does not explicitly overwrite keeps the **root's** value at every depth. Affects `*_wish_turns`, `*_sleep_clause_blocks`, `*_stall_counter`, `*_encore_elapsed`. | H | REACHABLE — Wish 16 species, Protect 43, Encore 16. Three named members are **latent**: `confusion_elapsed`, `wrap_trap_elapsed` (Shuckle only, G25), `meanlook_trap` (Misdreavus + Ariados, 2 of 220). | 100 rows in the c112 corpus |
+| **G42** | **P2 — the event renderer emits status-free condition strings**, so a Toxic stint is invisible to the leaf. `events.rs` `hp_condition` never appends a status token. c112 flags a downstream trap: `leaf.rs`'s "no status token means unchanged, not cured" rule becomes a stale-status bug the moment absence can mean "no status". | R | REACHABLE and pervasive — `toxic` is on **114 of 220** species, the most widespread move in the pool. | 28 rows |
+| **G43** | **P5 — a recharge request carries no `disabled` bits, so the constructed world loses a Choice lock.** "the only [family] where the leaf is *permissive* rather than empty." | H | REACHABLE, but narrow: `hyperbeam` is on **Slaking alone** (1 of 220), and Choice Band is 12.4 % of items. | 20 rows |
+| **G44** | **P6 — the gen3 Sleep-Talk turn refund (`time += skippedTime`) is not modelled at the leaf.** `LeafMeta.sleep` is `(started, cant_count)` with no skipped term. | H | REACHABLE — `sleeptalk` 40 species, `snore` 0. | 2 rows |
+| **G45** | **The pyo3 `LeafEncoder` is not a byte-identical proxy for production** — it goes through `branch_context(lines)` with no transitions where production passes `rendered.active_status_transitions`. | H | REACHABLE by construction. | n/a |
+| **G46** | **The scenarios corpus skips 273 of 369 boundaries on `encode_error:ValueError`, and the matchup gate then reports INERT** (0 of 369 same-seat boundaries compared). | H | REACHABLE by construction. | **yes** |
+| **G47** | **Tier-2 `is_physical` heuristic diverges from the generator.** `src/pokezero/showdown.py` `_variant_has_physical_attack`: "measured against opening `|request|` truth over 60 games, **13 of 720 mons** get an `EXPECTED_ATK` band that excludes the engine's Atk — e.g. a Farfetch'd with `return` banded 133..133 against an engine value of 185." Mirrored deliberately in `encoder.rs::resolve_move_base_power`, so parity holds and both are wrong together. | H | REACHABLE — measured live at 1.8 % of mons. | **yes** |
+| **G48** | **Opponent request order: the in-crate fallback is ~91 % wrong** beyond the opponent's first switch-in, and it corrupts action indices. `leaf.rs::root_opponent_order`; `scripts/foulplay_paired_eval.py`: "fail-closed in Python is fail-OPEN in the crate." | H | REACHABLE — any game where the opponent switches twice. | n/a |
+
+### 3.5 Named unobserved coverage — every exit the code can emit and neither window did
+
+Every one of these is a gap in coverage *by definition*: the code has an exit for it and the
+program has never seen it fire. Listed rather than summarised, because "we have no rows for X"
+is only meaningful if X is named.
+
+**Never-fired static counters (10):** `abort:no_legal_action`, `skip:no_action_candidates`,
+`skip:world_error:no_constructible_candidate`, `skip:strict_all_branches_lossy` (H14),
+`strict:no_damage_rolls` (H8), `strict:branch_event_legal_error:BranchLegalRollError` — whose
+raise-site messages are all unexercised and are not distinguishable in the key anyway —
+`engine_error`, `world_prestate_mismatch:side_conditions`, and the two structurally
+unreachable `divergence_class` values `mapper_lossy` and `no_usable_branch`.
+
+**Never-fired dynamic families (6):** `skip:no_materialization:{Exc}`,
+`skip:world_error:{Exc}`, `strict:branch_events_error:{Exc}`, `engine_error:{Exc}:{detail}`,
+`engine_error_choice:{choice}`, `world_prestate_mismatch:weather_{WEATHER}`.
+
+**`skip:unmappable_choice` — 7 of 8 unobserved:** `no_candidate_row`, `blank_move_id`,
+`hidden_power_ambiguous`, `move_not_in_engine_set:{id}`, `blank_switch_species`,
+`switch_species_not_in_party`, `unknown_kind:{kind}`.
+
+**`skip:world_unsupported` — 36 of 40 reasons unobserved in both windows.** Two are
+structurally diverted on the default flags and their absence is expected
+(`status_unsupported` → `hidden_counter_support:sleep`; `substitute_health_unknown` →
+`limit:world_substitute_health_unknown`). One is UNREACHABLE in this pool and should be read
+as retired rather than untested: **`future_sight_pending`** — see R1. The remaining 33 are
+unobserved exits, two of which (marked) are additionally unreachable in this pool:
+`boost_unsupported`, `boundary_not_move_request`,
+`deferred_opponent_action`, `hidden_power_iv_mismatch`, `item_state_conflict`, `move_unknown`,
+`nature_not_neutral` (also UNREACHABLE — R7), `override_side_missing`, `payload_malformed`,
+`pending_baton_pass`, `public_effect_blocked`, `public_species_not_in_world`,
+`rest_sleep_attempt_unsettled`, `rest_sleep_provenance_unrepresentable`,
+`rest_sleep_refund_pending_precounts_legacy`, `rest_sleep_refund_pending_unsplit_legacy`,
+`self_maxhp_mismatch`, `self_moveset_mismatch`, `self_pp_unknown`, `self_world_mismatch`,
+`side_condition_turns_inconsistent`, `side_condition_turns_unknown`,
+`side_condition_unsupported`, `species_unknown`, `substitute_depletion_world_incompatible`,
+`substitute_health_provenance_contradiction`, `toxic_stage_inconsistent`, `toxic_stage_unknown`,
+`transform_unexpressible`, `weather_turns_inconsistent`, `weather_turns_unknown`,
+`weather_unsupported` (also UNREACHABLE — R8), `wish_turns_inconsistent`.
+
+**One-sided exits worth watching:** `skip:world_unsupported:self_request_state_unsupported` is
+13 in dev and **absent** in holdout; `hidden_counter_support:confusion` is 1 in dev and 0 in
+holdout, so the entire confusion hidden-counter machinery rests on a single observation across
+400 games.
+
+---
+
+## 4. Dropped by the reachability filter — verified UNREACHABLE
+
+This is the section item 14 exists for. Each of these is a real difference between the engine
+and gen3 Showdown, or a real inexpressibility, that **cannot be reached in gen3 randbats**.
+Carrying them in a ledger would inflate it and mislead a reader about where the risk is.
+
+| # | Candidate | Why it is unreachable, measured |
+|---|---|---|
+| **R1** | **Future Sight / Doom Desire — residual order 11, and the `future_sight_pending` refusal** | `futuresight` and `doomdesire` are each **0 of 220** species. They are the whole of gen3's delayed-damage class, so residual order 11 is unreachable and `_reject_unsupported_globals`'s `future_sight_pending` raise is dead code in this format. (Re-derived; C125 reached the same verdict.) |
+| **R2** | **Hail, and everything downstream of it** — the ICE branch of `weather_chips`, `Items`/ability hail interactions, `world_prestate_mismatch:weather_HAIL` | `hail` is **0 of 220** as a move, and the only ability that sets it — Snow Warning — reports `gen: 4, isNonstandard: "Future"` in `Dex.mod('gen3')`, i.e. it does not exist in gen3 at all. Two independent routes, both closed. |
+| **R3** | **Rain Dish's `maxhp/16` rain heal, and its missing `ResidualPlan` slot** | Rain Dish is **0 of 393 sets**. Verified at the species level too: the only three gen3 species with Rain Dish are Lotad, Lombre and Ludicolo; Lotad and Lombre are **not in the pool at all**, and Ludicolo's single set lists only `["Swift Swim"]`. |
+| **R4** | **Weather-expiry sand/hail chip truncation** | **0 of 220** species carry `sandstorm` or `hail` as a move (`raindance` 7 and `sunnyday` 4 exist and neither chips). So sand only ever comes from Sand Stream — **Tyranitar alone**, on all 3 of its sets — which sets `WEATHER_ABILITY_TURNS = -1` and never expires. The expiry path has no trigger. Corroborates `reports/c131` §2. |
+| **R5** | **Dry Skin's rain heal at order 10.3** | `Dex.mod('gen3').abilities.get('dryskin')` reports `gen: 4, isNonstandard: "Future"` — it does not exist in gen3. Stronger than C115's "dead code for gen3 randbats". |
+| **R6** | **Sitrus Berry, and the monotonicity break it causes in the residual mirror's bisection** | Not in the 13-item universe. `getItem` cannot return it: verified by reading every return path and by generating 24,000 Pokémon. `reports/c111`'s A2 addendum ("threshold berries break the monotonicity … Sitrus fires at `hp <= maxhp/2`") is therefore unreachable. The three reachable pinch berries (Salac, Petaya, Liechi) fire at `maxhp/4` and grant **stat boosts, not HP**, so they do not break HP monotonicity. |
+| **R7** | **`nature_not_neutral`** | Generated sets carry **no nature field at all** — measured unset on 12,000 of 12,000 Pokémon. The engine_world comment ("Gen 3 randbats sets are neutral") is correct and the refusal is unreachable. |
+| **R8** | **`weather_unsupported`** | All four gen3 weathers are in `_WEATHER_IDS` (`rain`, `sun`, `sand`, `hail`). No gen3-legal weather can miss the map. |
+| **R9** | **Liquid Ooze mislabelled by the residual-heal renderer** | Two things are true and they are different. Liquid Ooze *is* reachable — 2 of 220 species (Swalot, Tentacruel). But the **renderer path** is unreachable: in `events.rs` `render_residual_instruction`, an `Instruction::Heal` with `heal_amount < 0` is intercepted and rendered as `\|-damage\|…\|[from] ability: Liquid Ooze` **before** `plan.take(side, true)` or `residual_heal_cause` is ever called. The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code, exactly as `reports/c131` §5 says. Also **0 of 393 sets** put `leechseed` or `gigadrain` on a Liquid Ooze holder, so the same-side interaction is unreachable too; only the cross-side one is live. |
+| **R10** | **Shell Bell, and the `heal_drain_or_shellbell` ambiguity** | Shell Bell is modelled in the engine (`src/gen3/items.rs` `SHELLBELL`) and is **not in the 13-item universe**. So the bucket the crate names for an ambiguity it "cannot resolve" is, in this format, unambiguous: the only reachable producer is a drain move, and the pool's only drain move is `gigadrain` (Exeggutor, Parasect). |
+| **R11** | **The `TwoToFiveHits` flat-3.2 approximation** | Every `[2,5]`-hit move is **0 of 220**. The only multi-hit move in the pool is `bonemerang`, whose `multihit` is the scalar `2`. See G9 for what *is* reachable. |
+| **R12** | **Rest's Insomnia / Vital Spirit fail clauses** | **0 of 393 sets** pair `rest` with either ability (independently reproducing the patch's "0 of the 55 Rest sets"). Comatose is gen7. |
+| **R13** | **Belly Drum's Shedinja `maxhp === 1` fail clause** | Shedinja's single set is `agility / batonpass / hiddenpowerfighting / shadowball / silverwind / toxic`. No Belly Drum. It ships for source parity only. |
+| **R14** | **N5 — the residual ceiling overshooting into a move-KO** | c129 measured 4,326 such states, **every one at `maxhp <= 47`**. The pool's only `maxhp <= 47` variant is Shedinja at 1, and Shedinja carries no multi-hit move. |
+| **R15** | **Magic Coat / reflect path, and Ingrain blocking phazing** | `magiccoat` and `ingrain` are each **0 of 220**. The `reflectable: true` flag upstream puts on Roar/Whirlwind is inert. |
+| **R16** | **Dragon Rage and Psywave emit no instructions** | Each **0 of 220**. (Night Shade, also 0, was fixed anyway by the fixed-damage-pipeline patch.) |
+| **R17** | **Eruption / Water Spout one-ULP ordering divergence** | Each **0 of 220**. |
+| **R18** | **Locked-continuation PP on Outrage / Petal Dance / Thrash** | Each **0 of 220**. The reachable half of that patch is Solar Beam (4 species) and Hyper Beam (Slaking). |
+| **R19** | **Snore treated as not sleep-usable** | `snore` is **0 of 220**. |
+| **R20** | **Low Kick's weight-based base power, which Transform does not copy** | `lowkick` is **0 of 220**. |
+| **R21** | **Reflect / Light Screen keeping a trailing float position in the damage pipeline** | `reflect` and `lightscreen` are each **0 of 220**, as are `safeguard` and `mist`. No Pokémon in the pool can set a screen. (Flagged for re-checking because `engine_world` *can construct* screens as side conditions — but no battle path reaches that state, so the construction capability is not a reachability route.) |
+| **R22** | **Mimic, Imprison, Psych Up, Metronome, Assist, Nature Power, Sketch, Mirror Move** | Each **0 of 220**. This closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s `maybeDisabled`/`maybeLocked` (Imprison is their only producer), the `failencore` move-list edge cases, and G32. |
+| **R23** | **Focus Energy, Mud Sport, Water Sport, Taunt, Torment, Disable, Nightmare, Foresight** | Each **0 of 220** as moves. The `volatile_unsupported` refusals keyed to them cannot fire from play. |
+| **R24** | **Attract as a *move*** | `attract` is **0 of 220**. The volatile is reachable only through Cute Charm — see G37, which is the correctly-scoped version of the gap. |
+| **R25** | **Sleep Talk calling Haze / Psych Up / Roar / Whirlwind / Baton Pass** | **0 of 393 sets** pair `sleeptalk` with any of the five. Measured on this `sets.json`, not carried from the crate's three-universe count. |
+| **R26** | **Trick-style item acquisition and Transform/Psych-Up boost copy reaching White Herb** | White Herb's only holders are `deoxys` and `deoxysattack`, and neither movepool contains `trick`, `transform` or `psychup`. Corroborates `reports/c126` §5b. |
+| **R27** | **Quick Claw, King's Rock, Bright Powder, Lax Incense, Focus Band, Scope Lens, Berry Juice, Leppa/Oran/Chesto/Pecha/Rawst/Aspear/Persim/Cheri Berry, and every type-boosting item outside the 13** | None is in the 13-item universe. This is worth stating positively because of what it retires: **no priority randomness (Quick Claw), no item-sourced flinch (King's Rock), no evasion item, no crit item, no HP-restoring berry, and no item-sourced heal-on-damage (Shell Bell)** can occur in gen3 randbats. Any engine gap in those mechanics is unreachable here. |
+
+**One candidate resists the filter and is worth stating separately.** Sandstorm chip damage is
+*not* reachable via a move (0 of 220) and *is* reachable via Sand Stream (Tyranitar). It is
+observed — `divergence_class:component_missing_in_engine:sandstorm` is the dev row
+`19000074/27`. A ledger that had checked only the move column would have dropped G7.
+
+---
+
+## 5. The f32 comparator, re-derived rather than transcribed
+
+C115 §5 states this gap with specific numbers. The instruction for this ledger was to verify it
+from the shipped expression rather than copy the figure, so I did.
+
+The shipped expression, from the patched engine source (cited by symbol:
+`src/gen3/generate_instructions.rs`, `fn compare_health_with_damage_multiples`):
+
+```rust
+let increment = max_damage as f32 * 0.01;
+let mut damage = max_damage_f32 * 0.85;
+for _ in 0..16 {
+    if damage < health_f32 { total_less_than += damage as i16; num_less_than += 1; }
+    else { num_greater_than += 1; }
+    damage += increment;
+}
+```
+
+The truth it is meant to represent is the gen3 fan `floor(max * r / 100)` for `r = 85..=100`,
+with a roll lethal iff it is `>= health`. Transcribed into exact IEEE-754 single precision
+(`numpy.float32`, matching Rust's `f32` add and `as i16` truncation) and swept over
+`max_damage` 1..400 and `threshold` 1..max:
+
+```
+A) max values in 1..400 whose TOP rung truncates below max ............ 173
+B) kill-count mismatches over all (max, threshold) pairs .............. 195
+      of which undercounts ............................................ 195
+      of which overcounts .............................................   0
+C) mismatches at INTERIOR thresholds (threshold != max) ...............  22
+      by true rung: r=90 → 14, r=95 → 8
+E) max=120, threshold=108: engine 10 kills vs true 11
+   max=120, threshold=114: engine  5 kills vs true  6
+```
+
+**This reproduces C115 exactly** — 173 / 195 / 195 / 0 / 22 / {90: 14, 95: 8} — including its
+two worked examples, and including its correction that the drift is *not* confined to
+`threshold == max_damage`. The one-directional finding holds: the engine undercounts in all 195
+cases and never overcounts, so the defect always **under**-partitions, which is the safe
+direction.
+
+Two things the re-derivation adds:
+
+1. **`scripts/engine_behavioral_probes.py` states 174, not 173.** I checked whether the
+   discrepancy was an off-by-one in the range or in the predicate; it is neither. `< max` and
+   `== max - 1` give the same 173, and 1..400, 0..399 and 1..401 all give 173. The comment in
+   shipped code is wrong; C115 is right. Filed as **H20**.
+2. **The gap is reachable and invisible at once.** It is on the KO-threshold split path for
+   every damaging move, so reachability is not in question — but it changes *branch masses*,
+   and H4 records that the differential compares components rather than masses. A zero-row
+   count for G4 is therefore not evidence of absence.
+
+---
+
+## 6. What this ledger implies for how a fidelity claim should be worded
+
+Six constraints, each traceable to a row above.
+
+1. **State the denominator.** Any figure of the form "N divergences over two 200-game windows"
+   is a statement about **full-round boundaries**, which are 87.5 % (dev) and 86.7 % (holdout)
+   of all boundaries. It must say so, or carry §2. (H1)
+2. **State the window, not a rate.** Dev shows 2 divergences and holdout 4 on the same build
+   and the same 200-game budget. A single window is not a fidelity rate. (H16)
+3. **Say "components", not "transitions".** The comparison is over attributed HP components,
+   not branch probability masses. A mass-only defect — which is what G4 and G15 are — produces
+   a *match*, not a divergence. "Zero divergences" cannot be read as "zero defects", and the
+   two largest registered engine gaps are precisely of the invisible kind. (H4, G4, G15)
+4. **Do not launder reachability into correctness.** 27 candidate gaps — real differences from
+   gen3 Showdown, or real inexpressibilities — are unreachable in this format (§4, where R27
+   bundles a further class of items). The honest phrasing is "gen3 random battles as generated by
+   Showdown at `f76228a1`", not "gen3". A fidelity claim scoped to gen3 randbats is defensible;
+   the same claim scoped to gen3 is not, and §4 is the exact list of what would have to be
+   re-opened.
+5. **Do not claim a gap is closed on the strength of a closed row.** G2's two rows closed when
+   the *attribution* was fixed; the cross-side modelling gap is unchanged. G9's row closed via
+   the hit-count partition, not via the shared-roll defect. A row is evidence about a row.
+6. **Name the unobserved exits rather than omitting them.** 36 of 40 world-construction refusal
+   reasons, 7 of 8 unmappable-choice reasons and 11 of 19 divergence classes have never fired.
+   Some are unreachable (R1, R7, R8) and should be retired; the rest are untested code paths
+   sitting behind the measurement. §3.5 is the list. (H13, H15)
+
+A wording that satisfies all six looks roughly like: *"On gen3 random battles as generated by
+Showdown `f76228a1`, over two disjoint 200-game seed windows, the engine's attributed HP
+components matched Showdown's on 15,503 of 15,503 measured full-round boundaries in dev and
+15,575 of 15,579 in holdout — 87.5 % and 86.7 % of all boundaries respectively. Branch
+probability masses were not compared, and 27 documented gap candidates are unreachable in this
+pool and therefore untested by it."*
+
+---
+
+## 7. What I could not determine
+
+Stated explicitly, because a ledger of blind spots is the worst place to imply completeness.
+
+1. **Whether G1 (Stick) currently produces a differential row.** The pool reachability is
+   settled and deterministic (435/435). What is *not* settled is whether the differential ever
+   hands the engine a Farfetch'd holding Stick — items are not public until revealed, and Stick
+   has no reveal event. **Settling measurement:** a 200-game dev sweep with an assertion on
+   `PokemonSpec.item` recording every distinct item string reaching `build_poke_engine_state`;
+   if `stick` appears, the crit-rate divergence (1/16 vs 1/4 on Return) is live in the compared
+   population, and if it does not, the gap is confined to search-side worlds. I did not build
+   an engine for this document, so I did not run it.
+2. **The class of `19100170/71` and `19100170/72`** (H11). They are observed, open, and
+   undiagnosed anywhere in `reports/`. I did not attempt a diagnosis because it needs a branch
+   dump I would have had to regenerate.
+3. **How much matched mass rides on the comparator's ±9 % fallback window** (H8). The
+   state-level counter is 0 in both windows; the per-branch usage is not counted at all.
+4. **Whether c43's ~7,224 invisible shortfall rows still exist** (H12). The full-round path now
+   reconciles exactly, which is evidence against it *within that path*, but the single-seat arm
+   carries no exit taxonomy so nothing can be said about it.
+5. **Whether `rest_turns` can still exceed the clamp** and re-arm the `branch_events` panic
+   (G28). The crash is real and was observed in an older seed space; its current constructibility
+   is unverified.
+6. **Whether the four never-adjudicated families survive into the current era** (H19).
+7. **Whether the generator can actually draw both moves** in any co-occurrence check that came
+   back non-zero. Every pairing verdict I *relied* on came back zero — which is decisive —
+   but `sleeptalk`+`rest` (44 sets), `wish`+`protect` (24) and `leechseed`+`substitute` (6) are
+   upper bounds, not measured draw rates. Where a row depends on such a pairing being common
+   rather than merely possible, it is marked so.
+8. **Nothing here was measured on the reserved final holdout** (`19,200,000+`), deliberately.
+   Per the §J.7 amendment it must appear in exactly one measurement in the whole record.
+9. **No new sweep was run and no engine was built for this document.** Every "observed" column
+   reads `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`. A gap whose
+   incidence changed since commit `aeaee2b1` would be mis-stated here.
+
+---
+
+## 8. Standing rule, restated and widened
+
+C125's rule was: no entry joins the ledger without a recorded pool-reachability check **and the
+instrument that answered it**. That stands. This pass adds two clauses, both earned by a check
+that would otherwise have gone wrong:
+
+- **For a gap that needs two things at once, the instrument is per-set co-occurrence, not
+  per-species presence.** Haze and Sleep Talk are each reachable; the Sleep-Talk-calls-Haze gap
+  is not.
+- **For a gap in a *renderer* or *classifier*, pool reachability of the mechanic is necessary
+  but not sufficient.** Liquid Ooze is reachable and its residual-heal-renderer gap is not,
+  because a negative `Heal` is intercepted before that code runs. The reachable thing must be
+  the code path, not just the mechanic.
