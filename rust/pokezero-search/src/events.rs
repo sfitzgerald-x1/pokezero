@@ -437,11 +437,16 @@ const SUBCASE_VOCABULARY: &[&str] = &[
 /// With composition allowed, this does the same job explicitly and more tightly: it
 /// admits a fixed vocabulary rather than any literal a caller cares to write. A
 /// mis-composed slug therefore fails LOUDLY at the call site instead of quietly becoming
-/// a 37th aggregate key that nobody can trace back to a code path -- but note the SCOPE:
-/// for the sleeptalk path it can no longer fire at all, because
-/// `unrenderable_tail_families` degrades an unregistered token to `unclassified` first, on
-/// purpose (a panic there aborts the worker). It stays live for paired-tag misuse and for
-/// any future caller that does not degrade.
+/// a 37th aggregate key that nobody can trace back to a code path.
+///
+/// SCOPE, corrected. This block used to say the assert "can no longer fire at all" on the
+/// sleeptalk path because `unrenderable_tail_families` degrades an unregistered token to
+/// `unclassified` first. That is true of the FAMILY path and FALSE of the SHAPE path:
+/// `none_matched_slugs` composes its slug directly and reaches
+/// `mark_attribution_unsafe_subcase` with NO degrade in between. The belief that this could
+/// not fire is what shipped a half-applied rename whose first world would have panicked the
+/// release wheel -- the assert was doing exactly the job this comment said it no longer had.
+/// LIVE for: the shape path, paired-tag misuse, and any future caller that does not degrade.
 ///
 /// A plain `assert!` for the same reason the paired-tag check above is one: the campaign
 /// wheels are built `--release`, where `debug_assert!` compiles out, so a debug assert
@@ -6784,12 +6789,31 @@ mod tests {
     }
 
     /// The slugs actually shipped must pass their own gate.
+    ///
+    /// EVERY shape, through the PRODUCTION assert. This looped ONE hand-picked shape
+    /// (`Structure`), so six of seven slugs never touched the gate they must clear at
+    /// runtime -- and the sibling test asserts only a PROXY for it (starts-with-tag plus
+    /// ends-with-token), which a slug carrying an extra unregistered segment satisfies while
+    /// the real gate panics. Review demonstrated exactly that survivor.
+    /// `assert_subcase_vocabulary` is a plain `assert!` kept out of `debug_assert!` so it
+    /// survives `--release`; a slug that passes only the proxy kills the campaign worker.
     #[test]
     fn the_live_subcase_slugs_are_all_in_vocabulary() {
-        for slug in [
+        assert_subcase_vocabulary(
+            SLEEPTALK_LOSSY_TAG,
             sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
-            none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap(),
-        ] {
+        );
+        for shape in NoneMatchedShape::ALL {
+            let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
+            assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
+        }
+        // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
+        // shape and a real world can carry several, so each must clear the gate.
+        let mut several = NoneMatchedShapes::default();
+        several.insert(NoneMatchedShape::BranchIsPrefix);
+        several.insert(NoneMatchedShape::TailIsPrefix);
+        several.insert(NoneMatchedShape::Length);
+        for slug in none_matched_slugs(several) {
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
         let boost = Instruction::Boost(BoostInstruction {
@@ -8742,7 +8766,7 @@ mod none_matched_shape_tests {
     fn a_length_difference_outranks_a_variant_difference() {
         // Checked BEFORE the variant scan, because zipping unequal lengths would silently
         // compare only the shorter prefix and could report `values_only` for a tail that is
-        // missing instructions entirely. That ordering is unchanged by the Prefix/Suffix
+        // missing instructions entirely. That ordering is unchanged by the containment
         // split -- all three land ahead of the scan; they only say WHICH length difference.
         //
         // These two fixtures were asserted as bare `Length` before the split. Both are
@@ -8806,7 +8830,7 @@ mod none_matched_shape_tests {
     /// Containment is checked on FULL instruction equality, not on variant alone.
     ///
     /// `starts_with` uses `PartialEq`, so a branch whose head has the right VARIANTS but wrong
-    /// payloads is `Length`, not `Prefix`. Getting this wrong would be the worse direction:
+    /// payloads is `Length`, not a containment shape. Getting this wrong would be the worse direction:
     /// it would report "the callee was identified and the tail is over-long" for a tail whose
     /// head the candidate did not actually reproduce, sending the fix at the tail bound when
     /// the candidate is wrong.
