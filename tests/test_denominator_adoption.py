@@ -256,8 +256,15 @@ class GuardsArePinnedTest(unittest.TestCase):
         matching. So the call site gets its own corpus-free pin.
 
         This is a SOURCE-SHAPE assertion, not a behavioural one -- it cannot tell whether the
-        call runs on a given input, only that it is present and unconditional. The corpus-driven
-        test below is the behavioural proof; this one exists so CI is not blind to the deletion.
+        call runs on a given input. The corpus-driven test below is the behavioural proof; this
+        one exists so CI is not blind to the deletion.
+
+        It checks POSITION as well as presence, because "unconditional and before every return"
+        is not enough. Review moved the call to just above the loop, where it is top-level,
+        unconditional and pre-return but inspects an empty Counter -- a permanent no-op that
+        passed. That is the SAME defect run_corpus already shipped once and that the comment
+        four lines above the call exists to explain: a check placed above the loop that produces
+        the values it checks. So the call must sit AFTER the loop, and must be passed `stats`.
         """
         import ast
         import inspect
@@ -288,6 +295,21 @@ class GuardsArePinnedTest(unittest.TestCase):
         self.assertTrue(returns, "run_corpus has no return -- this test is looking at the wrong function")
         self.assertLess(
             calls[0].lineno, min(returns), "the guard must run before run_corpus can return"
+        )
+        # It must inspect `stats` itself, not a literal or some other name.
+        self.assertEqual(
+            getattr(calls[0].args[0], "id", None) if calls[0].args else None,
+            "stats",
+            "the guard must be passed `stats`, not a stand-in that can never contain a status",
+        )
+        # And it must run AFTER the loop that fills `stats`. Above it, the Counter is empty and
+        # the guard is a permanent no-op -- the round-1 defect, repeated one level up.
+        loops = [n.lineno for n in ast.walk(func) if isinstance(n, ast.For)]
+        self.assertTrue(loops, "run_corpus no longer has the loop that fills `stats`")
+        self.assertGreater(
+            calls[0].lineno,
+            max(loops),
+            "the guard sits above the loop that fills `stats`, so it inspects an empty Counter",
         )
 
     def test_an_unprefixed_status_raises_rather_than_inflating_measured(self) -> None:
