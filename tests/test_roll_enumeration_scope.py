@@ -1043,6 +1043,14 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # enumerating build; the test that reads the pin never sets the flag,
         # because the OnceLock makes one process one engine permanently.
         "scripts/collapsed_arm_mass_oracle.py",
+        # C140's diagnosis of 19000191/63 and its measurement artifact. PROSE
+        # AND DATA ONLY -- neither is on any import path and neither sets the
+        # flag; they RECORD a flag-off/flag-on replay of one boundary that was
+        # run by hand from the shell. The artifact's own field literally names
+        # the variable and its value, which is the point: the provenance of an
+        # enumerated measurement has to say which roll path produced it.
+        "reports/c140_last_dev_row_diagnosis.md",
+        "reports/artifacts/c140_last_dev_row_probe.json",
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:

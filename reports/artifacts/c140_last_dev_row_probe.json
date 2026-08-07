@@ -1,0 +1,777 @@
+{
+ "note": "C140 diagnosis of dev 19000191/63. Every number here is produced by replaying the recorded engine_state through the SHIPPING build and, separately, through an enumeration build; nothing is hand-derived.",
+ "source_row": {
+  "artifact": "c134_collapsed_dev_sweep.json",
+  "seed": 19000191,
+  "step": 63,
+  "recorded_class": "component_magnitude:heal",
+  "choices": {
+   "p1": "thunderbolt",
+   "p2": "hiddenpowergrass70"
+  },
+  "turn": 59
+ },
+ "builds": {
+  "replay": {
+   "fingerprint": "44ee1430708cbb55033f5c7f1234b4bf9699009e6ba6d9a972ba442df615d652",
+   "patches": 71,
+   "source_commit": "6be52191",
+   "note": "ONE build serves both roll paths since #1149 put the enumerate patch in the manifest; POKEZERO_ENUMERATE_ROLLS selects at process start. This fingerprint is identical to the one recorded in main's own c134_collapsed_* and c134_enumerated_* sweeps.",
+   "matches_sweep_fingerprint": true
+  }
+ },
+ "hp_arithmetic": {
+  "raichu_hp": 123,
+  "raichu_maxhp": 235,
+  "leftovers_tick": 14,
+  "leechseed_cap": 29,
+  "drain_formula": "min(maxhp//8, hp_after_move + leftovers) = min(29, 137 - d)"
+ },
+ "fans": {
+  "tangela_hiddenpowergrass70_noncrit_max": 115,
+  "noncrit_fan": [
+   97,
+   98,
+   100,
+   101,
+   102,
+   103,
+   104,
+   105,
+   106,
+   108,
+   109,
+   110,
+   111,
+   112,
+   113,
+   115
+  ],
+  "tangela_hiddenpowergrass70_crit_max": 231,
+  "crit_fan": [
+   196,
+   198,
+   200,
+   203,
+   205,
+   207,
+   210,
+   212,
+   214,
+   217,
+   219,
+   221,
+   224,
+   226,
+   228,
+   231
+  ],
+  "crit_fan_min": 196,
+  "raichu_hp": 123,
+  "every_crit_roll_is_a_move_ko": true,
+  "raichu_thunderbolt_noncrit_fan": [
+   64,
+   65,
+   66,
+   66,
+   67,
+   68,
+   69,
+   69,
+   70,
+   71,
+   72,
+   72,
+   73,
+   74,
+   75,
+   76
+  ],
+  "observed_roll_in_noncrit_fan": true,
+  "observed_roll_index": 95
+ },
+ "lethal_band": {
+  "rolls": [
+   108,
+   109,
+   110,
+   111,
+   112,
+   113,
+   115
+  ],
+  "drains": {
+   "108": 29,
+   "109": 28,
+   "110": 27,
+   "111": 26,
+   "112": 25,
+   "113": 24,
+   "115": 22
+  },
+  "distinct_drains": [
+   22,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29
+  ],
+  "injective": true
+ },
+ "observed_components": {
+  "p1": [
+   [
+    "",
+    -109
+   ],
+   [
+    "itemleftovers",
+    14
+   ],
+   [
+    "capped_lethal",
+    -28
+   ]
+  ],
+  "p2": [
+   [
+    "",
+    -76
+   ],
+   [
+    "heal",
+    28
+   ],
+   [
+    "itemleftovers",
+    17
+   ]
+  ]
+ },
+ "shipping_arms": [
+  {
+   "pct": 44.4946,
+   "p1": [
+    [
+     "",
+     -101
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 34.6069,
+   "p1": [
+    [
+     "",
+     -108
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "capped_lethal",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 5.2734,
+   "p1": [
+    [
+     "capped_lethal",
+     -123
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ]
+   ]
+  },
+  {
+   "pct": 2.3438,
+   "p1": [
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 3.7079,
+   "p1": [
+    [
+     "",
+     -101
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 2.8839,
+   "p1": [
+    [
+     "",
+     -108
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "capped_lethal",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 0.4395,
+   "p1": [
+    [
+     "capped_lethal",
+     -123
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -70
+    ]
+   ]
+  },
+  {
+   "pct": 2.9663,
+   "p1": [
+    [
+     "",
+     -101
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 2.3071,
+   "p1": [
+    [
+     "",
+     -108
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "capped_lethal",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 0.3516,
+   "p1": [
+    [
+     "capped_lethal",
+     -123
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ]
+   ]
+  },
+  {
+   "pct": 0.1562,
+   "p1": [
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 0.2472,
+   "p1": [
+    [
+     "",
+     -101
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "leechseed",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 0.1923,
+   "p1": [
+    [
+     "",
+     -108
+    ],
+    [
+     "itemleftovers",
+     14
+    ],
+    [
+     "capped_lethal",
+     -29
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ],
+    [
+     "heal",
+     29
+    ],
+    [
+     "itemleftovers",
+     17
+    ]
+   ]
+  },
+  {
+   "pct": 0.0293,
+   "p1": [
+    [
+     "capped_lethal",
+     -123
+    ]
+   ],
+   "p2": [
+    [
+     "",
+     -141
+    ]
+   ]
+  }
+ ],
+ "shipping_emitted_p2_heal_magnitudes": [
+  29
+ ],
+ "counterfactuals": {
+  "control_unmodified": "diverged",
+  "A_observed_roll_109_to_108": "matched",
+  "A2_only_mirror_heal_28_to_29": "matched",
+  "B_blanket_heal_roll_scaled": "matched",
+  "C_narrow_mirror_of_capped_lethal": "matched"
+ },
+ "mutation_test": {
+  "28": {
+   "truthful": true,
+   "ship": "diverged",
+   "blanket": "matched",
+   "narrow": "matched"
+  },
+  "27": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "matched",
+   "narrow": "diverged"
+  },
+  "26": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "matched",
+   "narrow": "diverged"
+  },
+  "25": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "diverged",
+   "narrow": "diverged"
+  },
+  "24": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "diverged",
+   "narrow": "diverged"
+  },
+  "22": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "diverged",
+   "narrow": "diverged"
+  },
+  "20": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "diverged",
+   "narrow": "diverged"
+  },
+  "18": {
+   "truthful": false,
+   "ship": "diverged",
+   "blanket": "diverged",
+   "narrow": "diverged"
+  }
+ },
+ "enumeration": {
+  "enumeration_build_flag_off_control": {
+   "POKEZERO_ENUMERATE_ROLLS": null,
+   "branch_count": 14,
+   "mass_sum_pct": 100.0,
+   "p2_heal_magnitudes_emitted": {
+    "29": 93.9062
+   },
+   "verdict": "diverged"
+  },
+  "enumeration_on": {
+   "POKEZERO_ENUMERATE_ROLLS": "1",
+   "branch_count": 1015,
+   "mass_sum_pct": 100.0,
+   "p2_heal_magnitudes_emitted": {
+    "22": 5.7129,
+    "24": 5.7129,
+    "25": 5.7129,
+    "26": 5.7129,
+    "27": 5.7129,
+    "28": 5.7129,
+    "29": 59.6289
+   },
+   "verdict": "matched"
+  }
+ },
+ "retained_row_census": {
+  "note": "every committed reports/artifacts/*.json retained transition repro, deduplicated on (seed, step) and re-read on the 44ee1430 build. Small and historically biased -- most rows were recorded on older engines and already close. Reported for what it is.",
+  "distinct_rows": 68,
+  "shipping_harness": {
+   "matched": 64,
+   "diverged": 4
+  },
+  "blanket_heal_roll_scaled": {
+   "matched": 65,
+   "diverged": 3
+  },
+  "narrow_mirror_of_capped_lethal": {
+   "matched": 65,
+   "diverged": 3
+  },
+  "newly_matched_by_blanket": [
+   [
+    19000191,
+    63
+   ]
+  ],
+  "newly_matched_by_narrow": [
+   [
+    19000191,
+    63
+   ]
+  ],
+  "newly_diverged_by_either": [],
+  "caveat": "a comparator WIDENING cannot open a row by construction, so 'nothing opened' is a vacuous falsifier for it. The mutation test is the non-vacuous one."
+ },
+ "main_sweeps_corroborating": {
+  "note": "produced by #1149, not by this report; cited because they are the sweep-level form of the same single-variable comparison, on the same engine fingerprint this report replays.",
+  "engine_fingerprint": "44ee1430708cbb55033f5c7f1234b4bf9699009e6ba6d9a972ba442df615d652",
+  "c134_collapsed_dev_sweep.json": {
+   "boundaries_measured": 15503,
+   "diverged": 1,
+   "classes": {
+    "component_magnitude:heal": 1
+   }
+  },
+  "c134_collapsed_holdout_sweep.json": {
+   "boundaries_measured": 15579,
+   "diverged": 0
+  },
+  "c134_enumerated_dev_sweep.json": {
+   "boundaries_measured": 15503,
+   "diverged": 0
+  },
+  "c134_enumerated_holdout_sweep.json": {
+   "boundaries_measured": 15579,
+   "diverged": 0
+  }
+ },
+ "representative_matrix": {
+  "note": "OVERTURNS this report's first revision. Engine representative (key) against the roll Showdown threw (columns, in band order). Produced by monkeypatching pokezero_search.branch_events to re-price the residual-kill arms to a different representative INSIDE the band -- still one arm per residual threshold, still 14 arms, asserted per cell -- then running the UNMODIFIED shipped evaluate_boundary_strict. The strict path compares rendered components only, so the substitution faithfully models the engine change.",
+  "band": [
+   108,
+   109,
+   110,
+   111,
+   112,
+   113,
+   115
+  ],
+  "columns_are": "the roll Showdown threw; observation(109) reproduces the recorded protocol byte-for-byte (asserted)",
+  "matrix": {
+   "108": [
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "109": [
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "110": [
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "111": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "112": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged"
+   ],
+   "113": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged"
+   ],
+   "115": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched"
+   ]
+  },
+  "every_representative_matches_exactly_one_of_seven": true,
+  "matrix_is_the_identity": true,
+  "consequence": "representative 109 CLOSES this row; 108 (shipping) does not. Moving 108 -> 109 does not fix anything -- it trades this row for the rows where Showdown throws 108. Both are one roll of sixteen, so the trade is even in expectation.",
+  "principled_rule_measured": {
+   "rule": "floor(mean(band)), the survive arm's own convention",
+   "survive_band_check": "floor(916/9) = 101, which is the representative the engine actually emits",
+   "lethal_band": "floor(778/7) = 111 -> drain 26",
+   "verdict": "diverged",
+   "source_confirmation": {
+    "band_arm_priced_at_the_threshold": "residual_disjoint_bands stores (threshold, band) and pushes the arm at `threshold` itself -- gen3/generate_instructions.rs",
+    "survive_arm_is_the_integer_mean": "survive_representative = average_below, and compare_health_with_damage_multiples returns (total_less_than / num_less_than) -- an integer mean of the sub-fan below the threshold. 916/9 = 101 exactly.",
+    "note": "so (iv) is confirmed at source rather than fitted to the observed -101.",
+    "alternative_rule_also_gives_111": "floor((min+max)/2) = floor((108+115)/2) = 111, so (iv) does not depend on which mean-like rule is chosen."
+   }
+  },
+  "controls": {
+   "rep108_rewrite_is_byte_identical_noop": true,
+   "why": "the rep=108 rewrite must reproduce the unpatched render exactly, or the diagonal cell at 108 would be an artifact of the rewrite machinery rather than of the engine. Asserted on the full rendered payload, sort_keys JSON."
+  },
+  "off_diagonal": {
+   "cells": 42,
+   "all_diverged": true,
+   "arms_per_cell": 14,
+   "reached_p2_comparison_with_predicted_pair": 42,
+   "predicted_pair": "observed_only=[('heal', min(29,137-r))] engine_only=[('heal', min(29,137-rep))]",
+   "consequence": "the residual-kill arm clears the p1 comparison in EVERY off-diagonal cell, so the cap-vs-cap identity (|obs|-|eng|) == (eng_direct-obs_direct) holds for every (rep, r) pair in the band, not only at rep=108. The p2 mirror heal is therefore the SOLE discriminator across the whole band."
+  },
+  "diagonal_is_definitional": "the 7 diagonal cells are a tautology, not a finding: with rep == r the engine arm's p1 components and its mirror heal are identical to the observation by construction, so the only live adjudication left is p2's direct damage roll, which the fan/window forgives. All the informative content is in the 42 off-diagonal cells."
+ },
+ "withdrawn_claims": [
+  {
+   "claim": "no choice of representative closes this row (first revision, section 6 box)",
+   "status": "FALSE -- overturned by representative_matrix; representative 109 matches",
+   "defect": "step (d) was a non-sequitur: 'at most 1 of 7 can match, and Showdown rolled one of the other 6' silently assumed representative = 108"
+  },
+  {
+   "claim": "108 is 'the one roll of the seven that would have matched' (first revision, section 6 close)",
+   "status": "FALSE -- 109 is; 108 is the roll the SHIPPING representative covers"
+  },
+  {
+   "claim": "the falsifier is 'a single representative accepted against all seven lethal rolls'",
+   "status": "STRAWMAN -- strictly harder than the claim it defended. The correctly scoped form, carried in the same revision's sections 9 and the PR body, FIRED."
+  }
+ ]
+}
