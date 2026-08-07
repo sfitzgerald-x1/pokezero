@@ -2572,15 +2572,29 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
                 "the Protect marker is rendered but the world is STILL REFUSED as \
                  attribution-unsafe, so the fix reclaims nothing: {r:?}"
             );
-            // AND it must be COUNTED. Closing this family deleted the only number that
-            // tracked it: era 62 measured the shape at 3,365 worlds solely because it
-            // aborted into `world_failure_reasons`. Without a success-side count, "the
-            // marker fires but the worlds die at their next unsafe branch" and "the
-            // marker never fires" are indistinguishable in the era data.
+            // AND it must be counted EXACTLY ONCE PER RENDERED LINE. Closing this family
+            // deleted the only number that tracked it: era 62 measured the shape at 3,365
+            // worlds solely because it aborted into `world_failure_reasons`.
+            //
+            // COUNT, not presence. `.any()` was the first version of this assertion and
+            // review killed it: duplicating the `mark_lossy_subcase` call passed all 423
+            // tests. Over-firing is the failure direction the whole change is most exposed
+            // to, because the number it inflates is the one the next era reads as evidence
+            // the fix worked -- and M3 only covers over-firing on the WRONG branch, not
+            // twice on the right one.
+            let markers = events.matches("|Protect").count();
+            let counted = r
+                .lossy_subcases
+                .iter()
+                .filter(|s| *s == "sleeptalk_called_unidentified:protect_marker_rendered")
+                .count();
+            assert_eq!(
+                counted, markers,
+                "the Protect counter must fire exactly once per rendered Protect line, \
+                 got {counted} for {markers} line(s): {r:?}"
+            );
             assert!(
-                r.lossy_subcases
-                    .iter()
-                    .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+                counted > 0,
                 "the Protect marker rendered but emitted NO telemetry, so a production era \
                  cannot tell a firing marker from a silent one: {r:?}"
             );

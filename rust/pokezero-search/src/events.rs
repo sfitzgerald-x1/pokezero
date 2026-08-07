@@ -2141,12 +2141,36 @@ fn render_move_phase(
                             //
                             // Before this line, closing the `heal` family DELETED its only
                             // number. Era 62 measured the shape at 3,365 worlds solely
-                            // because it aborted and landed in `world_failure_reasons`. Now
-                            // it renders and emits nothing, which makes two very different
-                            // outcomes look identical: the marker fires and the worlds are
-                            // reclaimed but die at their NEXT unsafe branch (first-refuser
-                            // attribution), versus the marker never fires at all. Only a
-                            // success-side count separates them.
+                            // because it aborted and landed in `world_failure_reasons`.
+                            //
+                            // WHAT THIS NUMBER IS, stated exactly, because the first version
+                            // of this comment claimed something the plumbing does not deliver
+                            // and review disproved it:
+                            //
+                            // * It counts BRANCH RENDERS, not worlds. The enclosing `price`
+                            //   closure runs once per expanded branch seam (`tree.rs`
+                            //   `expand_edge`), summed over every world and decision in the
+                            //   shard. Era 62's 3,365 is a WORLD count. One world expands
+                            //   many branches carrying the same Protect-blocked tail, so the
+                            //   two are NOT commensurable and must not be differenced.
+                            //
+                            // * It only survives for worlds whose search COMPLETED.
+                            //   `model.rs` accumulates these counts and then, on any
+                            //   attribution-unsafe branch, `return Err(error)` before the
+                            //   report is built -- the Python seam catches that and salvages
+                            //   only `attribution_unsafe_renders`. So a world that renders
+                            //   the marker and later dies at a DIFFERENT unsafe branch
+                            //   contributes ZERO here, exactly like a world where the marker
+                            //   never fired.
+                            //
+                            // What it therefore DOES establish is the thing era 63 has to
+                            // know and otherwise cannot: a NONZERO value is direct positive
+                            // evidence that Protect-blocked worlds are being RECLAIMED and
+                            // searched, not merely re-refused one branch later. Zero is
+                            // ambiguous; nonzero is not. That asymmetry is the whole value,
+                            // and it is worth having precisely because the fallback RATE
+                            // cannot supply it -- the rate moves for nine commits' worth of
+                            // reasons, this counter for one.
                             //
                             // `mark_lossy_subcase`, NOT a new lossy tag. It pushes the SAME
                             // `SLEEPTALK_LOSSY_TAG` that the accepting path above already
@@ -6939,6 +6963,14 @@ mod tests {
         // very abort it exists to prevent.
         assert!(UNRENDERABLE_FAMILY_ORDER.contains(&"unclassified"));
         assert!(SUBCASE_VOCABULARY.contains(&"unclassified"));
+        // Same for the Protect counter's token. It is registered DEFENSIVELY -- the only
+        // caller goes through `mark_lossy_subcase`, which does not currently reach
+        // `assert_subcase_vocabulary` -- and review showed that made the registration
+        // deletable with all 423 tests green. An "unused token" cleanup would then arm a
+        // production panic for whoever later closes that asymmetry, on a --release wheel,
+        // where a pyo3 panic escapes `except Exception` and kills the campaign worker.
+        // Pinned here rather than in a new test so the CI count floor does not move.
+        assert!(SUBCASE_VOCABULARY.contains(&"protect_marker_rendered"));
     }
 
     /// COVERAGE LIMIT, stated because the first version of this test overstated it. That
