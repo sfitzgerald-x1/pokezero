@@ -176,6 +176,29 @@ class ContractTest(unittest.TestCase):
         self.assertTrue(independent.ok)
         self.assertEqual(derived.failures, independent.failures)
 
+    def test_a_caller_that_derives_contained_makes_rule_4_tautological(self) -> None:
+        """The same hole, one rule over -- and rule 4 is the load-bearing one.
+
+        Review demonstrated this live: replacing `contained=report["boundaries"]` with
+        `contained = attempted + sum(skips)` in leaf_vs_reality leaves rule 4 permanently
+        satisfied and the whole suite green. The helper cannot see it, for the same reason it
+        cannot see a derived `measured`: 5 == 2 + 3 looks identical however it was obtained.
+
+        So `contained` must be the corpus's OWN count of what it holds, read from the corpus
+        rather than reconstructed from the harness's own bookkeeping -- otherwise rule 4 checks
+        the harness against itself. All four adoption sites read it from the report's corpus
+        figure; nothing here enforces that, and this test exists so the gap is written down
+        rather than assumed shut.
+        """
+        derived = check_denominator(
+            "derived", measured=956, matched=39, diverged=917, contained=956 + 315, skipped=315
+        )
+        independent = check_denominator(
+            "independent", measured=956, matched=39, diverged=917, contained=1271, skipped=315
+        )
+        self.assertTrue(derived.ok)
+        self.assertEqual(derived.failures, independent.failures)
+
     def test_but_the_zero_rule_still_binds_a_deriving_caller(self) -> None:
         """The half that survives a lazy caller: if it measured nothing, `matched + diverged`
         is 0 too, so the derived `measured` is 0 and rule 2 fires anyway."""

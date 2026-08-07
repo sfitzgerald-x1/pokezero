@@ -611,6 +611,41 @@ def drive_boundary(
 # ---------------------------------------------------------------------------
 
 
+def assert_status_vocabulary(stats: "Counter[str] | dict[str, int]") -> None:
+    """Fail loudly if any status escaped the skip/measured prefix convention.
+
+    The split is a STRING-PREFIX convention spanning every ``BoundaryResult`` return site, and
+    nothing else pins it. A new status without the ``skip:`` prefix silently moves boundaries
+    out of ``skipped`` and into ``measured``.
+
+    Rule 4 does NOT catch that -- an earlier commit message claimed it would, and review
+    falsified the claim: moving a boundary between the two buckets changes both sides of
+    ``measured + skipped == contained`` by one each, so they cancel. Measured live, with a
+    third of boundaries returning an unprefixed status: 1064 + 207 = 1271, all four rules
+    green, 424 boundaries never driven and reported as divergences. Hence this assertion.
+
+    Lives at module scope rather than inline in ``run_corpus`` so it is pinnable WITHOUT a
+    corpus: review found that its only test was corpus-gated, and the corpus is gitignored, so
+    the guard could be deleted and CI stayed green. It is also runtime-only -- a return site no
+    corpus exercises will not reach it -- which a scan of the ``BoundaryResult`` literals would
+    close and this does not.
+
+    ``known`` duplicates ``classify_products``' verdict vocabulary with nothing linking them, so
+    a legitimate new verdict lands here first. That is fail-closed but misdirecting; the message
+    says so.
+    """
+    known = {"a", "b", "c", "attempted"}
+    unknown = {k for k in stats if k not in known and not k.startswith("skip:")}
+    if unknown:
+        raise AssertionError(
+            f"drive_boundary returned status(es) {sorted(unknown)} that are neither a known "
+            "verdict (a/b/c) nor `skip:`-prefixed. The denominator's skip/measured split is a "
+            "prefix convention; an unprefixed status inflates boundaries_measured and no "
+            "denominator rule can see it. If you are adding a legitimate verdict, add it to "
+            "`known` here as well as to classify_products."
+        )
+
+
 def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
     corpus = load_corpus(corpus_dir)
     from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
@@ -650,24 +685,7 @@ def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
                         "detail": result.detail,
                     }
                 )
-    # The skip/measured split is a STRING-PREFIX convention spanning every BoundaryResult
-    # return site, and nothing else pins it. A new status without the `skip:` prefix silently
-    # moves boundaries out of `skipped` and into `measured`.
-    #
-    # Rule 4 does NOT catch that -- an earlier commit message claimed it would, and review
-    # falsified the claim: moving a boundary between the two buckets changes both sides of
-    # `measured + skipped == contained` by one each, so they cancel. Measured live, with a
-    # third of boundaries returning an unprefixed status: 1064 + 207 = 1271, all four rules
-    # green, 424 boundaries never driven and reported as divergences. Hence this assertion.
-    known = {"a", "b", "c", "attempted"}
-    unknown = {k for k in stats if k not in known and not k.startswith("skip:")}
-    if unknown:
-        raise AssertionError(
-            f"drive_boundary returned status(es) {sorted(unknown)} that are neither a known "
-            "verdict (a/b/c) nor `skip:`-prefixed. The denominator's skip/measured split is a "
-            "prefix convention; an unprefixed status inflates boundaries_measured and no "
-            "denominator rule can see it."
-        )
+    assert_status_vocabulary(stats)
     total_pairs = sum(len(chain) - 1 for chain in corpus["fold_chains"].values() if len(chain) > 1)
     return {
         "corpus": str(corpus_dir),

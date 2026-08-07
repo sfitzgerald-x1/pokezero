@@ -203,8 +203,13 @@ class GuardsArePinnedTest(unittest.TestCase):
                 lines = self._denominator_lines(name, healthy)
                 self.assertTrue(lines, f"{name} printed no denominator line at all")
                 line = lines[0]
-                self.assertIn("contained", line, f"{name} does not supply `contained`")
-                self.assertIn("skipped", line, f"{name} does not supply `skipped`")
+                # assertRegex, not assertIn: review showed the plain substrings are
+                # UNFALSIFIABLE here, because the disarmed line reads "rule 4 NOT CHECKED
+                # (contained/skipped not supplied)" and contains both words. Both assertIns
+                # passed on a disarmed line. Match the armed forms -- "of N contained",
+                # "N skipped" -- which only render() with both figures present can produce.
+                self.assertRegex(line, r"of \d+ contained", f"{name} does not supply `contained`")
+                self.assertRegex(line, r"\d+ skipped", f"{name} does not supply `skipped`")
                 self.assertNotIn(
                     "NOT CHECKED", line, f"{name} is running with rule 4 disarmed"
                 )
@@ -221,6 +226,23 @@ class GuardsArePinnedTest(unittest.TestCase):
         with redirect_stdout(buffer):
             gate([check_denominator("bare", measured=5, matched=2, diverged=3)])
         self.assertIn("NOT CHECKED", buffer.getvalue())
+
+    def test_the_vocabulary_guard_is_pinned_without_a_corpus(self) -> None:
+        """The same guard as the test below, but reachable in CI.
+
+        Review found the guard's only pin was corpus-gated and the corpus is gitignored: with
+        the `raise` deleted, the CI step still read `Ran 28 / OK (skipped=6)`. Two of the three
+        guards this class exists to pin were covered in CI and this one was not. It is now at
+        module scope so it can be called directly.
+        """
+        module = importlib.import_module("fidelity_gate_events")
+        # Clean vocabularies pass, including a skip reason nobody has written yet.
+        module.assert_status_vocabulary({"a": 5, "b": 1, "c": 2, "attempted": 8, "skip:novel": 3})
+        for bad in ("unsupported:new_reason", "d", "skipped:typo", "skip_typo"):
+            with self.subTest(status=bad):
+                with self.assertRaises(AssertionError) as caught:
+                    module.assert_status_vocabulary({"a": 1, "attempted": 1, bad: 1})
+                self.assertIn(bad, str(caught.exception))
 
     def test_an_unprefixed_status_raises_rather_than_inflating_measured(self) -> None:
         """The vocabulary guard, through the REAL run_corpus.
@@ -319,8 +341,9 @@ class RealDriverAcceptanceTest(unittest.TestCase):
             )
 
     def test_and_the_same_corpus_passes_the_denominator_undriven(self) -> None:
-        """Non-vacuity: without the patch this corpus measures 1271 and the denominator is
-        clean, so the failure above is the skip and not the corpus."""
+        """Non-vacuity: without the patch this corpus measures 956 of the 1271 boundaries it
+        contains (315 skipped) and the denominator is clean, so the failure above is the
+        forced skip and not the corpus."""
         module = importlib.import_module("fidelity_gate_events")
         self.assertEqual(module.main(["--corpus", str(self.CORPUS)]), 0)
 
