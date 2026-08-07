@@ -573,9 +573,9 @@ jobs:
                      without_the_protect_volatile_no_protect_line_is_invented \
                      a_full_hp_absorb_activation_is_never_dressed_as_protect \
                      protect_plus_an_absorb_ability_refuses_rather_than_guessing \
-                     events::tests::the_protect_marker_renders_only_when_the_state_proves_it \
-                     events::tests::the_protect_marker_is_defender_side_and_zero_amount_only \
-                     events::tests::the_absorb_guard_covers_exactly_the_zero_heal_producers; do
+                     events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
+                     events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
+                     events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1
