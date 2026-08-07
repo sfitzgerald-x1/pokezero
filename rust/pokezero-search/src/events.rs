@@ -313,7 +313,8 @@ impl RenderedEvents {
     ///   literals present in the source: finite, greppable, reviewable. The honest
     ///   statement is that the ceiling rises from 1 key to 2^16 - 1 = 65,535, and
     ///   that the REALIZED count is small because tails are short -- the oracle corpus
-    ///   yields two (`boost`, `substitute+volatile`).
+    ///   yielded two (`boost`, `substitute+volatile`), though the second can no longer be
+    ///   emitted now that `substitute` is deregistered.
     ///
     /// Note 16, not 17: `UNRENDERABLE_FAMILY_ORDER` has 17 entries but `unclassified` is
     /// emitted by NO classifier arm -- it is reachable only through the degradation below,
@@ -3532,7 +3533,8 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 /// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
 /// heal on the attacker with no foe damage -- and the ranking cannot say which of the
 /// remaining shapes a refusal is without this split. There are FIVE buckets below, not the
-/// three that doc block names: it predates `heal_paindmg` and `heal_zero_marker`.
+/// three named in `heal_is_a_direct_self_heal`'s doc block: that block predates
+/// `heal_paindmg` and `heal_zero_marker`.
 ///
 /// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
 /// of refused tails is byte-identical to before. Nothing here changes what is searched.
@@ -5886,7 +5888,8 @@ mod tests {
             "a `DamageSubstitute` on the OTHER side does not make this removal a break"
         );
 
-        // ONE REPRESENTATIVE PER BLOCKED FAMILY, all sixteen. `Heal` is first because it
+        // ONE REPRESENTATIVE PER BLOCKED FAMILY -- 14 distinct families in this vec, and the
+        // full sixteen only counting `blocked_in_tail` below. `Heal` is first because it
         // is the variant review found most likely to be mistakenly admitted -- the whole
         // C52-mirror doc block is about it -- and it previously had no representative at
         // all, so `Heal(_) => None` left every test green.
@@ -6305,7 +6308,7 @@ mod tests {
             assert_eq!(
                 unrenderable_family_at(std::slice::from_ref(&tail[*index]), 0, SideReference::SideOne),
                 None,
-                "{:?} alone is a move's own stat change and must stay renderable",
+                "{:?} ALONE is admitted, so the refusal is a property of the TAIL",
                 tail[*index]
             );
             // ...and the COMPOSED SLUG must name the family, not just the raw classifier.
@@ -6512,8 +6515,9 @@ mod tests {
         assert_eq!(
             (UNRENDERABLE_FAMILY_ORDER.len(), reachable, 2usize.pow(reachable as u32) - 1),
             (17, 16, 65_535),
-            "the order list changed size -- update the `2^16 - 1 = 65,535` figure and the \
-             `Note 16, not 17` line in SUBCASE_VOCABULARY's doc block to match"
+            "the order list changed size -- update THREE places in SUBCASE_VOCABULARY's \
+             doc block (the `2^16 - 1 = 65,535` figure, the `Note 16, not 17` line, and \
+             the `A 65k ceiling` sentence) plus this test's own doc block"
         );
     }
 
@@ -6536,9 +6540,9 @@ mod tests {
                 "statrecalc",
                 "status",
                 "sleepcounter",
-                // DELIBERATE reorder, per this test's own instruction to say so. The `heal`
-                // family is PARTITIONED into sub-cases; the bare token survives as the
-                // remainder. Unlike the "substitute" removal below, this one DOES move
+                // DELIBERATE change, per this test's own instruction to say so. Not a
+                // reorder: the `heal` family is PARTITIONED into sub-cases and the bare
+                // token is REMOVED. Unlike the "substitute" removal below, this one DOES move
                 // real keys: era 61 measured 3,533 world failures under `heal`, and every
                 // one of them now reports a sub-case instead. The sum across the five
                 // tokens is what compares to the old bare count. The BARE token is gone
