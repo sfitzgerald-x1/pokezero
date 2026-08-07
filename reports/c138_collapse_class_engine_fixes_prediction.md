@@ -1,0 +1,326 @@
+# C138 — the two collapse-class engine fixes, registered before any post-fix measurement
+
+> **Two documents carry the number C138.** This one, and
+> `reports/c138_known_gaps_ledger.md` (Phase 4 item 14), which landed on main in #1151
+> while this branch was open. They are different items and neither supersedes the other;
+> the number is reused, the filenames are not. The ledger's **G6** and **G7** are the two
+> gaps this document's fixes close, and are annotated there. Renumbering this one after
+> the fact was rejected: it is cited by two commit messages and by the patch manifest, and
+> a dangling citation in a commit message is worse than a shared prefix.
+
+Registered 2026-08-06, before either patch was built or installed. The baseline in §2 was
+re-derived from the base commit on this branch's own build; no figure here is carried
+forward from another document.
+
+These are the two fixes `reports/c137_phase2_enumerate_decision.md` un-cancelled:
+`reports/c133_collapsed_roll_disposition.md` §3 (the crit-straddle sub-split) and
+`reports/c135_roll_divergent_lethality_adjudication.md` §5 (the status-aware residual
+threshold). They ship as two commits on one branch — see §6 for why one branch and not
+two PRs.
+
+## 1. What each fix is
+
+**(A) The crit-straddle residual sub-split.** When the CRIT fan straddles the KO threshold,
+Case B partitions it into crit-kill and crit-survive and never consults the residual
+threshold. The residual sub-split therefore existed at two of the three partition sites and
+was missing from the third. Dev row `19000074/27`: the priced crit fan is
+`[214, 216, 219, 221, 224, 226, 229, 231, 234, 236, 239, 241, 244, 246, 249, 252]` against
+244 HP with a sandstorm threshold of 229. Showdown rolled **241 — roll 96, a member of the
+engine's own fan** — while the engine emitted arms only at 244 (the defender's HP) and 227
+(the mean of the twelve non-KO rolls, not a fan member at all).
+
+**(B) The status-aware residual threshold, and the disjoint-band mass rule.**
+`residual_lethality_threshold` reads the defender's PRE-MOVE state, so a Fire move's own
+burn secondary is invisible and the split never fires. Holdout rows `19100107/135` (Sacred
+Fire into Roselia 175/254) and `19100191/5` (Fire Blast into Ninjask 225/225): both
+defenders unstatused, the mirror declines, the whole non-crit fan collapses onto a surviving
+representative — and the observed roll is again a member of the engine's own fan.
+
+The fix passes `choice` in so secondaries are visible, and takes the **union** of the
+distinct thresholds. Explicitly **not** the minimum: c133 §4 records a measured
+counterexample where `min` drops the threshold below the fan's lowest roll, every
+`min_roll < threshold` guard stops firing, and an arm the engine emits today is destroyed.
+
+Because the thresholds are **nested** (a status only adds a tick, so every status-aware
+threshold is at or below the pre-move one), each arm carries the **disjoint band**
+`#{rolls in [t_i, t_i+1)}` priced at its own `t_i`, the survive arm keeps
+`average_surviving_damage` over the rolls below `t_1`, and — this is the part c135 §5 states
+incompletely — **the KO threshold participates in the same nest as the ceiling wherever a
+KO arm already exists.** At Case A and at the crit-straddle site the top residual band is
+therefore `#{rolls in [t_k, hp)}`, not `#{rolls >= t_k}`; the literal reading of c135 §5
+would let the top arm absorb the hit-lethal rolls and double-count them against the KO arm.
+c133 §4 is primary here: it names the engine's existing
+`num_residual_only = num_at_or_above - num_kill_rolls` as "exactly the band between the
+residual threshold and the KO threshold", and the fix generalises that subtraction rather
+than replacing it. With a one-entry ladder every site reduces to the arithmetic it ran
+before.
+
+## 2. Baseline, re-derived from the base commit
+
+`origin/main` `2ec0cb13`, fingerprint-verified (`68 patches, 907bea70abd1bf86`), one build,
+200 games per window. Artifacts:
+`reports/artifacts/c138_collapsefix_main_{dev,holdout}_sweep.json`.
+
+| window | full_round | measured | matched | diverged | engine_errors |
+|---|---|---|---|---|---|
+| dev `19,000,000–199` | 15,968 | 15,503 | 15,501 | **2** | 0 |
+| holdout `19,100,000–199` | 16,155 | 15,579 | 15,575 | **4** | 0 |
+
+Complete `divergence_classes` census (not read off `repros`, which is capped at
+`keep_repro=25`):
+
+| window | class | count | rows |
+|---|---|---|---|
+| dev | `component_magnitude:heal` | 1 | `19000191/63` |
+| dev | `component_missing_in_engine:sandstorm` | 1 | **`19000074/27`** |
+| holdout | `component_missing_in_engine:itemleftovers` | 2 | `19100170/71`, `19100170/72` |
+| holdout | `limit:roll_divergent_lethality` | 2 | **`19100107/135`**, **`19100191/5`** |
+
+Holdout reads 4, not the 5 c133 §7 cites, because `19100180/24` closed in between
+(#1144). That is a difference in the baseline, not in this measurement.
+
+## 3. Prediction
+
+**After (A) alone:**
+
+| window | predicted |
+|---|---|
+| dev | **2 → 1**, closing exactly `19000074/27`, the lone `component_missing_in_engine:sandstorm` |
+| holdout | **4 → 4, unchanged** — no holdout row is the crit-straddle mechanism |
+
+**After (A) + (B):**
+
+| window | predicted |
+|---|---|
+| dev | **1 → 1, unchanged** |
+| holdout | **4 → 2**, closing exactly the two `limit:roll_divergent_lethality` rows |
+
+Also predicted, on all four post-fix runs: `boundaries_measured` and
+`boundaries_full_round` unchanged at 15,503 / 15,968 (dev) and 15,579 / 16,155 (holdout);
+`engine_errors: 0`; the identity `matched + diverged == measured` holding.
+
+Rows that must **survive** every run, because none of them is either mechanism:
+
+- `19000191/63` — c133 §3 disposes of it as "the arm exists; its representative mis-prices a
+  roll-dependent drain", needing enumeration or a matcher change. Neither fix touches it.
+- `19100170/71` and `19100170/72` — `component_missing_in_engine:itemleftovers`, not a
+  partition defect.
+
+## 4. Falsifier
+
+**If anything opens on either window, or either boundary count changes, or a predicted row
+survives, or a row closes that is not named above, the fix that produced the run is
+withdrawn.** This clause has caught two consecutive patches in this program that every other
+gate passed, and a third was caught only because a reviewer built a shape no sweep
+contained. A withdrawn fix with a clear diagnosis is an acceptable outcome; a believed fix
+without this measurement is not.
+
+Note the asymmetry that makes "nothing opened" the load-bearing half. Both fixes **re-price
+survive representatives** — c133 §7 names three, `227 → 220` on `19000074/27`,
+`203 → 197` on `19100191/5` and `157 → 150` on `19100107/135` — and the comparator's
+fallback acceptance window `[0.92·eng − 1, 1.09·eng + 1]` is not invariant under that
+re-pricing. How much currently-matched mass rides on that fallback is unmeasured
+(c135 §6). The sweep is the only instrument that sees it.
+
+## 5. The oracle, and why it is registered here too
+
+This family has burned **three wrong hand-derived mass recipes**, and the reason C134 §3
+froze it. What is different now is that an exact oracle exists: the enumerate-then-merge
+spike patch emits one arm per distinct `floor(max * r / 100)` for `r` in `85..=100` at mass
+1/16, resolves lethality inside `run_move` rather than in a mirror, and was verified against
+an independent reconstruction (Fire Blast, 64 of 64 damage × burn cells to 1e-9; an A8
+KO-mass fixture at 5.810547 % against independent truth 5.810547 %, delta 0, where the
+collapsed path gives 5.312500 %).
+
+So a fourth wrong recipe should be a **failing test**, not something review has to catch by
+reading. `tests/test_collapsed_arm_mass_oracle.py` is that test.
+
+**The functional is outcome mass, deliberately.** A correct collapsed path *cannot* agree
+with enumerated truth arm-for-arm — that is what collapsing means. The comparison is a
+coarsening: for each fixture, the total probability mass landing on each
+`(defender faints?, defender's end status)` cell. That is the functional the spike's own A8
+demonstration uses, and the one on which the disjoint-band rule is exact. Nobody should
+later "strengthen" it into an arm-for-arm comparison, which can never pass.
+
+**The oracle cannot be toggled in-process.** `ENUMERATE_DAMAGE_ROLLS` is a `OnceLock`
+initialised from `std::env::var` on first call, so one process is one engine, permanently.
+The enumerated truth is therefore produced in a **separate process against a separate
+build** and committed as a pinned artifact (`tests/data/collapsed_arm_mass_oracle.json`),
+which also answers c137 §4's objection that an unpinned oracle can silently bless a wrong
+recipe. The test then checks three things against each other: the shipping engine's
+functional, the pinned enumerated functional, and a pure-Python reconstruction that shares
+no partition arithmetic with either.
+
+Registered prediction for the oracle test, so it is falsifiable too: on the base commit the
+crit-straddle fixture and both status-aware fixtures are **RED**, and the
+`min-would-destroy-an-arm` fixture is **GREEN** — it is a control that only a
+minimum-over-statuses implementation breaks.
+
+## 6. Two commits, one branch, one PR
+
+The two fixes are not cleanly separable into two PRs. (B) does not add a threshold beside
+(A)'s; it replaces the single `residual_threshold_opt` that all four partition sites read
+with a ladder, and rewrites (A)'s own emission in the same edit. A second PR would therefore
+carry a diff against code that only exists in the first, and the patch stack is
+append-only and ordered, so the two patch files must land in a fixed order anyway.
+
+They are still **two commits**, each with its own clean-room digests and its own sweep pair,
+so the sweep attributes each closure to the fix that produced it. c133 §7 is the reason
+attribution matters: the last engine fix in this residue had a correct mechanism, a verified
+Showdown citation, a red-on-main pin and green unit gates, and still opened 38 dev / 40
+holdout rows against its single closure.
+
+## 7. Outcome — appended 2026-08-06, AFTER both sweep pairs
+
+Everything above this line is the registration and is unedited; this section is the
+result. Artifacts:
+`reports/artifacts/c138_collapsefix_{main,critstraddle,statusaware}_{dev,holdout}_sweep.json`.
+
+| build | fingerprint | dev diverged | holdout diverged |
+|---|---|---|---|
+| base `2ec0cb13` | `907bea70abd1bf86` | 2 | 4 |
+| + (A) crit-straddle | `0ef5a787452292a3` | **1** | 4 |
+| + (A) + (B) status-aware | `2688583a7bd134ab` | 1 | **2** |
+
+Complete `divergence_classes` census across all six runs:
+
+| window | class | base | after (A) | after (A)+(B) |
+|---|---|---|---|---|
+| dev | `component_magnitude:heal` (`19000191/63`) | 1 | 1 | 1 |
+| dev | `component_missing_in_engine:sandstorm` (`19000074/27`) | **1** | **0** | 0 |
+| holdout | `component_missing_in_engine:itemleftovers` (`19100170/71,72`) | 2 | 2 | 2 |
+| holdout | `limit:roll_divergent_lethality` (`19100107/135`, `19100191/5`) | 2 | 2 | **0** |
+
+**Every clause of §3 held and no clause of §4 fired.** The three predicted rows closed and
+no other row moved; `boundaries_measured` is 15,503 / 15,579 and `boundaries_full_round`
+15,968 / 16,155 on all six runs; `engine_errors` is 0 on all six; and
+`matched + diverged == measured` on all six. Nothing opened on either window, under either
+fix. The gating counters are also unmoved — `gating_exact` 14,156 / 14,148 and
+`gating_support_based` 1,347 / 1,431 across all six — so the measured population was not
+perturbed, which is the check that would catch a closure obtained by shrinking the
+denominator.
+
+Each post-fix sweep carries the `source_commit` of the commit *before* it, so the
+registration order is checkable from the artifacts rather than asserted: the (A) sweeps
+carry `534ac8dc`, which is this document, and the (A)+(B) sweeps carry `cf055326`, which is
+(A).
+
+§5's oracle prediction also held. On the base engine the three target fixtures were RED —
+`crit-straddle-sand` 94.375004 % against 95.781254 % (1.41 points), `a8-burn-secondary`
+44.531250 % against 30.615234 % (13.92 points), `nested-thresholds` 0.000000 % against
+2.783203 % (2.78 points) — and `min-would-destroy-an-arm` and `collapsed-fan-control` were
+GREEN. After (A) the crit fixture went green and the two status fixtures stayed red; after
+(B) all five are green. The two controls never moved. (The matrix grew to seven
+after review; §8 is that story. These five are the ones that existed when this
+measurement was taken.)
+
+## 8. Oracle coverage of the four partition sites — appended after review
+
+**The first version of the oracle reached two of the four sites it guards, and nothing said
+so.** Review found it the right way — by mutation, not by reading: an off-by-one in the arm
+price at Case A, and again at the crit-fan-that-cannot-kill site, left all five fixtures
+GREEN. `test_the_fixture_matrix_is_the_expected_size` pinned `len == 5`, which froze the
+absence in place. The engine was not unguarded — both sites are held by pre-existing
+behavioural probes, and both of those *did* go red under the same mutations — but the new
+instrument, the one advertised as preventing a fourth wrong recipe, did not cover half the
+sites the branch edits.
+
+Two fixtures close it, and coverage is now a machine-checked property
+(`test_every_partition_site_is_covered`) rather than a comment: each fixture declares its
+`site`, and the test asserts the mapping onto `PARTITION_SITES` is total. A fifth site
+would fail it until a fixture reached it.
+
+| site | ceiling | fixtures | what the fixture pins |
+|---|---|---|---|
+| `case-a` (`ko_max >= hp && ko_min < hp`) | `hp` | **`case-a-nested-ko-ceiling`** | three-level nest: KO 222, sand 207, Toxic 192, over the fan `[189 … 223]`. Bands 1 / 7 / 6 and a survive arm of 2. The only fixture where the KO threshold acts as the band ceiling — the correction this branch makes to c135 §5 |
+| `case-b-noncrit` | unbounded | `a8-burn-secondary`, `nested-thresholds`, `min-would-destroy-an-arm`, `collapsed-fan-control` | A8's declining pre-move mirror; two bands with an unbounded ceiling; the union-not-minimum control; the collapsed-fan negative control |
+| `case-b-crit-straddle` | `hp` | `crit-straddle-sand` | the site fix (A) adds, on the shape of dev `19000074/27` |
+| `case-b-crit-nokill` | unbounded | **`crit-fan-cannot-kill-sand`** | crit fan `[207 … 244]` topping out below 250 HP, threshold 235 inside it and above the non-crit fan's 122, so it isolates the site |
+
+### The mutation runs, which are what prove the fixtures reach their sites
+
+Each mutation is a one-line change to the arm price at one site, built and installed on top
+of this branch in a scratch clone. "Fixtures RED" is the complete list; every other fixture
+stayed green in each run. The mutations are inlined here rather than committed as files, so
+they are reproducible without adding a build input that looks like a shipped patch — apply
+either to `src/gen3/generate_instructions.rs` after the full stack:
+
+```
+ case-a           let residual_per_hit = if hit_count > 1 { … } else {
+-                     *residual_threshold
++                     *residual_threshold - 1
+                  };
+
+ crit-nokill  -   extra_branches.push((k, *crit_residual_threshold));
+              +   extra_branches.push((k, *crit_residual_threshold - 1));
+```
+
+| mutation | oracle fixtures RED | gap | pre-existing probe |
+|---|---|---|---|
+| Case A arm priced `t − 1` | **`case-a-nested-ko-ceiling`** only | 61.523438 % vs 32.812500 %, **28.71 points** | `case-a-partitions-three-ways` also RED: `[103, 104, 120]` for `[103, 105, 120]` |
+| crit-fan-cannot-kill arm priced `t − 1` | **`crit-fan-cannot-kill-sand`** only | 100.000004 % vs 98.593754 %, **1.41 points** | `residual-mass-crit-fan-only` also RED: KO mass 0.0000 % for 0.7031 % |
+
+That "only" is the reproduction of the review finding: under both mutations the five original
+fixtures pass. The two new ones are the whole of the coverage gained.
+
+**What the functional still cannot see, stated rather than left to be discovered.** Outcome
+mass is blind to an arm priced one *above* its threshold: `t + 1` still leaves the defender
+at or below zero after the residual, so no cell moves. That direction is a real mispricing
+and is caught by the transition differential (it changes the rendered damage), not here. The
+detectable direction is `t − 1`, which flips the arm from lethal to surviving, and the band
+counts, which move mass between cells. Both mutations above are of the detectable kind by
+construction.
+
+## 9. Re-measured on main + this branch — appended after review
+
+The sweeps in §7 were taken against base `2ec0cb13`. Main has since advanced by four
+commits, one of which (#1148) changes `rust/pokezero-search/src/events.rs` — a fingerprint
+input — so those artifacts no longer describe the build that would land. Main was **merged
+in** rather than rebased onto, so the published branch keeps its history and no force-push
+was needed.
+
+The §7 artifacts are kept: they are the evidence for the *mechanism*, isolated to one
+variable each. The pair below is the evidence for *what lands*. Both sides of it were
+measured here rather than carried forward — including the "before", which is a **different
+number from §2's** and would have been wrong if assumed.
+
+| | build | dev `19,000,000–199` | holdout `19,100,000–199` |
+|---|---|---|---|
+| main `f876803e` | `fdbf59379399b944`, 68 patches | 2 diverged | **2** diverged |
+| main + this branch | `e65044f6c8c3917a`, 70 patches | **1** | **0** |
+
+Complete `divergence_classes` census:
+
+| window | class | main | main + this |
+|---|---|---|---|
+| dev | `component_magnitude:heal` (`19000191/63`) | 1 | 1 |
+| dev | `component_missing_in_engine:sandstorm` (`19000074/27`) | 1 | **0** |
+| holdout | `limit:roll_divergent_lethality` (`19100107/135`, `19100191/5`) | 2 | **0** |
+
+`boundaries_full_round` 15,968 / 16,155, `boundaries_measured` 15,503 / 15,579,
+`gating_exact` 14,156 / 14,148, `gating_support_based` 1,347 / 1,431, `engine_errors` 0 and
+`matched + diverged == measured` — identical across all four runs and to every run in §7, so
+merging #1148 perturbed nothing this measures. Artifacts:
+`reports/artifacts/c138_collapsefix_{mainhead,merged}_{dev,holdout}_sweep.json`
+(`mainhead` = main at `f876803e`; the `main` pair is §2's base `2ec0cb13`).
+
+**Holdout's before-count is 2, not §2's 4, and this is worth stating because assuming it
+would have produced a wrong table.** The two `component_missing_in_engine:itemleftovers`
+rows at `19100170/71,72` closed on main between `2ec0cb13` and `f876803e` — by #1148, not by
+anything here. This branch's contribution on top of current main is therefore exactly its
+two mechanisms: `19000074/27` on dev and both `limit:roll_divergent_lethality` rows on
+holdout.
+
+> A process note, because it nearly went the other way. The first attempt at this "before"
+> measurement swept a scratch clone at `origin/main` — but that clone's `origin` is a *local
+> path*, so the ref was stale and it actually built `6b7e16f7`, two commits **behind** §2's
+> base. It reported dev 2 / holdout 4, which looks exactly like a correct answer and is not
+> one. It was caught by reading `source_commit` out of the artifact rather than trusting the
+> checkout, and the measurement was redone against the SHA. The committed artifacts carry
+> `source_commit f876803e`.
+
+**The holdout window goes to zero.** The surviving dev row is `19000191/63`
+(`component_magnitude:heal`), which **neither of these two fixes targets**: c133 §3 disposes
+of it as an arm that exists but whose representative mis-prices a roll-dependent Leech Seed
+drain, needing enumeration or a matcher change. It is **G8** in
+`reports/c138_known_gaps_ledger.md`, and it stays open.

@@ -1,0 +1,83 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3748,20 +3748,77 @@
+                 let (average_non_kill_crit_damage, num_crit_kill_rolls) =
+                     compare_health_with_damage_multiples(ko_max_crit, defender_active.hp);
+                 let crit_kill_chance = crit_rate * (num_crit_kill_rolls as f32 / 16.0);
+-                let crit_survive_chance = crit_rate - crit_kill_chance;
++                let mut crit_survive_chance = crit_rate - crit_kill_chance;
++                let mut crit_survive_damage = average_non_kill_crit_damage;
+                 if crit_kill_chance > 0.0 {
+                     let mut kill_ins = incoming_instructions.clone();
+                     kill_ins.update_percentage(crit_kill_chance);
+                     extra_branches.push((kill_ins, defender_active.hp));
+                 }
++
++                // THE CRIT-STRADDLE THIRD ARM. The crit rolls that fail to kill
++                // on the hit are not interchangeable either -- exactly the
++                // argument Case A already makes for the non-crit fan, and the
++                // one place the residual sub-split was missing. The residual
++                // treatment for crits existed in the sibling `else` below
++                // (reached when the crit fan CANNOT kill) and in Case A, so it
++                // was present at two of three sites and absent from this one.
++                //
++                // Dev row `19000074/27`: the priced crit fan is
++                // [214, 216, 219, 221, 224, 226, 229, 231, 234, 236, 239, 241,
++                //  244, 246, 249, 252] against 244 HP with a sandstorm
++                // threshold of 229. Showdown rolled 241 -- roll 96, a member of
++                // the engine's OWN fan -- and the engine emitted arms only at
++                // 244 (the HP) and 227 (the mean of the twelve non-KO rolls,
++                // not a fan member at all), so no arm sat at the observation.
++                // With this split the twelve non-KO rolls partition into the
++                // six at or above 229 (priced at 229, dying to the sand tick)
++                // and the six below it (mean 220), and the 229 arm renders the
++                // transition the sweep was missing.
++                //
++                // Same identity Case A uses -- `num_at_or_above - kill_rolls` is
++                // the band between the residual threshold and the KO threshold.
++                // Do not introduce a second one. reports/c133 section 3.
++                if let Some(residual_threshold) = residual_threshold_opt {
++                    if residual_threshold > 0
++                        && residual_threshold < defender_active.hp
++                        && ko_min_crit < residual_threshold
++                    {
++                        let (average_surviving_crit, num_at_or_above) =
++                            compare_health_with_damage_multiples(ko_max_crit, residual_threshold);
++                        let num_residual_only = num_at_or_above - num_crit_kill_rolls;
++                        if num_residual_only > 0 {
++                            let crit_residual_chance =
++                                crit_rate * (num_residual_only as f32 / 16.0);
++                            // Cloned from the UNREDUCED mass like every other arm
++                            // in this block; the single `1 - crit_rate` reduction
++                            // at the end of Case B is the only one applied.
++                            let mut residual_ins = incoming_instructions.clone();
++                            residual_ins.update_percentage(crit_residual_chance);
++                            // CEILING division, for the reason Case A records:
++                            // `run_move` applies `damage_amount` once per hit, and
++                            // truncating lands the total one short of the
++                            // threshold, which silently un-does the arm.
++                            let crit_residual_per_hit = if hit_count > 1 {
++                                (residual_threshold + hit_count as i16 - 1) / hit_count as i16
++                            } else {
++                                residual_threshold
++                            };
++                            extra_branches.push((residual_ins, crit_residual_per_hit));
++                            crit_survive_chance -= crit_residual_chance;
++                            crit_survive_damage = average_surviving_crit;
++                        }
++                    }
++                }
++
+                 if crit_survive_chance > 0.0 {
+                     let mut survive_ins = incoming_instructions.clone();
+                     survive_ins.update_percentage(crit_survive_chance);
+                     // Same total -> per-hit conversion as Case A; see there.
+                     let crit_survive_per_hit = if hit_count > 1 {
+-                        average_non_kill_crit_damage / hit_count as i16
++                        crit_survive_damage / hit_count as i16
+                     } else {
+-                        average_non_kill_crit_damage
++                        crit_survive_damage
+                     };
+                     extra_branches.push((survive_ins, crit_survive_per_hit));
+                 }

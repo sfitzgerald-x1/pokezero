@@ -1,0 +1,588 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1572,7 +1572,18 @@
+ /// too low. Summing is also unsound in the other direction: the order-8 chip can
+ /// kill before the 10.4 heal, so a net can read "survives" for a defender that is
+ /// already dead at step 8. Hence an ordered walk with each clamp applied.
+-fn residual_phase_final_hp(state: &State, side_ref: &SideReference, start_hp: i16) -> Option<i16> {
++///
++/// `status_override` is A8's fix (reports/c135 sections 2-3): the caller may ask
++/// what the phase would do if the defender ENDED this move carrying a status the
++/// move itself is about to inflict. It is honoured only when the defender is
++/// currently unstatused, mirroring `immune_to_status`'s own first clause -- a
++/// Pokemon that already has a status cannot be given another one.
++fn residual_phase_final_hp(
++    state: &State,
++    side_ref: &SideReference,
++    start_hp: i16,
++    status_override: Option<PokemonStatus>,
++) -> Option<i16> {
+     let side = state.get_side_immutable(side_ref);
+     let active = side.get_active_immutable();
+     let maxhp = active.maxhp;
+@@ -1666,8 +1677,16 @@
+         }
+     }
+ 
+-    // 10.6 -- status.
+-    match active.status {
++    // 10.6 -- status. A `status_override` stands in only for an unstatused
++    // defender: `get_instructions_from_status_effects` refuses to overwrite an
++    // existing status, so anything else would price a tick the phase cannot run.
++    // A freshly applied TOXIC ticks at maxhp/16 because the counter is still 0
++    // when the status lands -- the application path pushes only ChangeStatus.
++    let effective_status = match status_override {
++        Some(status) if active.status == PokemonStatus::NONE => status,
++        _ => active.status,
++    };
++    match effective_status {
+         PokemonStatus::BURN | PokemonStatus::POISON => hp -= cmp::max(maxhp / 8, 1),
+         PokemonStatus::TOXIC => {
+             let normalized = cmp::min(cmp::max(side.side_conditions.toxic_count as i16, 0), 14);
+@@ -1697,7 +1716,11 @@
+ /// `residual_phase_final_hp` is monotonic non-decreasing in its start (every
+ /// mirrored step is monotonic once threshold items are excluded), so bisection is
+ /// valid. Returns `None` to decline partitioning.
+-fn residual_lethality_threshold(state: &State, side_ref: &SideReference) -> Option<i16> {
++fn residual_lethality_threshold(
++    state: &State,
++    side_ref: &SideReference,
++    status_override: Option<PokemonStatus>,
++) -> Option<i16> {
+     let hp = state
+         .get_side_immutable(side_ref)
+         .get_active_immutable()
+@@ -1709,24 +1732,250 @@
+     // the CURRENT hp would be wrong: the 10.4 heal is min(maxhp/16, maxhp - hp),
+     // so it is LARGER after the hit than before, and a probe at current hp
+     // understates the healing available to a damaged defender.
+-    if residual_phase_final_hp(state, side_ref, 1)? > 0 {
++    if residual_phase_final_hp(state, side_ref, 1, status_override)? > 0 {
+         return None;
+     }
+     let mut low = 1;
+     let mut high = hp;
+-    if residual_phase_final_hp(state, side_ref, high)? <= 0 {
++    if residual_phase_final_hp(state, side_ref, high, status_override)? <= 0 {
+         // Even a full-HP defender dies to its own residual; every roll is lethal.
+         return Some(1);
+     }
+     while low < high {
+         let mid = low + (high - low) / 2;
+-        if residual_phase_final_hp(state, side_ref, mid)? > 0 {
++        if residual_phase_final_hp(state, side_ref, mid, status_override)? > 0 {
+             high = mid;
+         } else {
+             low = mid + 1;
+         }
+     }
+     Some(hp - low + 1)
++}
++
++/// How many distinct residual-lethality thresholds one boundary can carry.
++///
++/// One for the defender's pre-move state plus one per tick-bearing status the
++/// attacker's move can inflict. Gen-3 has three tick-bearing statuses, so four is
++/// an upper bound rather than a budget; `insert` drops anything beyond it, which
++/// degrades to fewer arms and never to a wrong mass.
++const MAX_RESIDUAL_THRESHOLDS: usize = 4;
++
++/// An ascending, de-duplicated set of residual-lethality thresholds.
++///
++/// A fixed array rather than a `Vec`: this sits on the damage-branch path, which
++/// runs once per ply per legal move.
++#[derive(Clone, Copy)]
++struct ResidualThresholdLadder {
++    values: [i16; MAX_RESIDUAL_THRESHOLDS],
++    len: usize,
++}
++
++impl ResidualThresholdLadder {
++    fn new() -> Self {
++        ResidualThresholdLadder {
++            values: [0; MAX_RESIDUAL_THRESHOLDS],
++            len: 0,
++        }
++    }
++
++    fn insert(&mut self, value: i16) {
++        if self.len == MAX_RESIDUAL_THRESHOLDS || self.values[..self.len].contains(&value) {
++            return;
++        }
++        let mut index = self.len;
++        while index > 0 && self.values[index - 1] > value {
++            self.values[index] = self.values[index - 1];
++            index -= 1;
++        }
++        self.values[index] = value;
++        self.len += 1;
++    }
++
++    fn as_slice(&self) -> &[i16] {
++        &self.values[..self.len]
++    }
++}
++
++/// Every residual-lethality threshold the defender can face THIS turn: the one
++/// its pre-move state implies, plus one per tick-bearing status the attacker's
++/// own move can inflict on it.
++///
++/// WHY. `residual_lethality_threshold` reads the defender's PRE-MOVE state, so a
++/// Fire move's own burn is invisible to it and the split never fires. Holdout
++/// rows `19100107/135` (Sacred Fire into Roselia 175/254 Leftovers) and
++/// `19100191/5` (Fire Blast into Ninjask 225/225 Leftovers): both defenders are
++/// unstatused, the mirror declines, and the whole non-crit fan collapses onto a
++/// surviving representative -- while the observed roll is a member of the
++/// engine's own fan and dies to the burn tick. With BURN visible the thresholds
++/// are 159 and 211, both inside their fans. reports/c135 sections 2-3.
++///
++/// THE UNION, NOT THE MINIMUM. A status only ADDS a tick, so every status-aware
++/// threshold is at or below the pre-move one and the two are nested. Collapsing
++/// them with `min` is a measured regression, not a simplification: when the
++/// defender already carries a non-status residual the minimum can fall BELOW the
++/// fan's lowest roll, every `min_roll < threshold` guard stops firing, and an arm
++/// the engine emits today vanishes. reports/c133 section 4 works the case
++/// through (pre-move 160, min-over-statuses 129, fan floor 144).
++fn residual_lethality_thresholds(
++    state: &State,
++    attacking_side: &SideReference,
++    choice: &Choice,
++) -> ResidualThresholdLadder {
++    let defending_side = attacking_side.get_other_side();
++    let mut ladder = ResidualThresholdLadder::new();
++    if let Some(threshold) = residual_lethality_threshold(state, &defending_side, None) {
++        ladder.insert(threshold);
++    }
++    if let Some(status) = &choice.status {
++        if status.target == MoveTarget::Opponent {
++            insert_status_aware_threshold(state, &defending_side, &status.status, &mut ladder);
++        }
++    }
++    if let Some(secondaries) = &choice.secondaries {
++        for secondary in secondaries {
++            if secondary.chance <= 0.0 || secondary.target != MoveTarget::Opponent {
++                continue;
++            }
++            if let Effect::Status(status) = &secondary.effect {
++                insert_status_aware_threshold(state, &defending_side, status, &mut ladder);
++            }
++        }
++    }
++    ladder
++}
++
++/// Add the threshold the defender would face if `status` landed on it.
++///
++/// Only BURN, POISON and TOXIC have an end-of-turn tick, so no other status can
++/// move the threshold -- the rest would dedup straight back onto the pre-move
++/// value. `immune_to_status` is the SHIPPED predicate the secondary itself will
++/// consult, so a threshold is never priced for a status this defender cannot be
++/// given (already statused, Substitute, Safeguard, Fire-type versus burn, ...).
++fn insert_status_aware_threshold(
++    state: &State,
++    defending_side: &SideReference,
++    status: &PokemonStatus,
++    ladder: &mut ResidualThresholdLadder,
++) {
++    if !matches!(
++        status,
++        PokemonStatus::BURN | PokemonStatus::POISON | PokemonStatus::TOXIC
++    ) {
++        return;
++    }
++    if immune_to_status(state, &MoveTarget::Opponent, defending_side, status) {
++        return;
++    }
++    if let Some(threshold) = residual_lethality_threshold(state, defending_side, Some(*status)) {
++        ladder.insert(threshold);
++    }
++}
++
++/// One fan's residual arms, as DISJOINT bands.
++struct ResidualBands {
++    /// The representative for the rolls below the lowest applied threshold --
++    /// the engine's existing `average_surviving_damage` convention.
++    survive_representative: i16,
++    /// `(threshold, roll count)`, ascending by threshold. Each arm is priced at
++    /// its OWN threshold.
++    bands: [(i16, i16); MAX_RESIDUAL_THRESHOLDS],
++    len: usize,
++    /// The rolls covered by `bands`, i.e. everything from the lowest applied
++    /// threshold up to (but not including) the ceiling.
++    total_rolls: i16,
++}
++
++impl ResidualBands {
++    fn iter(&self) -> impl Iterator<Item = &(i16, i16)> {
++        self.bands[..self.len].iter()
++    }
++}
++
++/// Partition a fan into disjoint residual bands, one per distinct threshold.
++///
++/// `max_damage` is the comparator's basis and `min_roll` its lowest rung -- the
++/// guard that keeps `num_less_than >= 1` inside
++/// `compare_health_with_damage_multiples`, whose `0/0` is otherwise reachable.
++/// `ceiling` is the exclusive top of the residual region: the defender's HP at a
++/// site that already emits a hit-KO arm, `i16::MAX` where the fan cannot kill on
++/// the hit. `rolls_at_or_above_ceiling` is the count that KO arm already owns.
++///
++/// Arm `i` carries `#{rolls in [t_i, t_i+1)}`, the top arm `#{rolls >= t_k}`
++/// bounded by the ceiling, and the survive arm keeps `#{rolls < t_1}`. NOT
++/// `#{rolls >= t_i}` per arm: the thresholds are nested, so that recipe counts
++/// every roll above the higher threshold twice. Measured on a 170-max fan with
++/// thresholds 145 and 169, it sums to 17/16 and
++/// `update_percentage(1 - branch_chance - residual_kill_chance)` has no room for
++/// the excess. reports/c133 section 4.
++///
++/// This is a GENERALISATION of a subtraction the engine already performed:
++/// `num_at_or_above - num_kill_rolls` at the Case A site is exactly the band
++/// between the residual threshold and the KO threshold. With a one-entry ladder
++/// every site below reduces to the arithmetic it ran before.
++///
++/// A threshold at or below `min_roll` is SKIPPED rather than clamped: no roll
++/// lies below it, so it has no survive side, and skipping it leaves the higher
++/// thresholds -- and the arms the engine emits today -- untouched. That is the
++/// property `min` destroys.
++///
++/// Returns `Some` whenever ANY threshold passed the guards, even when every band
++/// turns out empty. `total_rolls == 0` is a real state -- the f32 comparator can
++/// report zero rolls at or above a threshold that is inside the integer fan
++/// (C116 M5, still open) -- and the three sites that previously gated on
++/// `n > 0` still do, so their behaviour on that path is unchanged. Collapsing it
++/// into `None` here would have changed the crit-fan site's representative from
++/// `average_surviving_crit` to `0.925 * max_crit`.
++fn residual_disjoint_bands(
++    max_damage: i16,
++    min_roll: i16,
++    thresholds: &[i16],
++    ceiling: i16,
++    rolls_at_or_above_ceiling: i16,
++) -> Option<ResidualBands> {
++    let mut applicable = [0i16; MAX_RESIDUAL_THRESHOLDS];
++    let mut applicable_len = 0usize;
++    for threshold in thresholds {
++        if *threshold > 0
++            && *threshold < ceiling
++            && max_damage >= *threshold
++            && min_roll < *threshold
++        {
++            applicable[applicable_len] = *threshold;
++            applicable_len += 1;
++        }
++    }
++    if applicable_len == 0 {
++        return None;
++    }
++
++    let mut result = ResidualBands {
++        survive_representative: 0,
++        bands: [(0, 0); MAX_RESIDUAL_THRESHOLDS],
++        len: 0,
++        total_rolls: 0,
++    };
++    // Walk DOWN the ladder so each band can subtract the population already
++    // claimed by everything above it.
++    let mut claimed_above = rolls_at_or_above_ceiling;
++    let mut index = applicable_len;
++    while index > 0 {
++        index -= 1;
++        let threshold = applicable[index];
++        let (average_below, at_or_above) =
++            compare_health_with_damage_multiples(max_damage, threshold);
++        let band = at_or_above - claimed_above;
++        if band > 0 {
++            result.bands[result.len] = (threshold, band);
++            result.len += 1;
++            result.total_rolls += band;
++        }
++        claimed_above = at_or_above;
++        if index == 0 {
++            result.survive_representative = average_below;
++        }
++    }
++    result.bands[..result.len].reverse();
++    Some(result)
+ }
+ 
+ fn pending_hp_reading_move(choice: &Choice) -> bool {
+@@ -3463,8 +3712,12 @@
+     // disproved by compiling it at this position; the real earlier failure was a
+     // placement next to `crit_chance`, in a SIBLING block whose scope closed
+     // before the use. reports/c109, reports/c111 cause A3.
+-    let residual_threshold_opt =
+-        residual_lethality_threshold(state, &attacking_side.get_other_side());
++    //
++    // `choice` is passed in so the mirror can see the move's OWN secondaries.
++    // Without it the threshold is read from the defender's pre-move state, the
++    // burn a Fire move is about to apply is invisible, and the split never fires
++    // on the boundary it exists for. reports/c135 sections 2-3, cause A8.
++    let residual_thresholds = residual_lethality_thresholds(state, &attacking_side, choice);
+ 
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     let defender_active = defender_side.get_active();
+@@ -3584,19 +3837,21 @@
+                 average_non_kill_damage
+             };
+             let mut residual_kill_chance = 0.0_f32;
+-            if let Some(residual_threshold) = residual_threshold_opt {
+-                // This third arm counts the rolls that SURVIVE the move but die to
+-                // residuals -- the band `[residual_threshold, hp)`. It gets that
+-                // count by SUBTRACTING `num_kill_rolls`, so both counts must share
+-                // a basis, and the KO scaling above made `num_kill_rolls` TOTAL.
++            {
++                // These arms count the rolls that SURVIVE the move but die to
++                // residuals -- the region `[t_1, hp)`, now split into one disjoint
++                // band per distinct threshold. The population is obtained by
++                // SUBTRACTING the count already claimed above each band, so every
++                // count must share a basis, and the KO scaling above made
++                // `num_kill_rolls` TOTAL.
+                 //
+                 // Leaving a per-hit `max_damage_dealt` here mixes the two. For a
+                 // multi-hit move the total clears `hp` on more rolls than the
+-                // per-hit damage clears the LOWER threshold, so `num_at_or_above -
+-                // num_kill_rolls` goes negative, fails `> 0`, and the arm silently
+-                // vanishes for exactly the population this patch is about. These
+-                // are `i16`, so it underflows to a skip instead of panicking --
+-                // which is why no gate caught it.
++                // per-hit damage clears the LOWER threshold, so the subtraction
++                // goes negative, fails `> 0`, and the arm silently vanishes for
++                // exactly the population this patch is about. These are `i16`, so
++                // it underflows to a skip instead of panicking -- which is why no
++                // gate caught it.
+                 //
+                 // `residual_min` reuses Case A's floor rule for the same reason it
+                 // exists there: it is the comparator's own lowest roll, so gating
+@@ -3608,20 +3863,25 @@
+                 } else {
+                     min_damage_dealt
+                 };
+-                if residual_threshold > 0
+-                    && residual_threshold < defender_active.hp
+-                    && residual_min < residual_threshold
+-                {
+-                    let (average_surviving_damage, num_at_or_above) =
+-                        compare_health_with_damage_multiples(residual_max, residual_threshold);
+-                    let num_residual_only = num_at_or_above - num_kill_rolls;
+-                    if num_residual_only > 0 {
+-                        residual_kill_chance =
+-                            (1.0 - crit_rate) * (num_residual_only as f32 / 16.0);
++                let residual_bands = residual_disjoint_bands(
++                    residual_max,
++                    residual_min,
++                    residual_thresholds.as_slice(),
++                    defender_active.hp,
++                    num_kill_rolls,
++                );
++                // `total_rolls > 0` is the generalisation of the old
++                // `num_residual_only > 0`: with no rolls in any band the arm did
++                // not exist before and must not exist now, and the survive
++                // representative keeps the value Case A gave it.
++                if let Some(residual_bands) = residual_bands.filter(|b| b.total_rolls > 0) {
++                    for (residual_threshold, num_residual_only) in residual_bands.iter() {
++                        let band_chance = (1.0 - crit_rate) * (*num_residual_only as f32 / 16.0);
++                        residual_kill_chance += band_chance;
+                         // Cloned from the UNREDUCED mass, like branch_ins above, so
+                         // the single reduction below is the only one applied.
+                         let mut residual_ins = incoming_instructions.clone();
+-                        residual_ins.update_percentage(residual_kill_chance);
++                        residual_ins.update_percentage(band_chance);
+                         // `run_move` applies `damage_amount` ONCE PER HIT, so this
+                         // threshold has to be per-hit like every other arm in this
+                         // patch. Pushing the total made the arm deal
+@@ -3644,18 +3904,18 @@
+                         // which still clears the threshold: survives the move at 49,
+                         // dies to poison.
+                         let residual_per_hit = if hit_count > 1 {
+-                            (residual_threshold + hit_count as i16 - 1) / hit_count as i16
++                            (*residual_threshold + hit_count as i16 - 1) / hit_count as i16
+                         } else {
+-                            residual_threshold
++                            *residual_threshold
+                         };
+                         extra_branches.push((residual_ins, residual_per_hit));
+-                        // Now a TOTAL, for the same reason as the KO arm above.
+-                        survive_representative = if hit_count > 1 {
+-                            average_surviving_damage / hit_count as i16
+-                        } else {
+-                            average_surviving_damage
+-                        };
+                     }
++                    // Now a TOTAL, for the same reason as the KO arm above.
++                    survive_representative = if hit_count > 1 {
++                        residual_bands.survive_representative / hit_count as i16
++                    } else {
++                        residual_bands.survive_representative
++                    };
+                 }
+             }
+ 
+@@ -3699,26 +3959,33 @@
+             // representative left it below and the tick killed.
+             //
+             // Same identity Case A and the crit split already use; no second one.
+-            if let Some(residual_threshold) = residual_threshold_opt {
++            {
+                 let min_damage_dealt = (max_damage_dealt as f32 * 0.85) as i16;
+-                if residual_threshold > 0
+-                    && max_damage_dealt >= residual_threshold
+-                    && min_damage_dealt < residual_threshold
++                // No KO arm exists on this fan, so the top band is unbounded:
++                // ceiling `i16::MAX`, nothing claimed above it.
++                // Gated on `total_rolls > 0` for the same reason as Case A: with
++                // no rolls in any band the old `residual_kill_chance > 0.0` test
++                // was false, so `regular_damage` kept `0.925 * max`.
++                if let Some(residual_bands) = residual_disjoint_bands(
++                    max_damage_dealt,
++                    min_damage_dealt,
++                    residual_thresholds.as_slice(),
++                    i16::MAX,
++                    0,
++                )
++                .filter(|b| b.total_rolls > 0)
+                 {
+-                    let (average_surviving_damage, num_residual_kill_rolls) =
+-                        compare_health_with_damage_multiples(max_damage_dealt, residual_threshold);
+-                    let residual_kill_chance =
+-                        (1.0 - crit_rate) * (num_residual_kill_rolls as f32 / 16.0);
+-                    if residual_kill_chance > 0.0 {
++                    for (residual_threshold, num_residual_kill_rolls) in residual_bands.iter() {
+                         // Cloned from the UNREDUCED mass, so this arm is
+                         // (1 - crit_rate) * n/16 as intended.
+                         let mut kill_ins = incoming_instructions.clone();
+-                        kill_ins.update_percentage(residual_kill_chance);
+-                        extra_branches.push((kill_ins, residual_threshold));
+-                        residual_survive_factor =
+-                            1.0 - (num_residual_kill_rolls as f32 / 16.0);
+-                        regular_damage = average_surviving_damage;
++                        kill_ins.update_percentage(
++                            (1.0 - crit_rate) * (*num_residual_kill_rolls as f32 / 16.0),
++                        );
++                        extra_branches.push((kill_ins, *residual_threshold));
+                     }
++                    residual_survive_factor = 1.0 - (residual_bands.total_rolls as f32 / 16.0);
++                    regular_damage = residual_bands.survive_representative;
+                 }
+             }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
+@@ -3776,39 +4043,41 @@
+                 // and the six below it (mean 220), and the 229 arm renders the
+                 // transition the sweep was missing.
+                 //
+-                // Same identity Case A uses -- `num_at_or_above - kill_rolls` is
+-                // the band between the residual threshold and the KO threshold.
+-                // Do not introduce a second one. reports/c133 section 3.
+-                if let Some(residual_threshold) = residual_threshold_opt {
+-                    if residual_threshold > 0
+-                        && residual_threshold < defender_active.hp
+-                        && ko_min_crit < residual_threshold
+-                    {
+-                        let (average_surviving_crit, num_at_or_above) =
+-                            compare_health_with_damage_multiples(ko_max_crit, residual_threshold);
+-                        let num_residual_only = num_at_or_above - num_crit_kill_rolls;
+-                        if num_residual_only > 0 {
+-                            let crit_residual_chance =
+-                                crit_rate * (num_residual_only as f32 / 16.0);
+-                            // Cloned from the UNREDUCED mass like every other arm
+-                            // in this block; the single `1 - crit_rate` reduction
+-                            // at the end of Case B is the only one applied.
+-                            let mut residual_ins = incoming_instructions.clone();
+-                            residual_ins.update_percentage(crit_residual_chance);
+-                            // CEILING division, for the reason Case A records:
+-                            // `run_move` applies `damage_amount` once per hit, and
+-                            // truncating lands the total one short of the
+-                            // threshold, which silently un-does the arm.
+-                            let crit_residual_per_hit = if hit_count > 1 {
+-                                (residual_threshold + hit_count as i16 - 1) / hit_count as i16
+-                            } else {
+-                                residual_threshold
+-                            };
+-                            extra_branches.push((residual_ins, crit_residual_per_hit));
+-                            crit_survive_chance -= crit_residual_chance;
+-                            crit_survive_damage = average_surviving_crit;
+-                        }
++                // Same identity Case A uses -- the KO threshold is the CEILING of
++                // the band partition, so the top residual band is
++                // `#{rolls in [t_k, hp)}` and the hit-lethal rolls stay with the
++                // KO arm. Do not introduce a second identity, and do not price the
++                // top arm at `#{rolls >= t_k}`: that absorbs the KO population and
++                // double-counts it. reports/c133 sections 3 and 4.
++                if let Some(residual_bands) = residual_disjoint_bands(
++                    ko_max_crit,
++                    ko_min_crit,
++                    residual_thresholds.as_slice(),
++                    defender_active.hp,
++                    num_crit_kill_rolls,
++                )
++                .filter(|b| b.total_rolls > 0)
++                {
++                    for (residual_threshold, num_residual_only) in residual_bands.iter() {
++                        let crit_residual_chance = crit_rate * (*num_residual_only as f32 / 16.0);
++                        // Cloned from the UNREDUCED mass like every other arm
++                        // in this block; the single `1 - crit_rate` reduction
++                        // at the end of Case B is the only one applied.
++                        let mut residual_ins = incoming_instructions.clone();
++                        residual_ins.update_percentage(crit_residual_chance);
++                        // CEILING division, for the reason Case A records:
++                        // `run_move` applies `damage_amount` once per hit, and
++                        // truncating lands the total one short of the
++                        // threshold, which silently un-does the arm.
++                        let crit_residual_per_hit = if hit_count > 1 {
++                            (*residual_threshold + hit_count as i16 - 1) / hit_count as i16
++                        } else {
++                            *residual_threshold
++                        };
++                        extra_branches.push((residual_ins, crit_residual_per_hit));
++                        crit_survive_chance -= crit_residual_chance;
+                     }
++                    crit_survive_damage = residual_bands.survive_representative;
+                 }
+ 
+                 if crit_survive_chance > 0.0 {
+@@ -3827,29 +4096,30 @@
+                 // one above: it cannot kill on the hit here, but a residual still
+                 // can, and collapsing to 0.925 * max_crit picks one side of that
+                 // threshold. reports/c109.
+-                let crit_residual_threshold = residual_threshold_opt.unwrap_or(0);
+                 let min_crit_roll = (max_crit_damage as f32 * 0.85) as i16;
+-                if residual_threshold_opt.is_some()
+-                    && crit_residual_threshold > 0
+-                    && max_crit_damage >= crit_residual_threshold
+-                    && min_crit_roll < crit_residual_threshold
+-                {
+-                    let (average_surviving_crit, num_crit_residual_kills) =
+-                        compare_health_with_damage_multiples(
+-                            max_crit_damage,
+-                            crit_residual_threshold,
+-                        );
+-                    let crit_residual_kill = crit_rate * (num_crit_residual_kills as f32 / 16.0);
+-                    let crit_survive = crit_rate - crit_residual_kill;
+-                    if crit_residual_kill > 0.0 {
++                // No KO arm on this fan either: unbounded ceiling, nothing
++                // claimed above it.
++                if let Some(residual_bands) = residual_disjoint_bands(
++                    max_crit_damage,
++                    min_crit_roll,
++                    residual_thresholds.as_slice(),
++                    i16::MAX,
++                    0,
++                ) {
++                    let mut crit_survive = crit_rate;
++                    for (crit_residual_threshold, num_crit_residual_kills) in residual_bands.iter()
++                    {
++                        let crit_residual_kill =
++                            crit_rate * (*num_crit_residual_kills as f32 / 16.0);
++                        crit_survive -= crit_residual_kill;
+                         let mut k = incoming_instructions.clone();
+                         k.update_percentage(crit_residual_kill);
+-                        extra_branches.push((k, crit_residual_threshold));
++                        extra_branches.push((k, *crit_residual_threshold));
+                     }
+                     if crit_survive > 0.0 {
+                         let mut sv = incoming_instructions.clone();
+                         sv.update_percentage(crit_survive);
+-                        extra_branches.push((sv, average_surviving_crit));
++                        extra_branches.push((sv, residual_bands.survive_representative));
+                     }
+                 } else {
+                     let mut branch_ins = incoming_instructions.clone();
