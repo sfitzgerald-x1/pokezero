@@ -6,14 +6,23 @@ roll-dependent Leech Seed drain — on a second window with a different HP confi
 *look* new is a **separate renderer defect** that relabels the drain, flipping the class string from
 `component_magnitude:heal` (c140's) to `component_mismatch:heal|itemleftovers`.
 
-Two defects, superimposed. Both are measured below, and the measurement separates them: with the
-renderer's label corrected the row is still divergent, and with the representative corrected it is
-still divergent, so **neither is the whole cause and the renderer one is not merely cosmetic.**
+Two defects, superimposed. Both are measured below, and the measurement separates them **per path**:
+
+* **Under the collapsed path** (what the sweep runs) neither is the whole cause — correcting the label
+  alone leaves the row divergent, and so does correcting the representative alone.
+* **Under the enumeration oracle** (what C137 made the program's oracle) the engine emits the observed
+  row exactly, at 0.2189 % mass, and **the label is the only thing failing** — so gating the renderer
+  defect makes the row **match**.
+
+The first revision of this report measured only the collapsed path and concluded from it that a
+renderer gate "closes nothing". That was false; §6 carries the correction and the measurement.
 
 > **The brief I was given framed this as a novel heal-attribution gap and asked for a novelty
 > adjudication. It is not novel.** The correction came from independent review mid-diagnosis, and it
-> was right: the mechanism is c140's, and the numbers below are the same arithmetic with 407/157/25
-> in place of 235/123/14.
+> was right: the mechanism is c140's, and the numbers below are the same arithmetic with the victim's
+> maxhp/pre-move HP/Leftovers at **407/157/25** in place of c140's **235/123/14**. Where a cell
+> elsewhere writes `407/11/25` it is quoting the *post*-move HP, 157 − 146 = 11; both are correct and
+> neither is interesting without the label, which is why they are labelled here.
 
 **Nothing in this report is a fix.** No engine or crate change ships. The only non-documentation
 addition is `scripts/c143_heal_attribution_probe.py` and its artifact.
@@ -25,7 +34,7 @@ addition is `scripts/c143_heal_attribution_probe.py` and its artifact.
 | replay build | fingerprint `c72e6523d8de6f64090c9d9160a493ce5253662a65debc7f4229e88d9bb23761`, **71 patches**, built by `scripts/build_search_crate_engine.sh` with `exit=0` captured directly |
 | the row's own sweep | `c141_final_holdout_sweep.json`, engine fingerprint `44ee1430…` — **a different build.** `main` has since taken #1156/#1157/#1158, two of which touch the heal family in `events.rs` |
 | the control that makes the replay usable anyway | `reread_row` on this build reproduces the recorded verdict and **all nine `branch_misses` byte-for-byte** (`matrix.control.misses_identical_to_recorded: true`). The replay is on a different fingerprint but is behaviourally identical *on this row* |
-| every number below | `reports/artifacts/c143_heal_attribution_probe.json` |
+| every number below | `reports/artifacts/c143_heal_attribution_probe.json` (collapsed path) and `reports/artifacts/c143_heal_attribution_enumerated.json` (`POKEZERO_ENUMERATE_ROLLS=1`). **Two files because the flag is a Rust `OnceLock`** — one process is one engine, so the two paths cannot be measured in one run. Both are byte-reproducible (`cmp`-verified across re-runs) |
 | the artifact the row lives in | **not on `main`** — it lands with the C141 PR (`aa2f2d40`, branch `report-final-holdout-sweep`). The probe takes `--row` for that reason |
 
 No sweep was run at or above seed 19,200,000. The row was read from the committed artifact and
@@ -63,6 +72,10 @@ is 255 = 219 + 36, independently confirming its absence. Three facts from source
   either alone predicts the wrong order.)
 * **Moltres is the slower of the two.** Wigglytuff 135 against Moltres 185 quartered by paralysis, so
   Wigglytuff's whole block resolves first.
+* **The burn cannot beat the drain to the kill.** `data/mods/gen4/conditions.ts` puts `brn` at
+  `onResidualOrder 10 / subOrder 6`, *after* `leechseed`'s 5 — so within Wigglytuff's own block the
+  drain resolves first, which is why the protocol has Leech Seed and not the burn land the faint. It
+  also means the burn is not a competing explanation for the 36.
 * **The bucket stops at battle end.** `sim/battle.ts:565-566`, inside the residual handler loop:
   `this.faintMessages(); if (this.ended) return;`. Wigglytuff is p2's **last** living Pokémon (the
   engine state has all five others at 0 HP), so the drain that kills it ends the battle and Moltres'
@@ -113,6 +126,13 @@ The **HP arithmetic is identical to Showdown's in both** (361 → 407 in A; 361 
 the engine agrees with Showdown that the seeder's tick does not fire on battle end. Only the
 attribution is wrong, and only when the phase is truncated — exactly C131's finding one surface over.
 
+**The agreement in B is confined to those two heal lines, and the table above is deliberately narrow
+about it.** The engine's full B protocol still differs from Showdown's in two ways this report does not
+pursue: the drain damage line omits `|[of] p1a: Snorlax`, and `|faint|` precedes the mirror heal
+instead of following it. Neither is a component the strict matcher compares, so neither changes a
+verdict — but "the engine renders B byte-identically to Showdown" would be false, and an earlier draft
+of the PR body said it.
+
 The holdout row carries its own internal control for this. On the same boundary and the same build,
 the **1.33 %** arm — where Wigglytuff survives, so side one emits *two* heals and the plan
 reconciles — renders the drain correctly:
@@ -140,40 +160,69 @@ other **14** rolls survives the move and dies to the residual, and the mirror
 
 The engine emits **145**, and `sum(band) // len(band) == 145` exactly — the survive representative,
 `compare_health_with_damage_multiples`'s integer mean, not a threshold. This is a **different
-sub-case of G8 from c140's.** c140's row went through `residual_disjoint_bands` and was priced *at
-the threshold* (108, a fan member). Here every residual threshold lies below the fan minimum, so the
-`min_roll < threshold` guard cannot pass, `residual_disjoint_bands` yields nothing, and the single
-non-KO arm is mean-priced. *(The code-path attribution is inferred from the emitted value matching
-the band mean exactly and matching no threshold; I did not trace it in a debugger.)*
+sub-case of G8 from c140's**, and the path is **traced statically, in three steps that each name a
+value**:
+
+1. `compare_health_with_damage_multiples(159, 157)` in f32 returns **`(145, 2)`** — mean of the 14
+   rolls below Wigglytuff's 157 HP, and the 2 move-KO rolls at or above it.
+2. `residual_phase_final_hp`, bisected, gives `low = 76`, so the residual ladder on this boundary is
+   the **single threshold 82**.
+3. `residual_disjoint_bands`' guard `min_roll < threshold` is therefore **`135 < 82` → false**,
+   `applicable_len == 0`, the function returns `None`, and `survive_representative` keeps **145**.
+   The function's own doc comment names this behaviour: *"A threshold at or below `min_roll` is
+   SKIPPED rather than clamped: no roll lies below it, so it has no survive side."*
+
+c140's row took the other branch: its threshold **was** inside its fan, so the arm was priced *at the
+threshold* (108, a fan member). Here the threshold is skipped and the arm is mean-priced.
 
 **And 145 is not in its own fan, so its mirror 37 is not achievable by any roll.** Measured through
 the unmodified shipped `evaluate_boundary_strict`, rows = representative, columns = the 14 rolls
-Showdown can throw:
+Showdown can throw — eight representatives × 14 columns = 112 cells:
 
-| representative | renderer as shipped | renderer with the drain rendered `[silent]` |
-|---|---|---|
-| **145 (shipping)** | 0 of 14 | **0 of 14** |
-| 135, 141, 144, 146, 147, 155 (fan members) | 0 of 14 | **1 of 14 — its own column, each** |
-
-Seven representatives, all 14 columns each: 98 cells. Rows are the engine's representative, columns
-the roll Showdown threw; the diagonal under the fixed renderer is definitional, as c140 §6a notes.
+| representative | mirror | drain overflows the seeder's max HP | renderer as shipped | renderer with the drain rendered `[silent]` |
+|---|---|---|---|---|
+| **145 (shipping)** | 37 — unachievable | n/a | 0 of 14 | **0 of 14** |
+| 141, 144, 146, 147, 155 | 41, 38, 36, 35, 27 | no | 0 of 14 | **1 of 14 — its own column, each** |
+| 135, 136 | 47, 46 | **yes** | 0 of 14 | **2 of 14 — columns 135 *and* 136, both** |
 
 Control, non-vacuous: the repricer at 145 with the shipping label reproduces the recorded misses
 byte-for-byte, having touched 3 arms and rewritten 2 p1 heal lines. *(An earlier run of this matrix
 reported all-zeros because it keyed the rewrite on `Moltres` while the replay path renders side one's
 active as `unknown5`; the rewrite counters exist so that failure cannot recur silently.)*
 
-Read the two columns together:
+**The last row of that table is a correction to my own first draft, and it came out of fixing the
+probe.** The repricer originally did not clamp the mirror at max HP and synthesised an impossible
+`270/268`. With the clamp in place, representatives 135 and 136 — the only two whose mirror overflows
+Moltres' 268 from 223 — each price **two** columns, not one, because a heal saturating at max HP is
+relabelled `heal_to_full` by `damage_component_events`, which moves it out of the exact bucket into
+the tolerant roll-scaled one (ledger H8's `[0.92·eng − 1, 1.09·eng + 1]` window). So the exact
+diagonal holds only where the mirror does **not** saturate.
 
-* **The renderer defect alone is sufficient to keep this row divergent** — 0 of 14 at every one of
-  the **seven** representatives measured, which span the band (135, 141, 144, 145, 146, 147, 155).
-  It is not cosmetic. Not tested at the seven band values not in that set.
+Read the columns together:
+
+* **The renderer defect alone is sufficient to keep this row divergent under the collapsed path** —
+  0 of 14 at every one of the **eight** representatives measured (135, 136, 141, 144, 145, 146, 147,
+  155). It is not cosmetic. Not tested at the six band values not in that set.
 * **The representative defect alone is sufficient too** — 0 of 14 with the label fixed.
-* c140 §6a's bound ("any fixed representative prices exactly one") is sound **for representatives
-  inside the fan**, which is the only kind its matrix tested — all seven of its band values were fan
-  members. This instance exhibits the case it did not: a **non-fan representative prices zero**, and
-  the shipping engine is in that case here. So the shipping engine is **below** c140's bound, not at
-  it. That is a scoping correction to a merged claim, not a refutation of it.
+* c140 §6a's bound ("any fixed representative prices exactly one") needs **two** scope conditions,
+  both of which its own matrix satisfied without stating: the representative must be **inside the
+  fan**, and its mirror must **not saturate** the seeder's max HP. All seven of c140's band values
+  were fan members and none saturated. This instance exhibits both excluded cases: a non-fan
+  representative prices **zero**, and a saturating one prices **two**. The shipping engine is in the
+  first, so it is **below** c140's bound rather than at it. That is a scoping correction to a merged
+  claim, not a refutation of it.
+* **A third consequence, which the first draft of this report failed to draw.** Because 145 prices
+  **zero** rather than one, re-pricing this arm to any non-saturating fan member is a **strict gain
+  here — 0 → 1** — not the even permutation c140 §6a(ii) analysed, where moving 108 → 109 closed one
+  column and opened another at equal `1/16` mass. c140's refusal of re-pricing rested on that
+  exchange being a wash; on an off-fan representative the wash argument does not apply. It does not
+  change the refusal, for c140's *other* two reasons, which survive intact: it would be **fitted to
+  the sample** (c140 §6a(iii), and this row is `n = 1` on a spent holdout), and the engine's own
+  `floor(mean(band))` convention is what *produces* 145, so "use a fan member instead" is a new rule,
+  not the existing one applied. What it does change is the **characterisation**: "any representative
+  is as good as any other" is false, and an engine change that merely snapped the mean-priced
+  representative to the nearest non-saturating fan member would be a rule change with a real, if
+  unmeasured, upside. That is a candidate for the ledger, not for this PR.
 
 ## 4. The second miss (`engine_only=[]`, 10.74 %) is not a third defect
 
@@ -191,33 +240,101 @@ The 0.72 % miss is its crit twin. A boundary needs only one matching arm, so a n
 complementary arm of the same KO/non-KO partition is expected and carries no information. Together
 with the 49.03 % arm it also confirms the partition has exactly two Flamethrower outcomes here.
 
+### 4a. The 34.92 % of mass nothing above accounts for — a *third* roll collapse
+
+Five of the nine recorded misses are discussed above (49.03, 10.74, 1.33, 3.27, 0.72 %). The other
+four — **3.75, 9.23, 2.02 and 19.92 %, totalling 34.92 %** — fail on p1's *roll-scaled* list, before
+any heal is compared, and the first revision of this report left them unmentioned. They sit on the
+**other side of the same boundary**:
+
+* **15.00 % exactly** (3.75 + 9.23 + 2.02) are arms where the engine's **Fire Blast missed** against a
+  Showdown hit — `observed=[('', -49)] engine=[]`. Fire Blast is 85 % accurate and `100 − 85 = 15`, so
+  this is the accuracy split, not a defect. It is the same shape as ledger **G3**: no rendering or
+  pricing change can make a miss branch reproduce a hit.
+* **19.92 %** is the Fire-Blast-hit, Moltres-fully-paralysed arm, and it fails because the engine's
+  **Fire Blast representative is 45 against the observed 49**.
+
+That last one is a **third roll collapse on this single boundary**, and it is the same mechanism as
+§3 one field over. Fire Blast into Moltres kills nothing, so no residual threshold applies at all and
+the entire 16-roll fan collapses to its integer mean: max 49, rolls
+`[41,41,42,42,43,44,44,45,45,46,46,47,48,48,49,49]`, sum 720, `720 // 16 = 45`. **The observed 49 is
+the fan's top value** and a member. So the boundary carries *two* independent mean-priced collapses —
+Flamethrower at 145 and Fire Blast at 45 — and either alone would block an arm.
+
+This does not change the diagnosis: a boundary needs one matching arm, and §6 shows the enumerated
+oracle supplies one. It does mean the collapsed path's failure here is **over-determined**, which is
+worth stating rather than leaving 35 % of the mass silently unexplained.
+
 ## 5. Adjudication
 
 | | |
 |---|---|
 | **magnitude, 36 vs 37** | **ENGINE gap — ledger G8, second confirmed instance.** Not a limit: the observed roll is in the engine's own fan and c140 measured the enumeration oracle accepting it. Both values are correct given each side's own HP; the engine's arm sits at a damage value Showdown cannot throw |
-| **attribution, bare `heal` vs `itemleftovers`** | **RENDERER (harness) defect**, in `ResidualPlan::build` in `rust/pokezero-search/src/events.rs` — the Leftovers heal slot, over-booked on a residual phase truncated by battle end. Filed as **G33b**, adjacent to G33's over-booked *drain* slot |
+| **attribution, bare `heal` vs `itemleftovers`** | **RENDERER (harness) defect**, in `ResidualPlan::build` in `rust/pokezero-search/src/events.rs` — the Leftovers heal slot, over-booked on a residual phase truncated by battle end. Filed as **G33b**, adjacent to G33's over-booked *drain* slot. **Under the enumeration oracle it is the row's only remaining failure, and gating it makes the row match** (§6) |
 | **`engine_only=[]` arm** | not a defect — the complementary move-KO arm |
 | **novelty** | **none.** G8 for the magnitude; a new row only for the renderer half |
 
-## 6. No fix ships, and the reason is measured rather than argued
+## 6. The G33b gate closes nothing under the collapsed path and **closes this row under enumeration**
 
-The renderer fix is small and its predicate is exact: **do not book a side's Leftovers slot when the
-residual phase will be truncated by battle end** — i.e. when the opposing side's active is the last
-living Pokémon on that side and a booked residual will kill it. It is tempting.
+> ### Correction — the first revision of this section measured the wrong path, and its conclusion was false
+>
+> It refused the gate on the grounds that it has "a measured upside of zero rows". That is true of
+> the **collapsed** path and only of it. G8's own merged disposition is *"closed by enumeration,
+> retained under the collapsed path"*, and c140 §6 measured its row flag-off **versus flag-on**. I
+> measured only flag-off, then generalised. Review ran the flag and the gate closes the row.
+>
+> Worse, §6 itself named the trigger for revisiting — *"a boundary of this shape where the mirror
+> magnitude already agrees and the label is the only thing failing"* — and that condition is
+> satisfied **by this very row** under enumeration. I wrote the falsifier and did not run it.
 
-**It closes nothing on this row: 0 of 14 before, 0 of 14 after.** Its only effect here is to move the
-class string from `component_mismatch:heal|itemleftovers` to `component_magnitude:heal`, which is
-where the row belonged all along. A change with a measured upside of zero rows and an unmeasured
-downside is exactly the trade C133 §7 and c140 §7 refuse, so no prediction is registered and no
-sweep was run.
+The gate's predicate: **do not book a side's Leftovers slot when the residual phase will be truncated
+by the opposing active's faint** — read off the render, since an arm that ends the battle carries a
+`|faint|p2a:` and no `|turn|` line.
 
-What is **unmeasured** and would justify revisiting it: whether any *other* boundary of this shape
-exists where the representative *is* a fan member, so the mirror magnitude already agrees and the
-label is the only thing failing. On such a row the gate would close it outright. The measurement that
-would settle it is the one C133 §7 prescribes — the gate built, a prediction registered with a
-"nothing opened" falsifier, and both the dev (19,000,000) and validation-holdout (19,100,000) windows
-swept. This report does not do it, and the reachability question is stated, not answered.
+Both paths, same build, same row, flag off versus on (the flag is a Rust `OnceLock`, so one process
+is one engine and these are two processes):
+
+| path | renderer | branches | verdict | misses |
+|---|---|---|---|---|
+| collapsed | as shipped | 9 | diverged | 9 |
+| collapsed | modelled G33b gate | 9 | **diverged** | — 0 of 14 at every representative, §3 |
+| **enumerated** | as shipped | 416 | diverged | **12** |
+| **enumerated** | **modelled G33b gate** | 416 | **matched** | **0** |
+
+Under enumeration the oracle **emits the observed row exactly** and fails on the label alone:
+
+```
+pct=0.22: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[('itemleftovers', 36)]
+```
+
+Right magnitude, wrong label. Exactly **1 arm** of the 416 reproduces the full observed HP trace —
+Fire Blast 49 *and* Flamethrower 146 — at **0.2189 %** mass; 26 arms totalling 4.3945 % reproduce the
+Flamethrower half, summed over the paralysis and crit splits on the other side of the field.
+
+**Soundness control on the gate**, because a relabelling can only ever *widen* what matches and
+"nothing opened" therefore proves nothing about it: across all 416 arms the gate relabelled **350**
+heals, every delta in **[27, 47]** — the exact range of the 14 achievable mirrors — and **none equal
+to 16**, which is `268//16`, a genuine Moltres Leftovers tick. So the gate silenced no real tick. It
+does not show the gate is safe repo-wide; it shows it is not obviously over-broad on this boundary.
+
+**Still no fix ships in this PR**, and the reason is now different and narrower than the first
+revision's:
+
+* The gate is a **crate change** to `ResidualPlan::build`, not a rewrite of rendered output. What is
+  measured above is a *model* of it applied to the renderer's output — the method c140 §6a used, and
+  faithful because the strict path compares rendered components only, but not the same thing as the
+  built change.
+* Its measured upside is **one row under the enumeration oracle**, and C137 already made enumeration
+  the oracle while H18 records that enumeration cannot be used in search (2.38 ms → 8,881.8 ms per
+  decision). So the closure is real and lands on the path the program certifies against.
+* What is **still unmeasured** is the only thing that licenses shipping: both windows swept with the
+  built gate. C133 §7's discipline applies — the gate built in the crate, a prediction registered with
+  a "nothing opened" falsifier, dev (19,000,000) and validation-holdout (19,100,000) swept, and
+  **never** the final holdout, which this row has already spent.
+
+**Recommendation, changed from the first revision: this gate is worth building and sweeping.** It has
+a measured closure on the certifying oracle, an exact and cheap predicate, and a soundness control
+that did not fire. That is a materially stronger case than "zero upside", which is what I reported.
 
 ## 7. What was ruled out, and by what
 
@@ -233,21 +350,35 @@ Ruled out **by measurement**:
   behaviour, reproduced on three generated boundaries, and the engine reproduces it too.
 * **An `hp < maxhp` guard as the renderer fix.** Moltres ends at 260/268; the guard cannot see the
   truncation.
-* **The renderer defect being cosmetic.** 0 of 14 columns at each of the seven representatives
-  measured, with it in place.
+* **The renderer defect being cosmetic.** 0 of 14 columns at each of the eight representatives
+  measured, with it in place — and under enumeration it is the row's *sole* remaining failure (§6).
 * **The representative defect being sufficient on its own to explain the class string.** With the
   label fixed the class becomes c140's, which is the point.
 * **Fire Blast / Flamethrower / burn / a burn interaction being required.** The generated
   reproduction uses none of them.
-* **A limit.** c140 §6 recorded the falsifier firing for this family; nothing here re-opens it.
+* **A limit.** c140 §6 recorded the falsifier firing for this family; nothing here re-opens it, and §6
+  above adds a second firing on this row.
+* **Which code path prices the arm at 145.** Traced statically in §3 — `(159, 157) → (145, 2)`,
+  `low = 76` so the ladder is the single threshold 82, and `135 < 82` is false so
+  `residual_disjoint_bands` returns `None`. The first revision hedged this as "inferred, not traced";
+  the hedge is withdrawn.
+* **"A G33b gate closes nothing."** False as the first revision stated it. It closes nothing under the
+  collapsed path and **closes this row under enumeration** (§6).
+* **"Any fan-member representative is as good as any other here."** False: the two whose mirror
+  saturates max HP price two columns, the rest price one (§3).
 
 **Left uncertain, and stated as such:**
 
-* Which engine code path prices the arm at 145 is **inferred** from the emitted value equalling the
-  band mean exactly, not traced. If `residual_disjoint_bands` does fire here with a threshold I have
-  not accounted for, the §3 sub-case story changes while the 0-of-14 measurement does not.
-* Whether the G33b gate would close any row anywhere. Unmeasured — see §6.
+* Whether the G33b gate is safe **repo-wide**. The soundness control (350 relabels, all deltas in
+  [27, 47], none equal to 16) shows it silenced no genuine Leftovers tick *on this boundary*, and a
+  relabelling can only widen what matches, so "nothing opened" cannot vindicate it. Only both windows
+  swept with the built crate change will.
+* Whether **snapping the mean-priced representative to the nearest non-saturating fan member** is a net
+  gain. It is a strict 0 → 1 gain *on this boundary* (§3), which is new, but no rule was written, no
+  build was made and no window was swept.
 * The replay is on `c72e6523…`, not the row's own `44ee1430…`. The nine-miss identity is strong
   evidence they agree on this row and says nothing about any other.
-* The 14-row band and the 7-row band are two instances. Nothing here bounds how the band width
+* The 14-roll band and the 7-roll band are two instances. Nothing here bounds how band width
   distributes over the pool, so "1 of 14" and "1 of 7" are two observations, not a rate.
+* Six of the fourteen band values were not used as representatives, and the two saturating ones are the
+  only members of their class that were.

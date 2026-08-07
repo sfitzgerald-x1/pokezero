@@ -93,7 +93,9 @@ def measure_showdown(seed: int) -> dict:
         result = run_multi_turn_fixture(p1_team=p1, p2_team=p2, turns=_TURNS, seed=seed)
         if result.error_lines:
             raise SystemExit(f"{name}: showdown reported errors {result.error_lines}")
-        lines = list(result.steps[-1].protocol_lines)
+        # Drop `|t:|<unix>`: it is wall-clock and would make the artifact
+        # differ on every run for no measured reason.
+        lines = [l for l in result.steps[-1].protocol_lines if not l.startswith("|t:|")]
         seeder_name = p1[0].species
         drain_at = next(
             (i for i, line in enumerate(lines) if "[from] Leech Seed" in line), None
@@ -256,7 +258,12 @@ def _repricer(real, rep: int, silent: bool, stats: dict):
                 elif event.startswith("|-heal|p1a: ") and p1_hp is not None:
                     who = event.split("|")[2]
                     tail = "|[silent]" if silent else "|[from] item: Leftovers"
-                    event = f"|-heal|{who}|{p1_hp + drain}/268{tail}"
+                    # Clamp at maxhp, as the engine does. Without this the rewrite
+                    # synthesises `270/268` at rep 135 — physically impossible, and
+                    # although it landed only in positive-control cells whose verdict
+                    # is set by the diagonal, a probe must not emit states the engine
+                    # cannot produce.
+                    event = f"|-heal|{who}|{min(268, p1_hp + drain)}/268{tail}"
                     stats["p1_heal_rewrites"] += 1
                 out.append(event)
             branch["events"] = out
@@ -278,6 +285,21 @@ def measure_matrix(row: dict, reps: list[int]) -> dict:
     if sum(_BAND) // len(_BAND) != _SHIPPING_REP:
         raise SystemExit("band mean is no longer the shipping representative")
 
+    # A THIRD roll collapse sits on the other side of the same boundary and accounts
+    # for the 34.92 % of mass no arm above reaches. Fire Blast into Moltres kills
+    # nothing, so no threshold applies and the whole 16-roll fan collapses to its
+    # integer mean; the observed roll is the fan's top value.
+    fb_max = maxima[1][0]
+    fb_rolls = [fb_max * r // 100 for r in range(85, 101)]
+    fire_blast = {
+        "max": fb_max,
+        "fan": sorted(set(fb_rolls)),
+        "representative": sum(fb_rolls) // len(fb_rolls),
+        "observed_roll": 268 - _PRE_P1,
+        "observed_roll_in_fan": (268 - _PRE_P1) in fb_rolls,
+        "accuracy_miss_mass_pct": 15.0,
+    }
+
     mirrors = {d: min(_CAP, _HP0 - d + _LEFT) for d in _BAND}
     real = pokezero_search.branch_events
     result = {
@@ -290,6 +312,7 @@ def measure_matrix(row: dict, reps: list[int]) -> dict:
         "shipping_representative": _SHIPPING_REP,
         "shipping_representative_in_fan": _SHIPPING_REP in fan,
         "shipping_mirror": min(_CAP, _HP0 - _SHIPPING_REP + _LEFT),
+        "fire_blast_third_collapse": fire_blast,
         "columns": {},
         "control": {},
     }
@@ -323,11 +346,152 @@ def measure_matrix(row: dict, reps: list[int]) -> dict:
     return result
 
 
+# --- part 4: the enumeration oracle, with and without a modelled G33b gate --
+
+_OBSERVED_ROLL = 146
+_TRUE_LEFTOVERS_TICK = 268 // 16  # 16 — a genuine Moltres tick, which the gate must not silence
+
+
+def _is_truncated(events: list[str]) -> bool:
+    """The arm's residual phase was cut short by the opposing active's faint.
+
+    Read off the render, not predicted: an arm that ends the battle carries a
+    ``|faint|p2a:`` and NO ``|turn|`` line, because `finish_ply` only emits the turn
+    marker when the battle continues.
+    """
+    return (
+        any(e.startswith("|faint|p2a: ") for e in events)
+        and not any(e.startswith("|turn|") for e in events)
+    )
+
+
+def _g33b_gate(real, pre_p1_hp: int, log: dict):
+    """Model the G33b fix at the renderer's output: in an arm truncated by the
+    opposing active's faint, side one's Leftovers-tagged heal is the bare drain.
+
+    The strict path compares rendered components only, so rewriting the render
+    models the crate change faithfully — the method c140 §6a used.
+    """
+    def patched(*args, **kwargs):
+        report = json.loads(real(*args, **kwargs))
+        for branch in report.get("branches") or []:
+            events = list(branch["events"])
+            if not _is_truncated(events):
+                continue
+            hp, out = pre_p1_hp, []
+            for event in events:
+                if event.startswith(("|-damage|p1a: ", "|-heal|p1a: ")):
+                    new_hp = int(event.split("|")[3].split("/")[0])
+                    if event.startswith("|-heal|p1a: ") and "[from] item: Leftovers" in event:
+                        log["deltas"].append(new_hp - hp)
+                        event = "|".join(event.split("|")[:4]) + "|[silent]"
+                    hp = new_hp
+                out.append(event)
+            branch["events"] = out
+        return json.dumps(report)
+
+    return patched
+
+
+def measure_enumerated(row: dict) -> dict:
+    """Part 4. Must run in a process started with POKEZERO_ENUMERATE_ROLLS=1."""
+    import os
+
+    import pokezero_search
+    from cert_sweep_reread import reread_row
+
+    if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
+        raise SystemExit(
+            "part 4 requires POKEZERO_ENUMERATE_ROLLS=1 in the environment at process start"
+        )
+    real = pokezero_search.branch_events
+    pre_p1_hp = int(row["pre_features"]["p1_hp"])
+    out: dict = {"flag": "POKEZERO_ENUMERATE_ROLLS=1"}
+
+    verdict, misses, total = reread_row(row)
+    out["shipped_renderer"] = {
+        "verdict": verdict,
+        "branches": total,
+        "misses": len(misses),
+        # The oracle reaches the observed magnitude and fails on the LABEL alone.
+        "label_only_miss": [
+            m for m in misses
+            if f"observed_only=[('heal', {_OBSERVED_ROLL - 110})]" in m
+            and f"engine_only=[('itemleftovers', {_OBSERVED_ROLL - 110})]" in m
+        ],
+    }
+    # Mass of the arm that reproduces the recorded protocol's HP trace exactly.
+    ctx = json.dumps({
+        "p1": row["party_display"]["p1"], "p2": row["party_display"]["p2"], "turn": row["turn"],
+    })
+    report = json.loads(
+        real(row["engine_states"][0], row["choices"]["p1"], row["choices"]["p2"], ctx, True, True)
+    )
+    def _mass(predicate):
+        arms = [b for b in report.get("branches") or [] if predicate(b["events"])]
+        return {"count": len(arms), "mass_pct": round(sum(float(b["percentage"]) for b in arms), 4)}
+
+    def _flamethrower_matches(events):
+        return (
+            f"|-damage|p2a: Wigglytuff|{_HP0 - _OBSERVED_ROLL}/407" in events
+            and f"|-heal|p2a: Wigglytuff|{_HP0 - _OBSERVED_ROLL + _LEFT}/407|"
+            "[from] item: Leftovers" in events
+            and _is_truncated(events)
+        )
+
+    # Two different questions, kept apart because a single "the oracle emits the
+    # observed row" figure conflates them. The first counts arms agreeing with the
+    # observed FLAMETHROWER roll (summed over the paralysis and crit splits on the
+    # other side of the field); the second additionally requires the observed FIRE
+    # BLAST roll, and is the arm the label-only miss is reported at.
+    out["arms_reproducing_the_observed_flamethrower_roll"] = _mass(_flamethrower_matches)
+    out["arms_reproducing_the_full_observed_trace"] = _mass(
+        lambda e: _flamethrower_matches(e) and f"|-damage|p1a: Moltres|{_PRE_P1}/268" in e
+    )
+
+    log = {"deltas": []}
+    try:
+        pokezero_search.branch_events = _g33b_gate(real, pre_p1_hp, log)
+        verdict, misses, total = reread_row(row)
+    finally:
+        pokezero_search.branch_events = real
+    deltas = log["deltas"]
+    out["modelled_g33b_gate"] = {
+        "verdict": verdict,
+        "branches": total,
+        "misses": len(misses),
+        "first_misses": list(misses[:3]),
+        "soundness": {
+            "heals_relabelled": len(deltas),
+            "delta_min": min(deltas) if deltas else None,
+            "delta_max": max(deltas) if deltas else None,
+            # A genuine Moltres Leftovers tick is exactly 268//16 = 16. If the gate ever
+            # silenced one, this would be non-zero and the gate would be over-broad.
+            "deltas_equal_to_a_true_leftovers_tick": sum(
+                1 for d in deltas if d == _TRUE_LEFTOVERS_TICK
+            ),
+            "all_deltas_inside_the_residual_lethal_band": bool(deltas) and all(
+                min(_BAND_MIRRORS) <= d <= max(_BAND_MIRRORS) for d in deltas
+            ),
+        },
+    }
+    return out
+
+
+_BAND_MIRRORS = [min(_CAP, _HP0 - d + _LEFT) for d in _BAND]
+
+
 # --- entry point ------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--row", type=Path, help="sweep JSON containing the 19200244/115 repro")
+    parser.add_argument(
+        "--enumerated", action="store_true",
+        help="run part 4 only; REQUIRES the process to have been started with "
+             "POKEZERO_ENUMERATE_ROLLS=1 (the flag is a Rust OnceLock, so one process "
+             "is one engine and the two paths cannot be compared in-process)",
+    )
     parser.add_argument("--seed", type=int, default=7717, help="fixture seed for the generated boundaries")
     parser.add_argument("--out", type=Path, help="write the artifact here")
     parser.add_argument(
@@ -342,6 +506,18 @@ def main() -> None:
         "engine_fingerprint": compute_fingerprint()["fingerprint"],
         "fixture_seed": args.seed,
     }
+    if args.enumerated:
+        if not args.row:
+            raise SystemExit("--enumerated requires --row")
+        row = next(
+            r for r in json.loads(args.row.read_text())["repros"] if r.get("seed") == SEED
+        )
+        artifact["enumerated"] = measure_enumerated(row)
+        text = json.dumps(artifact, indent=2, sort_keys=True)
+        if args.out:
+            args.out.write_text(text + "\n", encoding="utf-8")
+        print(text)
+        return
     if not args.skip_showdown:
         artifact["showdown"] = measure_showdown(args.seed)
     artifact["engine"] = measure_engine()
@@ -349,7 +525,7 @@ def main() -> None:
         row = next(
             r for r in json.loads(args.row.read_text())["repros"] if r.get("seed") == SEED
         )
-        artifact["matrix"] = measure_matrix(row, [135, 141, 144, 145, 146, 147, 155])
+        artifact["matrix"] = measure_matrix(row, [135, 136, 141, 144, 145, 146, 147, 155])
 
     text = json.dumps(artifact, indent=2, sort_keys=True)
     if args.out:

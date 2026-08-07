@@ -1051,6 +1051,21 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # enumerated measurement has to say which roll path produced it.
         "reports/c140_last_dev_row_diagnosis.md",
         "reports/artifacts/c140_last_dev_row_probe.json",
+        # C143's diagnosis of 19200244/115, the same shape as C140's entries above
+        # and for the same reason: the row is G8, so adjudicating it REQUIRES the
+        # flag-off/flag-on comparison, and the provenance of an enumerated
+        # measurement has to say which roll path produced it.
+        #
+        # The probe is an analysis tool run by hand and on no import path. It
+        # READS the variable and never sets it: `--enumerated` raises SystemExit
+        # unless the caller already started the process with the flag, precisely
+        # so a default run cannot silently enumerate. Two artifacts rather than
+        # one because the OnceLock makes one process one engine.
+        "scripts/c143_heal_attribution_probe.py",
+        "reports/artifacts/c143_heal_attribution_enumerated.json",
+        "reports/c143_heal_attribution_diagnosis.md",
+        # The ledger's G8 and G33b cells now record that enumerated closure.
+        "reports/c138_known_gaps_ledger.md",
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:

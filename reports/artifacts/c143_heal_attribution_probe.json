@@ -40,7 +40,15 @@
     "columns": {
       "135": {
         "renderer_fixed": [
-          135
+          135,
+          136
+        ],
+        "renderer_shipping": []
+      },
+      "136": {
+        "renderer_fixed": [
+          135,
+          136
         ],
         "renderer_shipping": []
       },
@@ -102,6 +110,24 @@
       157,
       159
     ],
+    "fire_blast_third_collapse": {
+      "accuracy_miss_mass_pct": 15.0,
+      "fan": [
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49
+      ],
+      "max": 49,
+      "observed_roll": 49,
+      "observed_roll_in_fan": true,
+      "representative": 45
+    },
     "mirror_heal_by_roll": {
       "135": 47,
       "136": 46,
@@ -150,7 +176,6 @@
       "predicted_seeder_leftovers": "absent",
       "protocol": [
         "|",
-        "|t:|1786127232",
         "|move|p2a: Blissey|Seismic Toss|p1a: Snorlax",
         "|-damage|p1a: Snorlax|361/461",
         "|move|p1a: Snorlax|Splash|p1a: Snorlax",
@@ -171,7 +196,6 @@
       "predicted_seeder_leftovers": "after_mirror",
       "protocol": [
         "|",
-        "|t:|1786127233",
         "|move|p2a: Blissey|Seismic Toss|p1a: Snorlax",
         "|-damage|p1a: Snorlax|361/461",
         "|move|p1a: Snorlax|Splash|p1a: Snorlax",
@@ -192,7 +216,6 @@
       "predicted_seeder_leftovers": "before_drain",
       "protocol": [
         "|",
-        "|t:|1786127233",
         "|move|p1a: Suicune|Splash|p1a: Suicune",
         "|-nothing",
         "|move|p2a: Blissey|Seismic Toss|p1a: Suicune",
