@@ -19,8 +19,8 @@
   },
   "gating_exact": 14156,
   "gating_support_based": 1347,
-  "elapsed_seconds": 825.28,
-  "games_per_hour": 872.4,
+  "elapsed_seconds": 792.41,
+  "games_per_hour": 908.6,
   "boundaries_full_round": 15968,
   "boundaries_measured": 15503,
   "transitions_matched": 15503,
@@ -56,7 +56,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"be2f416091d10c6e5cf49ebcb6dd2284bfaf05569e79fa15551e32f0d24eaa0f\", \"enumerate_rolls\": true, \"image_commit\": null, \"source_commit\": \"2117899000ed9bd0e0ec7d7e6e812777d93d1ea6\", \"source_tree\": \"clean\"}"
+      "{\"engine_fingerprint\": \"e97e661eaf9fb3b15fb156378d071dbe7a805aeedd9545c5b935130b082f8017\", \"enumerate_rolls\": true, \"image_commit\": null, \"source_commit\": \"f35c5928296cec813b4bb6d75669a8ee6f58bf27\", \"source_tree\": \"clean\"}"
     ]
   }
 }

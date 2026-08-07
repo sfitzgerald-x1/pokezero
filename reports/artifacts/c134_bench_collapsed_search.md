@@ -1,8 +1,8 @@
 | position | depth | sims | sims/s | ms/decision | decision nodes | chance nodes | leaf evals | deep-KO triggers |
 |---|---|---|---|---|---|---|---|---|
-| minimal_1v1 | 4 | 1024 | 3,067,373 | 0.33 | 37 | 87 | 140 | 0 |
-| midgame_3v3 | 4 | 1024 | 389,888 | 2.63 | 282 | 1024 | 4189 | 17 |
-| endgame_straddle | 4 | 1024 | 3,739,542 | 0.27 | 29 | 86 | 56 | 16 |
+| minimal_1v1 | 4 | 1024 | 3,231,964 | 0.32 | 32 | 89 | 132 | 0 |
+| midgame_3v3 | 4 | 1024 | 411,986 | 2.49 | 292 | 1024 | 4147 | 18 |
+| endgame_straddle | 4 | 1024 | 4,016,476 | 0.25 | 28 | 84 | 55 | 16 |
 
 Argmax stability across seeds 0..4 (sims=1024):
 
