@@ -339,12 +339,12 @@ jobs:
           # otherwise keep `Ran N` green while disarming the acceptance entirely -- the
           # "guard nothing runs" pattern this file already documents twice, and the very
           # reason this step exists.
-          if ! grep -qE 'Ran 25 tests' /tmp/denominator.log; then
+          if ! grep -qE 'Ran 28 tests' /tmp/denominator.log; then
             echo "::error::denominator pins changed count; the suite shrank or grew"
             exit 1
           fi
-          if ! grep -qE 'OK \(skipped=5\)' /tmp/denominator.log; then
-            echo "::error::denominator skip set changed; expected exactly the 5 real-driver tests"
+          if ! grep -qE 'OK \(skipped=6\)' /tmp/denominator.log; then
+            echo "::error::denominator skip set changed; expected exactly the 6 corpus-dependent tests"
             exit 1
           fi
 

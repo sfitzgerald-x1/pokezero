@@ -174,6 +174,81 @@ class DenominatorAcceptanceTest(unittest.TestCase):
                 )
 
 
+class GuardsArePinnedTest(unittest.TestCase):
+    """The guards added for rule 4 -- without this, all three revert green.
+
+    Review observed that the commit adding them touched no test file: deleting the
+    vocabulary `raise`, deleting the `NOT CHECKED` phrase, or reverting `contained=report[...]`
+    to `.get` each left every test passing. That is the "guard nothing pins" pattern that
+    produced the original blocker in this PR, so it is closed here rather than noted.
+    """
+
+    def _denominator_lines(self, name: str, report: dict) -> list[str]:
+        import io
+        from contextlib import redirect_stdout
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            _run(name, report)
+        return [l for l in buffer.getvalue().splitlines() if "[denominator]" in l]
+
+    def test_every_adoption_site_keeps_rule_4_armed(self) -> None:
+        """Pins that all four supply BOTH `contained` and `skipped`.
+
+        Reverting any site to `report.get(...)` and renaming the key, or dropping `skipped=`,
+        silently disarms rule 4 -- the only load-bearing rule -- and this goes red.
+        """
+        for name, _skipped, healthy in HARNESSES:
+            with self.subTest(harness=name):
+                lines = self._denominator_lines(name, healthy)
+                self.assertTrue(lines, f"{name} printed no denominator line at all")
+                line = lines[0]
+                self.assertIn("contained", line, f"{name} does not supply `contained`")
+                self.assertIn("skipped", line, f"{name} does not supply `skipped`")
+                self.assertNotIn(
+                    "NOT CHECKED", line, f"{name} is running with rule 4 disarmed"
+                )
+
+    def test_a_disarmed_run_says_so_in_its_output(self) -> None:
+        """Non-vacuity for the assertion above: the phrase it looks for really does appear
+        when rule 4 is off, so `assertNotIn` is discriminating rather than always-true."""
+        import io
+        from contextlib import redirect_stdout
+
+        from differential_denominator import check_denominator, gate
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            gate([check_denominator("bare", measured=5, matched=2, diverged=3)])
+        self.assertIn("NOT CHECKED", buffer.getvalue())
+
+    def test_an_unprefixed_status_raises_rather_than_inflating_measured(self) -> None:
+        """The vocabulary guard, through the REAL run_corpus.
+
+        Rule 4 cannot catch this: moving a boundary from `skipped` to `measured` changes both
+        sides of `measured + skipped == contained` by one each, so they cancel. Measured on
+        golden-v4 before the guard: 1064 + 207 = 1271, all four rules green, 424 boundaries
+        never driven. Hence a guard, and hence this pin.
+        """
+        corpus = REPO_ROOT / "corpus" / "golden-v4"
+        if not (corpus / "rows.jsonl").exists():
+            self.skipTest(f"no corpus at {corpus}")
+        module = importlib.import_module("fidelity_gate_events")
+        real = module.drive_boundary
+        calls = {"n": 0}
+
+        def sometimes_unprefixed(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] % 3 == 0:
+                return module.BoundaryResult("unsupported:new_reason", "forced")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(module, "drive_boundary", sometimes_unprefixed):
+            with self.assertRaises(AssertionError) as caught:
+                module.main(["--corpus", str(corpus)])
+        self.assertIn("unsupported:new_reason", str(caught.exception))
+
+
 class RealDriverAcceptanceTest(unittest.TestCase):
     """The same acceptance, one seam LOWER — against the real `run_corpus`.
 
