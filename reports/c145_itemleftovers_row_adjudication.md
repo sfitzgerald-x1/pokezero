@@ -51,14 +51,26 @@ carry for `dc6e1e19`. Each worktree got its own `.venv` and its own build, so
 `third_party/poke-engine-src` was vendored per tree by step `[1/8]`; nothing here was measured
 against a tree a bare `git checkout` had left stale.
 
-**`main` moved twice under this work, and every `1a929c57` below is left as written.** The branch was
-cut at `1a929c57`, C143 (#1161) then C144 (#1163) landed, and the branch was rebased onto `ce962c6e`.
-The mutant run and the `--check`ed build in §5 were genuinely taken at `1a929c57`, so restating them
-as `ce962c6e` would be false. What licenses carrying them across is measured, not assumed:
-`git diff a4e42034 HEAD -- rust/ third_party/` is **empty**, `--check` returns the same
-`5fa147ffa325c887…` on the rebased tree, and the `19100170` sweep returns the identical 88 / 81 / 81 / 0
-after C144's +189-line change to `engine_transition_differential.py`. The head-commit row of §3 and its
-artifact were re-derived on the rebased tree rather than carried.
+**`main` moved three times under this work, and every `1a929c57` below is left as written.** The
+branch was cut at `1a929c57`; C143 (#1161) and C144 (#1163) landed and the branch was **rebased** onto
+`ce962c6e`; then C141's final-holdout sweep (#1159) landed and the branch **merged** `973379d1` — a
+merge, not a rebase, so no published history was rewritten.
+
+The mutant run and the `--check`ed build in §5 were genuinely taken at `1a929c57`. Restating them as a
+later commit would be false, so they stand as written, and what licenses carrying them across is
+measured on the *current* head rather than assumed:
+
+- `git diff 1a929c57 HEAD -- rust/ third_party/` is **empty** — across all three of C143, C144 and
+  #1159, nothing touched the crate or the patch stack.
+- `engine_build_fingerprint.py --check` on the merged tree returns the same
+  `5fa147ffa325c887…`, 71 patches.
+- A fresh `19100170` sweep at the merged head returns 88 / 81 / 81 / 0 with the **full `counters`
+  block identical** to `reports/artifacts/c145_g19100170_head.json` — so C144's +189 lines in
+  `engine_transition_differential.py` and #1159's additions move nothing here.
+
+That artifact's own `source_commit` is `662d9db8`, an ancestor of the current head rather than the head
+itself. Left that way deliberately: re-recording it at each new head changes the head again, and the
+check that matters is the one above — a fresh run at the head reproduces it exactly.
 
 **The sweep window.** `19100170` is in the validation holdout (`19100000–19100199`), which is
 sweepable. Nothing here ran at or above `19_200_000`; `FINAL_HOLDOUT_SEED_FLOOR`
