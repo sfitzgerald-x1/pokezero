@@ -816,11 +816,6 @@ class PairBySource(unittest.TestCase):
         self.assertEqual(_pair_by_source([("drain", -10)], []), [])
 
 
-if __name__ == "__main__":  # pragma: no cover
-    # At the END. It sat at line 592, stranding MajorityBranchOverride, PainSplitSetHp, PairBySource
-    # from direct execution -- found by the repo-wide structural guard in
-    # tests/test_public_invariant.py.
-    unittest.main()
 
 
 class WrongFanControlMap(unittest.TestCase):
@@ -887,3 +882,12 @@ class WrongFanControlMap(unittest.TestCase):
                         abs(target - source), span + len(legal),
                         f"{source} -> {target} left the fan's magnitude range",
                     )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # MUST BE THE LAST STATEMENT IN THE FILE. It has now stranded classes twice: at
+    # line 592 (MajorityBranchOverride, PainSplitSetHp, PairBySource) and again here,
+    # when WrongFanControlMap was appended below it. Anything defined after this line
+    # does not exist under `python <file>`, so pytest and direct execution disagree on
+    # the test count. Append new classes ABOVE this block, never below.
+    unittest.main()
