@@ -389,7 +389,8 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "none_matched",
     // The `none_matched` DIVERGENCE SHAPES. era 60 measured that class at 3,595 world
     // failures with no way to say why, and the era-60 measurement states it "must be
-    // classified before it can be fixed". These SEVEN are that classification, and the
+    // classified before it can be fixed". These SEVEN are that classification.
+    //
     // The two-way ownership split this comment once drew -- `values_only` unfixable here,
     // `structure`/`length` a candidate-set bug -- is RETRACTED in both directions. The
     // `NoneMatchedShape` doc records `ValuesOnly` measured 132/132 RENDERER-side in C31, so
@@ -4122,9 +4123,13 @@ pub enum NoneMatchedShape {
     /// Different lengths, shorter is a prefix of longer, and the TAIL is the shorter one.
     /// The candidate generated MORE than happened -- a state-input or candidate-set fault.
     TailIsPrefix,
-    /// Different number of instructions, and NEITHER list is a prefix of the other.
-    /// A genuinely different transition, which is the reading the bare token was always
-    /// assumed to carry and, before the Prefix/Suffix split, could not establish.
+    /// Different number of instructions, and neither list is a prefix of the other -- PLUS
+    /// the empty-tail case, which is routed here deliberately. An empty tail IS vacuously a
+    /// prefix, so admitting it to a containment bucket would fill that bucket with rows
+    /// carrying no containment evidence; see the guard in `divergence_shape`.
+    ///
+    /// Otherwise: a genuinely different transition, which is the reading the bare token was
+    /// always assumed to carry and, before the containment split, could not establish.
     Length,
     /// A candidate produced an empty instruction list.
     Empty,
@@ -4234,8 +4239,8 @@ fn none_matched_slugs(shapes: NoneMatchedShapes) -> impl Iterator<Item = &'stati
             "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
         }
         NoneMatchedShape::Structure => "sleeptalk_called_unidentified:none_matched:shape_structure",
-        NoneMatchedShape::BranchIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_prefix",
-        NoneMatchedShape::TailIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_suffix",
+        NoneMatchedShape::BranchIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_branch_is_prefix_of_tail",
+        NoneMatchedShape::TailIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_tail_is_prefix_of_branch",
         NoneMatchedShape::Length => "sleeptalk_called_unidentified:none_matched:shape_length",
         NoneMatchedShape::Empty => "sleeptalk_called_unidentified:none_matched:shape_empty",
         NoneMatchedShape::NoCandidates => {
@@ -8751,7 +8756,7 @@ mod none_matched_shape_tests {
             divergence_shape(&[dmg(30), heal(10)], &[dmg(30)]),
             NoneMatchedShape::TailIsPrefix,
             "the tail is reproduced and the branch continues past it -- the mirror case, and \
-             it must NOT collapse into Prefix"
+             it must NOT collapse into the branch-shorter bucket"
         );
         // NEITHER contains the other: a genuinely different transition. This is the reading
         // the bare `Length` token was always assumed to carry and, before the split, could
@@ -8817,14 +8822,14 @@ mod none_matched_shape_tests {
         );
     }
 
-    /// An EMPTY branch stays `Empty`, not `Prefix`.
+    /// An EMPTY branch stays `Empty`, not a containment shape.
     ///
     /// The empty slice is a prefix of everything, so ordering matters: the `is_empty` check
     /// runs first. Collapsing these would fold "the candidate generated nothing" -- the move
     /// did not execute at all -- into "the candidate reproduced the tail's head", which is a
     /// different question with a different owner.
     #[test]
-    fn an_empty_branch_is_not_reported_as_a_prefix() {
+    fn an_empty_branch_is_not_reported_as_containment() {
         assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
     }
 
@@ -8885,24 +8890,32 @@ mod none_matched_shape_tests {
     /// the failure the family split exists to prevent.
     #[test]
     fn every_shape_token_is_in_the_subcase_vocabulary() {
-        for shape in [
-            NoneMatchedShape::ValuesOnly,
-            NoneMatchedShape::Structure,
-            NoneMatchedShape::Length,
-            NoneMatchedShape::Empty,
-        ] {
+        // ITERATE `ALL`, not a hand-picked list. The previous version looped four variants
+        // and so said nothing about any variant added later -- which is how a HALF-APPLIED
+        // rename shipped: `token()` and `SUBCASE_VOCABULARY` carried the new names while
+        // `none_matched_slugs` still emitted the old ones, and `assert_subcase_vocabulary` is
+        // a plain `assert!` kept out of `debug_assert!` ON PURPOSE so it survives --release.
+        // The first world of the largest failure class would have panicked the wheel.
+        for shape in NoneMatchedShape::ALL {
             assert!(
                 SUBCASE_VOCABULARY.contains(&shape.token()),
-                "{:?} emits unregistered token {:?}",
-                shape,
+                "{shape:?}'s token {:?} is not registered, so the class stops being rankable",
                 shape.token()
             );
-            // ...and the composed slug must carry it, since that is what reaches the era report.
-            let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
+            let mut only = NoneMatchedShapes::default();
+            only.insert(shape);
+            let slug = none_matched_slugs(only).next().expect("one shape, one slug");
+            // The SLUG must end with the token. This is what catches a rename applied to
+            // `token()` but not to `none_matched_slugs`, and a token-string swap between two
+            // variants -- both of which the four-variant loop missed.
             assert!(
                 slug.ends_with(shape.token()),
-                "slug {slug:?} does not name {:?}",
+                "{shape:?}: slug {slug:?} does not end with its token {:?}",
                 shape.token()
+            );
+            assert!(
+                slug.starts_with(SLEEPTALK_LOSSY_TAG),
+                "{shape:?}: slug {slug:?} lost the contract tag prefix"
             );
         }
     }
