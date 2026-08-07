@@ -339,7 +339,7 @@ jobs:
           # otherwise keep `Ran N` green while disarming the acceptance entirely -- the
           # "guard nothing runs" pattern this file already documents twice, and the very
           # reason this step exists.
-          if ! grep -qE 'Ran 30 tests' /tmp/denominator.log; then
+          if ! grep -qE 'Ran 31 tests' /tmp/denominator.log; then
             echo "::error::denominator pins changed count; the suite shrank or grew"
             exit 1
           fi

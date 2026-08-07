@@ -242,7 +242,53 @@ class GuardsArePinnedTest(unittest.TestCase):
             with self.subTest(status=bad):
                 with self.assertRaises(AssertionError) as caught:
                     module.assert_status_vocabulary({"a": 1, "attempted": 1, bad: 1})
-                self.assertIn(bad, str(caught.exception))
+                # f"['{bad}']", not `bad`: the bare letter "d" occurs in "returned",
+                # "verdict" and "denominator", so assertIn(bad) is non-discriminating for
+                # that case. Match the rendered `sorted(unknown)` list instead.
+                self.assertIn(f"['{bad}']", str(caught.exception))
+
+    def test_run_corpus_actually_calls_the_vocabulary_guard(self) -> None:
+        """Hoisting the guard to module scope made a NEW failure mode expressible.
+
+        While it was inline, "not called" could not happen. Now deleting the call while
+        leaving the function intact is a live mutation, and review showed it is CI-invisible:
+        corpus-present FAILED, corpus-absent `Ran 30 / OK (skipped=6)` with both greps
+        matching. So the call site gets its own corpus-free pin.
+
+        This is a SOURCE-SHAPE assertion, not a behavioural one -- it cannot tell whether the
+        call runs on a given input, only that it is present and unconditional. The corpus-driven
+        test below is the behavioural proof; this one exists so CI is not blind to the deletion.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        module = importlib.import_module("fidelity_gate_events")
+        tree = ast.parse(textwrap.dedent(inspect.getsource(module.run_corpus)))
+        func = tree.body[0]
+        calls = [
+            node
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "assert_status_vocabulary"
+        ]
+        self.assertEqual(len(calls), 1, "run_corpus must call the vocabulary guard exactly once")
+        # Unconditional and before every return, so no path can reach a result past it.
+        self.assertTrue(
+            any(
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Call)
+                and getattr(stmt.value.func, "id", None) == "assert_status_vocabulary"
+                for stmt in func.body
+            ),
+            "the guard call must sit at run_corpus's top level, not inside a branch",
+        )
+        returns = [n.lineno for n in ast.walk(func) if isinstance(n, ast.Return)]
+        self.assertTrue(returns, "run_corpus has no return -- this test is looking at the wrong function")
+        self.assertLess(
+            calls[0].lineno, min(returns), "the guard must run before run_corpus can return"
+        )
 
     def test_an_unprefixed_status_raises_rather_than_inflating_measured(self) -> None:
         """The vocabulary guard, through the REAL run_corpus.

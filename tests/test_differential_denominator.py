@@ -160,44 +160,57 @@ class RenderTest(unittest.TestCase):
 class ContractTest(unittest.TestCase):
     """What the helper deliberately cannot enforce, recorded so nobody assumes it does."""
 
-    def test_a_caller_that_derives_measured_from_the_sum_is_undetectable(self) -> None:
-        """`measured = matched + diverged` makes rule 3 unfalsifiable, and the helper CANNOT
-        see it — 5 == 2 + 3 looks identical however `measured` was obtained.
+    def test_a_caller_that_derives_measured_hides_a_real_unclassified_boundary(self) -> None:
+        """`measured = matched + diverged` makes rule 3 unfalsifiable — shown by OPPOSITE
+        VERDICTS on the same underlying bug, not by two identical reports.
 
-        This is the tautology `leaf_vs_reality` shipped: `compared` was assigned
-        `exact + divergent` and the identity was then cited as evidence. The defence is a
-        contract on the caller, stated in the module docstring and at each adoption site, and
-        this test exists so the limitation is written down rather than assumed away.
+        An earlier version of this test asserted that a derived and an independent report were
+        equally `ok` on inputs where the two were byte-identical apart from the label — i.e.
+        that a pure function returns the same thing for the same arguments. Review deleted
+        rule 3 outright and it still passed. This version fails if rule 3 ever stops working.
+
+        The bug: one boundary was attempted and never classified. A harness that counts
+        `measured` independently sees 957 != 39 + 917; one that derives it cannot.
         """
-        matched, diverged = 2, 3
-        derived = check_denominator("derived", measured=matched + diverged, matched=matched, diverged=diverged)
-        independent = check_denominator("independent", measured=5, matched=matched, diverged=diverged)
-        self.assertTrue(derived.ok)
-        self.assertTrue(independent.ok)
-        self.assertEqual(derived.failures, independent.failures)
+        matched, diverged, truth = 39, 917, 957
+        honest = check_denominator("honest", measured=truth, matched=matched, diverged=diverged)
+        derived = check_denominator(
+            "derived", measured=matched + diverged, matched=matched, diverged=diverged
+        )
+        self.assertFalse(honest.ok, "rule 3 must catch an unclassified boundary")
+        self.assertIn("never classified", " ".join(honest.failures))
+        self.assertTrue(derived.ok, "the derived caller is blind to it — that is the hole")
+        # The helper CANNOT tell these apart from the values alone, so this is a contract on
+        # the caller, stated in the module docstring and at each adoption site.
+        self.assertNotEqual(honest.failures, derived.failures)
 
-    def test_a_caller_that_derives_contained_makes_rule_4_tautological(self) -> None:
-        """The same hole, one rule over -- and rule 4 is the load-bearing one.
+    def test_a_caller_that_derives_contained_hides_a_double_counted_boundary(self) -> None:
+        """The same hole one rule over — and rule 4 is the load-bearing one.
 
         Review demonstrated this live: replacing `contained=report["boundaries"]` with
         `contained = attempted + sum(skips)` in leaf_vs_reality leaves rule 4 permanently
-        satisfied and the whole suite green. The helper cannot see it, for the same reason it
-        cannot see a derived `measured`: 5 == 2 + 3 looks identical however it was obtained.
+        satisfied and the whole suite green.
 
-        So `contained` must be the corpus's OWN count of what it holds, read from the corpus
-        rather than reconstructed from the harness's own bookkeeping -- otherwise rule 4 checks
-        the harness against itself. All four adoption sites read it from the report's corpus
-        figure; nothing here enforces that, and this test exists so the gap is written down
-        rather than assumed shut.
+        The bug is round 1's real `leaf_vs_reality` defect: the `no_golden_row` path incremented
+        `attempted` AND `skip:no_golden_row`, so one boundary landed in both buckets. Read the
+        corpus's own count and rule 4 fires; reconstruct it from the harness's bookkeeping and
+        rule 4 is checking the harness against itself.
+
+        So `contained` must be the corpus's OWN count of what it holds. Nothing here can enforce
+        that — this test exists so the gap is written down and stays falsifiable.
         """
+        measured, skipped, truth = 957, 315, 1271  # 957 + 315 = 1272, one counted twice
+        honest = check_denominator(
+            "honest", measured=measured, matched=40, diverged=917, contained=truth, skipped=skipped
+        )
         derived = check_denominator(
-            "derived", measured=956, matched=39, diverged=917, contained=956 + 315, skipped=315
+            "derived", measured=measured, matched=40, diverged=917,
+            contained=measured + skipped, skipped=skipped,
         )
-        independent = check_denominator(
-            "independent", measured=956, matched=39, diverged=917, contained=1271, skipped=315
-        )
-        self.assertTrue(derived.ok)
-        self.assertEqual(derived.failures, independent.failures)
+        self.assertFalse(honest.ok, "rule 4 must catch a double-counted boundary")
+        self.assertIn("counted twice", " ".join(honest.failures))
+        self.assertTrue(derived.ok, "the derived caller is blind to it — that is the hole")
+        self.assertNotEqual(honest.failures, derived.failures)
 
     def test_but_the_zero_rule_still_binds_a_deriving_caller(self) -> None:
         """The half that survives a lazy caller: if it measured nothing, `matched + diverged`
