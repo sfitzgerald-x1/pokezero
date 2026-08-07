@@ -549,16 +549,16 @@ exactness pin is worth anything under. Noted in the file and on the PR.
 - **H11** gets a real disposition: closing commit named and bisected, mechanism written,
   classified as a world-construction fix, with the "nothing in `reports/`" sentence withdrawn in
   place rather than deleted.
-- **§7's list of undetermined items loses the `19100170/71-72` entry** (it was item 2). The
-  remaining items are renumbered. `§7.1` is the only item cross-referenced anywhere — twice, from
-  §1 (`:49`) and §8 (`:586`) — and item 1 keeps its number, so no reference breaks.
-- The **UNKNOWN roster in §1** drops from four rows to three: H8, H12 and H19. H11 is no longer
+- **`c138` §7's list of undetermined items loses the `19100170/71-72` entry** (it was item 2). The
+  remaining items are renumbered. `c138` `§7.1` is the only item cross-referenced anywhere — twice,
+  from that ledger's §1 (`:49`) and §8 (`:586`) — and item 1 keeps its number, so nothing breaks.
+- The **UNKNOWN roster in `c138` §1** drops from four rows to three: H8, H12 and H19. H11 is no longer
   UNKNOWN.
-- **§7 gains an item as well as losing one** — the incidence of the missing Protect `|-fail|` line
-  (§4.5), as new item 7, with its own settling measurement and the note that C125 (§8) is why it is
-  not a §3 row. Recorded as a §7 entry precisely because this PR removes one: a list of blind spots
-  that only ever shrinks is losing them by attrition rather than by resolution. Net §7 count is
-  unchanged at nine.
+- **`c138` §7 gains an item as well as losing one** — the incidence of the missing Protect `|-fail|`
+  line (this report's §4.5), as that ledger's new item 7, with its own settling measurement and the
+  note that C125 (`c138` §8) is why it is not a `c138` §3 row. Added precisely because this PR also
+  removes one: a list of blind spots that only ever shrinks is losing them by attrition rather than
+  by resolution. Net `c138` §7 count is unchanged at nine.
 
 ## 7. What this does not claim
 
