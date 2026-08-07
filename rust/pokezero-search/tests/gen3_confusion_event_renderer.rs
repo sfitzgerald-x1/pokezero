@@ -781,6 +781,24 @@ fn protected_memento_emits_one_protect_activation() {
     assert_eq!(branches.len(), 1, "{branches:?}");
     let rendered = rendered(&mut state, &branches[0]);
     assert!(rendered.attribution_unsafe.is_empty(), "{rendered:?}");
+    // AND NOT LOSSY AT ALL. This is a NAMED-callee Protect render on a fully clean branch,
+    // and `set(lossy)` here must stay EMPTY.
+    //
+    // It guards the safety argument for the Protect render counter in the unnamed-callee
+    // walk. That counter is safe only because the walk has ALREADY pushed
+    // `SLEEPTALK_LOSSY_TAG`, so `set(lossy)` does not move. There are three OTHER
+    // `|-activate|...|Protect` sites on the named path, and the obvious next edit for
+    // anyone reading "COUNT IT" is to add the same call to them. Doing that here would take
+    // `set(lossy)` from `{}` to `{sleeptalk_called_unidentified}` on a branch where Sleep
+    // Talk never ran -- which makes `fidelity_gate_events.py` and `leaf_vs_reality.py` drop
+    // the row as `skip:lossy_render`, flips the transition differential's `sleeptalk_union`,
+    // and counts a `lossy_render` that is not lossy.
+    //
+    // Found by review as mutant N9, which passed all 423 tests: this test asserted the full
+    // `lines` vector and `attribution_unsafe`, but never `lossy`. Production-only defects
+    // are the reason the counter is pinned by assertion rather than by comment, and the pin
+    // covered only the call site that exists.
+    assert!(rendered.lossy.is_empty(), "{rendered:?}");
     assert_eq!(
         rendered.lines,
         vec![
@@ -2572,6 +2590,61 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
                 "the Protect marker is rendered but the world is STILL REFUSED as \
                  attribution-unsafe, so the fix reclaims nothing: {r:?}"
             );
+            // AND it must be counted EXACTLY ONCE PER RENDERED LINE. Closing this family
+            // deleted the only number that tracked it: era 62 measured the shape at 3,365
+            // worlds solely because it aborted into `world_failure_reasons`.
+            //
+            // COUNT, not presence. `.any()` was the first version of this assertion and
+            // review killed it: duplicating the `mark_lossy_subcase` call passed all 423
+            // tests. Over-firing is the failure direction the whole change is most exposed
+            // to, because the number it inflates is the one the next era reads as evidence
+            // the fix worked -- and M3 only covers over-firing on the WRONG branch, not
+            // twice on the right one.
+            // KNOWN COVERAGE LIMIT, stated rather than implied. `markers` is 1 in every
+            // branch this fixture generates, so this is operationally `counted == 1` and it
+            // does NOT distinguish once-per-line from once-per-branch: review's N3, which
+            // hoists the push to a single one-per-branch call, survives all 423 tests. It
+            // does kill the duplicate-push mutant, which is the failure direction named
+            // above.
+            //
+            // The denominator is exact despite being a substring match. The renderer has
+            // exactly four `|Protect` producers and all four are `|-activate|{ident}|Protect`
+            // -- `|-singleturn|...|Protect` is never emitted, and move ids render lowercase
+            // so `|move|...|protect` cannot collide with a case-sensitive match. THREE of
+            // the four are NAMED-path sites this counter must never count; the clean-branch
+            // pin in `protected_memento_emits_one_protect_activation` is what holds that.
+            let markers = events.matches("|Protect").count();
+            let counted = r
+                .lossy_subcases
+                .iter()
+                .filter(|s| *s == "sleeptalk_called_unidentified:protect_marker_rendered")
+                .count();
+            assert_eq!(
+                counted, markers,
+                "the Protect counter must fire exactly once per rendered Protect line, \
+                 got {counted} for {markers} line(s): {r:?}"
+            );
+            assert!(
+                counted > 0,
+                "the Protect marker rendered but emitted NO telemetry, so a production era \
+                 cannot tell a firing marker from a silent one: {r:?}"
+            );
+            // AND `set(lossy)` must be UNCHANGED. This is the contract
+            // `engine_transition_differential.py` matches exactly
+            // (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, and
+            // that file's bytes are pinned by the certification lifecycle, so it cannot be
+            // edited to follow a renderer change. Counting via a NEW lossy tag would
+            // silently narrow which branches the differential accepts -- green here, wrong
+            // in production. Pinned as a SET so a repeated push of the same tag passes and
+            // an added distinct tag fails.
+            let distinct: std::collections::BTreeSet<&str> =
+                r.lossy.iter().map(String::as_str).collect();
+            assert_eq!(
+                distinct,
+                ["sleeptalk_called_unidentified"].into_iter().collect(),
+                "the Protect counter changed set(lossy); the transition differential's \
+                 acceptance set moves with it: {r:?}"
+            );
             checked += 1;
         }
     }
@@ -2603,10 +2676,20 @@ fn without_the_protect_volatile_no_protect_line_is_invented() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "a Protect line was invented with no PROTECT volatile in state:\n{events}"
+        );
+        // The COUNTER must be silent too. A counter that fires without a rendered line
+        // inflates the one number era 63 reads to decide whether the marker works, and
+        // it inflates it in the direction that manufactures a win.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired with no Protect line rendered: {r:?}"
         );
     }
 }
@@ -2641,11 +2724,21 @@ fn a_full_hp_absorb_activation_is_never_dressed_as_protect() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "a full-HP absorb activation was dressed as Protect -- this is the fabricated \
              line the absorb guard exists to prevent:\n{events}"
+        );
+        // The counter is silent here for the same reason the LINE is: this zero-amount
+        // Heal is byte-identical to a Protect marker and is NOT one. A counter that
+        // cannot tell the two producers apart measures the wrong population.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired on a full-HP absorb activation: {r:?}"
         );
     }
 }
@@ -2685,11 +2778,31 @@ fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "with a heal-carrying absorb ability present the marker is ambiguous and must \
              be refused, not guessed:\n{events}"
+        );
+        // THE COUNTER MUST BE SILENT, and this is the ONLY fixture that can prove it.
+        //
+        // It is the sole case with `defender_protected == true` and NO rendered marker. Its
+        // two sibling negatives both leave PROTECT unset, so a counter hoisted out of the
+        // render arm and gated on `defender_protected` alone passes all of them -- review's
+        // N22, which survived 423/423 while this fixture was still on the string-only
+        // `render()` helper.
+        //
+        // N22 is not merely theoretical. Its spurious counts on REFUSED branches would be
+        // discarded anyway, since the world aborts before the report is built -- but it also
+        // fires on ACCEPTED protected-defender walks whose tail carries no marker, and those
+        // DO reach the shard. That inflates the very number era 63 reads as evidence the fix
+        // works, with worlds that rendered nothing.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired on a branch that REFUSED to render the marker: {r:?}"
         );
     }
 }

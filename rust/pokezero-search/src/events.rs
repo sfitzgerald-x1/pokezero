@@ -427,6 +427,20 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "heal_defender",
     "heal_drain_or_shellbell",
     "heal_zero_marker",
+    // The SUCCESS-side counter for the Protect marker. Registered even though the
+    // caller does not currently reach this gate: `mark_lossy_subcase` asserts only
+    // `starts_with(lossy_tag)` and, unlike `mark_attribution_unsafe_subcase`, never
+    // calls `assert_subcase_vocabulary`. That asymmetry is a latent trap rather than
+    // a licence -- the moment anyone closes it (a sensible hardening, since the lossy
+    // sub-case channel is otherwise unbounded) an unregistered token becomes a
+    // PRODUCTION panic on a `--release` wheel, and a pyo3 panic escapes
+    // `except Exception` and kills the campaign worker. Registering costs one line.
+    //
+    // Prefixed for the same reason as the `shape_*` and `heal_*` tokens: this
+    // vocabulary is shared across every lossy tag and validated per token with no
+    // tag scoping, so a bare `protect` or `rendered` would weaken the gate for
+    // unrelated families.
+    "protect_marker_rendered",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -2119,6 +2133,70 @@ fn render_move_phase(
                             sim.apply(instruction);
                             let ident = ctx.active_ident(sim.state, protected_side);
                             out.lines.push(format!("|-activate|{ident}|Protect"));
+                            // COUNT IT. A class that stops refusing must not stop being
+                            // visible -- `engine_search.py`'s `lossy_subcase_renders` exists
+                            // for exactly this, and its comment records the price of the
+                            // alternative: "Two eras were spent unable to say what had
+                            // changed in a class."
+                            //
+                            // Before this line, closing the `heal` family DELETED its only
+                            // number. Era 62 measured the shape at 3,365 worlds solely
+                            // because it aborted and landed in `world_failure_reasons`.
+                            //
+                            // WHAT THIS NUMBER IS, stated exactly, because the first version
+                            // of this comment claimed something the plumbing does not deliver
+                            // and review disproved it:
+                            //
+                            // * It counts BRANCH RENDERS, not worlds. The enclosing `price`
+                            //   closure runs once per expanded branch seam (`tree.rs`
+                            //   `expand_edge`), summed over every SEARCH INVOCATION and
+                            //   decision in the shard -- invocation, not world: with
+                            //   `early_stop` on, a stopped world is replayed at full budget
+                            //   and `_absorb_lossy_subcases` runs on both passes over a
+                            //   freshly re-expanded tree, so that world contributes twice.
+                            //   `early_stop` defaults off, so this is latent, not live.
+                            //   Era 62's 3,365 is a WORLD count. One world expands
+                            //   many branches carrying the same Protect-blocked tail, so the
+                            //   two are NOT commensurable and must not be differenced.
+                            //
+                            // * It only survives for worlds whose search COMPLETED.
+                            //   `model.rs` accumulates these counts and then, on any
+                            //   attribution-unsafe branch, `return Err(error)` before the
+                            //   report is built -- the Python seam catches that and salvages
+                            //   only `attribution_unsafe_renders`. So a world that renders
+                            //   the marker and later dies at a DIFFERENT unsafe branch
+                            //   contributes ZERO here, exactly like a world where the marker
+                            //   never fired.
+                            //
+                            // What it therefore DOES establish is the thing era 63 has to
+                            // know and otherwise cannot: a NONZERO value is direct positive
+                            // evidence that Protect-blocked worlds are being RECLAIMED and
+                            // searched, not merely re-refused one branch later. Zero is
+                            // ambiguous; nonzero is not. That asymmetry is the whole value,
+                            // and it is worth having precisely because the fallback RATE
+                            // cannot supply it: the rate between eras 62 and 63 moves for
+                            // nine commits' worth of reasons, so a fall in it is not
+                            // evidence about #1157. The ASYMMETRY here is. Note the scope --
+                            // only the zero/nonzero bit is robust. The MAGNITUDE is a raw
+                            // volume and moves with search_sims, batch size, decisions and
+                            // games per shard, and the early-stop replay factor, so it must
+                            // not be read as a rate or differenced across eras.
+                            //
+                            // `mark_lossy_subcase`, NOT a new lossy tag. It pushes the SAME
+                            // `SLEEPTALK_LOSSY_TAG` that the accepting path above already
+                            // pushed, so `set(lossy)` is unchanged and
+                            // `engine_transition_differential.py`'s
+                            // `set(lossy) == {_SLEEPTALK_LOSSY_MARKER}` contract still holds
+                            // -- that file's bytes are pinned by the certification
+                            // lifecycle and cannot be edited to follow along. A NEW tag
+                            // would silently narrow which branches the differential accepts.
+                            //
+                            // This is telemetry only. Nothing keys behaviour off
+                            // `lossy_subcases`, so counting a render cannot refuse one.
+                            out.mark_lossy_subcase(
+                                SLEEPTALK_LOSSY_TAG,
+                                "sleeptalk_called_unidentified:protect_marker_rendered",
+                            );
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
                             // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
                             // `[from]` tag, which is what Showdown emits for Recover,
@@ -6895,6 +6973,20 @@ mod tests {
         // very abort it exists to prevent.
         assert!(UNRENDERABLE_FAMILY_ORDER.contains(&"unclassified"));
         assert!(SUBCASE_VOCABULARY.contains(&"unclassified"));
+        // Same for the Protect counter's token. It is registered DEFENSIVELY -- the only
+        // caller goes through `mark_lossy_subcase`, which does not currently reach
+        // `assert_subcase_vocabulary` -- and review showed that made the registration
+        // deletable with all 423 tests green. An "unused token" cleanup would then arm a
+        // production panic for whoever later closes that asymmetry, on a --release wheel,
+        // where a pyo3 panic escapes `except Exception` and kills the campaign worker.
+        // Pinned here rather than in a new test so the CI count floor does not move.
+        //
+        // DELIBERATELY REDUNDANT. `the_live_subcase_slugs_are_all_in_vocabulary` now runs the
+        // same literal through `assert_subcase_vocabulary`, which SUBSUMES this membership
+        // check -- deleting the entry fails both. Kept as defence in depth, and labelled so,
+        // because the comment above justifies only this assert's PLACEMENT and review noted
+        // it no longer explains its EXISTENCE.
+        assert!(SUBCASE_VOCABULARY.contains(&"protect_marker_rendered"));
     }
 
     /// COVERAGE LIMIT, stated because the first version of this test overstated it. That
@@ -6990,6 +7082,16 @@ mod tests {
             let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
+        // The Protect counter's literal, through the PRODUCTION gate rather than a
+        // membership check. Strictly stronger: membership passes a re-composed literal that
+        // the gate would reject. Its caller is `mark_lossy_subcase`, which does NOT reach
+        // this gate today -- the `&'static str` bound on its `subcase` keeps that caller set
+        // literals-only and greppable, so running them through here is what makes closing
+        // that asymmetry safe later.
+        assert_subcase_vocabulary(
+            SLEEPTALK_LOSSY_TAG,
+            "sleeptalk_called_unidentified:protect_marker_rendered",
+        );
         // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
         // shape and a real world can carry several, so each must clear the gate.
         let mut several = NoneMatchedShapes::default();
