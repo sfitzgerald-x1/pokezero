@@ -81,97 +81,108 @@ divergence, whatever the number.
 
 ---
 
-# OUTCOME — appended after the single run. The falsifier fired.
+# OUTCOME — appended after the single run, then corrected twice by review
 
-Run once, on `19,200,060`–`19,200,259`, 200 games, build `44ee1430708cbb55` / 71 patches,
-`main` `16857e06`. Artifact: `reports/artifacts/c141_final_holdout_sweep.json`. Exit 1,
-which is the differential's by-design code when divergences exist.
+Run once, on `19,200,060`–`19,200,259`, 200 games, build `44ee1430708cbb55` / 71 patches.
+Artifact: `reports/artifacts/c141_final_holdout_sweep.json`. The run executed **at the
+prediction commit** `3687d205` with `source_tree: clean`, so the pre-registration is
+verifiable rather than asserted.
+
+**Headline: 1 divergence and 1 withheld boundary in 16,274 measured boundaries, zero
+engine errors.**
 
 | | dev | holdout | **final holdout** |
 |---|---|---|---|
 | boundaries_measured | 15,503 | 15,579 | **16,274** |
-| boundaries_full_round | 15,968 | 16,155 | **16,837** |
 | matched | 15,502 | 15,579 | **16,268** |
-| **diverged** | 1 | 0 | **2** |
+| reported diverged | 1 | 0 | **2** |
+| **of which a rump artifact** | 0 | 0 | **1** |
+| **genuine divergences** | 1 | 0 | **1** |
 | all-branches-lossy | 0 | 0 | **4** |
-| lossy_render | 0 | 3 | **14** |
 | engine_errors | 0 | 0 | **0** |
 
-**The count landed inside the predicted 0–3. Everything else about the prediction was
-wrong, and in the direction that matters.**
+## The falsifier did NOT fire, and my first outcome note said it did
 
-## The falsifier fired on shape, not on count
+I wrote that both rows were shapes the ledger does not contain. **Both halves were false.**
 
-The registered falsifier read: *"if the count is large — say above 5 — or if any row is a
-shape the ledger does not already contain, the program's claim that the residue is
-understood is wrong."*
+- `roll_scaled_component` has fired **5× on dev and 2–4× on the validation holdout** across
+  nine committed artifacts. `c138` H15 already lists it among the six classes ever seen.
+- `component_mismatch:` fired on the holdout as `component_mismatch:itemleftovers|leechseed`.
 
-Both rows are shapes the ledger does not contain, and both classes are strings neither
-development window ever emitted.
+**`19200244/115` is ledger entry G8**, still open — the collapsed lethal Leech Seed drain,
+`hp_after_move + leftovers < maxhp/8`. Verified: 11 + 25 = 36 < 50.875. It is the same
+mechanism as dev row `19000191/63`, diagnosed in `c140` one commit before this sweep ran,
+off by one in the same way (36 vs 37; 28 vs 29). The class string differs only because the
+engine's arm labelled its component `itemleftovers` instead of `heal`.
 
-**`19200131/129`** — `roll_scaled_component`, `p1: doubleedge / p2: batonpass`, gating
-exact, 2 branches:
+**`19200131/129` is not a divergence at all.** Replaying the retained state recovers two
+arms: the non-crit arm at **93.75 %** mass, carrying `recoil −19`, was **dropped** as
+`attract_empty_tail_ambiguous:paralyzed+cannot_act`; the crit arm at 6.25 %, carrying
+`−32`, survived; the observation is `−18`. The observation *is* the dropped arm.
+Allowlisting that one marker turns the boundary into **matched**. The verdict rested on
+one-sixteenth of the enumerated mass.
 
-```
-pct=6.25: p1 roll-scaled components differ: observed=[('recoil', -18)] engine=[('recoil', -32)]
-```
+So the corrected reading of this window is **1 divergence + 1 withheld boundary**.
 
-Recoil. Not a residual, not a heal label, not a partition artifact — a **recoil magnitude**
-disagreement, on a class that has never appeared in this program's residue.
+## The identity finding was already ledgered — as H14
 
-**`19200244/115`** — `component_mismatch:heal|itemleftovers`, `p1: flamethrower /
-p2: fireblast`, gating exact, 9 branches:
+`skip:strict_all_branches_lossy = 4`, and `matched + diverged == measured` fails here. But
+this is **not** a discovery: `c138` H14 already states the correct form, and states it more
+completely than I did, including a term I dropped:
 
-```
-pct=49.03: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[('itemleftovers', 37)]
-pct=10.74: p1 attributed components differ: observed_only=[('heal', 36)] engine_only=[]
-```
+> `boundaries_measured == matched + diverged + engine_error + skip:strict_all_branches_lossy`
 
-An unattributed heal of 36 against a Leftovers tick of 37 — an **attribution** mismatch
-with a magnitude disagreement inside it, and again a class string new to the residue.
+`docs/engine_divergence_ledger_20260728.md` carries it as a standing rule, derived from a
+live 40-row instance in closed PR #1037. This window is the **first live firing** of a
+gap H14 had already classified reachable-in-principle. No report ever asserted the
+two-term form beyond its own data, and no code guard on this harness covers it.
 
-## A second, quieter finding: four boundaries were adjudicated as neither
+## Coverage, corrected
 
-`skip:strict_all_branches_lossy = 4`. Those boundaries are counted in
-`boundaries_measured` but are neither matched nor diverged, which is why
-`matched + diverged == measured` — an identity this program has asserted repeatedly, and
-which I asserted throughout this session — **does not hold here**. The correct identity is
-`matched + diverged + all_branches_lossy == measured` (16,268 + 2 + 4 = 16,274), and it
-held on dev and holdout only because that counter was zero on both.
+My first note said "~3.3 % of full-round boundaries are single-seat" and called it unchanged
+from the pre-registration. Wrong by 3×, and it was a silent revision. Single-seat
+boundaries are counted **before** `boundaries_full_round`, so they are not in that
+denominator at all. The reconciliation from `c132`:
 
-`strict:lossy_render` is 14 here against 3 on holdout and 0 on dev. So the unseen window
-exercises renderer paths the development windows do not, and four boundaries could not be
-adjudicated at all. That population is invisible in a divergence count.
+- total 16,837 + 1,767 = **18,604**; single-seat **9.5 %**; coverage **16,274 / 18,604 =
+  87.5 %** — which *vindicates* the pre-registered ~87 %.
+- within-full-round exits total 563: 205 struggle, 169 substitute-health-unknown, 141
+  volatile-unsupported, 24 prestate-mismatch, 18 self-request-state, 4 materialization,
+  2 encore-move-unknown. `16,837 − 563 = 16,274`. My first list omitted the 169 and the 24
+  and therefore did not reconcile — the exact omission `c132` warns about by name.
+- `gating_support_based` 1,284 / 16,274 = **7.9 %** accepted through the enumerated
+  sleep-counter widening (Constraint 7). That figure was right.
 
 ## What this measurement establishes
 
-The engine is close on an unbiased sample nothing was tuned against: **2 divergences in
-16,274 measured boundaries, zero engine errors.** That is a real result and it is the
-number this window was reserved to produce.
+**One genuine divergence in 16,274 measured boundaries on an unbiased window nothing was
+tuned against**, and it is an instance of a gap already diagnosed and already open in the
+ledger. Zero engine errors.
 
-It also establishes that **the residue was not understood** — it was exhausted on two
-windows. Six of the seven rows this program closed were closed after being seen, and the
-first window that had never been seen produced two shapes in classes that had never
-appeared, plus a four-boundary adjudication hole that had never appeared. The prediction
-argued for exactly this and then guessed the wrong specifics; the count was right for the
-wrong reason.
+My first outcome note concluded "the residue was not understood, it was exhausted on two
+windows." That was over-correction in the pessimistic direction and it was wrong on the
+facts. The residue looks **more** understood than that: the heal/Leech-Seed family
+predicted the one real row, and the other row was never a divergence.
 
-## What it cannot say, unchanged from the pre-registration
+What the window did surface, and could not have been surfaced otherwise, is
+**instrumentation**: the first live firing of H14, and a rump-branch adjudication that had
+been documented as possible and never seen in a reported result. Both are now measurable.
 
-- **~9% of measured boundaries are accepted through a widened bar** (Constraint 7):
-  `gating_support_based` is 1,284 of 16,274 here, 7.9%.
-- **~3.3% of full-round boundaries are single-seat and skipped** (1,767 of 16,837), plus
-  205 struggle, 141 volatile-unsupported, 18 self-request-state, 4 materialization and 2
-  encore-move-unknown exits.
-- **The double-faint terminal-value tie is invisible to every counter above.**
+## What it cannot say
 
-## The window is now spent
+- ~7.9 % of measured boundaries accepted through the sleep-counter widening (Constraint 7).
+- Coverage is 87.5 %, not 100 % — 1,767 single-seat boundaries and 563 in-path exits are
+  outside the measured set.
+- The double-faint terminal-value tie is invisible to every counter here.
+- The true rump-boundary count on this window is **unknowable**: `strict:lossy_render = 14`
+  counts branch drops, not boundaries, so it is somewhere in 1–14, and the measurement that
+  would settle it is the forbidden one.
 
-`19,200,060`–`19,200,259` has been measured and must never be measured again. Seeds
-`19,200,000`–`19,200,059` were contaminated earlier and are also spent. The remainder of
-the reserved range above `19,200,260` is untouched and is the only clean reserve left; the
-#1122 guard still refuses it without an explicit opt-in.
+## The window is spent
 
-**Neither of the two rows should be fixed against this window.** Diagnose them on
-generated boundaries or on new dev seeds. Fixing against the final holdout is exactly the
-fitting this reservation exists to prevent, and it would spend the reserve twice.
+`19,200,060`–`19,200,259` must never be measured again; `19,200,000`–`19,200,059` was
+contaminated earlier and is also spent. Above `19,200,260` is the only clean reserve, and
+#1122's guard still refuses it without an explicit opt-in.
+
+**Neither row may be fixed against this window.** Both were diagnosed on generated
+boundaries and retained-state replays, which is not a re-measurement.
