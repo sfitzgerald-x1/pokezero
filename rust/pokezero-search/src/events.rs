@@ -311,13 +311,17 @@ impl RenderedEvents {
     ///   the key set for this class is the non-empty subsets of the REACHABLE token set.
     /// * This is therefore NOT "stronger than `'static`". `'static` restricted keys to
     ///   literals present in the source: finite, greppable, reviewable. The honest
-    ///   statement is that the ceiling rises from 1 key to 2^16 - 1 = 65,535, and
+    ///   statement is that the ceiling rises from 1 key to 2^17 - 1 = 131,071, and
     ///   that the REALIZED count is small because tails are short -- the oracle corpus
     ///   yielded two (`boost`, `substitute+volatile`), though the second can no longer be
     ///   emitted now that `substitute` is deregistered.
     ///
-    /// Note 16, not 17: `UNRENDERABLE_FAMILY_ORDER` has 17 entries but `unclassified` is
+    /// Note 17, not 18: `UNRENDERABLE_FAMILY_ORDER` has 18 entries but `unclassified` is
     /// emitted by NO classifier arm -- it is reachable only through the degradation below.
+    /// `immobilizer`, the 18th, IS emitted by an arm -- one that is structurally unreachable
+    /// in production -- so it counts toward the ceiling even though its realized volume is
+    /// zero. Registered-and-unreachable and unregistered-and-unemittable are different
+    /// states and the count follows registration, not reachability.
     ///
     /// That degradation is NOT redundant, and an earlier version of this sentence implied it
     /// was: it said the path is "unreachable while every arm's token is registered", which
@@ -336,9 +340,10 @@ impl RenderedEvents {
     /// 8,191, 14 entries" while the array held 13; the heal split took it to 18 without
     /// the arithmetic moving; and the correction to 2^17 was itself stale, because
     /// deregistering `heal` had already taken 18 back to 17. Each time the error was the
-    /// same -- treating a COUNT as prose. A test is the only thing that has held.
+    /// same -- treating a COUNT as prose. A test is the only thing that has held -- and it
+    /// is what carried the fourth move, `immobilizer`, from 17 entries to 18.
     ///
-    /// A 65k ceiling is a real cost, accepted because a class that was 51.6% of the abort
+    /// A 131k ceiling is a real cost, accepted because a class that was 51.6% of the abort
     /// channel could not be ranked at all as one key. It is bounded, greppable via the
     /// order list, and every token maps to a named renderer gap.
     ///
@@ -892,8 +897,60 @@ fn instruction_side(ins: &Instruction) -> Option<SideReference> {
         Instruction::ChangeSpecialAttack(i) => i.side_ref,
         Instruction::ChangeSpecialDefense(i) => i.side_ref,
         Instruction::ChangeSpeed(i) => i.side_ref,
+        // pokezero gen3 fidelity fix (Attract immobilization attribution). Added
+        // here for the same reason `SetRestSleepPendingRefund` was: the catch-all
+        // below returns `None`, and an unattributable instruction breaks the
+        // prelude/segment walks that ask which side an instruction belongs to.
+        // Bookkeeping only -- the public line it licenses is emitted by the
+        // dedicated arm in `render_move_phase`, not by these walks.
+        Instruction::MoveImmobilized(i) => i.side_ref,
         _ => return None,
     })
+}
+
+/// How `side`'s move-time immobilization marker sits in `tail`, if the engine set one.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ImmobilizationMarker {
+    /// The marker is the ENTIRE remaining move phase: `[marker]`. Renderable.
+    Terminal,
+    /// A marker plus something else. The something else has no render arm here, so the
+    /// branch is refused rather than described with that part dropped.
+    NotTerminal,
+}
+
+/// Classify `side`'s move-time immobilization marker within a post-prelude move tail.
+///
+/// SPLIT OUT SO THE TERMINAL/NON-TERMINAL SPLIT CAN BE UNIT-TESTED. The renderer is only
+/// reachable through `segment`, which prefix-matches against RE-GENERATED engine branches,
+/// so a "marker plus something else" tail cannot be hand-built end to end -- the engine
+/// appends the marker last and every instruction `before_move` may have pushed ahead of it
+/// in gen3 (`SetFutureSight` for Future Sight, Choice Band's `DisableMove`s, the sleep and
+/// freeze gates, the confusion counter) is consumed by `consume_move_prelude`. Without this
+/// seam the refusal arm would have no test at all. See
+/// `the_attract_marker_is_classified_terminal_only_when_it_is_the_whole_tail`.
+///
+/// Matches on `side_ref` rather than trusting the segment boundary. The marker is only ever
+/// pushed for the acting side, but both plies share ONE instruction list and a segmentation
+/// slip would otherwise credit one side's `|cant|` line to the other -- the worst available
+/// failure for a line whose entire purpose is attribution.
+fn move_immobilization_marker(
+    tail: &[Instruction],
+    side: SideReference,
+) -> Option<ImmobilizationMarker> {
+    let position = tail.iter().position(|instruction| {
+        matches!(instruction, Instruction::MoveImmobilized(marker) if marker.side_ref == side)
+    })?;
+    // `tail.len() == 1` rather than `position == tail.len() - 1`: a marker that is LAST but
+    // preceded by instructions is exactly the case that must refuse, so "is it last" is the
+    // wrong question. Both conditions are written out because `position == 0` alone would
+    // admit `[marker, boost]` and `tail.len() == 1` alone would admit a one-element tail
+    // holding some other side's marker -- which `position` has already excluded, but the
+    // pair is what makes that independent of the search above.
+    if tail.len() == 1 && position == 0 {
+        Some(ImmobilizationMarker::Terminal)
+    } else {
+        Some(ImmobilizationMarker::NotTerminal)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1813,6 +1870,83 @@ fn render_move_phase(
         out.lines.push(format!("|-activate|{ident}|confusion"));
     }
 
+    // ATTRACT IMMOBILIZATION, read off the engine's marker instead of guessed.
+    //
+    // `Instruction::MoveImmobilized` is the gen3 attract-marker patch's whole
+    // point: the immobilized branch used to be an empty-delta clone, so it was
+    // BYTE-IDENTICAL to the fully-paralyzed branch and this renderer refused the
+    // world rather than invent an attribution (`attract_empty_tail_ambiguous`,
+    // measured at ~46% of the remaining search-fallback residue). With the marker
+    // the branch names its own cause and no inference is required.
+    //
+    // POSITION IS LOAD-BEARING, three ways:
+    //
+    //   * BEFORE the Sleep Talk block below. Showdown resolves `attract`'s
+    //     onBeforeMove at priority 2, i.e. before the move is used at all, so an
+    //     immobilized Sleep Talk click emits NO `|move|...|sleeptalk|` line. It is
+    //     also the trap: the sleep-talk unnamed-callee walk ends in a bare
+    //     `else { sim.apply(instruction) }`, and the marker has no state effect, so
+    //     that fall-through would render NOTHING and swallow the marker in silence
+    //     -- the fix would fail with the entire suite green.
+    //     `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk` is
+    //     the pin; moving this block below the Sleep Talk block turns it red.
+    //   * BEFORE `has_any_effect` is computed further down as `!tail.is_empty()`.
+    //     A marker makes the tail NON-empty, so every `!has_any_effect` predicate
+    //     below -- the attract refusal, the `|cant|..|par|` arm, the deterministic
+    //     no-effect renders -- would flip and the branch would render as a MOVE
+    //     THAT HAPPENED.
+    //   * AFTER the confusion activation above. Confusion is priority 3, so its
+    //     `|-activate|` precedes the attract `|cant|` on the same turn.
+    //
+    // TERMINAL-ONLY, and it refuses otherwise. The engine appends the marker last,
+    // after everything `before_move` may have pushed, and the prelude above has
+    // already consumed the bookkeeping it knows (PP, last-move, the sleep gate, the
+    // confusion counter). So the expected tail is exactly `[marker]`. A tail with
+    // anything ELSE left in it means the prelude broke on an instruction this
+    // renderer cannot express, and emitting only the `|cant|` line would silently
+    // drop it. Refusing there is a real change in the conservative direction: before
+    // the marker such a branch had a non-empty tail, missed the attract block
+    // entirely, and rendered a `|move|` line for a move that never happened.
+    if called_tag.is_none() {
+        if let Some(marker) = move_immobilization_marker(tail, side) {
+            let attacker_ident = ctx.active_ident(sim.state, side);
+            if marker == ImmobilizationMarker::Terminal {
+                // Apply it for Sim bookkeeping symmetry: it is a no-op in the
+                // engine, but `Sim::apply` also records the instruction for the
+                // reverse in `finish`, and leaving one instruction of a consumed
+                // segment unrecorded is the kind of asymmetry that only shows up
+                // once someone gives the variant a state effect.
+                sim.apply(&tail[0]);
+                // Telemetry-only, and UNCHANGED by this patch: the engine does not
+                // track WHO the mon is infatuated with, so Showdown's companion
+                // `|-activate|<ident>|move: Attract|[of] <source>` line stays
+                // unrenderable. The public action window (`cant:Attract`) is exact,
+                // which is why this is `mark_lossy` and not a refusal -- and why
+                // `engine_transition_differential.py` allowlists this exact tag in
+                // `_TELEMETRY_ONLY_LOSSY_MARKERS`. Do not add a NEW lossy tag on
+                // this path: that allowlist is an equality check on the tag SET and
+                // its file is byte-pinned by the certification lifecycle, so a new
+                // tag would make every marked branch unusable for matching.
+                out.mark_lossy("attract_immobilization_source_unknown");
+                out.lines.push(format!("|cant|{attacker_ident}|Attract"));
+            } else {
+                // `mark_attribution_unsafe`, not the sub-case helper: this shares
+                // the attract path's plain-reason channel (no vocabulary check),
+                // and it is a DIFFERENT class from `attract_empty_tail_ambiguous`
+                // -- that slug means "the tail is empty and several immobilizers
+                // explain it", this one means "the marker fired but the tail also
+                // carries something unrenderable". Merging them would put an
+                // engine/renderer contract violation into a bucket the campaign
+                // reads as a known ambiguity.
+                out.mark_attribution_unsafe("attract_marker_tail_not_terminal");
+                for instruction in tail {
+                    sim.apply(instruction);
+                }
+            }
+            return;
+        }
+    }
+
     // Sleep Talk while asleep: the instruction list carries the CALLED
     // move's effects but not its identity — recover it by re-generating each
     // sleep-talk candidate and matching the segment tail exactly, then
@@ -2300,6 +2434,37 @@ fn render_move_phase(
                             before[side_usize(switch.side_ref)] =
                                 sim.active_hp(switch.side_ref).0;
                             dragged[side_usize(switch.side_ref)] = true;
+                        } else if matches!(instruction, Instruction::MoveImmobilized(_)) {
+                            // EXPLICIT ARM FOR AN UNREACHABLE CASE. Do not delete it
+                            // as dead code, and do not delete it on the strength of
+                            // "the caller handles it" either -- that is exactly the
+                            // reachability argument the boost arm above records being
+                            // FALSIFIED by review.
+                            //
+                            // Why it cannot fire today: `render_move_phase` consumes
+                            // any `MoveImmobilized` for the acting side (or refuses)
+                            // BEFORE the Sleep Talk block that owns this walk, and
+                            // `called_tail` is a copy of that same `tail`, so a marker
+                            // that reaches here would have had to survive an earlier
+                            // `return`. That is a property of statement order in one
+                            // function, which is the weakest kind of invariant there
+                            // is: it is one cut-and-paste away from being false, the
+                            // matches in this walk are NOT exhaustive (a catch-all
+                            // `else` closes them), so the compiler will not object.
+                            //
+                            // Why it must not be the fall-through: the marker is a
+                            // pure no-op, so `sim.apply` renders nothing and the walk
+                            // would SWALLOW it -- a `|cant|` line silently replaced by
+                            // an unattributed callee tail, with every test green.
+                            // Refusing instead is right rather than rendering the
+                            // `|cant|` line here: by this point the walk has already
+                            // emitted `|move|...|sleeptalk|`, so the turn would read as
+                            // both a move and a cant.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            out.mark_attribution_unsafe(
+                                "attract_marker_reached_unnamed_callee_walk",
+                            );
                         } else {
                             sim.apply(instruction);
                         }
@@ -2566,8 +2731,22 @@ fn render_move_phase(
             && s.get_active_immutable().ability != Abilities::OBLIVIOUS
     };
 
-    // Attract's immobilized branch is also an empty tail, including after the
-    // higher-priority confusion handler has already incremented its duration.
+    // WHAT REACHES HERE CHANGED with the attract-marker patch, and the old reading
+    // of this block is now WRONG: an Attract-immobilized branch carries
+    // `Instruction::MoveImmobilized` and RETURNED far above, before
+    // `has_any_effect` was even computed. So every branch that arrives here is one
+    // where Attract did NOT immobilize -- the marker's absence is proof, not an
+    // inference -- and the mon merely happens to be attracted.
+    //
+    // The refusal STAYS anyway, deliberately, and this is the "remove the ambiguity,
+    // do not force a render" half of that patch. What is left is an empty tail that
+    // can still be full paralysis, an accuracy miss, or a deterministic no-op, and
+    // the marker says nothing about which. Those are the same three the unattracted
+    // path resolves with a documented probability guess further down; extending that
+    // guess to a new population is a SEPARATE decision with its own measurement, and
+    // keeping the refusal here is what keeps the remainder countable under an
+    // UNCHANGED sub-case slug so era-over-era sums still work.
+    //
     // An empty tail is only evidence of immobilization when the selected move
     // could otherwise change state and no deterministic no-op/miss explains
     // the same endpoint. Protect, immunity, misses, capped boosts/statuses,
@@ -2577,9 +2756,12 @@ fn render_move_phase(
         if deterministic_noop
             || volatile_empty_tail_ambiguous
             || empty_tail_can_be_accuracy_miss
-            // Attract resolves before full paralysis, but the engine merges
-            // their identical empty endpoints. The aggregate branch cannot
-            // prove which immobilizer stopped this action.
+            // Full paralysis. This used to read "Attract resolves before full
+            // paralysis, but the engine merges their identical empty endpoints",
+            // which the marker has made false: the two endpoints are no longer
+            // identical, so this predicate no longer means "it might have been
+            // Attract". It now means the residual par-vs-miss ambiguity, which is
+            // real and unresolved.
             || attacker_paralyzed
             || !move_could_act
         {
@@ -2647,6 +2829,25 @@ fn render_move_phase(
             ));
             return;
         }
+        // UNREACHABLE while the engine emits the marker, and kept as the
+        // PRE-MARKER DEGRADATION PATH rather than deleted.
+        //
+        // Reaching it needs an attracted mon, an empty tail, and not one of the five
+        // predicates above -- which post-marker means "Attract did not immobilize,
+        // yet nothing explains the empty tail". No gen3 branch produces that: the
+        // immobilized branch returns above with `[marker]`, and an executed move
+        // that leaves no delta always trips one of the predicates. Mutation
+        // confirms: deleting the engine's marker push turns this back into the live
+        // path and the marker tests go red, which is the signal that matters.
+        //
+        // Deliberately NOT converted to a refusal. This repo has lost an era to a
+        // patch stack silently drifting between its two builders (see the header of
+        // `third_party/poke-engine-gen3-patches.txt`); if the marker ever stops
+        // arriving, this restores exactly the behaviour that shipped before it
+        // instead of refusing every attract world. No new lossy tag either -- see
+        // the marker arm on why a second tag would make these branches unusable to
+        // the differential.
+        //
         // The action is uniquely immobilized, but the engine does not retain
         // Attract's source/gender attribution. That omission is telemetry-only
         // because the public action window itself is exact.
@@ -3451,6 +3652,13 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     "moveslot",
     "item",
     "silent",
+    // APPENDED, deliberately last before the escape hatch, so no existing composition
+    // changes relative order and no era-over-era key moves. Its producer is the
+    // `MoveImmobilized` arm in `unrenderable_family_at_with_protect`, which is
+    // structurally unreachable in production -- registered anyway, by the same rule that
+    // put `boost` back: a token belongs here if some classifier arm can emit it, and an
+    // unregistered one would degrade a NAMED contract violation into `unclassified`.
+    "immobilizer",
     "unclassified",
 ];
 
@@ -4035,6 +4243,22 @@ fn unrenderable_family_at_with_protect(
         | Instruction::ToggleShedTailing(_)
         | Instruction::ToggleSideOneForceSwitch
         | Instruction::ToggleSideTwoForceSwitch => Some("silent"),
+        // NOT `silent`, and the distinction is exactly the one that group's comment
+        // insists on: `MoveImmobilized` DOES have a public line
+        // (`|cant|<ident>|Attract`), it is just emitted by a different path --
+        // `render_move_phase`'s dedicated arm, which returns before this walk is
+        // reachable. Filing it under `silent` would book "needs zero renderer work,
+        // just an allowlist audit" for the one instruction in this match whose
+        // presence HERE means the renderer's own statement order broke.
+        //
+        // STRUCTURALLY UNREACHABLE, which is stronger than the walk's other
+        // unreachable arms and is why it gets a family of its own rather than sharing
+        // one. The engine pushes this marker from
+        // `generate_instructions_from_existing_status_conditions`, and that call is
+        // guarded by `!choice.sleep_talk_move` -- so a Sleep Talk CALLEE's generation
+        // cannot produce one, and the caller has already consumed or refused any
+        // marker in the enclosing tail before this walk starts.
+        Instruction::MoveImmobilized(_) => Some("immobilizer"),
     }
 }
 
@@ -5609,7 +5833,8 @@ mod tests {
         ChangeSideConditionInstruction, ChangeStatInstruction, ChangeWishInstruction,
         ChangeSubsituteHealthInstruction, ChangeType, DecrementPPInstruction,
         DisableMoveInstruction,
-        HealInstruction, RemoveVolatileStatusInstruction,
+        HealInstruction, ImmobilizeReason, MoveImmobilizedInstruction,
+        RemoveVolatileStatusInstruction,
         SetFutureSightInstruction, SetLastUsedMoveInstruction, SetSleepTurnsInstruction,
         SwitchInstruction, ToggleBatonPassingInstruction,
         ToggleDamageDealtHitSubstituteInstruction,
@@ -6417,6 +6642,20 @@ mod tests {
                 "item",
             ),
             (
+                // NOT `silent`, which is where every other line-less instruction goes. The
+                // attract marker HAS a public line -- `|cant|<ident>|Attract` -- emitted by
+                // `render_move_phase`'s own arm, which returns before this walk can start.
+                // A marker reaching the classifier therefore means the renderer's statement
+                // order broke, not that a family needs a new protocol line, and `silent`
+                // reads as "zero renderer work, just an allowlist audit". Mutation: filing
+                // it under `silent` passes every other test in this file.
+                Instruction::MoveImmobilized(MoveImmobilizedInstruction {
+                    side_ref: SideReference::SideOne,
+                    reason: ImmobilizeReason::Attract,
+                }),
+                "immobilizer",
+            ),
+            (
                 Instruction::ToggleBatonPassing(ToggleBatonPassingInstruction {
                     side_ref: SideReference::SideOne,
                 }),
@@ -6873,15 +7112,19 @@ mod tests {
     /// then 2^17 after deregistering `heal` had already taken 18 back to 17. Each time the
     /// error was treating a COUNT as prose, and each time the fix was a comment telling the
     /// next author to recount. Telling did not work. A test does.
+    ///
+    /// FOURTH move, and the first one that did not start as an error: the attract-marker
+    /// patch appends `immobilizer`, taking 17 entries to 18 and the ceiling to 2^17 - 1.
+    /// The figure is RECOUNTED from the array here rather than edited to match.
     #[test]
     fn the_cardinality_ceiling_matches_the_array() {
         let reachable = UNRENDERABLE_FAMILY_ORDER.len() - 1; // `unclassified` is unemittable
         assert_eq!(
             (UNRENDERABLE_FAMILY_ORDER.len(), reachable, 2usize.pow(reachable as u32) - 1),
-            (17, 16, 65_535),
+            (18, 17, 131_071),
             "the order list changed size -- update THREE places in \
-             `mark_attribution_unsafe_subcase`'s doc block (the `2^16 - 1 = 65,535` \
-             figure, the `Note 16, not 17` line, and the `A 65k ceiling` sentence) plus \
+             `mark_attribution_unsafe_subcase`'s doc block (the `2^17 - 1 = 131,071` \
+             figure, the `Note 17, not 18` line, and the `A 131k ceiling` sentence) plus \
              this test's own doc block"
         );
     }
@@ -6927,6 +7170,13 @@ mod tests {
                 "moveslot",
                 "item",
                 "silent",
+                // DELIBERATE change, per this test's own instruction to say so. APPENDED,
+                // not reordered: `immobilizer` goes last before the escape hatch, so every
+                // token keeps its relative order and no existing slug changes. Its
+                // producer -- the `MoveImmobilized` arm -- is structurally unreachable in
+                // production, so the emitted-key volume is zero on both sides of the
+                // boundary.
+                "immobilizer",
                 "unclassified",
             ],
             "the emitted slug order changed; era-over-era keys will not match for any \
@@ -6987,6 +7237,79 @@ mod tests {
         // because the comment above justifies only this assert's PLACEMENT and review noted
         // it no longer explains its EXISTENCE.
         assert!(SUBCASE_VOCABULARY.contains(&"protect_marker_rendered"));
+    }
+
+    /// The attract marker's TERMINAL/NON-TERMINAL split, pinned at the only seam where it
+    /// can be pinned.
+    ///
+    /// The renderer arm that consumes the marker is reachable only through `segment`, which
+    /// prefix-matches against re-generated engine branches -- and the engine appends the
+    /// marker LAST, after every instruction gen3's `before_move` can push, all of which
+    /// `consume_move_prelude` consumes. So `[marker, something]` is not constructible end to
+    /// end, the `NotTerminal` refusal is a FAIL-CLOSED guard rather than a live path, and
+    /// this classifier is the whole of what a test can reach.
+    ///
+    /// Stated as a coverage limit rather than implied: mutating the refusal arm's BODY (the
+    /// `attract_marker_tail_not_terminal` reason, the `sim.apply` loop) survives the suite,
+    /// because nothing reaches it. Mutating this classifier does not -- collapsing it to
+    /// always-`Terminal`, dropping the `side_ref` match, or widening `tail.len() == 1` to
+    /// `position == tail.len() - 1` each fail here.
+    #[test]
+    fn the_attract_marker_is_classified_terminal_only_when_it_is_the_whole_tail() {
+        let marker = |side_ref| {
+            Instruction::MoveImmobilized(MoveImmobilizedInstruction {
+                side_ref,
+                reason: ImmobilizeReason::Attract,
+            })
+        };
+        let boost = Instruction::Boost(BoostInstruction {
+            side_ref: SideReference::SideOne,
+            stat: PokemonBoostableStat::Defense,
+            amount: 1,
+        });
+
+        // The shape the engine actually produces.
+        assert_eq!(
+            move_immobilization_marker(
+                std::slice::from_ref(&marker(SideReference::SideOne)),
+                SideReference::SideOne
+            ),
+            Some(ImmobilizationMarker::Terminal)
+        );
+
+        // Anything else in the tail refuses -- in BOTH orders, so the guard is "the marker
+        // is the whole tail" and not the weaker "the marker is last".
+        for tail in [
+            vec![marker(SideReference::SideOne), boost.clone()],
+            vec![boost.clone(), marker(SideReference::SideOne)],
+        ] {
+            assert_eq!(
+                move_immobilization_marker(&tail, SideReference::SideOne),
+                Some(ImmobilizationMarker::NotTerminal),
+                "{tail:?} must refuse rather than render a bare |cant| and drop the rest"
+            );
+        }
+
+        // SIDE is load-bearing: the other side's marker is not this side's cant line.
+        // Without the `side_ref` match a segmentation slip would credit `|cant|..|Attract`
+        // to the wrong Pokemon, which is the worst failure available for an attribution line.
+        assert_eq!(
+            move_immobilization_marker(
+                std::slice::from_ref(&marker(SideReference::SideTwo)),
+                SideReference::SideOne
+            ),
+            None
+        );
+
+        // No marker at all is the overwhelmingly common case and must stay untouched.
+        assert_eq!(
+            move_immobilization_marker(&[], SideReference::SideOne),
+            None
+        );
+        assert_eq!(
+            move_immobilization_marker(std::slice::from_ref(&boost), SideReference::SideOne),
+            None
+        );
     }
 
     /// COVERAGE LIMIT, stated because the first version of this test overstated it. That

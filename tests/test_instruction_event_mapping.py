@@ -548,17 +548,62 @@ class BranchEventsTest(unittest.TestCase):
             tokens,
         )
 
+    def test_attract_against_protect_is_now_fully_disambiguated(self) -> None:
+        """The `protect` case MOVED out of the fail-closed set, and only that one.
+
+        It used to refuse: the Attract-immobilized branch was an empty delta, so it
+        was indistinguishable from Chansey's Tackle being blocked. The engine's
+        attract marker (`Instruction::MoveImmobilized`) resolves it COMPLETELY here,
+        because the sibling branch is not empty either -- the public-noop-branches
+        patch gives a Protect block its own `Heal 0` marker. Two distinguishable
+        branches, two correct renders, nothing left to guess.
+
+        The other fourteen sub-cases still refuse (see the sibling test): their
+        non-immobilized branch really is an empty delta, so `par`/`miss`/`noop`
+        remain mutually ambiguous and the marker says nothing about which.
+        """
+        state = _build_state(
+            ("protect",),
+            ("tackle",),
+            s1_speed=500,
+            s2_speed=1,
+            s2_volatile_statuses=("attract",),
+        )
+        branches = json.loads(
+            pokezero_search.branch_events(state, "protect", "tackle", CTX, True, False)
+        )["branches"]
+        self.assertEqual(len(branches), 2, branches)
+        for branch in branches:
+            self.assertFalse(branch["attribution_unsafe"], branch)
+            self.assertEqual(branch["attribution_unsafe_reasons"], [], branch)
+
+        immobilized = next(
+            branch
+            for branch in branches
+            if "|cant|p2a: Chansey|Attract" in branch["events"]
+        )
+        self.assertEqual(
+            immobilized["lossy"], ["attract_immobilization_source_unknown"], immobilized
+        )
+        self.assertFalse(
+            any(line.startswith("|move|p2a: Chansey") for line in immobilized["events"]),
+            immobilized,
+        )
+        blocked = next(branch for branch in branches if branch is not immobilized)
+        self.assertIn("|move|p2a: Chansey|tackle|p1a: Rattata", blocked["events"])
+        self.assertIn("|-activate|p1a: Rattata|Protect", blocked["events"])
+
     def test_attract_empty_tail_ambiguities_fail_closed(self) -> None:
         # An empty post-confusion tail is not unique evidence of Attract. Each
         # case can also be a real attempted move with no observable change.
+        #
+        # The engine's attract marker took the ATTRACT-IMMOBILIZED branch out of this
+        # set -- it now names its own cause -- so what these cases pin is the
+        # REMAINDER: the branch on which Attract did NOT immobilize, whose empty delta
+        # is still par-vs-miss-vs-noop. `protect` left this dict entirely because its
+        # remainder is not an empty delta either (it carries a `Heal 0` Protect
+        # marker); see `test_attract_against_protect_is_now_fully_disambiguated`.
         cases = {
-            "protect": ("protect", "tackle", _build_state(
-                ("protect",),
-                ("tackle",),
-                s1_speed=500,
-                s2_speed=1,
-                s2_volatile_statuses=("attract",),
-            )),
             "immunity": ("splash", "tackle", _build_state(
                 ("splash",),
                 ("tackle",),
