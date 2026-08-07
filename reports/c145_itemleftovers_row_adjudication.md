@@ -118,7 +118,7 @@ PYTHONPATH=src python scripts/engine_transition_differential.py \
 | `2ec0cb13` (range start) | 88 | 81 | 79 | **2** | `component_missing_in_engine:itemleftovers` 2 |
 | `dc6e1e19` (`d27316b6`'s parent) | 88 | 81 | 79 | **2** | `component_missing_in_engine:itemleftovers` 2 |
 | `d27316b6` (**#1148**) | 88 | 81 | **81** | **0** | `{}` |
-| `67427cf1` (this branch, on `1a929c57`) | 88 | 81 | 81 | 0 | `{}` |
+| `0afb2dcc` (this branch, on `1a929c57`) | 88 | 81 | 81 | 0 | `{}` |
 
 `matched + diverged == boundaries_measured` on every line: `79 + 2 == 81`, `81 + 0 == 81`. The skip
 histogram is **byte-identical** across all four — `skip:single_seat_boundary` 8,
