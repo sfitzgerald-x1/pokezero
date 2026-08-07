@@ -27,9 +27,9 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
 # Post-patch content pins for the 72-patch stack. The two collapse-class patches, the
-# roll-enumeration patch and the attract-marker patch all touch generate_instructions.rs (the
-# marker patch also touches src/instruction.rs and src/state.rs, neither of which is pinned
-# here), so exactly one of the four digests
+# roll-enumeration patch and the immobilizer-marker patch all touch generate_instructions.rs
+# (the marker patch also touches src/instruction.rs, src/state.rs and tests/test_gen3.rs, none
+# of which is pinned here), so exactly one of the four digests
 # below moved and three did NOT: items.rs, abilities.rs and choice_effects.rs are
 # byte-identical to their pre-split values. Those three unchanged digests are the
 # drift control -- vendored-source drift would have moved all four, so an update
@@ -38,7 +38,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "94c16832fb1724b13799b126b5d1c905dcd54be675eeede471fd675f8141ce72",
+    "src/gen3/generate_instructions.rs": "99188ed7bb4cc7fb1d4aecf3f4608dc03ad818d6c816368dc73de5afc72973fc",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",

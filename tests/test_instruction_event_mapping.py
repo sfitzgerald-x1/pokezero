@@ -548,147 +548,110 @@ class BranchEventsTest(unittest.TestCase):
             tokens,
         )
 
-    def test_attract_against_protect_is_now_fully_disambiguated(self) -> None:
-        """The `protect` case MOVED out of the fail-closed set, and only that one.
+    def test_every_attract_empty_tail_ambiguity_is_resolved(self) -> None:
+        """THE FALLBACK CLAIM, measured per sub-case.
 
-        It used to refuse: the Attract-immobilized branch was an empty delta, so it
-        was indistinguishable from Chansey's Tackle being blocked. The engine's
-        attract marker (`Instruction::MoveImmobilized`) resolves it COMPLETELY here,
-        because the sibling branch is not empty either -- the public-noop-branches
-        patch gives a Protect block its own `Heal 0` marker. Two distinguishable
-        branches, two correct renders, nothing left to guess.
+        This replaces `test_attract_empty_tail_ambiguities_fail_closed` and
+        `test_attract_against_protect_is_now_fully_disambiguated`, which asserted the
+        opposite of each other over the same fixtures. Nine shapes, each one a distinct
+        reason an attracted attacker's tail could be empty for a reason OTHER than
+        Attract, and every one of them used to refuse.
 
-        The other fourteen sub-cases still refuse (see the sibling test): their
-        non-immobilized branch really is an empty delta, so `par`/`miss`/`noop`
-        remain mutually ambiguous and the marker says nothing about which.
+        WHY REFUSING WAS NOT MERELY IMPRECISE: `reject_attribution_unsafe` aborts the
+        whole WORLD, not the branch. One refusing branch anywhere in a state's fan means
+        the world falls back to the no-search path, so "two refusing branches became one"
+        buys nothing. Zero refusals across the fan is the only shape that reclaims a
+        world, which is why the paralysis marker had to land with the Attract one.
+
+        Each case asserts three things: no branch refuses; the immobilized branch names
+        Attract; and the sibling renders the outcome its own state implies rather than a
+        `|cant|`. The third is what stops this test passing by rendering `|cant|Attract`
+        everywhere.
         """
-        state = _build_state(
-            ("protect",),
-            ("tackle",),
-            s1_speed=500,
-            s2_speed=1,
-            s2_volatile_statuses=("attract",),
-        )
-        branches = json.loads(
-            pokezero_search.branch_events(state, "protect", "tackle", CTX, True, False)
-        )["branches"]
-        self.assertEqual(len(branches), 2, branches)
-        for branch in branches:
-            self.assertFalse(branch["attribution_unsafe"], branch)
-            self.assertEqual(branch["attribution_unsafe_reasons"], [], branch)
-
-        immobilized = next(
-            branch
-            for branch in branches
-            if "|cant|p2a: Chansey|Attract" in branch["events"]
-        )
-        self.assertEqual(
-            immobilized["lossy"], ["attract_immobilization_source_unknown"], immobilized
-        )
-        self.assertFalse(
-            any(line.startswith("|move|p2a: Chansey") for line in immobilized["events"]),
-            immobilized,
-        )
-        blocked = next(branch for branch in branches if branch is not immobilized)
-        self.assertIn("|move|p2a: Chansey|tackle|p1a: Rattata", blocked["events"])
-        self.assertIn("|-activate|p1a: Rattata|Protect", blocked["events"])
-
-    def test_attract_empty_tail_ambiguities_fail_closed(self) -> None:
-        # An empty post-confusion tail is not unique evidence of Attract. Each
-        # case can also be a real attempted move with no observable change.
-        #
-        # The engine's attract marker took the ATTRACT-IMMOBILIZED branch out of this
-        # set -- it now names its own cause -- so what these cases pin is the
-        # REMAINDER: the branch on which Attract did NOT immobilize, whose empty delta
-        # is still par-vs-miss-vs-noop. `protect` left this dict entirely because its
-        # remainder is not an empty delta either (it carries a `Heal 0` Protect
-        # marker); see `test_attract_against_protect_is_now_fully_disambiguated`.
-        cases = {
-            "immunity": ("splash", "tackle", _build_state(
-                ("splash",),
-                ("tackle",),
-                s1_speed=500,
-                s1_types=("ghost",),
-                s2_speed=1,
+        # (name, s1_move, s2_move, state, a line the SIBLING branch must contain)
+        cases = [
+            ("protect", "protect", "tackle", _build_state(
+                ("protect",), ("tackle",), s1_speed=500, s2_speed=1,
                 s2_volatile_statuses=("attract",),
-            )),
-            "miss": ("splash", "hydropump", _build_state(
-                ("splash",),
-                ("hydropump",),
-                s1_speed=500,
-                s2_speed=1,
+            ), "|-activate|p1a: Rattata|Protect"),
+            ("immunity", "splash", "tackle", _build_state(
+                ("splash",), ("tackle",), s1_speed=500, s1_types=("ghost",), s2_speed=1,
                 s2_volatile_statuses=("attract",),
-            )),
-            "status": ("splash", "toxic", _build_state(
-                ("splash",),
-                ("toxic",),
-                s1_speed=500,
-                s1_status="poison",
-                s2_speed=1,
+            ), "|-immune|p1a: Rattata"),
+            ("miss", "splash", "hydropump", _build_state(
+                ("splash",), ("hydropump",), s1_speed=500, s2_speed=1,
                 s2_volatile_statuses=("attract",),
-            )),
-            "capped_boost": ("splash", "swordsdance", _build_state(
-                ("splash",),
-                ("swordsdance",),
-                s1_speed=500,
-                s2_speed=1,
-                s2_boosts={"attack": 6},
+            ), "|move|p2a: Chansey|hydropump|p1a: Rattata|[miss]"),
+            ("status", "splash", "toxic", _build_state(
+                ("splash",), ("toxic",), s1_speed=500, s1_status="poison", s2_speed=1,
                 s2_volatile_statuses=("attract",),
-            )),
-            "opponent_capped_boost": ("splash", "charm", _build_state(
-                ("splash",),
-                ("charm",),
-                s1_speed=500,
-                s1_boosts={"attack": -6},
-                s2_speed=1,
+            ), "|move|p2a: Chansey|toxic"),
+            ("capped_boost", "splash", "swordsdance", _build_state(
+                ("splash",), ("swordsdance",), s1_speed=500, s2_speed=1,
+                s2_boosts={"attack": 6}, s2_volatile_statuses=("attract",),
+            ), "|-boost|p2a: Chansey|atk|0"),
+            ("opponent_capped_boost", "splash", "charm", _build_state(
+                ("splash",), ("charm",), s1_speed=500, s1_boosts={"attack": -6},
+                s2_speed=1, s2_volatile_statuses=("attract",),
+            ), "|move|p2a: Chansey|charm"),
+            ("opponent_boost_immunity", "splash", "charm", _build_state(
+                ("splash",), ("charm",), s1_speed=500, s1_ability="clearbody",
+                s2_speed=1, s2_volatile_statuses=("attract",),
+            ), "|move|p2a: Chansey|charm"),
+            ("side_condition", "splash", "spikes", _build_state(
+                ("splash",), ("spikes",), s1_speed=500, s2_speed=1,
+                s1_side_conditions={"spikes": 3}, s2_volatile_statuses=("attract",),
+            ), "|move|p2a: Chansey|spikes"),
+            ("intrinsic_noop", "splash", "splash", _build_state(
+                ("splash",), ("splash",), s1_speed=500, s2_speed=1,
                 s2_volatile_statuses=("attract",),
-            )),
-            "opponent_boost_immunity": ("splash", "charm", _build_state(
-                ("splash",),
-                ("charm",),
-                s1_speed=500,
-                s1_ability="clearbody",
-                s2_speed=1,
-                s2_volatile_statuses=("attract",),
-            )),
-            "side_condition": ("splash", "spikes", _build_state(
-                ("splash",),
-                ("spikes",),
-                s1_speed=500,
-                s2_speed=1,
-                s1_side_conditions={"spikes": 3},
-                s2_volatile_statuses=("attract",),
-            )),
-            "intrinsic_noop": ("splash", "splash", _build_state(
-                ("splash",),
-                ("splash",),
-                s1_speed=500,
-                s2_speed=1,
-                s2_volatile_statuses=("attract",),
-            )),
-        }
-        for name, (s1_move, s2_move, state) in cases.items():
+            ), "|move|p2a: Chansey|splash"),
+        ]
+        for name, s1_move, s2_move, state, sibling_line in cases:
             with self.subTest(name=name):
-                report = json.loads(
+                branches = json.loads(
                     pokezero_search.branch_events(
                         state, s1_move, s2_move, CTX, True, False
                     )
-                )
-                unsafe = [
-                    branch
-                    for branch in report["branches"]
-                    if any(
-                        reason.startswith("attract_empty_tail_ambiguous")
-                        for reason in branch["attribution_unsafe_reasons"]
+                )["branches"]
+                for branch in branches:
+                    self.assertFalse(branch["attribution_unsafe"], (name, branch))
+                    self.assertEqual(
+                        branch["attribution_unsafe_reasons"], [], (name, branch)
                     )
+
+                immobilized = [
+                    b for b in branches
+                    if "|cant|p2a: Chansey|Attract" in b["events"]
                 ]
-                self.assertTrue(unsafe, report["branches"])
-                for branch in unsafe:
-                    self.assertTrue(branch["attribution_unsafe"], branch)
-                    self.assertFalse(
-                        any("|cant|p2a: Chansey|Attract" in line for line in branch["events"]),
-                        branch,
-                    )
+                self.assertEqual(
+                    len(immobilized), 1, (name, branches)
+                )
+                self.assertEqual(
+                    immobilized[0]["lossy"],
+                    ["attract_immobilization_source_unknown"],
+                    (name, immobilized[0]),
+                )
+                self.assertFalse(
+                    any(
+                        line.startswith("|move|p2a: Chansey")
+                        for line in immobilized[0]["events"]
+                    ),
+                    (name, immobilized[0]),
+                )
+
+                # ...and the SIBLING renders its own outcome. Without this the test would
+                # pass on a renderer that answered `|cant|Attract` to everything.
+                siblings = [b for b in branches if b not in immobilized]
+                self.assertTrue(siblings, (name, branches))
+                self.assertTrue(
+                    any(
+                        any(sibling_line in line for line in b["events"])
+                        for b in siblings
+                    ),
+                    f"{name}: no sibling rendered {sibling_line!r}: {siblings}",
+                )
+
 
     def test_confusion_crash_recoil_and_explosion_do_not_fake_self_hit(self) -> None:
         crash_state = _build_state(

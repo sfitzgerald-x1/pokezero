@@ -1,6 +1,6 @@
 --- a/src/instruction.rs
 +++ b/src/instruction.rs
-@@ -105,6 +105,39 @@
+@@ -105,6 +105,57 @@
      ToggleSideOneForceSwitch,
      ToggleSideTwoForceSwitch,
      ToggleTerastallized(ToggleTerastallizedInstruction),
@@ -22,25 +22,43 @@
 +    /// state field because it describes THIS branch's provenance, not the
 +    /// Pokemon's condition -- nothing may read it back later, and nothing does.
 +    ///
-+    /// The reason is carried as an enum rather than implied by the variant name so
-+    /// the paralysis and confusion immobilizers can be marked later without a
-+    /// second variant and a second renderer arm. Only `Attract` is emitted today.
++    /// The reason is carried as an enum rather than implied by the variant name
++    /// because BOTH move-time immobilizers this generation can produce have to be
++    /// marked, and they need different protocol lines from one renderer arm.
++    ///
++    /// MARKING ONLY ONE OF THEM ACHIEVES NOTHING, which is the lesson that shaped
++    /// this patch. `reject_attribution_unsafe` aborts the WHOLE WORLD, not the
++    /// branch, so as long as the paralysis sibling of a marked Attract branch is
++    /// still an anonymous empty delta, the renderer still refuses it and the world
++    /// still falls back. Attract alone took the refusing branches from two to one
++    /// and the fallback rate from N to N.
 +    MoveImmobilized(MoveImmobilizedInstruction),
 +}
 +
 +/// Which move-time immobilizer aborted an action. See `Instruction::MoveImmobilized`.
 +///
-+/// Only `Attract` is constructed today. The others are NOT pre-added: an unemitted
-+/// variant is an untested branch in every match that handles this instruction, and
-+/// the renderer's arm would have to guess a protocol line for it.
++/// EXACTLY the gen3 immobilizers that produce an EMPTY delta and are rolled inside
++/// `generate_instructions_from_existing_status_conditions`. Sleep, freeze, flinch,
++/// Taunt, Disable and recharge are all deliberately absent: each already leaves a
++/// distinguishable delta or is short-circuited in `cannot_use_move` before this
++/// function runs, so the renderer can already name them. A variant nothing emits is
++/// an untested branch in every match over this instruction.
 +#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 +pub enum ImmobilizeReason {
 +    /// Showdown gen3 `attract.onBeforeMove` returned false: `|cant|<ident>|Attract`.
 +    Attract,
++    /// Showdown gen3 `par.onBeforeMove` lost its 1-in-4 roll: `|cant|<ident>|par`.
++    ///
++    /// This one replaces a GUESS rather than a refusal. The renderer used to infer
++    /// `|cant|..|par|` from an empty tail on a probability-mass argument, with its
++    /// own comment conceding "a real miss renders identically". With the marker the
++    /// line is a fact, and -- the half that actually reduces fallback -- an UNMARKED
++    /// empty tail is now provably not an immobilization at all.
++    Paralysis,
  }
  
  impl fmt::Debug for Instruction {
-@@ -305,6 +338,9 @@
+@@ -305,6 +356,9 @@
              Instruction::ToggleTerastallized(s) => {
                  write!(f, "ToggleTerastallized {:?}", s.side_ref)
              }
@@ -50,7 +68,7 @@
              Instruction::SetLastUsedMove(s) => {
                  write!(
                      f,
-@@ -623,7 +659,19 @@
+@@ -623,7 +677,19 @@
      pub side_ref: SideReference,
  }
  
@@ -99,76 +117,6 @@
          }
      }
  }
-@@ -2675,3 +2688,69 @@
-         assert_eq!(state.serialize(), before, "reverse must restore bit-identically");
-     }
- }
-+
-+#[cfg(test)]
-+mod move_immobilized_marker_tests {
-+    use super::*;
-+    use crate::instruction::{ImmobilizeReason, Instruction, MoveImmobilizedInstruction};
-+
-+    fn attract_marker(side_ref: SideReference) -> Instruction {
-+        Instruction::MoveImmobilized(MoveImmobilizedInstruction {
-+            side_ref,
-+            reason: ImmobilizeReason::Attract,
-+        })
-+    }
-+
-+    /// apply-then-reverse must return the state bit-identical.
-+    ///
-+    /// TRIVIALLY TRUE for a pure marker, and written down anyway. The sibling
-+    /// `SetRestSleepPendingRefund` test carries the same name because this is the
-+    /// invariant that forces an Instruction variant rather than a bare mutation, and
-+    /// the next person to add a marker will not know which of the two cases they are
-+    /// in. If someone later gives this variant a state effect -- the obvious
-+    /// "while I am here" edit, since the reason field invites reading it back -- the
-+    /// no-op reverse arm stops being an inverse and this test is what says so.
-+    #[test]
-+    fn apply_then_reverse_is_bit_identical() {
-+        let mut state = State::default();
-+        let before = state.serialize();
-+        let instruction = attract_marker(SideReference::SideOne);
-+        state.apply_one_instruction(&instruction);
-+        state.reverse_instructions(&vec![instruction]);
-+        assert_eq!(state.serialize(), before, "reverse must restore bit-identically");
-+    }
-+
-+    /// APPLY ALONE must not move the state either, which is the half the
-+    /// apply-then-reverse test cannot see: a mutation with a matching inverse would
-+    /// pass that test while changing the leaf distribution the search prices, because
-+    /// the immobilized branch would stop being an empty delta.
-+    ///
-+    /// This is the assertion the sibling refund test writes as `assert_ne!` -- the
-+    /// two markers differ in exactly this direction, so the pin has to be inverted
-+    /// rather than copied.
-+    #[test]
-+    fn apply_alone_does_not_change_the_state() {
-+        for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
-+            let mut state = State::default();
-+            let before = state.serialize();
-+            state.apply_one_instruction(&attract_marker(side_ref));
-+            assert_eq!(
-+                state.serialize(),
-+                before,
-+                "the marker must be a pure no-op on apply for {side_ref:?}"
-+            );
-+        }
-+    }
-+
-+    /// The marker must be DISTINGUISHABLE from the empty delta it annotates, which is
-+    /// the entire point of the patch: an immobilized branch and a same-shaped
-+    /// non-immobilized branch used to compare equal, so the renderer could not tell
-+    /// "Attract stopped the move" from "full paralysis stopped the move".
-+    #[test]
-+    fn the_marker_is_not_equal_to_an_empty_branch_or_to_the_other_side() {
-+        let branch = vec![attract_marker(SideReference::SideOne)];
-+        assert_ne!(branch, Vec::<Instruction>::new());
-+        assert_ne!(branch, vec![attract_marker(SideReference::SideTwo)]);
-+        assert_eq!(branch, vec![attract_marker(SideReference::SideOne)]);
-+    }
-+}
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
 @@ -22,6 +22,8 @@
@@ -233,3 +181,215 @@
          final_instructions.push(immobilized_instruction);
  
          incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
+@@ -3060,6 +3097,30 @@
+         // Fully-Paralyzed Branch
+         let mut fully_paralyzed_instruction = incoming_instructions.clone();
+         fully_paralyzed_instruction.update_percentage(0.25);
++        // MARKER, for the same reason the Attract branch above carries one, and it
++        // has to land in the SAME change: `reject_attribution_unsafe` aborts the
++        // whole WORLD rather than the branch, so marking only Attract leaves this
++        // sibling an anonymous empty delta, the renderer keeps refusing it, and the
++        // world keeps falling back. Two refusing branches become one and the
++        // fallback rate does not move.
++        //
++        // Unlike Attract this replaces a GUESS, not a refusal. `events.rs` inferred
++        // `|cant|..|par|` from an empty tail because full paralysis carries more mass
++        // than a miss, with its own comment admitting "a real miss renders
++        // identically". Marked, the line is a fact -- and, the part that actually
++        // reclaims worlds, an UNMARKED empty tail is now provably NOT an
++        // immobilization, so the miss/no-op renders below become reachable.
++        //
++        // NO SLEEP-GATE HAZARD HERE, unlike Attract: `status` is one field, so a
++        // paralyzed Pokemon is never also asleep or frozen, and this roll can
++        // therefore never sit on a branch whose BeforeMove chain was short-circuited
++        // by `slp.onBeforeMove`. Attract can, and `consume_move_prelude` handles it.
++        fully_paralyzed_instruction
++            .instruction_list
++            .push(Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++                side_ref: *attacking_side_ref,
++                reason: ImmobilizeReason::Paralysis,
++            }));
+         final_instructions.push(fully_paralyzed_instruction);
+ 
+         // Non-Paralyzed Branch
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -9,8 +9,9 @@
+ use poke_engine::instruction::{
+     ApplyVolatileStatusInstruction, ChangeItemInstruction, ChangeStatusInstruction,
+     ChangeVolatileStatusDurationInstruction, DamageInstruction, EnableMoveInstruction,
+-    HealInstruction, Instruction, RemoveVolatileStatusInstruction, SetSleepTurnsInstruction,
+-    StateInstructions, SwitchInstruction,
++    HealInstruction, ImmobilizeReason, Instruction, MoveImmobilizedInstruction,
++    RemoveVolatileStatusInstruction, SetSleepTurnsInstruction, StateInstructions,
++    SwitchInstruction,
+ };
+ use poke_engine::state::PokemonSideCondition;
+ use poke_engine::state::{
+@@ -1064,5 +1065,166 @@
+         }),
+         "staying asleep under Early Bird must still discard the bank: {:?}",
+         vec_of_instructions
++    );
++}
++
++// ---------------------------------------------------------------------------
++// Move-time immobilization markers (Attract / full paralysis)
++//
++// IN THIS FILE, NOT IN `src/state.rs`, and that placement is the whole point. The first
++// version of this patch put them in a `#[cfg(test)] mod` inside `src/state.rs`, i.e. the
++// `--lib` target -- and NOTHING in CI runs `--lib` for the engine. The workflow's engine
++// step is `cargo test --test test_gen3` with a pinned count, so three tests sitting in the
++// lib target were pins nothing executed: exactly the defect
++// `.github/workflows/engine-fidelity-gates.yml` was written to close, and the same shape as
++// the #1105 wheel break. The `SetRestSleepPendingRefund` precedent this patch follows put
++// its tests here for that reason.
++// ---------------------------------------------------------------------------
++
++fn attract_marker(side_ref: SideReference) -> Instruction {
++    Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++        side_ref,
++        reason: ImmobilizeReason::Attract,
++    })
++}
++
++/// apply-then-reverse must return the state bit-identical.
++///
++/// TRIVIALLY TRUE for a pure marker, and written down anyway. The sibling
++/// `SetRestSleepPendingRefund` test carries the same name because this is the invariant
++/// that forces an Instruction variant rather than a bare mutation, and the next person to
++/// add a marker will not know which of the two cases they are in. If someone later gives
++/// this variant a state effect -- the obvious "while I am here" edit, since the reason field
++/// invites reading it back -- the no-op reverse arm stops being an inverse and this says so.
++#[test]
++fn immobilization_marker_apply_then_reverse_is_bit_identical() {
++    for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
++        let mut state = State::default();
++        let before = state.serialize();
++        let instruction = Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++            side_ref: SideReference::SideOne,
++            reason,
++        });
++        state.apply_one_instruction(&instruction);
++        state.reverse_instructions(&vec![instruction]);
++        assert_eq!(
++            state.serialize(),
++            before,
++            "reverse must restore bit-identically for {:?}",
++            reason
++        );
++    }
++}
++
++/// APPLY ALONE must not move the state either, which is the half the apply-then-reverse
++/// test cannot see: a mutation with a matching inverse would pass that test while changing
++/// the leaf distribution the search prices, because the immobilized branch would stop being
++/// an empty delta.
++///
++/// This is the assertion the sibling refund test writes as `assert_ne!` -- the two markers
++/// differ in exactly this direction, so the pin has to be inverted rather than copied.
++#[test]
++fn immobilization_marker_apply_alone_does_not_change_the_state() {
++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
++        for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
++            let mut state = State::default();
++            let before = state.serialize();
++            state.apply_one_instruction(&Instruction::MoveImmobilized(
++                MoveImmobilizedInstruction { side_ref, reason },
++            ));
++            assert_eq!(
++                state.serialize(),
++                before,
++                "the marker must be a pure no-op on apply for {:?}/{:?}",
++                side_ref,
++                reason
++            );
++        }
++    }
++}
++
++/// The marker must be DISTINGUISHABLE from the empty delta it annotates, from the other
++/// side's marker, and from the OTHER REASON. That last one is the whole mechanism:
++/// `combine_duplicate_instructions` merges branches with equal instruction lists, so two
++/// immobilizers sharing one marker value would collapse right back into the ambiguity this
++/// patch exists to remove.
++#[test]
++fn immobilization_markers_are_distinguishable_from_each_other_and_from_nothing() {
++    let attract = vec![attract_marker(SideReference::SideOne)];
++    assert_ne!(attract, Vec::<Instruction>::new());
++    assert_ne!(attract, vec![attract_marker(SideReference::SideTwo)]);
++    assert_eq!(attract, vec![attract_marker(SideReference::SideOne)]);
++    assert_ne!(
++        attract,
++        vec![Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++            side_ref: SideReference::SideOne,
++            reason: ImmobilizeReason::Paralysis,
++        })],
++        "Attract and paralysis must not compare equal, or the engine merges them again"
+     );
+ }
++
++/// END TO END: both immobilizers mark their own branch, and the masses prove the ORDER.
++///
++/// Showdown resolves attract's onBeforeMove at priority 2 and paralysis at 1, so attract is
++/// rolled FIRST at 1/2 and paralysis only on the surviving half at 1/4 -> 1/8 overall.
++#[test]
++fn both_gen3_immobilizers_mark_their_branch_with_their_own_reason() {
++    let mut state = State::default();
++    state
++        .side_one
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++    state
++        .side_two
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
++    state
++        .side_one
++        .volatile_statuses
++        .insert(PokemonVolatileStatus::ATTRACT);
++    state.side_one.get_active().status = PokemonStatus::PARALYZE;
++
++    let branches = generate_instructions_with_state_assertion(
++        &mut state,
++        &MoveChoice::Move(PokemonMoveIndex::M0),
++        &MoveChoice::Move(PokemonMoveIndex::M0),
++    );
++    let mass = |reason: ImmobilizeReason| -> f32 {
++        branches
++            .iter()
++            .filter(|b| {
++                b.instruction_list.iter().any(|i| matches!(i,
++                    Instruction::MoveImmobilized(m)
++                        if m.reason == reason && m.side_ref == SideReference::SideOne))
++            })
++            .map(|b| b.percentage)
++            .sum()
++    };
++    assert!(
++        (mass(ImmobilizeReason::Attract) - 50.0).abs() < 1e-3,
++        "attract is rolled first at 1/2: {:?}",
++        branches
++    );
++    assert!(
++        (mass(ImmobilizeReason::Paralysis) - 12.5).abs() < 1e-3,
++        "paralysis is rolled on the surviving half at 1/4: {:?}",
++        branches
++    );
++    // Every marker is TERMINAL in its branch, which is what makes the renderer's
++    // post-prelude tail exactly `[marker]`.
++    for branch in &branches {
++        if let Some(position) = branch
++            .instruction_list
++            .iter()
++            .position(|i| matches!(i, Instruction::MoveImmobilized(_)))
++        {
++            assert_eq!(
++                position,
++                branch.instruction_list.len() - 1,
++                "the marker must close the branch: {:?}",
++                branch
++            );
++        }
++    }
++}

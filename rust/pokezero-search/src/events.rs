@@ -59,7 +59,7 @@ use poke_engine::engine::generate_instructions::{
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::instruction::{
-    BoostInstruction, ChangeStatusInstruction, DamageInstruction, Instruction,
+    BoostInstruction, ChangeStatusInstruction, DamageInstruction, ImmobilizeReason, Instruction,
     StateInstructions,
 };
 use poke_engine::state::{
@@ -413,16 +413,16 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "shape_length",
     "shape_empty",
     "shape_no_candidates",
-    // attract. These are the tokens after the tag, so `attract` itself is NOT one --
-    // an earlier version listed it, which was an entry no path can emit, while
-    // `volatile`, which attract DOES emit, was missing and passed only by coincidence
-    // through `UNRENDERABLE_FAMILY_ORDER`. If the attract path is ever moved onto this
-    // helper, the pre-added entry would have been the wrong one.
-    "cannot_act",
-    "miss",
-    "noop",
-    "paralyzed",
-    "volatile",
+    // attract: DEREGISTERED. `cannot_act`, `miss`, `noop`, `paralyzed` and `volatile` were
+    // the five sub-case tokens of `attract_empty_tail_ambiguous`, and that whole class is
+    // gone -- the engine now marks both move-time immobilizers, so an empty tail is
+    // provably not an immobilization and there is nothing left to refuse. Removed by the
+    // same rule that removed `heal` and `substitute`: a token belongs here only if some arm
+    // can emit it, and this vocabulary's value is being a closed, greppable set.
+    //
+    // `volatile` is NOT lost -- it is still registered in `UNRENDERABLE_FAMILY_ORDER`, which
+    // `assert_subcase_vocabulary` also accepts, and the sleeptalk family path still emits
+    // it. The other four had no other producer.
     // the `heal` sub-cases. PREFIXED for the same reason the `shape_*` tokens are: this
     // vocabulary is shared across every lossy tag and `assert_subcase_vocabulary` validates
     // per token with no tag scoping, so registering bare `drain` or `defender` would weaken
@@ -897,12 +897,23 @@ fn instruction_side(ins: &Instruction) -> Option<SideReference> {
         Instruction::ChangeSpecialAttack(i) => i.side_ref,
         Instruction::ChangeSpecialDefense(i) => i.side_ref,
         Instruction::ChangeSpeed(i) => i.side_ref,
-        // pokezero gen3 fidelity fix (Attract immobilization attribution). Added
-        // here for the same reason `SetRestSleepPendingRefund` was: the catch-all
-        // below returns `None`, and an unattributable instruction breaks the
-        // prelude/segment walks that ask which side an instruction belongs to.
-        // Bookkeeping only -- the public line it licenses is emitted by the
-        // dedicated arm in `render_move_phase`, not by these walks.
+        // pokezero gen3 fidelity fix (immobilization markers). The catch-all below
+        // returns `None`, i.e. "this instruction belongs to no side", and a marker
+        // does belong to one -- the side whose action it aborted.
+        //
+        // THE REAL CALLERS, named because the first version of this comment said
+        // "the prelude/segment walks" and that is FALSE: `consume_move_prelude` never
+        // calls this function. The two callers are the MISS-INFERENCE predicate
+        // (`defender_affected`, which asks whether any tail instruction touched the
+        // defender) and the `NoneMatchedShape` diagnostic (`divergence_shape`, which
+        // compares per-instruction sides between a candidate branch and the tail).
+        //
+        // Neither can currently observe this arm: a marker is consumed and returned
+        // on far above the miss inference, and it cannot appear in a Sleep Talk callee
+        // tail at all. So the arm is pinned DIRECTLY, by
+        // `a_marker_is_attributed_to_the_side_whose_action_it_aborted`, rather than
+        // through a production path -- deleting it with only the end-to-end tests in
+        // place leaves the suite green.
         Instruction::MoveImmobilized(i) => i.side_ref,
         _ => return None,
     })
@@ -936,10 +947,18 @@ enum ImmobilizationMarker {
 fn move_immobilization_marker(
     tail: &[Instruction],
     side: SideReference,
-) -> Option<ImmobilizationMarker> {
+) -> Option<(ImmobilizationMarker, ImmobilizeReason)> {
     let position = tail.iter().position(|instruction| {
         matches!(instruction, Instruction::MoveImmobilized(marker) if marker.side_ref == side)
     })?;
+    let reason = match &tail[position] {
+        Instruction::MoveImmobilized(marker) => marker.reason,
+        // `position` came from the `matches!` above, so this is unreachable. Written
+        // as an explicit panic rather than a silent default because a default would
+        // pick a `|cant|` REASON TAG, and the tag is a different action id
+        // downstream -- `public_action_capture.py` keys `cant:{reason}`.
+        other => unreachable!("marker search returned a non-marker: {other:?}"),
+    };
     // `tail.len() == 1` rather than `position == tail.len() - 1`: a marker that is LAST but
     // preceded by instructions is exactly the case that must refuse, so "is it last" is the
     // wrong question. Both conditions are written out because `position == 0` alone would
@@ -947,9 +966,24 @@ fn move_immobilization_marker(
     // holding some other side's marker -- which `position` has already excluded, but the
     // pair is what makes that independent of the search above.
     if tail.len() == 1 && position == 0 {
-        Some(ImmobilizationMarker::Terminal)
+        Some((ImmobilizationMarker::Terminal, reason))
     } else {
-        Some(ImmobilizationMarker::NotTerminal)
+        Some((ImmobilizationMarker::NotTerminal, reason))
+    }
+}
+
+/// The `|cant|` reason tag Showdown prints for each marked immobilizer.
+///
+/// A total match with NO catch-all, on purpose. The tag is not cosmetic:
+/// `src/pokezero/public_action_capture.py` builds `event_id = f"cant:{reason}"`, so
+/// `cant:Attract` and `cant:par` are DIFFERENT public action ids, and
+/// `public_replay_materializer.py` gates on a closed reason set. A wrong tag is a wrong
+/// action, not a cosmetic slip, so a new `ImmobilizeReason` must fail to compile here
+/// rather than fall through to a plausible-looking default.
+fn immobilize_cant_reason(reason: ImmobilizeReason) -> &'static str {
+    match reason {
+        ImmobilizeReason::Attract => "Attract",
+        ImmobilizeReason::Paralysis => "par",
     }
 }
 
@@ -1681,13 +1715,45 @@ fn consume_move_prelude(
     // Asleep with no wake/sleep-talk instructions at all: the engine's
     // "still asleep" branch when chance_to_wake == 0 emits SetSleepTurns, but
     // a rest sleep at 0 pp etc. may reach here with an empty tail.
-    if pre_status == PokemonStatus::SLEEP && !sleep_gate_seen && segment[*cursor..].is_empty() {
+    //
+    // "EMPTY" MUST TOLERATE AN IMMOBILIZATION MARKER, or the markers fabricate a
+    // protocol line here. At `chance_to_wake == 0.0` with a non-`sleepUsable` move the
+    // engine pushes the real "still asleep" outcome to `final_instructions` and then
+    // zeroes `incoming`'s mass WITHOUT waking the Pokemon and WITHOUT clearing
+    // `reaches_confusion_handler` -- so a ZERO-MASS phantom branch flows on into the
+    // Attract roll with the mon still asleep, and comes back carrying a marker. Before
+    // the markers that branch was an empty delta and landed here as `|cant|..|slp`,
+    // which is right; with a marker in the way this check missed and the marker arm in
+    // `render_move_phase` emitted `|cant|..|Attract` instead.
+    //
+    // That line CANNOT EXIST. Showdown gen3's `slp.onBeforeMove` returns FALSE for a
+    // non-`sleepUsable` move, which short-circuits the whole BeforeMove chain, so
+    // attract's handler (priority 2) never runs on a turn the sleep gate blocked. The
+    // mass is 0.0, but `branch_render_is_usable` allowlists this branch's lossy set and
+    // `sample_branch_index` can still land on a zero-weight branch, so a fabricated
+    // line in a searched world was reachable. Deferring to the sleep gate -- rather than
+    // refusing -- restores exactly the pre-marker render.
+    //
+    // The engine-side zero-mass phantom is a SEPARATE pre-existing defect (it also
+    // advances the confusion counter on a turn Showdown never reaches) and is left
+    // alone here: gating it needs `reaches_confusion_handler` to change, which moves
+    // instruction lists on branches this change has no business touching.
+    let remainder_is_only_immobilization_markers = segment[*cursor..]
+        .iter()
+        .all(|ins| matches!(ins, Instruction::MoveImmobilized(_)));
+    if pre_status == PokemonStatus::SLEEP
+        && !sleep_gate_seen
+        && remainder_is_only_immobilization_markers
+    {
         let ident = ctx.active_ident(sim.state, side);
         out.lines.push(format!("|cant|{ident}|slp"));
         prelude.used_move = false;
         return prelude;
     }
-    if pre_status == PokemonStatus::FREEZE && !sleep_gate_seen && segment[*cursor..].is_empty() {
+    if pre_status == PokemonStatus::FREEZE
+        && !sleep_gate_seen
+        && remainder_is_only_immobilization_markers
+    {
         let ident = ctx.active_ident(sim.state, side);
         out.lines.push(format!("|cant|{ident}|frz"));
         prelude.used_move = false;
@@ -1870,75 +1936,89 @@ fn render_move_phase(
         out.lines.push(format!("|-activate|{ident}|confusion"));
     }
 
-    // ATTRACT IMMOBILIZATION, read off the engine's marker instead of guessed.
+    // MOVE-TIME IMMOBILIZATION, read off the engine's marker instead of guessed.
     //
-    // `Instruction::MoveImmobilized` is the gen3 attract-marker patch's whole
-    // point: the immobilized branch used to be an empty-delta clone, so it was
-    // BYTE-IDENTICAL to the fully-paralyzed branch and this renderer refused the
-    // world rather than invent an attribution (`attract_empty_tail_ambiguous`,
-    // measured at ~46% of the remaining search-fallback residue). With the marker
-    // the branch names its own cause and no inference is required.
+    // `Instruction::MoveImmobilized` is the gen3 attract-marker patch's whole point.
+    // Both gen3 immobilizers that abort a move produce an EMPTY delta -- "the move did
+    // not happen" has no state representation -- so the Attract branch and the
+    // fully-paralyzed branch used to be BYTE-IDENTICAL. This renderer could not name
+    // the cause: it refused the attracted case (`attract_empty_tail_ambiguous`) and
+    // GUESSED the paralyzed one on a probability-mass argument. Now each branch names
+    // itself and neither inference is needed.
+    //
+    // BOTH REASONS ARE MARKED, and marking only one would have been pointless:
+    // `reject_attribution_unsafe` aborts the WHOLE WORLD rather than the branch, so an
+    // unmarked paralysis sibling kept every attracted world falling back. That is the
+    // review finding that shaped this arm -- two refusing branches became one and the
+    // fallback rate did not move.
     //
     // POSITION IS LOAD-BEARING, three ways:
     //
-    //   * BEFORE the Sleep Talk block below. Showdown resolves `attract`'s
-    //     onBeforeMove at priority 2, i.e. before the move is used at all, so an
-    //     immobilized Sleep Talk click emits NO `|move|...|sleeptalk|` line. It is
-    //     also the trap: the sleep-talk unnamed-callee walk ends in a bare
-    //     `else { sim.apply(instruction) }`, and the marker has no state effect, so
-    //     that fall-through would render NOTHING and swallow the marker in silence
-    //     -- the fix would fail with the entire suite green.
-    //     `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk` is
-    //     the pin; moving this block below the Sleep Talk block turns it red.
-    //   * BEFORE `has_any_effect` is computed further down as `!tail.is_empty()`.
-    //     A marker makes the tail NON-empty, so every `!has_any_effect` predicate
-    //     below -- the attract refusal, the `|cant|..|par|` arm, the deterministic
-    //     no-effect renders -- would flip and the branch would render as a MOVE
-    //     THAT HAPPENED.
-    //   * AFTER the confusion activation above. Confusion is priority 3, so its
-    //     `|-activate|` precedes the attract `|cant|` on the same turn.
+    //   * BEFORE the Sleep Talk block below. Showdown resolves attract's onBeforeMove
+    //     at priority 2 -- before the move is used at all -- so an immobilized Sleep
+    //     Talk click emits NO `|move|...|sleeptalk|` line. It is also the trap: the
+    //     sleep-talk unnamed-callee walk ends in a bare `else { sim.apply(instruction) }`
+    //     and a pure marker has no state effect, so that fall-through renders NOTHING
+    //     and swallows the marker in silence -- the fix would fail with the suite green.
+    //     `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk` is the
+    //     pin; moving this block below the Sleep Talk block turns it red.
+    //   * BEFORE `has_any_effect` is computed below as `!tail.is_empty()`. A marker
+    //     makes the tail non-empty, so every `!has_any_effect` predicate below would
+    //     flip and the branch would render as a MOVE THAT HAPPENED.
+    //   * AFTER the confusion activation above. Confusion is onBeforeMove priority 3
+    //     and both marked immobilizers are lower (attract 2, par 1), so its
+    //     `|-activate|` precedes the `|cant|` on the same turn.
+    //
+    // It is also AFTER `consume_move_prelude`, which is what stops it fabricating a
+    // line on a turn the sleep gate already blocked -- see the marker-tolerant
+    // "remainder is empty" check there, and why that branch can exist at all.
     //
     // TERMINAL-ONLY, and it refuses otherwise. The engine appends the marker last,
-    // after everything `before_move` may have pushed, and the prelude above has
-    // already consumed the bookkeeping it knows (PP, last-move, the sleep gate, the
-    // confusion counter). So the expected tail is exactly `[marker]`. A tail with
-    // anything ELSE left in it means the prelude broke on an instruction this
-    // renderer cannot express, and emitting only the `|cant|` line would silently
-    // drop it. Refusing there is a real change in the conservative direction: before
-    // the marker such a branch had a non-empty tail, missed the attract block
-    // entirely, and rendered a `|move|` line for a move that never happened.
+    // after everything `before_move` may have pushed, and the prelude has already
+    // consumed the bookkeeping it knows (PP, last-move, the sleep gate, the confusion
+    // counter). So the expected tail is exactly `[marker]`. Anything ELSE left in it
+    // means the prelude broke on an instruction this renderer cannot express, and
+    // emitting only the `|cant|` line would silently drop it. Refusing there is a
+    // change in the conservative direction: before the markers such a branch had a
+    // non-empty tail, missed the immobilizer paths entirely, and rendered a `|move|`
+    // line for a move that never happened.
     if called_tag.is_none() {
-        if let Some(marker) = move_immobilization_marker(tail, side) {
+        if let Some((marker, reason)) = move_immobilization_marker(tail, side) {
             let attacker_ident = ctx.active_ident(sim.state, side);
             if marker == ImmobilizationMarker::Terminal {
-                // Apply it for Sim bookkeeping symmetry: it is a no-op in the
-                // engine, but `Sim::apply` also records the instruction for the
-                // reverse in `finish`, and leaving one instruction of a consumed
-                // segment unrecorded is the kind of asymmetry that only shows up
-                // once someone gives the variant a state effect.
+                // Apply it for Sim bookkeeping symmetry: it is a no-op in the engine,
+                // but `Sim::apply` also records the instruction for the reverse in
+                // `finish`, and leaving one instruction of a consumed segment
+                // unrecorded is the kind of asymmetry that only shows up once someone
+                // gives the variant a state effect. KNOWN UNPINNED: deleting this call
+                // leaves the suite green, because a no-op's reverse is also a no-op.
                 sim.apply(&tail[0]);
-                // Telemetry-only, and UNCHANGED by this patch: the engine does not
-                // track WHO the mon is infatuated with, so Showdown's companion
-                // `|-activate|<ident>|move: Attract|[of] <source>` line stays
-                // unrenderable. The public action window (`cant:Attract`) is exact,
-                // which is why this is `mark_lossy` and not a refusal -- and why
-                // `engine_transition_differential.py` allowlists this exact tag in
-                // `_TELEMETRY_ONLY_LOSSY_MARKERS`. Do not add a NEW lossy tag on
-                // this path: that allowlist is an equality check on the tag SET and
-                // its file is byte-pinned by the certification lifecycle, so a new
-                // tag would make every marked branch unusable for matching.
-                out.mark_lossy("attract_immobilization_source_unknown");
-                out.lines.push(format!("|cant|{attacker_ident}|Attract"));
+                if reason == ImmobilizeReason::Attract {
+                    // Telemetry-only, and UNCHANGED by this patch: the engine does not
+                    // track WHO the mon is infatuated with, so Showdown's companion
+                    // `|-activate|<ident>|move: Attract|[of] <source>` line stays
+                    // unrenderable. The public action window (`cant:Attract`) is exact,
+                    // which is why this is `mark_lossy` and not a refusal -- and why
+                    // `engine_transition_differential.py` allowlists this exact tag in
+                    // `_TELEMETRY_ONLY_LOSSY_MARKERS`. Do not add a NEW lossy tag on
+                    // this path: that allowlist is an equality check on the tag SET and
+                    // its file is byte-pinned by the certification lifecycle, so a new
+                    // tag would make every marked branch unusable for matching.
+                    //
+                    // Paralysis gets NO tag: `|cant|<ident>|par` is the complete
+                    // Showdown line, so that render is exact and not lossy at all.
+                    out.mark_lossy("attract_immobilization_source_unknown");
+                }
+                let tag = immobilize_cant_reason(reason);
+                out.lines.push(format!("|cant|{attacker_ident}|{tag}"));
             } else {
-                // `mark_attribution_unsafe`, not the sub-case helper: this shares
-                // the attract path's plain-reason channel (no vocabulary check),
-                // and it is a DIFFERENT class from `attract_empty_tail_ambiguous`
-                // -- that slug means "the tail is empty and several immobilizers
-                // explain it", this one means "the marker fired but the tail also
-                // carries something unrenderable". Merging them would put an
-                // engine/renderer contract violation into a bucket the campaign
-                // reads as a known ambiguity.
-                out.mark_attribution_unsafe("attract_marker_tail_not_terminal");
+                // `mark_attribution_unsafe`, not the sub-case helper: this is a
+                // DIFFERENT class from the old `attract_empty_tail_ambiguous` -- that
+                // slug meant "the tail is empty and several immobilizers explain it",
+                // this one means "a marker fired but the tail also carries something
+                // unrenderable", i.e. an engine/renderer contract violation rather than
+                // a known ambiguity.
+                out.mark_attribution_unsafe("immobilization_marker_tail_not_terminal");
                 for instruction in tail {
                     sim.apply(instruction);
                 }
@@ -2642,28 +2722,6 @@ fn render_move_phase(
             .as_ref()
             .map_or(false, |boost| !boost_would_apply(sim.state, side, boost));
     let capped_boost_move = self_target && boost_has_no_effect;
-    // Most volatile moves have move-specific no-op paths (failed Protect,
-    // no eligible Encore target, an already-present volatile). Substitute is
-    // the one pure volatile whose public pre-state proves an executed move
-    // would change state, so it remains a sound Attract immobilization cue.
-    let volatile_empty_tail_ambiguous = !has_any_effect
-        && choice.volatile_status.as_ref().map_or(false, |volatile| {
-            if volatile.volatile_status != PokemonVolatileStatus::SUBSTITUTE {
-                return true;
-            }
-            let target = match &volatile.target {
-                MoveTarget::User => side,
-                MoveTarget::Opponent => defender,
-            };
-            let target_side = sim.state.get_side_immutable(&target);
-            !target_side
-                .get_active_immutable()
-                .volatile_status_can_be_applied(
-                    &volatile.volatile_status,
-                    &target_side.volatile_statuses,
-                    choice.first_move,
-                )
-        });
     // A pure side-condition move whose condition is at CAP (spikes: 3
     // layers; screens/safeguard/mist: 1) fails with the real protocol's
     // blank-target form: `|move|..|Spikes||[still]` + `|-fail|user`
@@ -2683,186 +2741,52 @@ fn render_move_phase(
             };
             side_condition_value(sim.state, target_side, sc.condition) >= cap
         });
-    // Empty tails need two independent predicates. The same engine delta can
-    // represent an immobilizer OR a successful move that left no state change.
-    // Full paralysis has a documented probability-based tie break; Attract
-    // does not, so the latter must reject rather than invent either action.
-    let deterministic_noop = (defender_protected && choice.flags.protect)
-        || (is_damaging && effectiveness == 0.0)
-        || (is_damaging && absorb.is_some())
-        || ability_immune.is_some()
-        || status_fail
-        || status_type_immune
-        || boost_has_no_effect
-        || side_condition_fail;
-    let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
-    let move_could_act = is_damaging
-        || choice.status.is_some()
-        || (choice.heal.is_some() && attacker_hp < attacker_maxhp)
-        || choice.volatile_status.is_some()
-        || choice.side_condition.is_some()
-        || choice.boost.is_some();
-    let empty_tail_can_be_accuracy_miss = choice.target == MoveTarget::Opponent
-        && !status_fail
-        && !non_ghost_curse
-        && ability_immune.is_none()
-        && effectiveness > 0.0
-        && choice.accuracy < 100.0;
-
-    // Full paralysis: the engine merges the 25% fully-paralyzed branch with
-    // any same-delta branch (notably the miss branch). When the empty delta
-    // is not deterministically explained and the move WOULD have acted, the
-    // paralysis outcome carries the larger probability mass — render
-    // |cant|..|par| (documented ambiguity: a real miss renders identically).
-    let attacker_paralyzed = {
-        let s = match side {
-            SideReference::SideOne => &sim.state.side_one,
-            SideReference::SideTwo => &sim.state.side_two,
-        };
-        s.get_active_immutable().status == PokemonStatus::PARALYZE
-    };
-    let attacker_attracted = {
-        let s = match side {
-            SideReference::SideOne => &sim.state.side_one,
-            SideReference::SideTwo => &sim.state.side_two,
-        };
-        s.volatile_statuses
-            .contains(&PokemonVolatileStatus::ATTRACT)
-            && s.get_active_immutable().ability != Abilities::OBLIVIOUS
-    };
-
-    // WHAT REACHES HERE CHANGED with the attract-marker patch, and the old reading
-    // of this block is now WRONG: an Attract-immobilized branch carries
-    // `Instruction::MoveImmobilized` and RETURNED far above, before
-    // `has_any_effect` was even computed. So every branch that arrives here is one
-    // where Attract did NOT immobilize -- the marker's absence is proof, not an
-    // inference -- and the mon merely happens to be attracted.
+    // FOUR PREDICATES DELETED HERE, not merely unused: `volatile_empty_tail_ambiguous`,
+    // `deterministic_noop`, `move_could_act` and `empty_tail_can_be_accuracy_miss`
+    // existed ONLY to decide the two empty-tail immobilizer inferences below, and both
+    // inferences are gone now that the engine marks its immobilizers. Their inputs
+    // (`status_fail`, `status_type_immune`, `boost_has_no_effect`, `side_condition_fail`,
+    // `capped_boost_move`, `defender_protected`, `absorb`, `ability_immune`) are all
+    // still live and still read directly by the deterministic no-effect renders and the
+    // miss inference below, which is where an empty tail is now handled with no
+    // reference to the attacker's status at all.
     //
-    // The refusal STAYS anyway, deliberately, and this is the "remove the ambiguity,
-    // do not force a render" half of that patch. What is left is an empty tail that
-    // can still be full paralysis, an accuracy miss, or a deterministic no-op, and
-    // the marker says nothing about which. Those are the same three the unattracted
-    // path resolves with a documented probability guess further down; extending that
-    // guess to a new population is a SEPARATE decision with its own measurement, and
-    // keeping the refusal here is what keeps the remainder countable under an
-    // UNCHANGED sub-case slug so era-over-era sums still work.
+    // Left as a deletion rather than `let _ =`: a predicate kept alive for no reader is
+    // how the next person concludes the inference is still there.
+
+    // BOTH EMPTY-TAIL IMMOBILIZER INFERENCES ARE GONE, and their removal is the half
+    // of the attract-marker change that actually reclaims worlds.
     //
-    // An empty tail is only evidence of immobilization when the selected move
-    // could otherwise change state and no deterministic no-op/miss explains
-    // the same endpoint. Protect, immunity, misses, capped boosts/statuses,
-    // capped side conditions, and intrinsically no-effect moves therefore
-    // fail closed: rendering either |cant| or |move| would invent attribution.
-    if attacker_attracted && !has_any_effect && called_tag.is_none() {
-        if deterministic_noop
-            || volatile_empty_tail_ambiguous
-            || empty_tail_can_be_accuracy_miss
-            // Full paralysis. This used to read "Attract resolves before full
-            // paralysis, but the engine merges their identical empty endpoints",
-            // which the marker has made false: the two endpoints are no longer
-            // identical, so this predicate no longer means "it might have been
-            // Attract". It now means the residual par-vs-miss ambiguity, which is
-            // real and unresolved.
-            || attacker_paralyzed
-            || !move_could_act
-        {
-            // Name WHICH ambiguity refused, not just that one did. The five
-            // predicates are function-local and were discarded at the refusal, so
-            // no artifact recorded the split and no script could recover it --
-            // which left the only available plan "patch the engine and hope".
-            //
-            // The split decides the fix, and the two answers are far apart. If
-            // `paralyzed` dominates, this is downgradeable to lossy in a few
-            // lines: both outcomes are "no move used, no reveal, no PP", Attract
-            // dominates 4:1 (50% vs 12.5%), and that is a WIDER margin than the
-            // par-over-miss guess this renderer already ships. If the noop/miss
-            // arms dominate it is not downgradeable at any price -- those erase a
-            // `|move|` reveal, and the miss arm also suppresses a PP decrement the
-            // fold tracks -- and only then is an engine marker instruction worth
-            // its patch-stack and digest cost.
-            //
-            // Emit EVERY live predicate, not the first match. They are not
-            // mutually exclusive, and a first-match bucket answers the wrong
-            // question in the expensive direction: `attacker_paralyzed` is a
-            // property of the ATTACKER while `miss`/`noop` are properties of the
-            // MOVE, so they co-occur freely, and testing paralysis first hides
-            // the non-downgradeable arms inside the one bucket that looks safe
-            // to downgrade.
-            //
-            // Measured on the fork masses (`ATTRACT_IMMOBILIZE_CHANCE` 1/2, then
-            // the 0.25 paralysis roll on the surviving half):
-            //   clean paralyzed-only      attract .500 / par .125          -> 80/20
-            //   paralyzed + Thunder       + miss .1125                     -> 15.3% miss
-            //   paralyzed + immune target + noop .375                      -> 37.5% noop
-            // The contamination is unrecoverable once collapsed, so a
-            // `paralyzed`-dominant read would say "ship the lossy downgrade"
-            // while a third of that mass is the case that erases a `|move|`
-            // reveal. Emitting the joint set keeps the probe able to answer its
-            // own question, and the realized cardinality is small (~8).
-            //
-            // Order within the slug is FIXED, not predicate-evaluation order, so
-            // the key is stable across runs and aggregators can sum it.
-            let mut parts: Vec<&str> = Vec::new();
-            if attacker_paralyzed {
-                parts.push("paralyzed");
-            }
-            if empty_tail_can_be_accuracy_miss {
-                parts.push("miss");
-            }
-            if deterministic_noop {
-                parts.push("noop");
-            }
-            if volatile_empty_tail_ambiguous {
-                parts.push("volatile");
-            }
-            if !move_could_act {
-                parts.push("cannot_act");
-            }
-            // Unreachable: the enclosing `if` fired, so at least one predicate is
-            // live. Named rather than silently empty so a future edit that breaks
-            // that correspondence is visible in the measurement.
-            if parts.is_empty() {
-                parts.push("unclassified");
-            }
-            out.mark_attribution_unsafe(&format!(
-                "attract_empty_tail_ambiguous:{}",
-                parts.join("+")
-            ));
-            return;
-        }
-        // UNREACHABLE while the engine emits the marker, and kept as the
-        // PRE-MARKER DEGRADATION PATH rather than deleted.
-        //
-        // Reaching it needs an attracted mon, an empty tail, and not one of the five
-        // predicates above -- which post-marker means "Attract did not immobilize,
-        // yet nothing explains the empty tail". No gen3 branch produces that: the
-        // immobilized branch returns above with `[marker]`, and an executed move
-        // that leaves no delta always trips one of the predicates. Mutation
-        // confirms: deleting the engine's marker push turns this back into the live
-        // path and the marker tests go red, which is the signal that matters.
-        //
-        // Deliberately NOT converted to a refusal. This repo has lost an era to a
-        // patch stack silently drifting between its two builders (see the header of
-        // `third_party/poke-engine-gen3-patches.txt`); if the marker ever stops
-        // arriving, this restores exactly the behaviour that shipped before it
-        // instead of refusing every attract world. No new lossy tag either -- see
-        // the marker arm on why a second tag would make these branches unusable to
-        // the differential.
-        //
-        // The action is uniquely immobilized, but the engine does not retain
-        // Attract's source/gender attribution. That omission is telemetry-only
-        // because the public action window itself is exact.
-        out.mark_lossy("attract_immobilization_source_unknown");
-        out.lines.push(format!("|cant|{attacker_ident}|Attract"));
-        return;
-    }
-
-    if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
-        if !deterministic_noop && move_could_act {
-            out.lines.push(format!("|cant|{attacker_ident}|par"));
-            return;
-        }
-    }
-
+    // What stood here:
+    //
+    //   * `attract_empty_tail_ambiguous` -- a REFUSAL. An attracted attacker with an
+    //     empty tail could be Attract, full paralysis, a miss or a deterministic no-op,
+    //     and the renderer would not pick. Because `reject_attribution_unsafe` aborts
+    //     the whole WORLD rather than the branch, every one of those worlds fell back.
+    //   * a `|cant|..|par|` GUESS -- rendered whenever a paralyzed attacker had an empty
+    //     tail that no deterministic no-op explained, justified by full paralysis
+    //     carrying more mass than a miss, with its own comment conceding "a real miss
+    //     renders identically".
+    //
+    // Both existed only because the two immobilizers had no state representation. They
+    // are now marked (`Instruction::MoveImmobilized`, consumed far above), so:
+    //
+    //   * an immobilized branch never reaches here -- it returned with its own exact
+    //     `|cant|` line;
+    //   * an empty tail that DOES reach here is provably NOT an immobilization, and the
+    //     deterministic no-effect renders and the miss inference below -- which already
+    //     handle exactly this shape for an unattracted, unparalyzed attacker -- are
+    //     correct for it without any attract- or paralysis-specific special case.
+    //
+    // So the ambiguity is not being downgraded or guessed away; it stopped existing.
+    // The module docs' "the residual ambiguity is para-vs-miss only" note is settled the
+    // same way: the para branch is now separable, so a surviving empty tail on a
+    // sub-100%-accuracy move IS the miss.
+    //
+    // DO NOT reintroduce an `attacker_paralyzed`/`attacker_attracted` empty-tail arm
+    // here. Both reads are still available from the live state, and both are now
+    // ANTI-EVIDENCE: reaching this point with either status set means that immobilizer
+    // specifically did not fire.
     // Caller-invoked moves (Sleep Talk) render their explicit target even on
     // failure (measured; the [still] blanking does not apply to them).
     //
@@ -3781,7 +3705,7 @@ fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideRefer
 ///
 /// A `Boost` with a same-side `Switch` later in the tail is classified `boost` and the walk
 /// emits no line for it. Measured cost on the attribution oracle: ZERO searchable worlds --
-/// the tally is unchanged at (2614, 2377, 237, 0), because no corpus tail pairs the two.
+/// the tally is unchanged at (2720, 2483, 237, 0), because no corpus tail pairs the two.
 ///
 /// The first version of this block called that "failing closed", and argued that refusing is
 /// safe where rendering nothing would need a reachability premise. **Review showed that
@@ -6296,17 +6220,36 @@ mod tests {
         // together. Do not update one without the other.
         assert_eq!(
             (total_branches, agree, multi_label_unattributed, multi_label_refused),
-            // 221 -> 231 -> 237 usable, 16 -> 6 -> 0 unrenderable, across two changes: #1131
+            // MOVED DELIBERATELY by the immobilizer-marker change: branches 2614 -> 2720 and
+            // agree 2377 -> 2483, both +106, with usable and unrenderable UNCHANGED at 237/0
+            // and WRONG still 0. This is the change's own measurement and the reason it is
+            // recorded here rather than only in the PR.
+            //
+            // MECHANISM, verified by reverting just the paralysis push and watching the pin
+            // go back to 2614: several callees in this matrix (`bodyslam`, `thunder`)
+            // paralyse the DEFENDER, who then rolls full paralysis on its own ply. Its
+            // fully-paralyzed branch was an EMPTY delta, byte-identical to its same-delta
+            // sibling, so `combine_duplicate_instructions` MERGED the two into one branch --
+            // which is precisely why the renderer could not tell "no move happened" from "a
+            // move happened and changed nothing". Marking the immobilizer separates them:
+            // +106 branches, and all 106 land in `agree` because each now carries its own
+            // exact attribution. Nothing moved OUT of agree, which is the claim that matters.
+            //
+            // The deploy campaign's fallback ledger quotes the OLD pair. That row needs the
+            // same update; it lives outside this repo, so this comment is the handoff.
+            //
+            // 221 -> 231 -> 237 usable, 16 -> 6 -> 0 unrenderable, across two earlier
+            // changes: #1131
             // rendered the ten `[Boost]` tails, and the substitute break closes the last six
-            // `[DamageSubstitute, RemoveVolatileStatus]`. `branches`, `agree` and WRONG are
-            // UNCHANGED throughout, which is the claim that matters -- no attribution moved,
+            // `[DamageSubstitute, RemoveVolatileStatus]`. `branches`, `agree` and WRONG were
+            // UNCHANGED throughout those two, which is the claim that matters -- no attribution moved,
             // only the refuse-versus-count decision.
             //
             // `ambiguous_unrenderable` is therefore CLOSED for this corpus. It is not closed in
             // production: the corpus contains only the two shapes above, and the era-59 family
             // split exists precisely because the reachable surface is wider than the corpus
             // that ranked it.
-            (2614, 2377, 237, 0),
+            (2720, 2483, 237, 0),
             "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
              printed above, and the comment here on what else must be updated."
         );
@@ -7239,28 +7182,111 @@ mod tests {
         assert!(SUBCASE_VOCABULARY.contains(&"protect_marker_rendered"));
     }
 
-    /// The attract marker's TERMINAL/NON-TERMINAL split, pinned at the only seam where it
-    /// can be pinned.
+    /// A marker is attributed to the side whose action it aborted.
     ///
-    /// The renderer arm that consumes the marker is reachable only through `segment`, which
+    /// PINNED DIRECTLY because no production path can observe it. `instruction_side`'s two
+    /// callers are the miss-inference predicate and the `NoneMatchedShape` diagnostic, and a
+    /// marker is consumed and returned on before either runs -- so deleting the arm and
+    /// letting the catch-all answer `None` leaves every end-to-end test green. Review found
+    /// exactly that.
+    ///
+    /// `None` would mean "belongs to no side", which for a `|cant|` line's own instruction
+    /// is the one answer that could let a future caller credit the line to the wrong
+    /// Pokemon.
+    #[test]
+    fn a_marker_is_attributed_to_the_side_whose_action_it_aborted() {
+        for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+            for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
+                assert_eq!(
+                    instruction_side(&Instruction::MoveImmobilized(MoveImmobilizedInstruction {
+                        side_ref,
+                        reason,
+                    })),
+                    Some(side_ref),
+                    "{side_ref:?}/{reason:?} must be attributable, not fall to the catch-all"
+                );
+            }
+        }
+    }
+
+    /// `attribution_unsafe_label` dedupes AND sorts. RELOCATED, not deleted.
+    ///
+    /// This property was pinned end to end by
+    /// `a_two_sided_refusal_keys_canonically_and_fits_the_python_seam` in the renderer
+    /// suite, through a fixture where BOTH sides refused with different
+    /// `attract_empty_tail_ambiguous` sub-cases. That class no longer exists -- the
+    /// immobilizer markers closed it -- so the fixture cannot be rebuilt and the test
+    /// could not be updated. Pinning the function directly is strictly stronger anyway:
+    /// the old version depended on a state that happened to produce two refusals, and
+    /// review had already recorded that such a fixture "must produce two DIFFERENT
+    /// sub-case sets" as an assertion inside the test rather than a property of it.
+    ///
+    /// Both rules are load-bearing and both were real bugs review found:
+    ///
+    /// * SORT -- push order is RENDER order, which is SPEED order, so without it the same
+    ///   pair of reasons keyed two ways depending only on who moved first, splitting one
+    ///   `world_failure_reasons` measurement across two buckets and halving each.
+    /// * DEDUPE -- both sides refusing for the SAME reason is the common case, and the
+    ///   duplicate is pure length with no information in it.
+    ///
+    /// The length budget is pinned here too, mirroring `_REASON_DETAIL_LIMIT` in
+    /// `src/pokezero/engine_search.py`: that seam TRUNCATES, and a truncated key aliases
+    /// two different diagnoses into one bucket.
+    #[test]
+    fn the_attribution_unsafe_label_is_deduplicated_and_sorted() {
+        /// Mirror of `_REASON_DETAIL_LIMIT` in `src/pokezero/engine_search.py`.
+        const PY_REASON_DETAIL_LIMIT: usize = 512;
+
+        let mut out = RenderedEvents::default();
+        // Deliberately pushed in NON-alphabetical order, with a duplicate, which is
+        // exactly what two sides refusing produces.
+        out.mark_attribution_unsafe("segmentation_failed");
+        out.mark_attribution_unsafe("immobilization_marker_tail_not_terminal");
+        out.mark_attribution_unsafe("segmentation_failed");
+        let label = attribution_unsafe_label(&out);
+        assert_eq!(
+            label,
+            "immobilization_marker_tail_not_terminal,segmentation_failed",
+            "the label must be deduplicated and sorted, never render/speed order"
+        );
+
+        // Order of PUSHES must not change the key. This is the whole point of the sort.
+        let mut reversed = RenderedEvents::default();
+        reversed.mark_attribution_unsafe("immobilization_marker_tail_not_terminal");
+        reversed.mark_attribution_unsafe("segmentation_failed");
+        assert_eq!(attribution_unsafe_label(&reversed), label);
+
+        // ...and it fits the Python seam WITH the prefix that side prepends. The lane
+        // string varies; `tree/model fold` is the longest in use.
+        let full =
+            format!("attribution-unsafe renderer branch rejected before tree/model fold: {label}");
+        assert!(
+            full.len() <= PY_REASON_DETAIL_LIMIT,
+            "refusal message is {} chars, over the {PY_REASON_DETAIL_LIMIT}-char seam \
+             budget -- it would be truncated into a `world_failure_reasons` key: {full}",
+            full.len()
+        );
+    }
+
+    /// The marker's TERMINAL/NON-TERMINAL split and its REASON, pinned at the only seam
+    /// where they can be pinned.
+    ///
+    /// The renderer arm that consumes a marker is reachable only through `segment`, which
     /// prefix-matches against re-generated engine branches -- and the engine appends the
     /// marker LAST, after every instruction gen3's `before_move` can push, all of which
-    /// `consume_move_prelude` consumes. So `[marker, something]` is not constructible end to
-    /// end, the `NotTerminal` refusal is a FAIL-CLOSED guard rather than a live path, and
-    /// this classifier is the whole of what a test can reach.
+    /// `consume_move_prelude` consumes. So `[marker, something]` is not constructible end
+    /// to end, the `NotTerminal` refusal is a FAIL-CLOSED guard rather than a live path,
+    /// and this classifier is the whole of what a test can reach.
     ///
     /// Stated as a coverage limit rather than implied: mutating the refusal arm's BODY (the
-    /// `attract_marker_tail_not_terminal` reason, the `sim.apply` loop) survives the suite,
-    /// because nothing reaches it. Mutating this classifier does not -- collapsing it to
-    /// always-`Terminal`, dropping the `side_ref` match, or widening `tail.len() == 1` to
-    /// `position == tail.len() - 1` each fail here.
+    /// `immobilization_marker_tail_not_terminal` reason, the `sim.apply` loop) survives the
+    /// suite, because nothing reaches it. Mutating this classifier does not -- collapsing it
+    /// to always-`Terminal`, dropping the `side_ref` match, widening `tail.len() == 1` to
+    /// `position == tail.len() - 1`, or swapping the two `|cant|` tags each fail here.
     #[test]
-    fn the_attract_marker_is_classified_terminal_only_when_it_is_the_whole_tail() {
-        let marker = |side_ref| {
-            Instruction::MoveImmobilized(MoveImmobilizedInstruction {
-                side_ref,
-                reason: ImmobilizeReason::Attract,
-            })
+    fn a_move_immobilization_marker_is_classified_by_position_and_reason() {
+        let marker = |side_ref, reason| {
+            Instruction::MoveImmobilized(MoveImmobilizedInstruction { side_ref, reason })
         };
         let boost = Instruction::Boost(BoostInstruction {
             side_ref: SideReference::SideOne,
@@ -7268,48 +7294,55 @@ mod tests {
             amount: 1,
         });
 
-        // The shape the engine actually produces.
-        assert_eq!(
-            move_immobilization_marker(
-                std::slice::from_ref(&marker(SideReference::SideOne)),
-                SideReference::SideOne
-            ),
-            Some(ImmobilizationMarker::Terminal)
-        );
-
-        // Anything else in the tail refuses -- in BOTH orders, so the guard is "the marker
-        // is the whole tail" and not the weaker "the marker is last".
-        for tail in [
-            vec![marker(SideReference::SideOne), boost.clone()],
-            vec![boost.clone(), marker(SideReference::SideOne)],
-        ] {
+        for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
+            // The shape the engine actually produces.
             assert_eq!(
-                move_immobilization_marker(&tail, SideReference::SideOne),
-                Some(ImmobilizationMarker::NotTerminal),
-                "{tail:?} must refuse rather than render a bare |cant| and drop the rest"
+                move_immobilization_marker(
+                    std::slice::from_ref(&marker(SideReference::SideOne, reason)),
+                    SideReference::SideOne
+                ),
+                Some((ImmobilizationMarker::Terminal, reason)),
+                "{reason:?}"
+            );
+
+            // Anything else in the tail refuses -- in BOTH orders, so the guard is "the
+            // marker is the whole tail" and not the weaker "the marker is last".
+            for tail in [
+                vec![marker(SideReference::SideOne, reason), boost.clone()],
+                vec![boost.clone(), marker(SideReference::SideOne, reason)],
+            ] {
+                assert_eq!(
+                    move_immobilization_marker(&tail, SideReference::SideOne),
+                    Some((ImmobilizationMarker::NotTerminal, reason)),
+                    "{tail:?} must refuse rather than render a bare |cant| and drop the rest"
+                );
+            }
+
+            // SIDE is load-bearing: the other side's marker is not this side's cant line.
+            // Without the `side_ref` match a segmentation slip would credit the `|cant|`
+            // to the wrong Pokemon, the worst failure available for an attribution line.
+            assert_eq!(
+                move_immobilization_marker(
+                    std::slice::from_ref(&marker(SideReference::SideTwo, reason)),
+                    SideReference::SideOne
+                ),
+                None,
+                "{reason:?}"
             );
         }
 
-        // SIDE is load-bearing: the other side's marker is not this side's cant line.
-        // Without the `side_ref` match a segmentation slip would credit `|cant|..|Attract`
-        // to the wrong Pokemon, which is the worst failure available for an attribution line.
-        assert_eq!(
-            move_immobilization_marker(
-                std::slice::from_ref(&marker(SideReference::SideTwo)),
-                SideReference::SideOne
-            ),
-            None
-        );
-
         // No marker at all is the overwhelmingly common case and must stay untouched.
-        assert_eq!(
-            move_immobilization_marker(&[], SideReference::SideOne),
-            None
-        );
+        assert_eq!(move_immobilization_marker(&[], SideReference::SideOne), None);
         assert_eq!(
             move_immobilization_marker(std::slice::from_ref(&boost), SideReference::SideOne),
             None
         );
+
+        // THE TAGS, pinned exactly. `public_action_capture.py` keys public actions as
+        // `cant:{reason}`, so swapping these two is not a cosmetic slip -- it reports a
+        // different ACTION to everything downstream.
+        assert_eq!(immobilize_cant_reason(ImmobilizeReason::Attract), "Attract");
+        assert_eq!(immobilize_cant_reason(ImmobilizeReason::Paralysis), "par");
     }
 
     /// COVERAGE LIMIT, stated because the first version of this test overstated it. That
