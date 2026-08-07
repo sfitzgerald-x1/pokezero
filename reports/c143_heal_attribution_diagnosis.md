@@ -249,8 +249,10 @@ cells to it would have inflated its reach in the durable ledger.
 > since B.4 and its verdict C.2 live in `docs/`. **Refusing to cite an unopened label was the right
 > instinct; scoping the search to one directory and then reporting the result as a property of the repo
 > was the same error in a new costume** — a negative asserted more broadly than it was measured, in the
-> section about not asserting what you have not opened. Every one of the three had the right number and
-> the wrong mechanism, and every one was fixed by opening the file rather than reasoning about it.
+> section about not asserting what you have not opened. In all three the *substance* held — the path
+> comparison, the count of two, the refusal to cite blind — while the supporting mechanism or scope went
+> unverified; and all three were fixed by opening the file rather than reasoning about which answer must
+> apply.
 
 **The saturation claim is now a census, not a sample.** The matrix was re-run over the **whole
 14-roll band plus the off-fan shipping representative — 15 rows × 14 columns, 210 cells** — and
