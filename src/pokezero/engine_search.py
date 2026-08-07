@@ -508,6 +508,10 @@ _CAUSE_NO_ACTION_CANDIDATES = "no_action_candidates"
 _CAUSE_AGGREGATED_EMPTY = "aggregated_empty"
 _CAUSE_SWITCH_ONLY = "all_unmapped_switch_only"
 _CAUSE_LEGALITY_MISMATCH = "all_unmapped_legality_mismatch"
+
+#: Normalized ids for the crate's display of `MoveChoice::None` -- the engine's forced no-move.
+#: Showdown names the same forced action `recharge` in the request it sends for that turn.
+_ENGINE_FORCED_NO_MOVE_IDS = frozenset({"nomove", "none"})
 _CAUSE_NO_LEGAL_ACTION = "no_legal_action_offered"
 _CAUSE_NO_POSITIVE_WEIGHT = "mapped_but_no_positive_weight"
 _CAUSE_UNCLASSIFIED = "unclassified_cause"
@@ -1873,24 +1877,31 @@ class EngineMctsPolicy:
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
         observation_metadata = getattr(context.observation, "metadata", None)
 
-        # OUR OWN slot, from the same parser tracker. Until this existed the world was
-        # asymmetric: only the opponent could be locked, so a root world in which OUR active
-        # must recharge offered it every move in its moveset. The sim's own request offers
-        # exactly one (`recharge`), so search was choosing over actions the server would have
-        # rejected, and the encoder's self-side MUSTRECHARGE volatile was root-frozen because
-        # deriving it live would have contradicted a world that never carried it.
+        # OUR OWN slot, from the same parser tracker. Until this existed only the opponent could
+        # be locked.
+        #
+        # CORRECTED after review, because the obvious rationale is wrong and was asserted in
+        # three places: the old world did NOT let our recharging mon pick any move. Showdown sets
+        # `trapped: true` on a recharge request, so `engine_world` rejected these worlds outright
+        # as `self_request_state_unsupported` and search FAILED CLOSED to the fallback. The real
+        # effect of the asymmetry was that our recharge turns were UNSEARCHABLE, not mis-searched
+        # -- except in the rare sub-case where the foe independently traps us, where the request
+        # is accepted and the free-choice harm is real.
+        #
+        # It also forced leaf.rs to root-freeze the self-side MUSTRECHARGE volatile: deriving it
+        # live would have contradicted a world that never carried it.
         #
         # `self_must_recharge` is the same `must_recharge` tracker that feeds
         # `opponent_must_recharge`, published per seat, so this is one parser truth applied to
         # both sides rather than a second derivation that can disagree with the first. Measured
-        # on corpus/golden-v4: 1208 decision-row pairs where seat X's `self_must_recharge`
-        # equals seat Y's `opponent_must_recharge`, zero disagreements.
+        # on corpus/golden-v4: 1208 decision-row PAIRS (of 1295 rows; the rest have no partner
+        # row in the corpus) where seat X's `self_must_recharge` equals seat Y's
+        # `opponent_must_recharge`, zero disagreements.
         self_slot: tuple[str, ...] = ()
         if isinstance(observation_metadata, Mapping):
             if observation_metadata.get("self_must_recharge") is True:
                 self_slot = (context.player_id,)
 
-        if isinstance(observation_metadata, Mapping):
             tracked = observation_metadata.get("opponent_must_recharge")
             if tracked is True:
                 return self_slot + (opponent_slot,)
@@ -1898,23 +1909,29 @@ class EngineMctsPolicy:
                 # An explicit False from the tracker is a public PROOF of no lock, not an absent
                 # signal — do not let the weaker fallback manufacture one behind it.
                 return self_slot
-        if self_slot:
-            # The self side is settled by the tracker; the opponent side is not, so fall
-            # through to the reconstruction below and let it decide only the opponent. The
-            # fallback returns early in several places, so carry the self lock into each.
-            return self_slot + self._opponent_recharging_fallback(context, opponent_slot)
-        return self._opponent_recharging_fallback(context, opponent_slot)
+        # The self side is settled by the tracker; the opponent side is not, so fall through to
+        # the reconstruction and let it decide only the opponent. `self_slot` is () when we are
+        # not locked, so one expression covers both cases -- review found the guarded and
+        # unguarded forms were identical and one was dead.
+        #
+        # Prefixing HERE rather than inside the fallback is the point: that function has eleven
+        # early `return ()` statements, each meaning "no OPPONENT lock", and any one of them
+        # would otherwise silently drop our own. Pinned in
+        # tests/test_recharging_slots_symmetry.py, which review demonstrated was necessary --
+        # dropping the prefix left the entire suite green.
+        return self_slot + self._opponent_recharging_fallback(context, opponent_slot)
 
     def _opponent_recharging_fallback(
         self, context: PolicyContext, opponent_slot: str
     ) -> tuple[str, ...]:
         """The pre-tracker reconstruction, for observations whose metadata predates the pack.
 
-        Extracted verbatim from `_recharging_slots` when the self side became live: its several
-        early returns each meant "no OPPONENT lock", and once our own slot can also be locked
-        those returns must no longer be able to discard it. Keeping them here and prefixing the
-        self lock at the call site is what makes that structurally impossible, rather than a
-        thing to remember at eight separate return statements.
+        Extracted verbatim from `_recharging_slots` when the self side became live: its eleven
+        early `return ()` statements each meant "no OPPONENT lock", and once our own slot can
+        also be locked those returns must no longer be able to discard it. Keeping them here and
+        prefixing the self lock at the single call site is what removes the need to remember it
+        eleven times -- but structure is not a test, and review showed dropping the prefix left
+        the whole suite green, so it is pinned in tests/test_recharging_slots_symmetry.py.
 
         Strictly weaker than the tracker, never stronger, so it can only fail to add a lock.
         """
@@ -2210,6 +2227,20 @@ class EngineMctsPolicy:
                 if index is None and move_id.startswith("hiddenpower"):
                     # Engine ids are typed+BP; the request reports plain "hiddenpower".
                     index = hidden_power_index
+                if index is None and move_id in _ENGINE_FORCED_NO_MOVE_IDS:
+                    # The crate displays MoveChoice::None as "No Move" for a slot the engine has
+                    # locked -- a recharge turn is the case that reaches here. Showdown's request
+                    # for that turn offers exactly one candidate, and it is named `recharge`, so
+                    # the two vocabularies describe the same forced action under different names
+                    # and the lookup above misses.
+                    #
+                    # `depth_tactics_probe.py` already carried this translation ("No Move" ->
+                    # "none"); `_map_choices` never got it, so before this the decision fell to
+                    # `_fallback(..., "choices_unmapped")` -- a counter this file states at
+                    # :668-670 must be zero independently of the fallback rate, and with the cause
+                    # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
+                    # `_recharging_slots` went symmetric and these worlds started building at all.
+                    index = move_index_by_id.get("recharge")
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue

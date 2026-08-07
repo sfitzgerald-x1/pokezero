@@ -150,9 +150,11 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
 
     KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
     signal from the round-indexed public action record when the tracker key is ABSENT. This
-    returns `()` there instead. On corpus/golden-v4 the tracker is present on 1208 of 1295
-    decision rows; for the other 87 this is fail-open, which is also where production's own
-    fallback lands when the record is unavailable, but the two are not identical.
+    returns `()` there instead. On corpus/golden-v4 that fallback covers ZERO rows -- both
+    tracker keys are present on all 1295 decision rows -- so the divergence is unexercised here
+    rather than small. (An earlier version of this note said "present on 1208 of 1295"; 1208 is
+    the count of rows that have a PARTNER row for the cross-seat check, a different quantity.
+    Review caught the conflation.)
     """
     opponent = "p2" if seat == "p1" else "p1"
     if not isinstance(anchor_metadata, Mapping):

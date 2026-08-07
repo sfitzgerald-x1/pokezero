@@ -1311,8 +1311,12 @@ impl LeafContext {
         // STATUS UPDATE: both blockers named above are now cleared, and this freeze is the
         // remaining half. (1) _recharging_slots IS symmetric — it returns our own slot from the
         // parser's `self_must_recharge`, the same tracker that feeds the opponent side — so the
-        // production root world no longer lets our recharging mon pick any move, and deriving
-        // the self flag from volatile_statuses would no longer write `false` at depth 0. (2) The
+        // root world now carries the volatile and deriving the self flag from volatile_statuses
+        // would no longer write `false` at depth 0. (The comment this replaces said the old
+        // asymmetry "lets our recharging mon pick any move". Review falsified that: Showdown
+        // sets `trapped: true` on a recharge request, so engine_world rejected those worlds as
+        // `self_request_state_unsupported` and search failed CLOSED. Our recharge turns were
+        // unsearchable, not mis-searched.) (2) The
         // four gates no longer derive `recharging` from the recorded chosen candidate; they use
         // fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and
         // reads the tracker, so they can now CATCH a bad self-side write instead of ratifying

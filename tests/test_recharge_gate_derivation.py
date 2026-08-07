@@ -238,9 +238,10 @@ class TheFixedGateCatchesItTest(unittest.TestCase):
         """Recorded because it is a real divergence from production, not a design choice.
 
         Production reconstructs from the round-indexed public action record when the tracker key
-        is absent; this returns (). On corpus/golden-v4 the tracker is present on 1208 of 1295
-        decision rows, so the fallback covers 87. Fail-open matches where production's own
-        fallback lands when the record is unavailable, but the two are not identical.
+        is absent; this returns (). On corpus/golden-v4 both tracker keys are present on ALL 1295
+        decision rows, so this path covers zero of them -- unexercised rather than small. Fail-open
+        matches where production's own fallback lands when the record is unavailable, but the two
+        are not identical.
         """
         del self.decisions[("b", 7, "p2")]["observation_metadata"]["opponent_must_recharge"]
         self.assertNotIn("p1", self._fixed("p2"))
