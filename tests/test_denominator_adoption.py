@@ -265,6 +265,20 @@ class GuardsArePinnedTest(unittest.TestCase):
         passed. That is the SAME defect run_corpus already shipped once and that the comment
         four lines above the call exists to explain: a check placed above the loop that produces
         the values it checks. So the call must sit AFTER the loop, and must be passed `stats`.
+
+        THIS IS A CHANGE-DETECTOR, deliberately. Review confirmed four behaviour-preserving
+        refactors it rejects as false positives -- `dict(stats)`, `stats2 = stats`, `*[stats]`,
+        and appending any unrelated `for` loop below the call (which makes the lineno check
+        harder, not easier, and reports a misleading reason). The trade is accepted because the
+        thing it protects has been silently disarmed twice in this PR, and a false positive
+        costs one confused minute and a one-line edit. If you hit one, that is this comment, not
+        a bug.
+
+        KNOWN SURVIVOR, not chased: rebinding `stats = Counter()` on the line above the call
+        passes all five assertions while the guard inspects an empty counter. Closing it means
+        reasoning about dataflow, i.e. writing a static analyser inside a unit test. Unlike the
+        hoist above, it is not a line anyone writes by accident, and the corpus-driven tests
+        catch it twice. The honest boundary is source shape, not behaviour.
         """
         import ast
         import inspect
