@@ -67,7 +67,9 @@ per-**set** question, not a per-species one.
 ### 1.3 What was measured, and how to reproduce it
 
 All measurements are against the vendored Showdown at
-`/Users/scott/workspace/pokerena/vendor/pokemon-showdown`, commit `f76228a1354b5d0f307ca2d16101294ad3a2308b`.
+the vendored Showdown checkout (`$POKEZERO_SHOWDOWN_ROOT`, resolved by
+`pokezero.local_showdown.default_showdown_root`), commit
+`f76228a1354b5d0f307ca2d16101294ad3a2308b`.
 
 **Static pool census** (`data/random-battles/gen3/sets.json`):
 
