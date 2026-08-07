@@ -99,7 +99,9 @@ def _boot_identity() -> str:
     except Exception:
         node = ""
     if node:
-        return node
+        # Node-scoped on its own, which is exactly the failure this function was rewritten to fix,
+        # so it is never returned bare: the pid suffix keeps two agents on one host distinct.
+        return f"{node}-{os.getpid()}"
     # No hostname at all (a bare test harness): fall back to something unique to this process, and
     # never to a shared constant -- a shared owner is worse than an over-specific one, because it
     # lets one agent adopt and kill another's work.
@@ -278,6 +280,36 @@ def _kill_group(pgid: int | None) -> None:
         time.sleep(0.2)
 
 
+def requeue_untokened_claims(queue: Path) -> list[str]:
+    """Return claims that were renamed into claimed/ but never got a claim token.
+
+    A NARROW WINDOW WITH A LONG CONSEQUENCE. claim_next_request renames pending -> claimed and then
+    writes the token; an agent that dies between those two steps leaves a claim that nothing can
+    see. release_stale_claims iterates `*.claim.json`, so a tokenless claim is invisible to it, and
+    claim_next_request finds pending/ empty. The controller then waits out its full multi-hour
+    bound, dies, restarts, sees the service healthy and waits out another one -- without anything
+    ever training. Non-converging, though not corrupting.
+
+    Safe because exactly one agent exists per queue (the unified shape refuses more than one serving
+    replica), so a claim with no token can only be this pod's own abandoned partial. Writing the
+    token before the rename would also close the window, but this additionally REPAIRS state already
+    on disk, which the ordering change cannot.
+    """
+    pending, claimed, _, _ = _queue_dirs(queue)
+    recovered: list[str] = []
+    for request in sorted(claimed.glob("*.json")):
+        if request.name.endswith(".claim.json") or request.name.endswith(".claim.reaped.json"):
+            continue
+        if (claimed / f"{request.stem}.claim.json").exists():
+            continue
+        try:
+            os.rename(request, pending / request.name)
+            recovered.append(request.name)
+        except OSError:
+            continue
+    return recovered
+
+
 def release_stale_claims(queue: Path, owner: str) -> list[str]:
     """Return claims this pod previously owned to pending, and report what was released.
 
@@ -444,6 +476,8 @@ def serve_queue(
     """
     owner = owner or _boot_identity()
     _, claimed, done, failed = _queue_dirs(queue)
+    for name in requeue_untokened_claims(queue):
+        print(f"train-agent: requeued untokened claim {name}", flush=True)
     released = release_stale_claims(queue, owner)
     for name in released:
         print(f"train-agent: released own stale claim {name}", flush=True)

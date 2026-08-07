@@ -23,6 +23,7 @@ from pokezero.train_agent import (  # noqa: E402
     claim_next_request,
     _process_group_is_alive,
     record_running_trainer,
+    requeue_untokened_claims,
     release_stale_claims,
     run_training_attempt,
     serve_queue,
@@ -251,6 +252,50 @@ class TrainAgentRestartTest(unittest.TestCase):
                 except OSError:
                     pass
             del grandchild
+
+    def test_a_claim_whose_token_was_never_written_is_recovered(self) -> None:
+        """A narrow window with a long consequence, and one nothing else could see.
+
+        claim_next_request renames pending -> claimed and THEN writes the token. An agent that dies
+        between those two steps leaves a claim invisible to everything:
+        release_stale_claims iterates `*.claim.json` so it skips it, and claim_next_request finds
+        pending/ empty. The controller then waits out its full multi-hour bound, dies, restarts,
+        sees the service healthy and waits out another one -- with nothing training at all.
+
+        Not corrupting, but non-converging, which in a 4-iteration smoke reads as a stuck run.
+        """
+        with TemporaryDirectory() as root:
+            queue = Path(root) / "train-queue"
+            write_request(queue, 51, "true")
+            self.assertIsNotNone(claim_next_request(queue, "pod-a"))
+            # Simulate the crash: the claim exists, the token does not.
+            (queue / "claimed" / "train-0051.claim.json").unlink()
+
+            self.assertEqual(
+                release_stale_claims(queue, "pod-a"), [],
+                "a tokenless claim should be invisible to the token-based release path",
+            )
+            self.assertEqual(
+                requeue_untokened_claims(queue), ["train-0051.json"],
+                "the tokenless claim was not recovered, so the iteration is stranded",
+            )
+            self.assertTrue((queue / "pending" / "train-0051.json").exists())
+            # And it genuinely runs again rather than merely being moved.
+            self.assertEqual(serve_queue(queue, owner="pod-a", once=True), 1)
+
+    def test_the_sweep_leaves_properly_tokened_claims_alone(self) -> None:
+        """The dangerous direction: requeueing a claim that a live agent holds would put two
+        trainers on one checkpoint, which is the whole hazard class this design fights."""
+        with TemporaryDirectory() as root:
+            queue = Path(root) / "train-queue"
+            write_request(queue, 52, "true")
+            self.assertIsNotNone(claim_next_request(queue, "pod-a"))
+            self.assertEqual(
+                requeue_untokened_claims(queue), [],
+                "requeued a claim that still has its token, i.e. one an agent may be working",
+            )
+            self.assertFalse((queue / "pending" / "train-0052.json").exists())
+
 
     def test_the_forked_trainer_is_death_linked_to_the_agent(self) -> None:
         """PR_SET_PDEATHSIG, which closes the double-trainer at its source rather than papering
