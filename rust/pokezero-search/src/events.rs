@@ -311,17 +311,22 @@ impl RenderedEvents {
     ///   the key set for this class is the non-empty subsets of the REACHABLE token set.
     /// * This is therefore NOT "stronger than `'static`". `'static` restricted keys to
     ///   literals present in the source: finite, greppable, reviewable. The honest
-    ///   statement is that the ceiling rises from 1 key to 2^13 - 1 = 8,191, and
+    ///   statement is that the ceiling rises from 1 key to 2^17 - 1 = 131,071, and
     ///   that the REALIZED count is small because tails are short -- the oracle corpus
     ///   yields two (`boost`, `substitute+volatile`).
     ///
-    /// Note 13, not 14: `UNRENDERABLE_FAMILY_ORDER` has 14 entries but `unclassified` is
+    /// Note 17, not 18: `UNRENDERABLE_FAMILY_ORDER` has 18 entries but `unclassified` is
     /// emitted by NO classifier arm -- it is reachable only through the degradation below,
     /// itself unreachable while every arm's token is registered. Counting the order list
     /// instead of the reachable token set overstated this 2x in an earlier version, in the
     /// one comment block whose entire purpose is precision.
     ///
-    /// An 8k ceiling is a real cost, accepted because a class that was 51.6% of the abort
+    /// RECOUNT FROM THE ARRAY, never by adding to this number. It read "2^13 - 1 = 8,191,
+    /// 14 entries" while the array held 13, and the heal split then took it to 18 without
+    /// the arithmetic moving -- understating an explicitly ACCEPTED cost by 16x. Both
+    /// errors are the same one: treating this figure as prose rather than as a count.
+    ///
+    /// A 131k ceiling is a real cost, accepted because a class that was 51.6% of the abort
     /// channel could not be ranked at all as one key. It is bounded, greppable via the
     /// order list, and every token maps to a named renderer gap.
     ///
@@ -3252,7 +3257,7 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     //
     // ERA-OVER-ERA DRIFT, stated because the `boost` note above understated exactly this:
     // every key containing `heal` MOVES with this change, and unlike the `boost` case the
-    // volume is NOT zero -- era 61 measured 3,199. `ambiguous_unrenderable:heal` becomes
+    // volume is NOT zero -- era 61 measured 3,533. `ambiguous_unrenderable:heal` becomes
     // `…:heal_drain_or_shellbell` and friends, so an era-over-era diff keyed on the bare
     // token will read the old class as vanished and the new ones as novel. It is one class
     // being partitioned, and the SUM is the quantity that is comparable across the boundary.
@@ -3260,7 +3265,21 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     "heal_liquidooze",
     "heal_defender",
     "heal_drain_or_shellbell",
-    "heal",
+    "heal_zero_marker",
+    // `heal` is deliberately ABSENT, by the SAME rule that removed `substitute` below and
+    // that put `boost` back above: a token belongs here only if some classifier arm can
+    // emit it. After the sub-case split every reachable shape routes to a sub-case --
+    // negative Damage to `heal_paindmg`, negative Heal to `heal_liquidooze`, zero Heal to
+    // `heal_zero_marker`, defender heal to `heal_defender`, attacker heal with foe damage
+    // to `heal_drain_or_shellbell`, and attacker heal WITHOUT foe damage is admitted by
+    // `heal_is_a_direct_self_heal` before it ever reaches the classifier.
+    //
+    // The two `"heal"` returns that remain in `heal_subcase` are both unreachable
+    // fall-throughs. Leaving the token registered would have made
+    // `the_renderable_allowlist_is_exactly_what_it_was` demand a representative for a
+    // shape no input can produce. Unregistered, either fall-through degrades through
+    // `registered_family_or_unclassified` to a measurable `unclassified` bucket rather
+    // than panicking -- which is the whole reason that degradation exists.
     // `substitute` is deliberately ABSENT, for the same reason as `boost` and by the same
     // rule: `DamageSubstitute` was its ONLY producer and the walk now renders it, so the
     // token is dead weight in a vocabulary whose job is to be a closed, greppable set.
@@ -3503,8 +3522,8 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 
 /// Which SUB-CASE of the `heal` family a REFUSED HP-increase belongs to.
 ///
-/// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 partial: 3,199
-/// world failures, 25.0% of all world-failure classes) and it survived the partial close
+/// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 final, 64/64 shards:
+/// 3,533 world failures, 24.6% of all world-failure classes) and it survived the partial close
 /// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
 /// heal on the attacker with no foe damage -- so everything here is one of the three
 /// cases its doc block names, and the ranking cannot say which without this split.
@@ -3545,8 +3564,23 @@ fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> 
                 "heal"
             }
         }
-        // Zero-amount heals and any future producer. Deliberately NOT silent: the
-        // remainder stays rankable, which is what let this family be found at all.
+        // A ZERO-amount `Heal` is not a heal at all -- it is a BRANCH MARKER, and gen3
+        // emits it from two places on purpose:
+        //   * `gen3/generate_instructions.rs:3369` -- a PROTECT-blocked branch. Its own
+        //     comment: "Mark only the successful accuracy branch so protocol rendering
+        //     can emit Protect instead of collapsing both outcomes." Pushed on
+        //     `attacking_side.get_other_side()`, i.e. the DEFENDER.
+        //   * `gen3/generate_instructions.rs:1373` -- a full-HP absorb activation kept as
+        //     "a reversible no-op so event consumers can keep the public histories
+        //     distinct".
+        // The line the walk owes for the first is `|-activate|<target>|Protect`, NOT a
+        // `-heal`. Leaving these in the bare `heal` bucket would break this classifier's
+        // own rule -- grouped by PROTOCOL LINE, not by engine instruction kind -- and
+        // would mis-scope the very fix this split exists to aim. Review caught the first
+        // version of this arm doing exactly that, with a test pinning the mislabel.
+        Some(Instruction::Heal(heal)) if heal.heal_amount == 0 => "heal_zero_marker",
+        // Any future producer. Deliberately NOT silent: the remainder stays rankable,
+        // which is what let this family be found at all.
         _ => "heal",
     }
 }
@@ -6017,6 +6051,17 @@ mod tests {
                 "silent",
             ),
             (
+                // The bare `heal` REMAINDER. A heal-direction `Damage` on the DEFENDER is
+                // not Pain Split's own side and carries no sub-case of its own, so it
+                // reaches the fall-through -- which keeps a representative, or a mutation
+                // collapsing every sub-case back onto `heal` would pass.
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: -1,
+                }),
+                "heal_paindmg",
+            ),
+            (
                 // LIQUID OOZE: a NEGATIVE `Heal`, which the named path renders as
                 // `-damage`, not `-heal`. Blocked standalone, so it belongs here and
                 // not in `blocked_in_tail`.
@@ -6035,7 +6080,7 @@ mod tests {
                     side_ref: SideReference::SideOne,
                     heal_amount: 0,
                 }),
-                "heal",
+                "heal_zero_marker",
             ),
             (
                 // NOT `pp`: there is no `-pp` line in the protocol. `silent` says the
@@ -6103,6 +6148,27 @@ mod tests {
             ],
             1,
             "heal_drain_or_shellbell",
+        ),
+        (
+            // DRAIN AGAINST A SUBSTITUTE. Review's mutation DELETED the
+            // `DamageSubstitute` arm from `tail_damages_the_foe` and the whole suite
+            // stayed GREEN -- while that deletion flips this tail from refused to
+            // ADMITTED, making the walk emit a bare `|-heal|` for a drain. That is
+            // precisely the fabricated-`[from]`-tag harm `heal_is_a_direct_self_heal`
+            // exists to prevent, and it was the one clause the refactor's doc claimed to
+            // protect with nothing testing it.
+            vec![
+                Instruction::DamageSubstitute(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 25,
+                }),
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 30,
+                }),
+            ],
+            1,
+            "heal_drain_or_shellbell",
         )];
         // THE HEAL PREDICATE, pinned in all four directions it discriminates on. This family
         // is only PARTIALLY closed, and each clause is what keeps a mis-tagged `-heal` -- which
@@ -6134,6 +6200,31 @@ mod tests {
             Some("heal_defender"),
             "a heal on the DEFENDER is an absorb ability, not a direct heal"
         );
+        // ARM ORDER, pinned. A heal on the DEFENDER *with* foe damage in the tail must
+        // bucket as `heal_defender`, not as drain -- an absorb ability's line is an
+        // ABILITY reveal whatever else the tail did. NOT in `blocked_in_tail`, because
+        // that loop also asserts the instruction alone stays ADMITTED and a defender heal
+        // is refused standalone. Review's mutation swapped the two checks and the suite
+        // stayed green, since no other fixture carries both.
+        assert_eq!(
+            unrenderable_family_at(
+                &[
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount: 60,
+                    }),
+                    Instruction::Heal(HealInstruction {
+                        side_ref: SideReference::SideTwo,
+                        heal_amount: 30,
+                    }),
+                ],
+                1,
+                SideReference::SideOne
+            ),
+            Some("heal_defender"),
+            "a defender heal stays an absorb ability even when the tail damages the foe"
+        );
+
         // 4. LIQUID OOZE: a negative heal, which the named path renders as `-damage`.
         assert_eq!(
             unrenderable_family_at(
@@ -6402,14 +6493,14 @@ mod tests {
                 // DELIBERATE reorder, per this test's own instruction to say so. The `heal`
                 // family is PARTITIONED into sub-cases; the bare token survives as the
                 // remainder. Unlike the "substitute" removal below, this one DOES move
-                // real keys: era 61 measured 3,199 world failures under `heal`, and every
+                // real keys: era 61 measured 3,533 world failures under `heal`, and every
                 // one of them now reports a sub-case instead. The sum across the five
                 // tokens is what compares to the old bare count.
                 "heal_paindmg",
                 "heal_liquidooze",
                 "heal_defender",
                 "heal_drain_or_shellbell",
-                "heal",
+                "heal_zero_marker",
                 // "substitute" removed by hand: its only producer, `DamageSubstitute`, is
                 // now rendered. Every token AFTER it keeps its relative order, so no slug
                 // that does not contain "substitute" changes -- and no slug can contain it.
