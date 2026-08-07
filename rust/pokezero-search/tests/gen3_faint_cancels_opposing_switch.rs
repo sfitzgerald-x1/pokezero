@@ -175,8 +175,10 @@ fn a_forced_replacement_is_never_cancelled_even_when_the_other_one_dies_on_entry
 /// `[Damage SideOne: 1, Damage SideTwo: 5, ToggleSideOneForceSwitch,
 ///   ToggleSideTwoForceSwitch]`: no switch.
 ///
-/// Review established that predicate passes ALL the other pins and BOTH 200-game sweeps,
-/// because this shape occurs in neither window. Without this test the repository cannot
+/// Review established by mutation that the predicate passes every other pin in both
+/// queue-semantics files. That neither 200-game sweep would catch it is an inference from
+/// the shape being absent in both windows, not a measurement — no window has been run
+/// under the wrong predicate. Without this test the repository cannot
 /// tell the two apart, and a maintainer "restoring" the code to match the prediction doc
 /// would get a green board and a wrong guard. That is exactly how three previous
 /// versions of this mechanism shipped or nearly shipped.

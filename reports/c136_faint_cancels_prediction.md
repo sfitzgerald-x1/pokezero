@@ -25,7 +25,8 @@ closer to the exception and broke the rule.** Neither had both measured.
 
 ## WHAT SHIPPED DIFFERS FROM WHAT WAS REGISTERED — read this first
 
-**Amended 2026-08-06, before measuring, after review of the fixture PR.** The predicate
+**Predicate amended 2026-08-06, before the sweeps were run, after review of the fixture
+PR. This note was written afterwards, once the measurement and the review of it existed.** The predicate
 registered below is **not** the predicate that shipped, and the registered one is
 **wrong**. This section is kept verbatim as history, because the value of a
 pre-registration is that it is not rewritten after the fact — but the tracked patch
@@ -37,14 +38,25 @@ stated at the top rather than left for a reader to discover.
 | registered below | `!choice.first_move && !force_switch` read **before** the batch, then *the opponent* newly fainted |
 | **shipped** | `!choice.first_move`, then **someone** newly fainted **and this side is still standing**, both read **after** the batch |
 
+**The framing above this section is superseded too.** It calls the Pursuit case "one rule
+and one exception". That is the framing which *generates* the wrong predicate — an
+exception invites a special case, and a special case invites keying on the wrong side.
+The rule has no exception: a faint cancels the queued action of every **still-active**
+Pokémon, and `getAllActive()` filters on `!fainted`, so a Pursuit victim is outside the
+set rather than excepted from it. #1141's commit message, the patch comment and the test
+header all say so; this document predates that correction and is left uncorrected below
+by design.
+
 The registered version fails on a **double KO**. Real gen3 line, measured: Pursuit KOs
 the switcher while the switcher's Rough Skin kills the hunter on the same hit. Both
 actives faint, `getAllActive()` is empty, and Showdown cancels nothing — the switch still
 happens. A pre-batch `force_switch` reading sees a side that does not *yet* owe a
 replacement, cancels, and drops the switch.
 
-That difference is invisible to every other gate: the registered predicate passes all the
-other pins **and both 200-game sweeps**, because the shape occurs in neither window. It is
+That difference is invisible to every other gate. **Measured:** the registered predicate
+passes every other pin in both queue-semantics test files. **Not measured, and stated as
+the inference it is:** neither 200-game window contains this shape, so neither sweep would
+distinguish the two predicates — nobody has run a window under the registered one. It is
 caught only by `a_double_ko_cancels_nothing_because_nobody_is_left_standing` in
 `rust/pokezero-search/tests/gen3_faint_cancels_opposing_switch.rs`, which exists because
 review found this gap. **Do not "restore" the code to match the section below.**
