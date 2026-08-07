@@ -97,9 +97,13 @@ defect rather than a research one: H11's *class* was correctly marked UNKNOWN un
 the error is the negative, asserted over `reports/` as a whole from a search that missed a file
 merged in the range the same cell was pointing at.
 
-That makes this the fourth report in this effort to find a claimed absence already recorded
-elsewhere in the repo. The pattern is now specific enough to name: the misses have all been
-**inside the commit range the claim itself cites**.
+This effort has recorded three previous instances of a report claiming a first-ever observation that
+was already written down elsewhere in the repo; this is a fourth instance of the same family, in the
+mirror-image form — a claimed *absence* rather than a claimed *first*. I am not claiming the four
+share a cause: I did not re-examine the other three, and this one's specific shape (the missed file
+was merged **inside the commit range the same cell cites**) is a property of this instance only.
+What generalises is the cheap countermeasure, which would have caught it: `git grep <the row id>`
+over the head being described, before writing any negative about the record.
 
 ---
 
