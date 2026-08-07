@@ -317,8 +317,16 @@ impl RenderedEvents {
     ///   emitted now that `substitute` is deregistered.
     ///
     /// Note 16, not 17: `UNRENDERABLE_FAMILY_ORDER` has 17 entries but `unclassified` is
-    /// emitted by NO classifier arm -- it is reachable only through the degradation below,
-    /// itself unreachable while every arm's token is registered. Counting the order list
+    /// emitted by NO classifier arm -- it is reachable only through the degradation below.
+    ///
+    /// That degradation is NOT redundant, and an earlier version of this sentence implied it
+    /// was: it said the path is "unreachable while every arm's token is registered", which
+    /// the heal split falsified. `heal_subcase` returns the UNREGISTERED token `"heal"` from
+    /// two arms, so the degradation is the only thing standing between them and a
+    /// `PanicException` in the release wheel. Those two arms are unreachable on their own
+    /// terms -- non-negative `Damage` is admitted upstream and every `Heal` sign is covered
+    /// -- which is a different and much narrower guarantee. Do not delete
+    /// `registered_family_or_unclassified` on the strength of the old sentence. Counting the order list
     /// instead of the reachable token set overstated this 2x in an earlier version, in the
     /// one comment block whose entire purpose is precision.
     ///
@@ -381,7 +389,7 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "none_matched",
     // The `none_matched` DIVERGENCE SHAPES. era 60 measured that class at 3,595 world
     // failures with no way to say why, and the era-60 measurement states it "must be
-    // classified before it can be fixed". These four are that classification, and the
+    // classified before it can be fixed". These FIVE are that classification, and the
     // ownership split is the point: `values_only` means the renderer regenerated the right
     // transition and disagreed about a NUMBER -- a roll or a merged chance branch, neither
     // fixable here -- while `structure` and `length` mean it regenerated a different
@@ -3534,8 +3542,11 @@ fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
 /// heal on the attacker with no foe damage -- and the ranking cannot say which of the
 /// remaining shapes a refusal is without this split. There are FIVE buckets below against
 /// the FOUR shapes `heal_is_a_direct_self_heal`'s doc block enumerates: that block predates
-/// `heal_paindmg` and `heal_zero_marker`, and Rest -- its fourth shape -- has no bucket of
-/// its own because its companion `status`/`sleepcounter` instructions refuse the tail first.
+/// `heal_paindmg` and `heal_zero_marker`. Rest -- its fourth shape -- has no bucket of its
+/// own because its `Heal` is ADMITTED by `heal_is_a_direct_self_heal`; its companion
+/// `status`/`sleepcounter` instructions are separately refused by their own arms, which is
+/// what makes that admission safe. There is no short-circuit: `unrenderable_tail_families`
+/// visits every index.
 ///
 /// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
 /// of refused tails is byte-identical to before. Nothing here changes what is searched.
@@ -3751,7 +3762,8 @@ fn unrenderable_family_at(
         //   * `ChangeSubstituteHealth` -- see `substitute` above.
         //   * `ChangeWish` / `DecrementWish` -- `DecrementWish` is read only as a
         //     LOOKAHEAD, to tag an existing `|-heal|` with `[from] move: Wish`. The
-        //     renderable unit is that `Heal`, already counted under `heal`.
+        //     renderable unit is that `Heal`, already accounted for -- admitted by
+        //     `heal_is_a_direct_self_heal`, or bucketed under one of the `heal_*` sub-cases.
         //   * `SetFutureSight` / `DecrementFutureSight` -- pending-slot bookkeeping;
         //     `SetFutureSight`'s arm is `sim.apply` only and the decrement has no arm.
         //   * `ChangeType` / `ChangeAbility` / `FormeChange` -- the named path's own arm
