@@ -54,6 +54,21 @@ arguments, which is the point.
 
 Rules 2 and 4 are the ones doing work. Rule 2 also cannot be faked by deriving ``measured``
 from the sum: if nothing was measured, the sum is zero too.
+
+**SCOPE WARNING (C144).** Rule 3's two-term form is correct *for these four harnesses and
+only for them*. Each compares golden-corpus rows and each classifies an attempted row as
+exactly one of ``exact``/``divergent`` (``a``/not-``a`` in ``fidelity_gate_events``), so the
+partition genuinely closes in two terms there.
+
+It does **not** transfer to ``scripts/engine_transition_differential.py``, which does not
+adopt this module and whose ``boundaries_measured`` counter shares only the *name*. There a
+boundary that reached the matcher has FOUR possible verdicts — ``transition:matched``,
+``transition:diverged``, ``engine_error`` and ``skip:strict_all_branches_lossy`` — because the
+last two are counted after ``boundaries_measured`` has already incremented. Rule 3's wording
+here was read across into that harness and asserted as a property of it in a dozen reports,
+where it is false. Its mechanized form there is ``verdict_partition_failures()`` in
+``engine_transition_differential.py``; see ``reports/c144_boundary_identity_correction.md``.
+The shared counter name is the whole trap, so it is named here rather than left implicit.
 """
 from __future__ import annotations
 

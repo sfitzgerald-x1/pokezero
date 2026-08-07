@@ -49,7 +49,15 @@ Concretely, on the two sweeps (200 games each, `--keep-repro 25`, strict matcher
 2. **Dev 19000000**: **no change at all** — identical `matched`, `diverged`,
    `engine_errors`, and an identical `divergence_classes` census.
 3. `boundaries_full_round` and `boundaries_measured` are **unchanged** on both sweeps, and
-   `matched + diverged == boundaries_measured` holds before and after.
+   the boundary verdict partition closes before and after.
+
+   > **[CORRECTION 2026-08-07 — C144.]** This clause was registered as the **two-term**
+   > `matched + diverged == boundaries_measured`. The identity is four-term:
+   > `matched + diverged + engine_errors + skip:strict_all_branches_lossy ==
+   > boundaries_measured`. Registering the two-term form as a prediction clause is worse
+   > than merely inaccurate — a run that lost boundaries to the lossy verdict violates it
+   > and would read as falsifying the fix. Clause 5 below has the same defect and the same
+   > correction. See `reports/c144_boundary_identity_correction.md`.
 4. The **skip histogram is unchanged** on both sweeps, including
    `skip:world_unsupported:encore_move_unknown` staying at its baseline value (expected: 1).
 
@@ -146,7 +154,9 @@ Merged base = `dc6e1e19` with no fix. Merged + fix = that plus this branch.
    **already 0 on the merged base** (closed by #1144, not by this fix — this PR must not claim it).
 4. **Dev**: unchanged at `diverged` 2, `matched` 15501, same two classes.
 5. `boundaries_full_round` / `boundaries_measured` unchanged by the fix on both windows, and
-   `matched + diverged == boundaries_measured` throughout.
+   the four-term verdict partition (`matched + diverged + engine_errors +
+   skip:strict_all_branches_lossy == boundaries_measured`) closing throughout. **C144
+   correction:** registered as the two-term form, which is not an instrument property.
 6. The skip histogram is unchanged by the fix on both windows, `encore_move_unknown` included.
 
 ## Falsifier — unchanged in spirit, and now specifically about the interaction

@@ -226,9 +226,27 @@ def main(argv=None) -> int:
     if tally.get("reread_error"):
         print("REREAD FAILED: one or more retained rows could not be evaluated")
         return 1
-    if args.expect == "diverged" and tally.get("matched"):
-        print("VALIDATION GATE FAILED: matched/error rows on the reference build")
-        return 1
+    if args.expect == "diverged":
+        # "Every row must re-read as diverged" -- which is what the docstring
+        # says and what this gate did NOT check. It tested `tally["matched"]`
+        # only, so any other non-divergent verdict passed silently: `skip_lossy`
+        # already, and `skip_rump` (C142) as well. Both are reconstruction
+        # infidelity on the sweep's own build, which is precisely what this gate
+        # exists to catch, and both would have been reported as a clean pass.
+        #
+        # Stated as a complement, not a list: a future verdict is caught the
+        # moment it appears rather than the moment someone remembers to add it.
+        unexpected = {
+            verdict: count
+            for verdict, count in tally.items()
+            if verdict != "diverged" and count
+        }
+        if unexpected:
+            print(
+                "VALIDATION GATE FAILED: non-divergent verdicts on the reference "
+                f"build: {dict(sorted(unexpected.items()))}"
+            )
+            return 1
     return 0
 
 

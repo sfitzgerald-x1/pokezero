@@ -59,6 +59,8 @@ from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     CHECKPOINT_SCHEMA,
     checkpoint_report_binding_failures,
+    VERDICT_PARTITION_SKIP_COUNTERS,
+    verdict_partition_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
     legal_roll_damages,
@@ -1442,6 +1444,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     input_failures.append(f"{Path(p).name}: malformed counter {key!r}")
                     continue
                 aggregate_counters[key] += number
+        # PER SHARD, not on the aggregate. Two shards can violate the partition in
+        # opposite directions and cancel, so a sum-level check is strictly weaker.
+        # The identity is FIVE-term: a boundary that reached the matcher is matched,
+        # diverged, an `engine_error`, `skip:strict_all_branches_lossy`, or (C142)
+        # `skip:rump_branch_set`. A two-term reading of it was asserted repeatedly across
+        # reports/ and is false -- reports/c144_boundary_identity_correction.md and
+        # reports/c142_rump_branch_adjudication.md.
+        input_failures.extend(verdict_partition_failures(shard, label=Path(p).name))
         divergence_classes = shard.get("divergence_classes")
         if not isinstance(divergence_classes, Mapping):
             input_failures.append(f"{Path(p).name}: divergence_classes is not an object")
@@ -1584,10 +1594,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     # which is why the era stamp carries the differential's own hash alongside
     # the engine fingerprint. A reading may only be compared against another
     # sharing that differential hash.
-    measured = max(1, agg["boundaries_measured"])
+    #
+    # DENOMINATOR, corrected in C144. This used to divide by `boundaries_measured`,
+    # which reads `measured - diverged` as "in support" and therefore counts every
+    # unadjudicated boundary as a success. `boundaries_measured` is not the
+    # adjudicated set: a boundary whose every branch rendered lossy
+    # (`skip:strict_all_branches_lossy`) and a boundary whose matcher raised
+    # (`engine_error`) are both inside it and produced NO answer to the support
+    # question. They are removed from the denominator rather than credited to the
+    # numerator, and the count that was removed is published beside the rate so the
+    # adjustment is visible instead of implicit.
+    #
+    # `matched` is used directly rather than as `measured - diverged`: the subtraction
+    # form is exactly the two-term identity C144 falsified.
+    # Every post-measurement skip verdict, not just the lossy one: C142's
+    # `skip:rump_branch_set` is a boundary the harness explicitly declined to judge, so
+    # crediting it to the denominator would understate `in_support_rate` by exactly the
+    # rows whose verdict was withheld.
+    unadjudicated = (
+        sum(aggregate_counters.get(name, 0) for name in VERDICT_PARTITION_SKIP_COUNTERS)
+        + agg["engine_errors"]
+    )
+    adjudicated = max(1, agg["boundaries_measured"] - unadjudicated)
     games = max(1, agg["games"])
     fidelity = {
-        "in_support_rate": round((measured - agg["transitions_diverged"]) / measured, 6),
+        "in_support_rate": round(agg["transitions_matched"] / adjudicated, 6),
+        "boundaries_adjudicated": agg["boundaries_measured"] - unadjudicated,
+        "boundaries_unadjudicated": unadjudicated,
         "out_of_support_per_10k_games": round(
             agg["transitions_diverged"] / games * 10_000
         ),

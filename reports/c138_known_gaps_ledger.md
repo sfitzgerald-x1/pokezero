@@ -44,7 +44,8 @@ Three verdicts, and only three:
 | **UNKNOWN** | not determined, with the exact measurement that would settle it named |
 
 "UNKNOWN with a named next measurement" is a better entry than a confident wrong
-classification. **Four** rows below are UNKNOWN and say so — H8, H11, H12 and H19. (An earlier
+classification. **Three** rows below are UNKNOWN and say so — H8, H12 and H19. (H11 was the fourth
+until 2026-08-07, when `reports/c145_itemleftovers_row_adjudication.md` classified it; an earlier
 draft said six: it counted G1, which is classified REACHABLE and merely carries an open
 *follow-up* measurement in §7.1, and G28, which is now settled UNREACHABLE by a static argument.)
 
@@ -264,10 +265,10 @@ merely observed: a terminal is not a boundary, so no `divergence_class` can ever
 | **H8** | **The comparator's fallback window `[0.92·eng − 1, 1.09·eng + 1]` carries unmeasured matched mass.** It applies whenever `pre_legal` is unavailable. `reports/c135` §6. | H | **UNKNOWN how much.** `strict:no_damage_rolls` — the counter that fires when `pre_legal` is None at the state level — is **0 in both windows**, which bounds the *state*-level fallback at zero but not the per-branch one. **Settling measurement:** count boundaries whose accept came from the window rather than exact fan membership, over a 200-game dev sweep. | partially — the counter is 0 |
 | **H9** | **Per-slot HP comparison is invalid on any boundary where the active changed.** `reports/c61_empty_engine_arm_census.json`: "37 of 108 rows here are uncomparable … roughly a third of the residue." | H | REACHABLE — **4 of the 6** c136 divergence rows carry `active_changed: true` on one side (`19000074/27`, `19100170/71`, `19100170/72`, `19100191/5`). | **yes**, structurally |
 | **H10** | **Repro retention caps at `keep_repro=25` and retains repros only for *divergent* boundaries**, so an adjacent matched boundary needed for a diagnosis is simply not in the artifact. `reports/c120_a1_marker_design.md` §2. | H | REACHABLE by construction. | n/a (both windows are under the cap: 2 and 4 retained) |
-| **H11** | **`19100170/71` and `19100170/72` are open divergent rows with no written cause anywhere in `reports/`.** Both are `component_missing_in_engine:itemleftovers`, `branch_count: 1`, `pct=100.00`, `p1: protect` against a p2 switch. | H/E | REACHABLE — observed. **Class UNKNOWN**: nothing in `reports/` diagnoses them, and their shape (a 100 %-mass single-branch Leftovers omission on a Protect turn) does not match any registered family. **Settling measurement:** replay both boundaries through `evaluate_boundary_strict` with the branch dump retained and compare the engine's residual plan against Showdown's `\|-heal\|…\|[from] item: Leftovers` line. | **was yes**; ⚠ **no longer observed as of main `f876803e`** — a 200-game re-sweep of the holdout window taken while validating the collapse-class fixes returns a census of `limit:roll_divergent_lethality` 2 and nothing else (`reports/artifacts/c138_collapsefix_mainhead_holdout_sweep.json`). Neither collapse-class fix touches this shape, so the closure belongs to something merged between `2ec0cb13` and `f876803e` — most likely #1148 — and is recorded here as an observation, not a diagnosis. The gap itself is **not** adjudicated: nothing in `reports/` still explains the original rows. |
+| **H11** | **`19100170/71` and `19100170/72` were open divergent rows.** Both `component_missing_in_engine:itemleftovers`, `branch_count: 1`, `pct=100.00`, `p1: protect` against a p2 switch. ⚠ **ADJUDICATED 2026-08-07 — `reports/c145_itemleftovers_row_adjudication.md`.** Class: **a world-construction fix in shipped Python, not a limit and not an engine fix.** Mechanism, measured end to end: `_build_side_spec` resolved the Encore lock — Showdown locks by move **id**, the engine by move **slot index** — against `_active_row_moves`, which is deliberately the **pre-Transform** snapshot (`local_showdown.actor_move_states_from_request_history` skips requests taken while transformed so PP stays honest). For a gen3 randbats Ditto that snapshot is the single move `transform`, so the self-seat rule "exactly one enabled move identifies the lock" was satisfied **spuriously** at index 0; `_apply_transform` then swapped the donor's moveset in underneath the surviving index. Showdown Encored **Protect** (donor slot 3); the world built `last_used_move=move:0` — **Body Slam**. Because an Encore lock is a *forced* choice, that phantom move is the only thing the engine can do, its damage is **lethal** to the switch-in (Spikes had taken Delcatty to 65 at step 71; Typhlosion was at 2 at step 72). The component is labelled `capped_lethal`, but its magnitude equalling remaining HP is **not** corroboration — `engine_transition_differential.py:551` constructs it as `-remaining`, so every lethal capped hit reads that way, the faint arms `end_of_turn_is_deferred`, and the entire residual block is deferred off the boundary. **BOTH** sides' Leftovers ticks are lost, not just p1's — the recorded miss names p1 only because `evaluate_boundary_strict` `break`s out of its `("p1","p2")` slot loop on the first failure, so p2's `itemleftovers +18` at step 71 was never compared. Sizing this class from the miss string undercounts it **by up to half, at boundaries where both sides tick** — 2 ticks against 1 named at step 71, but only 1 tick at step 72 (Typhlosion holds no item), where the miss is complete; **3 lost against 2 named across the class, a third rather than a half.** | H/E | REACHABLE — observed. **Settling measurement (the one specified here): RUN.** Replayed at `dc6e1e19` through `scripts/replay_residue.py`, which re-executes the same `pokezero_search.branch_events` call `evaluate_boundary_strict` makes on the retained candidate states. One branch, `pct=100.00`, `lossy=[]`; instruction stream ends at `ToggleSideTwoForceSwitch` with **no residual phase at all**. Rewriting **one field** of that state — side one's `last_used_move`, `move:0` → `move:3`, same byte-identical engine build — makes the render reproduce Showdown's `\|-heal\|p1a: Ditto\|161/258\|[from] item: Leftovers` and `\|-heal\|p2a: Delcatty\|83/290\|[from] item: Leftovers` **character-for-character**, and the component sets become exactly equal to the observed sets on both slots at both boundaries. Dump: `reports/artifacts/c145_settling_branch_dump.json`. Both rows carry `gating: exact`, so **none of this rides the Constraint-7 hidden-sleep-counter union** (22 of 81 measured boundaries in this game do). | **was yes**; ⚠ **CLOSED by `d27316b6` (#1148)** — **bisected, not inferred.** A one-game sweep (`--games 1 --seed-start 19100170`, strict, rebuilt and `--check`-verified engine at each point) gives 2 divergent rows at `2ec0cb13` (fp `907bea70…`) and at `dc6e1e19` (fp `fdbf5937…`), and **0** at `d27316b6` (fp `fdbf5937…`, unchanged) and on this branch at `662d9db8`. `boundaries_full_round` 88 / `boundaries_measured` 81 and the full skip and gating histograms are identical at all four, so the two boundaries became `matched` rather than skipped. `27609063` is unmeasured and cannot hold the transition: it lies between two measured reds. Artifacts `reports/artifacts/c145_g19100170_{2ec0cb13,dc6e1e19,d27316b6,head}.json`. ⚠ **RETRACTED from the previous revision of this cell:** "nothing in `reports/` still explains the original rows" and "no written cause anywhere in `reports/`". **Both were false when written.** `reports/c139_encore_transform_move_index_prediction.md` § Observation states this mechanism on these two boundaries by seed and step, and #1148 — the very commit this cell guessed at — is what merged it, so the diagnosis was already on `main` at `f876803e`. The negative was asserted over `reports/` from a search that missed a file two commits behind. The closure was also **not incidental**: #1148 registered that prediction, naming these two rows and this class, before measuring. |
 | **H12** | **The skip counters do not sum to the coverage shortfall** — `reports/c43_coverage_shortfall_diagnosis.json` measured ~7,224 rows invisible to any skip counter: "no repair list built from them can be complete." | H | **UNKNOWN whether it still holds.** c43 is an older era. In the c136 windows the full-round path reconciles *exactly* (§2), which is evidence against a residual invisible population **within the full-round path** — but says nothing about the single-seat population. **Settling measurement:** instrument the single-seat arm with the same exit taxonomy and re-run. | n/a |
 | **H13** | **`self_moveset_mismatch`, `transform_unexpressible`, `status_unsupported` and 33 other world-construction refusal reasons are defined and never fire in either window.** Full list in §3.5. | H | REACHABLE-in-principle for some (Transform is 2 of 220: Ditto, Mew), unreachable for others (Future Sight, 0 of 220 — see R1). | **no** — 36 of 40 `world_unsupported` reasons are 0 in both windows |
-| **H14** | **`skip:strict_all_branches_lossy` has never fired**, so C132's claim that it is "not an exit" has never been exercised live. Verified against the code: it increments at `run_game` *after* `_prepare_boundary` has already incremented `boundaries_measured`, so the claim is right — but it *is* an exit from the **verdict** tally, which C132 does not say. The identity that actually holds is `boundaries_measured == matched + diverged + engine_error + skip:strict_all_branches_lossy`. | H | REACHABLE-in-principle; `strict:lossy_render` (the per-branch precursor) fired 3 times in holdout without ever dropping *every* branch. | **no** |
+| **H14** | ⚠ **CORRECTED 2026-08-07 (C144).** This cell said "**`skip:strict_all_branches_lossy` has never fired**". **That is false, and the refuting artifacts were already committed when it was written:** `reports/c26_structural_probe_report.json` and `reports/c27_structural_probe_report.json` both carry it at **2** (seeds 17000000–17000059, strict matcher), and C141's final-holdout sweep carries it at **4**. On all three the two-term `matched + diverged == boundaries_measured` **fails**. The rest of the cell was right: it increments at `run_game` *after* `_prepare_boundary` has already incremented `boundaries_measured`, so C132's "not an exit" holds for the coverage denominator — but it *is* an exit from the **verdict** tally, which C132 does not say. The identity that actually holds is `boundaries_measured == matched + diverged + engine_error + skip:strict_all_branches_lossy`, and it is now mechanized (`verdict_partition_failures`, gated per shard in `cert_sweep_readout.py`, pinned in `tests/test_boundary_verdict_partition.py`). See `reports/c144_boundary_identity_correction.md`. | H | **REACHED, three times over** — not "in-principle". `strict:lossy_render` is the per-branch precursor and reaching 14 of it (C141 holdout) dropped every branch on 4 boundaries. | **no** — its own gap is closed by the mechanized identity; the *engine_error* term of that identity remains unexercised (0 on every committed artifact). |
 | **H15** | **Seven of the eight `unmappable_choice` reasons never fire, and only 6 of the 19 `divergence_class` values have *ever* fired — so 13 have never fired.** ⚠ An earlier draft said 11 of 19, counting only the c136 pair. Re-derived across **all 31 committed sweep artifacts**: the classes that have ever fired are `component_missing_in_engine`, `component_magnitude`, `component_extra_in_engine`, `component_mismatch`, `roll_scaled_component` and `limit:roll_divergent_lethality` — six. (The 18 *distinct keys* observed are dynamic expansions of those six; the taxonomy is 19 static `return` sites in `classify_divergence`.) In c136 specifically only **3** fired: `component_magnitude` and `component_missing_in_engine` in dev, `component_missing_in_engine` and `limit:roll_divergent_lethality` in holdout. Two of the 13 are **structurally unreachable**: `mapper_lossy` (its verdict `continue`s before the classification line) and `no_usable_branch` (its trigger string exists nowhere in the repo). Four more (`boost_delta_support`, `status_support`, `faint_boundary`, `damage_band`) are reachable only through the `--matcher banded` path, which no committed artifact used. The remaining seven — `component_set_equal_but_unmatched`, `limit:world_sample_drag_target`, `evidence:faint_ply_no_upkeep`, `evidence:spikes_in_step`, `evidence:crit_in_step`, `no_miss_recorded`, `unclassified` — are strict-path classes the program has simply never produced. | H | mixed. | **no** |
 | **H16** | **The dev window is overfit relative to holdout by 3.53×.** `reports/c117_validation_holdout_baseline.md` §1: "Any statement of the form 'the residue is 7' describes *one particular* 200-game window and must not be read as a fidelity rate." | X | REACHABLE by construction. | **yes** — dev 2 divergences vs holdout 4 on the same build |
 | **H17** | **`reports/c119_phase2_scoping.md`, `reports/c134…` and `reports/c137_phase2_enumerate_decision.md` are cited by merged reports and absent from `reports/`.** They are load-bearing: c135 §5/§7 rests on C134 §3's freeze and c137's adopt-for-harness-only decision. | X | n/a. | **yes** (verified by `ls`) |
@@ -302,12 +303,26 @@ Every one of these is a gap in coverage *by definition*: the code has an exit fo
 program has never seen it fire. Listed rather than summarised, because "we have no rows for X"
 is only meaningful if X is named.
 
-**Never-fired static counters (10):** `abort:no_legal_action`, `skip:no_action_candidates`,
-`skip:world_error:no_constructible_candidate`, `skip:strict_all_branches_lossy` (H14),
+**Never-fired static counters (9):** `abort:no_legal_action`, `skip:no_action_candidates`,
+`skip:world_error:no_constructible_candidate`,
 `strict:no_damage_rolls` (H8), `strict:branch_event_legal_error:BranchLegalRollError` — whose
 raise-site messages are all unexercised and are not distinguishable in the key anyway —
 `engine_error`, `world_prestate_mismatch:side_conditions`, and the two structurally
 unreachable `divergence_class` values `mapper_lossy` and `no_usable_branch`.
+
+⚠ **CORRECTED 2026-08-07 (C142).** This list said **10** and included
+`skip:strict_all_branches_lossy` (H14) — cross-referencing the very cell that, as of C144's
+correction above, now reads **"REACHED, three times over"**. The list and H14 contradicted each
+other two paragraphs apart, and #1163 fixed H14 without reaching here. Removed, and the count
+re-derived rather than decremented on assertion: each of the other nine names was searched for a
+nonzero value across all 260 committed JSONs under `reports/`, and all nine are still absent, so
+10 − 1 = **9** is the measured figure. The refutation rests on hard counter values —
+`reports/c26_structural_probe_report.json` and `reports/c27_structural_probe_report.json` carry
+`skip:strict_all_branches_lossy` at **2** apiece — not on narration. (An older-era diagnosis,
+`reports/c32_fail_diagnosis.json`, records the same phenomenon at **372** under the differently
+named field `coverage_diagnosis.coverage_reducing_skips.strict_all_branches_lossy`; it is
+corroborating rather than the counter itself.) `engine_error` remains genuinely never-fired,
+which is what H14's own closing sentence says. See `reports/c142_rump_branch_adjudication.md`.
 
 **Never-fired dynamic families (6):** `skip:no_materialization:{Exc}`,
 `skip:world_error:{Exc}`, `strict:branch_events_error:{Exc}`, `engine_error:{Exc}:{detail}`,
@@ -520,31 +535,54 @@ Stated explicitly, because a ledger of blind spots is the worst place to imply c
    if `stick` appears, the crit-rate divergence (1/16 vs 1/4 on Return) is live in the compared
    population, and if it does not, the gap is confined to search-side worlds. I did not build
    an engine for this document, so I did not run it.
-2. **The class of `19100170/71` and `19100170/72`** (H11). They are observed, open, and
-   undiagnosed anywhere in `reports/`. I did not attempt a diagnosis because it needs a branch
-   dump I would have had to regenerate.
-3. **How much matched mass rides on the comparator's ±9 % fallback window** (H8). The
+2. **How much matched mass rides on the comparator's ±9 % fallback window** (H8). The
    state-level counter is 0 in both windows; the per-branch usage is not counted at all.
-4. **Whether c43's ~7,224 invisible shortfall rows still exist** (H12). The full-round path now
+3. **Whether c43's ~7,224 invisible shortfall rows still exist** (H12). The full-round path now
    reconciles exactly, which is evidence against it *within that path*, but the single-seat arm
    carries no exit taxonomy so nothing can be said about it.
-5. **Whether the four never-adjudicated families survive into the current era** (H19).
-6. **Whether the generator can actually draw both moves** in any co-occurrence check that came
+4. **Whether the four never-adjudicated families survive into the current era** (H19).
+5. **Whether the generator can actually draw both moves** in any co-occurrence check that came
    back non-zero. Every *same-side* pairing verdict I relied on for an UNREACHABLE came back
    zero, which is decisive. The non-zero ones — `sleeptalk`+`rest` (44 sets), `wish`+`protect`
    (24), `leechseed`+`substitute` (6) — are upper bounds, not measured draw rates. **G14 is the
    row where I read such an upper bound as a reachability fact and was wrong**; it is corrected
    in place, but the same trap applies to any future row built this way.
-7. **How much of G0's population is a *last-mon* double faint.** Double faints are reachable and
+6. **How much of G0's population is a *last-mon* double faint.** Double faints are reachable and
    demonstrated; the fraction where both sides are down to their final Pokémon is not measured.
    **Settling measurement:** count games in a 200-game dev sweep ending in a same-ply double
    faint with both parties at one remaining Pokémon. This bounds G0's incidence but not its
    severity, which is per-occurrence large.
+7. **The incidence of the missing Protect `|-fail|` line** (C145 §4.5, added 2026-08-07 —
+   `reports/c145_itemleftovers_row_adjudication.md`). Showdown's gen3 `protect.onPrepareHit` is
+   `!!this.queue.willAct() && this.runEvent('StallMove', pokemon)`, so a Protect the opponent's
+   switch pre-empted **fails on the first conjunct**; the engine renders no `|-fail|`. The mechanism
+   is settled and the *cost on the observed shape is zero*, measured rather than argued: on
+   `19100170/71` with the lock corrected, `generate_instructions` emits **no**
+   `ApplyVolatileStatus PROTECT` and **no** `ChangeSideCondition Protect`, against a
+   single-variable control (only p2's choice changed from a switch to a move) that emits both — so
+   the stall ladder does not move and matches Showdown, and no HP changes either way. What is
+   **not** measured is whether any shape exists where the omission costs more than a protocol line.
+   **Settling measurement:** a dev sweep counting boundaries where a side's chosen or Encored move
+   is a stalling move and every opposing action is a switch, cross-checked against
+   `side_conditions.protect` at the following boundary. Filed here rather than in §3 because C125
+   (§8) forbids a §3 row without a recorded pool-reachability check, which I have not run.
+   ⚠ **This entry exists partly to keep §7 honest:** the same PR *removed* an item (H11's), and a
+   list of blind spots that only ever shrinks is losing them by attrition rather than by resolution.
 8. **Nothing here was measured on the reserved final holdout** (`19,200,000+`), deliberately.
    Per the §J.7 amendment it must appear in exactly one measurement in the whole record.
 9. **No new sweep was run and no engine was built for this document.** Every "observed" column
    reads `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`. A gap whose
    incidence changed since commit `aeaee2b1` would be mis-stated here.
+
+> **RESOLVED and removed from this list, 2026-08-07.** Item 2 was *"the class of `19100170/71`
+> and `19100170/72` (H11) — observed, open, and undiagnosed anywhere in `reports/`. I did not
+> attempt a diagnosis because it needs a branch dump I would have had to regenerate."* The branch
+> dump was regenerated and the class is settled: a world-construction fix, closed by `d27316b6`
+> (#1148), diagnosed in the H11 cell above and in
+> `reports/c145_itemleftovers_row_adjudication.md`. The items below it were renumbered; `§7.1` is
+> the only one cross-referenced (from §1 and §8) and kept its number. The clause *"undiagnosed
+> anywhere in `reports/`"* was already false when written — `reports/c139_encore_transform_move_index_prediction.md`
+> had merged, in #1148, before this document did.
 
 ---
 

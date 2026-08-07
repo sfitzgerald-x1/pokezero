@@ -1,0 +1,52 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "enumerate_rolls": false,
+  "games": 1,
+  "seeds": {
+    "min": 19100170,
+    "max": 19100170,
+    "distinct": 1
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "repro_retention": {
+    "repros_per_game": 8,
+    "keep_repro": 25,
+    "repros_retained": 0,
+    "transitions_diverged": 0,
+    "repros_complete": true
+  },
+  "gating_exact": 59,
+  "gating_support_based": 22,
+  "elapsed_seconds": 3.09,
+  "games_per_hour": 1166.5,
+  "boundaries_full_round": 88,
+  "boundaries_measured": 81,
+  "transitions_matched": 81,
+  "transitions_diverged": 0,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 0.0,
+  "measured_fraction_of_full_rounds": 0.9205,
+  "divergence_classes": {},
+  "counters": {
+    "boundaries_full_round": 88,
+    "boundaries_measured": 81,
+    "gating:exact": 59,
+    "gating:support": 22,
+    "hidden_counter_support:sleep": 22,
+    "skip:single_seat_boundary": 8,
+    "skip:unmappable_choice:struggle_not_submittable": 6,
+    "transition:matched": 81,
+    "world_prestate_mismatch": 1,
+    "world_prestate_mismatch:p1_status": 1
+  },
+  "repros": [],
+  "checkpoint_provenance": {
+    "records_with_provenance": 1,
+    "complete": true,
+    "distinct": [
+      "{\"engine_fingerprint\": \"5fa147ffa325c8872d47fbe3645125af9dac2c94f3b84ca6dc8be5f96539d341\", \"enumerate_rolls\": false, \"image_commit\": null, \"source_commit\": \"662d9db8717fb31e2dc51d78e720ea846432ac72\", \"source_tree\": \"clean\"}"
+    ]
+  }
+}

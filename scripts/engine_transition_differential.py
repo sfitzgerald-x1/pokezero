@@ -2011,6 +2011,46 @@ def evaluate_boundary_strict(
     misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
+    # Probability mass this verdict is entitled to speak for. The matcher's
+    # semantics are EXISTENTIAL -- "some enumerated branch reproduces the
+    # observation" -- so a branch dropped by the lossy-render filter makes the
+    # existential UNVERIFIABLE, not false. Adjudicating anyway evaluates the
+    # boundary on a rump branch set and can report a matched boundary as
+    # divergent; measured on the retained row 19200131/129, where the 93.75%
+    # non-crit arm was dropped as `attract_empty_tail_ambiguous:paralyzed+
+    # cannot_act` and the surviving 6.25% CRIT arm supplied the only comparison
+    # (its capped-lethal recoil -32 against the observed non-crit recoil -18).
+    # That boundary matches on its full branch set.
+    #
+    # `enumeration_incomplete` is the DECIDING flag and `dropped_mass` only
+    # describes it. Three distinct paths leave a positive-mass branch
+    # uncompared, and all three must set it, or `diverged_on_full_branch_set`
+    # would assert "100 % of its mass" over an enumeration that was not
+    # complete:
+    #   1. the lossy-render filter        (the measured case)
+    #   2. `BranchLegalRollError`         (per-branch support could not be priced)
+    #   3. `strict:branch_events_error`   (a whole candidate state failed to render)
+    #
+    # (1) and (2) drop a branch whose mass is known, so they accumulate into
+    # `dropped_mass`. (3) loses the branch LIST, so its mass is not merely zero,
+    # it is unknown -- and `states` is the hidden-counter candidate list, so
+    # losing one of several is the ordinary shape of (3), not a corner. The first
+    # version of this guard reported an `unknown` fraction only when
+    # `enumerated_mass == 0`, which is unreachable (a zero mass implies
+    # `usable_branches == 0`, and the all-lossy return fires first), while the
+    # REACHABLE case -- one state lost, another rendered -- printed
+    # "100 of 100 enumerated mass survived (100.00%)". That is a guessed 100 %
+    # over an incomplete enumeration: the same defect the guard exists to
+    # prevent, in the same direction, one layer up. `unrendered_states` is
+    # therefore counted separately and forces the `unknown` report whenever it
+    # is non-zero.
+    #
+    # Neither (2) nor (3) appears in any of the sweep artifacts committed under
+    # `reports/artifacts/`, so both are fail-closed guards on paths this
+    # program has not observed rather than fixes to a live number.
+    enumerated_mass = 0.0
+    dropped_mass = 0.0
+    unrendered_states = 0
     for state in states:
         try:
             rendered = json.loads(
@@ -2022,6 +2062,7 @@ def evaluate_boundary_strict(
             raise
         except BaseException as error:  # noqa: BLE001
             counts[f"strict:branch_events_error:{type(error).__name__}"] += 1
+            unrendered_states += 1
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
@@ -2043,6 +2084,7 @@ def evaluate_boundary_strict(
         for branch in branches:
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
+            enumerated_mass += float(branch.get("percentage") or 0.0)
             lossy = list(branch.get("lossy") or [])
             # A branch whose ONLY defect is the known Sleep Talk callee-identity
             # gap is still usable: its damage is real, only its attribution is
@@ -2063,6 +2105,14 @@ def evaluate_boundary_strict(
             # verified nothing -- disqualifies it.
             if not branch_render_is_usable(lossy):
                 counts["strict:lossy_render"] += 1
+                dropped_mass += float(branch.get("percentage") or 0.0)
+                enumeration_incomplete = True
+                # Subcase, so the drop is attributable. The single
+                # undifferentiated `strict:lossy_render` counter is why the
+                # marker behind 19200131/129 had to be recovered by replay
+                # rather than read off the artifact.
+                for marker in sorted(set(lossy)):
+                    counts[f"strict:lossy_render_marker:{marker.split(':')[0]}"] += 1
                 continue
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
@@ -2074,6 +2124,7 @@ def evaluate_boundary_strict(
                 )
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
+                dropped_mass += float(branch.get("percentage") or 0.0)
                 continue
             usable_branches += 1
             engine_components = damage_component_events(
@@ -2171,6 +2222,61 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
+    # DERIVED, not carried. The previous form assigned a separate boolean at each
+    # of the three sites, which is one unpinnable duplicate per site: deleting the
+    # assignment inside the state-render handler left every test green. Each of
+    # the two accumulators below is now the single source of truth for its own
+    # path, so removing either increment changes an observable number.
+    enumeration_incomplete = dropped_mass > 0.0 or unrendered_states > 0
+    if enumeration_incomplete:
+        # SOME branch was left uncompared and nothing that survived reproduced
+        # the observation. The branch that would have may be one of those, so the
+        # only honest verdict is "unmeasurable on this render", counted in its own
+        # bucket and NEVER folded into `transition:diverged`.
+        #
+        # Deliberately mass-blind: the trigger is `enumeration_incomplete`, not a
+        # fraction. A threshold ("only withhold when the majority was dropped")
+        # would put a tuned constant in front of a semantic question — the
+        # existential is unverifiable at ANY positive dropped mass, and a 1 %
+        # dropped arm is still the arm that might have matched. The surviving
+        # fraction is recorded instead of gated on, so the population stays
+        # visible and is attacked by making the renderer lossless rather than by
+        # choosing a number. `tests/test_rump_branch_adjudication.py` pins this
+        # with a MINORITY drop, which is the case a threshold would let through.
+        surviving = enumerated_mass - dropped_mass
+        counts["skip:rump_branch_set"] += 1
+        if unrendered_states or enumerated_mass <= 0.0:
+            # A candidate state produced no branch list at all, so the
+            # denominator is not `enumerated_mass` -- it is `enumerated_mass`
+            # plus an unknown amount. Any fraction computed here would be an
+            # overstatement, and at one lost state out of two it would read
+            # "100.00%". Report the loss instead of a number.
+            counts["skip:rump_branch_set_surviving_decile:unknown"] += 1
+            note = (
+                f"rump branch set: {unrendered_states} of {len(states)} candidate "
+                f"states failed to render, so the enumerated denominator is "
+                f"incomplete and the surviving fraction is UNKNOWN "
+                f"(dropped {dropped_mass:.4g} of the {enumerated_mass:.4g} that did "
+                f"enumerate); verdict withheld"
+            )
+        else:
+            # Decile of surviving mass, so "how much of its mass did the withheld
+            # verdict have" is answerable from the artifact alone.
+            counts[
+                f"skip:rump_branch_set_surviving_decile:"
+                f"{int(10 * surviving / enumerated_mass)}"
+            ] += 1
+            note = (
+                f"rump branch set: {surviving:.4g} of {enumerated_mass:.4g} enumerated "
+                f"mass survived the branch filters "
+                f"({surviving / enumerated_mass:.2%}); verdict withheld"
+            )
+        return "skip_rump", [note, *ordered], branch_total
+    # Reaching here means every enumerated branch was rendered and compared, so
+    # this divergence rests on 100 % of the enumerated mass. Counted so the
+    # invariant `transition:diverged == strict:diverged_on_full_branch_set` is
+    # checkable from the artifact rather than asserted in prose.
+    counts["strict:diverged_on_full_branch_set"] += 1
     return "diverged", ordered, branch_total
 
 
@@ -2263,10 +2369,25 @@ def run_game(
     approximate_sleep: bool,
     hidden_counter_support: bool,
     matcher: str,
+    withheld_repros: list[dict[str, Any]] | None = None,
 ) -> Counter:
     """Run one game. Divergence repros are appended to ``repros`` (capped by
     ``keep_repro``); the caller owns whether that list is per-game (checkpoint
-    records) or run-global (the final report)."""
+    records) or run-global (the final report).
+
+    ``withheld_repros`` is the SECOND, separate population: boundaries whose
+    verdict was withheld because the branch set was a rump (see
+    ``evaluate_boundary_strict``). It is separate precisely so that
+    ``repros_retained == transitions_diverged`` keeps holding — the contract
+    ``scripts/cert_sweep_reread.py`` checks — while the withheld rows still carry
+    the state needed to replay them.
+
+    Retaining that state is not a nicety. Row 19200131/129, the boundary this
+    exit was built for, was diagnosable ONLY because it happened to be retained
+    in ``repros`` as a divergence; on a reserved window, re-running its seed to
+    recover the state IS the forbidden measurement. A withheld row carrying only
+    a counter key would be permanently undiagnosable.
+    """
 
     counts: Counter = Counter()
     env.reset(seed=seed, format_id="gen3randombattle")
@@ -2390,8 +2511,50 @@ def run_game(
                 )
             continue
 
+        # THE THIRD VERDICT. `boundaries_measured` has ALREADY incremented for this
+        # boundary (`_prepare_boundary`'s last statement), so a boundary that leaves
+        # here is inside the denominator and outside both `transition:*` tallies.
+        # This is one of the two terms that make the boundary verdict partition
+        # five-term rather than two-term, not
+        # two-term -- see `verdict_partition_failures` below.
         if verdict == "skip_lossy":
             counts["skip:strict_all_branches_lossy"] += 1
+            continue
+        if verdict == "skip_rump":
+            # `skip:rump_branch_set` is incremented inside the matcher. The row
+            # goes to its OWN list, not `repros`: that list's completeness
+            # contract is `repros_retained == transitions_diverged` (checked by
+            # scripts/cert_sweep_reread.py), so a second population must sit
+            # beside it rather than inside it. The counter key is kept as well,
+            # because it is the COMPLETE index even when `withheld_repros` has
+            # been truncated by `keep_repro`.
+            counts[f"skip:rump_branch_set_row:{seed}/{steps}"] += 1
+            if withheld_repros is not None and len(withheld_repros) < keep_repro:
+                withheld_repros.append(
+                    {
+                        "kind": "verdict_withheld_rump_branch_set",
+                        "seed": seed,
+                        "step": steps,
+                        "choices": prepared["choices"],
+                        "engine_state": prepared["states"][0].to_string(),
+                        # EVERY hidden-counter candidate, so the replay
+                        # reconstructs the exact branch union the matcher saw.
+                        "engine_states": [st.to_string() for st in prepared["states"]],
+                        "gating": prepared["gating"],
+                        "party_display": prepared["party_display"],
+                        "slot_sides": prepared["slot_sides"],
+                        "turn": prepared["turn"],
+                        "pre_features": _features_payload(prepared["pre_features"]),
+                        "observed": _features_payload(observed),
+                        "observed_boost_deltas": observed_boost_deltas(step_lines),
+                        "active_changed": active_changed,
+                        "branch_count": branch_count,
+                        # The verdict that was NOT issued, kept verbatim: its
+                        # first entry is the surviving-mass line.
+                        "withheld_misses": list(misses[:12]),
+                        "protocol": list(step_lines),
+                    }
+                )
             continue
         counts[f"transition:{verdict}"] += 1
         if verdict == "diverged":
@@ -2770,6 +2933,7 @@ def checkpoint_record(
     seconds: float,
     build_check: str,
     provenance: Mapping[str, str | bool | None],
+    withheld_repros: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
@@ -2781,6 +2945,11 @@ def checkpoint_record(
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
         "repros": list(repros),
+        # Additive and always present, so a record written by this build is
+        # self-describing. Records written BEFORE this key existed are read as
+        # an empty list rather than rejected -- `--resume` and `--merge-from`
+        # over the existing checkpoint archive must keep working.
+        "withheld_repros": list(withheld_repros),
     }
 
 
@@ -2796,6 +2965,7 @@ def checkpoint_report_aggregate(
 
     totals: Counter = Counter()
     repros: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
     build_checks: set[str] = set()
     for record in records:
         build_checks.add(str(record.get("build_check", "unknown")))
@@ -2815,6 +2985,16 @@ def checkpoint_report_aggregate(
         for repro in record_repros:
             if len(repros) < keep_repro:
                 repros.append(dict(repro))
+        # ABSENT is legal (pre-C142 records); MALFORMED is not. An older record
+        # simply had no withheld population, so defaulting to empty is exact
+        # rather than lenient.
+        record_withheld = record.get("withheld_repros", [])
+        if not isinstance(record_withheld, list) or not all(
+                isinstance(row, Mapping) for row in record_withheld):
+            raise ValueError("checkpoint record has malformed withheld_repros")
+        for row in record_withheld:
+            if len(withheld) < keep_repro:
+                withheld.append(dict(row))
     # Match build_report's Counter access order so absent-but-observed-as-zero
     # aggregate fields are represented identically in report["counters"].
     measured = totals["boundaries_measured"]
@@ -2842,7 +3022,233 @@ def checkpoint_report_aggregate(
         "boundaries_full_round": full_rounds,
         "boundaries_measured": measured,
         "repros": repros,
+        "withheld_repros": withheld,
     }
+
+
+# ---------------------------------------------------------------------------------------------
+# THE BOUNDARY VERDICT PARTITION, and the false two-term identity it replaces.
+#
+# `boundaries_measured` increments as the LAST statement of `_prepare_boundary`, after
+# every skip path there has already returned `None`. So it counts boundaries that
+# reached the matcher. Exactly FOUR things can then happen to such a boundary in
+# `run_game`, and each one is counted exactly once:
+#
+#   1. the matcher raises (pyo3 panics included)  -> `engine_error`
+#   2. no branch survived the strict render       -> `skip:strict_all_branches_lossy`
+#   3. the boundary matched                       -> `transition:matched`
+#   4. the boundary diverged                      -> `transition:diverged`
+#
+# so the identity is FOUR-TERM:
+#
+#     transition:matched + transition:diverged + engine_error
+#         + skip:strict_all_branches_lossy  ==  boundaries_measured
+#
+# WHY IT IS EXHAUSTIVE, exactly. `boundaries_measured` has ONE increment site in the
+# whole repo (`_prepare_boundary`, `counts["boundaries_measured"] += 1`), and the verdict
+# domain is closed and every non-`transition:*` verdict has an explicit `continue`
+# before `counts[f"transition:{verdict}"]`, so that DYNAMIC key cannot mint an
+# uncounted term. C144 stated the closure as "three values -- `evaluate_boundary_strict`
+# and `evaluate_boundary` return only \"matched\", \"diverged\" and \"skip_lossy\"".
+# C142 makes it FOUR: `evaluate_boundary_strict` also returns "skip_rump". The
+# exhaustiveness argument is unchanged in form -- `skip_rump` has its own `continue` and
+# its own counted term -- but the enumeration had to be updated with it, which is the
+# drift C144's seam comment predicted. `_prepare_boundary` has a second
+# caller (`scripts/attest_materialized_damage_stats.py`), which is harmless only because
+# it passes a THROWAWAY `Counter()` and never publishes a report; give it the live counter
+# and the identity breaks there, silently, with no verdict ever recorded.
+#
+# ------------------------------------------------------------------------------------
+# THE SEAM: a FIFTH path exists, and the identity survives it only by an accident of
+# error handling. Say which accident, because it is load-bearing and reversible.
+#
+# Between the increment and the verdict there is a stretch of code that is NOT inside the
+# matcher's `try`: `env.step(actions)`, `_fold(cumulative)`, the `active_changed`
+# comprehension, the deliberate re-raise of `KeyboardInterrupt`/`SystemExit` from the
+# matcher's handler, and `classify_divergence` on the diverged path. An exception from any
+# of those escapes `run_game` with `boundaries_measured` already incremented and no
+# verdict counted -- a genuine fifth outcome.
+#
+# It is not a partition violation TODAY for one reason and one reason only: `counts` is a
+# LOCAL `Counter` created at the top of `run_game`, and the sweep loop calls `run_game`
+# with NO try/except around it. So a game that raises anywhere in that stretch propagates
+# out and its counts are discarded WHOLESALE -- the increment never reaches a checkpoint
+# record or a report. The partition holds because the evidence is thrown away, not because
+# the path cannot be taken.
+#
+# THE CHANGE THAT BREAKS IT, named so it is recognisable in review: "salvage the partial
+# counts so a long sweep does not lose a game" -- i.e. wrapping the `run_game` call in
+# try/except and recording `counts` anyway, or hoisting `counts` out of `run_game` so the
+# caller owns it. Either makes the identity FIVE-term instantly, and the new term has no
+# name because nothing counts it. If you make that change, count the escape explicitly
+# (e.g. `boundary_abandoned_after_measure`) and add it to VERDICT_PARTITION_SCALARS or
+# VERDICT_PARTITION_COUNTERS, rather than discovering the drift from a report that no
+# longer reconciles.
+# ------------------------------------------------------------------------------------
+#
+# The two-term form `matched + diverged == boundaries_measured` was asserted as a
+# property of this instrument across reports/ and docs/ and is FALSE. It held on most
+# windows only because both extra terms were 0 there, and it is measurably broken on
+# committed artifacts: `reports/c26_structural_probe_report.json` and
+# `reports/c27_structural_probe_report.json` (lossy 2 each) and C141's final-holdout
+# sweep (lossy 4). See `reports/c144_boundary_identity_correction.md`.
+#
+# Counters that must NOT be folded in, because they are not boundary verdicts:
+# `strict:lossy_render`, `strict:sleeptalk_union_branch`, `strict:no_damage_rolls`,
+# `strict:branch_events_error:*` and `strict:branch_event_legal_error:*` are
+# PER-BRANCH or PER-STATE tallies within one boundary -- C141's holdout has
+# `strict:lossy_render` 14 against only 4 boundaries that lost every branch.
+# `gating:*` partitions the measured set a second, independent way, and
+# `divergence_class:*` partitions `transition:diverged` alone.
+#
+# The remaining `skip:*` counters -- every one not in
+# `VERDICT_PARTITION_SKIP_COUNTERS` -- fire BEFORE `boundaries_measured` increments and
+# belong to the coverage reconciliation instead
+# (`tests/test_single_seat_coverage_bound.py`).
+#
+# C144 wrote that as "every `skip:*` counter OTHER than `skip:strict_all_branches_lossy`
+# fires before `boundaries_measured` increments". C142's `skip:rump_branch_set` falsifies
+# it as stated: it is a `skip:*` counter, it is not the lossy one, and it fires after.
+#
+# The membership test is THREE conditions, and firing late is only the first of them:
+#
+#   1. the counter increments only AFTER `boundaries_measured` has incremented for that
+#      boundary -- otherwise the boundary is not in the denominator at all;
+#   2. the increment is the boundary's TERMINAL VERDICT: at most one per boundary, and
+#      mutually exclusive with `transition:matched` / `transition:diverged`. In the code
+#      that is literally the `continue` in `run_game` that skips
+#      `counts[f"transition:{verdict}"] += 1`; and
+#   3. it is the UNKEYED verdict counter. A per-boundary attribution sub-key -- this
+#      exit's own `skip:rump_branch_set_row:{seed}/{step}` and
+#      `skip:rump_branch_set_surviving_decile:{N}` -- is an ATTRIBUTE of a verdict already
+#      counted, not a second verdict, and summing it double-counts its boundary.
+#
+# Condition 3 is not decoration: without it the definition over-admits this exit's own
+# siblings, which satisfy 1 and 2 exactly (each fires once per withheld boundary, after
+# the measure, and never alongside a `transition:*`). Four withheld boundaries carrying
+# both families sum to 108 against `boundaries_measured` 100 under a 1+2-only reading.
+# The SHIPPED tuple is an explicit two-name list and closes correctly, so this is a
+# defect in the stated rule rather than in the code -- but the rule is cited as settled
+# in `reports/c144_boundary_identity_correction.md`, and it has already needed one
+# retraction, so it is stated correctly here rather than left to be re-derived.
+#
+# Condition 1 alone is NOT sufficient, and the counterexamples are in the paragraph
+# above. `gating:*` increments on the line immediately after `boundaries_measured`, and
+# every `strict:*` counter in this function fires later still -- `evaluate_boundary_strict`
+# is called after `_prepare_boundary` has returned. None of them is a partition term,
+# because each fails condition 2: `strict:lossy_render` can increment many times for one
+# boundary and leaves the boundary free to receive an ordinary verdict. C141's holdout
+# is the measurement -- `strict:lossy_render` 3, every boundary `matched`, identity
+# closes -- and `tests/test_boundary_verdict_partition.py` pins exactly that shape.
+#
+# So: NOT the counter's prefix, and NOT timing alone. Terminal-verdict-ness is the
+# discriminator; late firing is the precondition that makes it visible in this identity.
+# ---------------------------------------------------------------------------------------------
+
+# The four verdict terms as a report PUBLISHES them: three top-level scalars and one
+# counter. The lossy term has no top-level scalar, which is a large part of why the
+# published identity was read as two-term for so long -- the other three are right
+# there in the summary block and the fourth has to be dug out of `counters`.
+VERDICT_PARTITION_SCALARS = ("transitions_matched", "transitions_diverged", "engine_errors")
+# The post-measurement SKIP verdicts, which have no top-level scalar and must be dug
+# out of `counters`. C144 shipped this as a single name; C142 added the second, doing
+# exactly what C144's own instruction above said to do rather than letting the
+# identity drift.
+#
+# Both satisfy BOTH membership conditions stated above: each fires only after
+# `boundaries_measured` has incremented, AND each is a terminal verdict -- at most one
+# increment per boundary, `continue`ing past `counts[f"transition:{verdict}"]`. Timing
+# alone would also admit `gating:*` and every `strict:*` counter, none of which is a
+# verdict; the prefix would admit the pre-measurement `skip:*` counters, which are not in
+# the denominator. Neither shortcut is the rule.
+VERDICT_PARTITION_SKIP_COUNTERS = (
+    "skip:strict_all_branches_lossy",
+    "skip:rump_branch_set",
+)
+# Retained as the name C144's consumers import. It is the FIRST of the skip terms, no
+# longer the only one; code that needs the whole partition must use the tuple.
+VERDICT_PARTITION_LOSSY_COUNTER = VERDICT_PARTITION_SKIP_COUNTERS[0]
+# The same partition in the internal counter vocabulary `run_game` increments, in
+# report-field order. `checkpoint_report_binding_failures` is what binds the two
+# vocabularies together; this function does not re-check that binding.
+VERDICT_PARTITION_COUNTERS = (
+    "transition:matched",
+    "transition:diverged",
+    "engine_error",
+    *VERDICT_PARTITION_SKIP_COUNTERS,
+)
+
+
+def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "report") -> list[str]:
+    """Return every way the boundary verdict partition fails to close.
+
+    Empty means it closes. Callers OR this into their own gate; it never lowers an
+    exit code.
+
+    Reads ``transitions_matched``, ``transitions_diverged``, ``engine_errors`` and
+    ``boundaries_measured`` from the report's top level and
+    every name in ``VERDICT_PARTITION_SKIP_COUNTERS`` from its counter dump. The skip
+    counters are the only terms allowed to default -- to 0, because a Counter dump omits
+    unseen keys and the non-strict matcher never emits them at all. Everything else is
+    REFUSED when absent or non-integer rather than defaulted, because defaulting
+    ``boundaries_measured`` to 0 would let the identity close on an unreadable
+    report, which is the instrument-that-cannot-move failure this repo keeps
+    rediscovering.
+    """
+
+    if not isinstance(report, Mapping):
+        return [f"{label}: report is not an object, so the verdict partition cannot be checked"]
+    out: list[str] = []
+    measured = report.get("boundaries_measured")
+    if type(measured) is not int or measured < 0:
+        out.append(
+            f"{label}: boundaries_measured is {measured!r}, not a non-negative int, so the "
+            "verdict partition cannot be checked"
+        )
+    terms: dict[str, int] = {}
+    for name in VERDICT_PARTITION_SCALARS:
+        value = report.get(name)
+        if type(value) is not int or value < 0:
+            out.append(f"{label}: {name} is {value!r}, not a non-negative int")
+            continue
+        terms[name] = value
+    counters = report.get("counters")
+    if not isinstance(counters, Mapping):
+        out.append(f"{label}: counters is not an object, so the skip verdicts cannot be read")
+    else:
+        for name in VERDICT_PARTITION_SKIP_COUNTERS:
+            value = counters.get(name, 0)
+            if type(value) is not int or value < 0:
+                out.append(f"{label}: counter {name!r} is {value!r}, not a non-negative int")
+            else:
+                terms[name] = value
+    if out:
+        return out
+    accounted = sum(terms.values())
+    if accounted != measured:
+        breakdown = " + ".join(f"{name}={value}" for name, value in terms.items())
+        gap = abs(measured - accounted)
+        # Direction is diagnostic, so name BOTH causes rather than guessing. A tally
+        # exceeding the denominator is what a two-term writer produces (the missing
+        # verdict never entered `boundaries_measured`); a denominator exceeding the
+        # tally is what a new uncounted post-measurement exit produces.
+        cause = (
+            f"{gap} more verdicts than measured boundaries — either a boundary was "
+            "counted under two verdicts, or boundaries_measured was derived from a "
+            "partition that omits a term"
+            if accounted > measured
+            else f"{gap} measured boundaries carry no verdict — either a verdict "
+            "counter is missing from this tally, or run_game grew a post-measurement "
+            "exit that nothing counts"
+        )
+        out.append(
+            f"{label}: the boundary verdict partition does not close — {breakdown} = "
+            f"{accounted} against boundaries_measured {measured}; {cause}. The identity "
+            "is five-term (matched + diverged + engine_errors + "
+            "skip:strict_all_branches_lossy + skip:rump_branch_set); a two-term reading "
+            "of it is the C144 defect."
+        )
+    return out
 
 
 def checkpoint_report_binding_failures(
@@ -2879,6 +3285,20 @@ def checkpoint_report_binding_failures(
         failures.append("report repro_retention.transitions_diverged does not match the checkpoint aggregate")
     if retention.get("repros_retained") != len(aggregate["repros"]):
         failures.append("report repro_retention.repros_retained does not match the checkpoint aggregate")
+    # Checked, because a stale report that dropped the withheld population would
+    # otherwise pass certification and those rows are the only replayable record
+    # of boundaries the harness declined to judge.
+    #
+    # Checked with a DEFAULT, because every certification report written before
+    # C142 has no such key and an empty aggregate: absent-and-empty is
+    # consistent, not a mismatch. Demanding the key outright failed the whole
+    # existing archive, which is a compatibility break dressed as a gate. The
+    # fail-closed property survives: a report that drops a NON-empty withheld
+    # population still mismatches, because the aggregate is non-empty.
+    if report.get("withheld_repros", []) != aggregate["withheld_repros"]:
+        failures.append("report withheld_repros does not match the checkpoint aggregate")
+    if retention.get("withheld_retained", 0) != len(aggregate["withheld_repros"]):
+        failures.append("report repro_retention.withheld_retained does not match the checkpoint aggregate")
     return failures
 
 
@@ -2996,6 +3416,7 @@ def build_report(
     aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
     totals: Counter = Counter(aggregate["counters"])
     repros: list[dict[str, Any]] = list(aggregate["repros"])
+    withheld: list[dict[str, Any]] = list(aggregate["withheld_repros"])
     seeds: list[int] = []
     total_seconds = 0.0
     provenance_rows: list[Mapping[str, Any]] = []
@@ -3035,6 +3456,13 @@ def build_report(
             "repros_retained": len(repros),
             "transitions_diverged": totals["transition:diverged"],
             "repros_complete": len(repros) >= totals["transition:diverged"],
+            # The withheld population is declared with the same three facts and
+            # kept STRICTLY SEPARATE, so `repros_retained == transitions_diverged`
+            # continues to mean exactly what cert_sweep_reread.py reads it to
+            # mean.
+            "withheld_retained": len(withheld),
+            "verdicts_withheld": totals["skip:rump_branch_set"],
+            "withheld_complete": len(withheld) >= totals["skip:rump_branch_set"],
         },
         "gating_exact": totals["gating:exact"],
         "gating_support_based": totals["gating:support"],
@@ -3054,6 +3482,7 @@ def build_report(
         "divergence_classes": aggregate["divergence_classes"],
         "counters": dict(sorted(totals.items())),
         "repros": repros,
+        "withheld_repros": withheld,
         "checkpoint_provenance": {
             "records_with_provenance": len(provenance_rows),
             "complete": len(provenance_rows) == games,
@@ -3336,11 +3765,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "acceptance-eligible.",
                 file=sys.stderr,
             )
-        print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
+        print(json.dumps(
+            {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
+            indent=2,
+        ))
         if args.json:
             Path(args.json).write_text(json.dumps(report, indent=2))
             print(f"-> {args.json}")
-        return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
+        # SELF-CHECK on the instrument, after the artifact is written so no compute is
+        # lost. If the verdict partition does not close, the counters in the file just
+        # written do not account for every boundary the merge measured, and no number in
+        # it is safe to quote. C144.
+        partition = verdict_partition_failures(report, label="merged report")
+        for reason in partition:
+            print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
+        return 1 if (
+            report["transitions_diverged"] or report["engine_errors"] or partition
+        ) else 0
 
     if args.resume and not args.checkpoint:
         parser.error("--resume requires --checkpoint")
@@ -3391,6 +3832,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for index, seed in enumerate(todo, start=1):
             game_started = time.perf_counter()
             game_repros: list[dict[str, Any]] = []
+            game_withheld: list[dict[str, Any]] = []
             counts = run_game(
                 env=env,
                 flags_policy=flags_policy,
@@ -3402,6 +3844,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approximate_sleep=args.approximate_sleep,
                 hidden_counter_support=not args.no_hidden_counter_support,
                 matcher=args.matcher,
+                withheld_repros=game_withheld,
             )
             record = checkpoint_record(
                 seed=seed,
@@ -3410,6 +3853,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seconds=time.perf_counter() - game_started,
                 build_check=build_check,
                 provenance=provenance,
+                withheld_repros=game_withheld,
             )
             records.append(record)
             if handle is not None:
@@ -3443,11 +3887,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         keep_repro=args.keep_repro,
         repros_per_game=args.repros_per_game,
     )
-    print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
+    print(json.dumps(
+        {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
+        indent=2,
+    ))
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
         print(f"-> {args.json}")
-    return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
+    # SELF-CHECK on the instrument, after the artifact is written so a long sweep loses
+    # nothing. See the merge path above and C144.
+    partition = verdict_partition_failures(report, label="report")
+    for reason in partition:
+        print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
+    return 1 if (
+        report["transitions_diverged"] or report["engine_errors"] or partition
+    ) else 0
 
 
 if __name__ == "__main__":
