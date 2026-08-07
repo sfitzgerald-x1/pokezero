@@ -189,10 +189,25 @@ Kept because the failure is more useful than the conclusion.
 2. **It said "at the production config" for a depth-4/1024 measurement.** Production is
    depth 2 / 256. The heading was honest; the sentence that rejected option (a) was not.
 3. **It reported 34 branches for the enumerated Fire Blast fixture. The answer is 65.**
-   34 is the *other* demonstration's branch count. It is self-refuting — 64 cells cannot
-   be filled by 34 branches, since each branch maps to one cell — and it survived because
-   the demonstrations have no committed artifact while the PR body claimed every figure
-   came from one.
+   34 is the *other* demonstration's branch count. It did **not** survive because an
+   artifact was missing — an earlier draft of this post-mortem said that, and it is the
+   comfortable explanation. It survived because nobody did the arithmetic, and 34 against
+   64 cells is visibly inconsistent on sight, since each branch maps to exactly one cell.
+   Every figure in §1 is forced, so all of them are checkable without running anything:
+
+   - **65** = 1 miss + (16 non-crit rolls 133–157 + 16 crit rolls 266–314, none clamped at
+     hp 404) × 2 burn outcomes. **5 collapsed** = 1 miss + 2 non-crit + 2 crit — the same
+     structure at two resolutions.
+   - **145**, the collapsed representative, = `(157 × 0.925) as i16`, and is not a fan
+     member: `157×92/100 = 144` and `157×93/100 = 146` bracket it.
+   - **34** is forced by demo 2's hp 206: all 16 crit rolls clamp to 206, giving 17 groups
+     × 2 burn.
+   - **5.810547 %** = `0.85 × [1/16 + (15/16)(1/16)(0.10)]`; collapsed **5.3125 %** =
+     `0.85/16`, the crit mass alone.
+
+   A committed log could only be trusted; a derivation can be checked. The demonstration
+   script and its output are owed on the PR that lands the flag, where the producer will be
+   in the tree and the artifact will be reproducible.
 4. **The survivorship argument was misattributed and wrong.** C119 (`reports/c119_phase2_scoping.md`, commit `66723d2f` — it is in branch history, not on `main`) annotates every "no" by
    *class* — "it cannot change a move-legality predicate, a renderer tag, a
    boundary-pairing marker, or a missing mechanic" — never by tractability, and **11 of
@@ -200,7 +215,7 @@ Kept because the failure is more useful than the conclusion.
    prediction was "conservative" is also false: it registered 2 holdout rows firmly and
    exactly 2 closed. That reading was reached by pooling dev and holdout into a
    holdout-scoped prediction.
-5. **Smaller:** seven `residual-mass-*` probes, not six; only 3 of the 14 failures are
+5. **Smaller:** seven `residual-mass-*` probes, not six; only 4 of the 14 failures are
    branch-count assertions; and `19000191/63` was labelled with the superseded C111/C115
    "collapsed lethal arm" diagnosis that c133 explicitly corrected.
 
