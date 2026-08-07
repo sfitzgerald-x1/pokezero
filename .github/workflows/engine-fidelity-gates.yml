@@ -194,7 +194,14 @@ jobs:
           workspaces: rust/pokezero-search
 
       - name: Install build tooling
-        run: python -m pip install -e . maturin
+        # numpy is explicit rather than implied. It is an OPTIONAL dependency (the `neural`
+        # extra in pyproject.toml), but three of the four differential harnesses --
+        # leaf_vs_reality.py, leaf_root_parity.py and prior_mapping_assert.py -- `import numpy`
+        # at module level. Without it they cannot be IMPORTED here at all, so the denominator
+        # step's acceptance subtests errored for three of four harnesses on this step's first
+        # real CI run. Installing the extra itself would drag in torch for nothing; numpy alone
+        # is what the harnesses actually need.
+        run: python -m pip install -e . maturin numpy
 
       # The patch stack must apply at fuzz 0 and hash to its pins before anything is
       # built. This is also the tamper guard: PATCHED_TARGET_TREE_SHA256 rejects a
