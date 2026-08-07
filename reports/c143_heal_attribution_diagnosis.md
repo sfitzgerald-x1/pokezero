@@ -195,12 +195,22 @@ active as `unknown5`; the rewrite counters exist so that failure cannot recur si
 probe.** The repricer originally did not clamp the mirror at max HP and synthesised an impossible
 `270/268`. With the clamp in place, representatives 135 and 136 each price **two** columns, not one.
 
-**Which rule does that — corrected, and my own measurement is what refutes the first answer.** A
-saturating heal is relabelled `heal_to_full` by `damage_component_events`, and revisions 1–2 of this
-report said the promoted component then falls into "ledger H8's `[0.92·eng − 1, 1.09·eng + 1]`
-window". **That is the wrong rule, and it is wrong in a way the measurement already contradicted:**
-H8's window around the engine's cap of 45 is `[40.40, 50.05]`, which admits **five** achievable
-mirrors — 47, 46, 44, 43 and 41 — and I measured **two**.
+**Which rule does that — corrected. The first answer was not merely unsourced; it was contrary to an
+adjudicated verdict already on disk.** A saturating heal is relabelled `heal_to_full` by
+`damage_component_events`, and revisions 1–2 of this report said the promoted component then falls into
+"ledger H8's `[0.92·eng − 1, 1.09·eng + 1]` window". That is wrong three times over, in increasing
+order of severity:
+
+1. **My own measurement contradicted it.** H8's window around the engine's cap of 45 is
+   `[40.40, 50.05]`, which admits **five** achievable mirrors — 47, 46, 44, 43 and 41 — and I measured
+   **two**.
+2. **The code takes a different branch**, which never reaches that window at all (below).
+3. **A window is the one thing this rule was adjudicated *not* to be.**
+   `docs/engine_divergence_ledger_20260728.md` §C.2 settled this exact tolerance and wrote the
+   prohibition into its verdict: *"only the magnitude is relaxed, and only in the capped direction
+   (clipping can only reduce, so the test is an **inequality, not a window**)"*. So the H8 attribution
+   did not merely lack a citation — it asserted the design that a verdict on disk had explicitly
+   rejected, and it did so in a section correcting an earlier unverified mechanism.
 
 The binding rule is the `_to_full` branch of `roll_components_agree`
 (`scripts/engine_transition_differential.py:984-1020`), which `continue`s out of the loop and so never
@@ -217,24 +227,21 @@ Together: `[45, 50]`. Intersected with the 14 achievable mirrors that leaves exa
 Measured directly against the shipped function — `m=44,43,41` rejected, `m=45,46,47` accepted — so the
 count of two is the direction rule's, not a window's.
 
-**This tolerance is not an implementation detail — it is an adjudicated design decision**, recorded in
-`docs/engine_divergence_ledger_20260728.md` **§B.4** (`:1005`, where `magnitude:heal` was filed
-UNRESOLVED with two hypotheses) and **§C.2** (`:1278`, *"The move-heal class (B.4) was a matcher
-defect — verdict"*), which settles it: *"a heal that **caps at max HP** restores `maxhp − hp`, so its
-magnitude is set by whatever damage landed earlier in the same turn — it inherits that hit's roll"*,
-and the fix is *"only the magnitude is relaxed, and only in the capped direction (clipping can only
-reduce, so the test is an **inequality, not a window**)"*. C.2's own worked case is seed 1310001 step
-72 — Showdown healed **251** from 2 HP, the engine **247** from 6 HP, same mechanic, different Surf
-roll — which is the same case the code comment I quoted above names as "the motivating Rest case, 251
-vs 247". Same lineage, and C.2 records the class as *gone from the residue*.
+**Where the verdict lives, and that the lineage is direct rather than analogous.** §B.4
+(`docs/engine_divergence_ledger_20260728.md:1005`) filed the `magnitude:heal` class UNRESOLVED with two
+hypotheses; §C.2 (`:1278`, *"The move-heal class (B.4) was a matcher defect — verdict"*) settled it:
+*"a heal that **caps at max HP** restores `maxhp − hp`, so its magnitude is set by whatever damage
+landed earlier in the same turn — it inherits that hit's roll"*, and records the class as *gone from
+the residue*. C.2's worked case is **seed 1310001 step 72 — Showdown healed 251 from 2 HP, the engine
+247 from 6 HP, same mechanic, different Surf roll** — which is the *same case* the code comment quoted
+above names as "the motivating Rest case, 251 vs 247". Not an analogous precedent: the same defect, the
+same numbers, the same fix, still doing its job in the function I measured.
 
-So C.2's "inequality, not a window" is the direct, adjudicated refutation of the H8 attribution I had
-written: the admitting rule was **designed** not to be a window. The family label
-`I3_roll_inherited` (**H19**) is where the ledger still tracks the *unadjudicated remainder* of this
-shape, and `reports/c101_i3_painsplit_tolerance_derivation.json:43` ties the two together, citing
-"ledger B.4" beside the same code site; `reports/c9_decomposition.json` and
-`reports/c12_decomposition.json` each cite the "B.4/C.2 family" three times. Calling the rule merely
-"unadjudicated" understated how settled it is, and that is corrected here.
+`I3_roll_inherited` (**H19**) is where the ledger tracks the still-*unadjudicated remainder* of this
+shape — not the home of the rule, which is what revision 3 implied by crediting H19 alone and calling
+it "unadjudicated". `reports/c101_i3_painsplit_tolerance_derivation.json:43` ties the two together,
+citing "ledger B.4" beside the same code site, and `reports/c9_decomposition.json` and
+`reports/c12_decomposition.json` each cite the "B.4/C.2 family" three times.
 
 **H8 is a different mechanism** — the `pre_legal`-absent proportional fallback — and its own cell says
 "UNKNOWN how much" matched mass rides on it while prescribing a settling measurement. Attaching these
@@ -253,6 +260,16 @@ cells to it would have inflated its reach in the durable ledger.
 > comparison, the count of two, the refusal to cite blind — while the supporting mechanism or scope went
 > unverified; and all three were fixed by opening the file rather than reasoning about which answer must
 > apply.
+>
+> **A fourth instance, outside the diagnosis, in the act of merging it.** This PR sat at
+> `mergeStateStatus: BLOCKED` with `reviews: []`, and both I and the coordinator inferred that the
+> missing GitHub review must be the blocker — plausible, and wrong.
+> `gh api repos/:owner/:repo/branches/main/protection` has **no `required_pull_request_reviews` key at
+> all**; the sole required context is `gate-status`, and it had simply not reported yet.
+> (`enforce_admins: true`, so the `--admin` bypass I declined would have failed regardless.) Two
+> API calls settled what two rounds of reasoning had not. Same shape as the three above: a mechanism
+> inferred from a symptom instead of read from the source, by both parties, in the process of
+> correcting exactly that habit.
 
 **The saturation claim is now a census, not a sample.** The matrix was re-run over the **whole
 14-roll band plus the off-fan shipping representative — 15 rows × 14 columns, 210 cells** — and
