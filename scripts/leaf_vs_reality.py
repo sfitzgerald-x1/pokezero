@@ -85,6 +85,8 @@ from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT  # noqa: E402
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 
 from fidelity_gate_events import (  # noqa: E402
+    anchor_observation_metadata,
+    production_recharging_slots,
     branch_matches_target,
     candidate_action_actors,
     chosen_candidate,
@@ -182,16 +184,22 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 #   - OPPONENT side: LIVE. It was the one pack member that did not merely go stale at a leaf but
 #     contradicted the same observation's action surface, which reads the MUSTRECHARGE volatile
 #     live; leaf.rs refreshes opponent_must_recharge from the branch's own volatile_statuses.
-#   - SELF side: ROOT-FROZEN, and deliberately so. MUSTRECHARGE only enters a world through
-#     recharging_slots, and the live producer (engine_search.py::_recharging_slots) never returns
-#     our own slot — so deriving it from volatile_statuses would write False at depth 0 for a
-#     genuinely recharging self mon and REGRESS root/leaf parity. Frozen is correct until
-#     _recharging_slots is made symmetric.
-# NOTE for anyone testing this area: the depth-0 gates below (and leaf_root_parity.py,
-# prior_mapping_assert.py, fidelity_gate_events.py) all derive `recharging` for BOTH slots from
-# the recorded chosen candidate. That is NOT what production builds, so these gates would ratify
-# a symmetric self-side write rather than catch it. Verify against engine_search's world, not
-# the gate's.
+#   - SELF side: STILL ROOT-FROZEN IN leaf.rs, but the reason it was frozen is gone. The freeze
+#     was correct only because `engine_search.py::_recharging_slots` never returned our own slot,
+#     so deriving the flag from volatile_statuses would have written False at depth 0 for a
+#     genuinely recharging self mon and REGRESSED root/leaf parity. _recharging_slots is now
+#     SYMMETRIC: it locks our slot from the parser's `self_must_recharge`, the same tracker that
+#     feeds the opponent side. The root world therefore carries the volatile, and the depth-0
+#     regression the freeze avoided can no longer happen. Making the leaf side live is a
+#     rust-side change and is NOT done here — but it is now unblocked, and the gates below can
+#     hold it honest, which they could not before.
+# NOTE for anyone testing this area: the four gates USED to derive `recharging` for BOTH slots
+# from the recorded chosen candidate, which seeded each gate's world from the very thing it was
+# checking — so they would ratify a self-side write rather than catch it. They now use
+# fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and reads the
+# parser tracker. Independence from the recorded action is the property that lets them catch a
+# bad write; symmetry is what keeps the two boundaries MEASURED. Both are needed and they are
+# different properties. See tests/test_recharge_gate_derivation.py.
 # The matchup pair, written from the fold since `matchup_counters` reached `ProductsData`. It used
 # to sit in V4_ROOT_FROZEN_PACK_COLUMNS below, which was never a designed freeze -- the counters
 # lived in the fold but were not carried on ProductsData, so the leaf fell through to the root
@@ -428,16 +436,15 @@ def drive_pair(
     teams = {slot: unpack_team(packed[slot]) for slot in ("p1", "p2")}
     party_display = {slot: [mon.species for mon in teams[slot]] for slot in ("p1", "p2")}
 
-    recharging = []
-    for slot in ("p1", "p2"):
-        row = decisions.get((battle_id, round_n, slot))
-        candidate = chosen_candidate(row) if row is not None else None
-        if (
-            candidate is not None
-            and candidate.get("kind") == "move"
-            and normalize_id(str(candidate.get("move_id") or "")) == "recharge"
-        ):
-            recharging.append(slot)
+    # PRODUCTION's derivation, not the recorded candidate's. Deriving `recharging` from the
+    # chosen action seeded this gate's world from the thing the gate is checking, so the world
+    # could only ever agree -- the "would ratify a symmetric write rather than catch a bad one"
+    # warning that leaf.rs and leaf_vs_reality.py both carry. See
+    # fidelity_gate_events.production_recharging_slots.
+    recharging = production_recharging_slots(
+        anchor_observation_metadata(decisions.get((battle_id, round_n, seat))),
+        seat,
+    )
     truant = truant_loaf_slots(history_lines, payload, teams)
 
     override = BattleStartOverride(player_teams={"p1": packed["p1"], "p2": packed["p2"]})
