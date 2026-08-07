@@ -2149,8 +2149,13 @@ fn render_move_phase(
                             //
                             // * It counts BRANCH RENDERS, not worlds. The enclosing `price`
                             //   closure runs once per expanded branch seam (`tree.rs`
-                            //   `expand_edge`), summed over every world and decision in the
-                            //   shard. Era 62's 3,365 is a WORLD count. One world expands
+                            //   `expand_edge`), summed over every SEARCH INVOCATION and
+                            //   decision in the shard -- invocation, not world: with
+                            //   `early_stop` on, a stopped world is replayed at full budget
+                            //   and `_absorb_lossy_subcases` runs on both passes over a
+                            //   freshly re-expanded tree, so that world contributes twice.
+                            //   `early_stop` defaults off, so this is latent, not live.
+                            //   Era 62's 3,365 is a WORLD count. One world expands
                             //   many branches carrying the same Protect-blocked tail, so the
                             //   two are NOT commensurable and must not be differenced.
                             //
@@ -2169,8 +2174,13 @@ fn render_move_phase(
                             // searched, not merely re-refused one branch later. Zero is
                             // ambiguous; nonzero is not. That asymmetry is the whole value,
                             // and it is worth having precisely because the fallback RATE
-                            // cannot supply it -- the rate moves for nine commits' worth of
-                            // reasons, this counter for one.
+                            // cannot supply it: the rate between eras 62 and 63 moves for
+                            // nine commits' worth of reasons, so a fall in it is not
+                            // evidence about #1157. The ASYMMETRY here is. Note the scope --
+                            // only the zero/nonzero bit is robust. The MAGNITUDE is a raw
+                            // volume and moves with search_sims, batch size, decisions and
+                            // games per shard, and the early-stop replay factor, so it must
+                            // not be read as a rate or differenced across eras.
                             //
                             // `mark_lossy_subcase`, NOT a new lossy tag. It pushes the SAME
                             // `SLEEPTALK_LOSSY_TAG` that the accepting path above already
@@ -7066,6 +7076,16 @@ mod tests {
             let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
+        // The Protect counter's literal, through the PRODUCTION gate rather than a
+        // membership check. Strictly stronger: membership passes a re-composed literal that
+        // the gate would reject. Its caller is `mark_lossy_subcase`, which does NOT reach
+        // this gate today -- the `&'static str` bound on its `subcase` keeps that caller set
+        // literals-only and greppable, so running them through here is what makes closing
+        // that asymmetry safe later.
+        assert_subcase_vocabulary(
+            SLEEPTALK_LOSSY_TAG,
+            "sleeptalk_called_unidentified:protect_marker_rendered",
+        );
         // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
         // shape and a real world can carry several, so each must clear the gate.
         let mut several = NoneMatchedShapes::default();

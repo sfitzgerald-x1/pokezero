@@ -781,6 +781,24 @@ fn protected_memento_emits_one_protect_activation() {
     assert_eq!(branches.len(), 1, "{branches:?}");
     let rendered = rendered(&mut state, &branches[0]);
     assert!(rendered.attribution_unsafe.is_empty(), "{rendered:?}");
+    // AND NOT LOSSY AT ALL. This is a NAMED-callee Protect render on a fully clean branch,
+    // and `set(lossy)` here must stay EMPTY.
+    //
+    // It guards the safety argument for the Protect render counter in the unnamed-callee
+    // walk. That counter is safe only because the walk has ALREADY pushed
+    // `SLEEPTALK_LOSSY_TAG`, so `set(lossy)` does not move. There are three OTHER
+    // `|-activate|...|Protect` sites on the named path, and the obvious next edit for
+    // anyone reading "COUNT IT" is to add the same call to them. Doing that here would take
+    // `set(lossy)` from `{}` to `{sleeptalk_called_unidentified}` on a branch where Sleep
+    // Talk never ran -- which makes `fidelity_gate_events.py` and `leaf_vs_reality.py` drop
+    // the row as `skip:lossy_render`, flips the transition differential's `sleeptalk_union`,
+    // and counts a `lossy_render` that is not lossy.
+    //
+    // Found by review as mutant N9, which passed all 423 tests: this test asserted the full
+    // `lines` vector and `attribution_unsafe`, but never `lossy`. Production-only defects
+    // are the reason the counter is pinned by assertion rather than by comment, and the pin
+    // covered only the call site that exists.
+    assert!(rendered.lossy.is_empty(), "{rendered:?}");
     assert_eq!(
         rendered.lines,
         vec![
@@ -2582,6 +2600,19 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
             // to, because the number it inflates is the one the next era reads as evidence
             // the fix worked -- and M3 only covers over-firing on the WRONG branch, not
             // twice on the right one.
+            // KNOWN COVERAGE LIMIT, stated rather than implied. `markers` is 1 in every
+            // branch this fixture generates, so this is operationally `counted == 1` and it
+            // does NOT distinguish once-per-line from once-per-branch: review's N3, which
+            // hoists the push to a single one-per-branch call, survives all 423 tests. It
+            // does kill the duplicate-push mutant, which is the failure direction named
+            // above.
+            //
+            // The denominator is exact despite being a substring match. The renderer has
+            // exactly four `|Protect` producers and all four are `|-activate|{ident}|Protect`
+            // -- `|-singleturn|...|Protect` is never emitted, and move ids render lowercase
+            // so `|move|...|protect` cannot collide with a case-sensitive match. THREE of
+            // the four are NAMED-path sites this counter must never count; the clean-branch
+            // pin in `protected_memento_emits_one_protect_activation` is what holds that.
             let markers = events.matches("|Protect").count();
             let counted = r
                 .lossy_subcases
@@ -2652,7 +2683,7 @@ fn without_the_protect_volatile_no_protect_line_is_invented() {
             "a Protect line was invented with no PROTECT volatile in state:\n{events}"
         );
         // The COUNTER must be silent too. A counter that fires without a rendered line
-        // inflates the one number era 64 reads to decide whether the marker works, and
+        // inflates the one number era 63 reads to decide whether the marker works, and
         // it inflates it in the direction that manufactures a win.
         assert!(
             !r.lossy_subcases
