@@ -390,10 +390,11 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // The `none_matched` DIVERGENCE SHAPES. era 60 measured that class at 3,595 world
     // failures with no way to say why, and the era-60 measurement states it "must be
     // classified before it can be fixed". These SEVEN are that classification, and the
-    // ownership split is the point: `values_only` means the renderer regenerated the right
-    // transition and disagreed about a NUMBER -- a roll or a merged chance branch, neither
-    // fixable here -- while `structure` and `length` mean it regenerated a different
-    // transition, which is a candidate-set or state-input bug and IS fixable here.
+    // The two-way ownership split this comment once drew -- `values_only` unfixable here,
+    // `structure`/`length` a candidate-set bug -- is RETRACTED in both directions. The
+    // `NoneMatchedShape` doc records `ValuesOnly` measured 132/132 RENDERER-side in C31, so
+    // it is no ownership verdict; and the containment split means a length difference can
+    // indicate an over-long TAIL rather than a wrong candidate. These name PREDICATES.
     // PREFIXED. `SUBCASE_VOCABULARY` is shared across every lossy tag and
     // `assert_subcase_vocabulary` validates per token with no tag scoping, so registering the
     // bare words `structure`, `length` and `empty` would weaken the gate for unrelated
@@ -401,8 +402,8 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // would start passing. That gate is a PRODUCTION assert, so this reaches past tests.
     "shape_same_variants_and_sides",
     "shape_structure",
-    "shape_prefix",
-    "shape_suffix",
+    "shape_branch_is_prefix_of_tail",
+    "shape_tail_is_prefix_of_branch",
     "shape_length",
     "shape_empty",
     "shape_no_candidates",
@@ -4108,14 +4109,19 @@ pub enum NoneMatchedShape {
     /// regenerated BRANCH the shorter one. The candidate reproduced the head of the tail
     /// exactly and the tail continues past it.
     ///
-    /// This is the shape that would indicate an OVER-LONG TAIL rather than a wrong callee:
-    /// `tail` is `&segment[cursor..]`, which runs to the end of the segment, while
+    /// CONSISTENT WITH an over-long tail rather than a wrong callee: `tail` is
+    /// `&segment[cursor..]`, which runs to the end of the segment, while
     /// `generate_instructions_from_move` produces only the callee's own instructions.
-    /// Whether it actually dominates is an OPEN QUESTION this token exists to answer.
-    Prefix,
+    ///
+    /// It does NOT establish that. Prefix containment is not callee identity: a WRONG callee
+    /// whose head coincidentally matches -- one `Damage` of the right amount on the right
+    /// side, which short branches make likely -- lands here too. A high count narrows the
+    /// search; it does not license bounding the tail on its own. Whether it dominates at all
+    /// is an OPEN QUESTION this token exists to answer.
+    BranchIsPrefix,
     /// Different lengths, shorter is a prefix of longer, and the TAIL is the shorter one.
     /// The candidate generated MORE than happened -- a state-input or candidate-set fault.
-    Suffix,
+    TailIsPrefix,
     /// Different number of instructions, and NEITHER list is a prefix of the other.
     /// A genuinely different transition, which is the reading the bare token was always
     /// assumed to carry and, before the Prefix/Suffix split, could not establish.
@@ -4151,7 +4157,7 @@ pub enum NoneMatchedShape {
 ///      diagnoses, and only the set separates them. The min is recoverable from the set, so the
 ///      set strictly dominates.
 ///
-/// Cardinality is bounded at 2^5 - 1 = 31, inside the discipline attract already accepts.
+/// Cardinality is bounded at 2^7 - 1 = 127, inside the discipline attract already accepts.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct NoneMatchedShapes(u8);
 
@@ -4183,8 +4189,8 @@ impl NoneMatchedShape {
     const ALL: [NoneMatchedShape; 7] = [
         NoneMatchedShape::ValuesOnly,
         NoneMatchedShape::Structure,
-        NoneMatchedShape::Prefix,
-        NoneMatchedShape::Suffix,
+        NoneMatchedShape::BranchIsPrefix,
+        NoneMatchedShape::TailIsPrefix,
         NoneMatchedShape::Length,
         NoneMatchedShape::Empty,
         NoneMatchedShape::NoCandidates,
@@ -4194,8 +4200,8 @@ impl NoneMatchedShape {
         match self {
             NoneMatchedShape::ValuesOnly => 0,
             NoneMatchedShape::Structure => 1,
-            NoneMatchedShape::Prefix => 2,
-            NoneMatchedShape::Suffix => 3,
+            NoneMatchedShape::BranchIsPrefix => 2,
+            NoneMatchedShape::TailIsPrefix => 3,
             NoneMatchedShape::Length => 4,
             NoneMatchedShape::Empty => 5,
             NoneMatchedShape::NoCandidates => 6,
@@ -4209,8 +4215,8 @@ impl NoneMatchedShape {
         match self {
             NoneMatchedShape::ValuesOnly => "shape_same_variants_and_sides",
             NoneMatchedShape::Structure => "shape_structure",
-            NoneMatchedShape::Prefix => "shape_prefix",
-            NoneMatchedShape::Suffix => "shape_suffix",
+            NoneMatchedShape::BranchIsPrefix => "shape_branch_is_prefix_of_tail",
+            NoneMatchedShape::TailIsPrefix => "shape_tail_is_prefix_of_branch",
             NoneMatchedShape::Length => "shape_length",
             NoneMatchedShape::Empty => "shape_empty",
             NoneMatchedShape::NoCandidates => "shape_no_candidates",
@@ -4228,8 +4234,8 @@ fn none_matched_slugs(shapes: NoneMatchedShapes) -> impl Iterator<Item = &'stati
             "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
         }
         NoneMatchedShape::Structure => "sleeptalk_called_unidentified:none_matched:shape_structure",
-        NoneMatchedShape::Prefix => "sleeptalk_called_unidentified:none_matched:shape_prefix",
-        NoneMatchedShape::Suffix => "sleeptalk_called_unidentified:none_matched:shape_suffix",
+        NoneMatchedShape::BranchIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_prefix",
+        NoneMatchedShape::TailIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_suffix",
         NoneMatchedShape::Length => "sleeptalk_called_unidentified:none_matched:shape_length",
         NoneMatchedShape::Empty => "sleeptalk_called_unidentified:none_matched:shape_empty",
         NoneMatchedShape::NoCandidates => {
@@ -4278,14 +4284,16 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
         // it cannot answer is whether the SHORTER list is a PREFIX of the longer one, and
         // that distinction is the whole diagnosis:
         //
-        //   * `Prefix` -- the regenerated branch reproduces the head of the tail exactly and
-        //     the tail continues past it. The callee was identified correctly and the tail is
-        //     over-long: it is `&segment[cursor..]`, which runs to the END OF THE SEGMENT,
-        //     while `generate_instructions_from_move` produces only the callee's own
-        //     instructions. If this dominates, the fix is to BOUND THE TAIL, and nothing is
-        //     wrong with candidate generation.
-        //   * `Suffix` -- the branch reproduces the tail and then continues. The candidate
-        //     generated MORE than happened, so the state input or the candidate set is wrong.
+        //   * `BranchIsPrefix` -- the branch reproduces the head of the tail exactly and the
+        //     tail continues past it. CONSISTENT WITH an over-long tail (`&segment[cursor..]`
+        //     runs to the END OF THE SEGMENT while the branch is only the callee's own
+        //     instructions), but it does NOT prove the callee was right: a wrong callee with
+        //     a coincidentally-matching head lands here too, and short branches make that
+        //     likely. A high count narrows where to look; on its own it does not license
+        //     bounding the tail.
+        //   * `TailIsPrefix` -- the branch reproduces the tail and then continues. Consistent
+        //     with the candidate generating MORE than happened -- a state-input or
+        //     candidate-set fault -- subject to the same coincidence caveat.
         //   * `Length` -- neither contains the other. A genuinely different transition, which
         //     is the reading the bare token was always assumed to carry.
         //
@@ -4294,6 +4302,15 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
         // `Structure` worlds refuted -- `Structure` is returned only AFTER the length check
         // passes, so same-length branches demonstrably exist. This split MEASURES the thing
         // that inference guessed at.
+        // An EMPTY TAIL is vacuously a prefix of anything, so without this guard
+        // `divergence_shape(&[dmg], &[])` returns a containment shape carrying ZERO
+        // containment evidence. Empty tails are real here -- `tail` is `&segment[cursor..]`
+        // and this file handles the empty case elsewhere -- so the bucket whose doc says
+        // "the tail is reproduced and the branch continues" would be contaminated.
+        // The branch-empty mirror is caught by the `is_empty` return above.
+        if tail.is_empty() {
+            return NoneMatchedShape::Length;
+        }
         let (shorter, longer) = if branch.len() < tail.len() {
             (branch, tail)
         } else {
@@ -4301,9 +4318,9 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
         };
         if longer.starts_with(shorter) {
             return if branch.len() < tail.len() {
-                NoneMatchedShape::Prefix
+                NoneMatchedShape::BranchIsPrefix
             } else {
-                NoneMatchedShape::Suffix
+                NoneMatchedShape::TailIsPrefix
             };
         }
         return NoneMatchedShape::Length;
@@ -8727,12 +8744,12 @@ mod none_matched_shape_tests {
         // containment cases, which is exactly why the bare token could not be acted on.
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::Prefix,
+            NoneMatchedShape::BranchIsPrefix,
             "the branch reproduces the head of the tail and the tail continues past it"
         );
         assert_eq!(
             divergence_shape(&[dmg(30), heal(10)], &[dmg(30)]),
-            NoneMatchedShape::Suffix,
+            NoneMatchedShape::TailIsPrefix,
             "the tail is reproduced and the branch continues past it -- the mirror case, and \
              it must NOT collapse into Prefix"
         );
@@ -8744,6 +8761,41 @@ mod none_matched_shape_tests {
             NoneMatchedShape::Length,
             "a shorter list that is not a PREFIX of the longer is a real structural miss"
         );
+    }
+
+    /// `bit()` must be UNIQUE, CONTIGUOUS and inside the `u8` bitset.
+    ///
+    /// Review mutated `BranchIsPrefix => 2` to `=> 0` and the whole suite stayed GREEN. Two
+    /// shapes sharing a bit makes them indistinguishable in `NoneMatchedShapes`, so inserting
+    /// `BranchIsPrefix` would ALSO emit `shape_same_variants_and_sides` -- the one token whose
+    /// doc spends fourteen lines warning it must not be read as an ownership verdict --
+    /// silently mislabelling the largest failure class. This PR moved three of these values
+    /// and added two, which is exactly when the guard was missing.
+    #[test]
+    fn the_shape_bits_are_unique_contiguous_and_fit_the_bitset() {
+        let bits: Vec<u8> = NoneMatchedShape::ALL.iter().map(|s| s.bit()).collect();
+        assert_eq!(
+            bits,
+            (0..NoneMatchedShape::ALL.len() as u8).collect::<Vec<u8>>(),
+            "shape bits must be unique and contiguous from 0"
+        );
+        assert!(
+            NoneMatchedShape::ALL.len() <= 8,
+            "NoneMatchedShapes is a u8 bitset: {} shapes will not fit",
+            NoneMatchedShape::ALL.len()
+        );
+        // ROUND TRIP: a set holding exactly one shape yields exactly that shape. This is what
+        // a duplicated bit actually breaks, and asserting the bits alone would not catch a
+        // mismatch between `bit()` and `iter()`.
+        for shape in NoneMatchedShape::ALL {
+            let mut only = NoneMatchedShapes::default();
+            only.insert(shape);
+            assert_eq!(
+                only.iter().collect::<Vec<_>>(),
+                vec![shape],
+                "{shape:?} did not round-trip through the bitset alone"
+            );
+        }
     }
 
     /// Containment is checked on FULL instruction equality, not on variant alone.
@@ -8761,7 +8813,7 @@ mod none_matched_shape_tests {
         );
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::Prefix
+            NoneMatchedShape::BranchIsPrefix
         );
     }
 
@@ -8788,17 +8840,44 @@ mod none_matched_shape_tests {
     /// would mask the one that nearly matched -- and the near-miss is the whole diagnosis.
     #[test]
     fn the_ordering_keeps_the_closest_miss() {
-        let mut shapes = [
-            NoneMatchedShape::Empty,
-            NoneMatchedShape::Structure,
-            NoneMatchedShape::ValuesOnly,
-            NoneMatchedShape::Length,
-        ];
+        // THE FULL SEQUENCE over `ALL`, not a hand-picked subset. The previous version listed
+        // four variants and so said nothing about any variant added later: review swapped
+        // `BranchIsPrefix` and `TailIsPrefix` in declaration order and the suite stayed GREEN,
+        // while this test's NAME claims to catch exactly that.
+        let mut shapes = NoneMatchedShape::ALL;
         shapes.sort();
+        assert_eq!(
+            shapes,
+            [
+                NoneMatchedShape::ValuesOnly,
+                NoneMatchedShape::Structure,
+                NoneMatchedShape::BranchIsPrefix,
+                NoneMatchedShape::TailIsPrefix,
+                NoneMatchedShape::Length,
+                NoneMatchedShape::Empty,
+                NoneMatchedShape::NoCandidates,
+            ],
+            "the closest-miss ordering changed; `min` over candidates now keeps a different \
+             shape and era-over-era keys move"
+        );
         assert_eq!(shapes[0], NoneMatchedShape::ValuesOnly);
         assert_eq!(
             NoneMatchedShape::Empty.min(NoneMatchedShape::ValuesOnly),
             NoneMatchedShape::ValuesOnly
+        );
+    }
+
+    /// An empty TAIL is not a containment case.
+    ///
+    /// The empty slice is a prefix of everything, so `longer.starts_with(shorter)` is
+    /// vacuously true and the containment buckets would absorb tails carrying ZERO
+    /// containment evidence. The branch-empty mirror is `Empty`; this is its counterpart.
+    #[test]
+    fn an_empty_tail_is_not_reported_as_containment() {
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[]),
+            NoneMatchedShape::Length,
+            "an empty tail carries no containment evidence"
         );
     }
 
