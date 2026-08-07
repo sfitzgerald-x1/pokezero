@@ -311,17 +311,34 @@ impl RenderedEvents {
     ///   the key set for this class is the non-empty subsets of the REACHABLE token set.
     /// * This is therefore NOT "stronger than `'static`". `'static` restricted keys to
     ///   literals present in the source: finite, greppable, reviewable. The honest
-    ///   statement is that the ceiling rises from 1 key to 2^13 - 1 = 8,191, and
+    ///   statement is that the ceiling rises from 1 key to 2^16 - 1 = 65,535, and
     ///   that the REALIZED count is small because tails are short -- the oracle corpus
-    ///   yields two (`boost`, `substitute+volatile`).
+    ///   yielded two (`boost`, `substitute+volatile`), though the second can no longer be
+    ///   emitted now that `substitute` is deregistered.
     ///
-    /// Note 13, not 14: `UNRENDERABLE_FAMILY_ORDER` has 14 entries but `unclassified` is
-    /// emitted by NO classifier arm -- it is reachable only through the degradation below,
-    /// itself unreachable while every arm's token is registered. Counting the order list
+    /// Note 16, not 17: `UNRENDERABLE_FAMILY_ORDER` has 17 entries but `unclassified` is
+    /// emitted by NO classifier arm -- it is reachable only through the degradation below.
+    ///
+    /// That degradation is NOT redundant, and an earlier version of this sentence implied it
+    /// was: it said the path is "unreachable while every arm's token is registered", which
+    /// the heal split falsified. `heal_subcase` returns the UNREGISTERED token `"heal"` from
+    /// two arms, so the degradation is the only thing standing between them and a
+    /// `PanicException` in the release wheel. Those two arms are unreachable on their own
+    /// terms -- non-negative `Damage` is admitted upstream and every `Heal` sign is covered
+    /// -- which is a different and much narrower guarantee. Do not delete
+    /// `registered_family_or_unclassified` on the strength of the old sentence. Counting the order list
     /// instead of the reachable token set overstated this 2x in an earlier version, in the
     /// one comment block whose entire purpose is precision.
     ///
-    /// An 8k ceiling is a real cost, accepted because a class that was 51.6% of the abort
+    /// RECOUNT FROM THE ARRAY, never by adding to this number -- and the recount is now
+    /// ENFORCED by `the_cardinality_ceiling_matches_the_array`, because being told to
+    /// recount did not work. This figure has been wrong three times: it read "2^13 - 1 =
+    /// 8,191, 14 entries" while the array held 13; the heal split took it to 18 without
+    /// the arithmetic moving; and the correction to 2^17 was itself stale, because
+    /// deregistering `heal` had already taken 18 back to 17. Each time the error was the
+    /// same -- treating a COUNT as prose. A test is the only thing that has held.
+    ///
+    /// A 65k ceiling is a real cost, accepted because a class that was 51.6% of the abort
     /// channel could not be ranked at all as one key. It is bounded, greppable via the
     /// order list, and every token maps to a named renderer gap.
     ///
@@ -370,6 +387,27 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "ambiguous",
     "ambiguous_unrenderable",
     "none_matched",
+    // The `none_matched` DIVERGENCE SHAPES. era 60 measured that class at 3,595 world
+    // failures with no way to say why, and the era-60 measurement states it "must be
+    // classified before it can be fixed". These SEVEN are that classification.
+    //
+    // The two-way ownership split this comment once drew -- `values_only` unfixable here,
+    // `structure`/`length` a candidate-set bug -- is RETRACTED in both directions. The
+    // `NoneMatchedShape` doc records `ValuesOnly` measured 132/132 RENDERER-side in C31, so
+    // it is no ownership verdict; and the containment split means a length difference can
+    // indicate an over-long TAIL rather than a wrong candidate. These name PREDICATES.
+    // PREFIXED. `SUBCASE_VOCABULARY` is shared across every lossy tag and
+    // `assert_subcase_vocabulary` validates per token with no tag scoping, so registering the
+    // bare words `structure`, `length` and `empty` would weaken the gate for unrelated
+    // families -- a mis-composed attract or `ambiguous_unrenderable` slug containing "length"
+    // would start passing. That gate is a PRODUCTION assert, so this reaches past tests.
+    "shape_same_variants_and_sides",
+    "shape_structure",
+    "shape_branch_is_prefix_of_tail",
+    "shape_tail_is_prefix_of_branch",
+    "shape_length",
+    "shape_empty",
+    "shape_no_candidates",
     // attract. These are the tokens after the tag, so `attract` itself is NOT one --
     // an earlier version listed it, which was an entry no path can emit, while
     // `volatile`, which attract DOES emit, was missing and passed only by coincidence
@@ -380,6 +418,15 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "noop",
     "paralyzed",
     "volatile",
+    // the `heal` sub-cases. PREFIXED for the same reason the `shape_*` tokens are: this
+    // vocabulary is shared across every lossy tag and `assert_subcase_vocabulary` validates
+    // per token with no tag scoping, so registering bare `drain` or `defender` would weaken
+    // the gate for unrelated families.
+    "heal_paindmg",
+    "heal_liquidooze",
+    "heal_defender",
+    "heal_drain_or_shellbell",
+    "heal_zero_marker",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -390,11 +437,16 @@ const SUBCASE_VOCABULARY: &[&str] = &[
 /// With composition allowed, this does the same job explicitly and more tightly: it
 /// admits a fixed vocabulary rather than any literal a caller cares to write. A
 /// mis-composed slug therefore fails LOUDLY at the call site instead of quietly becoming
-/// a 37th aggregate key that nobody can trace back to a code path -- but note the SCOPE:
-/// for the sleeptalk path it can no longer fire at all, because
-/// `unrenderable_tail_families` degrades an unregistered token to `unclassified` first, on
-/// purpose (a panic there aborts the worker). It stays live for paired-tag misuse and for
-/// any future caller that does not degrade.
+/// a 37th aggregate key that nobody can trace back to a code path.
+///
+/// SCOPE, corrected. This block used to say the assert "can no longer fire at all" on the
+/// sleeptalk path because `unrenderable_tail_families` degrades an unregistered token to
+/// `unclassified` first. That is true of the FAMILY path and FALSE of the SHAPE path:
+/// `none_matched_slugs` composes its slug directly and reaches
+/// `mark_attribution_unsafe_subcase` with NO degrade in between. The belief that this could
+/// not fire is what shipped a half-applied rename whose first world would have panicked the
+/// release wheel -- the assert was doing exactly the job this comment said it no longer had.
+/// LIVE for: the shape path, paired-tag misuse, and any future caller that does not degrade.
 ///
 /// A plain `assert!` for the same reason the paired-tag check above is one: the campaign
 /// wheels are built `--release`, where `debug_assert!` compiles out, so a debug assert
@@ -1789,7 +1841,7 @@ fn render_move_phase(
                         Some("Sleep Talk"),
                     );
                 }
-                SleepTalkIdent::NoneMatched | SleepTalkIdent::Ambiguous => {
+                SleepTalkIdent::NoneMatched(_) | SleepTalkIdent::Ambiguous => {
                     // The called move is not provable from this delta, so its
                     // HP change gets no public action owner. It must still be
                     // DESCRIBED. Emitting nothing left the consumer's running
@@ -1839,7 +1891,7 @@ fn render_move_phase(
                     // and 86.4% of the abort channel, and aborts are ~76% of fallback.
                     // ONE predicate decides refuse-vs-count, so the decision is testable
                     // without reaching an arm the engine cannot currently produce.
-                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail) {
+                    if !sleeptalk_refusal_is_unsafe(&ident, &called_tail, side) {
                         out.mark_lossy_subcase(
                             SLEEPTALK_LOSSY_TAG,
                             sleeptalk_subcase_slug(&ident),
@@ -1857,8 +1909,17 @@ fn render_move_phase(
                         // measurement could not rank them.
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
-                            &ambiguous_unrenderable_slug(&called_tail),
+                            &ambiguous_unrenderable_slug(&called_tail, side),
                         );
+                    } else if let SleepTalkIdent::NoneMatched(shapes) = ident {
+                        // ONE SLUG PER OBSERVED SHAPE. `attribution_unsafe_label` sorts and
+                        // joins, so the set composes into a single deterministic key -- and
+                        // `same_variants_and_sides` alone is a different diagnosis from
+                        // `same_variants_and_sides + structure`, which a reduction to one shape
+                        // could not express.
+                        for slug in none_matched_slugs(shapes) {
+                            out.mark_attribution_unsafe_subcase(SLEEPTALK_LOSSY_TAG, slug);
+                        }
                     } else {
                         out.mark_attribution_unsafe_subcase(
                             SLEEPTALK_LOSSY_TAG,
@@ -1931,8 +1992,188 @@ fn render_move_phase(
                             }
                         };
                     }
-                    for instruction in &called_tail {
-                        if let Instruction::Switch(switch) = instruction {
+                    // ENUMERATED, because renderability is a property of the tail and not of
+                    // a lone instruction -- see `substitute_break_side`, where the same
+                    // engine variant is a narrated break in one position and a silent
+                    // switch-out cleanup in another.
+                    for (index, instruction) in called_tail.iter().enumerate() {
+                        if boost_may_be_a_switch_out_reset(&called_tail, index) {
+                            // LOAD-BEARING. Do not delete this as dead code.
+                            //
+                            // The first version of this comment said it was "unreachable while
+                            // the classifier refuses these tails". That is FALSE, and review
+                            // proved it by deleting the arm and keeping the classifier: the
+                            // phantom `|-unboost|p1a: Lead|atk|2` came straight back. Refusal
+                            // goes through `mark_attribution_unsafe_subcase`, which records a
+                            // reason and does NOT short-circuit the walk -- the walk runs on
+                            // refused branches too, which the sibling test's own docstring
+                            // says out loud. So this arm is the only thing suppressing the
+                            // line, not a second layer behind the classifier.
+                            //
+                            // KNOWN UNTESTED, same as the substitute break's arm: deleting the
+                            // `emit_residuals!()` below survives the suite, because nothing can
+                            // be pending at this point in any tail the corpus produces.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                        } else if let Instruction::Boost(boost) = instruction {
+                            // RENDER the boost, which is what lets an ambiguous
+                            // Harden/Withdraw tail be searched instead of thrown away.
+                            //
+                            // `ambiguous_unrenderable` was 8,149 world failures in era 59 --
+                            // 51.6% of the abort channel and the largest single world-level
+                            // refusal in the era. #1124 split it by blocking effect family
+                            // precisely so the work could be scoped, and `boost` is the family
+                            // the oracle corpus shows dominating: 10 of its 16 refused tails
+                            // are a bare `[Boost]`, from identical-boost pairs like
+                            // Harden/Withdraw where no candidate can be named but the
+                            // transition is proven.
+                            //
+                            // RESIDUALS FIRST, exactly as the `Switch` arm does, and for the
+                            // same reason: the walk's contract is IN ORDER. Without this a
+                            // `[Damage, Boost..]` tail rendered the boosts BEFORE the damage
+                            // they follow -- reproduced on Overheat/Psycho Boost (-2 spa) and
+                            // Ancient Power/Silver Wind (+1 all five), both of which this
+                            // change newly admits, so the misordering would have been a
+                            // regression introduced by the fix. The whole suite passed with
+                            // and without it, so `renders_a_damage_then_boost_tail_in_order`
+                            // exists to pin it.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            // NO `amount != 0` guard, mirroring the named path, which has
+                            // none either. An earlier version had one, justified by two claims
+                            // that are both FALSE: the engine never writes a 0-delta `Boost`
+                            // (every construction site is zero-guarded --
+                            // `gen3/generate_instructions.rs`'s `if boost_amount != 0`, plus
+                            // the ability, item and Belly Drum sites), and Showdown DOES show
+                            // a line for a capped boost -- `|-boost|IDENT|stat|0`, which this
+                            // renderer already emits from its own `capped_boost_move` block,
+                            // driven by the move rather than by a `Boost` instruction. So the
+                            // guard was dead code resting on a wrong premise, and removing it
+                            // also removes the `!= 0` -> `> 0` mutation that silently dropped
+                            // every `|-unboost|`.
+                            out.lines.push(render_boost_line(
+                                ctx,
+                                sim,
+                                boost.side_ref,
+                                boost.stat,
+                                boost.amount,
+                                None,
+                            ));
+                            // GHOST CURSE is the one suppression the named path has and this
+                            // arm does not: it skips the boost lines and marks the branch
+                            // `ghost_curse_engine_model` attribution-unsafe. Unreachable here
+                            // only by accident -- `Choices::CURSE` carries a
+                            // `volatile_status` alongside its boosts, so such a tail still
+                            // holds `ApplyVolatileStatus` and is blocked by the `volatile`
+                            // family. Recorded because admitting `volatile` is a plausible
+                            // next step, and it would turn this into three phantom boost lines
+                            // with no refusal.
+                        } else if let Instruction::DamageSubstitute(dmg) = instruction {
+                            // RENDER the substitute hit. This is the other half of
+                            // `ambiguous_unrenderable`: #1131 closed the `boost` family, and the
+                            // oracle's surviving 6 of 16 refusals are all
+                            // `[DamageSubstitute, RemoveVolatileStatus]` -- a substitute BREAK,
+                            // which the doc block above correctly said the obvious
+                            // "-boost/-status/-heal/-sidestart" plan does not cover.
+                            //
+                            // Residuals first, same contract as the Boost and Switch arms.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let ident = ctx.active_ident(sim.state, dmg.side_ref);
+                            out.lines
+                                .push(format!("|-activate|{ident}|Substitute|[damage]"));
+                        } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
+                            // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
+                            // `[from]` tag, which is what Showdown emits for Recover,
+                            // Soft-Boiled, Moonlight, Synthesis and Morning Sun.
+                            //
+                            // BARE IS LOAD-BEARING, not laziness. The fold READS the tag:
+                            // `[from] item: Leftovers` is an item reveal and `[from] ability:
+                            // X` an ability reveal on the healed mon, whose own comment records
+                            // a live capture where a misread overwrote a protocol-confirmed
+                            // Pressure. Inventing a tag FABRICATES a belief, which is worse
+                            // than refusing. The predicate exists precisely to admit only the
+                            // shape whose correct tag is no tag.
+                            // TWO MUTANTS STILL SURVIVE HERE, stated rather than implied,
+                            // because an earlier version of this arm claimed a pin it did not
+                            // have and review caught exactly that:
+                            //
+                            //   * passing `0` instead of `index` to the predicate. Survives
+                            //     because in every fixture that reaches this arm the `Heal` IS
+                            //     at index 0 -- a gen3 Sleep Talk callee tail for a direct
+                            //     healing move contains nothing else. Killing it needs a tail
+                            //     with an instruction before the heal, which no reachable gen3
+                            //     callee produces.
+                            //   * deleting the re-baseline below. Survives because making it
+                            //     observable needs a same-side HP DECREASE later in the same
+                            //     tail, and the Leech Seed fixture written for it does not
+                            //     produce one -- the residual lands outside the callee tail.
+                            //     The sibling test records that non-firing rather than passing
+                            //     silently.
+                            //
+                            // Both are the same shape as the `emit_residuals!()` survivor the
+                            // substitute arm documents: unreachable-today rather than untested
+                            // in principle.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let ident = ctx.active_ident(sim.state, side);
+                            let condition = sim.hp_condition(side);
+                            out.lines.push(format!("|-heal|{ident}|{condition}"));
+                            // RE-BASELINE, which is the half of the deferral comment that was
+                            // already satisfied and the half this arm must not forget:
+                            // `emit_residuals!()` compares against `before[]`, so an unbaselined
+                            // increase would leave the next comparison reading a phantom
+                            // decrease. The `Switch` arm does the same thing for the same
+                            // reason.
+                            before[side_usize(side)] = sim.active_hp(side).0;
+                        } else if let Some(break_side) = substitute_break_side(&called_tail, index) {
+                            // SUBSTITUTE ONLY, matched through a helper rather than by
+                            // destructuring the variant here ON PURPOSE. Every other volatile is
+                            // still unexpressible by this walk and stays in the `volatile`
+                            // family, so admitting the whole variant would be the C52-mirror
+                            // defect.
+                            //
+                            // Routing through `substitute_break_side` keeps this a flat arm in
+                            // the chain, so a non-substitute volatile falls through to the same
+                            // `else { sim.apply(instruction) }` it always did -- byte-identical
+                            // behaviour, including NOT calling `emit_residuals!()` at that
+                            // point. Deciding it inside the body would have made this change
+                            // touch tails it has no business touching, reachable or not, and
+                            // "the predicate blocks those anyway" is a reachability argument,
+                            // not an invariant. Edition 2021 here, so no let-chain.
+                            //
+                            // `ChangeSubstituteHealth` stays `silent` -- see the classifier --
+                            // because a creation or a break always carries a companion whose
+                            // line is the one that matters.
+                            //
+                            // KNOWN UNTESTED, stated rather than hidden: mutation testing kills
+                            // six of seven mutants of these two arms (dropped line, dropped
+                            // -activate, break credited to the attacker, spurious `[from]` tag,
+                            // lowercased keyword, admission widened to every volatile) but
+                            // DELETING the `emit_residuals!()` below SURVIVES the whole suite.
+                            //
+                            // The first version of this note claimed it survives because "the
+                            // sibling `DamageSubstitute` arm flushes first, in every tail this
+                            // corpus produces". Review FALSIFIED that: it built a phaze tail
+                            // reaching this arm with no `DamageSubstitute` present at all. The
+                            // tail-pairing guard now makes the claim true by CONSTRUCTION rather
+                            // than by assertion -- a break is admitted only when a same-side
+                            // `DamageSubstitute` precedes it, so the flush has always happened.
+                            // The mutant still survives because nothing can be pending between
+                            // the two, which is now a property of the predicate.
+                            //
+                            // The call stays anyway. #1131 shipped precisely this omission for
+                            // `[Damage, Boost..]`, the suite was green with AND without the fix,
+                            // and the result was boosts rendered before the damage that caused
+                            // them. An unreachable-today ordering guard costs one macro call;
+                            // its absence cost a fidelity regression that only a hand-read of
+                            // the diff caught. Making the unreachability a PINNED assertion over
+                            // the corpus rather than a paragraph is the honest follow-up.
+                            emit_residuals!();
+                            sim.apply(instruction);
+                            let ident = ctx.active_ident(sim.state, break_side);
+                            out.lines.push(format!("|-end|{ident}|Substitute"));
+                        } else if let Instruction::Switch(switch) = instruction {
                             emit_residuals!();
                             sim.apply(instruction);
                             let details =
@@ -2921,13 +3162,21 @@ fn render_move_phase(
 /// `NoneMatched` is unreachable from any state the crate tests build, so nothing observed
 /// the routing. A synthesised test of the refusing SEAM did not help either, because the
 /// seam is downstream of the choice. A pure predicate is testable without reaching the arm.
-fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> bool {
+fn sleeptalk_refusal_is_unsafe(
+    ident: &SleepTalkIdent,
+    tail: &[Instruction],
+    // The ATTACKER's side, i.e. the sleeping mon that used Sleep Talk. Threaded in because
+    // renderability is not a property of the tail alone: a `Heal` on the attacker with no
+    // damage to the defender is a direct healing move and renderable, while the same `Heal`
+    // on the DEFENDER is an absorb ability and is not. See `heal_is_a_direct_self_heal`.
+    attacker: SideReference,
+) -> bool {
     match ident {
         // Proven transition; unsafe only if the walk would silently drop part of it.
-        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail),
+        SleepTalkIdent::Ambiguous => !ambiguous_tail_is_fully_renderable(tail, attacker),
         // The renderer could not reproduce the engine's tail at all, so any description
         // built on it may be wrong. Always unsafe.
-        SleepTalkIdent::NoneMatched => true,
+        SleepTalkIdent::NoneMatched(_) => true,
         // Handled by the naming path; never reaches the refusal decision.
         SleepTalkIdent::Matched(_) => false,
     }
@@ -2993,25 +3242,70 @@ fn sleeptalk_refusal_is_unsafe(ident: &SleepTalkIdent, tail: &[Instruction]) -> 
 /// bookkeeping for Counter/Mirror Coat damage accounting and last-move tracking, and the
 /// renderer emits no line for them on ANY path, named or unnamed -- so omitting them
 /// loses nothing that the named path would have shown.
-fn ambiguous_tail_is_fully_renderable(tail: &[Instruction]) -> bool {
+fn ambiguous_tail_is_fully_renderable(tail: &[Instruction], attacker: SideReference) -> bool {
     // DEFINED as "nothing blocks it", so the predicate and the diagnostic below cannot
     // disagree about which instructions are renderable. They were two independent
     // matches in the first version, and this file already records what that costs: the
     // renderer and `engine_transition_differential.py` held opposite views of the
     // sleeptalk contract for two eras with nothing to notice. One list, one answer.
-    unrenderable_tail_families(tail).is_empty()
+    unrenderable_tail_families(tail, attacker).is_empty()
 }
 
 /// Fixed slug order, so the emitted key is stable across runs and aggregators can sum
 /// it. Encounter order would make the same tail composition produce different keys
 /// depending on instruction sequence -- the requirement attract's slug records too.
 const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
+    // `boost` is BACK, after #1131 removed it. The removal reasoned "the walk renders it, so
+    // no arm can emit it" -- true for a move's own stat change, false for the switch-out reset
+    // Showdown does not narrate. The narrowed classifier can emit this token again, so leaving
+    // it out would push an emittable family through `registered_family_or_unclassified` and
+    // bucket a KNOWN cause as `unclassified`.
+    //
+    // Position is unchanged from before #1131 removed it, and no slug emitted in the interval
+    // could contain the BARE token.
+    //
+    // "So no era-over-era key moves" was the first version of that sentence, and it is
+    // OVERSTATED: COMPOSITE keys do move, for any tail already refused under another family.
+    // Review demonstrated `[RemoveVolatileStatus(CONFUSION, S1), Boost(S1), Switch(S1)]`
+    // keying `…:volatile` before this change and `…:boost+volatile` after. The reason there is
+    // no practical drift is NOT the token position -- it is that the whole family is
+    // unreachable in the current randbat pool, so the volume is zero.
     "boost",
     "statrecalc",
     "status",
     "sleepcounter",
-    "heal",
-    "substitute",
+    // The `heal` SUB-CASES.
+    //
+    // ERA-OVER-ERA DRIFT, stated because the `boost` note above understated exactly this:
+    // every key containing `heal` MOVES with this change, and unlike the `boost` case the
+    // volume is NOT zero -- era 61 measured 3,533. `ambiguous_unrenderable:heal` becomes
+    // `…:heal_drain_or_shellbell` and friends, so an era-over-era diff keyed on the bare
+    // token will read the old class as vanished and the new ones as novel. It is one class
+    // being partitioned, and the SUM is the quantity that is comparable across the boundary.
+    "heal_paindmg",
+    "heal_liquidooze",
+    "heal_defender",
+    "heal_drain_or_shellbell",
+    "heal_zero_marker",
+    // `heal` is deliberately ABSENT, by the SAME rule that removed `substitute` below and
+    // that put `boost` back above: a token belongs here only if some classifier arm can
+    // emit it. After the sub-case split every reachable shape routes to a sub-case --
+    // negative Damage to `heal_paindmg`, negative Heal to `heal_liquidooze`, zero Heal to
+    // `heal_zero_marker`, defender heal to `heal_defender`, attacker heal with foe damage
+    // to `heal_drain_or_shellbell`, and attacker heal WITHOUT foe damage is admitted by
+    // `heal_is_a_direct_self_heal` before it ever reaches the classifier.
+    //
+    // The two `"heal"` returns that remain in `heal_subcase` are both unreachable
+    // fall-throughs. Leaving the token registered would have made
+    // `the_renderable_allowlist_is_exactly_what_it_was` demand a representative for a
+    // shape no input can produce. Unregistered, either fall-through degrades through
+    // `registered_family_or_unclassified` to a measurable `unclassified` bucket rather
+    // than panicking -- which is the whole reason that degradation exists.
+    // `substitute` is deliberately ABSENT, for the same reason as `boost` and by the same
+    // rule: `DamageSubstitute` was its ONLY producer and the walk now renders it, so the
+    // token is dead weight in a vocabulary whose job is to be a closed, greppable set.
+    // `ChangeSubstituteHealth` never produced it -- that is `silent`, deliberately, and the
+    // representative below records why.
     "volatile",
     "sidecondition",
     "weather",
@@ -3022,6 +3316,307 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
     "unclassified",
 ];
 
+/// The substitute BREAK and nothing else, as an `Option` the walk's else-if chain and the
+/// renderability classifier can both match on.
+///
+/// One predicate, two callers, deliberately: the walk RENDERS exactly what the classifier
+/// ADMITS. When those were separate expressions the pair could drift, and the drift is
+/// silent in the direction that matters -- admit a tail the walk cannot express and the
+/// world is searched against a protocol log missing a line, which is a wrong world rather
+/// than a refused one.
+///
+/// # Why this takes the TAIL and an INDEX rather than one instruction
+///
+/// Because `RemoveVolatileStatus(SUBSTITUTE)` has TWO producers in the engine and only one
+/// of them is a break that Showdown narrates:
+///
+///   * `generate_instructions.rs` emits it directly after a same-side `DamageSubstitute`.
+///     That is the real break, and Showdown's `onEnd` fires: `|-end|<ident>|Substitute`.
+///   * `state.rs`'s `remove_volatile_statuses_on_switch` emits it on EVERY non-Baton-Pass
+///     switch-out, including a phazing drag. Showdown clears volatiles there with
+///     `this.volatiles = {}` and does NOT run `onEnd`, so it emits NOTHING.
+///
+/// The first version of this predicate keyed on the volatile identity alone and therefore
+/// admitted the second case, making a `[RemoveVolatileStatus(SUBSTITUTE), Switch]` phaze
+/// tail render a PHANTOM `|-end|` and be SEARCHED where it used to refuse. Review
+/// reproduced that end to end through `render_branch_events`. An extra line is the same
+/// defect class as a missing one: a wrong world instead of a refused one.
+///
+/// That is the mistake this file already warns about further up -- "fail-closed
+/// against unknown INSTRUCTIONS is not the same as fail-closed against unknown USES of a
+/// known one" -- committed against the very sentence that names it.
+///
+/// So the test is CONSTRUCTIONAL, not nominal: a break is a substitute removal preceded in
+/// the same tail by a same-side `DamageSubstitute`, because that is how the engine builds
+/// one. A switch-out removal has no such predecessor and stays in the `volatile` family.
+///
+/// # The one hypothetical this rule does not close by itself
+///
+/// A hit that does NOT break, followed later by a switch-out clear of the same still-standing
+/// substitute, would pair spuriously and re-emit the phantom. That needs a single move which
+/// both damages a substitute and phazes, and the ENGINE closes it, not this predicate:
+/// `generate_instructions.rs` clears `choice.flags.drag` whenever the target holds a
+/// Substitute and the move is not a status move, so the only damaging drag moves can never
+/// reach the drag path against a sub (and both are post-gen3 regardless).
+///
+/// Recorded because it is a dependency on upstream behaviour that the engine itself marks
+/// TODO, and it is the only thing standing between this pairing rule and a repeat of the
+/// phantom-line defect. If that block ever moves, this predicate needs a same-tail "and no
+/// later same-side Switch" clause too.
+///
+/// Reused already: `Boost` has the same multi-producer problem -- a switch-out pushes a boost
+/// RESET that Showdown does not narrate -- and `boost_may_be_a_switch_out_reset` below is that
+/// fix, built on this same tail-and-index shape rather than a second bespoke rule. See its doc
+/// for the full producer list, which is FIVE and not two.
+fn substitute_break_side(tail: &[Instruction], index: usize) -> Option<SideReference> {
+    let remove = match tail.get(index)? {
+        Instruction::RemoveVolatileStatus(remove)
+            if remove.volatile_status == PokemonVolatileStatus::SUBSTITUTE =>
+        {
+            remove
+        }
+        _ => return None,
+    };
+    // A same-side `DamageSubstitute` EARLIER in this tail. Same-side matters: a double
+    // battle is out of scope for gen3 singles, but the sides are still distinct objects and
+    // pairing across them would be a phantom in the other direction.
+    tail[..index]
+        .iter()
+        .any(|earlier| match earlier {
+            Instruction::DamageSubstitute(dmg) => dmg.side_ref == remove.side_ref,
+            _ => false,
+        })
+        .then_some(remove.side_ref)
+}
+
+/// Is this `Boost` possibly a switch-out RESET rather than a narrated stat change?
+///
+/// `Boost` has the same MULTI-producer problem the substitute break has -- five producers in
+/// gen3, enumerated below -- and #1131 admitted every one of them unconditionally. The two that
+/// matter for THIS predicate:
+///
+///   * A move's own stat change. Showdown narrates `|-boost|` / `|-unboost|`.
+///   * `generate_instructions.rs`'s switch path calls `state.reset_boosts(&switching_side_ref,
+///     ..)` when `!baton_passing`, in the pre-switch block beside the volatile clears and the
+///     toxic reset. Showdown drops boosts inside `clearVolatile()` and narrates NOTHING. This
+///     crate's own `render_switch_phase` already gets that right: it renders only the
+///     `switched && boost.side_ref != side` Intimidate case and sends everything else through
+///     `_ => sim.apply(ins)`, commented "Pre-switch bookkeeping (volatile clears, boost
+///     resets, ...): no lines."
+///
+/// So the unnamed-callee walk contradicted sibling code in the same file, and a phaze tail
+/// rendered a phantom `|-unboost|`.
+///
+/// # FIVE producers, not two -- this predicate closes ONE of the three open ones
+///
+/// The first version of this doc called it "the two-producer problem". Review enumerated the
+/// gen3 construction sites and there are FIVE. Only the first narrates `-boost`/`-unboost`;
+/// the other four do something else, and three of those four are still open (White Herb
+/// self-closes). Two counts of three are easy to confuse here, so: four are mis-narrated, one
+/// of those four is now fixed, and three remain.
+///
+///   * move's own stat change -- `-boost`/`-unboost`. Correctly rendered.
+///   * switch-out reset -- no line. CLOSED by this predicate.
+///   * **Haze** (`choice_effects.rs`) -- Showdown emits `|-clearallboost|`. STILL ADMITTED, and
+///     reproduced end to end: a Haze/Charm ambiguity renders the Charm line and is SEARCHED,
+///     so if the callee was Haze the world is silently wrong. No `clearallboost` exists
+///     anywhere in this crate, so the NAMED path is wrong for Haze too.
+///   * **Psych Up** (`choice_effects.rs`) -- `|-copyboost|`. STILL ADMITTED, same shape.
+///   * **White Herb** (`items.rs`) -- `|-clearnegativeboost|[silent]`. Self-closing, because
+///     its tail also carries `ChangeItem`, which is the `item` family.
+///
+/// Haze and Psych Up are PRE-EXISTING from #1131 and not widened here, and unreachable on
+/// today's data (of 350 Sleep Talk sets across three cached randbat universes, zero pair it
+/// with Roar, Whirlwind, Haze, Psych Up or Baton Pass). They are named rather than left
+/// implied because this file's rule is that reachability is not an invariant, and an
+/// enumeration that says "two" when it is five is the kind of claim the next author builds on.
+///
+/// # What this actually does, stated precisely because the first version overclaimed
+///
+/// A `Boost` with a same-side `Switch` later in the tail is classified `boost` and the walk
+/// emits no line for it. Measured cost on the attribution oracle: ZERO searchable worlds --
+/// the tally is unchanged at (2614, 2377, 237, 0), because no corpus tail pairs the two.
+///
+/// The first version of this block called that "failing closed", and argued that refusing is
+/// safe where rendering nothing would need a reachability premise. **Review showed that
+/// framing is wrong for one of the two consumers**, so it is corrected here rather than
+/// quoted forward:
+///
+///   * The SEARCH consumer does refuse. `mark_attribution_unsafe_subcase` populates
+///     `attribution_unsafe`, and a branch with a Sleep-Talk-shaped entry there is discarded.
+///   * The TRANSITION DIFFERENTIAL does NOT. It gates usability on the `lossy` set alone, and
+///     this path leaves `lossy` at exactly the bare marker, which is in the telemetry-only
+///     allowlist. So the differential accepts these branches -- WHEN that marker is the only
+///     one they carry, since usability is a property of the whole branch and any other lossy
+///     entry drops it -- and reads their rendered events -- meaning for that consumer this ships EXACTLY the render-nothing
+///     behaviour the first version declined to commit to, resting on EXACTLY the reachability
+///     premise it said it would not accept. The two consumers disagreeing is documented
+///     elsewhere in this file; it is not new here, but it does invalidate the old argument.
+///
+/// The reachability premise, for the record, since half the behaviour now depends on it: no
+/// gen3 move both boosts and phazes (the four `drag: true` moves -- Circle Throw, Dragon Tail,
+/// Roar, Whirlwind -- carry no `boost`), and Baton Pass is the only other `Switch` producer in
+/// a callee tail and is excluded from the reset by `!baton_passing`. So a legitimate boost and
+/// a same-side switch cannot co-occur, and rendering nothing is correct for the tails that
+/// reach it.
+///
+/// What the classification still buys, given that: the family REPORTS ITS OWN SIZE. Folding
+/// these tails into `None` would make them silently indistinguishable from a rendered boost,
+/// and a family that reports its size is how we would learn whether the contiguous-pre-switch
+/// refinement is worth writing.
+fn boost_may_be_a_switch_out_reset(tail: &[Instruction], index: usize) -> bool {
+    let boost = match tail.get(index) {
+        Some(Instruction::Boost(boost)) => boost,
+        _ => return false,
+    };
+    tail[index + 1..].iter().any(|later| match later {
+        Instruction::Switch(switch) => switch.side_ref == boost.side_ref,
+        _ => false,
+    })
+}
+
+/// Is this HP increase a DIRECT healing move on the attacker -- the one heal shape the walk
+/// can express -- rather than drain, an absorb ability, or Rest?
+///
+/// `heal` is the family for HP INCREASES, because `emit_residuals!()` is decreases-only by
+/// design (its own comment: "DECREASES ONLY, deliberately. Rendering the heal direction was
+/// shipped once and emitted lines for the wrong Pokemon; it needs the same per-side
+/// re-baselining this walk now has, plus its own pin."). Era-60 production ranks it second
+/// among the walk's gaps, at 117 records / 461 world failures.
+///
+/// # Why this is NOT a mirror of the boost or substitute fixes
+///
+/// A `-heal` line's `[from]` tag is not decoration: the FOLD READS IT. `belief.py` treats
+/// `[from] item: Leftovers` as an item reveal, and `[from] ability: X` as an ability reveal on
+/// the healed mon -- its comment records a live capture where misreading `[of]` pinned an
+/// ability on the attacker and overwrote a protocol-confirmed Pressure. So an invented tag
+/// FABRICATES a belief, which is worse than refusing. Four shapes exist and the named path
+/// distinguishes all four:
+///
+///   * drain (Absorb, Giga Drain): `|-heal|{attacker}|{cond}|[from] drain|[of] {defender}`
+///   * absorb ability (Volt/Water Absorb): `|-heal|{defender}|{cond}|[from] ability: X|[of] ..`
+///   * direct healing move (Recover, Soft-Boiled, Moonlight): BARE `|-heal|{ident}|{cond}`
+///   * Rest: `|-heal|{ident}|{cond} slp|[silent]`
+///
+/// Only the third is admitted here, and the discrimination is a property of the TAIL:
+///
+///   * The heal must be on the ATTACKER. A heal on the defender is an absorb ability.
+///   * The tail must carry NO damage to the defender. Damage plus a heal on the attacker is
+///     drain, whose line needs `[from] drain|[of] ..`.
+///   * The amount must be POSITIVE. A negative `Heal` is the engine's spelling for Liquid
+///     Ooze, which the named path renders as `-damage`, not `-heal`.
+///
+/// Rest needs no clause: its tail always carries `ChangeStatus` and `SetSleepTurns`, which are
+/// the still-blocked `status` and `sleepcounter` families, so those tails refuse regardless.
+/// That is a companion-blocks-it argument rather than a reachability one -- the companion is
+/// emitted by construction, the way the substitute break's `DamageSubstitute` is.
+///
+/// This is a PARTIAL close of the family, deliberately. Every tail this does not admit is
+/// reported under a `heal_*` SUB-CASE by `heal_subcase`, so the remainder stays rankable
+/// instead of vanishing. The bare `heal` token is deregistered -- no reachable input
+/// produces it once the sub-cases exist.
+fn heal_is_a_direct_self_heal(tail: &[Instruction], index: usize, attacker: SideReference) -> bool {
+    let healed = match tail.get(index) {
+        // POSITIVE only: a negative `Heal` is Liquid Ooze and renders as `-damage`.
+        Some(Instruction::Heal(heal)) if heal.heal_amount > 0 => heal.side_ref,
+        _ => return false,
+    };
+    if healed != attacker {
+        return false;
+    }
+    // No damage to the OTHER side anywhere in the tail, or this is drain.
+    !tail_damages_the_foe(tail, attacker)
+}
+
+/// Does this tail damage the side that is NOT the attacker?
+///
+/// Factored out so `heal_is_a_direct_self_heal` (which REFUSES on it) and `heal_subcase`
+/// (which CLASSIFIES on it) cannot drift apart. Two copies of this predicate would let the
+/// admit-set and the diagnostic disagree about the same tail, which is the failure mode
+/// where a bucket named `drain` does not contain the tails the renderer treats as drain --
+/// and the ranking built on it sends the fix to the wrong place.
+fn tail_damages_the_foe(tail: &[Instruction], attacker: SideReference) -> bool {
+    tail.iter().any(|other| match other {
+        Instruction::Damage(dmg) => dmg.side_ref != attacker && dmg.damage_amount > 0,
+        Instruction::DamageSubstitute(dmg) => dmg.side_ref != attacker,
+        _ => false,
+    })
+}
+
+/// Which SUB-CASE of the `heal` family a REFUSED HP-increase belongs to.
+///
+/// `heal` is the second-largest `ambiguous_unrenderable` family (era 61 final, 64/64 shards:
+/// 3,533 world failures, 24.6% of all world-failure classes) and it survived the partial close
+/// in `heal_is_a_direct_self_heal`. That close admitted exactly one shape -- a positive
+/// heal on the attacker with no foe damage -- and the ranking cannot say which of the
+/// remaining shapes a refusal is without this split. There are FIVE buckets below against
+/// the FOUR shapes `heal_is_a_direct_self_heal`'s doc block enumerates: that block predates
+/// `heal_paindmg` and `heal_zero_marker`. Rest -- its fourth shape -- has no bucket of its
+/// own because its `Heal` is ADMITTED by `heal_is_a_direct_self_heal`; its companion
+/// `status`/`sleepcounter` instructions are separately refused by their own arms, which is
+/// what makes that admission safe. There is no short-circuit: `unrenderable_tail_families`
+/// visits every index.
+///
+/// This is DIAGNOSTIC ONLY. Every token returned is still a blocking family, so the set
+/// of refused tails is byte-identical to before. Nothing here changes what is searched.
+///
+/// The `drain_or_shellbell` name is deliberately honest about an ambiguity the tail cannot
+/// resolve. Both a drain move and a SHELLBELL holder produce `[foe damage, attacker heal]`,
+/// and poke-engine models both in gen3 (`src/gen3/items.rs` SHELLBELL). Showdown renders
+/// them differently -- `[from] drain|[of] <foe>` versus `[from] item: Shell Bell` -- and the
+/// second is an ITEM REVEAL. Guessing between them would FABRICATE a belief, which the
+/// render arm's own comment states is worse than refusing. So this bucket is named for what
+/// is actually known, and disambiguating it needs the candidate move set or the item, not
+/// the tail.
+fn heal_subcase(tail: &[Instruction], index: usize, attacker: SideReference) -> &'static str {
+    match tail.get(index) {
+        // The engine spells an HP INCREASE as a NEGATIVE `Damage` (Pain Split). A distinct
+        // producer from `Heal`, and one whose protocol line differs, so it is worth its own
+        // bucket even though the walk drops the same thing for both.
+        Some(Instruction::Damage(dmg)) if dmg.damage_amount < 0 => "heal_paindmg",
+        // A NEGATIVE `Heal` is Liquid Ooze; the named path renders it as `-damage`.
+        Some(Instruction::Heal(heal)) if heal.heal_amount < 0 => "heal_liquidooze",
+        Some(Instruction::Heal(heal)) if heal.heal_amount > 0 => {
+            if heal.side_ref != attacker {
+                // A heal on the DEFENDER inside our move phase is an absorb ability
+                // (Volt Absorb, Water Absorb), whose line is an ABILITY reveal.
+                "heal_defender"
+            } else if tail_damages_the_foe(tail, attacker) {
+                "heal_drain_or_shellbell"
+            } else {
+                // UNREACHABLE from the classifier: a positive attacker heal with no foe
+                // damage is exactly what `heal_is_a_direct_self_heal` admits, so it
+                // returns `None` before reaching here. Kept as the honest remainder
+                // rather than an `unreachable!()`, because a panic in this crate is
+                // mapped by pyo3 to `PanicException` -- past `except Exception` -- and
+                // kills the campaign worker instead of producing a measurable key.
+                "heal"
+            }
+        }
+        // A ZERO-amount `Heal` is not a heal at all -- it is a BRANCH MARKER, and gen3
+        // emits it from two places on purpose:
+        //   * `gen3/generate_instructions.rs:3369` -- a PROTECT-blocked branch. Its own
+        //     comment: "Mark only the successful accuracy branch so protocol rendering
+        //     can emit Protect instead of collapsing both outcomes." Pushed on
+        //     `attacking_side.get_other_side()`, i.e. the DEFENDER.
+        //   * `gen3/generate_instructions.rs:1373` -- a full-HP absorb activation kept as
+        //     "a reversible no-op so event consumers can keep the public histories
+        //     distinct".
+        // The line the walk owes for the first is `|-activate|<target>|Protect`, NOT a
+        // `-heal`. Leaving these in the bare `heal` bucket would break this classifier's
+        // own rule -- grouped by PROTOCOL LINE, not by engine instruction kind -- and
+        // would mis-scope the very fix this split exists to aim. Review caught the first
+        // version of this arm doing exactly that, with a test pinning the mislabel.
+        Some(Instruction::Heal(heal)) if heal.heal_amount == 0 => "heal_zero_marker",
+        // Any future producer. NOT silent, deliberately -- but note this no longer keeps
+        // the remainder RANKABLE the way the bare `heal` bucket once did: the token is
+        // deregistered, so `registered_family_or_unclassified` maps it to `unclassified`.
+        // That is the intended outcome for a shape nothing can currently produce (both
+        // `"heal"` returns here are unreachable), and it is measurable rather than a panic.
+        _ => "heal",
+    }
+}
+
 /// Which effect FAMILY, if any, the unnamed-callee walk cannot express for this
 /// instruction. `None` means the walk renders it (or correctly renders nothing).
 ///
@@ -3029,7 +3624,20 @@ const UNRENDERABLE_FAMILY_ORDER: &[&str] = &[
 /// here instead of silently classifying as one more `unclassified`, which on the largest
 /// failure class in the program would be a mis-diagnosis rather than a crash. This is
 /// the same reasoning `sleeptalk_subcase_slug` states for its own exhaustive match.
-fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
+fn unrenderable_family_at(
+    tail: &[Instruction],
+    index: usize,
+    attacker: SideReference,
+) -> Option<&'static str> {
+    // `get`, not `tail[index]`. Every caller is in bounds today, but an out-of-bounds index
+    // would PANIC, and this file spends a long comment below on why that specific outcome is
+    // the worst one available: pyo3 maps a Rust panic to `PanicException`, which derives from
+    // `BaseException` so it propagates past `engine_search.py`'s `except Exception`, killing
+    // the campaign worker instead of producing a measurable key. `None` here means "nothing
+    // blocks", which is the wrong answer to give for a nonexistent instruction -- so it is
+    // deliberately paired with the sibling predicate's `tail.get(index)?`, and both are
+    // unreachable rather than merely harmless.
+    let instruction = tail.get(index)?;
     match instruction {
         // --- rendered, or provably nothing to render -------------------------------
         //
@@ -3043,6 +3651,11 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         // emits on `active_hp < before` only, so a heal-direction `Damage` renders
         // NOTHING -- see this function's caller doc for the reproduced C52-mirror defect.
         Instruction::Damage(damage) if damage.damage_amount >= 0 => None,
+        // A DIRECT self-heal is renderable; drain, an absorb ability and Liquid Ooze are not.
+        // The discrimination needs the whole tail and the attacker -- see
+        // `heal_is_a_direct_self_heal` for why, and for why this is a deliberately PARTIAL
+        // close of the family rather than a whole one.
+        Instruction::Heal(_) if heal_is_a_direct_self_heal(tail, index, attacker) => None,
         Instruction::Switch(_) => None,
         Instruction::SetLastUsedMove(_)
         | Instruction::ChangeDamageDealtDamage(_)
@@ -3071,8 +3684,26 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         //
         // A heal-direction `Damage` lands with `Heal` because what the walk drops is
         // identical: an HP INCREASE. That grouping IS by protocol line, so it stays.
-        Instruction::Damage(_) | Instruction::Heal(_) => Some("heal"),
-        Instruction::Boost(_) => Some("boost"),
+        //
+        // SUB-CASED, not widened. `heal_subcase` only ever returns a blocking family, so
+        // the refused set is unchanged -- this splits the bucket for ranking, it does not
+        // admit anything. See `heal_subcase` for why the drain bucket keeps its ambiguous
+        // name instead of guessing between drain and Shell Bell.
+        Instruction::Damage(_) | Instruction::Heal(_) => {
+            Some(heal_subcase(tail, index, attacker))
+        }
+        // RENDERED NOW, so no longer a blocker. The unnamed-callee walk emits the
+        // `|-boost|`/`|-unboost|` line above, which is the whole reason this family existed:
+        // a bare `[Boost]` tail is fully expressible and must not refuse a world. Moving an
+        // arm into the `None` set is a BEHAVIOUR CHANGE by design -- it stops refusing a
+        // class -- which is why `the_renderable_allowlist_is_exactly_what_it_was` had to be
+        // updated deliberately rather than silently widened.
+        // REOPENED, and NARROWED rather than reverted. #1131 admitted every `Boost`: right
+        // for a move's own stat change, wrong for the switch-out reset Showdown does not
+        // narrate. See `boost_may_be_a_switch_out_reset` for why this refuses rather than
+        // rendering silence.
+        Instruction::Boost(_) if boost_may_be_a_switch_out_reset(tail, index) => Some("boost"),
+        Instruction::Boost(_) => None,
         Instruction::ChangeAttack(_)
         | Instruction::ChangeDefense(_)
         | Instruction::ChangeSpecialAttack(_)
@@ -3094,7 +3725,21 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         // `substitute` companion is ALWAYS present and the line to emit is theirs.
         // Filing it here made a Substitute-CREATION tail report `substitute+volatile`
         // when the only missing line is the `volatile` one.
-        Instruction::DamageSubstitute(_) => Some("substitute"),
+        // RENDERED NOW: the walk emits `|-activate|...|Substitute|[damage]`, so a substitute
+        // hit is expressible. This closes the oracle's surviving 6 of 16 `ambiguous_unrenderable`
+        // refusals, all of which are `[DamageSubstitute, RemoveVolatileStatus]`.
+        Instruction::DamageSubstitute(_) => None,
+        // The SUBSTITUTE break is rendered; every OTHER volatile is not. Admitting
+        // `RemoveVolatileStatus` wholesale would be the C52-mirror defect, because the walk has
+        // no line for Leech Seed, Confusion, Encore or the rest -- so the guard is on the
+        // volatile IDENTITY, not on the variant.
+        // Same predicate the walk matches on -- see `substitute_break_side`. Written as a
+        // concrete pattern with a guard rather than a bare `_`, so the "EXHAUSTIVE on
+        // purpose -- no `_` arm" claim above stays literally true and a NEW engine variant
+        // is still a compile error rather than falling into this arm.
+        Instruction::RemoveVolatileStatus(_) if substitute_break_side(tail, index).is_some() => {
+            None
+        }
         Instruction::ApplyVolatileStatus(_)
         | Instruction::RemoveVolatileStatus(_)
         | Instruction::ChangeVolatileStatusDuration(_) => Some("volatile"),
@@ -3126,7 +3771,8 @@ fn unrenderable_family(instruction: &Instruction) -> Option<&'static str> {
         //   * `ChangeSubstituteHealth` -- see `substitute` above.
         //   * `ChangeWish` / `DecrementWish` -- `DecrementWish` is read only as a
         //     LOOKAHEAD, to tag an existing `|-heal|` with `[from] move: Wish`. The
-        //     renderable unit is that `Heal`, already counted under `heal`.
+        //     renderable unit is that `Heal`, already accounted for -- admitted by
+        //     `heal_is_a_direct_self_heal`, or bucketed under one of the `heal_*` sub-cases.
         //   * `SetFutureSight` / `DecrementFutureSight` -- pending-slot bookkeeping;
         //     `SetFutureSight`'s arm is `sim.apply` only and the decrement has no arm.
         //   * `ChangeType` / `ChangeAbility` / `FormeChange` -- the named path's own arm
@@ -3193,9 +3839,12 @@ fn registered_family_or_unclassified(family: &'static str, order: &[&str]) -> &'
     }
 }
 
-fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
+fn unrenderable_tail_families(
+    tail: &[Instruction],
+    attacker: SideReference,
+) -> Vec<&'static str> {
     let mut families: Vec<&'static str> = Vec::new();
-    for instruction in tail {
+    for index in 0..tail.len() {
         // An UNREGISTERED token degrades to `unclassified` here, which is in both the
         // order list and the vocabulary. That makes `assert_subcase_vocabulary`
         // UNREACHABLE from this path by construction, and the difference is not
@@ -3211,7 +3860,7 @@ fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
         // forgets `UNRENDERABLE_FAMILY_ORDER`, and the release wheel aborts mid-campaign.
         // Now that path yields a measurable `unclassified` bucket instead, and the test
         // below still fails in CI so the omission is caught before it ships.
-        if let Some(family) = unrenderable_family(instruction) {
+        if let Some(family) = unrenderable_family_at(tail, index, attacker) {
             let family = registered_family_or_unclassified(family, UNRENDERABLE_FAMILY_ORDER);
             if !families.contains(&family) {
                 families.push(family);
@@ -3235,8 +3884,8 @@ fn unrenderable_tail_families(tail: &[Instruction]) -> Vec<&'static str> {
 /// visible together. The prefix must remain `SLEEPTALK_LOSSY_TAG`, since
 /// `mark_attribution_unsafe_subcase` asserts it and
 /// `engine_transition_differential.py` matches the bare tag exactly.
-fn ambiguous_unrenderable_slug(tail: &[Instruction]) -> String {
-    let families = unrenderable_tail_families(tail);
+fn ambiguous_unrenderable_slug(tail: &[Instruction], attacker: SideReference) -> String {
+    let families = unrenderable_tail_families(tail, attacker);
     // Unreachable: this slug is only built when the tail is NOT fully renderable, which
     // is defined as a non-empty family list. Named rather than emitting a bare trailing
     // colon so a future edit that breaks that correspondence shows up in the measurement.
@@ -3264,7 +3913,7 @@ fn ambiguous_unrenderable_slug(tail: &[Instruction]) -> String {
 enum SleepTalkIdent {
     Matched(Box<Choice>),
     /// No candidate regenerated the observed tail.
-    NoneMatched,
+    NoneMatched(NoneMatchedShapes),
     /// Two or more candidates regenerate the SAME tail.
     Ambiguous,
 }
@@ -3289,7 +3938,15 @@ const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
 fn sleeptalk_subcase_slug(ident: &SleepTalkIdent) -> &'static str {
     match ident {
         SleepTalkIdent::Ambiguous => "sleeptalk_called_unidentified:ambiguous",
-        SleepTalkIdent::NoneMatched => "sleeptalk_called_unidentified:none_matched",
+        // A SET cannot be one static string, so `NoneMatched` is emitted by
+        // `none_matched_slugs` at the marking site -- one slug per observed shape, which the
+        // existing sort-and-join in `attribution_unsafe_label` composes into one deterministic
+        // key. Routing it through here would force either a `format!` (ungreppable, and this
+        // returns `&'static str`) or a lossy reduction back to a single shape, which is exactly
+        // what the set replaced.
+        SleepTalkIdent::NoneMatched(_) => {
+            unreachable!("NoneMatched is emitted per shape by `none_matched_slugs`")
+        }
         // Exhaustive on purpose. A `_` arm would send a future variant into
         // `none_matched` with no compiler error -- a silent MIS-DIAGNOSIS of the
         // largest failure class rather than a crash. `Matched` cannot reach here:
@@ -3324,6 +3981,11 @@ fn identify_sleep_talk_called(
         s.get_active_immutable().get_sleep_talk_choices()
     };
     let mut matched: Option<Choice> = None;
+    // The CLOSEST miss across all candidates. Seeded at the least informative shape so a
+    // candidate list that produces nothing still yields a token rather than a default that
+    // reads as a diagnosis.
+    // EVERY shape observed, not the closest one. See `NoneMatchedShapes`.
+    let mut shapes = NoneMatchedShapes::default();
     for candidate in candidates {
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
@@ -3381,12 +4043,315 @@ fn identify_sleep_talk_called(
                 return SleepTalkIdent::Ambiguous;
             }
             matched = Some(choice);
+        } else {
+            // NO MATCH for this candidate. Record HOW CLOSE it came, because the match is
+            // byte-exact on the whole instruction list and so a single differing numeric field
+            // is indistinguishable from a wholly different transition -- and those are
+            // different bugs with different owners.
+            //
+            // era 60 measured `none_matched` at 3,595 world failures, third largest, and the
+            // era-60 measurement says in as many words that it "must be classified before it
+            // can be fixed". This is that classification, and it is the same move that turned
+            // `ambiguous_unrenderable` from one opaque key into a ranked family list.
+            for branch in &generated {
+                shapes.insert(divergence_shape(branch.instruction_list.as_slice(), tail));
+            }
         }
     }
     match matched {
         Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
-        None => SleepTalkIdent::NoneMatched,
+        None => SleepTalkIdent::NoneMatched(if shapes.is_empty() {
+            // No candidate produced ANY branch to classify, which is the empty-candidate-list
+            // case. `NoCandidates` is reachable only from here.
+            let mut only = NoneMatchedShapes::default();
+            only.insert(NoneMatchedShape::NoCandidates);
+            only
+        } else {
+            shapes
+        }),
     }
+}
+
+/// How a regenerated candidate branch DIFFERS from the observed tail.
+///
+/// Reordering these variants COMPILES and is caught by `the_ordering_keeps_the_closest_miss`.
+/// An earlier commit message claimed reordering "does not compile, so that property is
+/// compile-time rather than tested" -- false in both halves, and stated as fact. Coverage was
+/// better than claimed, which is the less harmful direction to be wrong in but still wrong.
+///
+/// Ordered from most to least diagnostic, so `min` over all candidates keeps the closest miss:
+/// if any candidate reproduced the transition's SHAPE and differed only in a number, that is
+/// far more informative than a candidate that produced something structurally unrelated.
+///
+/// The point is ownership, the same argument `choices_unmapped_causes` makes on the Python
+/// side. `ValuesOnly` means the renderer regenerated the right transition and disagreed about a
+/// ROLL -- the engine's damage enumeration, or a merged chance branch, neither of which the
+/// renderer can fix. `Structure` means it regenerated a different transition altogether, which
+/// is a candidate-set or state-input bug and IS fixable here. The code above records one
+/// instance already: passing `Choice::default()` for the defender made the engine's 32-roll
+/// enumeration mismatch, and every such world refused as `none_matched`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum NoneMatchedShape {
+    /// Same variant sequence and same sides; something in the payload differs.
+    ///
+    /// **Named for the PREDICATE, not a cause — twice corrected to get here.** The first
+    /// version claimed "numeric field differs", which review measured false a second time even
+    /// after sides were added: `Boost(Attack)` vs `Boost(Speed)`, `ChangeStatus(→SLEEP)` vs
+    /// `(→BURN)`, and `Switch(→P1)` vs `(→P4)` all land here. Those are a wrong stat, a wrong
+    /// status and a wrong Pokémon — categorical, not numeric, and renderer-side.
+    ///
+    /// **It also does NOT mean the engine owns it, and an earlier version of this doc said it
+    /// did.** Review measured the one `none_matched` population this repo can reproduce -- the
+    /// C31 bug, where `Choice::default()` was passed instead of the real defender choice, so
+    /// the engine's 32-roll damage enumeration did not match -- and it lands here **132 of
+    /// 132**. That bug was entirely RENDERER-side and was fixed in this file. So a numeric
+    /// divergence is a roll-enumeration disagreement whose cause may be engine-side (merged
+    /// chance branches) or renderer-side (a wrong state input, as C31 was), and this token
+    /// must not be read as an ownership verdict.
+    ValuesOnly,
+    /// Same number of instructions, different variant sequence.
+    Structure,
+    /// Different lengths, and the SHORTER list is a prefix of the longer -- with the
+    /// regenerated BRANCH the shorter one. The candidate reproduced the head of the tail
+    /// exactly and the tail continues past it.
+    ///
+    /// CONSISTENT WITH an over-long tail rather than a wrong callee: `tail` is
+    /// `&segment[cursor..]`, which runs to the end of the segment, while
+    /// `generate_instructions_from_move` produces only the callee's own instructions.
+    ///
+    /// It does NOT establish that. Prefix containment is not callee identity: a WRONG callee
+    /// whose head coincidentally matches -- one `Damage` of the right amount on the right
+    /// side, which short branches make likely -- lands here too. A high count narrows the
+    /// search; it does not license bounding the tail on its own. Whether it dominates at all
+    /// is an OPEN QUESTION this token exists to answer.
+    BranchIsPrefix,
+    /// Different lengths, shorter is a prefix of longer, and the TAIL is the shorter one.
+    /// The candidate generated MORE than happened -- a state-input or candidate-set fault.
+    TailIsPrefix,
+    /// Different number of instructions, and neither list is a prefix of the other -- PLUS
+    /// the empty-tail case, which is routed here deliberately. An empty tail IS vacuously a
+    /// prefix, so admitting it to a containment bucket would fill that bucket with rows
+    /// carrying no containment evidence; see the guard in `divergence_shape`.
+    ///
+    /// Otherwise: a genuinely different transition, which is the reading the bare token was
+    /// always assumed to carry and, before the containment split, could not establish.
+    Length,
+    /// A candidate produced an empty instruction list.
+    Empty,
+    /// There were NO candidates to regenerate. `get_sleep_talk_choices` returns an empty list
+    /// when every non-Sleep-Talk slot is `Choices::NONE`, so the loop body never runs.
+    ///
+    /// Split out of `Empty`, which conflated it with "a candidate produced nothing" -- and this
+    /// one is different in kind: there was nothing to look at, it is knowable with certainty,
+    /// and it is trivially fixable. LAST in declaration order, so `min` never prefers it.
+    NoCandidates,
+}
+
+/// The SET of divergence shapes observed across a decision's candidates.
+///
+/// A `min` was the first design and review argued it out on three grounds:
+///
+///   1. It costs nothing to carry the set. `attribution_unsafe` is already a `Vec<String>`
+///      that `attribution_unsafe_label` sorts and joins, so emitting one `&'static str` per
+///      observed shape composes into a single deterministic key -- no counter, and no change to
+///      the Python seam, which counts `f"crate_search: {reason}"` verbatim. That is the
+///      mechanism `ambiguous_unrenderable` already uses via `unrenderable_tail_families`'
+///      fixed-order dedupe: this file's own precedent, not a new pattern.
+///   2. **It DELETES the one defect nothing could pin.** Inverting the cross-candidate `min`
+///      to `max` survived the entire suite, reporting the FARTHEST miss -- near-universally the
+///      least informative bucket. A union has no "closest" semantics to get backwards, so the
+///      failure mode stops existing rather than being tested around. Strictly less code and
+///      strictly less risk.
+///   3. A min is a lossy projection of a distribution collectable ONCE per campaign.
+///      `same_variants_and_sides` alone and `same_variants_and_sides + structure` are different
+///      diagnoses, and only the set separates them. The min is recoverable from the set, so the
+///      set strictly dominates.
+///
+/// Cardinality is bounded at 2^7 - 1 = 127, inside the discipline attract already accepts.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct NoneMatchedShapes(u8);
+
+impl NoneMatchedShapes {
+    fn insert(&mut self, shape: NoneMatchedShape) {
+        self.0 |= 1u8 << shape.bit();
+    }
+
+    fn contains(self, shape: NoneMatchedShape) -> bool {
+        self.0 & (1u8 << shape.bit()) != 0
+    }
+
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// In declaration order, so the emitted slug set is deterministic across runs -- the same
+    /// requirement `UNRENDERABLE_FAMILY_ORDER` exists for.
+    fn iter(self) -> impl Iterator<Item = NoneMatchedShape> {
+        NoneMatchedShape::ALL
+            .into_iter()
+            .filter(move |shape| self.contains(*shape))
+    }
+}
+
+impl NoneMatchedShape {
+    /// EVERY variant, in declaration order. The `iter` above and the vocabulary test both walk
+    /// this, so a new variant that is not added here is invisible to both.
+    const ALL: [NoneMatchedShape; 7] = [
+        NoneMatchedShape::ValuesOnly,
+        NoneMatchedShape::Structure,
+        NoneMatchedShape::BranchIsPrefix,
+        NoneMatchedShape::TailIsPrefix,
+        NoneMatchedShape::Length,
+        NoneMatchedShape::Empty,
+        NoneMatchedShape::NoCandidates,
+    ];
+
+    fn bit(self) -> u8 {
+        match self {
+            NoneMatchedShape::ValuesOnly => 0,
+            NoneMatchedShape::Structure => 1,
+            NoneMatchedShape::BranchIsPrefix => 2,
+            NoneMatchedShape::TailIsPrefix => 3,
+            NoneMatchedShape::Length => 4,
+            NoneMatchedShape::Empty => 5,
+            NoneMatchedShape::NoCandidates => 6,
+        }
+    }
+}
+
+impl NoneMatchedShape {
+    /// The sub-case token. Closed and greppable, like the renderer's family order.
+    pub fn token(self) -> &'static str {
+        match self {
+            NoneMatchedShape::ValuesOnly => "shape_same_variants_and_sides",
+            NoneMatchedShape::Structure => "shape_structure",
+            NoneMatchedShape::BranchIsPrefix => "shape_branch_is_prefix_of_tail",
+            NoneMatchedShape::TailIsPrefix => "shape_tail_is_prefix_of_branch",
+            NoneMatchedShape::Length => "shape_length",
+            NoneMatchedShape::Empty => "shape_empty",
+            NoneMatchedShape::NoCandidates => "shape_no_candidates",
+        }
+    }
+}
+
+/// One registered slug per observed shape.
+///
+/// Static literals rather than a `format!`, for the same reason the rest of this vocabulary is:
+/// a formatted key is ungreppable, which is how a class stops being rankable.
+fn none_matched_slugs(shapes: NoneMatchedShapes) -> impl Iterator<Item = &'static str> {
+    shapes.iter().map(|shape| match shape {
+        NoneMatchedShape::ValuesOnly => {
+            "sleeptalk_called_unidentified:none_matched:shape_same_variants_and_sides"
+        }
+        NoneMatchedShape::Structure => "sleeptalk_called_unidentified:none_matched:shape_structure",
+        NoneMatchedShape::BranchIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_branch_is_prefix_of_tail",
+        NoneMatchedShape::TailIsPrefix => "sleeptalk_called_unidentified:none_matched:shape_tail_is_prefix_of_branch",
+        NoneMatchedShape::Length => "sleeptalk_called_unidentified:none_matched:shape_length",
+        NoneMatchedShape::Empty => "sleeptalk_called_unidentified:none_matched:shape_empty",
+        NoneMatchedShape::NoCandidates => {
+            "sleeptalk_called_unidentified:none_matched:shape_no_candidates"
+        }
+    })
+}
+
+/// The CLOSEST divergence across a candidate's regenerated branches.
+///
+/// Extracted from the loop specifically so it can be tested. Review's mutation battery found
+/// every kill landing on `divergence_shape` or the enum, and every SURVIVOR in the aggregation
+/// that computes what an era actually reads: swapping the argument order, and -- worst --
+/// `min` becoming `max`, which inverts the measurement to report the FARTHEST miss with a
+/// fully green suite. The enum's ORDERING was pinned; the USE of `min` was not, because no test
+/// crossed from the helper into the loop. It does now.
+///
+/// The C31 fixture cannot serve here: on a correct build it identifies its callee, so it
+/// produces no `none_matched` at all, and the only way to reach this code naturally is to
+/// reintroduce the bug. A pure function is testable without that.
+fn nearest_divergence<'a>(
+    branches: impl Iterator<Item = &'a [Instruction]>,
+    tail: &[Instruction],
+) -> NoneMatchedShape {
+    branches
+        .map(|branch| divergence_shape(branch, tail))
+        .min()
+        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist generated
+        // zero branches, which is "the candidate produced nothing" -- exactly what `Empty`
+        // means. Returning `NoCandidates` here reintroduced the very conflation that variant
+        // was split out to remove, so `NoCandidates` is now reachable ONLY from the seed, where
+        // it means the candidate list itself was empty.
+        .unwrap_or(NoneMatchedShape::Empty)
+}
+
+/// Classify one candidate branch against the observed tail.
+fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+    if branch.is_empty() {
+        return NoneMatchedShape::Empty;
+    }
+    if branch.len() != tail.len() {
+        // SPLIT BY CONTAINMENT before falling back to a bare length mismatch.
+        //
+        // `shape_length` was era 61's largest world-failure class -- 4,786 worlds, 33.3% --
+        // and it says only "the lists are different sizes", which names no fix. The question
+        // it cannot answer is whether the SHORTER list is a PREFIX of the longer one, and
+        // that distinction is the whole diagnosis:
+        //
+        //   * `BranchIsPrefix` -- the branch reproduces the head of the tail exactly and the
+        //     tail continues past it. CONSISTENT WITH an over-long tail (`&segment[cursor..]`
+        //     runs to the END OF THE SEGMENT while the branch is only the callee's own
+        //     instructions), but it does NOT prove the callee was right: a wrong callee with
+        //     a coincidentally-matching head lands here too, and short branches make that
+        //     likely. A high count narrows where to look; on its own it does not license
+        //     bounding the tail.
+        //   * `TailIsPrefix` -- the branch reproduces the tail and then continues. Consistent
+        //     with the candidate generating MORE than happened -- a state-input or
+        //     candidate-set fault -- subject to the same coincidence caveat.
+        //   * `Length` -- neither contains the other. A genuinely different transition, which
+        //     is the reading the bare token was always assumed to carry.
+        //
+        // DELIBERATELY NOT a mechanism claim. An earlier read of era 61 asserted a
+        // "constant-offset signature" from the absence of `ValuesOnly`, which the 460
+        // `Structure` worlds refuted -- `Structure` is returned only AFTER the length check
+        // passes, so same-length branches demonstrably exist. This split MEASURES the thing
+        // that inference guessed at.
+        // An EMPTY TAIL is vacuously a prefix of anything, so without this guard
+        // `divergence_shape(&[dmg], &[])` returns a containment shape carrying ZERO
+        // containment evidence. Empty tails are real here -- `tail` is `&segment[cursor..]`
+        // and this file handles the empty case elsewhere -- so the bucket whose doc says
+        // "the tail is reproduced and the branch continues" would be contaminated.
+        // The branch-empty mirror is caught by the `is_empty` return above.
+        if tail.is_empty() {
+            return NoneMatchedShape::Length;
+        }
+        let (shorter, longer) = if branch.len() < tail.len() {
+            (branch, tail)
+        } else {
+            (tail, branch)
+        };
+        if longer.starts_with(shorter) {
+            return if branch.len() < tail.len() {
+                NoneMatchedShape::BranchIsPrefix
+            } else {
+                NoneMatchedShape::TailIsPrefix
+            };
+        }
+        return NoneMatchedShape::Length;
+    }
+    // VARIANT **and SIDE**. `std::mem::discriminant` alone ignores the entire payload, and
+    // `side_ref` lives in the payload -- so an earlier version reported
+    // `Damage(SideOne)` vs `Damage(SideTwo)` as a mere "value" difference. Review measured the
+    // same collapse for a different stat on `Boost`, a different volatile on
+    // `ApplyVolatileStatus`, a different status on `ChangeStatus` and a different weather on
+    // `ChangeWeather`. Every one of those is a WRONG-TARGET or WRONG-EFFECT renderer bug, and
+    // reporting them as numeric divergence pointed the diagnosis at the wrong owner.
+    //
+    // Side is checked via `instruction_side`, which is exhaustive over the variants that carry
+    // one. A `None` side (field-wide instructions like weather) compares equal, which is
+    // correct: those have no side to disagree about.
+    if branch.iter().zip(tail).all(|(a, b)| {
+        std::mem::discriminant(a) == std::mem::discriminant(b) && instruction_side(a) == instruction_side(b)
+    }) {
+        return NoneMatchedShape::ValuesOnly;
+    }
+    NoneMatchedShape::Structure
 }
 
 /// Expected collapsed damage values (regular, crit) for the attacking side's
@@ -4383,7 +5348,7 @@ mod tests {
         ChangeSideConditionInstruction, ChangeStatInstruction, ChangeWishInstruction,
         ChangeSubsituteHealthInstruction, ChangeType, DecrementPPInstruction,
         DisableMoveInstruction,
-        HealInstruction,
+        HealInstruction, RemoveVolatileStatusInstruction,
         SetFutureSightInstruction, SetLastUsedMoveInstruction, SetSleepTurnsInstruction,
         SwitchInstruction, ToggleBatonPassingInstruction,
         ToggleDamageDealtHitSubstituteInstruction,
@@ -4781,12 +5746,32 @@ mod tests {
         );
         // The fail-closed arm must also be EXERCISED, or the predicate is untested and
         // could be `|_| true` without anything noticing.
-        assert!(
-            multi_label_refused > 0,
-            "VACUOUS THE OTHER WAY: no ambiguous branch was refused, so nothing here \
-             exercises `ambiguous_tail_is_fully_renderable`. The Harden/Withdraw fixture \
-             carries an unrendered Boost and MUST refuse; a predicate that accepted \
-             everything would pass this test without it."
+        // THE CORPUS IS NOW EXHAUSTED, so this guard has to move rather than be weakened.
+        //
+        // It used to assert `multi_label_refused > 0`, to stop
+        // `ambiguous_tail_is_fully_renderable` degenerating to "accept everything" unnoticed.
+        // That was the right guard while the corpus still contained a refusable ambiguity.
+        // It no longer does: #1131 rendered the `boost` family (16 -> 6) and the substitute
+        // break closes the last 6 (6 -> 0), so every ambiguous tail this corpus produces is
+        // fully expressible. Keeping `> 0` would force either a weakened assertion or a
+        // fabricated fixture, and both are worse than moving the guard.
+        //
+        // WHERE THE FAIL-CLOSED ARM IS EXERCISED NOW, so this is a relocation and not a loss:
+        //   * `the_renderable_allowlist_is_exactly_what_it_was` asserts, for one representative
+        //     of EVERY still-blocked family, that `ambiguous_tail_is_fully_renderable` returns
+        //     FALSE. An "accept everything" predicate fails there on all of them.
+        //   * `the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract` drives a real
+        //     Mean Look/Spider Web ambiguity end to end and requires it to refuse under
+        //     `volatile`. It used to use Recover/Soft-Boiled and refuse under `heal`; the
+        //     direct-self-heal change admits exactly that shape, so the guard had to move to a
+        //     family that still blocks -- a knock-on the heal work predicted in advance rather
+        //     than discovered when the suite went red.
+        // The pinned tuple below still catches any drift, in both directions: a refusal
+        // REAPPEARING moves the 0 as loudly as a usable one moving the 237.
+        assert_eq!(
+            multi_label_refused, 0,
+            "an ambiguous refusal reappeared in a corpus that is now fully renderable -- \
+             see the relocation note above before updating this number"
         );
         // ...and the two must partition the ambiguous population exactly.
         assert_eq!(
@@ -4825,7 +5810,17 @@ mod tests {
         // together. Do not update one without the other.
         assert_eq!(
             (total_branches, agree, multi_label_unattributed, multi_label_refused),
-            (2614, 2377, 221, 16),
+            // 221 -> 231 -> 237 usable, 16 -> 6 -> 0 unrenderable, across two changes: #1131
+            // rendered the ten `[Boost]` tails, and the substitute break closes the last six
+            // `[DamageSubstitute, RemoveVolatileStatus]`. `branches`, `agree` and WRONG are
+            // UNCHANGED throughout, which is the claim that matters -- no attribution moved,
+            // only the refuse-versus-count decision.
+            //
+            // `ambiguous_unrenderable` is therefore CLOSED for this corpus. It is not closed in
+            // production: the corpus contains only the two shapes above, and the era-59 family
+            // split exists precisely because the reachable surface is wider than the corpus
+            // that ranked it.
+            (2614, 2377, 237, 0),
             "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
              printed above, and the comment here on what else must be updated."
         );
@@ -4834,7 +5829,7 @@ mod tests {
     /// The refactor must not change WHICH branches are refused.
     ///
     /// `ambiguous_tail_is_fully_renderable` was an inline `matches!` pair and is now
-    /// defined as `unrenderable_tail_families(tail).is_empty()`. That is only a
+    /// defined as `unrenderable_tail_families(tail, attacker).is_empty()`. That is only a
     /// refactor if the admitted set is byte-identical -- widening it by one variant
     /// stops refusing a class of worlds, which is a behaviour change to the largest
     /// failure class in the program, and narrowing it starts refusing worlds that
@@ -4894,31 +5889,124 @@ mod tests {
                     side_ref: SideReference::SideOne,
                 },
             ),
+            // NEWLY ADMITTED, and the reason this test exists. The unnamed-callee walk now
+            // emits `|-boost|`/`|-unboost|`, so a bare `[Boost]` tail is fully expressible and
+            // must stop refusing worlds. Measured on the attribution oracle: usable 221 -> 231,
+            // unrenderable 16 -> 6, with zero change to `agree` or WRONG. Moving an arm into
+            // the admitted set is a BEHAVIOUR change, which is precisely why this test had to
+            // be edited by hand rather than quietly widened.
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideOne,
+                stat: PokemonBoostableStat::Defense,
+                amount: 1,
+            }),
+            // NEWLY ADMITTED, second batch. The walk now emits
+            // `|-activate|{ident}|Substitute|[damage]` and, for the SUBSTITUTE volatile only,
+            // `|-end|{ident}|Substitute`. That closes the oracle's last 6 of 16 refusals, all
+            // `[DamageSubstitute, RemoveVolatileStatus]`: usable 231 -> 237, unrenderable
+            // 6 -> 0, again with zero change to `agree` or WRONG.
+            Instruction::DamageSubstitute(DamageInstruction {
+                side_ref: SideReference::SideOne,
+                damage_amount: 20,
+            }),
+            // `RemoveVolatileStatus(SUBSTITUTE)` is deliberately NOT in this list. It is
+            // admitted only when a same-side `DamageSubstitute` precedes it in the tail, so it
+            // is not an unconditionally-renderable INSTRUCTION and belongs in the tail-level
+            // pin below rather than here. Review found the first version of this change
+            // admitting it unconditionally, which made a switch-out volatile cleanup render a
+            // phantom `|-end|` and be searched where it used to refuse.
         ];
-        for instruction in &admitted {
+        for (index, instruction) in admitted.iter().enumerate() {
             assert_eq!(
-                unrenderable_family(instruction),
+                unrenderable_family_at(&admitted, index, SideReference::SideOne),
                 None,
                 "{instruction:?} was admitted by the previous allowlist and must stay \
                  admitted -- widening or narrowing this set changes which worlds refuse"
             );
         }
         assert!(
-            ambiguous_tail_is_fully_renderable(&admitted),
+            ambiguous_tail_is_fully_renderable(&admitted, SideReference::SideOne),
             "a tail built only from admitted instructions must be fully renderable"
         );
 
-        // ONE REPRESENTATIVE PER BLOCKED FAMILY, all sixteen. `Heal` is first because it
+        // THE TAIL-PAIRING GUARD, pinned in both directions. `RemoveVolatileStatus(SUBSTITUTE)`
+        // is a narrated break in one position and a silent switch-out cleanup in another, and
+        // the first version of this change could not tell them apart.
+        let hit = Instruction::DamageSubstitute(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 20,
+        });
+        let removal = Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
+            side_ref: SideReference::SideOne,
+            volatile_status: PokemonVolatileStatus::SUBSTITUTE,
+        });
+        let switch = Instruction::Switch(SwitchInstruction {
+            side_ref: SideReference::SideOne,
+            previous_index: PokemonIndex::P0,
+            next_index: PokemonIndex::P1,
+        });
+
+        // A real break: hit then removal. Showdown narrates `|-end|`, so this is renderable.
+        assert!(
+            ambiguous_tail_is_fully_renderable(&[hit.clone(), removal.clone()], SideReference::SideOne),
+            "a `DamageSubstitute` followed by the substitute removal IS a break and must be \
+             renderable -- this is the whole point of the change"
+        );
+
+        // A PHAZE: removal then switch, no hit. `remove_volatile_statuses_on_switch` emits this
+        // on every non-Baton-Pass switch-out and Showdown clears volatiles with
+        // `this.volatiles = {}` WITHOUT running `onEnd`, so it emits no line at all. Rendering
+        // `|-end|` here is a phantom, and searching the world against a protocol log with an
+        // extra line is the same defect class as one missing a line.
+        assert_eq!(
+            unrenderable_family_at(&[removal.clone(), switch.clone()], 0, SideReference::SideOne),
+            Some("volatile"),
+            "a substitute removal with NO preceding same-side `DamageSubstitute` is a \
+             switch-out cleanup, not a break, and must stay blocked"
+        );
+        assert!(
+            !ambiguous_tail_is_fully_renderable(&[removal.clone(), switch], SideReference::SideOne),
+            "a phaze tail must keep REFUSING -- review reproduced this rendering a phantom \
+             `|-end|` end to end through `render_branch_events`"
+        );
+
+        // ORDER is load-bearing, not just presence: the hit must come BEFORE the removal.
+        assert_eq!(
+            unrenderable_family_at(&[removal.clone(), hit.clone()], 0, SideReference::SideOne),
+            Some("volatile"),
+            "a removal that PRECEDES the hit is not a break that hit caused"
+        );
+
+        // SIDE is load-bearing too: the sub that broke must belong to the mon whose volatile
+        // is being removed, or the pairing invents a break across sides.
+        let other_side_hit = Instruction::DamageSubstitute(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 20,
+        });
+        assert_eq!(
+            // index 1: the REMOVAL is the instruction under test here, not the hit.
+            unrenderable_family_at(&[other_side_hit, removal], 1, SideReference::SideOne),
+            Some("volatile"),
+            "a `DamageSubstitute` on the OTHER side does not make this removal a break"
+        );
+
+        // ONE REPRESENTATIVE PER BLOCKED FAMILY -- 14 distinct families in this vec, and the
+        // full sixteen only counting `blocked_in_tail` below. `Heal` is first because it
         // is the variant review found most likely to be mistakenly admitted -- the whole
         // C52-mirror doc block is about it -- and it previously had no representative at
         // all, so `Heal(_) => None` left every test green.
         let blocked: Vec<(Instruction, &str)> = vec![
             (
+                // The DEFENDER's side, deliberately. An attacker-side heal with no damage
+                // to the defender is now a direct self-heal and RENDERS; this one is an
+                // absorb ability, whose Showdown line carries `[from] ability: X|[of] ..`,
+                // which the walk cannot construct without knowing the ability. So the family
+                // is partially closed and this representative is what remains of it.
                 Instruction::Heal(HealInstruction {
-                    side_ref: SideReference::SideOne,
+                    side_ref: SideReference::SideTwo,
                     heal_amount: 40,
                 }),
-                "heal",
+                "heal_defender",
             ),
             (
                 // The load-bearing sign case: `Damage` is SIGNED, and negative is the
@@ -4928,19 +6016,13 @@ mod tests {
                     side_ref: SideReference::SideOne,
                     damage_amount: -130,
                 }),
-                "heal",
+                "heal_paindmg",
             ),
             (
-                Instruction::Boost(BoostInstruction {
-                    side_ref: SideReference::SideOne,
-                    stat: PokemonBoostableStat::Defense,
-                    amount: 1,
-                }),
-                "boost",
-            ),
-            (
-                // NOT `boost`: the engine emits `Change<Stat>` from `recalculate_stats`
-                // on mega/forme/transform and it carries no `-boost` line.
+                // NOT a boost family any more -- see the admitted list above. Kept here only
+                // as the contrast for `statrecalc`, which looks like a boost and is not.
+                // The engine emits `Change<Stat>` from `recalculate_stats` on
+                // mega/forme/transform and it carries no `-boost` line.
                 Instruction::ChangeAttack(ChangeStatInstruction {
                     side_ref: SideReference::SideOne,
                     amount: 20,
@@ -4991,11 +6073,19 @@ mod tests {
                 "silent",
             ),
             (
-                Instruction::DamageSubstitute(DamageInstruction {
+                // THE GUARD ON THE ADMISSION ABOVE, and the reason it is written as a match
+                // GUARD on `volatile_status` rather than on the variant. `RemoveVolatileStatus`
+                // is admitted for SUBSTITUTE only; the walk has no line for Leech Seed,
+                // Confusion, Encore or any other volatile, so those must keep refusing. Widen
+                // the admission to the whole variant and this representative fails -- which is
+                // the C52-mirror defect caught at compile-adjacent cost instead of in a
+                // campaign. `DamageSubstitute` USED to sit here under "substitute"; it is now
+                // in the admitted list above.
+                Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
                     side_ref: SideReference::SideOne,
-                    damage_amount: 20,
+                    volatile_status: PokemonVolatileStatus::LEECHSEED,
                 }),
-                "substitute",
+                "volatile",
             ),
             (
                 // NOT `substitute`. Creation emits this with `Damage` +
@@ -5072,6 +6162,37 @@ mod tests {
                 "silent",
             ),
             (
+                // PAIN SPLIT at the boundary: a heal-direction `Damage` of just -1, on the
+                // ATTACKER's side (SideOne is the attacker this loop passes). Pins that the
+                // sign test is `< 0`, not a magnitude threshold.
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: -1,
+                }),
+                "heal_paindmg",
+            ),
+            (
+                // LIQUID OOZE: a NEGATIVE `Heal`, which the named path renders as
+                // `-damage`, not `-heal`. Blocked standalone, so it belongs here and
+                // not in `blocked_in_tail`.
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: -40,
+                }),
+                "heal_liquidooze",
+            ),
+            (
+                // A ZERO-amount `Heal` is a gen3 BRANCH MARKER -- Protect-blocked, or a
+                // full-HP absorb no-op -- not a heal. The bare `heal` remainder
+                // deliberately has NO representative: it is unreachable, which is why the
+                // token is deregistered from UNRENDERABLE_FAMILY_ORDER.
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 0,
+                }),
+                "heal_zero_marker",
+            ),
+            (
                 // NOT `pp`: there is no `-pp` line in the protocol. `silent` says the
                 // truth -- no public line on any path.
                 Instruction::DecrementPP(DecrementPPInstruction {
@@ -5084,21 +6205,236 @@ mod tests {
         ];
         for (instruction, family) in &blocked {
             assert_eq!(
-                unrenderable_family(instruction),
+                unrenderable_family_at(std::slice::from_ref(instruction), 0, SideReference::SideOne),
                 Some(*family),
                 "{instruction:?} must be blocked and classified as {family:?}"
             );
             assert!(
-                !ambiguous_tail_is_fully_renderable(std::slice::from_ref(instruction)),
+                !ambiguous_tail_is_fully_renderable(std::slice::from_ref(instruction), SideReference::SideOne),
                 "{instruction:?} carries an effect the walk drops, so its tail is not \
                  fully renderable"
+            );
+        }
+
+        // TAIL-CONTEXT families, which a lone instruction cannot represent because the
+        // classifier's answer depends on what surrounds it. `boost` is one: a move's own stat
+        // change is renderable, the switch-out RESET is not, and the only difference is a
+        // later same-side `Switch`.
+        //
+        // A separate list rather than forced into `blocked` above, because that loop asserts
+        // on `from_ref(instruction), 0` and a lone `Boost` legitimately answers `None`.
+        // Collapsing the two would mean weakening that loop or writing a representative that
+        // lies about its own family.
+        let blocked_in_tail: Vec<(Vec<Instruction>, usize, &str)> = vec![(
+            vec![
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Attack,
+                    amount: -2,
+                }),
+                Instruction::Switch(SwitchInstruction {
+                    side_ref: SideReference::SideOne,
+                    previous_index: PokemonIndex::P0,
+                    next_index: PokemonIndex::P1,
+                }),
+            ],
+            0,
+            "boost",
+        ),
+        (
+            // DRAIN SHAPE. The `Heal` ALONE is admitted -- it is a direct self-heal --
+            // so this belongs here rather than in `blocked`, and the loop's
+            // "same instruction without the tail must stay admitted" assertion is the
+            // one that proves the discrimination is a property of the TAIL.
+            vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 60,
+                }),
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 30,
+                }),
+            ],
+            1,
+            "heal_drain_or_shellbell",
+        ),
+        (
+            // DRAIN AGAINST A SUBSTITUTE. Review's mutation DELETED the
+            // `DamageSubstitute` arm from `tail_damages_the_foe` and the whole suite
+            // stayed GREEN -- while that deletion flips this tail from refused to
+            // ADMITTED, making the walk emit a bare `|-heal|` for a drain. That is
+            // precisely the fabricated-`[from]`-tag harm `heal_is_a_direct_self_heal`
+            // exists to prevent, and it was the one clause the refactor's doc claimed to
+            // protect with nothing testing it.
+            vec![
+                Instruction::DamageSubstitute(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 25,
+                }),
+                Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: 30,
+                }),
+            ],
+            1,
+            "heal_drain_or_shellbell",
+        )];
+        // THE HEAL PREDICATE, pinned in every direction it discriminates on. This family
+        // is only PARTIALLY closed, and each clause is what keeps a mis-tagged `-heal` -- which
+        // FABRICATES a belief in the fold -- out of a searched world.
+        let self_heal = Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 40,
+        });
+        let foe_damage = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 30,
+        });
+        // 1. Direct self-heal: renders bare. The one admitted shape.
+        assert_eq!(
+            unrenderable_family_at(std::slice::from_ref(&self_heal), 0, SideReference::SideOne),
+            None,
+            "an attacker-side heal with no foe damage is a direct healing move"
+        );
+        // 2. DRAIN: same heal, but the tail damages the foe. Needs `[from] drain|[of] ..`.
+        assert_eq!(
+            unrenderable_family_at(&[foe_damage, self_heal.clone()], 1, SideReference::SideOne),
+            Some("heal_drain_or_shellbell"),
+            "damage to the foe plus a heal on the attacker is DRAIN-SHAPED, not a direct \
+             heal -- and the tail alone cannot tell drain from a Shell Bell holder"
+        );
+        // 3. ABSORB ABILITY: the heal is on the defender. Needs `[from] ability: X`.
+        assert_eq!(
+            unrenderable_family_at(std::slice::from_ref(&self_heal), 0, SideReference::SideTwo),
+            Some("heal_defender"),
+            "a heal on the DEFENDER is an absorb ability, not a direct heal"
+        );
+        // ARM ORDER, pinned. A heal on the DEFENDER *with* foe damage in the tail must
+        // bucket as `heal_defender`, not as drain -- an absorb ability's line is an
+        // ABILITY reveal whatever else the tail did. NOT in `blocked_in_tail`, because
+        // that loop also asserts the instruction alone stays ADMITTED and a defender heal
+        // is refused standalone. Review's mutation swapped the two checks and the suite
+        // stayed green, since no other fixture carries both.
+        assert_eq!(
+            unrenderable_family_at(
+                &[
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount: 60,
+                    }),
+                    Instruction::Heal(HealInstruction {
+                        side_ref: SideReference::SideTwo,
+                        heal_amount: 30,
+                    }),
+                ],
+                1,
+                SideReference::SideOne
+            ),
+            Some("heal_defender"),
+            "a defender heal stays an absorb ability even when the tail damages the foe"
+        );
+
+        // ZERO-DAMAGE CONTROL, pinning `> 0` rather than `>= 0` in `tail_damages_the_foe`.
+        // Review mutated that comparison and the whole suite stayed GREEN, while the change
+        // flips this tail from ADMITTED to refused -- an admission boundary with nothing
+        // watching. The two drain fixtures use 60 and 25, which cannot discriminate.
+        assert_eq!(
+            unrenderable_family_at(
+                &[
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount: 0,
+                    }),
+                    Instruction::Heal(HealInstruction {
+                        side_ref: SideReference::SideOne,
+                        heal_amount: 30,
+                    }),
+                ],
+                1,
+                SideReference::SideOne
+            ),
+            None,
+            "a ZERO-amount foe Damage is not damage, so this stays a direct self-heal"
+        );
+
+        // 4. LIQUID OOZE: a negative heal, which the named path renders as `-damage`.
+        assert_eq!(
+            unrenderable_family_at(
+                &[Instruction::Heal(HealInstruction {
+                    side_ref: SideReference::SideOne,
+                    heal_amount: -40,
+                })],
+                0,
+                SideReference::SideOne
+            ),
+            Some("heal_liquidooze"),
+            "a NEGATIVE heal is Liquid Ooze and renders as damage, not as a heal"
+        );
+
+        // CROSS-SIDE control. Review's mutation replaced the predicate's
+        // `switch.side_ref == boost.side_ref` with `true` and SURVIVED the whole suite, because
+        // every fixture above pairs SideOne with SideOne. A cross-side pair must stay ADMITTED:
+        // side two switching out does not reset side one's boosts.
+        let cross_side = vec![
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideOne,
+                stat: PokemonBoostableStat::Attack,
+                amount: -2,
+            }),
+            Instruction::Switch(SwitchInstruction {
+                side_ref: SideReference::SideTwo,
+                previous_index: PokemonIndex::P0,
+                next_index: PokemonIndex::P1,
+            }),
+        ];
+        assert_eq!(
+            unrenderable_family_at(&cross_side, 0, SideReference::SideOne),
+            None,
+            "a `Switch` on the OTHER side does not reset this side's boosts, so the boost \
+             stays renderable"
+        );
+
+        for (tail, index, family) in &blocked_in_tail {
+            assert_eq!(
+                unrenderable_family_at(tail, *index, SideReference::SideOne),
+                Some(*family),
+                "{tail:?} at {index} must be blocked as {family:?}"
+            );
+            assert!(
+                !ambiguous_tail_is_fully_renderable(tail, SideReference::SideOne),
+                "{tail:?} carries an effect the walk drops, so it is not fully renderable"
+            );
+            // ...and the SAME instruction WITHOUT the tail context must stay admitted, or the
+            // narrowing is a blanket revert of #1131 wearing a guard's clothes.
+            assert_eq!(
+                unrenderable_family_at(std::slice::from_ref(&tail[*index]), 0, SideReference::SideOne),
+                None,
+                "{:?} ALONE is admitted, so the refusal is a property of the TAIL",
+                tail[*index]
+            );
+            // ...and the COMPOSED SLUG must name the family, not just the raw classifier.
+            // Review's mutation dropped `"boost"` from UNRENDERABLE_FAMILY_ORDER *and* from
+            // the order pin together, and SURVIVED: the family then degrades to
+            // `unclassified` through `registered_family_or_unclassified`, which is exactly the
+            // outcome reinstating the token is supposed to prevent. Asserting the raw family
+            // cannot see that, because the degradation happens one layer up.
+            assert!(
+                ambiguous_unrenderable_slug(tail, SideReference::SideOne).ends_with(&format!(":{family}")),
+                "the composed slug must name {family:?} rather than degrade to \
+                 `unclassified`: {}",
+                ambiguous_unrenderable_slug(tail, SideReference::SideOne)
             );
         }
 
         // EVERY family in the order list has a representative above, except the
         // `unclassified` escape hatch which no instruction maps to. Without this, adding
         // a family and forgetting to cover it silently reopens the gap review found.
-        let covered: Vec<&str> = blocked.iter().map(|(_, f)| *f).collect();
+        let covered: Vec<&str> = blocked
+            .iter()
+            .map(|(_, f)| *f)
+            .chain(blocked_in_tail.iter().map(|(_, _, f)| *f))
+            .collect();
         for family in UNRENDERABLE_FAMILY_ORDER {
             if *family == "unclassified" {
                 continue;
@@ -5121,15 +6457,15 @@ mod tests {
     /// several keys), dedup (two Boosts are one family), and the contract-tag prefix.
     #[test]
     fn the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed() {
-        let boost = Instruction::Boost(BoostInstruction {
+        // `statrecalc`, not `boost`: Boost is now RENDERED and therefore admitted, so it can
+        // no longer stand in for "a blocked family". `Change<Stat>` still carries no line.
+        let boost = Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         });
-        let second_boost = Instruction::Boost(BoostInstruction {
+        let second_boost = Instruction::ChangeDefense(ChangeStatInstruction {
             side_ref: SideReference::SideTwo,
-            stat: PokemonBoostableStat::Attack,
-            amount: 2,
+            amount: 15,
         });
         let status = Instruction::ChangeStatus(ChangeStatusInstruction {
             side_ref: SideReference::SideOne,
@@ -5140,26 +6476,26 @@ mod tests {
 
         // Two Boosts are ONE family token.
         assert_eq!(
-            unrenderable_tail_families(&[boost.clone(), second_boost]),
-            vec!["boost"],
+            unrenderable_tail_families(&[boost.clone(), second_boost], SideReference::SideOne),
+            vec!["statrecalc"],
             "repeated instructions in the same family must collapse to one token"
         );
 
         // FIXED order, not encounter order. `boost` precedes `status` in
         // UNRENDERABLE_FAMILY_ORDER, so both instruction orders give the same slug --
         // otherwise one composition splits across two keys and neither sums.
-        let forward = ambiguous_unrenderable_slug(&[boost.clone(), status.clone()]);
-        let reversed = ambiguous_unrenderable_slug(&[status, boost.clone()]);
+        let forward = ambiguous_unrenderable_slug(&[boost.clone(), status.clone()], SideReference::SideOne);
+        let reversed = ambiguous_unrenderable_slug(&[status, boost.clone()], SideReference::SideOne);
         assert_eq!(forward, reversed, "slug must not depend on instruction order");
         assert_eq!(
             forward,
-            "sleeptalk_called_unidentified:ambiguous_unrenderable:boost+status"
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:statrecalc+status"
         );
 
         // The prefix is the CONTRACT tag. `engine_transition_differential.py` matches
         // the bare tag exactly, and `mark_attribution_unsafe_subcase` asserts this
         // relationship, so a slug that lost the prefix would panic in production.
-        assert!(ambiguous_unrenderable_slug(&[boost]).starts_with(SLEEPTALK_LOSSY_TAG));
+        assert!(ambiguous_unrenderable_slug(&[boost], SideReference::SideOne).starts_with(SLEEPTALK_LOSSY_TAG));
     }
 
     /// Every token the classifier can emit must be ORDERABLE and REGISTERED.
@@ -5189,10 +6525,9 @@ mod tests {
             );
         }
         let reachable = [
-            Instruction::Boost(BoostInstruction {
+            Instruction::ChangeAttack(ChangeStatInstruction {
                 side_ref: SideReference::SideOne,
-                stat: PokemonBoostableStat::Defense,
-                amount: 1,
+                amount: 20,
             }),
             Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
@@ -5204,13 +6539,15 @@ mod tests {
                 old_status: PokemonStatus::NONE,
                 new_status: PokemonStatus::SLEEP,
             }),
-            Instruction::DamageSubstitute(DamageInstruction {
+            // Was `DamageSubstitute`, which the walk now renders. A NON-substitute volatile
+            // is the reachable blocked representative in its place.
+            Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
                 side_ref: SideReference::SideOne,
-                damage_amount: 20,
+                volatile_status: PokemonVolatileStatus::LEECHSEED,
             }),
         ];
         for instruction in &reachable {
-            let family = unrenderable_family(instruction)
+            let family = unrenderable_family_at(std::slice::from_ref(instruction), 0, SideReference::SideOne)
                 .expect("these representatives are all blocked families");
             assert!(
                 UNRENDERABLE_FAMILY_ORDER.contains(&family),
@@ -5267,11 +6604,32 @@ mod tests {
         out.mark_lossy_subcase(SLEEPTALK_LOSSY_TAG, "attract_empty_tail_ambiguous:miss");
     }
 
+    /// The cardinality ceiling quoted in `mark_attribution_unsafe_subcase`'s doc block,
+    /// ENFORCED.
+    ///
+    /// That figure has been wrong THREE times -- "2^13 - 1 = 8,191, 14 entries" while the
+    /// array held 13; then 18 entries after the heal split with the arithmetic unmoved;
+    /// then 2^17 after deregistering `heal` had already taken 18 back to 17. Each time the
+    /// error was treating a COUNT as prose, and each time the fix was a comment telling the
+    /// next author to recount. Telling did not work. A test does.
+    #[test]
+    fn the_cardinality_ceiling_matches_the_array() {
+        let reachable = UNRENDERABLE_FAMILY_ORDER.len() - 1; // `unclassified` is unemittable
+        assert_eq!(
+            (UNRENDERABLE_FAMILY_ORDER.len(), reachable, 2usize.pow(reachable as u32) - 1),
+            (17, 16, 65_535),
+            "the order list changed size -- update THREE places in \
+             `mark_attribution_unsafe_subcase`'s doc block (the `2^16 - 1 = 65,535` \
+             figure, the `Note 16, not 17` line, and the `A 65k ceiling` sentence) plus \
+             this test's own doc block"
+        );
+    }
+
     /// The full slug ORDER, not just one adjacent pair.
     ///
     /// `the_unrenderable_slug_is_stable_deduplicated_and_tag_prefixed` pins `boost` before
-    /// `status`, which leaves 14 of 16 token positions free: review showed swapping `heal`
-    /// and `substitute` in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
+    /// `status`, which leaves 15 of 17 token positions free: review showed that swapping
+    /// two adjacent tokens in `UNRENDERABLE_FAMILY_ORDER` silently changes emitted keys
     /// era-over-era with every test green. Cross-era comparability is the entire value of
     /// a stable slug, so the whole sequence is pinned.
     ///
@@ -5286,8 +6644,21 @@ mod tests {
                 "statrecalc",
                 "status",
                 "sleepcounter",
-                "heal",
-                "substitute",
+                // DELIBERATE change, per this test's own instruction to say so. Not a
+                // reorder: the `heal` family is PARTITIONED into sub-cases and the bare
+                // token is REMOVED. Unlike the "substitute" removal below, this one DOES move
+                // real keys: era 61 measured 3,533 world failures under `heal`, and every
+                // one of them now reports a sub-case instead. The sum across the five
+                // tokens is what compares to the old bare count. The BARE token is gone
+                // from this array: after the split nothing can emit it.
+                "heal_paindmg",
+                "heal_liquidooze",
+                "heal_defender",
+                "heal_drain_or_shellbell",
+                "heal_zero_marker",
+                // "substitute" removed by hand: its only producer, `DamageSubstitute`, is
+                // now rendered. Every token AFTER it keeps its relative order, so no slug
+                // that does not contain "substitute" changes -- and no slug can contain it.
                 "volatile",
                 "sidecondition",
                 "weather",
@@ -5328,13 +6699,13 @@ mod tests {
         // can achieve. This is the branch that stands between a future forgotten
         // registration and an aborted worker.
         assert_eq!(
-            registered_family_or_unclassified("boost", &["status", "heal"]),
+            registered_family_or_unclassified("statrecalc", &["status", "heal"]),
             "unclassified"
         );
         // And a registered family passes through untouched.
         assert_eq!(
-            registered_family_or_unclassified("boost", UNRENDERABLE_FAMILY_ORDER),
-            "boost"
+            registered_family_or_unclassified("statrecalc", UNRENDERABLE_FAMILY_ORDER),
+            "statrecalc"
         );
         // `unclassified` must itself be registered, or the degradation would produce a
         // token that panics in `assert_subcase_vocabulary` -- turning the guard into the
@@ -5379,13 +6750,13 @@ mod tests {
     /// removing a guard the suite cannot miss.
     #[test]
     fn a_registered_family_reaches_the_marker_without_panicking() {
-        let boost = Instruction::Boost(BoostInstruction {
+        // `statrecalc`: Boost is admitted now, so it produces NO family at all.
+        let boost = Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         });
-        let families = unrenderable_tail_families(std::slice::from_ref(&boost));
-        assert_eq!(families, vec!["boost"]);
+        let families = unrenderable_tail_families(std::slice::from_ref(&boost), SideReference::SideOne);
+        assert_eq!(families, vec!["statrecalc"]);
         for family in &families {
             assert!(
                 UNRENDERABLE_FAMILY_ORDER.contains(family),
@@ -5395,7 +6766,7 @@ mod tests {
         let mut out = RenderedEvents::default();
         out.mark_attribution_unsafe_subcase(
             SLEEPTALK_LOSSY_TAG,
-            &ambiguous_unrenderable_slug(std::slice::from_ref(&boost)),
+            &ambiguous_unrenderable_slug(std::slice::from_ref(&boost), SideReference::SideOne),
         );
         assert!(out.is_attribution_unsafe());
     }
@@ -5418,12 +6789,31 @@ mod tests {
     }
 
     /// The slugs actually shipped must pass their own gate.
+    ///
+    /// EVERY shape, through the PRODUCTION assert. This looped ONE hand-picked shape
+    /// (`Structure`), so six of seven slugs never touched the gate they must clear at
+    /// runtime -- and the sibling test asserts only a PROXY for it (starts-with-tag plus
+    /// ends-with-token), which a slug carrying an extra unregistered segment satisfies while
+    /// the real gate panics. Review demonstrated exactly that survivor.
+    /// `assert_subcase_vocabulary` is a plain `assert!` kept out of `debug_assert!` so it
+    /// survives `--release`; a slug that passes only the proxy kills the campaign worker.
     #[test]
     fn the_live_subcase_slugs_are_all_in_vocabulary() {
-        for slug in [
+        assert_subcase_vocabulary(
+            SLEEPTALK_LOSSY_TAG,
             sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched),
-        ] {
+        );
+        for shape in NoneMatchedShape::ALL {
+            let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
+            assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
+        }
+        // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
+        // shape and a real world can carry several, so each must clear the gate.
+        let mut several = NoneMatchedShapes::default();
+        several.insert(NoneMatchedShape::BranchIsPrefix);
+        several.insert(NoneMatchedShape::TailIsPrefix);
+        several.insert(NoneMatchedShape::Length);
+        for slug in none_matched_slugs(several) {
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
         let boost = Instruction::Boost(BoostInstruction {
@@ -5431,7 +6821,7 @@ mod tests {
             stat: PokemonBoostableStat::Defense,
             amount: 1,
         });
-        assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, &ambiguous_unrenderable_slug(&[boost]));
+        assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, &ambiguous_unrenderable_slug(&[boost], SideReference::SideOne));
     }
 
     /// The ROUTING decision, tested directly for every variant.
@@ -5445,10 +6835,12 @@ mod tests {
             side_ref: SideReference::SideOne,
             damage_amount: 10,
         })];
-        let unrenderable = vec![Instruction::Boost(BoostInstruction {
+        // `Change<Stat>`, not Boost: Boost is RENDERED now and so no longer unrenderable.
+        // Using it here would assert the opposite of the intended behaviour, which is the
+        // exact trap this test's own comment records from an earlier split.
+        let unrenderable = vec![Instruction::ChangeAttack(ChangeStatInstruction {
             side_ref: SideReference::SideOne,
-            stat: PokemonBoostableStat::Defense,
-            amount: 1,
+            amount: 20,
         })];
 
         // A HEAL-DIRECTION Damage must refuse. `Damage` is signed and the walk emits on
@@ -5461,12 +6853,12 @@ mod tests {
             damage_amount: -130,
         })];
         assert!(
-            !ambiguous_tail_is_fully_renderable(&heal_shaped),
+            !ambiguous_tail_is_fully_renderable(&heal_shaped, SideReference::SideOne),
             "a negative `damage_amount` is a HEAL and the walk drops it, so the tail is \
              NOT fully renderable"
         );
         assert!(
-            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped),
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &heal_shaped, SideReference::SideOne),
             "a heal-shaped ambiguous tail must REFUSE"
         );
         // Mixed sign refuses too: one dropped component is enough.
@@ -5480,31 +6872,32 @@ mod tests {
                 damage_amount: -130,
             }),
         ];
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &mixed, SideReference::SideOne));
         // Zero is a no-op and stays admissible.
         assert!(!sleeptalk_refusal_is_unsafe(
             &SleepTalkIdent::Ambiguous,
             &[Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
                 damage_amount: 0,
-            })]
+            })],
+            SideReference::SideOne
         ));
 
         // Ambiguous: renderable is USABLE, unrenderable REFUSES.
-        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable));
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &renderable, SideReference::SideOne));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &unrenderable, SideReference::SideOne));
 
         // NoneMatched: unsafe either way. A renderable tail must NOT rescue it.
         assert!(
-            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &renderable),
+            sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &renderable, SideReference::SideOne),
             "none_matched with a renderable tail must STILL refuse -- the tail is not the \
              defect, the renderer's failure to reproduce it is"
         );
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &unrenderable));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &unrenderable, SideReference::SideOne));
 
         // An empty tail is renderable by construction, so it must not rescue it either.
-        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched, &[]));
-        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[]));
+        assert!(sleeptalk_refusal_is_unsafe(&SleepTalkIdent::NoneMatched(one_shape(NoneMatchedShape::Structure)), &[], SideReference::SideOne));
+        assert!(!sleeptalk_refusal_is_unsafe(&SleepTalkIdent::Ambiguous, &[], SideReference::SideOne));
     }
 
     /// The refusing seam must still refuse `none_matched`, and must NOT refuse
@@ -5543,7 +6936,7 @@ mod tests {
             turn_completed: false,
             lossy: vec![SLEEPTALK_LOSSY_TAG.to_string()],
             attribution_unsafe: vec![
-                sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched).to_string(),
+                none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap().to_string(),
             ],
             lossy_subcases: Vec::new(),
             active_status_transitions: Vec::new(),
@@ -5559,7 +6952,7 @@ mod tests {
         // And the two slugs must not be the same string, or the split is cosmetic.
         assert_ne!(
             sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous),
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched)
+            none_matched_slugs(one_shape(NoneMatchedShape::Structure)).next().unwrap()
         );
     }
 
@@ -5587,8 +6980,10 @@ mod tests {
             "sleeptalk_called_unidentified:ambiguous"
         );
         assert_eq!(
-            sleeptalk_subcase_slug(&SleepTalkIdent::NoneMatched),
-            "sleeptalk_called_unidentified:none_matched"
+            none_matched_slugs(one_shape(NoneMatchedShape::Structure))
+                .next()
+                .unwrap(),
+            "sleeptalk_called_unidentified:none_matched:shape_structure"
         );
     }
 
@@ -5597,8 +6992,13 @@ mod tests {
     /// differential starts seeing a tag it does not recognise.
     #[test]
     fn every_sleeptalk_subcase_belongs_to_the_lossy_contract_tag() {
-        for ident in [SleepTalkIdent::Ambiguous, SleepTalkIdent::NoneMatched] {
-            let slug = sleeptalk_subcase_slug(&ident);
+        // Ambiguous through the slug fn; every NoneMatched shape through the set emitter,
+        // which is where they are produced now. Both must stay inside the contract tag.
+        let mut slugs: Vec<&'static str> = vec![sleeptalk_subcase_slug(&SleepTalkIdent::Ambiguous)];
+        for shape in NoneMatchedShape::ALL {
+            slugs.extend(none_matched_slugs(one_shape(shape)));
+        }
+        for slug in slugs {
             assert!(
                 slug.starts_with(SLEEPTALK_LOSSY_TAG),
                 "{slug} escapes the contract tag {SLEEPTALK_LOSSY_TAG}"
@@ -7274,4 +8674,349 @@ mod tests {
             );
         }
     }
+}
+
+#[cfg(test)]
+mod none_matched_shape_tests {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+
+    fn dmg(amount: i16) -> Instruction {
+        Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: amount,
+        })
+    }
+
+    fn heal(amount: i16) -> Instruction {
+        Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: amount,
+        })
+    }
+
+    /// The whole point of the split is OWNERSHIP, so the two verdicts with different owners
+    /// must not collapse.
+    ///
+    /// `values_only` says the renderer regenerated the right transition and disagreed about a
+    /// NUMBER -- a damage roll, or a chance branch the engine merged -- neither of which the
+    /// renderer can fix. `structure` says it regenerated a different transition, which is a
+    /// candidate-set or state-input bug and IS fixable here. The code records one instance
+    /// already: passing `Choice::default()` for the defender made the engine's 32-roll
+    /// enumeration mismatch, and every affected world refused as `none_matched`.
+    #[test]
+    fn a_numeric_disagreement_is_values_only_and_a_variant_swap_is_structure() {
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[dmg(31)]),
+            NoneMatchedShape::ValuesOnly,
+            "same variant, different number: a roll disagreement"
+        );
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[heal(30)]),
+            NoneMatchedShape::Structure,
+            "different variant at the same position: a different transition"
+        );
+    }
+
+    /// SIDE is part of the shape, not a value. Review measured every one of these reporting
+    /// `ValuesOnly` before the predicate compared `instruction_side`, which pointed a
+    /// wrong-target renderer bug at the engine.
+    #[test]
+    fn a_side_difference_is_structural_not_numeric() {
+        let one = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 30,
+        });
+        let two = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 30,
+        });
+        assert_eq!(
+            divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&two)),
+            NoneMatchedShape::Structure,
+            "the same variant on the OTHER side is a wrong-target bug, not a roll disagreement"
+        );
+        // ...and the same side with a different number is still numeric, so the fix did not
+        // simply collapse everything into `Structure`.
+        let one_bigger = Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: 31,
+        });
+        assert_eq!(
+            divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&one_bigger)),
+            NoneMatchedShape::ValuesOnly
+        );
+    }
+
+    /// An empty candidate LIST is not an empty candidate BRANCH.
+    #[test]
+    fn no_candidates_is_distinct_from_an_empty_branch() {
+        assert_ne!(
+            NoneMatchedShape::NoCandidates.token(),
+            NoneMatchedShape::Empty.token()
+        );
+        // LAST in declaration order, so `min` never prefers it over a real observation.
+        assert_eq!(
+            NoneMatchedShape::NoCandidates.min(NoneMatchedShape::Empty),
+            NoneMatchedShape::Empty
+        );
+    }
+
+    #[test]
+    fn a_length_difference_outranks_a_variant_difference() {
+        // Checked BEFORE the variant scan, because zipping unequal lengths would silently
+        // compare only the shorter prefix and could report `values_only` for a tail that is
+        // missing instructions entirely. That ordering is unchanged by the containment
+        // split -- all three land ahead of the scan; they only say WHICH length difference.
+        //
+        // These two fixtures were asserted as bare `Length` before the split. Both are
+        // containment cases, which is exactly why the bare token could not be acted on.
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
+            NoneMatchedShape::BranchIsPrefix,
+            "the branch reproduces the head of the tail and the tail continues past it"
+        );
+        assert_eq!(
+            divergence_shape(&[dmg(30), heal(10)], &[dmg(30)]),
+            NoneMatchedShape::TailIsPrefix,
+            "the tail is reproduced and the branch continues past it -- the mirror case, and \
+             it must NOT collapse into the branch-shorter bucket"
+        );
+        // NEITHER contains the other: a genuinely different transition. This is the reading
+        // the bare `Length` token was always assumed to carry and, before the split, could
+        // not establish -- era 61's 4,786 worlds were all reported under it.
+        assert_eq!(
+            divergence_shape(&[heal(10)], &[dmg(30), heal(10)]),
+            NoneMatchedShape::Length,
+            "a shorter list that is not a PREFIX of the longer is a real structural miss"
+        );
+    }
+
+    /// `bit()` must be UNIQUE, CONTIGUOUS and inside the `u8` bitset.
+    ///
+    /// Review mutated `BranchIsPrefix => 2` to `=> 0` and the whole suite stayed GREEN. Two
+    /// shapes sharing a bit makes them indistinguishable in `NoneMatchedShapes`, so inserting
+    /// `BranchIsPrefix` would ALSO emit `shape_same_variants_and_sides` -- the one token whose
+    /// doc spends fourteen lines warning it must not be read as an ownership verdict --
+    /// silently mislabelling the largest failure class. This PR moved three of these values
+    /// and added two, which is exactly when the guard was missing.
+    #[test]
+    fn the_shape_bits_are_unique_contiguous_and_fit_the_bitset() {
+        let bits: Vec<u8> = NoneMatchedShape::ALL.iter().map(|s| s.bit()).collect();
+        assert_eq!(
+            bits,
+            (0..NoneMatchedShape::ALL.len() as u8).collect::<Vec<u8>>(),
+            "shape bits must be unique and contiguous from 0"
+        );
+        assert!(
+            NoneMatchedShape::ALL.len() <= 8,
+            "NoneMatchedShapes is a u8 bitset: {} shapes will not fit",
+            NoneMatchedShape::ALL.len()
+        );
+        // ROUND TRIP: a set holding exactly one shape yields exactly that shape. This is what
+        // a duplicated bit actually breaks, and asserting the bits alone would not catch a
+        // mismatch between `bit()` and `iter()`.
+        for shape in NoneMatchedShape::ALL {
+            let mut only = NoneMatchedShapes::default();
+            only.insert(shape);
+            assert_eq!(
+                only.iter().collect::<Vec<_>>(),
+                vec![shape],
+                "{shape:?} did not round-trip through the bitset alone"
+            );
+        }
+    }
+
+    /// Containment is checked on FULL instruction equality, not on variant alone.
+    ///
+    /// `starts_with` uses `PartialEq`, so a branch whose head has the right VARIANTS but wrong
+    /// payloads is `Length`, not a containment shape. Getting this wrong would be the worse direction:
+    /// it would report "the callee was identified and the tail is over-long" for a tail whose
+    /// head the candidate did not actually reproduce, sending the fix at the tail bound when
+    /// the candidate is wrong.
+    #[test]
+    fn containment_compares_payloads_not_just_variants() {
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[dmg(31), heal(10)]),
+            NoneMatchedShape::Length
+        );
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
+            NoneMatchedShape::BranchIsPrefix
+        );
+    }
+
+    /// An EMPTY branch stays `Empty`, not a containment shape.
+    ///
+    /// The empty slice is a prefix of everything, so ordering matters: the `is_empty` check
+    /// runs first. Collapsing these would fold "the candidate generated nothing" -- the move
+    /// did not execute at all -- into "the candidate reproduced the tail's head", which is a
+    /// different question with a different owner.
+    #[test]
+    fn an_empty_branch_is_not_reported_as_containment() {
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+    }
+
+    #[test]
+    fn an_empty_candidate_branch_is_its_own_shape() {
+        // Distinct from `length` deliberately: a candidate that generated NOTHING means the
+        // move did not execute in regeneration at all, which is a different question from one
+        // that executed and produced a different number of instructions.
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+    }
+
+    /// `min` over candidates must keep the CLOSEST miss, or a structurally-unrelated candidate
+    /// would mask the one that nearly matched -- and the near-miss is the whole diagnosis.
+    #[test]
+    fn the_ordering_keeps_the_closest_miss() {
+        // THE FULL SEQUENCE over `ALL`, not a hand-picked subset. The previous version listed
+        // four variants and so said nothing about any variant added later: review swapped
+        // `BranchIsPrefix` and `TailIsPrefix` in declaration order and the suite stayed GREEN,
+        // while this test's NAME claims to catch exactly that.
+        let mut shapes = NoneMatchedShape::ALL;
+        shapes.sort();
+        assert_eq!(
+            shapes,
+            [
+                NoneMatchedShape::ValuesOnly,
+                NoneMatchedShape::Structure,
+                NoneMatchedShape::BranchIsPrefix,
+                NoneMatchedShape::TailIsPrefix,
+                NoneMatchedShape::Length,
+                NoneMatchedShape::Empty,
+                NoneMatchedShape::NoCandidates,
+            ],
+            "the closest-miss ordering changed; `min` over candidates now keeps a different \
+             shape and era-over-era keys move"
+        );
+        assert_eq!(shapes[0], NoneMatchedShape::ValuesOnly);
+        assert_eq!(
+            NoneMatchedShape::Empty.min(NoneMatchedShape::ValuesOnly),
+            NoneMatchedShape::ValuesOnly
+        );
+    }
+
+    /// An empty TAIL is not a containment case.
+    ///
+    /// The empty slice is a prefix of everything, so `longer.starts_with(shorter)` is
+    /// vacuously true and the containment buckets would absorb tails carrying ZERO
+    /// containment evidence. The branch-empty mirror is `Empty`; this is its counterpart.
+    #[test]
+    fn an_empty_tail_is_not_reported_as_containment() {
+        assert_eq!(
+            divergence_shape(&[dmg(30)], &[]),
+            NoneMatchedShape::Length,
+            "an empty tail carries no containment evidence"
+        );
+    }
+
+    /// Every shape's token must be registered, or the class silently stops being rankable --
+    /// the failure the family split exists to prevent.
+    #[test]
+    fn every_shape_token_is_in_the_subcase_vocabulary() {
+        // ITERATE `ALL`, not a hand-picked list. The previous version looped four variants
+        // and so said nothing about any variant added later -- which is how a HALF-APPLIED
+        // rename shipped: `token()` and `SUBCASE_VOCABULARY` carried the new names while
+        // `none_matched_slugs` still emitted the old ones, and `assert_subcase_vocabulary` is
+        // a plain `assert!` kept out of `debug_assert!` ON PURPOSE so it survives --release.
+        // The first world of the largest failure class would have panicked the wheel.
+        for shape in NoneMatchedShape::ALL {
+            assert!(
+                SUBCASE_VOCABULARY.contains(&shape.token()),
+                "{shape:?}'s token {:?} is not registered, so the class stops being rankable",
+                shape.token()
+            );
+            let mut only = NoneMatchedShapes::default();
+            only.insert(shape);
+            let slug = none_matched_slugs(only).next().expect("one shape, one slug");
+            // The SLUG must end with the token. This is what catches a rename applied to
+            // `token()` but not to `none_matched_slugs`, and a token-string swap between two
+            // variants -- both of which the four-variant loop missed.
+            assert!(
+                slug.ends_with(shape.token()),
+                "{shape:?}: slug {slug:?} does not end with its token {:?}",
+                shape.token()
+            );
+            assert!(
+                slug.starts_with(SLEEPTALK_LOSSY_TAG),
+                "{shape:?}: slug {slug:?} lost the contract tag prefix"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod nearest_divergence_tests {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+
+    fn dmg(side: SideReference, amount: i16) -> Instruction {
+        Instruction::Damage(DamageInstruction {
+            side_ref: side,
+            damage_amount: amount,
+        })
+    }
+
+    fn heal(amount: i16) -> Instruction {
+        Instruction::Heal(HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: amount,
+        })
+    }
+
+    /// The aggregation must keep the CLOSEST miss. `max` here reports the farthest, which is
+    /// near-universally the least informative bucket -- and it survived the whole suite before
+    /// this test existed, because nothing crossed from `divergence_shape` into the loop.
+    #[test]
+    fn the_aggregation_keeps_the_closest_miss_not_the_farthest() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        // One structurally-unrelated candidate branch, one that differs only numerically.
+        let far = [heal(10)];
+        let near = [dmg(SideReference::SideOne, 31)];
+        let branches: Vec<&[Instruction]> = vec![&far, &near];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::ValuesOnly,
+            "a structurally-unrelated candidate must not mask the near miss"
+        );
+    }
+
+    /// Argument order is load-bearing and was unobserved: `divergence_shape(&[], &[d])` is
+    /// `Empty` while `divergence_shape(&[d], &[])` is `Length`.
+    #[test]
+    fn the_argument_order_is_branch_then_tail() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        let empty: [Instruction; 0] = [];
+        let branches: Vec<&[Instruction]> = vec![&empty];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::Empty,
+            "an empty BRANCH against a non-empty tail is `Empty`; swapping the arguments \
+             would report `Length`"
+        );
+    }
+
+    /// A candidate that generated NO branches is `Empty`, not `NoCandidates`.
+    ///
+    /// Those are different facts: the candidate existed and produced nothing, versus there
+    /// being no candidate to regenerate. An earlier version returned `NoCandidates` here,
+    /// reintroducing the exact conflation that variant was split out to remove. `NoCandidates`
+    /// is now reachable only from the seed.
+    #[test]
+    fn a_candidate_with_no_branches_is_empty_not_no_candidates() {
+        let tail = [dmg(SideReference::SideOne, 30)];
+        let branches: Vec<&[Instruction]> = vec![];
+        assert_eq!(
+            nearest_divergence(branches.into_iter(), &tail),
+            NoneMatchedShape::Empty
+        );
+        assert_ne!(NoneMatchedShape::Empty, NoneMatchedShape::NoCandidates);
+    }
+}
+
+#[cfg(test)]
+fn one_shape(shape: NoneMatchedShape) -> NoneMatchedShapes {
+    let mut set = NoneMatchedShapes::default();
+    set.insert(shape);
+    set
 }

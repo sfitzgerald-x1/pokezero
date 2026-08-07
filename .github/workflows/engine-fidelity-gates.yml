@@ -53,11 +53,29 @@ jobs:
             # pin file still trips this workflow -- otherwise the guard could be
             # disarmed by a test-only edit that never triggers its own gate.
             tests/test_final_holdout_guard.py
+            # The coverage-bound pins. Listed so a PR that only weakens them still
+            # trips this workflow.
+            tests/test_single_seat_coverage_bound.py
+            # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
+            # only change is deleting one of them skips mass-gate and goes green.
+            reports/artifacts/c131_leechseed_main_dev_sweep.json
+            reports/artifacts/c131_leechseed_main_holdout_sweep.json
+            reports/artifacts/c131_leechseed_fix_dev_sweep.json
+            reports/artifacts/c131_leechseed_fix_holdout_sweep.json
             src/pokezero/**
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
             tests/test_crit_kill_split_patch.py
+            # C138's enumeration oracle: the fixtures and the shipping-engine
+            # comparison, the module that builds both, and the PINNED enumerated
+            # truth. All three are listed. The artifact especially: a PR whose only
+            # change is regenerating it is exactly the shape its own README warns
+            # against ("NEVER regenerate it from the shipping build to make a test
+            # pass"), and without this entry that PR would skip the gate.
+            tests/test_collapsed_arm_mass_oracle.py
+            scripts/collapsed_arm_mass_oracle.py
+            tests/data/collapsed_arm_mass_oracle.json
             tests/test_drag_limit_is_a_last_resort.py
             # Imported by the differential (engine_transition_differential.py:105).
             scripts/fidelity_gate_events.py
@@ -95,6 +113,12 @@ jobs:
             scripts/fidelity_gate_events.py
             tests/test_differential_denominator.py
             tests/test_denominator_adoption.py
+            # C116 Phase 2's scope gate. Listed for the same reason as the entries
+            # above: a PR whose only change is adding a file to the mention ledger,
+            # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
+            # touches nothing else -- so without this line the gate that would object
+            # is not even a trigger.
+            tests/test_roll_enumeration_scope.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -222,12 +246,65 @@ jobs:
           # cannot notice a DELETED test: removing three of four leaves the step
           # green, which is the "reads PASS while asserting less than intended"
           # shape this workflow's header forbids. Found by review of #1081.
-          if ! grep -qE 'Ran 5 tests' /tmp/massgate.log; then
-            echo "::error::expected 5 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 6 tests' /tmp/massgate.log; then
+            echo "::error::expected 6 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/massgate.log; then
             echo "::error::the mass gate SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # C138. The mass gate above compares ONE scalar -- total KO mass -- against a
+      # reconstruction that has no notion of a secondary, which is precisely the
+      # axis cause A8 lives on. This compares the full outcome-mass functional,
+      # mass per (defender faints?, defender's end status), against ENUMERATED
+      # truth from the roll-enumeration build, cross-checked against an independent
+      # Python enumeration so a wrong oracle cannot bless a wrong recipe.
+      - name: Collapsed-arm mass oracle
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_collapsed_arm_mass_oracle -v 2>&1 \
+            | tee /tmp/armoracle.log
+          if ! grep -qE 'Ran 7 tests' /tmp/armoracle.log; then
+            echo "::error::expected 7 oracle tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/armoracle.log; then
+            echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
+      # tests; NOTHING that ships takes that path, the transition differential very
+      # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s
+      # per midgame_3v3 decision at depth 4 / 1024 sims, and a differential running
+      # enumerated certifies a code path production never takes, which silently blinds
+      # the 200-game fidelity gate to the surface that actually ships.
+      #
+      # The gate is BEHAVIOURAL, after review defeated the textual version: a file
+      # containing only `import engine_transition_differential` mentioned no flag,
+      # matched no allowlist, and enabled enumeration process-wide (and in every child)
+      # while the scan stayed green. Each check now spawns a child, imports a surface
+      # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
+      # latched per process by a OnceLock, so an in-process toggle would measure
+      # whichever path happened to be latched first.
+      #
+      # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
+      # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
+      # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
+      # reached by the pokezero-rollout console script. With an enabler there a real
+      # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
+      - name: Roll-enumeration scope gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_roll_enumeration_scope -v 2>&1 | tee /tmp/enumscope.log
+          if ! grep -qE 'Ran 17 tests' /tmp/enumscope.log; then
+            echo "::error::expected 17 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/enumscope.log; then
+            echo "::error::the scope gate SKIPPED; it must never skip"
             exit 1
           fi
 
@@ -348,6 +425,21 @@ jobs:
             exit 1
           fi
 
+      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
+      # measurement, ever, and that reservation used to live only in a plan
+      # document -- until a convenience shell loop over three --seed-start values
+      # executed 60 games of it. The guard refuses such runs; these pins keep the
+      # guard honest, so they have to actually run.
+      #
+      # NOTE ON SKIPS, learned the hard way. The first version of this step said
+      # "this job builds Showdown" and errored on any skip. CI builds no Showdown --
+      # no workflow installs node, none is tracked, and two steps in this same job
+      # say so outright -- so the ordering pin skipped and this step went RED on
+      # every PR that tripped the filter. A permanently-red gate discriminates
+      # nothing: the only way back to green is to delete the step, which is the
+      # failure mode the guard exists to prevent, one level up. The ordering pin now
+      # stubs its collaborators and needs no checkout, so the no-skip assertion
+      # below is meaningful rather than self-defeating.
       - name: Final-holdout guard pins
         run: |
           set -o pipefail
@@ -371,25 +463,31 @@ jobs:
             exit 1
           fi
 
+      # The differential measures ~87% of boundaries, not the ~96.6% its own
+      # `measured_fraction_of_full_rounds` reports: that metric's denominator is
+      # `boundaries_full_round`, which by construction EXCLUDES single-seat plies
+      # (~10% of boundaries, and almost all of the deferred-residual population --
+      # all of it except a simultaneous double faint). These pins keep the real
+      # denominator recoverable from any report, so a residue figure cannot be read
+      # as full coverage. reports/c132.
+      - name: Single-seat coverage bound
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_single_seat_coverage_bound -v 2>&1 \
+            | tee /tmp/coverage.log
+          if ! grep -qE 'Ran 3 tests' /tmp/coverage.log; then
+            echo "::error::expected 3 coverage-bound pins; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/coverage.log; then
+            echo "::error::coverage-bound pins did not report a clean OK"
+            exit 1
+          fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly
       # what #1113 did at 7abf3343, invisibly, because no workflow executed it.
-      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
-      # measurement, ever, and that reservation used to live only in a plan
-      # document -- until a convenience shell loop over three --seed-start values
-      # executed 60 games of it. The guard refuses such runs; these pins keep the
-      # guard honest, so they have to actually run.
-      #
-      # NOTE ON SKIPS, learned the hard way. The first version of this step said
-      # "this job builds Showdown" and errored on any skip. CI builds no Showdown --
-      # no workflow installs node, none is tracked, and two steps in this same job
-      # say so outright -- so the ordering pin skipped and this step went RED on
-      # every PR that tripped the filter. A permanently-red gate discriminates
-      # nothing: the only way back to green is to delete the step, which is the
-      # failure mode the guard exists to prevent, one level up. The ordering pin now
-      # stubs its collaborators and needs no checkout, so the no-skip assertion
-      # below is meaningful rather than self-defeating.
       - name: Engine stat attestation
         run: |
           set -o pipefail

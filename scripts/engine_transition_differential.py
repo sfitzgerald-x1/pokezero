@@ -46,6 +46,20 @@ Usage::
     PYTHONPATH=src python scripts/engine_transition_differential.py \\
         --showdown-root <showdown> --games 200 --seed-start 900000 \\
         --json report.json
+
+This harness measures the SHIPPING configuration: the collapsed partition cascade,
+the same roll path ``src/pokezero/engine_search.py`` takes in production. That is
+not incidental — a differential running the engine's other roll path would certify
+a code path production never takes, and a regression in the collapsed damage-branch
+or residual-partition surface would become invisible to the 200-game gate. See
+``reports/c137_phase2_enumerate_decision.md`` §2.
+
+``--enumerate-rolls`` opts one run into the enumerate-then-merge reference oracle
+(C116 Phase 2) for a one-off collapsed-vs-enumerated comparison. It is an explicit
+CLI act with no default and no import side effect: importing this module does not
+touch ``POKEZERO_ENUMERATE_ROLLS`` and does not change any other process's engine.
+The value in force is recorded in the report and in every checkpoint record's
+provenance, and ``--merge-from`` refuses to merge shards that disagree about it.
 """
 
 from __future__ import annotations
@@ -56,6 +70,7 @@ import json
 import os
 import re
 import random
+import subprocess
 import sys
 import time
 import types
@@ -65,6 +80,58 @@ from typing import Any, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+
+# ---------------------------------------------------------------------------------------------
+# C116 Phase 2 -- the enumerate-then-merge roll path is a REFERENCE ORACLE, and this
+# module does NOT enable it at import time.
+#
+# The engine ships enumerate-then-merge behind the runtime env flag
+# ``POKEZERO_ENUMERATE_ROLLS``, read once through a Rust ``OnceLock`` on the first
+# call into the engine, OFF by default.
+#
+# An earlier revision of this file wrote ``os.environ.setdefault(..., "1")`` HERE, at
+# module scope. That made every importer an enabler: ``os.environ`` writes go through
+# ``putenv``, so the value is process-global AND inherited by every child. Twenty-one
+# tracked modules load this file (13 by ``import`` statement, 8 through
+# ``importlib.util.spec_from_file_location``), and ``unittest`` imports every selected
+# module before running any test, so ``tests/test_engine_search_no_panic.py`` -- which
+# spawns ``python -m pokezero.engine_search`` -- was demonstrated to run SEARCH under
+# enumeration. The write is gone, and its absence is asserted at RUNTIME by
+# ``tests/test_roll_enumeration_scope.py``, which imports each surface in a child
+# process and requires the engine's fan to come back collapsed.
+#
+# Turning it on is an explicit act, per run: ``--enumerate-rolls`` on this tool, or an
+# explicit environment set by a test that wants the oracle. There is no default, and
+# no code path here that flips it for anyone else.
+#
+# Why a runtime flag rather than a cargo feature: one build then serves both paths, so
+# a collapsed sweep and an enumerated sweep of the same commit differ in exactly one
+# variable and carry the same engine fingerprint. The cost of that choice is that the
+# fingerprint cannot say which path ran, which is why ``enumerate_rolls`` is carried in
+# the report and in every checkpoint record's provenance, guarded on resume, and
+# refused on a mixed ``--merge-from``.
+_ENUMERATE_ROLLS_ENV = "POKEZERO_ENUMERATE_ROLLS"
+
+# The configuration THIS process will measure. Collapsed -- the shipping path -- until
+# ``main`` is told otherwise by ``--enumerate-rolls``. Module import never reads the
+# ambient environment for it either: an inherited ``POKEZERO_ENUMERATE_ROLLS=1`` from
+# some unrelated parent must not silently relabel a sweep.
+ENUMERATE_ROLLS = False
+
+
+def _apply_roll_path(enumerate_rolls: bool) -> None:
+    """Select the engine's roll path for THIS process. Call before any engine call.
+
+    Explicit and idempotent-per-process: the engine latches the flag in a ``OnceLock``
+    on its first ``generate_instructions``, so a later change is a silent no-op. The
+    only caller is ``main`` (and tests exercising it), which runs this before the first
+    game.
+    """
+
+    global ENUMERATE_ROLLS
+    ENUMERATE_ROLLS = bool(enumerate_rolls)
+    os.environ[_ENUMERATE_ROLLS_ENV] = "1" if enumerate_rolls else "0"
+
 
 import poke_engine  # noqa: E402
 import pokezero_search  # noqa: E402
@@ -1679,10 +1746,22 @@ _RESIDUAL_PHASE_SOURCES = frozenset({
 
 
 def _is_forced_replacement_ply(step_lines: Sequence[str]) -> bool:
-    """A ply on which Showdown ran NO residual phase, because it is a replacement.
+    """A ply on which nobody moved, somebody switched, no residual phase ran, and
+    the battle did not end.
 
-    Nobody moved, somebody switched, no residual phase ran, and the battle did
-    not end.
+    THE OLD FIRST LINE SAID "because it is a replacement", AND THAT REASON IS THE
+    OPPOSITE OF WHAT SHOWDOWN DOES. Being a replacement ply is not what makes the
+    residual phase absent. Measured by driving Showdown directly in
+    `gen3customgame`: after a Pokemon faints to a MOVE, gen 3 pauses mid-turn for
+    the replacement, and the ply that follows the replacement runs the FULL
+    residual phase -- weather upkeep, both actives' chips, items, status. The
+    engine defers it identically (its arm ends in `ToggleSide*ForceSwitch`, and the
+    next transition carries the whole phase), so the two agree.
+
+    The predicate is still correct, for a different reason than it claimed: such a
+    ply carries `|upkeep|`, so the first clause excludes it. What this really
+    matches is the OTHER shape -- a replacement with no residual phase at all,
+    which is the switch-then-nothing ply.
 
     Hoisted to module level so it can be pinned BEHAVIOURALLY. An earlier version
     lived inline and its pins asserted on `inspect.getsource` TEXT, which meant
@@ -2557,7 +2636,7 @@ CHECKPOINT_SCHEMA = "engine-transition-differential/1"
 _FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 
-def _checkpoint_provenance() -> dict[str, str | None]:
+def _checkpoint_provenance() -> dict[str, str | bool | None]:
     """Capture the runtime identity on every completed game, including resumes."""
 
     source_commit = public_repo_commit(REPO_ROOT)
@@ -2574,21 +2653,111 @@ def _checkpoint_provenance() -> dict[str, str | None]:
         fingerprint = None
     return {
         "source_commit": source_commit,
+        # Whether ``source_commit`` actually DESCRIBES the tree that ran. It records
+        # ``git rev-parse HEAD`` and nothing else, so a sweep taken with uncommitted
+        # changes stamps a commit whose content it does not have. Four committed
+        # artifacts on this branch were emitted that way and were attributable to no
+        # committed tree; review caught it by reading the patch list at the stamped
+        # commit and finding no enumeration patch there.
+        #
+        # Recorded, not enforced -- and that is enforced in turn. It is listed in
+        # ``_DESCRIPTIVE_PROVENANCE_KEYS``, so ``_resume_provenance_failures`` ignores it:
+        # a 200-game crash-safe sweep must stay resumable across an unrelated edit, and
+        # the first version of this field silently broke that by riding a whole-dict
+        # comparison. Sweeping a dirty tree is the normal way to measure a change before
+        # committing it; what must not happen is a dirty sweep being INDISTINGUISHABLE
+        # from a clean one in the artifact.
+        "source_tree": _source_tree_state(),
         "engine_fingerprint": fingerprint,
         "image_commit": image_commit,
+        # Part of the RESUME IDENTITY, deliberately. One build serves both roll
+        # paths, so source_commit and engine_fingerprint are identical between a
+        # collapsed sweep and an enumerated one -- they cannot tell the two apart.
+        # Without this key a collapsed shard and an enumerated shard would resume
+        # into, and merge into, a single report that describes neither.
+        "enumerate_rolls": ENUMERATE_ROLLS,
+    }
+
+
+def _source_tree_state() -> str:
+    """``"clean"``, ``"dirty"``, or ``"unknown"`` for the checkout that is running.
+
+    Tracked files only (``--untracked-files=no``): an untracked scratch file is not a
+    change to the code under measurement, and counting it would make every real run
+    read dirty and the field worthless.
+    """
+
+    try:
+        status = subprocess.check_output(
+            ("git", "-C", str(REPO_ROOT), "status", "--porcelain", "--untracked-files=no"),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return "dirty" if status.strip() else "clean"
+
+
+def _merged_roll_path(records: Sequence[Mapping[str, Any]]) -> bool:
+    """The one roll path every merged record was produced on. Raises if they disagree.
+
+    Absent means collapsed: records written before ``enumerate_rolls`` existed can only
+    have come from a build with no enumerated path in it. That is a fact about the
+    history, not a default -- the key is written unconditionally now.
+    """
+
+    observed: set[bool] = set()
+    for index, record in enumerate(records, start=1):
+        provenance = record.get("provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError(f"checkpoint record {index} has no provenance to merge")
+        observed.add(bool(provenance.get("enumerate_rolls", False)))
+    if len(observed) > 1:
+        raise ValueError(
+            "refusing to merge shards from DIFFERENT roll paths: "
+            "some records carry enumerate_rolls=true and some false. One build serves "
+            "both paths, so source_commit and engine_fingerprint are identical between "
+            "them and cannot catch this; the merged report would describe neither "
+            "configuration."
+        )
+    return next(iter(observed)) if observed else False
+
+
+# Provenance keys that are DESCRIPTIVE, not part of resume identity.
+#
+# ``source_tree`` says whether the checkout was clean when a record was written. It is
+# recorded so a dirty sweep cannot pass as a clean one -- but it must not gate a resume.
+# The comparison below is a whole-dict ``!=``, so leaving it in made a 200-game crash-safe
+# sweep unresumable the moment anyone touched a tracked file between the crash and the
+# restart: clean checkpoint, edit a README, resume, exit 1. That is exactly the outcome the
+# field's own comment says it avoids, and review found the contradiction.
+#
+# Excluded rather than dropped: a clean/dirty flip is still visible, because every distinct
+# provenance blob is carried into the report's ``checkpoint_provenance.distinct``.
+_DESCRIPTIVE_PROVENANCE_KEYS = frozenset({"source_tree"})
+
+
+def _resume_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a provenance record that a resume must MATCH."""
+
+    return {
+        key: value
+        for key, value in provenance.items()
+        if key not in _DESCRIPTIVE_PROVENANCE_KEYS
     }
 
 
 def _resume_provenance_failures(
-    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | None]
+    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | bool | None]
 ) -> list[str]:
     failures: list[str] = []
+    expected = _resume_identity(current)
     for index, record in enumerate(records, start=1):
         provenance = record.get("provenance")
         if not isinstance(provenance, Mapping):
             failures.append(f"checkpoint record {index} has no resume provenance")
             continue
-        if dict(provenance) != dict(current):
+        if _resume_identity(provenance) != expected:
             failures.append(f"checkpoint record {index} provenance differs from this resume")
     return failures
 
@@ -2600,7 +2769,7 @@ def checkpoint_record(
     repros: Sequence[Mapping[str, Any]],
     seconds: float,
     build_check: str,
-    provenance: Mapping[str, str | None],
+    provenance: Mapping[str, str | bool | None],
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
@@ -2809,6 +2978,7 @@ def build_report(
     keep_repro: int,
     repros_per_game: int | None = None,
     sources: Sequence[str] = (),
+    enumerate_rolls: bool | None = None,
 ) -> dict[str, Any]:
     """Aggregate per-game records into the report schema (live and merge paths).
 
@@ -2843,6 +3013,16 @@ def build_report(
     report: dict[str, Any] = {
         "build_check": aggregate["build_check"],
         "acceptance_eligible": aggregate["acceptance_eligible"],
+        # Which roll path produced these numbers. The engine fingerprint cannot
+        # say: one build serves both. A sweep artifact that does not name its own
+        # configuration is not evidence for either configuration.
+        #
+        # Derived from the RECORDS when the caller supplies it (the --merge-from
+        # path), never from this process's own configuration: a merge runs no games,
+        # so ``ENUMERATE_ROLLS`` there describes the merging process and not the
+        # shards. Stamping it would have let a collapsed merge of enumerated shards
+        # label itself collapsed.
+        "enumerate_rolls": ENUMERATE_ROLLS if enumerate_rolls is None else enumerate_rolls,
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
@@ -3059,7 +3239,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=8,
         help="per-game cap on repros written to the checkpoint (keeps shard files small)",
     )
+    parser.add_argument(
+        "--enumerate-rolls",
+        action="store_true",
+        help="C116 Phase 2 REFERENCE ORACLE, off by default. Run this sweep on the "
+             "engine's enumerate-then-merge roll path instead of the collapsed "
+             "partition cascade. The collapsed cascade is what production search runs, "
+             "so the DEFAULT is the configuration that ships and this flag is for "
+             "one-off comparison runs only; a sweep taken with it is not evidence about "
+             "the shipping path. Recorded in the report and in every checkpoint "
+             "record's provenance, guarded on --resume, and refused on a mixed "
+             "--merge-from.",
+    )
     args = parser.parse_args(argv)
+
+    # Select the roll path BEFORE anything calls the engine -- the flag is latched in a
+    # Rust OnceLock on the first generate_instructions. Unconditional, both ways: an
+    # inherited POKEZERO_ENUMERATE_ROLLS=1 must not silently relabel a default sweep,
+    # and a run's configuration has to be reproducible from its argv alone.
+    _apply_roll_path(args.enumerate_rolls)
     # Derive the attribute from the flag rather than hand-writing it. A review
     # renamed the flag and found all seven pins stayed green while the opt-in
     # silently became unreachable -- `getattr(..., False)` turned a typo into
@@ -3112,6 +3310,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if _reserved_error is not None:
             print(f"error: {_reserved_error}", file=sys.stderr)
             return 2
+        # --resume already refuses a shard whose provenance differs from this run's.
+        # Merge did not, and merge is where it matters more: source_commit and
+        # engine_fingerprint are IDENTICAL between the two roll paths by design, so
+        # nothing else in the record can tell a collapsed shard from an enumerated
+        # one. Merging them silently produced one report describing neither.
+        try:
+            merged_enumerate_rolls = _merged_roll_path(deduped)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
         report = build_report(
             deduped,
             elapsed=None,
@@ -3119,6 +3327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             matcher=None,
             keep_repro=args.keep_repro,
             sources=[str(p) for p in args.merge_from],
+            enumerate_rolls=merged_enumerate_rolls,
         )
         if not report.get("acceptance_eligible"):
             print(

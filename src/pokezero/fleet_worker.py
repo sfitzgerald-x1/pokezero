@@ -123,11 +123,18 @@ _FANIN_TASK_LOCK_DIRECTORY = ".fanin-task-locks"
 _FANIN_ROUTE_DIRECTORY = ".fanin-routes"
 _SELECTED_FANIN_READ_ATTEMPTS = 3
 _SELECTED_FANIN_RETRY_SECONDS = 0.01
+# The filesystem probe asks whether a mount *supports* atomic link CAS, not how
+# fast it is. A shared NFS mount under a few hundred contending workers can take
+# seconds for a single link(), and a probe that times out there reported
+# "hard-link probe did not finish" and killed the worker. Bound it generously so
+# only a genuinely stuck mount trips it.
+_FANIN_PROBE_TIMEOUT_SECONDS = 60.0
 _FANIN_PUBLISH_LOCK_ATTEMPTS = 3
 _FANIN_PRODUCER_LEASE_SECONDS = 60.0
 _FANIN_HEARTBEAT_INTERVAL_SECONDS = 10.0
 _FANIN_GUARD_CHAIN_MAX_GENERATIONS = 4096
 _FANIN_GUARD_ACQUIRE_ATTEMPTS = 8
+_FANIN_FENCE_TRAVERSAL_ATTEMPTS = 4
 
 
 class FanInValidationError(ValueError):
@@ -152,6 +159,25 @@ class FanInRouteConflictError(FanInInventoryValidationError):
 
 class _SelectedFanInVersionVanishedError(RuntimeError):
     """A selected immutable version vanished while its files were being read."""
+
+
+class _FanInRecordRacedError(FanInInventoryValidationError):
+    """The record under this read was concurrently rewritten, replaced, or removed.
+
+    Subclasses the inventory error so any path that does not explicitly handle a race still
+    fails closed exactly as before. Exists so callers can distinguish "a producer is actively
+    working on this" from a genuine fault BY TYPE -- an earlier version matched on the message
+    text, which made control flow depend on the pathname interpolated into it: a shard named
+    `...changed...` silently reopened the hole the narrowing had just closed.
+    """
+
+
+class _FanInFenceAdvancedError(FanInInventoryValidationError):
+    """A peer installed the next guard generation mid-traversal; re-traverse.
+
+    Subclasses the inventory error so that any path which does not re-traverse
+    still fails closed exactly as before.
+    """
 
 
 class _FanInTransientError(RuntimeError):
@@ -220,7 +246,7 @@ class _FanInPayloadFile:
     """One selected cache file's generation and bytes before pathname reuse."""
 
     relative: tuple[str, ...]
-    identity: tuple[int, int, int, int, int, int]
+    identity: tuple[int, int, int]
     sha256: str
 
 
@@ -246,7 +272,7 @@ class _FanInRouteResolution:
     root_identity: tuple[int, int] | None
     record: Path
     record_parent_identity: tuple[int, int]
-    record_identity: tuple[int, int, int, int, int, int]
+    record_identity: tuple[int, int, int]
     record_sha256: str
     task: FanInTask
 
@@ -359,8 +385,19 @@ def _parse_manifest_text(
 
 
 def _fanin_directory_identity(observed: os.stat_result) -> tuple[int, int]:
-    """The stable portion of a directory identity despite normal child writes."""
-    return observed.st_dev, observed.st_ino
+    """The stable portion of a directory identity despite normal child writes.
+
+    Deliberately excludes ``st_dev``: see ``_fanin_durable_stat_snapshot``. Fan-in
+    identity witnesses are written to the shared cache and re-checked by other
+    workers, so every field in one must be a property of the file rather than of
+    the observing client. ``S_IFMT`` keeps a directory from being confused with a
+    same-inode file; inode reuse is closed by the SHA-256 that every durable FILE
+    witness carries beside this identity -- a colliding inode would have to be byte-identical,
+    which is not corruption. Directory identities carry no hash and reuse is not caught, but
+    ``(st_dev, st_ino)`` did not catch it either: ``st_dev`` is uniform across a cache tree, so
+    it only ever distinguished a different filesystem mounted at the same path.
+    """
+    return observed.st_ino, stat.S_IFMT(observed.st_mode)
 
 
 def _verify_fanin_directory_identity(
@@ -370,7 +407,7 @@ def _verify_fanin_directory_identity(
 ) -> None:
     observed = _fanin_authoritative_directory_stat(path, label)
     if _fanin_directory_identity(observed) != expected:
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} identity changed during validation: {path}"
         )
 
@@ -386,7 +423,7 @@ def _read_fanin_file_with_parent_snapshot(
     parent_identity = _fanin_directory_identity(parent)
     try:
         if expected_parent is not None and parent_identity != expected_parent:
-            raise FanInInventoryValidationError(
+            raise _FanInRecordRacedError(
                 f"fan-in {label} directory identity changed during validation: {path.parent}"
             )
         contents, identity = _read_fanin_authoritative_regular_file_snapshot(
@@ -525,6 +562,23 @@ def _move_fanin_manifest_into_claim(
         os.close(pending_descriptor)
 
 
+def _fanin_pending_candidate_still_present(candidate: Path) -> bool:
+    """Whether a pending manifest is still unclaimed at its own pathname.
+
+    Used only to tell a lost claim race apart from a corrupt manifest: the sole
+    legal mutation of a pending manifest is exactly one worker renaming it into
+    ``claimed/``, so its disappearance from ``pending/`` is that rename. Anything
+    still sitting there that failed validation is reported as before.
+    """
+    try:
+        os.lstat(candidate)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True  # unreadable is a real fault; let the caller report it
+    return True
+
+
 def claim_next_task(
     queue: Path,
     worker_id: str,
@@ -550,6 +604,18 @@ def claim_next_task(
             # Fan-in route provenance is a trust-boundary failure. Do not move
             # the manifest into claimed/ merely to quarantine it as a routine
             # task error.
+            #
+            # Losing the claim race is not that failure. Every worker scans
+            # pending/ in the same sorted order, so all but one of them are
+            # reading a manifest that the winner is renaming into claimed/ at
+            # that moment. rename() changes the inode's ctime and removes the
+            # pathname, which surfaces here as "changed while opening",
+            # "changed during read", or "vanished during validation" -- the
+            # normal outcome for 255 of 256 workers on every pass, not
+            # corruption. It is a lost race exactly when the pathname is no
+            # longer in pending/; an in-place rewrite still fails closed.
+            if not _fanin_pending_candidate_still_present(candidate):
+                continue
             raise
         except ValueError:
             preview = None
@@ -634,7 +700,7 @@ def _claim_token_identity(payload: Any) -> tuple[int, ...] | None:
     if payload.get("schema_version") == 2:
         values = (payload.get("claim_dev"), payload.get("claim_ino"), payload.get("claim_ctime_ns"))
         return values if all(_is_int(value) for value in values) else None
-    if payload.get("schema_version") in (3, 4):
+    if payload.get("schema_version") in (3, 4, 5):
         values = (
             payload.get("claim_dev"), payload.get("claim_ino"), payload.get("claim_mode"),
             payload.get("claim_size"), payload.get("claim_mtime_ns"), payload.get("claim_ctime_ns"),
@@ -680,7 +746,7 @@ def _write_claim_token(
         lease_name = _claim_token_path(claim, token).name
         temporary_name = f".{lease_name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
         payload = {
-            "schema_version": 4,
+            "schema_version": 5,
             "claim": claim.name,
             "claim_dev": identity[0],
             "claim_ino": identity[1],
@@ -688,8 +754,10 @@ def _write_claim_token(
             "claim_size": identity[3],
             "claim_mtime_ns": identity[4],
             "claim_ctime_ns": identity[5],
-            "claimed_parent_dev": parent_identity[0],
-            "claimed_parent_ino": parent_identity[1],
+            # Opaque directory identity, not a (dev, ino) pair -- see
+            # _fanin_directory_identity. Schema 4 named these claimed_parent_dev
+            # and claimed_parent_ino, when the pair really was (dev, ino).
+            "claimed_parent_identity": list(parent_identity),
             "token": token,
         }
         no_follow = getattr(os, "O_NOFOLLOW", None)
@@ -734,10 +802,10 @@ def _write_claim_token(
 
 
 def _claim_token_parent_identity(payload: Any) -> tuple[int, int] | None:
-    if not isinstance(payload, dict) or payload.get("schema_version") != 4:
+    if not isinstance(payload, dict) or payload.get("schema_version") != 5:
         return None
-    values = payload.get("claimed_parent_dev"), payload.get("claimed_parent_ino")
-    return values if all(_is_int(value) for value in values) else None
+    identity = _fanin_identity_tuple(payload.get("claimed_parent_identity"), 2)
+    return None if identity is None else (identity[0], identity[1])
 
 
 def _claim_token_is_current(task: TaskManifest) -> bool:
@@ -783,7 +851,7 @@ def _claim_token_is_live(
         and payload.get("token") == token
         and _claim_snapshot_matches_identity(snapshot, _claim_token_identity(payload) or ())
         and (
-            payload.get("schema_version") != 4
+            payload.get("schema_version") != 5
             or _claim_token_parent_identity(payload) == parent_identity
         )
     )
@@ -823,7 +891,7 @@ def _remove_claim_token(task: TaskManifest) -> None:
         return
     if (
         isinstance(payload, dict)
-        and payload.get("schema_version") in (2, 3, 4)
+        and payload.get("schema_version") in (2, 3, 4, 5)
         and payload.get("claim") == task.claim_path.name
         and payload.get("token") == task.claim_token
     ):
@@ -934,9 +1002,23 @@ def _refresh_fanin_staging_lease(staging: Path, producer_token: str) -> None:
 def _fanin_staging_lease_is_active(staging: Path, producer_token: str) -> bool:
     if not producer_token:
         return False
-    payload = _read_fanin_authoritative_json(
-        _fanin_staging_lease_path(staging), "staging producer lease",
-    )
+    try:
+        payload = _read_fanin_authoritative_json(
+            _fanin_staging_lease_path(staging), "staging producer lease",
+        )
+    except _FanInRecordRacedError:
+        # A lease that CHANGED under this read is a producer *renewing* it -- the most direct
+        # evidence there is that its staging is still owned. Reporting it active only ever
+        # prevents a reclaim, never causes one.
+        #
+        # Caught BY TYPE, not by message text: matching on the string made control flow
+        # depend on the pathname interpolated into it, so a shard named `...changed...`
+        # reopened this hole. A blanket except also swallowed a lease pathname
+        # that is a DIRECTORY, a SYMLINK, or unreadable (EACCES), reporting the staging owned
+        # forever so it was never reclaimed -- and note the asymmetry it created: malformed JSON
+        # below still returns False (reclaimable), so garbage read as dead while a symlink read
+        # as alive. Those are real faults; fail-safe is not the same as silent.
+        return True
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "staging", "producer_token", "renewed_at"}:
         return False
     renewed_at = payload["renewed_at"]
@@ -975,7 +1057,14 @@ def _sweep_abandoned_fanin_staging(cache_dir: Path, queue: Path) -> None:
     for sidecar in Path(cache_dir).glob(f".shard-w*-v*.tmp.*{_FANIN_STAGING_OWNER_SUFFIX}"):
         staging_name = sidecar.name.removesuffix(_FANIN_STAGING_OWNER_SUFFIX)
         candidate = sidecar.with_name(staging_name)
-        record = _read_fanin_staging_owner_record(candidate)
+        try:
+            record = _read_fanin_staging_owner_record(candidate)
+        except FanInInventoryValidationError:
+            # The sidecar was enumerated by the glob above and then removed by
+            # its own producer completing -- the normal end of every successful
+            # publication. A sidecar this sweep cannot read is treated exactly
+            # like the unreadable/malformed case below: leave the staging alone.
+            continue
         if record is None:
             continue
         owner, producer_token = record
@@ -1104,7 +1193,7 @@ def _open_fanin_authoritative_directory(path: Path, label: str) -> tuple[int, os
     # mutable guard directory only needs the stable directory object identity.
     if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
         os.close(descriptor)
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} changed while opening: {path}"
         )
     return descriptor, expected
@@ -1117,7 +1206,7 @@ def _verify_fanin_authoritative_directory_identity(
 ) -> None:
     observed = _fanin_authoritative_directory_stat(path, label)
     if _fanin_stat_identity(observed) != _fanin_stat_identity(expected):
-        raise FanInInventoryValidationError(
+        raise _FanInRecordRacedError(
             f"fan-in {label} identity changed during validation: {path}"
         )
 
@@ -1160,7 +1249,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
     try:
         file_descriptor = os.open(name, os.O_RDONLY | no_follow, dir_fd=descriptor)
     except FileNotFoundError:
-        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from None
+        raise _FanInRecordRacedError(f"fan-in {label} vanished during validation: {name}") from None
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in {label} is unreadable: {name}"
@@ -1174,7 +1263,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
         while chunk := os.read(file_descriptor, 1024 * 1024):
             chunks.append(chunk)
         if _fanin_stat_snapshot(os.fstat(file_descriptor)) != _fanin_stat_snapshot(expected):
-            raise FanInInventoryValidationError(
+            raise _FanInRecordRacedError(
                 f"fan-in {label} changed during read: {name}"
             )
     finally:
@@ -1182,7 +1271,7 @@ def _read_fanin_authoritative_regular_file_snapshot(
     try:
         observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
     except FileNotFoundError as exc:
-        raise FanInInventoryValidationError(f"fan-in {label} vanished during validation: {name}") from exc
+        raise _FanInRecordRacedError(f"fan-in {label} vanished during validation: {name}") from exc
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in {label} is unreadable: {name}"
@@ -1367,7 +1456,7 @@ def _is_sha256(value: Any) -> bool:
 
 def _fanin_acceptance_payload(acceptance: _FanInAcceptance) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "task": _fanin_task_payload(acceptance.task),
         "guard_root": acceptance.guard_root,
         "guard_generation": acceptance.guard_generation,
@@ -1401,7 +1490,7 @@ def _fanin_acceptance_from_payload(payload: Any) -> _FanInAcceptance | None:
         "manifest_sha256", "metadata_sha256", "content_sha256", "record_count", "payload_files",
         "route",
     }
-    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 2:
+    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 3:
         return None
     task = _fanin_task_from_payload(payload["task"])
     string_fields = (
@@ -1551,7 +1640,13 @@ def _reject_unreachable_fanin_generations(root: Path, reachable: set[Path]) -> N
     unreachable = _installed_fanin_generation_paths(root) - reachable
     if unreachable:
         names = ", ".join(sorted(path.name for path in unreachable))
-        raise FanInInventoryValidationError(
+        # The traversal stopped because a successor slot read as absent. A peer
+        # installing that successor immediately afterwards makes it show up in
+        # this scan as "unreachable" purely because this traversal predates it.
+        # A caller that can re-traverse must do so before calling the fence
+        # corrupt; only a generation that is still unreachable from root after a
+        # fresh traversal is genuinely orphaned.
+        raise _FanInFenceAdvancedError(
             f"fan-in publication fence has unreachable generations: {names}"
         )
 
@@ -1625,7 +1720,24 @@ def _verify_fanin_fence_generation_identity(generation: _FanInFenceGeneration) -
 
 
 def _read_current_fanin_fence(root: Path) -> _FanInFenceGeneration | None:
-    """Resolve an immutable successor/acceptance chain and reject orphan state."""
+    """Resolve an immutable successor/acceptance chain and reject orphan state.
+
+    Retries the whole traversal when a peer installs the next generation while
+    this one is walking the chain: that makes an installed generation look
+    unreachable only because this traversal is older than it. A generation that
+    is still unreachable from ``root`` after a fresh traversal is orphaned, and
+    the last attempt propagates that as the inventory error it always was.
+    """
+    for _attempt in range(_FANIN_FENCE_TRAVERSAL_ATTEMPTS - 1):
+        try:
+            return _read_current_fanin_fence_once(root)
+        except _FanInFenceAdvancedError:
+            time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
+    return _read_current_fanin_fence_once(root)
+
+
+def _read_current_fanin_fence_once(root: Path) -> _FanInFenceGeneration | None:
+    """One chain traversal; see ``_read_current_fanin_fence``."""
     try:
         root_parent = _fanin_authoritative_directory_stat(
             root.parent, "publication fence parent directory",
@@ -1785,7 +1897,7 @@ def _fanin_fence_is_current_locked(fence: _FanInFilesystemFence) -> bool:
     except (OSError, FanInInventoryValidationError):
         return False
     if not (
-        (observed.st_dev, observed.st_ino) == fence.identity
+        _fanin_directory_identity(observed) == fence.identity
         and owner_contents is not None
         and acceptance_contents is None
         and not released
@@ -1886,7 +1998,7 @@ def _start_fanin_guard_heartbeat(
         raise FanInInventoryValidationError(f"new fan-in publication fence is malformed: {path}")
     stop = threading.Event()
     fence = _FanInFilesystemFence(
-        root, path, (observed.st_dev, observed.st_ino), fanin_task, task.claim_path.name,
+        root, path, _fanin_directory_identity(observed), fanin_task, task.claim_path.name,
         task.claim_token, stop, threading.Lock(), threading.Thread(),
     )
 
@@ -2437,7 +2549,7 @@ def _resolve_fanin_route(queue: Path, task: TaskManifest) -> _FanInRouteResoluti
         root_identity=root_identity,
         record=record,
         record_parent_identity=final_parent,
-        record_identity=_fanin_stat_snapshot(final_identity),
+        record_identity=_fanin_durable_stat_snapshot(final_identity),
         record_sha256=hashlib.sha256(final_contents).hexdigest(),
         task=established_task,
     )
@@ -2462,7 +2574,7 @@ def _verify_fanin_route_resolution(
         contents is None
         or observed is None
         or parent_identity != resolution.record_parent_identity
-        or _fanin_stat_snapshot(observed) != resolution.record_identity
+        or _fanin_durable_stat_snapshot(observed) != resolution.record_identity
         or hashlib.sha256(contents).hexdigest() != resolution.record_sha256
     ):
         raise FanInInventoryValidationError(
@@ -2537,7 +2649,7 @@ def _fanin_route_resolution_from_payload(
         # A terminal acceptance must carry the cache-root generation too.
         return None
     record_parent_identity = _fanin_identity_tuple(payload["record_parent_identity"], 2)
-    record_identity = _fanin_identity_tuple(payload["record_identity"], 6)
+    record_identity = _fanin_identity_tuple(payload["record_identity"], 3)
     if record_parent_identity is None or record_identity is None:
         return None
     return _FanInRouteResolution(
@@ -2783,10 +2895,23 @@ def _fanin_candidate_acceptance_evidence(
                 current = _read_current_fanin_fence(
                     _fanin_task_fence_path(path.parent, task.task_id)
                 )
-                if current is not None and current.path.name != publication.guard_generation:
+                # Publication is rename-then-accept: a version becomes visible
+                # before its trailing task's acceptance is installed. A reader
+                # that lands in that window sees a self-consistent target whose
+                # last task is not accepted *yet* -- whether this publication's
+                # generation is still the live one (acceptance in flight) or has
+                # already been superseded (publication abandoned). Neither is
+                # corruption. Both mean the same thing to a selector: this
+                # version is not selectable, so fall back to the last accepted
+                # one. Its own producer still finishes it through pending-
+                # publication recovery, which does not go through selection.
+                if current is not None:
                     _validate_fanin_target_acceptance(path, tasks, publication)
                     _verify_fanin_directory_identity(path.parent, cache_root_identity, "fan-in cache root")
                     return None
+            # A *non-trailing* task without an acceptance, a publication that
+            # names a task the manifest does not end with, or a missing guard
+            # root, all remain terminal: none of those is a publication window.
             raise FanInInventoryValidationError(
                 f"fan-in shard {path} has no immutable acceptance for {task.task_id!r}"
             )
@@ -3174,6 +3299,11 @@ def _fanin_stat_identity(observed: os.stat_result) -> tuple[int, int, int]:
 
 
 def _fanin_stat_snapshot(observed: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    """One file generation as seen by *this* process, ``st_dev`` included.
+
+    Only ever compared against another observation made by the same process, so
+    the client-local ``st_dev`` is meaningful here and pins the mount.
+    """
     return (
         observed.st_dev,
         observed.st_ino,
@@ -3181,6 +3311,38 @@ def _fanin_stat_snapshot(observed: os.stat_result) -> tuple[int, int, int, int, 
         observed.st_size,
         observed.st_mtime_ns,
         observed.st_ctime_ns,
+    )
+
+
+def _fanin_durable_stat_snapshot(observed: os.stat_result) -> tuple[int, int, int]:
+    """One file generation that survives crossing processes, mounts, and hosts.
+
+    Used only for witnesses that are *written into the shared cache and
+    re-checked by a different worker*. Every field of such a witness has to be a
+    property of the file rather than of the client that observed it, so two
+    fields of ``_fanin_stat_snapshot`` are deliberately dropped:
+
+    ``st_dev`` is not a property of the file at all. Linux allocates it per
+    superblock (``set_anon_super`` for NFS), so one shared file has a *different*
+    ``st_dev`` in every pod that mounts the export -- guaranteeing that every
+    cross-worker validation reports "corruption" as soon as two mounts exist.
+
+    ``st_mtime_ns``/``st_ctime_ns`` are not content signals. ``st_ctime`` moves
+    on link-count and metadata changes that leave the bytes untouched, and on a
+    shared filesystem both timestamps are subject to attribute-cache
+    revalidation between the writer's observation and a remote reader's. What
+    they were meant to prove -- that these are the certified bytes -- is proven
+    directly and portably by the SHA-256 that every caller of this function
+    records alongside the identity (``_FanInPayloadFile.sha256`` for payload
+    files, ``record_sha256`` for the route record).
+
+    What remains still pins the file: the inode rejects a replaced or relinked
+    generation, and the mode and size reject a substituted one.
+    """
+    return (
+        observed.st_ino,
+        observed.st_mode,
+        observed.st_size,
     )
 
 
@@ -3325,7 +3487,12 @@ def _snapshot_fanin_payload_files(path: Path) -> tuple[_FanInPayloadFile, ...]:
             finally:
                 os.close(file_descriptor)
             _verify_fanin_entry_unchanged(name, observed, dir_fd=directory)
-            files.append(_FanInPayloadFile(relative, _fanin_stat_snapshot(observed), digest.hexdigest()))
+            # The retained witness is durable (no st_dev): it is published in the
+            # acceptance record and re-checked by workers on other mounts. The
+            # in-process checks above still compare full st_dev-bearing snapshots.
+            files.append(
+                _FanInPayloadFile(relative, _fanin_durable_stat_snapshot(observed), digest.hexdigest())
+            )
         if _fanin_stat_snapshot(os.fstat(directory)) != _fanin_stat_snapshot(expected):
             raise FanInValidationError("fan-in shard directory changed during payload snapshot")
 
@@ -3358,7 +3525,7 @@ def _fanin_payload_files_from_payload(value: Any) -> tuple[_FanInPayloadFile, ..
         if not isinstance(entry, dict) or set(entry) != {"relative", "identity", "sha256"}:
             return None
         relative = entry["relative"]
-        identity = _fanin_identity_tuple(entry["identity"], 6)
+        identity = _fanin_identity_tuple(entry["identity"], 3)
         if (
             not isinstance(relative, list)
             or not relative
@@ -3603,7 +3770,16 @@ def _fsync_directory(path: Path) -> None:
 
 def _preflight_fanin_location(path: Path, location: str) -> None:
     """Probe one mount for the local atomic operations fan-in relies on."""
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        # `mkdir(exist_ok=True)` re-raises when its post-EEXIST is_dir() recheck fails, which a
+        # concurrent peer can cause. The stat below is the real existence check.
+        pass
+    except OSError as exc:
+        raise FanInInventoryValidationError(
+            f"fan-in {location} filesystem probe directory cannot be created: {path}"
+        ) from exc
     _fanin_authoritative_directory_stat(path, f"{location} filesystem probe directory")
     token = f".fanin-filesystem-probe.{os.getpid()}.{uuid.uuid4().hex}"
     source_a = path / f"{token}.source-a"
@@ -3624,7 +3800,7 @@ def _preflight_fanin_location(path: Path, location: str) -> None:
 
         def race_link(source: Path) -> None:
             try:
-                gate.wait(timeout=1.0)
+                gate.wait(timeout=_FANIN_PROBE_TIMEOUT_SECONDS)
                 os.link(source, collision)
             except OSError as exc:
                 outcome: OSError | None = exc
@@ -3639,13 +3815,13 @@ def _preflight_fanin_location(path: Path, location: str) -> None:
         for thread in threads:
             thread.start()
         try:
-            gate.wait(timeout=1.0)
+            gate.wait(timeout=_FANIN_PROBE_TIMEOUT_SECONDS)
         except threading.BrokenBarrierError as exc:
             raise FanInInventoryValidationError(
                 f"fan-in {location} filesystem hard-link probe did not start: {path}"
             ) from exc
         for thread in threads:
-            thread.join(timeout=1.0)
+            thread.join(timeout=_FANIN_PROBE_TIMEOUT_SECONDS)
         if any(thread.is_alive() for thread in threads):
             raise FanInInventoryValidationError(
                 f"fan-in {location} filesystem hard-link probe did not finish: {path}"
@@ -3690,37 +3866,33 @@ def _preflight_fanin_location(path: Path, location: str) -> None:
 
 
 def _preflight_fanin_route_directory(queue: Path) -> None:
-    """Probe the exact directory that will host the route-record link CAS."""
+    """Probe the exact directory that will host the route-record link CAS.
+
+    The directory is created if absent and then LEFT IN PLACE. It is a permanent part of the
+    protocol -- ``_fanin_route_record`` creates it unconditionally with ``exist_ok=True`` and
+    never removes it -- so there is nothing to clean up, and removing it is actively harmful.
+
+    An earlier version of this probe deleted the directory it had created, which raced every
+    peer running the same probe: this preflight runs once per PENDING CANDIDATE INSPECTED,
+    before any claim, so at 256 workers it hammers one shared pathname continuously. A peer's
+    rmdir landing between another worker's ``mkdir(exist_ok=True)`` and its internal ``is_dir``
+    recheck makes CPython re-raise FileExistsError, which reached run_worker as
+    "TERMINAL fan-in filesystem preflight failed" and killed the worker before it collected
+    anything -- reintroducing, in the fix, the exact rc=2 class the fix exists to remove.
+    Landing the same rmdir mid-probe instead surfaced as a bogus "filesystem lacks required
+    hard-link, mkdir, or same-directory rename support".
+    """
     directory = queue / _FANIN_ROUTE_DIRECTORY
-    created = False
     try:
-        directory.mkdir()
-        created = True
+        directory.mkdir(exist_ok=True)
     except FileExistsError:
+        # A peer created it between our check and ours; that is the steady state, not a fault.
         pass
     except OSError as exc:
         raise FanInInventoryValidationError(
             f"fan-in route provenance directory cannot be created: {directory}"
         ) from exc
-    try:
-        _preflight_fanin_location(directory, "route-CAS")
-    except BaseException:
-        if created:
-            try:
-                directory.rmdir()
-            except OSError as exc:
-                raise FanInInventoryValidationError(
-                    f"fan-in route-CAS probe cleanup failed: {directory}"
-                ) from exc
-        raise
-    if created:
-        try:
-            directory.rmdir()
-            _fsync_directory(queue)
-        except OSError as exc:
-            raise FanInInventoryValidationError(
-                f"fan-in route-CAS probe cleanup failed: {directory}"
-            ) from exc
+    _preflight_fanin_location(directory, "route-CAS")
 
 
 def _preflight_fanin_filesystems(queue: Path, cache_dir: Path) -> None:

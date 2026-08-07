@@ -1,0 +1,140 @@
+--- REBASED ONTO THE 70-PATCH STACK (#1152). The original three-hunk form no longer
+--- applies: #1152's status-aware-residual-threshold patch DELETED the
+--- `residual_threshold_opt` binding this patch's second hunk edited, replacing it with a
+--- `residual_lethality_thresholds(state, &attacking_side, choice)` ladder computed once
+--- and consumed only inside the partition cascade.
+---
+--- That hunk is therefore DROPPED rather than ported, and the result is strictly better.
+--- It used to read `if enumerate_damage_rolls() { None } else { ... }`, disabling the
+--- mirror UNCONDITIONALLY while enumerating only under the additional
+--- `branch_on_damage && fixed_damage.is_none()` guard -- so a searching process with the
+--- flag set got a THIRD configuration at every ply, collapsed representative AND no
+--- residual partition, which reports/c137 section 2 named as a real defect. With the
+--- ladder consumed only by the cascade the enumerated arm bypasses, nothing needs
+--- disabling: the flag-off path is bit-identical by construction and there is no third
+--- configuration to be in.
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1192,16 +1192,62 @@ fn get_instructions_from_boosts(
+             boost,
+             attacking_side_reference,
+             &target_side_ref,
+             incoming_instructions,
+         );
+     }
+ }
+ 
++/// C116 Phase 2 spike -- enumerate-then-merge, OFF BY DEFAULT.
++///
++/// Read once from `POKEZERO_ENUMERATE_ROLLS` (accepts `1`/`true`). A *runtime*
++/// flag, not a cargo feature, deliberately: the decision record needs the two
++/// engines swept from ONE build so the comparison is single-variable
++/// (C119 obligation 4).
++static ENUMERATE_DAMAGE_ROLLS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++
++pub fn enumerate_damage_rolls() -> bool {
++    *ENUMERATE_DAMAGE_ROLLS.get_or_init(|| {
++        matches!(
++            std::env::var("POKEZERO_ENUMERATE_ROLLS").as_deref(),
++            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
++        )
++    })
++}
++
++/// The 16 gen3 damage rolls of a fan, in EXACT INTEGER arithmetic, pre-merged on
++/// equal damage.
++///
++/// Showdown's randomizer is `tr(tr(base * (100 - random(16))) / 100)`, i.e.
++/// `floor(max * r / 100)` for `r` in `85..=100`
++/// (`src/pokezero/gen3_damage.py:392-396` reconstructs the same expression from
++/// the protocol side and shares no arithmetic with this file). The expression
++/// used here is character-for-character the one the ALREADY-SHIPPED 32-arm
++/// enumeration for `pending_hp_reading_move` uses in this same function
++/// (`(raw_damage as i32 * random / 100) as i16`), so the spike generalizes a
++/// mechanism this engine already runs in production rather than inventing one.
++///
++/// This is what replaces `compare_health_with_damage_multiples`: its f32
++/// accumulator (`max*0.85` stepped by `max*0.01`, sixteen times) drifts below
++/// the true rung and mis-counts kill rolls for 195 `(max, threshold)` pairs in
++/// the audited range -- C116 M5. Counting enumerated integers cannot drift.
++///
++/// Rolls that collapse onto the same integer (small `max`) are merged here, so a
++/// 20-damage fan costs the 5 or 6 arms it actually has, not 16.
++fn push_enumerated_rolls(arms: &mut Vec<(i16, f32)>, max_damage: i16, mass_per_roll: f32) {
++    for numerator in 85..=100i32 {
++        let rolled = (max_damage as i32 * numerator / 100) as i16;
++        match arms.iter_mut().find(|(damage, _)| *damage == rolled) {
++            Some(existing) => existing.1 += mass_per_roll,
++            None => arms.push((rolled, mass_per_roll)),
++        }
++    }
++}
++
+ fn compare_health_with_damage_multiples(max_damage: i16, health: i16) -> (i16, i16) {
+     let max_damage_f32 = max_damage as f32;
+     let health_f32 = health as f32;
+ 
+     let mut total_less_than = 0;
+     let mut num_less_than = 0;
+     let mut num_greater_than = 0;
+     let increment = max_damage as f32 * 0.01;
+@@ -3776,17 +3822,58 @@ pub fn generate_instructions_from_move(
+         // -- bonerush at 112, furyswipes at 121, spikecannon at 136. A 400-game
+         // sweep reported `engine_errors: 0` because the window is one or two HP
+         // values per matchup: sample size, not safety.
+         let ko_min_damage = if hit_count > 1 {
+             (ko_max_damage as f32 * 0.85) as i16
+         } else {
+             min_damage_dealt
+         };
+-        if branch_on_damage
++        if enumerate_damage_rolls() && branch_on_damage && fixed_damage.is_none() {
++            // ENUMERATE-THEN-MERGE. One arm per distinct roll, mass 1/16 each,
++            // times the crit split. No threshold is consulted and no
++            // representative roll is chosen, so there is no collapse to tax:
++            // every arm reaches `run_move` with the integer damage a legal roll
++            // deals, and `run_move` -- not a mirror -- resolves lethality,
++            // secondaries and everything downstream.
++            //
++            // Composition with a probabilistic SECONDARY is automatic and is the
++            // whole answer to C119's `count/16`-cannot-express-a-secondary
++            // objection: enumeration replaces the roll-collapse WITHIN the arm,
++            // and `run_move` -> `get_instructions_from_secondaries` then splits
++            // each of these arms by the secondary's own chance. The resulting
++            // masses are `count/16 x branch probability` by construction, with
++            // no recipe to hand-derive.
++            //
++            // `combine_duplicate_instructions` at the end of this function is the
++            // MERGE half: any two rolls whose full instruction lists coincide
++            // (equal damage after the HP clamp, same secondary outcome, same
++            // residual fate) come back out as one arm with the summed mass.
++            let crit_rate = critical_hit_chance(choice, defender_active.ability);
++            let mut roll_arms: Vec<(i16, f32)> = Vec::with_capacity(32);
++            if crit_rate < 1.0 {
++                push_enumerated_rolls(&mut roll_arms, max_damage_dealt, (1.0 - crit_rate) / 16.0);
++            }
++            if crit_rate > 0.0 {
++                push_enumerated_rolls(&mut roll_arms, max_crit_damage, crit_rate / 16.0);
++            }
++            // Per-HIT, deliberately: `run_move` applies `damage_amount` once per
++            // hit, and gen3 rolls a multi-hit move's damage once and reuses it.
++            // The collapsed path had to convert a TOTAL back to per-hit with a
++            // division (and a ceiling-vs-truncation correction); enumeration
++            // never forms the total, so that whole conversion disappears.
++            for (roll_damage, mass) in roll_arms {
++                let mut roll_ins = incoming_instructions.clone();
++                roll_ins.update_percentage(mass);
++                extra_branches.push((roll_ins, roll_damage));
++            }
++            // Every arm now lives in `extra_branches`; zero the base so the
++            // apply/reverse discipline below is uniform across all of them.
++            incoming_instructions.update_percentage(0.0);
++        } else if branch_on_damage
+             && ko_max_damage >= defender_active.hp
+             && ko_min_damage < defender_active.hp
+         {
+             let (average_non_kill_damage, num_kill_rolls) =
+                 compare_health_with_damage_multiples(ko_max_damage, defender_active.hp);
+ 
+             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
+                 || defender_active.ability == Abilities::SHELLARMOR

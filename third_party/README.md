@@ -43,3 +43,26 @@ Smoke-validated: ran two `gen3randombattle` games end-to-end (foul-play set pred
 
 ### Updating the pin
 Bump the pinned commit in a dedicated PR: `git submodule update --remote third_party/foul-play`.
+
+## poke-engine gen3 patches (`third_party/poke-engine-gen3-*.patch`)
+
+`third_party/poke-engine-gen3-patches.txt` is the **single source of truth** for which
+patches ship and in what order. Both builders read it. A `.patch` file sitting in this
+directory is *not* part of the engine unless that manifest names it.
+
+### One patch here is deliberately NOT in the manifest
+
+`poke-engine-gen3-enumerate-damage-rolls.patch` is a **reference oracle, not a shipped
+fix**. It replaces the collapsed damage-roll partition with one arm per distinct
+`floor(max * r / 100)` and is exact where the collapsed path is an approximation, so it
+is used to validate the collapsed path's masses — never to run them.
+
+Build it into a **separate venv on a separate checkout** and regenerate the pinned truth
+with `scripts/collapsed_arm_mass_oracle.py --write`; see that module's docstring.
+`tests/test_collapsed_arm_mass_oracle.py` then consumes the pin, so ordinary CI needs no
+second build.
+
+**Do not add it to the manifest.** `reports/c137_phase2_enumerate_decision.md` records why:
+it changes the engine production searches with (the argmax moves), the differential must
+keep measuring the shipping configuration, and the mass gate's own negative control has no
+collapsed fan left to be a control over once enumeration is on.

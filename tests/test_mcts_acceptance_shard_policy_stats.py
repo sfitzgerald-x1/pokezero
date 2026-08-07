@@ -120,6 +120,27 @@ class ShardPolicyStatsTest(unittest.TestCase):
         # 456 / 152 -- the aggregate the ladder's non-starvation rule reads.
         self.assertAlmostEqual(payload["depth_reached_mean"], 3.0)
 
+    def test_policy_stats_carries_the_choices_unmapped_cause_breakdown(self) -> None:
+        """The same silent-`{}` shape, one layer out, and it was live until this test.
+
+        `choices_unmapped_causes` exists to name WHY `_map_choices` returned None, because
+        `choices_unmapped` is a stop-condition term GOAL.md requires at zero and era 60 could
+        report it at 29 with no attribution. The counter is only useful if it reaches
+        `per_seat[].policy_stats` on disk, and exactly one line in `EngineMctsStats.to_dict`
+        carries it there.
+
+        Review deleted that line and all 304 tests passed. The unit tests are pure functions
+        and the wiring tests use a stats stub, so neither can see the export -- which is this
+        file's own failure mode restated: a field absent from the shard, failing silently in
+        the direction that looks like a clean run.
+        """
+
+        payload = report_for(populated_stats())["policy_stats"]
+        self.assertIn("choices_unmapped_causes", payload)
+        # A dict, not a Counter: the report is JSON, and a Counter round-trips to an object
+        # only because `to_dict` casts it. Asserting the type pins the cast.
+        self.assertIsInstance(payload["choices_unmapped_causes"], dict)
+
     def test_policy_stats_carries_the_latency_gate_field(self) -> None:
         # The same silent-{} also dropped the field the 20 s/turn rejection rule
         # is defined on, so it is pinned in the same place.
