@@ -122,7 +122,29 @@ _C141 = {
 # top-level `boundaries_measured`, so the selector below excludes it. Verified, not assumed --
 # as is the fact that #1161's `c143_heal_attribution_probe.json`, which landed on main in the
 # same merge, is outside the selector too. The delta really is this one sweep artifact.
-_EXPECTED_SWEEP_ARTIFACTS = 71
+#
+# 71 -> 75 (C145). The four added are the one-game `19100170` bisect sweeps
+# `reports/artifacts/c145_g19100170_{2ec0cb13,dc6e1e19,d27316b6,head}.json`.
+#
+# MEASURED, not computed. An earlier revision of this branch read 74 against a base of 70, and
+# `71 + 4` happening to agree with the selector here is a coincidence of this merge, not a method:
+# membership turns on a top-level `boundaries_measured` and nothing else, so a file can land in
+# `reports/artifacts/` without entering this corpus -- `c145_settling_branch_dump.json` does exactly
+# that, as do #1159's `c141_final_holdout_replay.json` and #1161's two `c143` artifacts noted above.
+# The directory count and the corpus count therefore move independently and neither may be used to
+# sanity-check the other.
+#
+# The procedure, which is what caught C145's bump rather than any reasoning about it:
+#   1. run the selector below over BOTH trees -- the merged one and the base it came from;
+#   2. confirm the set difference is exactly the files the PR adds, with NOTHING removed (a member
+#      that silently stops carrying the key drops OUT, which is this pin's fail-open and which pure
+#      addition would mask);
+#   3. set the number to the measured count and confirm the module is green;
+#   4. confirm the pin is still LIVE by setting it one lower and watching it fail -- a bump that
+#      disarms this pin is indistinguishable from a correct one in the diff.
+# All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
+# at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
+_EXPECTED_SWEEP_ARTIFACTS = 75
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

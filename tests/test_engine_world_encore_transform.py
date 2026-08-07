@@ -25,10 +25,18 @@ donor slot 0.
 
 ``test_transformed_self_encore_locks_the_post_transform_slot`` is the row that
 was RED before the fix, at ``move:0`` instead of ``move:3``.
+
+C145 adds ``LockIndexToResidualBlockTests``, which closes the chain that the
+tests above stop short of. Everything above ends at the INDEX; nothing asserted
+that the index change is what puts Showdown's ``|-heal|...|[from] item:
+Leftovers`` line back. That link is the whole reason the row was divergent, and
+without it a future change could keep ``move:3`` and still lose the tick.
+Measured red/green in ``reports/c145_itemleftovers_row_adjudication.md`` §5.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -45,8 +53,18 @@ from pokezero.engine_world import (  # noqa: E402
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
-from pokezero.poke_engine_adapter import MoveSpec  # noqa: E402
+from pokezero.poke_engine_adapter import MoveSpec, build_poke_engine_state  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
+
+# Imported unguarded, on purpose. Every other consumer of the native crate in
+# tests/ wraps this in try/except and skips when the wheel is missing, which is
+# right for a suite that is mostly crate-independent. Here it is not: a skip
+# would silently retire the only pin that ties the Encore lock index to the
+# residual block, and this program has twice read `OK (skipped=N)` as a pass.
+# An ImportError is the correct, loud outcome of running this file without a
+# built engine.
+import poke_engine  # noqa: E402
+import pokezero_search  # noqa: E402
 
 
 def _move(move_id: str, pp: int) -> MoveInfo:
@@ -584,6 +602,195 @@ class SoleEnabledMoveIdTests(unittest.TestCase):
             ),
             2,
         )
+
+
+class LockIndexToResidualBlockTests(unittest.TestCase):
+    """C145: the lock index is only interesting because of what it SUPPRESSES.
+
+    The `19100170/71-72` rows were never "the Encore index is wrong". They were
+    ``component_missing_in_engine:itemleftovers`` at ``pct=100.00`` over a single
+    branch: the phantom Body Slam KOs the incoming mon, ``end_of_turn_is_deferred``
+    defers the whole residual block to the forced-replacement boundary, and BOTH
+    sides' Leftovers ticks vanish from a turn where Showdown emits them.
+
+    So this class renders the CONSTRUCTED world through the same mapper the
+    differential's ``evaluate_boundary_strict`` calls, and asserts the heal line
+    is there. Measured on `dc6e1e19` (the fix's parent) the same fixture builds
+    ``move:0``, renders a faint, and emits no ``item: Leftovers`` event at all --
+    red -- and green from `d27316b6` onward. The engine build is BYTE-IDENTICAL
+    across that pair (fingerprint ``fdbf5937...``), which is the point: the
+    closing change is world construction, so an engine-only pin cannot see it.
+
+    Note the shape being pinned is a joint action where side one's move is
+    IRRELEVANT to the opponent -- Protect against a switch. That is what makes
+    the phantom lethal: the correct turn deals no damage whatsoever, so any
+    damage the engine invents is a pure fabrication rather than a mispriced roll.
+    """
+
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _payload_with_a_lethal_switch_in(self):
+        """The 19100170 shape, plus the two things the render needs.
+
+        1. The transformed Ditto is 40 below max, so its Leftovers tick is the
+           full ``maxhp // 16`` and not a clamp against the cap. A fixture that
+           healed 0 would pass the "no faint" half while asserting nothing.
+        2. The opponent has a benched mon at 5 HP to switch in, so the phantom
+           Body Slam is LETHAL and actually trips the deferral. At full HP the
+           block would still run and the pin would be vacuous -- which is what
+           ``test_a_survivable_phantom_would_not_have_hidden_the_tick`` proves.
+        """
+
+        payload = _payload(self.dex)
+        ditto_hp = _maxhp(_DITTO, self.dex)
+        target_hp = _maxhp(_SWAMPERT, self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["condition"] = f"{ditto_hp - 40}/{ditto_hp}"
+        payload["sides"]["p2"]["pokemon"].append(
+            {"species": "Swampert", "condition": f"5/{target_hp}",
+             "active": False, "moves": []}
+        )
+        return payload
+
+    def _render(self, payload, *, force_last_used_move: str | None = None,
+                expect_branches: int = 1):
+        """Build the world, then render the joint action (protect, switch).
+
+        ``force_last_used_move`` rewrites the built state's side-one
+        ``last_used_move`` field in place. It exists ONLY for the negative
+        control: it lets one test show that the identical engine build produces
+        the suppressed turn when handed ``move:0``, so the difference between
+        red and green is the constructed index and nothing else.
+
+        ``expect_branches`` is asserted rather than defaulted-and-ignored. Both
+        turns that reproduce the row are single-branch (the sweep recorded
+        ``branch_count: 1``); the survivable-phantom control is deliberately NOT,
+        because an invented attack that leaves the target alive splits into a
+        roll fan, and pretending otherwise would hide the fan behind a
+        highest-mass pick.
+        """
+
+        world = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, transformed_slots={"p1": _DELCATTY.species}
+        )
+        side_one, side_two = world.spec.side_one, world.spec.side_two
+        state = build_poke_engine_state(world.spec, module=poke_engine)
+        serialized = state.to_string()
+        if force_last_used_move is not None:
+            current = f"={side_one.last_used_move}="
+            self.assertIn(current, serialized)
+            serialized = serialized.replace(current, f"={force_last_used_move}=", 1)
+        context = json.dumps({
+            "p1": [mon.id for mon in side_one.pokemon],
+            "p2": [mon.id for mon in side_two.pokemon],
+            "turn": int(payload["turn"]),
+        })
+        rendered = json.loads(pokezero_search.branch_events(
+            serialized, "protect", "swampert", context, True, True
+        ))
+        branches = rendered.get("branches") or []
+        self.assertEqual(len(branches), expect_branches)
+        for branch in branches:
+            # A lossy render is the mapper declaring it cannot reproduce the
+            # turn; the differential treats that as unmeasurable rather than
+            # divergent, so a pin that allowed it would assert nothing.
+            self.assertEqual(list(branch.get("lossy") or []), [])
+        self.assertAlmostEqual(
+            sum(float(branch["percentage"]) for branch in branches), 100.0, places=3
+        )
+        return world, [list(branch.get("events") or []) for branch in branches]
+
+    def _sole_events(self, payload, **kwargs):
+        """The single 100 %-mass branch, as the sweep recorded it for these rows."""
+
+        world, per_branch = self._render(payload, expect_branches=1, **kwargs)
+        return world, per_branch[0]
+
+    def test_the_fixture_really_needs_the_residual_block(self) -> None:
+        """Guard against a vacuous pass on either half of the render."""
+
+        payload = self._payload_with_a_lethal_switch_in()
+        world = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, transformed_slots={"p1": _DELCATTY.species}
+        )
+        active = world.spec.side_one.pokemon[world.spec.side_one.active_index]
+        self.assertEqual(active.item, "leftovers")
+        # Below max by MORE than one tick, so the heal is the full tick.
+        self.assertGreater(active.maxhp - active.hp, active.maxhp // 16)
+        self.assertGreater(active.maxhp // 16, 0)
+
+    def test_the_constructed_world_renders_showdowns_leftovers_tick(self) -> None:
+        """RED at `dc6e1e19`: no ``item: Leftovers`` event, and a faint instead.
+
+        This is the row's actual symptom, asserted end to end from the payload
+        the differential hands the constructor.
+        """
+
+        world, events = self._sole_events(self._payload_with_a_lethal_switch_in())
+        side_one = world.spec.side_one
+        active = side_one.pokemon[side_one.active_index]
+
+        heals = [line for line in events if "[from] item: Leftovers" in line]
+        # Both sides tick. The sweep's miss named only p1 because
+        # `evaluate_boundary_strict` breaks out of its ("p1", "p2") slot loop on
+        # the first failure -- p2's tick was lost too, and was never compared.
+        self.assertEqual(len(heals), 2)
+        self.assertIn(
+            f"|-heal|p1a: {active.id}|{active.hp + active.maxhp // 16}/{active.maxhp}"
+            "|[from] item: Leftovers",
+            heals,
+        )
+        # The suppressor itself: no faint, so `end_of_turn_is_deferred` is not
+        # armed and the block runs on THIS boundary.
+        self.assertEqual([line for line in events if line.startswith("|faint|")], [])
+        self.assertIn("|upkeep", events)
+        # And Protect is what side one actually did, not Body Slam.
+        self.assertIn(f"|move|p1a: {active.id}|protect||[still]", events)
+        # Corroboration, asserted LAST on purpose. Checking the index first would
+        # make this test fail with the same message as the index test above and
+        # hide the symptom it exists to name.
+        self.assertEqual(side_one.last_used_move, "move:3")
+
+    def test_the_pre_fix_index_suppresses_the_block_on_the_same_build(self) -> None:
+        """The negative control, and the reason this is a world-construction row.
+
+        Same fixture, same engine build, same joint action -- only the side-one
+        ``last_used_move`` differs. ``move:0`` reproduces the divergence exactly:
+        a phantom Body Slam, a faint, and NO residual block. So nothing in the
+        engine changed between the red and green eras; the constructed index did.
+        """
+
+        _world, events = self._sole_events(
+            self._payload_with_a_lethal_switch_in(), force_last_used_move="move:0"
+        )
+        self.assertEqual([line for line in events if "item: Leftovers" in line], [])
+        self.assertEqual(len([line for line in events if line.startswith("|faint|")]), 1)
+        self.assertNotIn("|upkeep", events)
+        self.assertTrue(any("|bodyslam|" in line for line in events))
+
+    def test_a_survivable_phantom_would_not_have_hidden_the_tick(self) -> None:
+        """Why the row needed a LETHAL phantom, not merely a wrong one.
+
+        The same wrong lock against a healthy switch-in still emits the residual
+        block, so the boundary would have diverged on the invented damage instead
+        -- a different class. This is the control that keeps the fixture's 5 HP
+        from looking arbitrary.
+        """
+
+        payload = self._payload_with_a_lethal_switch_in()
+        target_hp = _maxhp(_SWAMPERT, self.dex)
+        payload["sides"]["p2"]["pokemon"][-1]["condition"] = f"{target_hp}/{target_hp}"
+        # A survivable invented attack is a roll fan, so every arm is checked
+        # rather than the most likely one.
+        _world, per_branch = self._render(
+            payload, force_last_used_move="move:0", expect_branches=4
+        )
+        for events in per_branch:
+            self.assertEqual([line for line in events if line.startswith("|faint|")], [])
+            self.assertEqual(
+                len([line for line in events if "[from] item: Leftovers" in line]), 2
+            )
+            self.assertTrue(any("|bodyslam|" in line for line in events))
 
 
 if __name__ == "__main__":  # pragma: no cover
