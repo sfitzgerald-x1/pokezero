@@ -6980,6 +6980,12 @@ mod tests {
         // production panic for whoever later closes that asymmetry, on a --release wheel,
         // where a pyo3 panic escapes `except Exception` and kills the campaign worker.
         // Pinned here rather than in a new test so the CI count floor does not move.
+        //
+        // DELIBERATELY REDUNDANT. `the_live_subcase_slugs_are_all_in_vocabulary` now runs the
+        // same literal through `assert_subcase_vocabulary`, which SUBSUMES this membership
+        // check -- deleting the entry fails both. Kept as defence in depth, and labelled so,
+        // because the comment above justifies only this assert's PLACEMENT and review noted
+        // it no longer explains its EXISTENCE.
         assert!(SUBCASE_VOCABULARY.contains(&"protect_marker_rendered"));
     }
 

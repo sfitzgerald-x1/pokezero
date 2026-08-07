@@ -2778,11 +2778,31 @@ fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "with a heal-carrying absorb ability present the marker is ambiguous and must \
              be refused, not guessed:\n{events}"
+        );
+        // THE COUNTER MUST BE SILENT, and this is the ONLY fixture that can prove it.
+        //
+        // It is the sole case with `defender_protected == true` and NO rendered marker. Its
+        // two sibling negatives both leave PROTECT unset, so a counter hoisted out of the
+        // render arm and gated on `defender_protected` alone passes all of them -- review's
+        // N22, which survived 423/423 while this fixture was still on the string-only
+        // `render()` helper.
+        //
+        // N22 is not merely theoretical. Its spurious counts on REFUSED branches would be
+        // discarded anyway, since the world aborts before the report is built -- but it also
+        // fires on ACCEPTED protected-defender walks whose tail carries no marker, and those
+        // DO reach the shard. That inflates the very number era 63 reads as evidence the fix
+        // works, with worlds that rendered nothing.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired on a branch that REFUSED to render the marker: {r:?}"
         );
     }
 }
