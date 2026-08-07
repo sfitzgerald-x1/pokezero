@@ -6781,6 +6781,17 @@ Rules:
    is now the mechanized form of this rule and
    `scripts/cert_sweep_readout.py` gates on it per shard. See
    `reports/c144_boundary_identity_correction.md`.
+
+   **C142 addition:** the identity is now FIVE-term. The second outcome above —
+   *some* branches lossy — is no longer adjudicated at all: it exits as
+   `skip:rump_branch_set`, which like the other two is counted after
+   `boundaries_measured` increments and takes the boundary out of both
+   `transition:*` tallies. `verdict_partition_failures()` carries it, so the
+   mechanized form of this rule is the thing to extend when a new post-measure
+   exit is added — not the prose. `transition:diverged ==
+   strict:diverged_on_full_branch_set` is the accompanying invariant: every
+   reported divergence rests on 100 % of its enumerated mass. See
+   `reports/c142_rump_branch_adjudication.md`.
 3. Baseline and test must differ **only** by the patch under test, and you must
    be able to **show** that from the artifacts. Record `engine_fingerprint`
    *and* a hash of the counter-computing harness, then exhibit the

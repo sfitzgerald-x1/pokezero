@@ -59,7 +59,7 @@ from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     CHECKPOINT_SCHEMA,
     checkpoint_report_binding_failures,
-    VERDICT_PARTITION_LOSSY_COUNTER,
+    VERDICT_PARTITION_SKIP_COUNTERS,
     verdict_partition_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
@@ -1446,10 +1446,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 aggregate_counters[key] += number
         # PER SHARD, not on the aggregate. Two shards can violate the partition in
         # opposite directions and cancel, so a sum-level check is strictly weaker.
-        # The identity is FOUR-term: a boundary that reached the matcher is matched,
-        # diverged, an `engine_error`, or `skip:strict_all_branches_lossy`. A two-term
-        # reading of it was asserted repeatedly across reports/ and is false --
-        # reports/c144_boundary_identity_correction.md.
+        # The identity is FIVE-term: a boundary that reached the matcher is matched,
+        # diverged, an `engine_error`, `skip:strict_all_branches_lossy`, or (C142)
+        # `skip:rump_branch_set`. A two-term reading of it was asserted repeatedly across
+        # reports/ and is false -- reports/c144_boundary_identity_correction.md and
+        # reports/c142_rump_branch_adjudication.md.
         input_failures.extend(verdict_partition_failures(shard, label=Path(p).name))
         divergence_classes = shard.get("divergence_classes")
         if not isinstance(divergence_classes, Mapping):
@@ -1606,8 +1607,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     #
     # `matched` is used directly rather than as `measured - diverged`: the subtraction
     # form is exactly the two-term identity C144 falsified.
+    # Every post-measurement skip verdict, not just the lossy one: C142's
+    # `skip:rump_branch_set` is a boundary the harness explicitly declined to judge, so
+    # crediting it to the denominator would understate `in_support_rate` by exactly the
+    # rows whose verdict was withheld.
     unadjudicated = (
-        aggregate_counters.get(VERDICT_PARTITION_LOSSY_COUNTER, 0) + agg["engine_errors"]
+        sum(aggregate_counters.get(name, 0) for name in VERDICT_PARTITION_SKIP_COUNTERS)
+        + agg["engine_errors"]
     )
     adjudicated = max(1, agg["boundaries_measured"] - unadjudicated)
     games = max(1, agg["games"])
