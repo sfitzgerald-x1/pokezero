@@ -153,11 +153,29 @@ enumerate flag on, same build, same seeds:
 | dev `19,000,000–199` | 2 diverged | **0** |
 | holdout `19,100,000–199` | 4 diverged | **2** |
 
+Measured on the spike build (fingerprint `1807ce9590bbd5b2`, source `425bf220`), which is
+*not* the `6b6fb368` build the rest of this report rests on — that is why the collapsed
+holdout column reads 4 where §3's baseline has 5. The difference is exactly `19100180/24`,
+closed in between by the faint-cancels-switch work, and not by enumeration.
+
 The two rows adjudicated here — `19100107/135` and `19100191/5` — **both close**, and
-nothing opened on either window. So the disposition stands as *engine gap*, and the
+nothing opened on either window. The stronger form of that check also holds:
+`boundaries_measured` is identical off versus on (15,503 dev / 15,579 holdout),
+`engine_errors` is 0 in all four runs, and every gating and skip counter is unchanged — so
+enumeration removed divergences without shrinking or perturbing the measured population,
+which is the check that would catch a fake closure. So the disposition stands as *engine gap*, and the
 remedy is not the status-aware threshold sketched in §5 but enumeration itself, which
 deletes the mirror rather than repairing it. C134 §3 anticipated exactly this: "enumeration
 fixes them or *constitutes* the demonstration". The measurement says **fixes**.
+
+**Scope: the differential harness only.** "The remedy is enumeration" here means for the
+*fidelity comparison*, and must not be read as licensing enumeration in search. The other
+two acceptance measurements C134 §3 required are decisive against that and are recorded in
+`reports/c137_phase2_enumerate_decision.md`: search throughput at depth 4 / 1024 sims
+regresses **2.38 ms → 8,881.8 ms per decision** on the production-representative position,
+and the mass gate's `test_matrix_is_not_vacuous` fails under the flag — not a mass
+disagreement, but because enumeration leaves no collapsed fan for the matrix's own negative
+control. C137 takes the resulting decision (adopt for the harness only).
 
 That also retires the sketch in §5 as the recommended fix. It should not be implemented;
 the crit-straddle sub-split queued for `19000074/27` should not be written either, for the
