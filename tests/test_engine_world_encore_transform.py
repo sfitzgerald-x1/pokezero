@@ -39,10 +39,13 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
+    _resolve_encored_move_index,
+    _sole_enabled_move_id,
     battle_spec_from_payload,
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
+from pokezero.poke_engine_adapter import MoveSpec  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
 
@@ -204,6 +207,95 @@ def _payload(dex: ShowdownDex, *, donor: FixturePokemon = _DELCATTY, **overrides
     return payload
 
 
+def _override_opponent_transformed() -> BattleStartOverride:
+    """Mirror image of ``_override``: the DONOR is ours, the Ditto is theirs."""
+
+    return BattleStartOverride(
+        player_teams={
+            "p1": pack_team((_DELCATTY, _SWAMPERT)),
+            "p2": pack_team((_DITTO, _SWAMPERT)),
+        },
+    )
+
+
+def _payload_opponent_transformed(dex: ShowdownDex, **overrides):
+    """We are p1; the OPPOSING active is a Ditto transformed into our Delcatty.
+
+    ``sides.p2.lastUsedMove`` is deliberately ``protect`` -- the id the
+    caller-supplied ``encored_move`` would also give -- so that a self-seat
+    fallback leaking onto the opponent seat is visible as a build where a
+    refusal is required.
+    """
+
+    delcatty_hp = _maxhp(_DELCATTY, dex)
+    ditto_hp = _maxhp(_DITTO, dex)
+    active_rows = [
+        {"id": "bodyslam", "pp": 20, "maxpp": 24, "disabled": False},
+        {"id": "healbell", "pp": 5, "maxpp": 5, "disabled": False},
+        {"id": "wish", "pp": 8, "maxpp": 10, "disabled": False},
+        {"id": "protect", "pp": 8, "maxpp": 10, "disabled": False},
+    ]
+    payload = {
+        "turn": 40,
+        "weather": None,
+        "weatherSetTurn": None,
+        "weatherFromAbility": False,
+        "futureSight": {"p1": 0, "p2": 0},
+        "wishSetTurns": {},
+        "leechSeedSourceSides": {},
+        "pendingBatonPassSides": [],
+        "deferredOpponentActions": {},
+        "deferredOpponentActionPriors": {},
+        "selfPlayer": "p1",
+        "selfRequestKind": "move",
+        "selfTeamOrder": ["Delcatty", "Swampert"],
+        "selfActiveRequestState": {
+            "trapped": False, "maybeTrapped": False,
+            "maybeDisabled": False, "maybeLocked": False,
+        },
+        "selfBenchedMoveHistory": False,
+        "selfActiveMoves": list(active_rows),
+        "sides": {
+            "p1": {
+                "pokemon": [
+                    {
+                        "species": "Delcatty",
+                        "condition": f"{delcatty_hp}/{delcatty_hp}",
+                        "active": True,
+                        "moves": list(active_rows),
+                    },
+                    {"species": "Swampert", "condition": "0 fnt", "active": False, "moves": []},
+                ],
+                "boosts": {},
+                "volatiles": [],
+                "lastUsedMove": "bodyslam",
+                "materializationBlockers": [],
+                "toxicStage": 0,
+                "sideConditions": {},
+                "sideConditionSetTurns": {},
+            },
+            "p2": {
+                "pokemon": [
+                    {
+                        "species": "Ditto",
+                        "condition": f"{ditto_hp}/{ditto_hp}",
+                        "active": True,
+                    },
+                ],
+                "boosts": {},
+                "volatiles": ["Encore"],
+                "lastUsedMove": "protect",
+                "materializationBlockers": [],
+                "toxicStage": 0,
+                "sideConditions": {},
+                "sideConditionSetTurns": {},
+            },
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
 class EncoreOnATransformedActiveTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dex = _dex()
@@ -331,6 +423,167 @@ class EncoreOnATransformedActiveTests(unittest.TestCase):
         )
         self.assertNotIn("transformed", side.volatile_statuses)
         self.assertEqual(side.last_used_move, "move:0")
+
+    def test_two_enabled_request_moves_do_not_identify_a_lock(self) -> None:
+        """M6 pin, integration half: the rule is ONE enabled move, not "the first".
+
+        With two enabled entries the request has not disclosed the lock, so
+        ``selfActiveMoves`` must be discarded and the public ``lastUsedMove``
+        used instead. A "first enabled wins" reading picks ``bodyslam`` (slot 0)
+        -- which is exactly the wrong answer this whole fix exists to stop
+        being produced by accident.
+        """
+
+        payload = _payload(self.dex)
+        payload["selfActiveMoves"] = [
+            {"id": "bodyslam", "pp": 5, "maxpp": 24, "disabled": False},
+            {"id": "healbell", "pp": 5, "maxpp": 5, "disabled": True},
+            {"id": "wish", "pp": 5, "maxpp": 10, "disabled": False},
+            {"id": "protect", "pp": 2, "maxpp": 10, "disabled": True},
+        ]
+        payload["sides"]["p1"]["lastUsedMove"] = "wish"
+        side = self._build(payload).spec.side_one
+        self.assertEqual(side.last_used_move, "move:2")
+
+
+class EncoreOnATransformedOpponentTests(unittest.TestCase):
+    """The OPPONENT seat is deferred too, and that CHANGED its coverage.
+
+    Deferral is not self-seat-only: any active in ``transformed_slots`` takes the
+    new path. On the opponent seat the id still comes from the caller's
+    ``encored_move`` -- the ``selfActiveMoves`` / ``lastUsedMove`` fallbacks are
+    self-seat only -- but the SLOT is now resolved against the copied moveset
+    instead of the transformer's own.
+
+    That is a coverage change, and it is the one the PR body originally and
+    wrongly claimed had been avoided. Before this fix the same input REFUSED:
+    ``_move_index_by_id`` ran against Ditto's own ``[transform]``, ``protect``
+    was absent, and construction raised ``encore_move_unknown`` -- a counted
+    skip. It now builds. The direction is right (a correct world beats a
+    refusal) and it still fails closed on an id the copy does not contain, but
+    it can convert an ``encore_move_unknown`` skip into a measured boundary. It
+    did not fire in either 200-game window; these tests exist so the path is
+    pinned rather than merely unobserved.
+    """
+
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _build(self, **kwargs):
+        return battle_spec_from_payload(
+            _payload_opponent_transformed(self.dex),
+            _override_opponent_transformed(),
+            dex=self.dex,
+            transformed_slots={"p2": "Delcatty"},
+            **kwargs,
+        )
+
+    def test_transformed_opponent_encore_locks_the_post_transform_slot(self) -> None:
+        world = self._build(encored_moves={"p2": "protect"})
+        side = world.spec.side_two
+        active = side.pokemon[side.active_index]
+        self.assertEqual(
+            [spec.id for spec in active.moves],
+            ["bodyslam", "healbell", "wish", "protect"],
+        )
+        self.assertIn("encore", side.volatile_statuses)
+        self.assertIn("transformed", side.volatile_statuses)
+        self.assertEqual(side.last_used_move, "move:3")
+
+    def test_transformed_opponent_encore_fails_closed_on_an_absent_move(self) -> None:
+        """``surf`` is on the bench Swampert, never on the copied Delcatty."""
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            self._build(encored_moves={"p2": "surf"})
+        self.assertEqual(caught.exception.reason, "encore_move_unknown")
+
+    def test_transformed_opponent_encore_still_needs_a_caller_supplied_move(self) -> None:
+        """No ``encored_move`` still refuses: the self-seat fallbacks are self-seat.
+
+        ``sides.p2.lastUsedMove`` is set to ``protect`` in this fixture, so if
+        the ``lastUsedMove`` fallback ever leaked across seats this would build
+        at ``move:3`` instead of raising.
+        """
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            self._build()
+        self.assertEqual(caught.exception.reason, "encore_move_unknown")
+
+
+class SoleEnabledMoveIdTests(unittest.TestCase):
+    """M6 pin, unit half.
+
+    ``_sole_enabled_move_id`` is the guard whose SPURIOUS satisfaction is this
+    defect: a one-move pre-Transform snapshot has exactly one enabled entry and
+    so "identified" a lock nobody set. Relaxing "exactly one" to "the first of
+    many" leaves every other test in this file and in ``test_engine_world``
+    green, so the invariant is pinned directly.
+    """
+
+    def test_exactly_one_enabled_row_identifies_the_lock(self) -> None:
+        rows = [
+            {"id": "bodyslam", "disabled": True},
+            {"id": "protect", "disabled": False},
+        ]
+        self.assertEqual(_sole_enabled_move_id(rows), "protect")
+
+    def test_two_enabled_rows_identify_nothing(self) -> None:
+        rows = [
+            {"id": "bodyslam", "disabled": False},
+            {"id": "healbell", "disabled": True},
+            {"id": "protect", "disabled": False},
+        ]
+        self.assertIsNone(_sole_enabled_move_id(rows))
+
+    def test_four_enabled_rows_identify_nothing(self) -> None:
+        """The ordinary un-encored request: every move usable, no lock at all."""
+
+        rows = [{"id": name, "disabled": False}
+                for name in ("bodyslam", "healbell", "wish", "protect")]
+        self.assertIsNone(_sole_enabled_move_id(rows))
+
+    def test_no_enabled_rows_identify_nothing(self) -> None:
+        rows = [{"id": "bodyslam", "disabled": True}, {"id": "protect", "disabled": True}]
+        self.assertIsNone(_sole_enabled_move_id(rows))
+
+    def test_empty_and_missing_rows_identify_nothing(self) -> None:
+        self.assertIsNone(_sole_enabled_move_id([]))
+        self.assertIsNone(_sole_enabled_move_id(None))
+
+    def test_the_non_transformed_path_inherits_the_same_rule(self) -> None:
+        """``_resolve_encored_move_index`` must not guess from an ambiguous row set.
+
+        This is the pre-existing invariant on the untouched path: two enabled
+        moves mean the request has not disclosed a lock, so the caller must fail
+        closed rather than take slot 0.
+        """
+
+        specs = [
+            MoveSpec(id="bodyslam", pp=24),
+            MoveSpec(id="healbell", pp=5),
+            MoveSpec(id="protect", pp=10),
+        ]
+        ambiguous = [
+            {"id": "bodyslam", "disabled": False},
+            {"id": "protect", "disabled": False},
+        ]
+        self.assertIsNone(
+            _resolve_encored_move_index(
+                specs, rows_for_active=ambiguous, encored_move=None
+            )
+        )
+        # Control: the same call with a real one-enabled pattern does resolve,
+        # so the None above is the ambiguity rule and not a broken fixture.
+        unambiguous = [
+            {"id": "bodyslam", "disabled": True},
+            {"id": "protect", "disabled": False},
+        ]
+        self.assertEqual(
+            _resolve_encored_move_index(
+                specs, rows_for_active=unambiguous, encored_move=None
+            ),
+            2,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

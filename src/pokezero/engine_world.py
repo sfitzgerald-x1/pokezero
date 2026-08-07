@@ -1458,6 +1458,18 @@ def _build_side_spec(
         #     pattern already applied, so its single enabled entry IS the lock.
         #   * `sides[slot]["lastUsedMove"]` -- the parser's public last executed
         #     move, which under an active Encore is the encored move.
+        #
+        # The last two are SELF-SEAT ONLY, but note that deferral itself is not:
+        # a transformed OPPONENT takes this path too, and that CHANGES ITS
+        # COVERAGE. Before deferral its `encored_move` was matched against the
+        # transformer's own moveset -- Ditto's `[transform]` -- so a real lock
+        # like `protect` was absent and construction raised, a counted
+        # `encore_move_unknown` skip. It now resolves against the copy and
+        # builds. That is the correct world rather than a refusal, and an id the
+        # copy does not contain still fails closed, but it can turn a skip into
+        # a measured boundary. Unobserved in the dev/holdout windows; pinned by
+        # tests/test_engine_world_encore_transform.py
+        # ::EncoreOnATransformedOpponentTests.
         pending_encore_move = normalize_id(encored_move) if encored_move else None
         if pending_encore_move is None and is_self:
             pending_encore_move = _sole_enabled_move_id(self_active_request_moves)
@@ -1673,6 +1685,14 @@ def _apply_encore_locks(
     is not in the copied moveset means the world cannot express the lock, so it
     refuses to build rather than inventing one. Falling back to slot 0 here is
     exactly the defect this function exists to remove.
+
+    ORDERING, which deferral does change for a transformed side. The
+    "no id at all" refusal still fires inside ``_build_side_spec``, before
+    ``self_world_mismatch`` and ``transform_unexpressible``, exactly as it always
+    did. But the "id absent from the moveset" refusal now fires HERE, i.e. AFTER
+    both of those. So a transformed side that would fail both checks is now
+    attributed to the earlier one. Non-transformed sides are unaffected, and the
+    measured skip histogram is unchanged on both 200-game windows.
     """
 
     updated = dict(sides)
