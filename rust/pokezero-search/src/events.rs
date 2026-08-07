@@ -427,6 +427,20 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     "heal_defender",
     "heal_drain_or_shellbell",
     "heal_zero_marker",
+    // The SUCCESS-side counter for the Protect marker. Registered even though the
+    // caller does not currently reach this gate: `mark_lossy_subcase` asserts only
+    // `starts_with(lossy_tag)` and, unlike `mark_attribution_unsafe_subcase`, never
+    // calls `assert_subcase_vocabulary`. That asymmetry is a latent trap rather than
+    // a licence -- the moment anyone closes it (a sensible hardening, since the lossy
+    // sub-case channel is otherwise unbounded) an unregistered token becomes a
+    // PRODUCTION panic on a `--release` wheel, and a pyo3 panic escapes
+    // `except Exception` and kills the campaign worker. Registering costs one line.
+    //
+    // Prefixed for the same reason as the `shape_*` and `heal_*` tokens: this
+    // vocabulary is shared across every lossy tag and validated per token with no
+    // tag scoping, so a bare `protect` or `rendered` would weaken the gate for
+    // unrelated families.
+    "protect_marker_rendered",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -2119,6 +2133,36 @@ fn render_move_phase(
                             sim.apply(instruction);
                             let ident = ctx.active_ident(sim.state, protected_side);
                             out.lines.push(format!("|-activate|{ident}|Protect"));
+                            // COUNT IT. A class that stops refusing must not stop being
+                            // visible -- `engine_search.py`'s `lossy_subcase_renders` exists
+                            // for exactly this, and its comment records the price of the
+                            // alternative: "Two eras were spent unable to say what had
+                            // changed in a class."
+                            //
+                            // Before this line, closing the `heal` family DELETED its only
+                            // number. Era 62 measured the shape at 3,365 worlds solely
+                            // because it aborted and landed in `world_failure_reasons`. Now
+                            // it renders and emits nothing, which makes two very different
+                            // outcomes look identical: the marker fires and the worlds are
+                            // reclaimed but die at their NEXT unsafe branch (first-refuser
+                            // attribution), versus the marker never fires at all. Only a
+                            // success-side count separates them.
+                            //
+                            // `mark_lossy_subcase`, NOT a new lossy tag. It pushes the SAME
+                            // `SLEEPTALK_LOSSY_TAG` that the accepting path above already
+                            // pushed, so `set(lossy)` is unchanged and
+                            // `engine_transition_differential.py`'s
+                            // `set(lossy) == {_SLEEPTALK_LOSSY_MARKER}` contract still holds
+                            // -- that file's bytes are pinned by the certification
+                            // lifecycle and cannot be edited to follow along. A NEW tag
+                            // would silently narrow which branches the differential accepts.
+                            //
+                            // This is telemetry only. Nothing keys behaviour off
+                            // `lossy_subcases`, so counting a render cannot refuse one.
+                            out.mark_lossy_subcase(
+                                SLEEPTALK_LOSSY_TAG,
+                                "sleeptalk_called_unidentified:protect_marker_rendered",
+                            );
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
                             // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
                             // `[from]` tag, which is what Showdown emits for Recover,

@@ -2572,6 +2572,34 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
                 "the Protect marker is rendered but the world is STILL REFUSED as \
                  attribution-unsafe, so the fix reclaims nothing: {r:?}"
             );
+            // AND it must be COUNTED. Closing this family deleted the only number that
+            // tracked it: era 62 measured the shape at 3,365 worlds solely because it
+            // aborted into `world_failure_reasons`. Without a success-side count, "the
+            // marker fires but the worlds die at their next unsafe branch" and "the
+            // marker never fires" are indistinguishable in the era data.
+            assert!(
+                r.lossy_subcases
+                    .iter()
+                    .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+                "the Protect marker rendered but emitted NO telemetry, so a production era \
+                 cannot tell a firing marker from a silent one: {r:?}"
+            );
+            // AND `set(lossy)` must be UNCHANGED. This is the contract
+            // `engine_transition_differential.py` matches exactly
+            // (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, and
+            // that file's bytes are pinned by the certification lifecycle, so it cannot be
+            // edited to follow a renderer change. Counting via a NEW lossy tag would
+            // silently narrow which branches the differential accepts -- green here, wrong
+            // in production. Pinned as a SET so a repeated push of the same tag passes and
+            // an added distinct tag fails.
+            let distinct: std::collections::BTreeSet<&str> =
+                r.lossy.iter().map(String::as_str).collect();
+            assert_eq!(
+                distinct,
+                ["sleeptalk_called_unidentified"].into_iter().collect(),
+                "the Protect counter changed set(lossy); the transition differential's \
+                 acceptance set moves with it: {r:?}"
+            );
             checked += 1;
         }
     }
@@ -2603,10 +2631,20 @@ fn without_the_protect_volatile_no_protect_line_is_invented() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "a Protect line was invented with no PROTECT volatile in state:\n{events}"
+        );
+        // The COUNTER must be silent too. A counter that fires without a rendered line
+        // inflates the one number era 64 reads to decide whether the marker works, and
+        // it inflates it in the direction that manufactures a win.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired with no Protect line rendered: {r:?}"
         );
     }
 }
@@ -2641,11 +2679,21 @@ fn a_full_hp_absorb_activation_is_never_dressed_as_protect() {
 
     let branches = generate(&mut state);
     for branch in &branches {
-        let events = render(&mut state, branch);
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
             "a full-HP absorb activation was dressed as Protect -- this is the fabricated \
              line the absorb guard exists to prevent:\n{events}"
+        );
+        // The counter is silent here for the same reason the LINE is: this zero-amount
+        // Heal is byte-identical to a Protect marker and is NOT one. A counter that
+        // cannot tell the two producers apart measures the wrong population.
+        assert!(
+            !r.lossy_subcases
+                .iter()
+                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
+            "the Protect counter fired on a full-HP absorb activation: {r:?}"
         );
     }
 }
