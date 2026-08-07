@@ -1,9 +1,10 @@
 # C134 — roll enumeration as a flag-gated reference oracle (C116 Phase 2)
 
-**Status: REGISTERED, awaiting re-measurement after the rebase onto `main`.** The
-prediction below is the one committed in `0733abe7` before any sweep on this branch was
-started; §"Post-rebase re-registration" adds the one new expectation the rebase creates,
-and is itself committed before the sweeps that test it.
+**Status: MEASURED. The falsifier did not fire, and the post-rebase prediction held on
+both windows.** The prediction was committed in `0733abe7` before any sweep on this branch
+was started; the post-rebase re-registration below was committed in `21178990`, before the
+sweeps that test it, which are the four artifacts landing with this section. The ordering
+between "what I expected" and "what I measured" is a property of the history.
 
 **This document was retitled and its disposition reversed after independent review.** The
 first version adopted enumeration *for the differential harness*. That was wrong, and the
@@ -196,11 +197,241 @@ forward. **One new prediction, registered here before the sweeps:**
 
 This is a real risk of being wrong and is registered as such: if `19100180/24` is still
 divergent on the rebased base, the c134 explanation for it was wrong and the report says
-so rather than re-explaining it after the fact. Everything else — coverage pairs,
+so rather than re-explaining it after the fact. (Measured below: it held. The row is gone
+from the collapsed set and holdout reads 4 -> 2.) Everything else — coverage pairs,
 `gating_exact` / `gating_support_based`, `engine_errors == 0`, and above all the
 **"nothing opened" subset falsifier** — carries over unchanged.
 
 ## Measurement
 
-_Pending. The four sweeps are re-run post-rebase, from the committed code commit on a
-clean tree, and land with the artifacts in the following commit._
+Four sweeps, 200 games each, **one build**, `POKEZERO_ENUMERATE_ROLLS` the only variable.
+Run from a **clean checkout of `21178990`**, the commit that carries the code — not from a
+dirty tree, which is how the previous four artifacts came to stamp a commit containing no
+enumeration patch. Every record carries `"source_tree": "clean"`, so that is a property of
+the artifact rather than a claim here.
+
+| artifact | window | roll path | `enumerate_rolls` in the artifact |
+| --- | --- | --- | --- |
+| `reports/artifacts/c134_collapsed_dev_sweep.json` | dev 19000000 | collapsed | `false` |
+| `reports/artifacts/c134_enumerated_dev_sweep.json` | dev 19000000 | enumerated | `true` |
+| `reports/artifacts/c134_collapsed_holdout_sweep.json` | holdout 19100000 | collapsed | `false` |
+| `reports/artifacts/c134_enumerated_holdout_sweep.json` | holdout 19100000 | enumerated | `true` |
+
+| window | | collapsed | enumerated |
+| --- | --- | --- | --- |
+| dev | `transitions_diverged` | 2 | **0** |
+| dev | `boundaries_measured / full_round` | 15503 / 15968 | 15503 / 15968 |
+| dev | `gating_exact / gating_support_based` | 14156 / 1347 | 14156 / 1347 |
+| dev | `engine_errors` | 0 | 0 |
+| holdout | `transitions_diverged` | **4** | **2** |
+| holdout | `boundaries_measured / full_round` | 15579 / 16155 | 15579 / 16155 |
+| holdout | `gating_exact / gating_support_based` | 14148 / 1431 | 14148 / 1431 |
+| holdout | `engine_errors` | 0 | 0 |
+
+All four: `build_check: gated`, `acceptance_eligible: true`, engine fingerprint
+`be2f416091d10c6e…` (**one** distinct value across all four), `source_commit` `21178990`
+(**one** distinct value), `source_tree: clean`. The coverage claim in its strong form:
+not merely the same *number* of boundaries measured, but the same boundaries measured the
+same way — `gating_exact` and `gating_support_based` are identical between the two
+configurations on each window.
+
+**The post-rebase prediction held.** Holdout reads **4 → 2**, not 5 → 3.
+`19100180/24` (`component_extra_in_engine:spikes`) is gone from the collapsed set, which
+is what §Post-rebase re-registration said would happen if the c134/c135 attribution of
+that row to the absence of #1144 was right. Dev is unchanged at 2 → 0. This branch now
+reproduces the spike's original 4 → 2 exactly.
+
+The reserved final holdout (`>= 19200000`) was not touched.
+
+### The falsifier: NOTHING OPENED
+
+Rows keyed `(seed, step)`, taken from the committed `repros` arrays; each sweep reports
+`repros_complete: true`, so these are full divergent sets and not samples.
+
+| window | closed by enumeration | opened by enumeration |
+| --- | --- | --- |
+| dev | `19000074/27` (`component_missing_in_engine:sandstorm`), `19000191/63` (`component_magnitude:heal`) | **none** |
+| holdout | `19100107/135`, `19100191/5` (both `limit:roll_divergent_lethality`) | **none** |
+
+Strict subset on both windows. **The falsifier did not fire.** Re-derivable from the
+committed artifacts:
+
+```sh
+python - <<'EOF'
+import json
+def rows(p):
+    d = json.load(open(p)); assert d["repro_retention"]["repros_complete"]
+    return {(r["seed"], r["step"]) for r in d["repros"]}
+for w in ("dev", "holdout"):
+    c = rows(f"reports/artifacts/c134_collapsed_{w}_sweep.json")
+    e = rows(f"reports/artifacts/c134_enumerated_{w}_sweep.json")
+    print(w, "opened:", sorted(e - c), "closed:", sorted(c - e))
+EOF
+```
+
+The two surviving holdout rows are `19100170/71` and `19100170/72`, both
+`component_missing_in_engine:itemleftovers` — as predicted, a harness defect with a
+separate fix in flight by another author, untouched here.
+
+### "Nothing opened" is WEAKER evidence than it looks, and here is the size of it
+
+`evaluate_boundary_strict` returns `matched` on the **first** rendered branch that
+matches; a boundary is divergent only when **every** branch misses
+(`scripts/engine_transition_differential.py`, the `if ok: return "matched"` inside the
+per-branch loop). Enumeration multiplies the branch count. So more branches is strictly
+more chances to match, and a subset relation is close to what you would expect **even if
+enumeration were wrong**.
+
+That is not a caveat in prose here; it is measured. Replaying each divergent row's own
+`engine_states` through `pokezero_search.branch_events` in both configurations:
+
+| window | row | collapsed branches | enumerated branches | factor |
+| --- | --- | --- | --- | --- |
+| dev | `19000074/27` | 3 | 29 | 9.7x |
+| dev | `19000191/63` | 14 | 1015 | 72.5x |
+| holdout | `19100107/135` | 8 | 544 | 68.0x |
+| holdout | `19100191/5` | 4 | 34 | 8.5x |
+| holdout | `19100170/71` | 1 | 1 | 1.0x |
+| holdout | `19100170/72` | 1 | 1 | 1.0x |
+
+The four rows that CLOSE are exactly the four whose branch count inflates by 8.5x to 72x.
+The two that SURVIVE are the two where enumeration adds nothing — one branch either way,
+because they carry no damage fan to enumerate. That is consistent with a real fix and it
+is also consistent with a lottery, and the sweep alone cannot separate the two.
+
+**What actually carries the correctness claim is the per-row mechanism analysis, not this
+sweep.** `reports/c133_collapsed_roll_disposition.md` §3 names the three sub-mechanisms
+behind the collapse-class rows and §7 records the warning this family exists to carry;
+`reports/c135_roll_divergent_lethality_adjudication.md` §2 shows the two
+`roll_divergent_lethality` rows are ONE mechanism and §3 locates it in source. The sweep's
+job is to check that closing them opened nothing else. It did that and nothing more.
+
+`strict:sleeptalk_union_branch` moves 126 → 617 (dev) and 105 → 612 (holdout), reproducing
+the movement c137 §4 recorded as unexplained. It is explained by the same mechanism: the
+counter is incremented **once per rendered branch** inside the same per-branch loop, so it
+tracks branch multiplicity and not boundary population. Every gating and skip counter that
+is per-BOUNDARY is unchanged.
+
+### Adopt-everywhere: re-measured, and still rejected
+
+`scripts/bench_multiply_search.py --depths 4 --sims 1024 --seeds 5 --min-time 1.0`, same
+build, flag off then on, run **serially** after the sweeps finished. Artifacts:
+`reports/artifacts/c134_bench_collapsed_search.md`,
+`reports/artifacts/c134_bench_enumerated_search.md`.
+
+| position | collapsed ms/decision | enumerated ms/decision | slowdown |
+| --- | --- | --- | --- |
+| `minimal_1v1` | 0.33 | 58.94 | 179x |
+| `midgame_3v3` | **2.63** | **10955.01** | **~4165x** |
+| `endgame_straddle` | 0.27 | 1.53 | 5.7x |
+
+`midgame_3v3` leaf evals go **4,189 -> 950,803** (227x) at the same 1024 sims: the
+per-branch factor multiplied down a depth-4 tree. Eleven seconds per decision is not a
+search.
+
+And these are demonstrably **different engines**, not the same engine at two speeds. Same
+position, same five seeds, `minimal_1v1` root argmax:
+
+```
+collapsed:  ember, ember, tackle, tackle, ember     (argmax unstable across seeds)
+enumerated: tackle, tackle, tackle, tackle, tackle
+```
+
+That is the coverage argument in one line: a differential run on the second column would
+certify a player that plays `tackle` while production plays `ember`.
+
+Enabling the flag for that second run is an explicit operator act on one command line —
+there is no code in this repository that would do it. Note the scope of the figure, per
+c137 §1: production is `search_depth: 2` / `search_sims: 256`, and enumeration is gated on
+`depth < DAMAGE_BRANCH_DEPTH = 2`, so **the production-config regression is unmeasured**.
+The decision does not depend on the size of the number: search takes the collapsed path
+because that is the path that ships, and the throughput measurement only rules out the
+alternative more emphatically.
+
+### Gates
+
+All run locally in this checkout, against the build the sweeps used
+(`be2f416091d10c6e`, 69 patches).
+
+| gate | result |
+| --- | --- |
+| `tests.test_poke_engine_patch_stack` — clean-room replay vs. the verified 0.0.47 sdist | **4 tests, OK**; 69 patches, all `git-apply`, no fuzz, the two `patch-fallback` entries still exactly two and adjacent |
+| `tests.test_roll_enumeration_scope` — the runtime scope gate | **14 tests, OK** |
+| `tests.test_branch_mass_reconstruction` — the mass gate | **6 tests, OK** |
+| `tests.test_engine_transition_checkpoint_provenance` | **15 tests, OK** (was 10; +5 for the roll-path merge guard) |
+| `tests.test_final_holdout_guard` | **14 tests, OK** |
+| `tests.test_engine_search_no_panic` — spawns a real SEARCH child, the leak path review demonstrated | **1 test, OK** (183.7 s) |
+| `tests.test_cert_sweep_readout_contract` | **39 tests, OK** |
+| `tests.test_cert_historical_attestation` | **3 tests, OK** |
+| `tests.test_transition_differential_matcher` | **52 tests, OK** |
+| `cargo test --release`, `RUSTFLAGS="-C debug-assertions=yes"`, `rust/pokezero-search` | **412 passed, 0 failed**, 34 suites, exit 0 |
+| `cargo test third_party/poke-engine-src --features gen3 --test test_gen3` | **28 passed, 0 failed**, exit 0 |
+| `scripts/engine_behavioral_probes.py`, flag off (the shipping path, and what CI runs) | **38 probes, 38 PASS**, exit 0 |
+| `scripts/engine_behavioral_probes.py`, flag on | 24 PASS / 14 FAIL, exit 1 — see below |
+| Also green: `test_single_seat_coverage_bound` (3), `test_drag_limit_is_a_last_resort` (3), `test_a1_residuals_already_ran` (13), `test_sleep_talk_phaze_drag` (7), `test_instruction_event_mapping` (21), `test_crit_kill_split_patch` (8), `test_rest_sleep_refund_boundary` (6), `test_rest_sleep_refund_write_side` (6), `test_engine_stat_attestation` (16), `test_roll_cascade_predicate` (29), `test_matcher_tolerance_promotion` (32), `test_c26_archival_recalibration` (11) | OK |
+
+**One pre-existing failure, not caused by this branch.**
+`tests.test_c26_damage_composition_readout::test_production_matcher_is_not_the_rejected_experiment`
+pins `reports/certification_contract_lifecycle.json`'s
+`successor_pending_identity.differential_sha256` against the live differential's digest.
+On `origin/main` (`2ec0cb13`) the live file hashes `3b6d3c60…` while the lifecycle pins
+`8f83a11f…`, so the test is RED on main before this branch touches anything. It is in no
+workflow's `FILTERS` and has no CI step, which is why nobody saw it go stale. Left alone
+here — it belongs to the certification lifecycle owner, and re-stamping it silently from
+this PR would hide the drift rather than surface it.
+
+**The 14 probes that fail under the flag** are all arm-STRUCTURE assertions
+(`residual-partition-*`, `pending-read-*`, `ordered-walk-*`, `case-a-*`), each a variant of
+*expected 4 branches, got 18*. They assert things about the collapsed cascade's partition
+shape; under enumeration the fan is enumerated, not partitioned. Masses are correct
+throughout and the mass gate passes in both configurations. Nothing ships on the enumerated
+path, so the shipped configuration is the one where all 38 pass.
+
+**Both gates were mutation-checked, not just run.**
+
+| mutation | failures |
+| --- | --- |
+| unmutated | 0 |
+| restore `os.environ.setdefault(_ENUMERATE_ROLLS_ENV, "1")` at module scope in the differential | **3** — `test_no_tracked_module_writes_the_environment_at_import`, `test_importing_the_differential_does_not_enable_enumeration`, `test_importing_every_differential_consumer_leaves_the_fan_collapsed` |
+| add an enabler to `src/pokezero/engine_search.py` | **4** — the three above plus `test_no_search_surface_puts_the_engine_on_the_enumerated_path` |
+| unmutated again | 0 |
+| mass gate: force the collapsed child ON | **2** |
+| mass gate: perturb the pinned representative 112 -> 111 | **1** |
+| mass gate: unmutated | 0 |
+
+The first alias-blind version of the AST check stayed GREEN against
+`os.environ.setdefault(_ENUMERATE_ROLLS_ENV, "1")` — it only matched string literals. That
+is why the check resolves module-level aliases now, and it is also why the *runtime* probes
+are the load-bearing ones: they caught that mutation when the static check did not.
+
+### The multi-hit semantic change, now pinned
+
+Enumeration applies a **per-hit** roll shared across the hits, replacing the collapsed
+path's total-to-per-hit conversion. c137 §4 listed this as unpinned; it is pinned now, by
+`tests/test_roll_enumeration_scope.py::test_enumeration_shares_one_roll_across_a_multi_hit`.
+
+Bonemerang, two hits, defender at full HP so nothing clamps or merges. Measured:
+
+| | per-hit damages emitted |
+| --- | --- |
+| collapsed | `[61, 124]` — one non-crit representative, one crit |
+| enumerated | all 28 of `floor(max * r / 100)` for r in 85..=100 over `max_regular 67` and `max_crit 135`, equal to the pure-Python reconstruction |
+
+and in every branch the two `Damage` instructions are **equal** — one roll, reused. A
+paired negative control requires the collapsed path to disagree, so the pin cannot pass
+vacuously.
+
+## Disposition
+
+**Enumeration lands as a default-off reference oracle. The differential is NOT switched to
+it.** The falsifier did not fire, the post-rebase prediction held on both windows,
+coverage and identity are unchanged, and the shipping configuration is what the four
+committed sweeps' `enumerate_rolls: false` pair measures.
+
+Still open, unchanged by this branch:
+
+* **The engine fixes in c133 §3 and c135 §5 are un-cancelled and not written.** Closing
+  those rows in the SHIPPING engine is the actual remedy; this branch only supplies the
+  oracle that makes a wrong mass recipe fail a test instead of surviving review.
+* **The f32 comparator (C116 M5)** still executes in search and is untouched here.
+* Enumeration's **production-config** (depth 2 / 256 sims) throughput cost is unmeasured.
