@@ -482,6 +482,26 @@ def _shedinja():  # 1 max HP: the Spikes minimum-damage clamp
                           moves=("Splash",))
 
 
+def _pursuit_hunter():  # Dark attacker holding Leftovers, so the ply's residual is visible
+    return FixturePokemon(species="Houndoom", ability="Flash Fire", item="Leftovers",
+                          moves=("Pursuit", "Splash"))
+
+
+def _pursuit_bait_frail():  # 1 max HP, and Dark is super effective through Wonder Guard
+    return FixturePokemon(species="Shedinja", ability="Wonder Guard", item="None",
+                          moves=("Seismic Toss", "Splash"))
+
+
+def _pursuit_bait_bulky():  # 651 max HP: survives Pursuit, so the same script has no faint
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Seismic Toss", "Splash"))
+
+
+def _pursuit_receiver():  # what the switch brings in, identical in both arms
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Splash",))
+
+
 def _sand_tyranitar():  # permanent gen3 sandstorm + a Leftovers residual to watch
     return FixturePokemon(species="Tyranitar", ability="Sand Stream", item="Leftovers",
                           moves=("Crunch", "Splash"))
@@ -999,6 +1019,95 @@ def _spec(name):
             expect={"landing_hp": "0 fnt", "fainted": True},
             landmark=lambda L: _has(L, "|switch|p2a: Shedinja"),
             landmark_desc="Shedinja switched into the hazard")
+
+    if name in ("pursuitkoswitcher", "pursuitnokocontrol"):
+        # C134 §4, the queue-semantics fixture pack. Pursuit is the ONE case where a
+        # switch is the second action of a ply without being a double switch, and it
+        # is the case that broke two faint-cancellation patches.
+        #
+        # Gen 2-4 has an explicit exception, stated in Showdown's own source at
+        # `sim/battle.ts:2790-2794`:
+        #
+        #     if (this.actions.switchIn(...) === 'pursuitfaint') {
+        #         // a pokemon fainted from Pursuit before it could switch
+        #         if (this.gen <= 4) {
+        #             // in gen 2-4, the switch still happens
+        #             this.hint("Previously chosen switches continue in Gen 2-4 ...")
+        #
+        # So a Pursuit KO does NOT cancel the switch it interrupted, and the residual
+        # block still runs. A faint-cancellation guard that keys on "an active newly
+        # reached 0 HP" gets this backwards and cancels the switch, which leaves the
+        # wrong Pokemon in and drops the opponent's Leftovers tick -- the observed
+        # signature of the two rows the v2 patch opened (`19000120`, `19100078`).
+        #
+        # Turn 1 exists only to damage p2, because Leftovers emits no `-heal` at full
+        # HP and the residual fact would then be vacuously false in both arms.
+        ko = name == "pursuitkoswitcher"
+        bait = _pursuit_bait_frail() if ko else _pursuit_bait_bulky()
+        bait_species = "Shedinja" if ko else "Blissey"
+        return dict(
+            p1=[bait, _pursuit_receiver()], p2=[_pursuit_hunter()],
+            # Seismic Toss, not an attack roll: a fixed 100 damage in BOTH arms, so
+            # the two differ only in whether Pursuit KOs. Blissey's Shadow Ball dealt
+            # less than the 18/turn Leftovers restores, which put p2 back at full HP
+            # and made `residual_ran` vacuously false in the control alone.
+            turns=[("move seismictoss", "move splash"),
+                   ("switch 2", "move pursuit")],
+            measured=1, setup_step=0,
+            # Seismic Toss is fixed at the user's level, so 291 - 100 = 191 exactly.
+            # Pinning the number rather than "some damage happened" is what makes
+            # this a real gate: the residual fact below is only meaningful while p2
+            # is genuinely below max HP, and that is an arithmetic claim.
+            setup_landed=lambda L: _has(L, "|-damage|p2a: Houndoom|191/291"),
+            facts=lambda L: {
+                "switch_happened": _has(L, "|switch|p1a: Snorlax"),
+                "switcher_fainted": _has(L, f"|faint|p1a: {bait_species}"),
+                "residual_ran": "p2a" in _residual_seats(L, "item: Leftovers"),
+                # The hint is the gen<=4 pursuitfaint branch announcing itself. Held
+                # as a FACT and not only as the KO arm's landmark, so the control
+                # asserts its ABSENCE -- otherwise nothing rules out both arms
+                # quietly taking the same path.
+                "hint_seen": _has(
+                    L,
+                    "Previously chosen switches continue in Gen 2-4 after a "
+                    "Pursuit target faints.",
+                ),
+                # Queue semantics is the subject of this pack, so order is asserted,
+                # not just membership.
+                "faint_precedes_switch": _ordered(
+                    L, f"|faint|p1a: {bait_species}", "|switch|p1a: Snorlax"
+                ),
+                "switch_precedes_residual": _ordered(
+                    L, "|switch|p1a: Snorlax", "|-heal|p2a: Houndoom"
+                ),
+            },
+            expect={
+                # The switch happens in BOTH arms. That is the whole point: the KO
+                # arm is not an exception to the switch, it is an exception to the
+                # cancellation.
+                "switch_happened": True,
+                "switcher_fainted": ko,
+                "residual_ran": True,
+                "hint_seen": ko,
+                # Only the KO arm has a faint to order; `_ordered` is False when
+                # either entry is absent, which is the correct reading here.
+                "faint_precedes_switch": ko,
+                "switch_precedes_residual": True,
+            },
+            landmark=(
+                (lambda L: _has(
+                    L,
+                    "Previously chosen switches continue in Gen 2-4 after a "
+                    "Pursuit target faints.",
+                ))
+                if ko
+                else (lambda L: _has(L, "|move|p2a: Houndoom|Pursuit"))
+            ),
+            landmark_desc=(
+                "Showdown took the gen<=4 pursuitfaint branch and said so"
+                if ko
+                else "Pursuit was used against the switching Pokemon"
+            ))
 
     # --- residual deferral across a forced replacement ----------------------
     # Shared line for the three scenarios below: permanent Sand Stream sandstorm
@@ -2267,6 +2376,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol",
              "partialtrapsubstitute",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
+             "pursuitkoswitcher", "pursuitnokocontrol",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
              "confusionbatonpass", "confusionbatonpasscontrol",
