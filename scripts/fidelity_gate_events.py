@@ -621,10 +621,6 @@ def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
     for (battle_id, seat), chain in sorted(corpus["fold_chains"].items()):
         history: list[str] = list(chain[0].get("event_slice") or ())
         for row_n, row_next in zip(chain, chain[1:]):
-            # Independent of the status classification below, for the reason in
-            # scripts/differential_denominator.py: a boundary that is driven and never lands
-            # in `stats` leaves matched + diverged < measured.
-            stats["attempted"] += 1
             result = drive_boundary(
                 corpus=corpus,
                 battle_id=battle_id,
@@ -637,6 +633,13 @@ def run_corpus(corpus_dir: Path, verbose: bool) -> dict[str, Any]:
             )
             history.extend(row_next.get("event_slice") or ())
             stats[result.status] += 1
+            # AFTER drive_boundary and gated on the skip decision, which lives inside it.
+            # An earlier revision incremented BEFORE the call, which made `attempted`
+            # identically the row-pair count -- so `measured == contained` by construction and
+            # a 100%-skipped run still exited 0. Review demonstrated that live; the acceptance
+            # criterion was simply false for this harness.
+            if not result.status.startswith("skip:"):
+                stats["attempted"] += 1
             if result.status not in ("a",):
                 details.append(
                     {
@@ -682,9 +685,14 @@ def main(argv=None) -> int:
             measured=report["counts"].get("attempted", 0),
             matched=report["counts"].get("a", 0),
             diverged=sum(
-                v for k, v in report["counts"].items() if k not in ("a", "attempted")
+                v
+                for k, v in report["counts"].items()
+                if k not in ("a", "attempted") and not k.startswith("skip:")
             ),
             contained=report.get("row_pair_boundaries"),
+            skipped=sum(
+                v for k, v in report["counts"].items() if k.startswith("skip:")
+            ),
         )
         for report in reports
     ])

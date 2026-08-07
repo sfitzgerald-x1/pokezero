@@ -88,7 +88,12 @@ HARNESSES = [
         {
             "corpus": "forced",
             "row_pair_boundaries": 500,
-            "counts": {"attempted": 0},
+            # `skip:forced` present because the real run_corpus cannot emit attempted == 0
+            # WITHOUT skips -- an earlier revision's fixture had `row_pair_boundaries: 500`
+            # with a bare `attempted: 0`, an arithmetically impossible pair, so the subtest
+            # was green on both the correct and the broken harness. See the real-driver test
+            # below, which is the layer that actually caught it.
+            "counts": {"attempted": 0, "skip:forced": 500},
             "non_a": [],
         },
         {
@@ -163,6 +168,46 @@ class DenominatorAcceptanceTest(unittest.TestCase):
                     1,
                     f"{name} passed with 11 attempts and only 10 classified",
                 )
+
+
+class RealDriverAcceptanceTest(unittest.TestCase):
+    """The same acceptance, one seam LOWER — against the real `run_corpus`.
+
+    The class above patches `run_corpus`, which pins `main()`'s wiring but never the
+    `attempted` counter that feeds it. That gap hid a real bug: `fidelity_gate_events`
+    incremented `attempted` BEFORE its skip decision (which lives inside `drive_boundary`),
+    making `measured` identically the row-pair count — so a 100%-skipped run still exited 0
+    while the fixture-level subtest passed. Independent review found it by simulating one
+    level down, which is what this class now does.
+
+    Requires the committed v4 corpus; skips without it rather than silently proving nothing.
+    """
+
+    CORPUS = REPO_ROOT / "corpus" / "golden-v4"
+
+    def setUp(self) -> None:
+        if not (self.CORPUS / "rows.jsonl").exists():
+            self.skipTest(f"no corpus at {self.CORPUS}; regenerate per C112's provenance block")
+
+    def test_fidelity_gate_events_fails_when_every_boundary_skips(self) -> None:
+        module = importlib.import_module("fidelity_gate_events")
+
+        class _Skipped:
+            status = "skip:forced"
+            detail = "forced by the acceptance test"
+
+        with mock.patch.object(module, "drive_boundary", return_value=_Skipped()):
+            self.assertEqual(
+                module.main(["--corpus", str(self.CORPUS)]),
+                1,
+                "the real run_corpus produced a 100%-skipped report and the harness passed",
+            )
+
+    def test_and_the_same_corpus_passes_the_denominator_undriven(self) -> None:
+        """Non-vacuity: without the patch this corpus measures 1271 and the denominator is
+        clean, so the failure above is the skip and not the corpus."""
+        module = importlib.import_module("fidelity_gate_events")
+        self.assertEqual(module.main(["--corpus", str(self.CORPUS)]), 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

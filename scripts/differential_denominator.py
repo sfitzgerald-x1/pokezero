@@ -1,8 +1,8 @@
-"""The denominator rule, shared by every differential harness.
+"""The denominator rule, adopted by four differential harnesses.
 
 A differential harness answers "how many boundaries diverged". That number is meaningless
-without the denominator it came from, and every harness in this repo has at some point
-reported a pass it had no ability to withhold:
+without the denominator it came from, and each of the four harnesses adopted here could at
+some point report a pass it had no ability to withhold:
 
 - ``leaf_vs_reality.py`` read the observation schema off a key the corpus rows do not carry,
   so the encoder's guard rejected **100% of boundaries** as ``skip:encode_error``. Skips print
@@ -12,6 +12,9 @@ reported a pass it had no ability to withhold:
   ``all(mismatch == 0)``. Both are **vacuously true on zero rows**.
 - ``fidelity_gate_events.py`` ended ``return 0`` unconditionally — a gate that could not fail.
 
+``scripts/`` holds roughly a dozen other ``*_differential.py`` and ``*_gate.py`` scripts. The four
+above are the ones adopted here; the claim is about them, not about every harness in the repo.
+
 So the rule this module mechanizes:
 
 1. publish ``boundaries_measured`` — the count the harness actually compared, not the count the
@@ -19,14 +22,21 @@ So the rule this module mechanizes:
 2. **hard-fail when it is zero**, because a run that measured nothing is not a pass; and
 3. assert ``matched + diverged == measured``, so every attempt is accounted for.
 
-**Why (3) is not a tautology, which is the trap this module exists to avoid.** In
-``leaf_vs_reality`` the pre-existing identity ``compared == exact + divergent`` held *by
-definition* — ``compared`` was assigned that sum — so it carried no information and was
-nonetheless cited as evidence. Here ``measured`` must be supplied INDEPENDENTLY: the harness
-increments it once per boundary it attempts to compare, before it knows the outcome. The
-identity then genuinely catches a boundary that was attempted and never classified, or
-classified twice. A caller that passes ``measured=matched+diverged`` gets the tautology back
-and :func:`check_denominator` says so rather than passing.
+**What rule 3 actually does, stated narrowly after review.** In ``leaf_vs_reality`` the
+pre-existing identity ``compared == exact + divergent`` held *by definition* — ``compared`` was
+assigned that sum — so it carried no information and was nonetheless cited as evidence. This
+module asks callers to supply ``measured`` independently, and they do.
+
+But **as adopted, rule 3 is currently unfalsifiable at all four sites**: in each one the
+increment is followed by exactly one classification with no intervening early return, so
+``matched + diverged == measured`` holds structurally. It is retained as a guard against a
+future refactor that introduces an unclassified path, **not** as evidence that the present
+accounting is sound — and "the partition closes on all four" is therefore a statement about
+the code's shape, not a measurement. Reading it as verification would be the
+instrument-that-cannot-move error this repo has made repeatedly.
+
+Rule 2 is the one doing work today. It is also the one a caller cannot fake by deriving
+``measured`` from the sum: if nothing was measured, the sum is zero too.
 """
 from __future__ import annotations
 
@@ -104,13 +114,18 @@ def check_denominator(
     contained: int | None = None,
     skipped: int | None = None,
 ) -> DenominatorReport:
-    """Build a report. `measured` must be counted independently of `matched`/`diverged`.
+    """Build a report. `measured` should be counted independently of `matched`/`diverged`.
 
     Passing ``measured=matched+diverged`` makes rule 3 unfalsifiable. That is not detectable
     from the values alone — ``5 == 2 + 3`` looks identical either way — so it cannot be
     asserted here; it is a contract on the caller, stated in the module docstring and in each
-    adoption site's comment. What IS enforced is that a zero denominator fails, which is the
-    half no caller can fake.
+    adoption site's comment. What IS enforced is that a zero denominator fails.
+
+    Even that half can be defeated by a caller that counts in the wrong place rather than by
+    deriving the value: ``fidelity_gate_events`` first incremented before its skip decision,
+    making ``measured`` identically the corpus's boundary count, and a 100%-skipped run still
+    exited 0. The counter's PLACEMENT is as load-bearing as its independence, which is why
+    each adoption site carries a comment naming where it sits and why.
     """
     return DenominatorReport(
         label=label,

@@ -345,6 +345,7 @@ def main(argv=None) -> int:
             measured=report["counts"].get("attempted", 0),
             matched=report["counts"].get("exact", 0),
             diverged=report["counts"].get("divergent", 0),
+            contained=report.get("rows"),
             skipped=sum(v for k, v in report["counts"].items() if k.startswith("skip")),
         )
         for report in reports

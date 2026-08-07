@@ -82,6 +82,19 @@ jobs:
             # workflow's FILTERS and no step. A guard nothing runs. Found by review
             # of #1113.
             tests/test_engine_stat_attestation.py
+            # The denominator rule and the four harnesses that adopt it. Without these a PR
+            # that guts differential_denominator.py -- or moves an `attempted` counter back
+            # above a skip decision, which is exactly the bug review caught in #1154 --
+            # triggers no workflow at all. Added with a STEP below rather than filters alone,
+            # because a filter with no step is the "guard nothing runs" this file already
+            # documents twice.
+            scripts/differential_denominator.py
+            scripts/leaf_vs_reality.py
+            scripts/leaf_root_parity.py
+            scripts/prior_mapping_assert.py
+            scripts/fidelity_gate_events.py
+            tests/test_differential_denominator.py
+            tests/test_denominator_adoption.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -308,6 +321,19 @@ jobs:
           # adds skipIf would otherwise quietly disarm the whole file.
           if grep -q 'skipped' /tmp/boundary.log; then
             echo "::error::a binding boundary pin SKIPPED"
+            exit 1
+          fi
+
+      - name: Denominator rule
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_differential_denominator \
+            tests.test_denominator_adoption -v 2>&1 | tee /tmp/denominator.log
+          # The real-driver acceptance needs corpus/golden-v4, which CI does not carry, so it
+          # SKIPS here by design -- unittest still counts a skip in "Ran N", so the count is 17
+          # either way. Asserting on it keeps a silent shrink from passing.
+          if ! grep -qE 'Ran 17 tests' /tmp/denominator.log; then
+            echo "::error::denominator pins changed count; the suite shrank or grew"
             exit 1
           fi
 

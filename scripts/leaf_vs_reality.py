@@ -770,7 +770,7 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
             # shipped once (`compared` was assigned `exact + divergent` and then cited as
             # evidence). An attempt that reaches here and never classifies makes
             # matched + diverged < measured, which is the whole point.
-            counts["attempted"] += 1
+            # NB: counted after the `no_golden_row` skip below, not here -- see that site.
             buffers, _turn, tags = payload
             golden_row = golden_rows.get(
                 (battle_id, row_next["decision_round_index"], seat)
@@ -778,6 +778,11 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
             if golden_row is None:
                 counts["skip:no_golden_row"] += 1
                 continue
+            # Counted HERE: after every skip decision including this one, before the
+            # comparison. An earlier revision counted above the `no_golden_row` check, which
+            # made a benign missing row report as "attempted but never classified" -- a
+            # partition break that is really a skip, double-counted into `skipped` as well.
+            counts["attempted"] += 1
 
             # Opponent-membership tokens: revealed between the boundaries.
             want_numeric = numpy.ascontiguousarray(
