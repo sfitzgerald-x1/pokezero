@@ -88,8 +88,11 @@ Artifact: `reports/artifacts/c141_final_holdout_sweep.json`. The run executed **
 prediction commit** `3687d205` with `source_tree: clean`, so the pre-registration is
 verifiable rather than asserted.
 
-**Headline: 1 divergence and 1 withheld boundary in 16,274 measured boundaries, zero
-engine errors.**
+**Headline: 1 divergence, 5 withheld boundaries, 16,268 matched, zero engine errors — of
+16,274 measured.** The five withheld are 1 rump-branch adjudication and 4 all-branches-lossy.
+An earlier version of this line said "1 divergence and 1 withheld", which undercounts: the
+four H14 boundaries are withheld in exactly the same sense, and a reader summing the old
+headline gets 16,272 adjudicated.
 
 | | dev | holdout | **final holdout** |
 |---|---|---|---|
@@ -97,6 +100,8 @@ engine errors.**
 | matched | 15,502 | 15,579 | **16,268** |
 | reported diverged | 1 | 0 | **2** |
 | **of which a rump artifact** | 0 | 0 | **1** |
+| all-branches-lossy (also withheld) | 0 | 0 | **4** |
+| **total withheld** | 0 | 0 | **5** |
 | **genuine divergences** | 1 | 0 | **1** |
 | all-branches-lossy | 0 | 0 | **4** |
 | engine_errors | 0 | 0 | **0** |
@@ -118,9 +123,22 @@ engine's arm labelled its component `itemleftovers` instead of `heal`.
 **`19200131/129` is not a divergence at all.** Replaying the retained state recovers two
 arms: the non-crit arm at **93.75 %** mass, carrying `recoil −19`, was **dropped** as
 `attract_empty_tail_ambiguous:paralyzed+cannot_act`; the crit arm at 6.25 %, carrying
-`−32`, survived; the observation is `−18`. The observation *is* the dropped arm.
-Allowlisting that one marker turns the boundary into **matched**. The verdict rested on
-one-sixteenth of the enumerated mass.
+`−32`, survived; the observation is `−18`. The observation **falls inside the dropped
+arm's accepted recoil roll band** — `recoil` is roll-scaled, and `−18` against `−19` is
+5.3 % — which is what makes the boundary matchable. It is not an identity, and an earlier
+version of this line said it was.
+
+Allowlisting that marker turns the boundary into **matched**, and that is stated here as a
+**counterfactual demonstration, not a recommendation.** The marker is emitted by
+`mark_attribution_unsafe` (`rust/pokezero-search/src/events.rs:2528-2531`), the strong
+refusal family — not the telemetry gap allowlisted two lines below — and the comment at
+`:2477-2500` argues on the record against downgrading it, because a third of that mass is
+the case that erases a `|move|` reveal. Actioning it as an allowlist change justified by
+*this* boundary would be fitting the harness to the final holdout, which is what the
+reservation exists to prevent. That is also why the right verdict is **withheld** rather
+than matched.
+
+The verdict rested on one-sixteenth of the enumerated mass.
 
 So the corrected reading of this window is **1 divergence + 1 withheld boundary**.
 
@@ -164,6 +182,16 @@ windows." That was over-correction in the pessimistic direction and it was wrong
 facts. The residue looks **more** understood than that: the heal/Leech-Seed family
 predicted the one real row, and the other row was never a divergence.
 
+**The pre-registration was correct as registered, on count and on shape.** It predicted
+"a small non-zero count, most likely 0–3, dominated by shapes already in the ledger": the
+count is 1, and the one row is G8, already in the ledger. Saying only "the falsifier did
+not fire" is a statement about the falsifier, not about the prediction, and withholding
+the latter is the same reflex as the over-correction, pointed the other way.
+
+The matching limit belongs beside it: **G8 is diagnosed but OPEN**, and `c140` §6a
+establishes it is not closable by a representative without a trade. "Understood" here
+means diagnosed and bounded, not fixed.
+
 What the window did surface, and could not have been surfaced otherwise, is
 **instrumentation**: the first live firing of H14, and a rump-branch adjudication that had
 been documented as possible and never seen in a reported result. Both are now measurable.
@@ -174,9 +202,16 @@ been documented as possible and never seen in a reported result. Both are now me
 - Coverage is 87.5 %, not 100 % — 1,767 single-seat boundaries and 563 in-path exits are
   outside the measured set.
 - The double-faint terminal-value tie is invisible to every counter here.
-- The true rump-boundary count on this window is **unknowable**: `strict:lossy_render = 14`
-  counts branch drops, not boundaries, so it is somewhere in 1–14, and the measurement that
-  would settle it is the forbidden one.
+- The true rump-boundary count is **1–10**, and it is unrecoverable for a structural
+  reason rather than merely a forbidden one. `strict:lossy_render = 14` counts branch
+  drops, not boundaries; the 4 all-branches-lossy boundaries each consumed at least one
+  drop, so at most 10 remain. And the skip path at
+  `scripts/engine_transition_differential.py:2393` does `continue` **before** the repro
+  append at `:2397`, so **no state was retained for any of the 4** — confirmed in the
+  artifact, where `repros_retained: 2` and both repros are `transition_diverged`. Their
+  markers were never recorded. The forward fix is filed on #1162: when `skip_rump` becomes
+  a first-class verdict, retain repros for withheld boundaries too, or the next H14 firing
+  is equally unrecoverable — and H14 waited an entire program for this one.
 
 ## The window is spent
 
