@@ -1,14 +1,36 @@
-# C140 — the last dev row, `19000191/63`: an engine gap that enumeration closes and the collapsed path structurally cannot
+# C140 — the last dev row, `19000191/63`: an engine gap that enumeration closes and no fixed representative can do better than trade
 
 After #1144, #1148 and #1152, `19000191/63` (`component_magnitude:heal`) is the only divergent
 row on either window: dev 1/15,503, holdout 0/15,579
 (`reports/artifacts/c134_collapsed_{dev,holdout}_sweep.json`, the sweeps #1149 committed).
 
 **Disposition: ENGINE gap. Not a limit — the falsifier fires, measured.** The remedy that works is
-enumeration, measured on main's shipped oracle at both the row and the sweep level. The collapsed
-representative path cannot close it without becoming per-roll enumeration inside the lethal band,
-and the reason is a measured injectivity, not an argument. The recommended program disposition is
-therefore **"closed by enumeration, retained under the collapsed path"**.
+enumeration, measured on main's shipped oracle at both the row and the sweep level. Under the
+collapsed path the row is not closable *without a trade*: any fixed representative prices exactly
+one of the seven lethal rolls, and the shipping engine is already at that bound. The recommended
+program disposition is **"closed by enumeration, retained under the collapsed path"**.
+
+> ### Correction, second revision — the first revision's central claim was FALSE
+>
+> §6 of the first revision asserted, in a box, that **no choice of representative closes this row**.
+> A review overturned it with one monkeypatch, and §6 now carries the reproduction: re-pricing the
+> residual-kill arm to **109** — still one arm per residual threshold, still 14 arms — **matches**.
+>
+> The defect was step (d). Steps (a)–(c) proved a *bound* (one arm carries one drain, the drains are
+> distinct, so a representative prices exactly one roll). Step (d) then wrote "therefore at most 1 of
+> the 7 can ever match, and Showdown rolled one of the other 6" — which silently assumes the
+> representative is 108. It is 108 only because that is what the engine happens to emit today.
+>
+> Two smaller errors went with it. The box's falsifier — *"exhibit a single representative accepted
+> against all seven lethal rolls"* — was a strawman, strictly harder than the claim it defended; the
+> correctly scoped version carried in §9 and the PR body ("a collapsed-path arm, from any engine
+> change keeping one arm per residual threshold, that the comparator accepts") **fired**. And the
+> box closed by calling 108 "the one roll of the seven that would have matched". **109 is.**
+>
+> The bound survives, and §6 now states it with the measurement that makes it stronger than the
+> universal it replaces. This matters beyond tidiness: `19000191/63` is one of the eight rows in
+> `reports/c105_retract_limit_overclaim.json`'s 8-for-8 retraction, filed as a limit by C111 v1 and
+> reduced to cause A7. It has now had four confident diagnoses and three of them were wrong.
 
 No engine or harness change ships with this report. The only non-documentation edit is two entries
 added to `_MENTION_ALLOWLIST` in `tests/test_roll_enumeration_scope.py`, because that gate is a
@@ -126,7 +148,10 @@ Census of what the shipping engine actually emits for the p2 `heal` component ac
 {29: 93.9062 %}          — one value, plus "absent" on the crit arms where Raichu never reaches the residual
 ```
 
-**28 is not reachable by any arm the shipping engine can emit on this boundary.**
+**28 is not reachable by any arm the shipping engine can emit on this boundary** — with the
+representative it currently uses. That qualifier is load-bearing and its absence is what wrecked the
+first revision: a *different* representative in the same one-arm-per-threshold discipline does emit
+28, and §6a measures it.
 
 ## 3. Why #1152's two fixes are inert here — measured, not read
 
@@ -186,7 +211,7 @@ So there are two true statements and they are not in conflict:
 
 §6 argues that (2) is not the one to fix.
 
-## 6. Enumeration closes it; the collapsed path cannot
+## 6. Enumeration closes it; a fixed representative can only trade
 
 Single-variable on **one** build (`44ee1430`), same row, flag off versus on:
 
@@ -213,25 +238,67 @@ enumerator can produce that the comparator accepts*. It fires — arm `−109 / 
 verdict `matched`. Nothing in this row is a limit, and this report does not construct a
 demonstration because none can be constructed.
 
-**What the collapsed path cannot do**, stated so it can be attacked:
+### 6a. What the collapsed path can and cannot do — the bound, measured
 
-> Under the collapsed discipline — at most one arm per residual threshold — no choice of
-> representative closes this row.
->
-> Because: (a) the only failing component is the p2 mirror heal (counterfactual A2, measured);
-> (b) the mirror heal is injective on the 7-roll lethal band, taking 7 distinct values (measured);
-> (c) one arm carries exactly one value, and `heal` is compared for exact equality; (d) therefore at
-> most 1 of the 7 lethal rolls can ever match, and Showdown rolled one of the other 6.
->
-> Falsifier: exhibit a single representative the shipped comparator accepts against all seven
-> lethal rolls. Impossible while the seven values are distinct and the comparison is exact.
+> **A first revision of this section claimed no representative closes this row. That is false.**
+> Representative **109** closes it. What is true is a *bound*, and the bound is worth more than the
+> false universal was.
 
-Note carefully what this does **not** say. It does not say no engine change can close it — §7 gives
-one. It says the *collapsed* discipline cannot, and the reason is arithmetic rather than an
-implementation gap. The bound is 1/7 of the lethal band, and the shipping engine is already at that
-bound: it prices the arm at 108, the one roll of the seven that would have matched.
+The measurement. `pokezero_search.branch_events` is monkeypatched to re-price the residual-kill arms
+to a different representative **inside** the band — one arm per residual threshold throughout,
+**14 arms throughout, asserted per cell** — and the result is fed to the **unmodified** shipped
+`evaluate_boundary_strict`. The strict path compares rendered components only, so an event rewrite
+models the engine change faithfully. Rows are the engine's representative; columns are the roll
+Showdown threw. (`observation(109)` reproduces the recorded protocol byte-for-byte, asserted.)
 
-## 7. The two fixable routes, and why neither should ship on the strength of one row
+|  | 108 | 109 | 110 | 111 | 112 | 113 | 115 |
+|---|---|---|---|---|---|---|---|
+| **rep 108** *(shipping)* | **MATCH** | · | · | · | · | · | · |
+| **rep 109** | · | **MATCH** | · | · | · | · | · |
+| **rep 110** | · | · | **MATCH** | · | · | · | · |
+| **rep 111** | · | · | · | **MATCH** | · | · | · |
+| **rep 112** | · | · | · | · | **MATCH** | · | · |
+| **rep 113** | · | · | · | · | · | **MATCH** | · |
+| **rep 115** | · | · | · | · | · | · | **MATCH** |
+
+**The matrix is the identity.** A representative matches iff it equals the roll thrown. So:
+
+**(i) The bound.** Any fixed representative prices **exactly one** of the seven lethal rolls —
+asserted on all seven rows, not inferred. This is what steps (a)–(c) of the withdrawn box actually
+proved: one arm carries one drain, the drains are distinct, `heal` is compared exactly.
+The shipping engine is at that bound; it is not below it.
+
+**(ii) Moving 108 → 109 is a trade, not a fix.** It closes this row and opens every boundary of this
+shape where Showdown throws 108 — column 108, which representative 109 misses. Both rolls carry one
+sixteenth of the fan, so the exchange is **even in expectation**. Nothing is gained; the covered
+roll is permuted.
+
+**(iii) Picking 109 would be fitting the representative to the sample.** The only reason 109 is
+attractive is that the dev window happens to contain a boundary where Showdown threw it. Choosing an
+engine constant because it closes an observed row is exactly what the dev/holdout split exists to
+forbid — and this row is a single observation, `n = 1`.
+
+**(iv) The principled rule does not close it either — measured.** The survive arm's representative is
+not chosen arbitrarily: it is `floor(mean(surviving rolls))`, and
+`floor((97+98+100+101+102+103+104+105+106)/9) = floor(916/9) = 101`, which is exactly the `−101` the
+engine emits. Applying the *same* convention to the lethal band gives
+`floor((108+109+110+111+112+113+115)/7) = floor(778/7) = 111` → drain 26 → **diverged**. So the row is
+not closable by any rule the engine already follows; only by a hand-picked constant, which (iii)
+rules out.
+
+**The correctly scoped falsifier, and what happened to it.** §9 and the PR body of the first revision
+named it properly: *a collapsed-path arm, from any engine change keeping one arm per residual
+threshold, that the shipped comparator accepts against this boundary.* **It fired.** (The box's own
+falsifier — "a representative accepted against all seven rolls" — was a strawman, strictly harder
+than the claim it defended, and would never have fired. That is the lesson: a falsifier harder than
+the claim is not a falsifier.)
+
+What remains true, and is the operative point for the program: **under one arm per residual
+threshold this boundary shape is matched with probability 1/7 whatever representative is chosen, and
+under enumeration with probability 1.** That is the gap, and it is a property of collapsing a fan
+rather than a defect to be tuned away.
+
+## 7. The three routes that close it, and why none should ship on the strength of one row
 
 ### 7a. Engine: split the residual-kill arm per roll inside the band
 
@@ -272,14 +339,25 @@ still calls it a divergence:
 Morning Sun, which are exact fractions of max HP. That is exactly the over-acceptance C133 §3
 warned the harness route had to avoid.
 
-**Variant C does not over-accept on this test**, because its gate is an identity rather than a
-tolerance: the heal is reclassified only when it equals the `capped_lethal` the harness *derived
-from the observed HP trace* on the opposite slot. Falsify the heal and the identity breaks, the
-reclassification does not fire, and the exact comparison rejects it. Over the 68 distinct retained
-transition repros committed under `reports/artifacts/` (deduplicated on `(seed, step)`, re-read on
-`44ee1430`), C closes exactly this row and nothing else: 64 → 65 matched, 4 → 3 diverged, none
-newly diverged. That census is small and historically biased and should not be read as strong
-evidence of safety.
+**Variant C survives this particular test — but the test is weaker than it looks, and an earlier
+revision of this paragraph oversold it.** C's gate keys on the *observed trace alone*: it
+reclassifies the heal only when it equals the `capped_lethal` the harness derived from that same
+trace. The mutation falsifies the mirror while leaving the drained side untouched, which makes the
+observed protocol **internally inconsistent in a way Showdown cannot emit** — Showdown always
+transfers exactly what it removed, so `mirror == drain` holds in every real protocol. Against real
+input, therefore, **C's gate fires on every Leech-Seed mirror**, and what it applies past the gate is
+the same `[0.92·eng − 1, 1.09·eng + 1]` window B uses. The rows in the table where C reads `diverged`
+are rows Showdown could not have produced.
+
+So C is **narrower in scope** than B — it touches only the Leech-Seed mirror rather than every bare
+heal, which is a real difference and keeps Recover exact — but the evidence here does **not** show
+that an identity gate is inherently safer than a tolerance. On the boundaries it actually governs, it
+is a tolerance.
+
+Over the 68 distinct retained transition repros committed under `reports/artifacts/` (deduplicated on
+`(seed, step)`, re-read on `44ee1430`), C closes exactly this row and nothing else: 64 → 65 matched,
+4 → 3 diverged, none newly diverged. That census is small and historically biased and should not be
+read as strong evidence of safety either.
 
 Recommendation: **do not ship.** Not because it is loose, but because of what it deletes. The p2
 mirror heal is currently the **only** component on this boundary shape that pins the damage roll
@@ -290,17 +368,41 @@ is precisely the class of defect this row is evidence of. C135 §4 rejected the 
 analogous reason: making the matcher accept the engine's answer here would not repair the instrument,
 it would blind it.
 
+### 7c. Engine: re-price the residual-kill representative from 108 to 109
+
+This closes the row — §6a measured it — and it is a one-constant change with no new machinery, which
+makes it the most tempting of the three and the one that most needs refusing.
+
+Recommendation: **do not ship**, for the two reasons §6a establishes. It is a **wash**: the identity
+matrix says representative 109 misses exactly the column 108 covers, and both rolls carry `1/16` of
+the fan, so the expected number of matched boundaries of this shape is unchanged. And it would be
+**fitted to the sample**: the sole evidence for 109 over 108 is that the dev window contains one
+boundary where Showdown threw 109, `n = 1`. Meanwhile the engine's *own* convention — `floor` of the
+band mean, which reproduces the `−101` survive representative exactly — gives 111, which diverges.
+Changing a representative to close an observed row, against the rule the engine otherwise follows, is
+the definition of what the holdout window exists to catch.
+
 ## 8. Recommended disposition
 
 **`19000191/63` — engine gap; closed by enumeration, retained under the collapsed path.**
 
 Concretely, for the ledger: `reports/c138_known_gaps_ledger.md` entry **G8** describes this row as
 *"the collapsed lethal arm mis-prices a roll-dependent Leech Seed drain"*, which is accurate, and it
-should now also record that (i) the drain is injective over the lethal band so no representative can
-price it, (ii) the enumeration oracle closes it, measured, and (iii) it is not a limit. The dev
-window's steady state is **1 divergence in 15,503 boundaries under the collapsed path and 0 under
-the oracle**, and that gap is a known, bounded, understood property of collapsing a fan — not an
-open defect to keep chasing.
+now also records that (i) the drain is injective over the lethal band, so a fixed representative
+prices exactly one of the seven rolls and re-pricing only trades which one; (ii) the enumeration
+oracle closes it, measured; and (iii) it is not a limit. **G8 stays open** — the row is unfixed under
+the shipping configuration and the ledger should keep saying so.
+
+> The first revision of this report also wrote the sentence *"Not closable by a representative
+> either"* into G8, and that sentence merged. It is false — see §6a — and is corrected in this PR.
+> A merged document must not be left carrying an overturned claim.
+
+The dev window's steady state is **1 divergence in 15,503 boundaries under the collapsed path and 0
+under the oracle**, and that gap is a known, bounded, understood property of collapsing a fan — not
+an open defect to keep chasing.
+
+This disposition does not conflict with C116 §5. That clause requires a written demonstration for a
+`limit:` disposition, and this is explicitly **not** one: §6 records the falsifier firing.
 
 ## 9. What was ruled out, and what is left uncertain
 
@@ -314,6 +416,8 @@ Ruled out by measurement:
   single-rung here.
 * **The p1 side being at fault.** Counterfactual A2 matches with the −109 roll left in place.
 * **"Blanket `heal` widening is harmless."** It blesses two impossible mirrors.
+* **"No representative closes this row."** Overturned by measurement, in this report's own second
+  revision. Representative 109 closes it. What survives is the bound in §6a.
 
 Left uncertain, and stated as such:
 
@@ -325,10 +429,24 @@ Left uncertain, and stated as such:
   is what carries that argument.
 * **How much matched mass rides on the `±9 %` fallback window** repo-wide is still unmeasured —
   C135 §6 raised it and this report does not close it.
-* Variant C was measured only against mirror falsifications on **this** boundary. A compensating
-  engine defect — a wrong drain that stays consistent with a wrong roll — would be invisible to it,
-  and is invisible to the p1 cap-vs-cap identity today too.
+* Variant C was measured only against mirror falsifications on **this** boundary, and §7b now records
+  that those falsifications are protocols Showdown cannot emit — so the test does not show C is safe
+  against real input, only that it is narrower in scope than B. A compensating engine defect — a
+  wrong drain that stays consistent with a wrong roll — is invisible to C, and is invisible to the p1
+  cap-vs-cap identity today too.
+* **(ii)'s "wash" is an expectation argument, not a sweep.** The identity matrix shows representative
+  109 misses column 108, and both rolls are `1/16` of the fan; the claim that the exchange is even
+  therefore rests on the fan being uniform, which it is, rather than on having measured a
+  109-representative build over both windows. No such build was made.
 
-The single measurement that would overturn this report's disposition: **a collapsed-path arm, from
-any engine change that keeps one arm per residual threshold, that the shipped comparator accepts
-against this boundary.** §6 argues that cannot exist; producing one refutes §6 directly.
+What would overturn what, stated separately now that one of these has already fired:
+
+* **The disposition** (engine gap, not a limit, closed by enumeration): an arm the enumerator
+  produces that the comparator rejects, or a demonstration that the enumerated closure is an
+  artifact of the replay rather than the engine. Neither is in evidence; #1149's sweep-level result
+  on the same fingerprint is independent corroboration.
+* **The §6a bound** (any fixed representative prices exactly one of the seven lethal rolls): a
+  representative, or a rule producing one, that the shipped comparator accepts against **two or more**
+  columns of the matrix. That is the correctly scoped falsifier. The first revision's version — "no
+  representative closes this row" — was refuted by a single monkeypatch, which is why the bound is
+  now stated as a bound and measured on all seven rows rather than argued.

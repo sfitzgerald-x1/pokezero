@@ -652,5 +652,107 @@
    "boundaries_measured": 15579,
    "diverged": 0
   }
- }
+ },
+ "representative_matrix": {
+  "note": "OVERTURNS this report's first revision. Engine representative (key) against the roll Showdown threw (columns, in band order). Produced by monkeypatching pokezero_search.branch_events to re-price the residual-kill arms to a different representative INSIDE the band -- still one arm per residual threshold, still 14 arms, asserted per cell -- then running the UNMODIFIED shipped evaluate_boundary_strict. The strict path compares rendered components only, so the substitution faithfully models the engine change.",
+  "band": [
+   108,
+   109,
+   110,
+   111,
+   112,
+   113,
+   115
+  ],
+  "columns_are": "the roll Showdown threw; observation(109) reproduces the recorded protocol byte-for-byte (asserted)",
+  "matrix": {
+   "108": [
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "109": [
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "110": [
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "111": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged",
+    "diverged"
+   ],
+   "112": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged",
+    "diverged"
+   ],
+   "113": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched",
+    "diverged"
+   ],
+   "115": [
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "diverged",
+    "matched"
+   ]
+  },
+  "every_representative_matches_exactly_one_of_seven": true,
+  "matrix_is_the_identity": true,
+  "consequence": "representative 109 CLOSES this row; 108 (shipping) does not. Moving 108 -> 109 does not fix anything -- it trades this row for the rows where Showdown throws 108. Both are one roll of sixteen, so the trade is even in expectation.",
+  "principled_rule_measured": {
+   "rule": "floor(mean(band)), the survive arm's own convention",
+   "survive_band_check": "floor(916/9) = 101, which is the representative the engine actually emits",
+   "lethal_band": "floor(778/7) = 111 -> drain 26",
+   "verdict": "diverged"
+  }
+ },
+ "withdrawn_claims": [
+  {
+   "claim": "no choice of representative closes this row (first revision, section 6 box)",
+   "status": "FALSE -- overturned by representative_matrix; representative 109 matches",
+   "defect": "step (d) was a non-sequitur: 'at most 1 of 7 can match, and Showdown rolled one of the other 6' silently assumed representative = 108"
+  },
+  {
+   "claim": "108 is 'the one roll of the seven that would have matched' (first revision, section 6 close)",
+   "status": "FALSE -- 109 is; 108 is the roll the SHIPPING representative covers"
+  },
+  {
+   "claim": "the falsifier is 'a single representative accepted against all seven lethal rolls'",
+   "status": "STRAWMAN -- strictly harder than the claim it defended. The correctly scoped form, carried in the same revision's sections 9 and the PR body, FIRED."
+  }
+ ]
 }
