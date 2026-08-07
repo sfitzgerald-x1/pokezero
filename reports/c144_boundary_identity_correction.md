@@ -1,5 +1,13 @@
 # C144: the boundary identity was two-term and the instrument is four-term
 
+> ⚠ **SUPERSEDED IN PART 2026-08-07 (C142).** The instrument is now **five**-term:
+> `skip:rump_branch_set` was added as a post-measurement verdict
+> (`reports/c142_rump_branch_adjudication.md`). Every finding below stands — the two-term form
+> is still false, the case analysis is still the right method, and no number here moves — but
+> two of this report's *premises* were falsified by that change and are corrected in the
+> table in §3, following this report's own convention of correcting the site rather than
+> only the conclusion.
+
 **The false invariant.** For the whole C111–C141 era this program asserted, in reports, in
 prediction clauses, and in a standing rule in the ledger, that
 
@@ -14,7 +22,10 @@ transitions_matched + transitions_diverged + engine_errors
     + counters["skip:strict_all_branches_lossy"]  ==  boundaries_measured
 ```
 
-Four terms, not two, and not the three the ledger's standing rule had.
+Four terms, not two, and not the three the ledger's standing rule had. (C142 later added a
+fifth, `skip:rump_branch_set`; see the banner above. The count is a property of how many
+post-measurement verdicts `run_game` has, so it is expected to grow — which is why the
+mechanized form, not the arity written in prose, is the thing to rely on.)
 
 **It was already refuted by artifacts in the repo when it was last asserted.** Two committed
 reports break the two-term form and close on the four-term one:
@@ -90,12 +101,14 @@ read alongside this table rather than after it:
 
 `engine_error` is the second one, and the ledger's three-term standing rule omitted it. It is 0
 on all 70 committed artifacts, so the omission has never been exercised — the same accident that
-kept the two-term form alive. The four-term identity is therefore **complete**, not patched: it
-is a case analysis of `run_game`, not an empirical fit.
+kept the two-term form alive. The four-term identity is therefore **complete for the verdicts
+`run_game` had when this was written**, not patched: it is a case analysis of `run_game`, not an
+empirical fit. ⚠ **C142** added a fifth verdict, so the *arity* was not durable even though the
+*method* was; the case analysis was re-run and extended rather than refitted.
 
 **Two facts make the case analysis airtight, and both are worth stating because each is a thing a
 future change could take away.** First, `boundaries_measured` has **exactly one increment site in
-the whole repo** and the verdict domain is **closed at three values** — `evaluate_boundary_strict`
+the whole repo** and the verdict domain is **closed** — at three values when this was written, four since C142 added `skip_rump` (⚠ corrected) — `evaluate_boundary_strict`
 and `evaluate_boundary` return only `"matched"`, `"diverged"` and `"skip_lossy"` — so the *dynamic*
 key `f"transition:{verdict}"`, which looks like it could mint a term, cannot. Second,
 `_prepare_boundary` has a **second caller**, `scripts/attest_materialized_damage_stats.py`, which
@@ -178,6 +191,17 @@ these is inside the measured region, and none of them is a boundary verdict:
   (`measured + in-path exits == boundaries_full_round`, pinned by
   `tests/test_single_seat_coverage_bound.py`).
 
+  ⚠ **CORRECTED 2026-08-07 (C142).** The clause "every other `skip:*` counter … fire *before*
+  `boundaries_measured` increments" is now false: `skip:rump_branch_set` is a `skip:*` counter,
+  is not the lossy one, and fires **after**. It was true when written — every `skip:*` site then
+  existing sat in `_prepare_boundary` and was immediately followed by `return None`, so
+  `counts["boundaries_measured"] += 1` never ran, and `skip:single_seat_boundary` sits in the
+  `else` branch where `_prepare_boundary` is not called at all. The repair is **not** to invert
+  the timing rule: membership needs *two* conditions — fires after `boundaries_measured`, **and**
+  is the boundary's terminal verdict (at most one per boundary, mutually exclusive with
+  `transition:*`). Timing alone would admit `gating:*`, which increments on the very next line,
+  and every `strict:*` counter in `evaluate_boundary_strict`. None of those is a verdict.
+
 ## 3. Where the false invariant appeared, and what each site was
 
 The arithmetic was searched for, not just the phrase. Complete list.
@@ -192,6 +216,8 @@ The arithmetic was searched for, not just the phrase. Complete list.
 | `docs/engine_divergence_ledger_20260728.md` standing rule 2 | **three**-term: omitted `engine_error` | corrected to four terms |
 | `reports/c138_known_gaps_ledger.md` **H14** | had the four-term identity right, but claimed the lossy counter "has never fired" | corrected: it had fired twice in committed artifacts before the cell was written |
 | `reports/c132_single_seat_coverage_bound.md` §2 | "`skip:strict_all_branches_lossy` is **not** an exit" — true of coverage, read as true of verdicts | clarified, with the distinction stated explicitly |
+| **this report** §2 "every other `skip:*` … fire *before* `boundaries_measured`" | true when written; falsified by C142's `skip:rump_branch_set` | corrected in place above, with the two-condition membership rule that replaces the timing-only reading |
+| **this report** §"closed at three values" and §"complete, not patched" | the verdict domain grew to four and the identity to five terms | corrected in place; the case-analysis method is unchanged and no number moved |
 | `scripts/differential_denominator.py` rule 3 | two-term, and **correctly scoped** to four golden-corpus harnesses — but it publishes a rule about a counter literally named `boundaries_measured`, which is the vector by which the claim reached the transition differential | scope warning added; semantics unchanged, because they are right for those four harnesses |
 
 ### Correct but fragile — asserted of specific artifacts where the extra terms are 0
@@ -223,8 +249,8 @@ the first mechanized form of it.
 
 ## 4. What is now mechanized
 
-- `verdict_partition_failures()` in `scripts/engine_transition_differential.py` — the four-term
-  identity as a checkable function. It refuses a missing or non-integer `boundaries_measured`
+- `verdict_partition_failures()` in `scripts/engine_transition_differential.py` — the
+  identity as a checkable function (four-term here; five since C142). It refuses a missing or non-integer `boundaries_measured`
   rather than defaulting it to 0, because a defaulted denominator makes the identity close on an
   unreadable report.
 - `scripts/cert_sweep_readout.py` gates on it **per shard**, into `gate_failures`. Per shard

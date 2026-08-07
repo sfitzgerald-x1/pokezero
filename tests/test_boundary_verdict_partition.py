@@ -17,8 +17,18 @@ incomplete before comparison has its verdict WITHHELD rather than adjudicated. I
 added here rather than discovered later because C144's own comment in
 `scripts/engine_transition_differential.py` said to, and because it falsifies C144's
 sentence that every `skip:*` counter other than the lossy one fires before
-`boundaries_measured` increments. Membership is decided by WHEN a counter fires, never
-by its prefix.
+`boundaries_measured` increments.
+
+Membership is TWO conditions, and C142's own first attempt at the repair -- "membership is
+WHEN a counter fires, never its prefix" -- was wrong for stating only the first:
+
+  1. the counter increments only after `boundaries_measured` has, and
+  2. the increment is that boundary's TERMINAL VERDICT -- at most one per boundary, and
+     mutually exclusive with `transition:matched` / `transition:diverged`.
+
+Timing alone would admit `gating:*` (which increments on the very next line) and every
+`strict:*` counter in `evaluate_boundary_strict` (which runs after `_prepare_boundary`
+returns). None of those is a verdict. Pin 6 below holds the distinction as arithmetic.
 
 The two extra terms were 0 on the dev and validation-holdout windows the era iterated
 against, which is the only reason the two-term form ever appeared to hold. It is broken
@@ -41,6 +51,10 @@ WHAT THIS MODULE PINS, and why each pin is not vacuous:
    missing or malformed -- rather than defaulting the denominator to 0 and closing.
 5. `cert_sweep_readout` actually gates on it per shard, and the failure reaches
    `gate_failures` with a nonzero exit code.
+6. Firing after `boundaries_measured` is NOT sufficient for membership: a report carrying
+   `gating:*` and several `strict:*` counters at nonzero values still closes, and folding
+   any one of them in would break it. C142's validation-holdout artifact exhibits the
+   shape live (`strict:lossy_render` 3, every boundary `matched`, identity closes).
 
 See `reports/c144_boundary_identity_correction.md`.
 """
@@ -194,12 +208,12 @@ class VerdictPartitionOverCommittedArtifactsTests(unittest.TestCase):
                         "so the two vocabularies for one partition have drifted",
                     )
 
-    def test_the_four_term_partition_closes_on_every_committed_artifact(self) -> None:
+    def test_the_partition_closes_on_every_committed_artifact(self) -> None:
         for name, report in _sweep_reports():
             with self.subTest(artifact=name):
                 self.assertEqual(
                     verdict_partition_failures(report, label=name), [],
-                    f"{name}: the four-term boundary verdict partition does not close",
+                    f"{name}: the boundary verdict partition does not close",
                 )
 
     def test_the_two_term_form_is_refuted_by_artifacts_already_in_the_repo(self) -> None:
@@ -236,7 +250,7 @@ class VerdictPartitionOverCommittedArtifactsTests(unittest.TestCase):
                 # The true one, shown true, on the same numbers.
                 self.assertEqual(
                     matched + diverged + report["engine_errors"] + lossy, measured,
-                    f"{name}: the four-term identity does not close either",
+                    f"{name}: the full identity does not close either",
                 )
 
     def test_some_committed_artifact_actually_exercises_the_lossy_verdict(self) -> None:
@@ -357,6 +371,74 @@ class VerdictPartitionFailuresTests(unittest.TestCase):
         self.assertEqual(
             VERDICT_PARTITION_LOSSY_COUNTER, VERDICT_PARTITION_SKIP_COUNTERS[0]
         )
+
+    def test_firing_after_boundaries_measured_is_NOT_sufficient_for_membership(self) -> None:
+        """Guards C142's correction of C144, which was itself first written wrong.
+
+        C144 said every `skip:*` other than the lossy one fires before
+        `boundaries_measured`; `skip:rump_branch_set` falsifies that. But the first repair
+        C142 offered — "membership is WHEN the counter fires, never its prefix" — is also
+        wrong, and its counterexample sits in the same comment: `gating:*` increments on
+        the line immediately AFTER `boundaries_measured`, and every `strict:*` counter in
+        `evaluate_boundary_strict` fires later still, because that function runs after
+        `_prepare_boundary` has returned. None of them is a partition term.
+
+        Membership needs the SECOND condition too: the increment must be the boundary's
+        terminal verdict. `strict:lossy_render` fails it — it can fire several times for
+        one boundary and leaves the boundary free to receive an ordinary verdict.
+
+        Pinned as arithmetic so the prose cannot drift from it: a report with post-measure
+        non-verdict counters at nonzero values still closes, and would NOT close if any of
+        them were folded in.
+        """
+
+        post_measure_non_verdicts = {
+            "gating:exact": 100,
+            "strict:lossy_render": 3,
+            "strict:sleeptalk_union_branch": 7,
+            "strict:diverged_on_full_branch_set": 4,
+            "strict:lossy_render_marker:attract_empty_tail_ambiguous": 3,
+        }
+        for name in post_measure_non_verdicts:
+            self.assertNotIn(
+                name, VERDICT_PARTITION_COUNTERS,
+                f"{name} fires after boundaries_measured but is not a terminal verdict",
+            )
+        report = {
+            "boundaries_measured": 100,
+            "transitions_matched": 94,
+            "transitions_diverged": 4,
+            "engine_errors": 0,
+            "counters": {
+                VERDICT_PARTITION_LOSSY_COUNTER: 2,
+                "skip:rump_branch_set": 0,
+                **post_measure_non_verdicts,
+            },
+        }
+        self.assertEqual(verdict_partition_failures(report), [])
+        # Folding any one of them in would break the identity, which is the arithmetic
+        # statement of "these are not verdicts".
+        for name, value in post_measure_non_verdicts.items():
+            self.assertNotEqual(
+                94 + 4 + 0 + 2 + value, 100,
+                f"{name} at {value} would coincidentally close the identity; pick a "
+                "value that discriminates",
+            )
+
+    def test_the_holdout_artifact_exhibits_that_shape(self) -> None:
+        """The measurement behind the paragraph above, not a constructed example.
+
+        C142's validation-holdout sweep carries `strict:lossy_render` 3 — three
+        post-measure increments of a non-verdict counter — while every boundary still
+        received a verdict and the identity closes.
+        """
+
+        path = REPO / "reports" / "artifacts" / "c142_rumpfix_holdout_sweep.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(report["counters"].get("strict:lossy_render"), 3)
+        self.assertEqual(report["counters"].get("skip:rump_branch_set", 0), 0)
+        self.assertEqual(report["transitions_matched"], report["boundaries_measured"])
+        self.assertEqual(verdict_partition_failures(report, label="c142 holdout"), [])
 
     def test_the_withheld_verdict_is_IN_the_partition(self) -> None:
         """C142's `skip:rump_branch_set` fires after `boundaries_measured` increments and

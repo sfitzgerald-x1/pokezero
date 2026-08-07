@@ -1446,10 +1446,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 aggregate_counters[key] += number
         # PER SHARD, not on the aggregate. Two shards can violate the partition in
         # opposite directions and cancel, so a sum-level check is strictly weaker.
-        # The identity is FOUR-term: a boundary that reached the matcher is matched,
-        # diverged, an `engine_error`, or `skip:strict_all_branches_lossy`. A two-term
-        # reading of it was asserted repeatedly across reports/ and is false --
-        # reports/c144_boundary_identity_correction.md.
+        # The identity is FIVE-term: a boundary that reached the matcher is matched,
+        # diverged, an `engine_error`, `skip:strict_all_branches_lossy`, or (C142)
+        # `skip:rump_branch_set`. A two-term reading of it was asserted repeatedly across
+        # reports/ and is false -- reports/c144_boundary_identity_correction.md and
+        # reports/c142_rump_branch_adjudication.md.
         input_failures.extend(verdict_partition_failures(shard, label=Path(p).name))
         divergence_classes = shard.get("divergence_classes")
         if not isinstance(divergence_classes, Mapping):

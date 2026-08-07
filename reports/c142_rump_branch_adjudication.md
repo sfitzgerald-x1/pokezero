@@ -178,7 +178,7 @@ across every sweep artifact in the repo:
 
 | window | `strict:lossy_render` | `skip:strict_all_branches_lossy` | reported `diverged` |
 |---|---|---|---|
-| dev `19,000,000–199` | **0** (counter absent from all 27 dev artifacts) | 0 | 1 |
+| dev `19,000,000–199` | **0** (counter absent from all **29** dev artifacts) | 0 | 1 |
 | validation holdout `19,100,000–199` | **3** (identical on every artifact `c121`→`c138`) | 0 | 0 |
 | final holdout `19,200,060–259` (`c141`) | **14** | **4** | 2 → corrected to **1** |
 
@@ -201,7 +201,10 @@ windows that can be. Two honest caveats:
   `reports/c32_fail_diagnosis.json`, records the same phenomenon at **372** under the
   differently named field `coverage_diagnosis.coverage_reducing_skips.strict_all_branches_lossy`
   — corroborating, but not the counter itself, and worth distinguishing because the counter is
-  what the partition reads. The claim came from
+  what the partition reads. An **eighth** instance, which neither this report nor the `c138`
+  ledger listed until review found it: `reports/c43_coverage_shortfall_diagnosis.json`
+  `decomposition.ranked[5]` = `{"rows": 372, "counter": "strict_all_branches_lossy"}` — the same
+  372 as `c32`, under the same prefix-stripped name. The claim came from
   `reports/c138_known_gaps_ledger.md:268`/`:304`, which says "has never fired" and lists it
   among never-fired static counters; that is the ledger's error and it has now propagated into
   three separate PRs, including this one. **Do not cite it.** Correcting `c138` belongs to
@@ -342,12 +345,50 @@ reconciles". Done:
   is rewritten against the skip tuple, so it keeps holding as that tuple grows and still fails
   if the two vocabularies diverge — plus a new pin that the withheld term is in the partition
   **and load-bearing** (dropping it goes red).
-- **One C144 claim is corrected**: that every `skip:*` counter other than the lossy one fires
-  *before* `boundaries_measured` increments. `skip:rump_branch_set` falsifies it. Membership in
-  the partition is decided by *when* a counter fires relative to `boundaries_measured`, never by
-  its prefix, and the comment now says so.
+- **Two stale C144 statements are corrected**, both of them premises of its exhaustiveness
+  argument rather than decoration:
+  - "every `skip:*` counter OTHER than `skip:strict_all_branches_lossy` fires before
+    `boundaries_measured` increments" — `skip:rump_branch_set` is a `skip:*` counter, is not the
+    lossy one, and fires after.
+  - "the verdict domain is closed at three values … `evaluate_boundary_strict` and
+    `evaluate_boundary` return only `matched`, `diverged` and `skip_lossy`" — it is now four;
+    `evaluate_boundary_strict` also returns `skip_rump`. The *form* of the exhaustiveness
+    argument survives (`skip_rump` has its own `continue` and its own counted term), but the
+    enumeration it rests on had to move with it.
 
 Both windows' artifacts pass `verdict_partition_failures()` on both sides of the comparison.
+
+#### The membership rule, stated as measured
+
+My first repair of C144's sentence was itself wrong, and it is worth recording because it would
+have inherited C144's authority. I wrote: *membership is decided by when a counter fires, never
+by its prefix.* **Firing late is necessary but not sufficient**, and the counterexamples were
+already in the same comment four lines above the claim:
+
+- `gating:exact` / `gating:support` increment on the line **immediately after**
+  `counts["boundaries_measured"] += 1` (`_prepare_boundary`);
+- every `strict:*` counter in `evaluate_boundary_strict` fires later still, because that function
+  is called after `_prepare_boundary` has returned.
+
+None of those is a partition term. The discriminator is the **second** condition:
+
+> A counter is a partition term iff (1) it increments only after `boundaries_measured` has
+> incremented for that boundary, **and** (2) the increment is that boundary's *terminal
+> verdict* — at most one per boundary, and mutually exclusive with `transition:matched` /
+> `transition:diverged`.
+
+In the code, (2) is literally the `continue` in `run_game` that skips
+`counts[f"transition:{verdict}"] += 1`. Verified for both skip terms: each has exactly **one**
+increment site in the repo, and each `continue`s before that line. `strict:lossy_render` fails
+(2) — it can fire several times for one boundary and leaves the boundary free to receive an
+ordinary verdict.
+
+This is pinned as arithmetic rather than left as prose
+(`test_firing_after_boundaries_measured_is_NOT_sufficient_for_membership`), and the live
+counterexample is **this branch's own validation-holdout artifact**: `strict:lossy_render` 3,
+every boundary `matched`, identity closes. Folding `strict:lossy_render` into
+`VERDICT_PARTITION_SKIP_COUNTERS` — the mutant a timing-only rule would permit — fails 45 tests,
+including the corpus pin on real committed artifacts.
 
 ### Blast radius
 
@@ -427,14 +468,31 @@ shipping path). Baseline from a `git worktree` at the merge base `ce962c6e`, sam
 `.so` — the build check reported a content-fingerprint match on both sides, so the two runs
 differ only by the patch. **No run at or above seed 19,200,000.**
 
-**All four sweeps were re-taken twice.** Once after the first review round, and again after
-merging `main`: that merge moved the engine patch set, the build gate **refused to measure on
-the stale build** (fingerprint `c72e6523d8de6f64` installed against `5fa147ffa325c887` at
-HEAD), and the run was redone after a rebuild. The counter tables below are unchanged across
-all three takes, which is the useful part — the result does not depend on the engine revision.
+**Take counts differ per artifact pair, and the earlier "unchanged across all three takes"
+overstated the baseline.** Per-path history: the **rumpfix** pair has three takes
+(`6d055c42`, `c893c7df`, `ac05ba61`); the **baseline** pair has two (`6d055c42`, `ac05ba61`).
+So the patched numbers are corroborated across three independent runs and the baseline across
+**two**, not three.
+
+The re-takes were forced rather than chosen: merging `main` moved the engine patch set and the
+build gate **refused to measure on the stale build** (`c72e6523d8de6f64` installed against
+`5fa147ffa325c887` at HEAD) instead of emitting plausible numbers. Every take agrees, which is
+the useful part — the result does not depend on the engine revision.
 
 Engine fingerprint `5fa147ffa325c887` on all four runs, `enumerate_rolls: false` on all four;
-the provenance records differ only in `source_commit`/`source_tree`, as they must. The
+the provenance records differ in `source_commit`/`source_tree`, as they must.
+
+**Provenance defect, disclosed rather than left to be derived.** The two `c142_rumpfix_*`
+artifacts stamp `source_commit 4c0ded451db822d207cbf5d985652a3154c1d85c` with
+`source_tree: dirty`, and **that commit does not resolve** — it was a local commit on the
+pre-merge rebase that was undone (§9), so `git log -1` on it returns `fatal: bad object`. The
+engine fingerprint pins the engine, but nothing in the record pins `scripts/`, which is exactly
+the hazard the comment at `scripts/engine_transition_differential.py` (Rule 3, "`source_commit`
+does not pin the code") exists to name. **This is a labelling defect, not a measurement one**:
+the numbers reproduce on a clean tree — the reviewer re-ran the dev window at `5a6eae37` and got
+the same counters with `verdict_partition_failures` empty — and the baseline pair carries a
+resolvable commit. The correct reading is that these two artifacts' *numbers* are corroborated
+and their *provenance stamp* is not usable for attribution. The
 baseline also reproduces `main`'s shipped numbers exactly — `boundaries_measured` 15,503 on
 dev and 15,579 on the validation holdout, identical to
 `reports/artifacts/c138_collapsefix_merged_{dev,holdout}_sweep.json` — so the "before" side is
@@ -546,3 +604,16 @@ One process note, disclosed rather than left in the reflog: `main` was **merged*
 branch, not rebased onto. An earlier local rebase was performed and then undone before any
 push — the published tip `c893c7df` is still an ancestor of this branch's head, so no
 force-push was needed and no published history was rewritten.
+
+### Owed at merge time: `_EXPECTED_SWEEP_ARTIFACTS`
+
+`tests/test_boundary_verdict_partition.py` pins the sweep-artifact corpus size **exactly**, so
+the value is a function of what is on `main` when this branch merges. It is **74** here, which
+is the honest measurement against `main` at `ce962c6e` plus this branch's four artifacts.
+
+It will be stale at merge time. #1165 lands four more artifacts ahead of this branch, and #1159
+one more after that. **The number must be re-derived by running the selector over the merged
+tree — not by adding 4 to 74, and not from any figure quoted in review** — and then re-confirmed
+live by checking that one lower and one higher both fail. Both checks were run this round (74
+correct; 73 and 75 both fail) and both must be re-run after each merge. The pin firing on a
+merge is the mechanism working, not a problem to route around.

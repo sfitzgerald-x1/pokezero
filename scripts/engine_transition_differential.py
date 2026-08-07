@@ -2514,7 +2514,8 @@ def run_game(
         # THE THIRD VERDICT. `boundaries_measured` has ALREADY incremented for this
         # boundary (`_prepare_boundary`'s last statement), so a boundary that leaves
         # here is inside the denominator and outside both `transition:*` tallies.
-        # This is the term that makes the boundary verdict partition four-term, not
+        # This is one of the two terms that make the boundary verdict partition
+        # five-term rather than two-term, not
         # two-term -- see `verdict_partition_failures` below.
         if verdict == "skip_lossy":
             counts["skip:strict_all_branches_lossy"] += 1
@@ -3045,9 +3046,14 @@ def checkpoint_report_aggregate(
 #
 # WHY IT IS EXHAUSTIVE, exactly. `boundaries_measured` has ONE increment site in the
 # whole repo (`_prepare_boundary`, `counts["boundaries_measured"] += 1`), and the verdict
-# domain is closed at three values -- `evaluate_boundary_strict` and `evaluate_boundary`
-# return only "matched", "diverged" and "skip_lossy" -- so the DYNAMIC key
-# `f"transition:{verdict}"` cannot mint a fifth term. `_prepare_boundary` has a second
+# domain is closed and every non-`transition:*` verdict has an explicit `continue`
+# before `counts[f"transition:{verdict}"]`, so that DYNAMIC key cannot mint an
+# uncounted term. C144 stated the closure as "three values -- `evaluate_boundary_strict`
+# and `evaluate_boundary` return only \"matched\", \"diverged\" and \"skip_lossy\"".
+# C142 makes it FOUR: `evaluate_boundary_strict` also returns "skip_rump". The
+# exhaustiveness argument is unchanged in form -- `skip_rump` has its own `continue` and
+# its own counted term -- but the enumeration had to be updated with it, which is the
+# drift C144's seam comment predicted. `_prepare_boundary` has a second
 # caller (`scripts/attest_materialized_damage_stats.py`), which is harmless only because
 # it passes a THROWAWAY `Counter()` and never publishes a report; give it the live counter
 # and the identity breaks there, silently, with no verdict ever recorded.
@@ -3098,10 +3104,32 @@ def checkpoint_report_aggregate(
 # The remaining `skip:*` counters -- every one not in
 # `VERDICT_PARTITION_SKIP_COUNTERS` -- fire BEFORE `boundaries_measured` increments and
 # belong to the coverage reconciliation instead
-# (`tests/test_single_seat_coverage_bound.py`). C144 wrote this as "every `skip:*` other
-# than `skip:strict_all_branches_lossy`", which C142's `skip:rump_branch_set` falsifies:
-# it is a `skip:*` that fires after. The membership test is WHEN the counter fires
-# relative to `boundaries_measured`, never the counter's prefix.
+# (`tests/test_single_seat_coverage_bound.py`).
+#
+# C144 wrote that as "every `skip:*` counter OTHER than `skip:strict_all_branches_lossy`
+# fires before `boundaries_measured` increments". C142's `skip:rump_branch_set` falsifies
+# it as stated: it is a `skip:*` counter, it is not the lossy one, and it fires after.
+#
+# The membership test is TWO conditions, and firing late is only the first of them:
+#
+#   1. the counter increments only AFTER `boundaries_measured` has incremented for that
+#      boundary -- otherwise the boundary is not in the denominator at all; and
+#   2. the increment is the boundary's TERMINAL VERDICT: at most one per boundary, and
+#      mutually exclusive with `transition:matched` / `transition:diverged`. In the code
+#      that is literally the `continue` in `run_game` that skips
+#      `counts[f"transition:{verdict}"] += 1`.
+#
+# Condition 1 alone is NOT sufficient, and the counterexamples are in the paragraph
+# above. `gating:*` increments on the line immediately after `boundaries_measured`, and
+# every `strict:*` counter in this function fires later still -- `evaluate_boundary_strict`
+# is called after `_prepare_boundary` has returned. None of them is a partition term,
+# because each fails condition 2: `strict:lossy_render` can increment many times for one
+# boundary and leaves the boundary free to receive an ordinary verdict. C141's holdout
+# is the measurement -- `strict:lossy_render` 3, every boundary `matched`, identity
+# closes -- and `tests/test_boundary_verdict_partition.py` pins exactly that shape.
+#
+# So: NOT the counter's prefix, and NOT timing alone. Terminal-verdict-ness is the
+# discriminator; late firing is the precondition that makes it visible in this identity.
 # ---------------------------------------------------------------------------------------------
 
 # The four verdict terms as a report PUBLISHES them: three top-level scalars and one
@@ -3112,9 +3140,14 @@ VERDICT_PARTITION_SCALARS = ("transitions_matched", "transitions_diverged", "eng
 # The post-measurement SKIP verdicts, which have no top-level scalar and must be dug
 # out of `counters`. C144 shipped this as a single name; C142 added the second, doing
 # exactly what C144's own instruction above said to do rather than letting the
-# identity drift. Both fire AFTER `boundaries_measured` has incremented and both take
-# the boundary out of every `transition:*` tally, which is the membership test for
-# this tuple -- not the counter's prefix.
+# identity drift.
+#
+# Both satisfy BOTH membership conditions stated above: each fires only after
+# `boundaries_measured` has incremented, AND each is a terminal verdict -- at most one
+# increment per boundary, `continue`ing past `counts[f"transition:{verdict}"]`. Timing
+# alone would also admit `gating:*` and every `strict:*` counter, none of which is a
+# verdict; the prefix would admit the pre-measurement `skip:*` counters, which are not in
+# the denominator. Neither shortcut is the rule.
 VERDICT_PARTITION_SKIP_COUNTERS = (
     "skip:strict_all_branches_lossy",
     "skip:rump_branch_set",
@@ -3198,8 +3231,9 @@ def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "repor
         out.append(
             f"{label}: the boundary verdict partition does not close — {breakdown} = "
             f"{accounted} against boundaries_measured {measured}; {cause}. The identity "
-            "is four-term (matched + diverged + engine_errors + "
-            "skip:strict_all_branches_lossy); a two-term reading of it is the C144 defect."
+            "is five-term (matched + diverged + engine_errors + "
+            "skip:strict_all_branches_lossy + skip:rump_branch_set); a two-term reading "
+            "of it is the C144 defect."
         )
     return out
 
