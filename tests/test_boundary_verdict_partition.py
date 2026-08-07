@@ -104,7 +104,20 @@ _C141 = {
 # Committing a new sweep artifact means bumping this number. That is the point: it makes the
 # new artifact pass through the checker deliberately rather than by default. C141's
 # final-holdout sweep lands with PR #1159 and takes it to 71.
-_EXPECTED_SWEEP_ARTIFACTS = 70
+#
+# 70 -> 74 (C145). The four are the one-game `19100170` bisect sweeps
+# `reports/artifacts/c145_g19100170_{2ec0cb13,dc6e1e19,d27316b6,head}.json`. Bumped only after
+# checking that the delta really is an ADDITION and not this pin's fail-open: the corpus at
+# `origin/main` selects exactly 70, this branch selects 74, and the set difference is those four
+# with nothing removed. `c145_settling_branch_dump.json` is deliberately NOT among them -- it is a
+# branch dump with no top-level `boundaries_measured`, so the selector does not see it, which is
+# correct rather than an omission. All four close the four-term identity through the checker below
+# (79 + 2 + 0 + 0 == 81 at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix).
+#
+# NOTE for whoever lands next: #1159 also bumps this line, to 71 from its own 70. The two edits
+# conflict, and the resolution is NOT 71 + 4 or 74 + 1 by arithmetic -- re-derive the count from the
+# merged corpus, because that is the only reading this pin's exactness is worth anything under.
+_EXPECTED_SWEEP_ARTIFACTS = 74
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

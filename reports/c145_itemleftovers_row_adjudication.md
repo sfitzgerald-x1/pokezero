@@ -449,6 +449,30 @@ step aborts at the pipeline with exit 1 and never reaches the guards. So the hol
 rather than by the greps — which is fine, but it is a property of the shell, and reading the two
 `grep -q` lines alone would have suggested a gap that is not there and hidden the reason there isn't.
 
+### 5.5 One pin this PR had to move, and why that is not a weakening
+
+C144 (#1163) merged into `main` while this work was in flight and added
+`tests/test_boundary_verdict_partition.py`, which pins the number of committed sweep artifacts
+**exactly** — `_EXPECTED_SWEEP_ARTIFACTS = 70` — because a floor was the one fail-open in its own
+mutation battery. The four bisect artifacts here take it to **74**, so the gate failed until bumped.
+
+Bumping an exactness pin is the shape that deserves suspicion, so it was not done by arithmetic. The
+selector was re-run over both trees: `origin/main` selects **exactly 70**, matching the pin, this
+branch selects **74**, and the set difference is exactly the four `c145_g19100170_*.json` files with
+**nothing removed** — so this is an addition, not the disappearance the pin exists to catch.
+`c145_settling_branch_dump.json` is correctly *not* selected: it carries no top-level
+`boundaries_measured`. All four then pass the checker itself rather than merely the count, closing the
+four-term identity — `79 + 2 + 0 + 0 == 81` at the two pre-fix commits and `81 + 0 + 0 + 0 == 81` at
+the two post-fix ones.
+
+And the bumped pin was confirmed still live, by the same standard §5.4 applies to my own guard: set to
+73 it fails with `AssertionError: 74 != 73`; at 74 the module is `Ran 23 tests … OK`. A bump that
+silently disarmed the pin would look identical from the diff.
+
+`#1159` also bumps that line, to 71 from its own 70. The edits conflict, and the resolution is
+neither `71 + 4` nor `74 + 1`: re-derive from the merged corpus, which is the only reading an
+exactness pin is worth anything under. Noted in the file and on the PR.
+
 ---
 
 ## 6. Ledger changes
