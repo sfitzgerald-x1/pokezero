@@ -77,13 +77,54 @@ threshold asserts nothing and reads PASS. ``test_matrix_is_not_vacuous`` asserts
 matrix contains a genuine split and a collapsed fan, and that ``case-a-three-way``
 partitions. A branch COUNT is never used as a signal: Rock Slide flinches 30%, so every
 arm appears twice and a count moves with an unrelated secondary.
+
+WHICH ROLL PATH THIS GATE MEASURES, since C116 Phase 2 there are two. The engine now
+ships enumerate-then-merge behind the runtime flag ``POKEZERO_ENUMERATE_ROLLS``, OFF by
+default and consumed only as a reference ORACLE by tests that ask for it explicitly
+(``tests/test_roll_enumeration_scope.py`` holds that line at runtime). This gate's
+subject is the COLLAPSED partition cascade — the path search runs, the path the
+transition differential runs, and the only path whose arm assignment a threshold can get
+wrong, because enumeration consults no threshold at all.
+
+The three mass assertions are configuration-agnostic and stay in-process: a KO mass, a
+mass total and a named-constant pin are true of both paths, and measuring whichever path
+the caller built is a feature. ``test_matrix_is_not_vacuous`` is NOT: its negative control
+asserts that some fixture leaves a fan COLLAPSED, which is unsatisfiable by construction
+under enumeration, where every fan is partitioned into its sixteen rolls. Under ambient
+``POKEZERO_ENUMERATE_ROLLS=1`` the old version therefore went red for a reason that has
+nothing to do with the defect class it guards.
+
+The fix is not to relax it. The flag is latched per process by a ``OnceLock``, so this
+gate measures its shapes in a CHILD process with ``POKEZERO_ENUMERATE_ROLLS=0`` and keeps
+every assertion at full strength. Verified by running the control against a child with
+the flag ON and confirming it fails.
+
+What forcing ``"0"`` does and does not catch, stated precisely because an earlier version
+of this paragraph overclaimed. It catches the flag being IGNORED — an engine that
+enumerates whatever the environment says makes this child come back enumerated and the
+collapsed control go red. It does NOT catch the patch's DEFAULT flipping, because the
+value is set explicitly here and a default only applies when the variable is unset. That
+property is asserted where it belongs, against an unset environment, by
+``tests/test_roll_enumeration_scope.py::test_default_build_collapses_the_fan``.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 import poke_engine as pe
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _subproc_env import subproc_env  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
+ENUMERATE_ROLLS_ENV = "POKEZERO_ENUMERATE_ROLLS"
 
 ACCURACY = 0.9          # Rock Slide
 CRIT_RATE = 1.0 / 16.0  # BASE_CRIT_CHANCE
@@ -142,6 +183,73 @@ def _net_hp_lost_by_defender(branch) -> int:
         elif text.startswith("Heal SideTwo"):
             total -= int(text.split(": ")[1])
     return total
+
+
+def measure_shapes() -> dict[str, list[int]]:
+    """{fixture -> sorted distinct move-damage values in its non-miss arms}.
+
+    Damage VALUES, never branch counts: Rock Slide flinches 30%, so every arm
+    appears twice and a count moves with an unrelated secondary.
+    """
+    shapes = {}
+    for label, hp, status, item, weather, tc in BranchMassReconstruction.CASES:
+        quiet = _state(hp, status, item, weather, tc, "splash")
+        tick = _net_hp_lost_by_defender(
+            pe.generate_instructions(quiet, "splash", "splash")[0]
+        )
+        state = _state(hp, status, item, weather, tc, "rockslide")
+        values = set()
+        for b in pe.generate_instructions(state, "rockslide", "splash"):
+            # A MISS branch loses exactly the residual tick and nothing else;
+            # any hit adds move damage on top, so comparing the NET against the
+            # tick identifies it exactly.
+            #
+            # My first attempt broke on a marker instruction instead, and review
+            # MEASURED that it did not work: for every fixture without Leftovers
+            # the miss branch's FIRST instruction IS the bare residual
+            # `Damage SideTwo`, so there was nothing to break on.
+            # saturated-toxic-count-1 still read [30, 112], still misreporting a
+            # collapsed fan as partitioned, while the comment claimed otherwise.
+            # It now reads [112] and is the negative control it was designed to be.
+            if _net_hp_lost_by_defender(b) == tick:
+                continue
+            for i in b.instruction_list:
+                text = str(i)
+                if text.startswith("Damage SideTwo"):
+                    values.add(int(text.split(": ")[1]))
+                    break
+        shapes[label] = sorted(v for v in values if v != hp)
+    return shapes
+
+
+def collapsed_shapes() -> dict[str, list[int]]:
+    """``measure_shapes`` from a child process pinned to the collapsed cascade.
+
+    A child, because ``POKEZERO_ENUMERATE_ROLLS`` is latched once per process by a
+    ``OnceLock``: this parent may already have called into the engine, and on an
+    enumerated parent an in-process measurement would silently report enumerated
+    shapes to a control whose whole job is to find a collapsed one.
+
+    Setting ``"0"`` rather than unsetting is deliberate and its scope is limited: it
+    makes this gate independent of the ambient environment, and it would catch an
+    engine that ignored the flag, but it cannot see the patch's default flip. The
+    unset-environment case is asserted in ``tests/test_roll_enumeration_scope.py``.
+    """
+    environment = subproc_env()
+    environment[ENUMERATE_ROLLS_ENV] = "0"
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--emit-shapes"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise AssertionError(
+            "collapsed shape probe exited "
+            f"{result.returncode}\n{result.stdout}\n{result.stderr}"
+        )
+    return json.loads(result.stdout)
 
 
 class BranchMassReconstruction(unittest.TestCase):
@@ -242,35 +350,12 @@ class BranchMassReconstruction(unittest.TestCase):
         Six such near-misses shipped in the previous era. This asserts the matrix
         as a whole exercises the arm structures it claims to, using distinct move
         damages rather than branch counts (flinch doubles every arm).
+
+        Measured in a child process pinned to the COLLAPSED cascade -- see the module
+        docstring. The three assertions below are byte-for-byte the ones that shipped;
+        only where the shapes come from has changed.
         """
-        shapes = {}
-        for label, hp, status, item, weather, tc in self.CASES:
-            quiet = _state(hp, status, item, weather, tc, "splash")
-            tick = _net_hp_lost_by_defender(
-                pe.generate_instructions(quiet, "splash", "splash")[0]
-            )
-            state = _state(hp, status, item, weather, tc, "rockslide")
-            values = set()
-            for b in pe.generate_instructions(state, "rockslide", "splash"):
-                # A MISS branch loses exactly the residual tick and nothing else;
-                # any hit adds move damage on top, so comparing the NET against the
-                # tick identifies it exactly.
-                #
-                # My first attempt broke on a marker instruction instead, and review
-                # MEASURED that it did not work: for every fixture without Leftovers
-                # the miss branch's FIRST instruction IS the bare residual
-                # `Damage SideTwo`, so there was nothing to break on.
-                # saturated-toxic-count-1 still read [30, 112], still misreporting a
-                # collapsed fan as partitioned, while the comment claimed otherwise.
-                # It now reads [112] and is the negative control it was designed to be.
-                if _net_hp_lost_by_defender(b) == tick:
-                    continue
-                for i in b.instruction_list:
-                    text = str(i)
-                    if text.startswith("Damage SideTwo"):
-                        values.add(int(text.split(": ")[1]))
-                        break
-            shapes[label] = sorted(v for v in values if v != hp)
+        shapes = collapsed_shapes()
 
         multi = [k for k, v in shapes.items() if len(v) >= 2]
         single = [k for k, v in shapes.items() if len(v) == 1]
@@ -283,6 +368,24 @@ class BranchMassReconstruction(unittest.TestCase):
         self.assertGreaterEqual(
             len(shapes["case-a-three-way"]), 2,
             f"case-a-three-way must show a partitioned fan, got {shapes}",
+        )
+
+    def test_the_negative_control_names_its_fixture(self):
+        """Which fixture is the collapsed control, and what it collapses TO.
+
+        ``single`` being non-empty is satisfied by any one of nine fixtures, so the
+        control could migrate between fixtures across an engine change and nobody
+        would see it move. ``saturated-toxic-count-1`` is the designed control -- the
+        residual already saturates, so no threshold straddles its fan and the
+        cascade emits one representative roll. Pinning the VALUE as well as the
+        count makes a representative that drifts to a different roll fail here by
+        name, which a shape-length check cannot do.
+        """
+        shapes = collapsed_shapes()
+        self.assertEqual(
+            shapes["saturated-toxic-count-1"], [112],
+            "the designed collapsed control changed shape; if the cascade now "
+            "partitions this fan the matrix has lost its negative control",
         )
 
     def test_named_constants_are_pinned_by_a_named_arm(self):
@@ -307,4 +410,9 @@ class BranchMassReconstruction(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--emit-shapes"]:
+        # Child entry point for ``collapsed_shapes``. Not a test: it reports the
+        # shapes of whatever roll path this process was started in.
+        print(json.dumps(measure_shapes()))
+        raise SystemExit(0)
     unittest.main(verbosity=2)

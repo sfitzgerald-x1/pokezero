@@ -203,5 +203,152 @@ class CheckpointProvenanceTests(unittest.TestCase):
         )
 
 
+class RollPathProvenanceTests(unittest.TestCase):
+    """C116 Phase 2: which roll path a shard ran on, and who may merge with whom.
+
+    One BUILD serves the collapsed cascade and the enumerated oracle, selected at
+    runtime. So ``source_commit``, ``engine_fingerprint`` and ``image_commit`` are
+    identical between the two configurations by design, and this field is the only
+    thing that can tell a collapsed shard from an enumerated one.
+    """
+
+    provenance = {
+        "source_commit": "a" * 40,
+        "engine_fingerprint": "b" * 64,
+        "image_commit": "c" * 40,
+    }
+
+    @staticmethod
+    def _record(enumerate_rolls: bool | None) -> dict:
+        provenance = {
+            "source_commit": "a" * 40,
+            "engine_fingerprint": "b" * 64,
+            "image_commit": "c" * 40,
+        }
+        if enumerate_rolls is not None:
+            provenance["enumerate_rolls"] = enumerate_rolls
+        return {"provenance": provenance}
+
+    def test_import_does_not_select_a_roll_path(self) -> None:
+        """Importing the differential must leave the process configuration alone.
+
+        The module used to run ``os.environ.setdefault`` at import, which made every
+        importer -- this test module included -- an enabler for its whole process and
+        every child of it. The behavioural proof lives in
+        ``tests/test_roll_enumeration_scope.py``; this is the cheap unit-level echo.
+        """
+        self.assertFalse(runner.ENUMERATE_ROLLS)
+
+    def test_merge_refuses_shards_from_different_roll_paths(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            runner._merged_roll_path([self._record(False), self._record(True)])
+        self.assertIn("DIFFERENT roll paths", str(caught.exception))
+
+    def test_merge_derives_the_roll_path_from_the_records(self) -> None:
+        self.assertTrue(
+            runner._merged_roll_path([self._record(True), self._record(True)])
+        )
+        self.assertFalse(
+            runner._merged_roll_path([self._record(False), self._record(False)])
+        )
+
+    def test_a_record_predating_the_field_counts_as_collapsed(self) -> None:
+        """Absent is collapsed as a matter of HISTORY, not as a lenient default.
+
+        Records written before the field existed came out of builds with no enumerated
+        path compiled into them at all.
+        """
+        self.assertFalse(runner._merged_roll_path([self._record(None)]))
+        with self.assertRaises(ValueError):
+            runner._merged_roll_path([self._record(None), self._record(True)])
+
+    def test_source_tree_is_recorded_but_does_not_gate_a_resume(self) -> None:
+        """The field's comment says "recorded, not enforced". This is that, enforced.
+
+        ``_resume_provenance_failures`` compares provenance with ``!=``, so adding a key
+        to the dict silently added it to resume IDENTITY. Review demonstrated the
+        consequence: sweep 200 games on a clean tree, touch any tracked file, resume ->
+        exit 1, "checkpoint record 1 provenance differs from this resume". A crash-safe
+        sweep that cannot survive an unrelated edit is not crash-safe, and it was the
+        exact recorded-vs-enforced contradiction this branch fixed two docstrings for.
+        """
+        clean = dict(self.provenance, source_tree="clean")
+        dirty = dict(self.provenance, source_tree="dirty")
+        self.assertEqual(runner._resume_provenance_failures([{"provenance": clean}], dirty), [])
+        self.assertEqual(runner._resume_provenance_failures([{"provenance": dirty}], clean), [])
+
+    def test_every_other_provenance_field_still_gates_a_resume(self) -> None:
+        """The negative control: excluding one key must not have excluded the rest."""
+        base = dict(self.provenance, source_tree="clean", enumerate_rolls=False)
+        for field, other in (
+            ("source_commit", "f" * 40),
+            ("engine_fingerprint", "e" * 64),
+            ("image_commit", "d" * 40),
+            ("enumerate_rolls", True),
+        ):
+            with self.subTest(field=field):
+                mixed = dict(base)
+                mixed[field] = other
+                self.assertEqual(
+                    runner._resume_provenance_failures([{"provenance": mixed}], base),
+                    ["checkpoint record 1 provenance differs from this resume"],
+                    f"{field} stopped being part of resume identity",
+                )
+
+    def test_source_tree_reports_the_checkout_state(self) -> None:
+        """It has to actually measure something, not just always say "clean"."""
+        self.assertIn(runner._source_tree_state(), {"clean", "dirty", "unknown"})
+
+    def test_a_clean_dirty_flip_stays_visible_in_the_report(self) -> None:
+        """Excluded from identity, NOT dropped: the artifact still shows both states.
+
+        Otherwise "recorded, not enforced" would have quietly become "not recorded".
+        """
+        records = []
+        for index, state in enumerate(("clean", "dirty")):
+            records.append({
+                "schema": runner.CHECKPOINT_SCHEMA,
+                "build_check": "gated",
+                "seed": 1000 + index,
+                "seconds": 1.0,
+                "counters": {"boundaries_measured": 1, "transition:matched": 1},
+                "repros": [],
+                "provenance": dict(self.provenance, enumerate_rolls=False, source_tree=state),
+            })
+        report = runner.build_report(
+            records, elapsed=None, approximate_sleep=None, matcher=None, keep_repro=0
+        )
+        distinct = report["checkpoint_provenance"]["distinct"]
+        self.assertEqual(len(distinct), 2, distinct)
+        self.assertTrue(any('"source_tree": "dirty"' in blob for blob in distinct))
+        self.assertTrue(any('"source_tree": "clean"' in blob for blob in distinct))
+
+    def test_the_merged_report_labels_itself_from_the_shards(self) -> None:
+        """Not from the merging PROCESS, which ran no games and made no engine call."""
+        record = {
+            "schema": runner.CHECKPOINT_SCHEMA,
+            "build_check": "gated",
+            "seed": 1000,
+            "seconds": 1.0,
+            "counters": {"boundaries_measured": 1, "transition:matched": 1},
+            "repros": [],
+            "provenance": self._record(True)["provenance"],
+        }
+        merged = runner.build_report(
+            [record],
+            elapsed=None,
+            approximate_sleep=None,
+            matcher=None,
+            keep_repro=0,
+            enumerate_rolls=runner._merged_roll_path([record]),
+        )
+        self.assertTrue(merged["enumerate_rolls"])
+        self.assertFalse(
+            runner.ENUMERATE_ROLLS,
+            "the merging process itself stayed on the collapsed default, so this label "
+            "could only have come from the records",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

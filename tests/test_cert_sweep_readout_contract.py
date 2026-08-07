@@ -188,6 +188,11 @@ class CertificationContractTests(unittest.TestCase):
                         "source_commit": self.source_commit,
                         "engine_fingerprint": self.engine_fingerprint,
                         "image_commit": self.image_commit,
+                        # C116 Phase 2: which roll path ran. The three fields above
+                        # are identical between the collapsed cascade and the
+                        # enumerated oracle -- one build serves both -- so this is
+                        # the only one that distinguishes them.
+                        "enumerate_rolls": False,
                     },
                 }
             ) + "\n",
@@ -200,6 +205,7 @@ class CertificationContractTests(unittest.TestCase):
                 "source_commit": self.source_commit,
                 "engine_fingerprint": self.engine_fingerprint,
                 "image_commit": self.image_commit,
+                "enumerate_rolls": False,
             },
         })
         return evidence

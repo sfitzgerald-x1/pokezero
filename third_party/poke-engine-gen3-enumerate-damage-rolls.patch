@@ -1,12 +1,29 @@
+--- REBASED ONTO THE 70-PATCH STACK (#1152). The original three-hunk form no longer
+--- applies: #1152's status-aware-residual-threshold patch DELETED the
+--- `residual_threshold_opt` binding this patch's second hunk edited, replacing it with a
+--- `residual_lethality_thresholds(state, &attacking_side, choice)` ladder computed once
+--- and consumed only inside the partition cascade.
+---
+--- That hunk is therefore DROPPED rather than ported, and the result is strictly better.
+--- It used to read `if enumerate_damage_rolls() { None } else { ... }`, disabling the
+--- mirror UNCONDITIONALLY while enumerating only under the additional
+--- `branch_on_damage && fixed_damage.is_none()` guard -- so a searching process with the
+--- flag set got a THIRD configuration at every ply, collapsed representative AND no
+--- residual partition, which reports/c137 section 2 named as a real defect. With the
+--- ladder consumed only by the cascade the enumerated arm bypasses, nothing needs
+--- disabling: the flag-off path is bit-identical by construction and there is no third
+--- configuration to be in.
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1194,6 +1194,52 @@
+@@ -1192,16 +1192,62 @@ fn get_instructions_from_boosts(
+             boost,
+             attacking_side_reference,
              &target_side_ref,
              incoming_instructions,
          );
-+    }
-+}
-+
+     }
+ }
+ 
 +/// C116 Phase 2 spike -- enumerate-then-merge, OFF BY DEFAULT.
 +///
 +/// Read once from `POKEZERO_ENUMERATE_ROLLS` (accepts `1`/`true`). A *runtime*
@@ -50,32 +67,23 @@
 +            Some(existing) => existing.1 += mass_per_roll,
 +            None => arms.push((rolled, mass_per_roll)),
 +        }
-     }
- }
++    }
++}
++
+ fn compare_health_with_damage_multiples(max_damage: i16, health: i16) -> (i16, i16) {
+     let max_damage_f32 = max_damage as f32;
+     let health_f32 = health as f32;
  
-@@ -3457,8 +3503,19 @@
-     // disproved by compiling it at this position; the real earlier failure was a
-     // placement next to `crit_chance`, in a SIBLING block whose scope closed
-     // before the use. reports/c109, reports/c111 cause A3.
--    let residual_threshold_opt =
--        residual_lethality_threshold(state, &attacking_side.get_other_side());
-+    //
-+    // THE SPIKE DELETES THIS CALL. Under enumeration there is no threshold to
-+    // place, because no roll is collapsed before its consequences are computed:
-+    // each roll is carried as its own arm through the move, its secondaries and
-+    // the ordered residual phase, and dies (or does not) where it actually
-+    // happens. A8's ordering concern -- "the threshold is read BEFORE secondaries
-+    // resolve" -- is a property of this mirror, and there is nothing left to
-+    // relocate once the mirror is not called.
-+    let residual_threshold_opt = if enumerate_damage_rolls() {
-+        None
-+    } else {
-+        residual_lethality_threshold(state, &attacking_side.get_other_side())
-+    };
- 
-     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
-     let defender_active = defender_side.get_active();
-@@ -3522,7 +3579,48 @@
+     let mut total_less_than = 0;
+     let mut num_less_than = 0;
+     let mut num_greater_than = 0;
+     let increment = max_damage as f32 * 0.01;
+@@ -3776,17 +3822,58 @@ pub fn generate_instructions_from_move(
+         // -- bonerush at 112, furyswipes at 121, spikecannon at 136. A 400-game
+         // sweep reported `engine_errors: 0` because the window is one or two HP
+         // values per matchup: sample size, not safety.
+         let ko_min_damage = if hit_count > 1 {
+             (ko_max_damage as f32 * 0.85) as i16
          } else {
              min_damage_dealt
          };
@@ -125,3 +133,8 @@
              && ko_max_damage >= defender_active.hp
              && ko_min_damage < defender_active.hp
          {
+             let (average_non_kill_damage, num_kill_rolls) =
+                 compare_health_with_damage_multiples(ko_max_damage, defender_active.hp);
+ 
+             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
+                 || defender_active.ability == Abilities::SHELLARMOR

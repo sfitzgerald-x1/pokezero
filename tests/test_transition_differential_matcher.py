@@ -816,8 +816,78 @@ class PairBySource(unittest.TestCase):
         self.assertEqual(_pair_by_source([("drain", -10)], []), [])
 
 
+
+
+class WrongFanControlMap(unittest.TestCase):
+    """Pins the remap behind ``scripts/c134_wrong_fan_control.py``.
+
+    That script attempts the question the sweep cannot answer: enumeration closes four
+    rows while inflating the branch count 8.5x-72.5x, and ``evaluate_boundary_strict``
+    accepts on the FIRST matching branch, so "nothing opened" is consistent with a real
+    fix AND with a lottery.
+
+    **The control is currently INCONCLUSIVE and the script exits non-zero.** It is kept,
+    and this pin is kept, because the remap is still the honest-wrong-fan primitive any
+    future version needs, and because four separate confounds have already been found in
+    it -- a constant down-shift that dropped every branch on a low-HP defender, a clamped
+    shift whose "wrong" fan overlapped the legal one, a run that perturbed only ``p2a``
+    when the row diverged on ``p1``, and finally the drop of unremappable branches doing
+    the entire work. Each produced the expected verdict for a reason unrelated to the
+    property under test.
+
+    What is pinned here is narrow and true: given a legal fan, the remap produces an
+    injective, same-cardinality, disjoint, nearby wrong fan.
+    """
+
+    @staticmethod
+    def _map(legal):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "c134_wrong_fan_control_under_test",
+            REPO_ROOT / "scripts" / "c134_wrong_fan_control.py",
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.wrong_fan_map(legal)
+
+    def test_the_wrong_fan_is_disjoint_same_size_and_nearby(self) -> None:
+        fans = {
+            "contiguous": list(range(103, 123)),
+            "sparse crit+non-crit": [187, 189, 191, 193, 195, 198, 200, 202, 204, 206,
+                                     209, 211, 213, 215, 217, 220],
+            "low hp, span exceeds minimum": [5, 9, 14, 20, 27, 35, 44],
+            "singleton": [112],
+        }
+        for label, legal in fans.items():
+            with self.subTest(fan=label):
+                mapping = self._map(legal)
+                wrong = sorted(mapping.values())
+                self.assertEqual(
+                    len(wrong), len(legal), "the wrong fan must have the SAME cardinality"
+                )
+                self.assertEqual(len(set(wrong)), len(wrong), "the remap must be injective")
+                self.assertFalse(
+                    set(wrong) & set(legal),
+                    f"the wrong fan still contains legal rolls: {sorted(set(wrong) & set(legal))}",
+                )
+                self.assertTrue(all(value > 0 for value in wrong), "damage must stay positive")
+                # Nearby, so no branch gains or loses a faint and the control changes
+                # exactly one property: whether the values are legal rolls.
+                span = max(legal) - min(legal) + 1
+                for source, target in mapping.items():
+                    self.assertLessEqual(
+                        abs(target - source), span + len(legal),
+                        f"{source} -> {target} left the fan's magnitude range",
+                    )
+
+
 if __name__ == "__main__":  # pragma: no cover
-    # At the END. It sat at line 592, stranding MajorityBranchOverride, PainSplitSetHp, PairBySource
-    # from direct execution -- found by the repo-wide structural guard in
-    # tests/test_public_invariant.py.
+    # MUST BE THE LAST STATEMENT IN THE FILE. It has now stranded classes twice: at
+    # line 592 (MajorityBranchOverride, PainSplitSetHp, PairBySource) and again here,
+    # when WrongFanControlMap was appended below it. Anything defined after this line
+    # does not exist under `python <file>`, so pytest and direct execution disagree on
+    # the test count. Append new classes ABOVE this block, never below.
     unittest.main()
