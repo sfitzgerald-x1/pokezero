@@ -2021,8 +2021,22 @@ def evaluate_boundary_strict(
     # cannot_act` and the surviving 6.25% CRIT arm supplied the only comparison
     # (its capped-lethal recoil -32 against the observed non-crit recoil -18).
     # That boundary matches on its full branch set.
+    #
+    # `enumeration_incomplete` is the DECIDING flag and `dropped_mass` only
+    # describes it. Three distinct paths leave a positive-mass branch
+    # uncompared, and all three must set it, or `diverged_on_full_branch_set`
+    # would assert "100 % of its mass" over an enumeration that was not
+    # complete:
+    #   1. the lossy-render filter        (the measured case)
+    #   2. `BranchLegalRollError`         (per-branch support could not be priced)
+    #   3. `strict:branch_events_error`   (a whole candidate state failed to render)
+    # Only (1) has a knowable mass; (3) loses the branch list itself, so the
+    # surviving fraction is reported as unknown rather than guessed. Neither (2)
+    # nor (3) has ever appeared in any artifact in `reports/artifacts/`, so this
+    # is a fail-closed guard on unexercised paths, not a fix to a live number.
     enumerated_mass = 0.0
     dropped_mass = 0.0
+    enumeration_incomplete = False
     for state in states:
         try:
             rendered = json.loads(
@@ -2034,6 +2048,7 @@ def evaluate_boundary_strict(
             raise
         except BaseException as error:  # noqa: BLE001
             counts[f"strict:branch_events_error:{type(error).__name__}"] += 1
+            enumeration_incomplete = True
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
@@ -2077,6 +2092,7 @@ def evaluate_boundary_strict(
             if not branch_render_is_usable(lossy):
                 counts["strict:lossy_render"] += 1
                 dropped_mass += float(branch.get("percentage") or 0.0)
+                enumeration_incomplete = True
                 # Subcase, so the drop is attributable. The single
                 # undifferentiated `strict:lossy_render` counter is why the
                 # marker behind 19200131/129 had to be recovered by replay
@@ -2094,6 +2110,8 @@ def evaluate_boundary_strict(
                 )
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
+                dropped_mass += float(branch.get("percentage") or 0.0)
+                enumeration_incomplete = True
                 continue
             usable_branches += 1
             engine_components = damage_component_events(
@@ -2191,36 +2209,44 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
-    if dropped_mass > 0.0:
-        # SOME branch was dropped and nothing that survived reproduced the
-        # observation. The branch that did may be one of the dropped ones, so
-        # the only honest verdict is "unmeasurable on this render", counted in
-        # its own bucket and NEVER folded into `transition:diverged`.
+    if enumeration_incomplete:
+        # SOME branch was left uncompared and nothing that survived reproduced
+        # the observation. The branch that would have may be one of those, so the
+        # only honest verdict is "unmeasurable on this render", counted in its own
+        # bucket and NEVER folded into `transition:diverged`.
         #
-        # Deliberately mass-blind. A threshold ("only skip when the majority was
-        # dropped") would be a tuned constant guarding a semantic question: the
-        # existential is unverifiable at ANY positive dropped mass. The surviving
-        # fraction is recorded instead of gating on it, so the population stays
-        # visible and can be attacked by making the renderer lossless rather than
-        # by choosing a number.
+        # Deliberately mass-blind: the trigger is `enumeration_incomplete`, not a
+        # fraction. A threshold ("only withhold when the majority was dropped")
+        # would put a tuned constant in front of a semantic question — the
+        # existential is unverifiable at ANY positive dropped mass, and a 1 %
+        # dropped arm is still the arm that might have matched. The surviving
+        # fraction is recorded instead of gated on, so the population stays
+        # visible and is attacked by making the renderer lossless rather than by
+        # choosing a number. `tests/test_rump_branch_adjudication.py` pins this
+        # with a MINORITY drop, which is the case a threshold would let through.
         surviving = enumerated_mass - dropped_mass
         counts["skip:rump_branch_set"] += 1
-        # Decile of surviving mass, so "how much of its mass did the withheld
-        # verdict have" is answerable from the artifact alone.
-        counts[
-            f"skip:rump_branch_set_surviving_decile:"
-            f"{int(10 * surviving / enumerated_mass)}"
-        ] += 1
-        return (
-            "skip_rump",
-            [
+        if enumerated_mass > 0.0:
+            # Decile of surviving mass, so "how much of its mass did the withheld
+            # verdict have" is answerable from the artifact alone.
+            counts[
+                f"skip:rump_branch_set_surviving_decile:"
+                f"{int(10 * surviving / enumerated_mass)}"
+            ] += 1
+            note = (
                 f"rump branch set: {surviving:.4g} of {enumerated_mass:.4g} enumerated "
-                f"mass survived the lossy-render filter "
-                f"({surviving / enumerated_mass:.2%}); verdict withheld",
-                *ordered,
-            ],
-            branch_total,
-        )
+                f"mass survived the branch filters "
+                f"({surviving / enumerated_mass:.2%}); verdict withheld"
+            )
+        else:
+            # A whole candidate state failed to render, so there is no branch list
+            # to take a fraction of. Reported as unknown rather than as 0 %.
+            counts["skip:rump_branch_set_surviving_decile:unknown"] += 1
+            note = (
+                "rump branch set: enumeration incomplete and no branch list "
+                "available; surviving mass unknown; verdict withheld"
+            )
+        return "skip_rump", [note, *ordered], branch_total
     # Reaching here means every enumerated branch was rendered and compared, so
     # this divergence rests on 100 % of the enumerated mass. Counted so the
     # invariant `transition:diverged == strict:diverged_on_full_branch_set` is
@@ -2318,10 +2344,25 @@ def run_game(
     approximate_sleep: bool,
     hidden_counter_support: bool,
     matcher: str,
+    withheld_repros: list[dict[str, Any]] | None = None,
 ) -> Counter:
     """Run one game. Divergence repros are appended to ``repros`` (capped by
     ``keep_repro``); the caller owns whether that list is per-game (checkpoint
-    records) or run-global (the final report)."""
+    records) or run-global (the final report).
+
+    ``withheld_repros`` is the SECOND, separate population: boundaries whose
+    verdict was withheld because the branch set was a rump (see
+    ``evaluate_boundary_strict``). It is separate precisely so that
+    ``repros_retained == transitions_diverged`` keeps holding — the contract
+    ``scripts/cert_sweep_reread.py`` checks — while the withheld rows still carry
+    the state needed to replay them.
+
+    Retaining that state is not a nicety. Row 19200131/129, the boundary this
+    exit was built for, was diagnosable ONLY because it happened to be retained
+    in ``repros`` as a divergence; on a reserved window, re-running its seed to
+    recover the state IS the forbidden measurement. A withheld row carrying only
+    a counter key would be permanently undiagnosable.
+    """
 
     counts: Counter = Counter()
     env.reset(seed=seed, format_id="gen3randombattle")
@@ -2450,13 +2491,39 @@ def run_game(
             continue
         if verdict == "skip_rump":
             # `skip:rump_branch_set` is incremented inside the matcher. The row
-            # is NOT retained in `repros`: that list's completeness contract is
-            # `repros_retained == transitions_diverged` (checked by
-            # scripts/cert_sweep_reread.py), and mixing a second population into
-            # it would break the contract rather than extend it. The seed/step
-            # is recorded as a counter key instead, which keeps every withheld
-            # boundary replayable without touching the checkpoint schema.
+            # goes to its OWN list, not `repros`: that list's completeness
+            # contract is `repros_retained == transitions_diverged` (checked by
+            # scripts/cert_sweep_reread.py), so a second population must sit
+            # beside it rather than inside it. The counter key is kept as well,
+            # because it is the COMPLETE index even when `withheld_repros` has
+            # been truncated by `keep_repro`.
             counts[f"skip:rump_branch_set_row:{seed}/{steps}"] += 1
+            if withheld_repros is not None and len(withheld_repros) < keep_repro:
+                withheld_repros.append(
+                    {
+                        "kind": "verdict_withheld_rump_branch_set",
+                        "seed": seed,
+                        "step": steps,
+                        "choices": prepared["choices"],
+                        "engine_state": prepared["states"][0].to_string(),
+                        # EVERY hidden-counter candidate, so the replay
+                        # reconstructs the exact branch union the matcher saw.
+                        "engine_states": [st.to_string() for st in prepared["states"]],
+                        "gating": prepared["gating"],
+                        "party_display": prepared["party_display"],
+                        "slot_sides": prepared["slot_sides"],
+                        "turn": prepared["turn"],
+                        "pre_features": _features_payload(prepared["pre_features"]),
+                        "observed": _features_payload(observed),
+                        "observed_boost_deltas": observed_boost_deltas(step_lines),
+                        "active_changed": active_changed,
+                        "branch_count": branch_count,
+                        # The verdict that was NOT issued, kept verbatim: its
+                        # first entry is the surviving-mass line.
+                        "withheld_misses": list(misses[:12]),
+                        "protocol": list(step_lines),
+                    }
+                )
             continue
         counts[f"transition:{verdict}"] += 1
         if verdict == "diverged":
@@ -2835,6 +2902,7 @@ def checkpoint_record(
     seconds: float,
     build_check: str,
     provenance: Mapping[str, str | bool | None],
+    withheld_repros: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
@@ -2846,6 +2914,11 @@ def checkpoint_record(
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
         "repros": list(repros),
+        # Additive and always present, so a record written by this build is
+        # self-describing. Records written BEFORE this key existed are read as
+        # an empty list rather than rejected -- `--resume` and `--merge-from`
+        # over the existing checkpoint archive must keep working.
+        "withheld_repros": list(withheld_repros),
     }
 
 
@@ -2861,6 +2934,7 @@ def checkpoint_report_aggregate(
 
     totals: Counter = Counter()
     repros: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
     build_checks: set[str] = set()
     for record in records:
         build_checks.add(str(record.get("build_check", "unknown")))
@@ -2880,6 +2954,16 @@ def checkpoint_report_aggregate(
         for repro in record_repros:
             if len(repros) < keep_repro:
                 repros.append(dict(repro))
+        # ABSENT is legal (pre-C142 records); MALFORMED is not. An older record
+        # simply had no withheld population, so defaulting to empty is exact
+        # rather than lenient.
+        record_withheld = record.get("withheld_repros", [])
+        if not isinstance(record_withheld, list) or not all(
+                isinstance(row, Mapping) for row in record_withheld):
+            raise ValueError("checkpoint record has malformed withheld_repros")
+        for row in record_withheld:
+            if len(withheld) < keep_repro:
+                withheld.append(dict(row))
     # Match build_report's Counter access order so absent-but-observed-as-zero
     # aggregate fields are represented identically in report["counters"].
     measured = totals["boundaries_measured"]
@@ -2907,6 +2991,7 @@ def checkpoint_report_aggregate(
         "boundaries_full_round": full_rounds,
         "boundaries_measured": measured,
         "repros": repros,
+        "withheld_repros": withheld,
     }
 
 
@@ -2944,6 +3029,20 @@ def checkpoint_report_binding_failures(
         failures.append("report repro_retention.transitions_diverged does not match the checkpoint aggregate")
     if retention.get("repros_retained") != len(aggregate["repros"]):
         failures.append("report repro_retention.repros_retained does not match the checkpoint aggregate")
+    # Checked, because a stale report that dropped the withheld population would
+    # otherwise pass certification and those rows are the only replayable record
+    # of boundaries the harness declined to judge.
+    #
+    # Checked with a DEFAULT, because every certification report written before
+    # C142 has no such key and an empty aggregate: absent-and-empty is
+    # consistent, not a mismatch. Demanding the key outright failed the whole
+    # existing archive, which is a compatibility break dressed as a gate. The
+    # fail-closed property survives: a report that drops a NON-empty withheld
+    # population still mismatches, because the aggregate is non-empty.
+    if report.get("withheld_repros", []) != aggregate["withheld_repros"]:
+        failures.append("report withheld_repros does not match the checkpoint aggregate")
+    if retention.get("withheld_retained", 0) != len(aggregate["withheld_repros"]):
+        failures.append("report repro_retention.withheld_retained does not match the checkpoint aggregate")
     return failures
 
 
@@ -3061,6 +3160,7 @@ def build_report(
     aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
     totals: Counter = Counter(aggregate["counters"])
     repros: list[dict[str, Any]] = list(aggregate["repros"])
+    withheld: list[dict[str, Any]] = list(aggregate["withheld_repros"])
     seeds: list[int] = []
     total_seconds = 0.0
     provenance_rows: list[Mapping[str, Any]] = []
@@ -3100,6 +3200,13 @@ def build_report(
             "repros_retained": len(repros),
             "transitions_diverged": totals["transition:diverged"],
             "repros_complete": len(repros) >= totals["transition:diverged"],
+            # The withheld population is declared with the same three facts and
+            # kept STRICTLY SEPARATE, so `repros_retained == transitions_diverged`
+            # continues to mean exactly what cert_sweep_reread.py reads it to
+            # mean.
+            "withheld_retained": len(withheld),
+            "verdicts_withheld": totals["skip:rump_branch_set"],
+            "withheld_complete": len(withheld) >= totals["skip:rump_branch_set"],
         },
         "gating_exact": totals["gating:exact"],
         "gating_support_based": totals["gating:support"],
@@ -3119,6 +3226,7 @@ def build_report(
         "divergence_classes": aggregate["divergence_classes"],
         "counters": dict(sorted(totals.items())),
         "repros": repros,
+        "withheld_repros": withheld,
         "checkpoint_provenance": {
             "records_with_provenance": len(provenance_rows),
             "complete": len(provenance_rows) == games,
@@ -3401,7 +3509,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "acceptance-eligible.",
                 file=sys.stderr,
             )
-        print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
+        print(json.dumps(
+            {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
+            indent=2,
+        ))
         if args.json:
             Path(args.json).write_text(json.dumps(report, indent=2))
             print(f"-> {args.json}")
@@ -3456,6 +3567,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for index, seed in enumerate(todo, start=1):
             game_started = time.perf_counter()
             game_repros: list[dict[str, Any]] = []
+            game_withheld: list[dict[str, Any]] = []
             counts = run_game(
                 env=env,
                 flags_policy=flags_policy,
@@ -3467,6 +3579,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approximate_sleep=args.approximate_sleep,
                 hidden_counter_support=not args.no_hidden_counter_support,
                 matcher=args.matcher,
+                withheld_repros=game_withheld,
             )
             record = checkpoint_record(
                 seed=seed,
@@ -3475,6 +3588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seconds=time.perf_counter() - game_started,
                 build_check=build_check,
                 provenance=provenance,
+                withheld_repros=game_withheld,
             )
             records.append(record)
             if handle is not None:
@@ -3508,7 +3622,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         keep_repro=args.keep_repro,
         repros_per_game=args.repros_per_game,
     )
-    print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
+    print(json.dumps(
+        {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
+        indent=2,
+    ))
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
         print(f"-> {args.json}")

@@ -6,6 +6,11 @@ Diagnosis of `19200131/129` in `reports/artifacts/c141_final_holdout_sweep.json`
 pct=6.25: p1 roll-scaled components differ: observed=[('recoil', -18)] engine=[('recoil', -32)]
 ```
 
+> The `c141` artifact and its prediction land with the final-holdout sweep (PR #1159), which
+> merges ahead of this one; the citations above resolve once it does. Nothing in this diagnosis
+> re-measures that window — every number here comes from the artifact's own retained state, from
+> generated Showdown fixtures, or from the two development windows.
+
 ## Verdict
 
 **HARNESS. Not an engine gap, and not a recoil defect of any kind.**
@@ -42,9 +47,21 @@ around its representative 19. The dropped arm is the arm that happened.
 Re-adjudicating the same state twice, changing nothing but the allowlist:
 
 ```
-as shipped (rump branch set)               -> ('diverged', ["pct=6.25: ... observed=[('recoil', -18)] engine=[('recoil', -32)]"])
-with that one marker allowlisted (full set) -> ('matched', [])
+as shipped (rump branch set)                -> ('diverged', ["pct=6.25: ... observed=[('recoil', -18)] engine=[('recoil', -32)]"])
+with that one slug allowlisted (full set)    -> ('matched', [])
 ```
+
+**The allowlist is exact-set membership, not a prefix.** `branch_render_is_usable`
+tests `set(lossy) <= _TELEMETRY_ONLY_LOSSY_MARKERS`, so what restores the arm is the full
+suffixed slug `attract_empty_tail_ambiguous:paralyzed+cannot_act` — adding the bare family
+name `attract_empty_tail_ambiguous` restores nothing. The distinction matters and is not
+pedantry: a *prefix* allowlist would also admit the `noop` and `miss` slugs, which
+`rust/pokezero-search/src/events.rs:2576-2650` records as **not downgradeable at any price**
+because they erase a `|move|` reveal and the miss arm suppresses a PP decrement the fold
+tracks. Only the `paralyzed`-dominant family is downgradeable. The new
+`strict:lossy_render_marker:*` counter is deliberately prefix-*split* — that is a
+low-cardinality reporting choice about the counter namespace and has no bearing on which
+slugs the allowlist admits.
 
 The first line reproduces the artifact's miss string character-for-character, so the replay
 is of the same boundary and not a near-miss. The second line is the finding.
@@ -79,9 +96,15 @@ Measured against real gen3 Showdown on **generated** fixtures (`FixturePokemon` 
 | `floor(damage / 3)` | **32 / 32** |
 | `floor(damage * 33 / 100)` | 10 / 32 |
 | `round(damage / 3)` | 25 / 32 |
+| `floor(damage / 4)` (the brief's premise) | **0 / 32** |
 
 22 of the 32 rows discriminate `floor(d/3)` from `floor(33d/100)`, so this is not a
-coincidence of small numbers.
+coincidence of small numbers — and the gate refuses to pass on a sample where fewer than a
+quarter of rows discriminate, so a future re-run cannot accidentally prove nothing.
+
+Both of these measurements are re-runnable: `scripts/gen3_recoil_differential.py` is
+committed with the branch and asserts every number above against ground truth rather than
+printing it (artifact `reports/artifacts/c142_recoil_ground_truth.json`).
 
 The engine implements exactly this: `third_party/poke-engine-src/src/gen3/generate_instructions.rs:2397-2417`
 maps the stored `0.33` back to integer `damage_dealt / 3` (and `0.25` → `/4`, `0.5` → `/2`),
@@ -162,10 +185,14 @@ across every sweep artifact in the repo:
 The population is largest exactly where it cannot be re-measured, and it is invisible on both
 windows that can be. Two honest caveats:
 
-- `strict:lossy_render` counts **branch drops, not boundaries**. The number of final-holdout
-  boundaries adjudicated on a rump set is somewhere in 1–14 and **cannot be determined
-  without re-running the reserved window**, which is forbidden. What is determined, by
-  replay, is that at least one of them was reported as a divergence and should not have been.
+- `strict:lossy_render` counts **branch drops, not boundaries**, so the number of
+  final-holdout boundaries adjudicated on a rump set **cannot be determined without re-running
+  the reserved window**, which is forbidden. It can be bounded: that window also records
+  `skip:strict_all_branches_lossy: 4`, and each of those 4 boundaries consumed at least one
+  of the 14 drops, so at most 10 remain for rump boundaries. With the one proven by replay,
+  the bound is **1–10**. (Incidentally, those 4 are the first time
+  `skip:strict_all_branches_lossy` has ever fired — `reports/c138_known_gaps_ledger.md` H14
+  lists it as reachable-in-principle but never observed. It is now observed.)
 - The 14-versus-3 jump is unexplained. The two windows differ by only ~4 % in boundaries
   measured (16,274 vs 15,579), so it is not a denominator effect. It may be window variance;
   nothing here establishes a trend from three points, and the dev-window row the ledger cites
@@ -183,21 +210,82 @@ verdict is withheld:
 - new verdict `skip_rump`, counted as `skip:rump_branch_set`, **never** folded into
   `transition:diverged`;
 - `skip:rump_branch_set_surviving_decile:N` records how much mass a withheld verdict had;
-- `skip:rump_branch_set_row:{seed}/{step}` names each withheld boundary so it stays
-  replayable;
+- `skip:rump_branch_set_row:{seed}/{step}` indexes each withheld boundary, and
+  `report["withheld_repros"]` carries its **state** — see §6.1, this is the part that makes a
+  withheld row diagnosable at all;
 - `strict:lossy_render_marker:{marker}` attributes each drop — the undifferentiated
   `strict:lossy_render` is why this row's marker had to be recovered by replay rather than
   read off the artifact;
 - `strict:diverged_on_full_branch_set` makes the resulting invariant checkable from the
   artifact: **every reported divergence rests on 100 % of its enumerated mass.**
 
+The trigger is `enumeration_incomplete`, which **three** paths set. The lossy-render filter is
+the measured one; the other two are `BranchLegalRollError` (per-branch support could not be
+priced) and `strict:branch_events_error` (a whole candidate state failed to render). Neither
+fed the drop accounting in the first version of this patch, so
+`strict:diverged_on_full_branch_set` could have fired asserting "100 % of its mass" over an
+enumeration that was not complete. Neither counter appears in **any** artifact in
+`reports/artifacts/`, so this is a fail-closed guard on unexercised paths rather than a change
+to a live number — but a guard, not a comment, because the invariant is the whole point of the
+counter. The state-render path loses the branch list itself, so its surviving fraction is
+recorded as `unknown` rather than guessed at 0 %.
+
 The rule is deliberately **mass-blind**. A threshold ("withhold only when the majority was
 dropped") would put a tuned constant in front of a semantic question — the existential is
-unverifiable at any positive dropped mass. The surviving fraction is *recorded* instead of
-gated on, so the population stays visible and the right way to attack it is to make the
+unverifiable at any positive dropped mass, and a 1 % dropped arm is still the arm that might
+have matched. This is pinned rather than asserted: a mutant gated on `dropped_mass > 50.0`
+passes the five original tests (the measured row dropped 93.75 %) and fails the
+minority-drop pin added for exactly that reason. The surviving fraction is *recorded* instead
+of gated on, so the population stays visible and the right way to attack it is to make the
 renderer lossless, not to pick a number.
 
 `skip_lossy` (every arm lossy) keeps precedence: it is the stronger statement.
+
+### 6.1 A withheld row must stay replayable, or the exit destroys evidence
+
+This is the sharpest thing in the change, and the first version of the patch got it wrong.
+
+**Row `19200131/129` was diagnosable only because it was retained in `repros` as a
+divergence.** Under a `skip_rump` exit that keeps nothing but a counter key, it would have
+carried no state — and on a reserved window, re-running its seed to recover the state **is the
+forbidden measurement**. The exit would have converted "a false divergence, diagnosable" into
+"a boundary we declined to judge and can never look at again". On the last clean reserve that
+is unrecoverable.
+
+So withheld rows are retained with the same payload a divergence gets — `engine_states` (every
+hidden-counter candidate), `choices`, `slot_sides`, `party_display`, `turn`, `pre_features`,
+`observed`, `observed_boost_deltas`, `active_changed`, `protocol`, `branch_count`, and the
+`withheld_misses` the verdict *would* have reported (whose first entry is the surviving-mass
+line).
+
+They go in a **separate** `withheld_repros` list, not in `repros`. That was the original
+objection to retaining them and it is answered rather than overridden: `repros`' completeness
+contract is `repros_retained == transitions_diverged`, which `scripts/cert_sweep_reread.py`
+enforces, and a second population beside it leaves that identity exactly as it was.
+`repro_retention` now declares both, symmetrically:
+
+| | divergences | withheld |
+|---|---|---|
+| population size | `transitions_diverged` | `verdicts_withheld` |
+| rows retained | `repros_retained` | `withheld_retained` |
+| complete? | `repros_complete` | `withheld_complete` |
+
+`withheld_repros` is in `checkpoint_report_binding_failures`' field list, so a stale report
+that dropped the withheld population fails certification instead of passing quietly. Records
+written before this key existed read as an empty list — `--resume` and `--merge-from` over the
+existing checkpoint archive keep working — while a *malformed* value still raises.
+
+### 6.2 `cert_sweep_reread.py --expect diverged` now means what it says
+
+Adjacent defect, found in review. The gate's docstring says "every row must re-read as
+diverged", but it failed only on `tally["matched"]`, so **any other** non-divergent verdict
+passed silently. `skip_lossy` already had this hole; `skip_rump` would have widened it. Both
+are reconstruction infidelity on the sweep's own build, which is exactly what the gate exists
+to catch, and both would have been reported as a clean pass.
+
+Fixed as a **complement** — every verdict that is not `diverged` fails — rather than as a list
+of known-bad verdicts, so a future verdict is caught when it appears rather than when someone
+remembers to extend the list. Pinned in both directions, including an unknown future verdict.
 
 ### Blast radius
 
@@ -210,11 +298,12 @@ renderer lossless, not to pick a number.
 - **Identity.** `boundaries_measured == matched + diverged + engine_error +
   skip:strict_all_branches_lossy + skip:rump_branch_set`. The ledger's Rule 2 has been
   amended in place.
-- **Other consumers.** `scripts/cert_sweep_reread.py` tallies by verdict string and
-  `scripts/attest_materialized_damage_stats.py` tests `verdict == "diverged"` explicitly, so
-  neither mistakes the new verdict for a divergence. The `repros` list is untouched: its
-  completeness contract is `repros_retained == transitions_diverged`, and mixing a second
-  population into it would break that contract rather than extend it.
+- **Other consumers.** `scripts/attest_materialized_damage_stats.py` tests
+  `verdict == "diverged"` explicitly, so it cannot mistake the new verdict for a divergence.
+  `scripts/cert_sweep_reread.py` tallies by verdict string — and its `--expect diverged` gate
+  was silently permissive about non-`matched` verdicts; §6.2 fixes that.
+- **Checkpoint schema.** One additive key (`withheld_repros`), absent-tolerant on read, so the
+  existing checkpoint archive resumes and merges unchanged.
 - **Sensitivity.** Pinned by `tests/test_rump_branch_adjudication.py`: with a fully rendered
   branch set that fails to reproduce the observation, the verdict is still `diverged`.
 
@@ -222,14 +311,25 @@ renderer lossless, not to pick a number.
 
 Generated / replayed evidence, none of it fitted to the reserved window:
 
-- `tests/test_rump_branch_adjudication.py` — 5 pins, all passing, on synthetic branch data:
-  the control (full set → `matched`), the withheld verdict and its recorded mass, the marker
-  attribution, unchanged sensitivity when nothing is dropped, and `skip_lossy` precedence.
-- Real gen3 Showdown fixtures for the recoil cap (2 HP regimes) and rounding (32 rows).
+- `tests/test_rump_branch_adjudication.py` — 13 pins on synthetic branch data. The control
+  (full set → `matched`); the withheld verdict and its recorded mass; marker attribution;
+  unchanged sensitivity when nothing is dropped; `skip_lossy` precedence; a **minority** drop
+  (6.25 % dropped, 93.75 % surviving) that a majority threshold would let through; an
+  unpriceable branch (`BranchLegalRollError`) counting as a drop; the withheld payload carrying
+  every field a replay consumes; a round trip that re-adjudicates from the payload alone back
+  to `skip_rump`; `repros_retained == transitions_diverged` untouched while the withheld row
+  survives; a report that drops `withheld_repros` failing certification; and both compatibility
+  halves — a pre-C142 *record* still aggregating and a pre-C142 *report* still certifying.
+- `tests/test_cert_sweep_reread.py` — 5 new pins on the `--expect diverged` gate: `diverged`
+  passes; `matched`, `skip_rump`, `skip_lossy` and an unknown future verdict all fail.
+- `scripts/gen3_recoil_differential.py` — **committed**, so the recoil ground truth is
+  re-runnable rather than quoted. Exits 0; artifact `c142_recoil_ground_truth.json`.
 - Retained-state replay of both `c141` repros.
 - `tests/test_transition_differential_matcher.py`, `tests/test_cert_sweep_readout_attribution.py`,
   `tests/test_roll_cascade_predicate.py`, `tests/test_family_bucket_audit.py`,
-  `tests/test_matcher_tolerance_promotion.py` — pass.
+  `tests/test_matcher_tolerance_promotion.py`,
+  `tests/test_engine_transition_checkpoint_provenance.py`, `tests/test_public_invariant.py`,
+  `tests/test_c26_archival_recalibration.py` — pass.
 - Two pre-existing failures (`test_c26_damage_composition_readout`,
   `test_engine_terminal_residual_roll_limit`) were confirmed failing on a clean `cc6ce904`
   worktree before this patch; they are not caused by it. `test_selfplay` and
@@ -242,6 +342,10 @@ Prediction registered before measuring in `reports/c142_rump_branch_prediction.m
 shipping path). Baseline from a `git worktree` at `cc6ce904`, same venv and same engine
 `.so` — the build check reported a content-fingerprint match on both sides, so the two runs
 differ only by the patch. **No run at or above seed 19,200,000.**
+
+Both patched sweeps were **re-taken after review** on the final code, so the artifacts describe
+what ships rather than an earlier revision; the counter tables below are unchanged from the
+first pair, and the baseline was untouched by the review changes.
 
 Engine fingerprint `c72e6523d8de6f64` on all four runs, `enumerate_rolls: false` on all four;
 the provenance records differ only in `source_commit`/`source_tree`, as they must. The
@@ -310,9 +414,21 @@ the sweeps are a safety result, not a confirmation. See §8.
   window, at zero extra cost, because the counter now exists.
 - **Whether the 14-versus-3 gap is a trend or variance is unresolved.** The measurement that
   would settle it is a fresh, never-swept 200-game window below the reservation floor, swept
-  with `strict:lossy_render_marker:*` installed; if `attract_empty_tail_ambiguous` dominates
-  there too, the durable fix is renderer-side — retain the Attract-versus-paralysis
-  attribution so the arm is never dropped — not matcher-side.
+  with `strict:lossy_render_marker:*` installed.
+
+  If `attract_empty_tail_ambiguous` dominates there too — as it does in all 3 of the
+  validation holdout's drops — **the durable fix is renderer-side, not matcher-side**: retain
+  the Attract-versus-paralysis attribution so the arm is never dropped, and the withheld
+  boundary becomes an ordinary judged one. `rust/pokezero-search/src/events.rs:2576-2650` has
+  already done the analysis and reaches the same place: the `paralyzed`-dominant family (which
+  is the measured slug here, `paralyzed+cannot_act`) is *downgradeable* — "both outcomes are
+  'no move used, no reveal, no PP', Attract dominates 4:1" — while the `noop` and `miss` slugs
+  are **"not downgradeable at any price"**, because they erase a `|move|` reveal and the miss
+  arm suppresses a PP decrement the fold tracks. That asymmetry is exactly why the fix must be
+  a renderer change scoped to the downgradeable family and **not** an entry in
+  `_TELEMETRY_ONLY_LOSSY_MARKERS`, which the withheld-verdict exit deliberately does not
+  touch. Withholding the verdict is the correct interim: it stops the harness asserting
+  something it cannot know, without paying for the asymmetry with a wrong allowlist.
 - **No claim is made that the engine's recoil is correct in general.** What is measured is
   gen3 Double-Edge: the `[1,3]` fraction, the `floor`, the min-1 clamp and the cap. Volt
   Tackle (1 set) and the `[1,4]` moves (0 sets) were not exercised against Showdown here.

@@ -115,5 +115,47 @@ class RetainedInputContractTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text())["tally"], {"reread_error": 1})
 
 
+class ExpectDivergedGateMeansEveryRow(unittest.TestCase):
+    """The docstring says "every row must re-read as diverged". The gate tested
+    only ``tally["matched"]``, so any OTHER non-divergent verdict passed silently
+    — ``skip_lossy`` already, and ``skip_rump`` (C142) as well. Both are
+    reconstruction infidelity on the sweep's own build, which is exactly what
+    this gate exists to catch.
+    """
+
+    def _run(self, verdict: str) -> int:
+        rows = [{"kind": "transition_diverged", "seed": 1, "step": 2,
+                 "protocol": ["|"], "divergence_class": "x"}]
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            output = directory / "reread.json"
+            (directory / "cert_shard_01.json").write_text(json.dumps(_shard(rows)))
+            with patch.object(REREAD, "reread_row", return_value=(verdict, [], 1)):
+                return REREAD.main([
+                    "--shards", f"{directory}/cert_shard_*.json",
+                    "--json", str(output),
+                    "--expected-rows", "1",
+                    "--expect", "diverged",
+                ])
+
+    def test_a_diverged_reread_passes(self) -> None:
+        self.assertEqual(self._run("diverged"), 0)
+
+    def test_a_matched_reread_still_fails(self) -> None:
+        self.assertEqual(self._run("matched"), 1)
+
+    def test_a_withheld_reread_now_fails(self) -> None:
+        self.assertEqual(self._run("skip_rump"), 1)
+
+    def test_an_all_lossy_reread_now_fails(self) -> None:
+        """Pre-existing hole, not introduced by C142 — and fixed by the same
+        complement rule rather than by enumerating verdicts."""
+
+        self.assertEqual(self._run("skip_lossy"), 1)
+
+    def test_an_unknown_future_verdict_fails_CLOSED(self) -> None:
+        self.assertEqual(self._run("some_future_verdict"), 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
