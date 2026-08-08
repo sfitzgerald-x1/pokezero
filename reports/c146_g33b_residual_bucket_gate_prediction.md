@@ -223,3 +223,32 @@ rebuilt, and every gate measurement reported here was re-run on **`b8ff1445…`*
 corrected in place because §1–§7 are frozen; it is corrected here and in the report §0.
 
 **No sweep was run at or above seed 19,200,000.**
+
+### 8a. Re-derived after `main` moved — appended, nothing above edited
+
+`origin/main` advanced to **`f1c3b3aa`** (#1166, the attract immobilizer marker) after §8's pair was
+taken. It adds an engine patch (**71 → 72**) and changes the renderer, so it was merged in
+(`git merge`, never a rebase) and **all four sweeps were re-run on both sides of the merge**. Every
+prediction still holds, on the merged builds `770228825d53f717…` (base) and `b3b0fde0b3fda523…`
+(gate), both `--check` green:
+
+* **P1/P2** — merged dev 15968 / 15503 / 15502 / 1 / 0 and merged holdout 16155 / 15579 / 15579 /
+  0 / 0, identical to §2's table.
+* **P3** — the merged gate's `counters` block is byte-identical to the merged base's, 23 keys on
+  dev and 19 on holdout.
+* **P5** — the row replay on the merged builds gives `diverged` / 12 misses → **`matched` / 0**,
+  relabels **350 → 0**, as before.
+
+**And the merge was not a no-op, which is why carrying the pre-merge numbers would have been
+wrong.** On the holdout window #1166 removes `strict:lossy_render` (3 → absent) and its
+`attract_empty_tail_ambiguous` marker (3 → absent) and moves
+`strict:sleeptalk_union_branch` 105 → 106; on dev it moves nothing. Compared against a merged base,
+those three would have read as **this** branch opening something and clause 6 of §4 would have fired
+on another PR's change.
+
+The crate floor was re-measured on the merged tree (429 → **436**, summed from the CI step's own
+expression) and `_EXPECTED_SWEEP_ARTIFACTS` re-derived a second time (79 → **87**, selector over
+both trees, live at 86 and 88). This branch adds **no** engine patch, so
+`PATCHED_TARGET_TREE_SHA256`, `EXPECTED_FINAL_SHA256`, `--test test_gen3` at 32 and the
+`Engine lib suite` at 5 are untouched — verified by an empty
+`git diff origin/main...HEAD -- third_party/ scripts/apply_poke_engine_patches.py`.

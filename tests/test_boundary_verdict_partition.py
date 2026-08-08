@@ -169,7 +169,7 @@ _C141 = {
 #      disarms this pin is indistinguishable from a correct one in the diff.
 # All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
 # at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
-_EXPECTED_SWEEP_ARTIFACTS = 83
+_EXPECTED_SWEEP_ARTIFACTS = 87
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
@@ -195,7 +195,19 @@ _EXPECTED_SWEEP_ARTIFACTS = 83
 # scalars under `windows.*.sweeps` for the same reason. Seven files added, four corpus members --
 # which is exactly why the directory count and the corpus count cannot check each other.
 #
-# Step 4 was run: at 82 and at 84 this module fails, so the bump did not disarm the pin.
+# 83 -> 87 after this branch MERGED `origin/main` at `f1c3b3aa`. #1166 adds an engine patch (72
+# patches now) and changes the renderer, so the pre-merge base/gate pair no longer measures the tree
+# that ships; the merged pair `c146_g33b_merged_{base,gate}_{dev,holdout}_sweep.json` does, and BOTH
+# pairs are retained -- the first is what the registered prediction was made against, the second is
+# what certifies the merged head. RE-DERIVED after the merge by the same two-tree procedure: 79 on a
+# worktree of `f1c3b3aa` and 87 here, set difference exactly the eight sweeps, nothing removed. The
+# merge also re-ran the corpus count from scratch rather than carrying 83 forward, because a figure
+# that was true before a merge and false after is this program's confirmed failure mode.
+#
+# The two merged row replays are outside the corpus for the same reason as the pre-merge two.
+#
+# Step 4 was run at BOTH numbers: at 82/84 before the merge and at 86/88 after it, and this module
+# fails at each, so neither bump disarmed the pin.
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

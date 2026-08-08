@@ -266,6 +266,55 @@ a counter-block difference and P3 would have read as falsified by a change this 
 make. The control was run because C133 §7 asks for it; it earned its keep on a detail the argument
 for skipping it could not have reached.
 
+### 5b. `main` moved mid-branch, so every merge-sensitive figure was re-derived
+
+`origin/main` advanced to **`f1c3b3aa`** (#1166, the attract immobilizer marker) after §5's pair was
+taken. That merge adds an engine patch — the stack goes **71 → 72** — and changes the renderer, so
+the pre-merge pair no longer measures the tree that ships. It was merged in (`git merge`, never a
+rebase) and **all four sweeps were re-run on both sides of the merge**, rather than the pre-merge
+numbers being carried across:
+
+| | dev merged base | dev **merged gate** | holdout merged base | holdout **merged gate** |
+|---|---|---|---|---|
+| `boundaries_measured` | 15503 | 15503 | 15579 | 15579 |
+| `transitions_matched` | 15502 | 15502 | 15579 | 15579 |
+| `transitions_diverged` | 1 | 1 | 0 | 0 |
+| `engine_errors` | 0 | 0 | 0 | 0 |
+| `divergence_classes` | `{component_magnitude:heal: 1}` | same | `{}` | `{}` |
+
+Merged base `770228825d53f717…`, merged gate `b3b0fde0b3fda523…`, both 72 patches, both `--check`
+green. **The merged gate's `counters` block is again byte-identical to the merged base's** — 23 keys
+on dev, 19 on holdout — and the row replay reproduces on the merged builds too: `diverged` / 12
+misses → **`matched` / 0**, relabels **350 → 0**. Provenance `source_commit f68a3546…`, the merge
+commit, `source_tree clean`.
+
+**The merge was not a no-op, which is why re-running was not ceremony.** On the holdout window
+#1166 moved three counters that this branch does not touch:
+
+| key | pre-merge base | merged base |
+|---|---|---|
+| `strict:lossy_render` | 3 | absent |
+| `strict:lossy_render_marker:attract_empty_tail_ambiguous` | 3 | absent |
+| `strict:sleeptalk_union_branch` | 105 | 106 |
+
+That is #1166's own effect — its marker de-collapses the three arms that used to refuse as
+`attract_empty_tail_ambiguous`. On dev it moved nothing. Had the pre-merge gate sweep been compared
+against the merged base, those three would have read as this branch opening something, and the
+falsifier's clause 6 would have fired on a change made in another PR. **Both pairs are retained**:
+the pre-merge pair is what the registered prediction was made against, the merged pair is what
+certifies the head that ships.
+
+The crate-test floor was likewise re-measured on the merged tree rather than carried: **429 → 436**,
+summed from that CI step's own expression over a local run (436 `... ok` lines, 0 failures, 1
+ignored). `429 + 7` agrees, but the figure comes from the run. And `_EXPECTED_SWEEP_ARTIFACTS` was
+re-derived twice — 79 → 83 before the merge, 79 → **87** after it, both times by running
+`_sweep_reports` itself over both trees, and confirmed live at 82/84 and again at 86/88.
+
+**No engine patch is added by this branch.** `git diff origin/main...HEAD -- third_party/
+scripts/apply_poke_engine_patches.py` is empty, so `PATCHED_TARGET_TREE_SHA256`,
+`EXPECTED_FINAL_SHA256`, the `--test test_gen3` count of 32 and the `Engine lib suite` count of 5 are
+all untouched and unchanged. The only CI count this branch moves is the crate floor.
+
 ## 6. Reach — the one measurement that could have made §5 vacuous
 
 **A verdict-level sweep cannot see this gate fire**, and the reason is structural rather than

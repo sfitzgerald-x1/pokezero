@@ -79,6 +79,10 @@ jobs:
             reports/artifacts/c146_g33b_base_holdout_sweep.json
             reports/artifacts/c146_g33b_gate_dev_sweep.json
             reports/artifacts/c146_g33b_gate_holdout_sweep.json
+            reports/artifacts/c146_g33b_merged_base_dev_sweep.json
+            reports/artifacts/c146_g33b_merged_base_holdout_sweep.json
+            reports/artifacts/c146_g33b_merged_gate_dev_sweep.json
+            reports/artifacts/c146_g33b_merged_gate_holdout_sweep.json
             src/pokezero/**
             # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
@@ -841,8 +845,16 @@ jobs:
           # against the PREVIOUS branch head and then carried forward across the very commit
           # that deleted these five, instead of being re-run. A cross-check a change makes
           # about itself is worth exactly one thing: running it.
-          if [ "${passed:-0}" -lt 429 ]; then
-            echo "::error::expected >= 429 crate tests, got ${passed:-0}"
+          #
+          # 429 -> 436 with C146's seven G33b pins, all seven named in the loop below.
+          # MEASURED on the MERGED tree by summing this step's own expression over a local
+          # run -- `429 + 7` agrees, but the figure comes from the run, not the arithmetic,
+          # because this branch merged `origin/main` after its first measurement and a floor
+          # carried across a merge is exactly the stale cross-check the paragraph above
+          # describes. Same run: 436 `... ok` lines, 0 failures, 1 ignored, and no NAME
+          # removed against the pre-merge head.
+          if [ "${passed:-0}" -lt 436 ]; then
+            echo "::error::expected >= 436 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.

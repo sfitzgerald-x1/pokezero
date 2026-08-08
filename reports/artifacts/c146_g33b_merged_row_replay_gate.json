@@ -1,0 +1,35 @@
+{
+  "engine_fingerprint": "b3b0fde0b3fda5237a459a02b3dd7c9e6e92601b66d7b767ce0f3b137d05ec83",
+  "enumerated": {
+    "arms_reproducing_the_full_observed_trace": {
+      "count": 1,
+      "mass_pct": 0.2189
+    },
+    "arms_reproducing_the_observed_flamethrower_roll": {
+      "count": 26,
+      "mass_pct": 4.3945
+    },
+    "flag": "POKEZERO_ENUMERATE_ROLLS=1",
+    "modelled_g33b_gate": {
+      "branches": 416,
+      "first_misses": [],
+      "misses": 0,
+      "soundness": {
+        "all_deltas_inside_the_residual_lethal_band": false,
+        "delta_max": null,
+        "delta_min": null,
+        "deltas_equal_to_a_true_leftovers_tick": 0,
+        "heals_relabelled": 0
+      },
+      "verdict": "matched"
+    },
+    "shipped_renderer": {
+      "branches": 416,
+      "label_only_miss": [],
+      "misses": 0,
+      "verdict": "matched"
+    }
+  },
+  "fixture_seed": 7717,
+  "row": "19200244/115"
+}
