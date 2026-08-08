@@ -781,7 +781,7 @@ jobs:
           # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # Floor RAISED 366 -> 423 (#1157) -> 430 (immobilizer markers), and it is always
+          # Floor RAISED 366 -> 423 (#1157) -> 431 (immobilizer markers), and it is always
           # set to the EXACT current total. A floor below the total is the same blindness the
           # comment above describes: at 366 it would have absorbed every Protect pin with 55
           # to spare, and at 420 it still absorbed the three UNIT pins -- deleting exactly
@@ -793,15 +793,15 @@ jobs:
           # a clean `origin/main` e0a23e4e worktree with its own 71-patch vendor, against this
           # tree -- and not by arithmetic on the totals:
           #
-          #   base 423 result lines / 423 distinct names; head 429 / 429; NO duplicate name in
+          #   base 423 result lines / 423 distinct names; head 431 / 431; NO duplicate name in
           #   either build, so the set difference is exact rather than approximate
-          #   ADDED    11
+          #   ADDED    13
           #   REMOVED   5  a_two_sided_refusal_keys_canonically_and_fits_the_python_seam
           #                attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion
           #                every_attract_subcase_literal_is_pinned
           #                the_attract_refusal_names_its_subcase
           #                the_attract_subcase_reports_every_live_predicate_not_just_the_first
-          #   NET      +6, and 423 + 6 == 429 == the floor enforced below
+          #   NET      +8, and 423 + 8 == 431 == the floor enforced below
           #
           # Nothing was lost. TWO of the five were RELOCATED, and both replacements are in the
           # ADDED set and pass:
@@ -820,9 +820,10 @@ jobs:
           # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
           # fires. Nothing on the production path can emit it.
           #
-          # All ELEVEN added names are pinned in the loop below -- 22 pins total, every one of
-          # them resolving in the same run these figures came from. Counted, not recalled: an
-          # earlier revision of this block said "ten".
+          # All THIRTEEN added names are pinned in the loop below -- 23 pins total, every one of
+          # them resolving in the same run these figures came from. "13 added" and "all pinned"
+          # are the SAME measurement: `comm -23 <(added names) <(pinned names)` is EMPTY.
+          # Counted, not recalled: earlier revisions of this block said "ten" and "eleven".
           #
           # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
           # said so. First, 428 was written 429, counted off a run that still had a scratch
@@ -833,8 +834,13 @@ jobs:
           # against the PREVIOUS branch head and then carried forward across the very commit
           # that deleted these five, instead of being re-run. A cross-check a change makes
           # about itself is worth exactly one thing: running it.
-          if [ "${passed:-0}" -lt 429 ]; then
-            echo "::error::expected >= 429 crate tests, got ${passed:-0}"            exit 1
+          #
+          # THIRD TIME, and the rule held rather than being restated: the follow-up review
+          # added two more tests, so 429 became 431 and ADDED 11 became 13. These figures are a
+          # RE-RUN of the same differential -- a fresh `origin/main` e0a23e4e worktree with its
+          # own 71-patch vendor, against this tree -- and NOT the previous numbers plus two.
+          if [ "${passed:-0}" -lt 431 ]; then
+            echo "::error::expected >= 431 crate tests, got ${passed:-0}"            exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
           # The Protect-marker pins (#1157). This arm RENDERS a protocol line into a
