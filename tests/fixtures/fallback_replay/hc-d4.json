@@ -1,0 +1,24 @@
+{
+  "c_puct": 1.4,
+  "cell": "hc-d4",
+  "checkpoint": "checkpoints/raw.pt",
+  "deep_ko_split": true,
+  "depth": 4,
+  "engine_stats": {
+    "fallback_samples": {
+      "fallback:no_worlds_constructed": [
+        {
+          "battle_id": "hcgrid-hc-d4-600000",
+          "reason": "no_worlds_constructed",
+          "round": 12,
+          "seat": "p1"
+        }
+      ]
+    }
+  },
+  "games": 1,
+  "raw_spec": "neural:checkpoints/raw.pt?deterministic=true&device=cpu",
+  "seed_start": 600000,
+  "sims": 1024,
+  "worlds": 4
+}
