@@ -84,6 +84,7 @@ quietly claim an exact replay it did not perform.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -131,6 +132,10 @@ FIDELITY_OPPONENT_UNPINNED = "opponent-unpinned"
 #: replay needs. Distinct from `opponent-unpinned`: that one no producer change
 #: can fix, this one is a recording gap and `missing` names it.
 FIDELITY_UNDERSPECIFIED = "underspecified"
+#: Every actor is seeded, but bitwise reproducibility has NOT been measured for
+#: this configuration. Deliberately not `exact`: `exact` is a claim, and the only
+#: leaf evaluator this repo has measured byte-identical is `hp_fraction_crate`.
+FIDELITY_UNVERIFIED = "seeded-unverified"
 #: The writer is not recognised, so nothing is claimed either way.
 FIDELITY_UNKNOWN = "unknown"
 
@@ -412,7 +417,7 @@ def _opponent_seed_from_schedule(
 
 def _foulplay_fields(
     document: Mapping[str, Any], address: FallbackAddress, seed: int
-) -> tuple[dict[str, Any], list[str], str | None]:
+) -> tuple[dict[str, Any], list[str], str | None, list[str]]:
     """Config for a foul-play bridge battle.
 
     Only the bridge's own summary (the ``-p1.json`` / ``-p2.json`` sidecar) is
@@ -435,6 +440,7 @@ def _foulplay_fields(
             [],
             "paired shard carries addresses but not a full config; resolve "
             f"against the per-seat sidecar {sidecar} instead",
+            [],
         )
 
     engine = _mapping(document.get("engine_mcts"))
@@ -443,7 +449,7 @@ def _foulplay_fields(
     # A seed outside the shard's own band is not a missing field, it is the wrong
     # shard: the config here describes a different set of battles.
     if schedule_problem is not None and schedule_problem.startswith("battle seed "):
-        return {}, [], schedule_problem
+        return {}, [], schedule_problem, []
 
     # The sidecar is written per --pokezero-player invocation, so it describes
     # ONE seat. An address filed under the other seat did not come from this
@@ -454,6 +460,7 @@ def _foulplay_fields(
             {},
             [],
             f"address seat {address.seat!r} is not this sidecar's seat {recorded_seat!r}",
+            [],
         )
 
     fields: dict[str, Any] = {
@@ -477,37 +484,54 @@ def _foulplay_fields(
         # foulplay_bridge.py:3541 -- verbatim, including the str seed argument.
         "decision_rng_seed": f"{seed}:{address.seat}:{address.round}",
     }
+    caveats: list[str] = []
     missing = ["foulplay_random_seed_schedule.seeds"] if schedule_problem else []
     # `--device` is a bridge CLI flag that never reaches the summary payload.
     missing.append("device")
-    return fields, missing, None
+    return fields, missing, None, caveats
 
 
 def _seed_band_problem(
-    document: Mapping[str, Any], seed: int, *, count_field: str
-) -> str | None:
-    """Refuse a seed the shard's own band does not contain.
+    document: Mapping[str, Any], seed: int, *, start_field: str, count_field: str
+) -> tuple[str | None, str | None]:
+    """Check the seed against the shard's own band. Returns ``(problem, caveat)``.
 
     The foul-play path got this from the recorded schedule; the grid writers
-    record ``seed_start`` plus a game count instead, and without the check an
-    address from a neighbouring shard resolves against the wrong config -- the
-    collision :attr:`ReplaySpec.source` exists to name.
+    record a start plus a count instead, and without the check an address from a
+    neighbouring shard resolves against the wrong config -- the collision
+    :attr:`ReplaySpec.source` exists to name.
+
+    When the band fields are ABSENT the check cannot run, and an earlier revision
+    returned ``None`` with a comment claiming ``missing`` reported the gap. It did
+    not: neither field is a spec field, so ``missing`` cannot name them and a
+    shard with a start and no count resolved ``exact`` with the band unchecked.
+    An unrunnable check is reported as a caveat, which costs the spec its
+    ``exact`` verdict -- the config cannot be shown to belong to this battle.
     """
-    seed_start = _as_int(document.get("seed_start"))
+    seed_start = _as_int(document.get(start_field))
     count = _as_int(document.get(count_field))
     if seed_start is None or count is None:
-        return None  # nothing to check against; `missing` reports the gap
+        absent = [
+            name
+            for name, value in ((start_field, seed_start), (count_field, count))
+            if value is None
+        ]
+        return None, (
+            f"the seed band could not be checked: this shard records no "
+            f"{' or '.join(absent)}, so its config is not shown to belong to "
+            f"battle seed {seed}"
+        )
     if not (seed_start <= seed < seed_start + count):
         return (
             f"battle seed {seed} is outside this shard's band "
             f"[{seed_start}, {seed_start + count})"
-        )
-    return None
+        ), None
+    return None, None
 
 
 def _hc_grid_fields(
     document: Mapping[str, Any], address: FallbackAddress, seed: int
-) -> tuple[dict[str, Any], list[str], str | None]:
+) -> tuple[dict[str, Any], list[str], str | None, list[str]]:
     """Config for an ``hc_depth_grid`` battle (scripts/hc_depth_grid.py:282-300)."""
     # The cell is IN the battle id (`f"hcgrid-{cell}-{seed}"`, :243) and is also
     # a top-level field (:283), and the cell is what selects the depth (:196).
@@ -522,10 +546,14 @@ def _hc_grid_fields(
             {},
             [],
             f"battle id names cell {id_cell!r} but the shard is cell {doc_cell!r}",
+            [],
         )
-    band = _seed_band_problem(document, seed, count_field="games")
+    band, caveat = _seed_band_problem(
+        document, seed, start_field="seed_start", count_field="games"
+    )
     if band is not None:
-        return {}, [], band
+        return {}, [], band, []
+    caveats = [caveat] if caveat else []
     raw_spec = _as_str(document.get("raw_spec")) or ""
     device = None
     if "device=" in raw_spec:
@@ -535,7 +563,11 @@ def _hc_grid_fields(
         "policy_mode": "engine-mcts",
         # scripts/hc_depth_grid.py:220 -- the handcrafted leaf, so the checkpoint
         # is the OPPONENT's and no model/tables artifact is involved.
-        "leaf_eval": "hp_fraction_crate",
+        # READ, with the script's compiled-in value as the fallback. Asserting
+        # it made the leaf-eval fidelity branch unreachable through
+        # `resolve_address` -- a latent wrong answer for the day
+        # `hc_depth_grid` grows a `--leaf-eval` flag. `:220` is today's value.
+        "leaf_eval": _as_str(document.get("leaf_eval")) or "hp_fraction_crate",
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
         "engine_worlds": _as_int(document.get("worlds")),
@@ -557,13 +589,14 @@ def _hc_grid_fields(
             [],
             f"seat {address.seat!r} contradicts hc_depth_grid's seed-parity rule "
             f"(seed {seed} -> {expected_seat})",
+            [],
         )
-    return fields, [], None
+    return fields, [], None, caveats
 
 
 def _k0_grid_fields(
     document: Mapping[str, Any], address: FallbackAddress, seed: int
-) -> tuple[dict[str, Any], list[str], str | None]:
+) -> tuple[dict[str, Any], list[str], str | None, list[str]]:
     """Config for a ``k0_grid_h2h`` battle (scripts/k0_grid_h2h.py:219-241).
 
     Reachable only if that writer is fixed: it never calls ``stats.to_dict()``,
@@ -572,9 +605,12 @@ def _k0_grid_fields(
     resolver that quietly failed on it would look identical to one that had
     never been asked.
     """
-    band = _seed_band_problem(document, seed, count_field="games")
+    band, caveat = _seed_band_problem(
+        document, seed, start_field="seed_start", count_field="games"
+    )
     if band is not None:
-        return {}, [], band
+        return {}, [], band, []
+    caveats = [caveat] if caveat else []
     config = _as_str(document.get("config")) or ""
     batch = None
     for part in config.split("-"):
@@ -585,7 +621,7 @@ def _k0_grid_fields(
         "checkpoint_sha256": _as_str(document.get("checkpoint_sha256")),
         "format_id": "gen3randombattle",  # scripts/k0_grid_h2h.py:190, hardcoded
         "policy_mode": "engine-mcts",
-        "leaf_eval": "model",  # scripts/k0_grid_h2h.py:154-168
+        "leaf_eval": _as_str(document.get("leaf_eval")) or "model",  # :154-168
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
         "engine_batch": batch,
@@ -600,13 +636,14 @@ def _k0_grid_fields(
             [],
             f"seat {address.seat!r} contradicts k0_grid_h2h's seed-parity rule "
             f"(seed {seed} -> {expected_seat})",
+            [],
         )
-    return fields, [], None
+    return fields, [], None, caveats
 
 
 def _acceptance_fields(
     document: Mapping[str, Any], address: FallbackAddress, seed: int
-) -> tuple[dict[str, Any], list[str], str | None]:
+) -> tuple[dict[str, Any], list[str], str | None, list[str]]:
     """Config for an ``mcts_acceptance_h2h`` battle (:252-288).
 
     Depth/sims/batch/worlds exist only inside ``config_id``
@@ -619,6 +656,20 @@ def _acceptance_fields(
     # and the shard records it at the top level -- two statements of one fact,
     # so a disagreement means the address came from the other arm's shard, whose
     # search config is precisely what differs.
+    # The seat is IN the id and is checked FIRST: the arm slice below is taken
+    # by the LENGTH of the trailing `-{seed}-{seat}`, and "p1"/"p2" are the same
+    # length, so a seat mismatch is invisible to it. Both grid readers check
+    # seat; this one did not, and `accept-search-600004-p1` filed under seat p2
+    # resolved `exact`.
+    id_seat = address.battle_id.rsplit("-", 1)[-1]
+    if id_seat != address.seat:
+        return (
+            {},
+            [],
+            f"battle id names seat {id_seat!r} but the address is seat "
+            f"{address.seat!r}",
+            [],
+        )
     id_arm = address.battle_id[len("accept-") : -len(f"-{seed}-{address.seat}")]
     doc_arm = _as_str(document.get("arm"))
     if doc_arm is not None and id_arm != doc_arm:
@@ -626,7 +677,14 @@ def _acceptance_fields(
             {},
             [],
             f"battle id names arm {id_arm!r} but the shard is arm {doc_arm!r}",
+            [],
         )
+    band, caveat = _seed_band_problem(
+        document, seed, start_field="pair_start", count_field="pairs"
+    )
+    if band is not None:
+        return {}, [], band, []
+    caveats = [caveat] if caveat else []
     config_id = _as_str(document.get("config_id")) or ""
     parsed: dict[str, int] = {}
     for part in config_id.split("@", 1)[0].split("-"):
@@ -636,7 +694,7 @@ def _acceptance_fields(
         "checkpoint": _as_str(document.get("checkpoint")),
         "format_id": "gen3randombattle",  # scripts/mcts_acceptance_h2h.py:435
         "policy_mode": "engine-mcts",
-        "leaf_eval": "model",  # scripts/mcts_acceptance_h2h.py:79-107
+        "leaf_eval": _as_str(document.get("leaf_eval")) or "model",  # :79-107
         "engine_depth": parsed.get("d"),
         "engine_sims": parsed.get("s"),
         "engine_batch": parsed.get("b"),
@@ -644,7 +702,7 @@ def _acceptance_fields(
         "rng_regime": "per-battle-stream",
         "decision_rng_seed": None,
     }
-    return fields, [], None
+    return fields, [], None, caveats
 
 
 _FIELD_READERS = {
@@ -657,31 +715,52 @@ _FIELD_READERS = {
 
 # --- fidelity ---------------------------------------------------------------
 
-#: Every spec field that describes the run and could in principle be recorded.
-#: `missing` is derived from this, so it can never fall behind the dataclass.
-#: `decision_rng_seed` is excluded: it is absent under the per-battle-stream
-#: regime by construction, not by omission, and `rng_regime` already says so --
-#: listing it would read as a shard defect a producer could fix.
-_PINNABLE_FIELDS: tuple[str, ...] = (
-    "belief_set_source",
-    "checkpoint",
-    "checkpoint_sha256",
-    "deep_ko_split",
-    "device",
-    "engine_batch",
-    "engine_c_puct",
-    "engine_depth",
-    "engine_sims",
-    "engine_worlds",
-    "format_id",
-    "leaf_eval",
-    "max_decision_rounds",
-    "opponent_policy_id",
-    "opponent_priors",
-    "opponent_random_seed",
-    "opponent_search_time_ms",
-    "policy_mode",
+#: Spec fields that are NOT recordable run configuration, so cannot be
+#: "missing". Everything else on :class:`ReplaySpec` is, by derivation below.
+#:
+#: An earlier revision hand-wrote the positive list and asserted in a comment
+#: that it "can never fall behind the dataclass" -- while nothing enforced that,
+#: and the test iterated the list itself, so it was structurally blind to drift.
+#: Adding a field to the spec left it silently unreported. That is precisely the
+#: defect the derivation was introduced to remove, reintroduced one level up.
+#: Stating a property is not holding it: derive, or pin. Here, both.
+#:
+#: `decision_rng_seed` is excluded because it is absent under the
+#: per-battle-stream regime by construction, not by omission -- `rng_regime`
+#: already says so, and listing it would read as a shard defect a producer could
+#: fix.
+_NON_CONFIG_FIELDS: frozenset[str] = frozenset(
+    {
+        "battle_id",
+        "round",
+        "seat",
+        "reason",
+        "key",
+        "source",
+        "harness",
+        "seed",
+        "rng_regime",
+        "decision_rng_seed",
+        "fidelity",
+        "fidelity_notes",
+        "missing",
+    }
 )
+
+
+def _derive_pinnable_fields() -> tuple[str, ...]:
+    """Every :class:`ReplaySpec` field that names recordable run configuration."""
+    return tuple(
+        sorted(
+            f.name
+            for f in dataclasses.fields(ReplaySpec)
+            if f.name not in _NON_CONFIG_FIELDS
+        )
+    )
+
+
+#: Derived, never written by hand. `missing` is computed from this.
+_PINNABLE_FIELDS: tuple[str, ...] = _derive_pinnable_fields()
 
 _SELF_PLAY_HARNESSES = frozenset(
     {HARNESS_ROLLOUT_ACCEPTANCE, HARNESS_ROLLOUT_HC_GRID, HARNESS_ROLLOUT_K0_GRID}
@@ -698,14 +777,25 @@ _REQUIRED_FOR_REPLAY: tuple[str, ...] = (
     "engine_worlds",
 )
 
-#: Leaf evaluators whose search is explicitly seeded, hence reproducible.
-#: `"hp_fraction"` is NOT here: it calls poke-engine's own
-#: `monte_carlo_tree_search`, measured nondeterministic at a fixed iteration
-#: count. See the module docstring.
-_SEEDED_LEAF_EVALS = frozenset({"hp_fraction_crate", "model"})
+#: Leaf evaluators MEASURED byte-identical across runs in this repo. One entry,
+#: because one is all that has been measured: two 40-battle sweeps under
+#: `hp_fraction_crate`, plus two single-address replays in fresh processes.
+_MEASURED_REPRODUCIBLE_LEAF_EVALS = frozenset({"hp_fraction_crate"})
+
+#: Seeded, but with no byte-identity measurement behind it. `model` passes a
+#: per-world `record["seed"]` (`engine_search.py:1838`) into
+#: `native.search_batched_multi_encoded` (`:1733`) -- NOT the `puct_search_multi`
+#: line the crate path uses, which an earlier revision miscited here -- and it
+#: additionally runs a TorchScript forward, which is not bitwise reproducible
+#: across devices or cuDNN algorithm selection. Calling that `exact` would be the
+#: same unmeasured-mechanism-in-fidelity_notes defect this module was rewritten
+#: to remove, so it gets its own verdict instead.
+_SEEDED_UNVERIFIED_LEAF_EVALS = frozenset({"model"})
 
 
-def _fidelity(harness: str, fields: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
+def _fidelity(
+    harness: str, fields: Mapping[str, Any], caveats: Sequence[str] = ()
+) -> tuple[str, tuple[str, ...]]:
     """Verdict plus the evidence for it. See the module docstring."""
     if harness == HARNESS_FOULPLAY_BRIDGE:
         notes = [
@@ -741,20 +831,41 @@ def _fidelity(harness: str, fields: Mapping[str, Any]) -> tuple[str, tuple[str, 
             + ", ".join(unpinned),
         )
     leaf_eval = fields.get("leaf_eval")
-    if leaf_eval not in _SEEDED_LEAF_EVALS:
+    in_process = (
+        "both policies are pokezero, driven in-process off the battle seed "
+        "(rollout.py:414-426), so the trajectory is reconstructible"
+    )
+    stream_note = (
+        "the decision RNG is a per-battle-per-seat stream advanced by every "
+        "preceding decision, so round N is reachable only by replaying 0..N-1"
+    )
+    if leaf_eval in _SEEDED_UNVERIFIED_LEAF_EVALS:
+        return FIDELITY_UNVERIFIED, (
+            in_process,
+            f"leaf_eval={leaf_eval!r} is seeded per world "
+            "(engine_search.py:1838 -> native.search_batched_multi_encoded, :1733)",
+            "but byte identity has NOT been measured for it, and it runs a "
+            "TorchScript forward that is not bitwise reproducible across devices "
+            "or cuDNN algorithm selection -- treat a match as evidence, not proof",
+            stream_note,
+        )
+    if leaf_eval not in _MEASURED_REPRODUCIBLE_LEAF_EVALS:
         return FIDELITY_OPPONENT_UNPINNED, (
             f"leaf_eval={leaf_eval!r} runs poke-engine's own "
             "monte_carlo_tree_search, measured nondeterministic at a fixed "
             "iteration count (unseeded chance sampler, src/mcts.rs sample_node)",
         )
-    return FIDELITY_EXACT, (
-        "both policies are pokezero, driven in-process off the battle seed "
-        "(rollout.py:414-426), so the trajectory is reconstructible",
+    notes = [
+        in_process,
         f"leaf_eval={leaf_eval!r} searches under an explicit seed "
-        "(engine_search.py:1202 puct_search_multi(seed=rng.getrandbits(63)))",
-        "the decision RNG is a per-battle-per-seat stream advanced by every "
-        "preceding decision, so round N is reachable only by replaying 0..N-1",
-    )
+        "(engine_search.py:1202 puct_search_multi(seed=rng.getrandbits(63))) and "
+        "is measured byte-identical across runs",
+        stream_note,
+    ]
+    if caveats:
+        # A check that could not be RUN is not a check that passed.
+        return FIDELITY_UNDERSPECIFIED, (*notes, *caveats)
+    return FIDELITY_EXACT, tuple(notes)
 
 
 # --- resolution -------------------------------------------------------------
@@ -785,17 +896,17 @@ def resolve_address(
             f"battle id names harness {id_harness!r} but the shard is {doc_harness!r}",
         )
 
-    fields, missing, problem = _FIELD_READERS[doc_harness](document, address, seed)
+    fields, missing, problem, caveats = _FIELD_READERS[doc_harness](
+        document, address, seed
+    )
     if problem is not None:
         return UnresolvedAddress(address, problem)
 
-    fidelity, notes = _fidelity(doc_harness, fields)
-    # DERIVED from the spec's own field list, not from a per-reader literal list.
-    # The hand-maintained lists drifted: hc_grid named three omissions and left
-    # `engine_batch`, `opponent_random_seed`, `opponent_search_time_ms`,
-    # `belief_set_source` and `opponent_priors` unpinned and unnamed, silently
-    # breaking the contract on `ReplaySpec.missing`. Deriving it means adding a
-    # field to the spec cannot forget to add it here.
+    fidelity, notes = _fidelity(doc_harness, fields, caveats)
+    # DERIVED from the spec's own field list (see `_derive_pinnable_fields`),
+    # never from a per-reader literal list. The hand-maintained lists drifted:
+    # hc_grid named three omissions and left five fields unpinned and unnamed,
+    # silently breaking the contract on `ReplaySpec.missing`.
     still_missing = tuple(
         sorted(
             {

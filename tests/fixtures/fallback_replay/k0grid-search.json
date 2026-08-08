@@ -1,4 +1,5 @@
 {
+  "_fixture_note": "HYPOTHETICAL SHAPE. scripts/k0_grid_h2h.py:236-246 lifts counts straight off the stats object and never calls EngineMctsStats.to_dict(), so it emits no fallback_samples at all and no shard like this exists. Kept so the k0 reader is exercised at all; the producer gap is tracked separately. Do not cite this file as evidence that k0 shards carry addresses.",
   "arm": "search",
   "checkpoint": "checkpoints/k0.pt",
   "checkpoint_sha256": "1111111111111111111111111111111111111111111111111111111111111111",

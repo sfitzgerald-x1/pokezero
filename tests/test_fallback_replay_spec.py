@@ -25,6 +25,7 @@ from pokezero.fallback_replay_spec import (
     FIDELITY_EXACT,
     FIDELITY_OPPONENT_UNPINNED,
     FIDELITY_UNDERSPECIFIED,
+    FIDELITY_UNVERIFIED,
     _PINNABLE_FIELDS,
     HARNESS_FOULPLAY_BRIDGE,
     HARNESS_ROLLOUT_ACCEPTANCE,
@@ -433,13 +434,17 @@ class TestSelfPlayWriters:
             "policy_stats": {"fallback_samples": {}},
         }
         spec = resolve_address(
-            _address("accept-search-600004-p1", round_index=7), document
+            _address("accept-search-600004-p1", round_index=7, seat="p1"), document
         )
         assert isinstance(spec, ReplaySpec)
         assert spec.seed == 600004
         assert (spec.engine_depth, spec.engine_sims) == (4, 2048)
         assert (spec.engine_batch, spec.engine_worlds) == (64, 8)
-        assert spec.fidelity == FIDELITY_EXACT
+        # NOT `exact`: this harness runs `leaf_eval="model"`, whose byte identity
+        # has never been measured here (unlike `hp_fraction_crate`) and which
+        # runs a TorchScript forward. An earlier revision called it exact on the
+        # strength of a miscited seeding line.
+        assert spec.fidelity == FIDELITY_UNVERIFIED
 
     def test_hc_grid_reads_deep_ko_split(self):
         # A real producer setting (`hc_depth_grid.py:107` BooleanOptionalAction,
@@ -483,10 +488,46 @@ class TestSelfPlayWriters:
             "policy_stats": {"fallback_samples": {}},
         }
         spec = resolve_address(
-            _address("accept-control-600004-p1", round_index=7), document
+            _address("accept-control-600004-p1", round_index=7, seat="p1"), document
         )
         assert isinstance(spec, UnresolvedAddress)
         assert "names arm 'control'" in spec.problem
+
+    def test_acceptance_seat_must_match_the_battle_id(self):
+        # The seat is IN the id, and both grid readers check theirs. This one did
+        # not, so `accept-search-600004-p1` filed under seat p2 resolved `exact`.
+        # The arm slice cannot catch it: it slices by the LENGTH of
+        # `-{seed}-{seat}`, and "p1" and "p2" are the same length.
+        document = {
+            "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "search",
+            "config_id": "d4-s2048-b64-w8",
+            "checkpoint": "checkpoints/k0.pt",
+            "pair_start": 600000,
+            "pairs": 8,
+            "policy_stats": {"fallback_samples": {}},
+        }
+        spec = resolve_address(
+            _address("accept-search-600004-p1", round_index=7, seat="p2"), document
+        )
+        assert isinstance(spec, UnresolvedAddress)
+        assert "names seat 'p1'" in spec.problem
+
+    def test_acceptance_seed_outside_the_band_is_unresolved(self):
+        document = {
+            "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "search",
+            "config_id": "d4-s2048-b64-w8",
+            "checkpoint": "checkpoints/k0.pt",
+            "pair_start": 600000,
+            "pairs": 8,
+            "policy_stats": {"fallback_samples": {}},
+        }
+        spec = resolve_address(
+            _address("accept-search-700004-p1", round_index=7, seat="p1"), document
+        )
+        assert isinstance(spec, UnresolvedAddress)
+        assert "outside this shard's band" in spec.problem
 
     def test_k0_grid_seed_outside_the_band_is_unresolved(self):
         document = {
@@ -509,12 +550,16 @@ class TestSelfPlayWriters:
         # numbers. Inventing defaults would replay a different search.
         document = {
             "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "control-raw-v-raw",
             "config_id": "control-raw-v-raw",
             "checkpoint": "checkpoints/k0.pt",
+            "pair_start": 600000,
+            "pairs": 8,
             "policy_stats": {"fallback_samples": {}},
         }
         spec = resolve_address(
-            _address("accept-control-raw-v-raw-600005-p2", round_index=3), document
+            _address("accept-control-raw-v-raw-600005-p2", round_index=3, seat="p2"),
+            document,
         )
         assert isinstance(spec, ReplaySpec)
         assert spec.engine_sims is None
@@ -664,7 +709,7 @@ class TestCorpus:
         assert main([str(tmp_path / "nope")]) == 2
         assert "does not exist" in capsys.readouterr().out
 
-    def test_committed_fixture_shards_cover_every_grammar(self):
+    def test_committed_fixtures_cover_three_real_grammars_plus_one_hypothetical(self):
         # Until this existed, no artifact IN THE REPO exercised the resolver:
         # `docs/audit_artifacts/hc-depth-grid-20260729/` predates #1178's
         # producer and carries `fallback_samples: {}`, so every number quoted
@@ -688,8 +733,92 @@ class TestCorpus:
             FIDELITY_OPPONENT_UNPINNED
         )
         assert by_harness[HARNESS_ROLLOUT_HC_GRID].fidelity == FIDELITY_EXACT
+        # THREE of these shapes are emitted by a producer today. The k0 one is
+        # not: `k0_grid_h2h.py:236-246` never calls `to_dict()`, so it writes no
+        # `fallback_samples` and no such shard exists. Naming that here keeps the
+        # fixture from reading as evidence that it does.
+        k0 = json.loads((fixtures / "k0grid-search.json").read_text())
+        assert "HYPOTHETICAL SHAPE" in k0["_fixture_note"]
 
     def test_cli_reports_no_addresses(self, tmp_path, capsys):
         (tmp_path / "empty.json").write_text(json.dumps({"schema_version": "x"}))
         assert main([str(tmp_path)]) == 1
         assert "no fallback addresses" in capsys.readouterr().out
+
+
+class TestPropertiesAreHeldNotAsserted:
+    """Three round-2 defects were comments claiming things no test enforced."""
+
+    def test_pinnable_fields_is_derived_from_the_dataclass(self):
+        # The round-2 comment said "adding a field to the spec cannot forget to
+        # add it here" while the list was hand-written and the missing-fields
+        # test iterated that same list -- self-referential, blind to drift.
+        # Adding `engine_threads` to ReplaySpec left 84 tests green.
+        import dataclasses
+
+        import pokezero.fallback_replay_spec as module
+
+        declared = {f.name for f in dataclasses.fields(ReplaySpec)}
+        # An exact partition: every field is either config or explicitly not.
+        assert set(_PINNABLE_FIELDS) | module._NON_CONFIG_FIELDS == declared
+        assert not (set(_PINNABLE_FIELDS) & module._NON_CONFIG_FIELDS)
+        # And the exclusion list may not name a field that no longer exists.
+        assert module._NON_CONFIG_FIELDS <= declared
+
+    def test_a_new_spec_field_is_pinnable_without_editing_a_list(self):
+        # The direct form of the reviewer's mutant, run rather than asserted.
+        import dataclasses
+
+        import pokezero.fallback_replay_spec as module
+
+        extended = dataclasses.make_dataclass(
+            "ExtendedSpec",
+            [("engine_threads", "int | None", dataclasses.field(default=None))],
+            bases=(ReplaySpec,),
+            frozen=True,
+        )
+        original = module.ReplaySpec
+        module.ReplaySpec = extended
+        try:
+            assert "engine_threads" in module._derive_pinnable_fields()
+        finally:
+            module.ReplaySpec = original
+
+    def test_an_uncheckable_seed_band_costs_the_exact_verdict(self):
+        # Round 2's `_seed_band_problem` returned None when the band fields were
+        # absent, with a comment claiming `missing` reported the gap. It cannot:
+        # `seed_start` and `games` are not spec fields. So a shard with a start
+        # and no count resolved `exact` with the band never checked.
+        document = _hc_grid_shard(seed=600000)
+        del document["games"]
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-999998", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.fidelity == FIDELITY_UNDERSPECIFIED
+        assert "could not be checked" in " ".join(spec.fidelity_notes)
+        assert "games" in " ".join(spec.fidelity_notes)
+
+    def test_leaf_eval_is_read_from_the_shard_not_asserted(self):
+        # Round 2 hardcoded it in all three readers, so the leaf-eval fidelity
+        # branch was unreachable through `resolve_address` -- a latent wrong
+        # answer the day `hc_depth_grid` grows a `--leaf-eval` flag.
+        document = _hc_grid_shard()
+        document["leaf_eval"] = "hp_fraction"
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.leaf_eval == "hp_fraction"
+        assert spec.fidelity == FIDELITY_OPPONENT_UNPINNED
+        assert "sample_node" in " ".join(spec.fidelity_notes)
+
+    def test_the_shipped_hc_grid_default_still_resolves_exact(self):
+        # ...and reading it from the shard must not break the shard shape that
+        # actually exists today, which records no `leaf_eval`.
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), _hc_grid_shard()
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.leaf_eval == "hp_fraction_crate"
+        assert spec.fidelity == FIDELITY_EXACT
