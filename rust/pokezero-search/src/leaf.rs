@@ -1286,7 +1286,9 @@ impl LeafContext {
             "opponent_active_volatiles".into(),
             json!(tracked_volatiles(opp_side, self_side)),
         );
-        // V4 pack A1, OPPONENT SIDE ONLY — the asymmetry is deliberate; see below.
+        // V4 pack A1, BOTH SIDES. The self side was root-frozen until #1156 made
+        // `_recharging_slots` symmetric; see below for why that freeze is now wrong rather than
+        // merely unnecessary.
         //
         // MUSTRECHARGE is absent from VOLATILE_MAP (no tracked parser counterpart), so without
         // this write the v4 encoder's `volatile:mustrecharge` bag entry would come from the
@@ -1297,46 +1299,49 @@ impl LeafContext {
         // with no recharge volatile, and a branch resuming from a recharging root would keep
         // the volatile after the turn was consumed.
         //
-        // The SELF side is deliberately NOT derived the same way, because the world it would
-        // read is not seeded for us. `MUSTRECHARGE` only enters a constructed world through
-        // engine_world.py's recharging_slots, and the live producer
-        // (engine_search.py::_recharging_slots) returns the OPPONENT slot or nothing — never
-        // ours. Since model.rs encodes the ROOT state to build root_priors, deriving the self
-        // flag from volatile_statuses would write `false` at depth 0 for a root where our own
-        // active must recharge, while Python's root encode writes the volatile from the parser
-        // tracker: a depth-0 parity regression in exchange for fixing a staleness. Passing the
-        // root flag through verbatim is correct there. Interior nodes are fine either way — the
-        // engine applies MUSTRECHARGE itself during simulation.
+        // BOTH SIDES, since `_recharging_slots` went symmetric (#1156). The self side used to be
+        // root-frozen here, and the reason was real: MUSTRECHARGE only enters a constructed world
+        // through engine_world.py's recharging_slots, and the live producer returned the OPPONENT
+        // slot or nothing. Since model.rs encodes the ROOT state to build root_priors, deriving
+        // the self flag from volatile_statuses would have written `false` at depth 0 for a root
+        // where our own active must recharge — trading a staleness for a depth-0 parity
+        // regression. That precondition is gone: `_recharging_slots` now locks our slot from the
+        // parser's `self_must_recharge`, so the root world carries the volatile and the depth-0
+        // value derived here agrees with Python's root encode.
         //
-        // STATUS UPDATE: both blockers named above are now cleared, and this freeze is the
-        // remaining half. (1) _recharging_slots IS symmetric — it returns our own slot from the
-        // parser's `self_must_recharge`, the same tracker that feeds the opponent side — so the
-        // root world now carries the volatile and deriving the self flag from volatile_statuses
-        // would no longer write `false` at depth 0. (The comment this replaces said the old
-        // asymmetry "lets our recharging mon pick any move". Review falsified that: Showdown
-        // sets `trapped: true` on a recharge request, so engine_world rejected those worlds as
-        // `self_request_state_unsupported` and search failed CLOSED. Our recharge turns were
-        // unsearchable, not mis-searched.) (2) The
-        // four gates no longer derive `recharging` from the recorded chosen candidate; they use
-        // fidelity_gate_events.production_recharging_slots, which mirrors _recharging_slots and
-        // reads the tracker, so they can CATCH a bad self-side write. Shown end-to-end, not just
-        // at the derivation: reports/c141_recharge_gate_injection_proof.md injects a wrong
-        // self-side write HERE (wired to the opponent's volatile), rebuilds, and measures
-        // leaf_root_parity going diverged 0 -> 5 at an unchanged denominator, back to 0 on revert.
-        // Narrower than it sounds: the pre-task-4 gates also caught 4 of those 5, because the
-        // recorded action and the tracker disagree on exactly one corpus row and it is
-        // opponent-side. tests/test_recharge_gate_derivation.py covers what the corpus cannot.
+        // Leaving it frozen after the world went symmetric was the strictly worse option, and
+        // C141 measured why: `engine_search` now BUILDS self-recharge worlds that previously
+        // failed closed as `self_request_state_unsupported`, so the stale root flag became
+        // reachable in production search at depth > 0 where it never was before. The fix made
+        // the defect live; this closes it.
         //
-        // So the self side can be made live here. It has NOT been, in this change: that is a
-        // rust-side edit needing an engine rebuild, and it is the follow-on rather than
-        // something to fold in silently. What has changed is that it is no longer blocked and
-        // no longer unverifiable.
-        md.insert(
-            "opponent_must_recharge".into(),
-            json!(opp_side
-                .volatile_statuses
-                .contains(&PokemonVolatileStatus::MUSTRECHARGE)),
-        );
+        // THE STRONGEST ARGUMENT, which the first version of this comment missed: further down
+        // this file, `let recharging = self_side.volatile_statuses.contains(&...MUSTRECHARGE)`
+        // (in the action-surface block) already reads our own side LIVE, to
+        // present the forced "recharge" pseudo-move on our own action surface. So pre-lift the
+        // SELF side carried exactly the self-contradiction cited above as the reason the OPPONENT
+        // side had to be live -- action surface live, volatile bag root-frozen, inside one
+        // observation. The lift removes a real internal inconsistency, not just an obsolete
+        // precondition.
+        //
+        // Verifiable now, which it was not before: the four gates derive `recharging` from the
+        // parser tracker rather than the recorded candidate, so they no longer ratify whatever
+        // this function writes. reports/c141_recharge_gate_injection_proof.md shows them catching
+        // a deliberately wrong write here -- read its limits section, the pre-task-4 gates also
+        // caught 4 of those 5 and the whole signal lives in one battle of twelve.
+        //
+        // Pinned by tests/test_leaf_self_recharge_derivation.py, which drives the real
+        // LeafEncoder. Added because review reverted this lift at the binary level and 146/146
+        // Python tests stayed green: the only things that caught it needed the gitignored corpus.
+        for (key, side) in [("self_must_recharge", self_side), ("opponent_must_recharge", opp_side)]
+        {
+            md.insert(
+                key.into(),
+                json!(side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::MUSTRECHARGE)),
+            );
+        }
 
         // --- team conditions + active flags ---
         for (key, engine_side, side) in [

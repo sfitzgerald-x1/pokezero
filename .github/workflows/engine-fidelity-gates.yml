@@ -138,6 +138,24 @@ jobs:
             scripts/fidelity_gate_events.py
             tests/test_differential_denominator.py
             tests/test_denominator_adoption.py
+            # The spread-gate provenance pin. Listed with a STEP below, and the step is
+            # honest that it cannot execute the assertions: the pin needs a pokemon-showdown
+            # checkout, CI builds none, and the default root is outside the repo and
+            # untracked -- so 5 of the 6 skip here; only the fixture lint executes. Without this entry a PR that DELETES the pin
+            # trips no workflow at all, which is the failure mode this file forbids twice and
+            # which this very pin was subject to for 37 commits after #1123.
+            tests/test_spread_gate_provenance.py
+            tests/_showdown_root.py
+            # The leaf self-recharge derivation pin. Review found the P3 freeze lift pinned by
+            # NOTHING -- reverting it at the binary level left 146/146 green, because the only
+            # things that caught it were the two corpus-driven harnesses, and the corpus is
+            # gitignored. This test needs no CORPUS but does need a Showdown checkout for the
+            # dex, so like the spread-gate pin above it SKIPS here; the step below pins that
+            # skip count so the file cannot shrink unnoticed. Listing a filter with no step is
+            # the "guard nothing runs" pattern this file names twice, and a first version of
+            # this entry did exactly that.
+            tests/test_leaf_self_recharge_derivation.py
+            tests/test_leaf_encoder.py
             # C116 Phase 2's scope gate. Listed for the same reason as the entries
             # above: a PR whose only change is adding a file to the mention ledger,
             # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
@@ -524,6 +542,52 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
+      - name: Spread-gate provenance pin (shape only -- CANNOT run here)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_spread_gate_provenance -v 2>&1 | tee /tmp/spreadgate.log
+          # READ THIS BEFORE TRUSTING A GREEN. Five of the six tests are SKIPPED in CI; only the
+          # fixture lint executes. The two-way provenance assertions do NOT run here.
+          # The pin drives a real randbats set source, CI builds no Showdown (two steps in this
+          # job say so), and the default root is outside the repo and untracked. So this step
+          # verifies SHAPE for five of them -- that the pin still exists, still has 6 tests, and
+          # still skips for the stated reason rather than silently shrinking -- plus ONE real
+          # assertion: the fixture lint was moved out of the skip-gated class so CI executes
+          # something. Review measured why that mattered: gut all 18 assertions while keeping 6
+          # tests and a shape-only step still passes.
+          #
+          # That is worth a step anyway. Between #1123 and this commit the file was in no
+          # filter and no step, so deleting it outright would have tripped nothing -- the
+          # "guard nothing runs" pattern this workflow's header forbids, applied to the guard
+          # that pins checkpoint provenance in both directions. The assertions are exercised on
+          # a developer machine with POKEZERO_SHOWDOWN_ROOT set; see reports/ for the red runs.
+          if ! grep -qE 'Ran 6 tests' /tmp/spreadgate.log; then
+            echo "::error::spread-gate pin changed count; the two-way provenance test shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/spreadgate.log; then
+            echo "::error::expected exactly 5 skips (the fixture lint must RUN, the other five must not); if all 6 skipped, the lint regained a Showdown dependency"
+            exit 1
+          fi
+
+      - name: Leaf self-recharge derivation pin (shape only -- CANNOT run here)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_leaf_self_recharge_derivation -v 2>&1 | tee /tmp/leafrecharge.log
+          # Skips in CI: _pair() needs a Showdown checkout for the dex. Shape only, same
+          # bargain as the spread-gate step above and disclosed for the same reason.
+          # It is worth a step because the thing it pins -- leaf.rs deriving our own
+          # MUSTRECHARGE rather than passing the root's -- was pinned by NOTHING until this
+          # PR: reverting it at the binary level left 146/146 Python tests green.
+          if ! grep -qE 'Ran 4 tests' /tmp/leafrecharge.log; then
+            echo "::error::leaf self-recharge pin changed count; the derivation pin shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=4\)' /tmp/leafrecharge.log; then
+            echo "::error::expected all 4 to skip here; if they RAN, CI gained a Showdown checkout and this disclaimer is wrong"
+            exit 1
+          fi
+
       - name: Final-holdout guard pins
         run: |
           set -o pipefail
