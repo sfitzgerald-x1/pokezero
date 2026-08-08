@@ -467,6 +467,42 @@ class OpponentJournalPayloadTest(unittest.TestCase):
         # The header total still agrees with the rows it summarises.
         self.assertEqual(payload["opponent_journal"]["record_failures"], 2)
 
+    def test_every_row_key_is_discoverable_from_the_advertised_prefix(self) -> None:
+        """`entries_key` is a PREFIX contract, not just the name of the list.
+
+        A consumer is told one name and scans for `<entries_key>[_suffix]`, so a
+        sibling counter added later stays discoverable without a new header field.
+        This fails the moment a row key escapes the prefix.
+
+        The journal's row keys are enumerated by DIFFING a row that has journal data
+        against one that has none, so the set is discovered independently of the
+        prefix rather than assumed from it. A substring filter would over-collect
+        the unrelated `root_puct_opponent_action_*` family.
+        """
+        payload = self._result(
+            mode="full",
+            games=[
+                self._game("lossy", emitted=2, recorded=5, failures=1),
+                self._game("bare", emitted=0, recorded=0),
+            ],
+        )
+        prefix = payload["opponent_journal"]["entries_key"]
+        rows = {row["battle_id"]: row for row in payload["game_results"]}
+
+        added = set(rows["lossy"]) - set(rows["bare"])
+        self.assertEqual(
+            added,
+            {"opponent_moves", "opponent_moves_recorded", "opponent_moves_record_failures"},
+        )
+        # Contract, both directions: every key the journal adds is reachable from the
+        # prefix, and the prefix reaches nothing else in the row.
+        for key in added:
+            self.assertTrue(
+                key == prefix or key.startswith(prefix + "_"),
+                f"{key!r} is not discoverable from entries_key {prefix!r}",
+            )
+        self.assertEqual({k for k in rows["lossy"] if k.startswith(prefix)}, added)
+
     def test_header_is_present_when_journaling_is_off(self) -> None:
         """Off, on-with-no-addresses and too-old-to-know must be distinguishable."""
         payload = self._result(mode="off", games=[self._game("a", emitted=0, recorded=0)])

@@ -242,17 +242,34 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 #                world-failure class in its delta.
 #
 #   2,093 fallback decisions -> 609 addressed -> 1,484 (70.9%) with NO address.
-#   47 of 906 per-key buckets sit at the cap of 3, counted WITHIN a block.
 #
 # Invariant checked, since a wrong denominator is exactly the mistake being corrected
-# here: numerator <= denominator in every one of the 313 blocks, 0 violations.
+# here: numerator <= denominator in every one of the 313 blocks, 0 violations. All
+# 1,140 address entries have an integer `round`, so reading them by raw dict access
+# gives the same set as `fallback_addresses.iter_shard_addresses`, whose int check
+# would otherwise drop the `round=None` that `_fallback` can file from a context
+# without `decision_round_index`.
 #
-# This does NOT contradict the "14.4% of games carry an address" above -- they answer
-# different questions in different units. 14.4% is games-with-an-address over GAMES
-# (which battles get a journal); 70.9% is unaddressed DECISIONS over fallback
-# decisions (which refusals are reachable at all). Both are consistent with fallbacks
-# clustering into a minority of battles that each retain only a handful of addresses,
-# which is precisely what the per-battle rule and the cap of 3 are designed to do.
+# WHICH RULE DOES THE DROPPING -- the cap of 3 is NOT the main one. Per-key bucket
+# sizes within a block are 719 x 1, 140 x 2, 47 x 3 (906 keys, none over 3). Only
+# those 47 (5.2%) ever reached `_FALLBACK_SAMPLES_PER_CLASS`; the other 859 (94.8%)
+# were never limited by it, so every address they did not retain was refused by the
+# one-address-per-battle rule at `:2421`. The per-battle rule is the dominant
+# mechanism and the cap is the ~5% tail.
+#
+# That split is in KEYS, which is what these shards can support. The DECISION-level
+# split is NOT measurable from them: attributing an unaddressed decision needs to know
+# which battles fell back, and `engine_mcts_fallbacks` is a
+# `ControlledFoulPlayGameResult` field that `to_dict` never emits -- the per-game rows
+# carry no fallback count at all. So "N fallback decisions per fallen-back battle"
+# cannot be computed here; dividing 2,093 by the 430 ADDRESSED battles instead would
+# assume every fallback lives in a battle that kept an address, which is the
+# unstated-population move that produced the withdrawn numbers below.
+#
+# None of this contradicts "14.4% of games carry an address" above -- different
+# questions in different units. 14.4% is games-with-an-address over GAMES (which
+# battles get a journal); 70.9% is unaddressed DECISIONS over fallback decisions
+# (which refusals are reachable at all).
 #
 # WITHDRAWN, recorded so it is not re-derived: an earlier revision said "45.2% of
 # 4,022 occurrences" and "30 of 35 classes at the cap". Both were unsound. 4,022 and
@@ -260,6 +277,12 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # ratio divided ADDRESSES by DECISIONS -- different units, and multi-key filing means
 # it can exceed 1 -- and the class count was taken corpus-wide when the cap is
 # per-block. The true gap is worse than the number that was withdrawn, not better.
+#
+# Three published figures were wrong across three review rounds and all three were the
+# same species: a counter measuring a DIFFERENT DROP, a ratio summed over TWO
+# POPULATIONS, and a count taken at the WRONG SCOPE. None was an arithmetic slip. The
+# question that catches all three, and the one to ask of any number before it is
+# written down here: WHAT UNIT, OVER WHAT POPULATION.
 #
 # That is a coverage limit, not corruption: a battle with no address needs no
 # journal, because nothing points at it to replay. It IS the reason to reach for
@@ -1116,6 +1139,14 @@ class ControlledFoulPlayBenchmarkResult:
                 "mode": self.config.opponent_journal,
                 # Where the rows live, named here so a consumer never has to guess
                 # that the header key and the row key differ.
+                #
+                # THE PREFIX IS THE CONTRACT: every per-game key this feature writes
+                # is `entries_key` or `entries_key + "_" + <suffix>` --
+                # `opponent_moves`, `opponent_moves_recorded`,
+                # `opponent_moves_record_failures`. A consumer scans the row for that
+                # prefix rather than being told each name, so a later sibling counter
+                # does not need a new header field to be discoverable. Sibling keys
+                # are omitted from a row when zero/empty; absent means zero.
                 "entries_key": "opponent_moves",
                 "recorded_decisions": sum(game.opponent_journal_recorded for game in self.games),
                 "emitted_decisions": sum(len(game.opponent_journal) for game in self.games),
