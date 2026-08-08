@@ -740,8 +740,27 @@ class TheRatifiedC151WindowIsNotYetSweptTests(unittest.TestCase):
     Once swept, the virginity pin turns red, which is the signal to do the ratification
     bookkeeping in the prediction document's section 10 and delete this class.
 
-    MUTATION BATTERY: see the class docstring note at the end of this module's history in
-    the PR; every pin below is exercised against a mutation that must turn it red.
+    MUTATION BATTERY: 18 applied across this class and
+    `TheBurnedBlockAndTheOwnerRatificationTests`, 18 caught, plus a clean-tree control that
+    stays green. Recorded because this repository has found four inert pins and eight
+    checks that assert nothing. Each mutation was applied to a clean tree, both modules run
+    with caches cleared and exit codes captured directly, and the tree restored with
+    `git checkout HEAD -- .` with the restoration verified by `git status --porcelain`
+    before the next one. The eleven that reach THIS class:
+
+      * band added to `REGISTERED_BANDS` -> 3 red, including the witness pin;
+      * a synthetic artifact covering `19,300,000`-`19,300,199` -> 3 red, including the
+        virginity pin. This is the shape of the sweep landing and is the one that MUST fire;
+      * ledger row flipped to `CONSUMED` -> 2 red;
+      * ledger row re-ranged into the `19,200,000` block -> 3 red, including the
+        decomposition pin that keeps #1189's three rows three;
+      * `OWNER_RATIFIED`'s owner rewritten -> 3 red across both modules;
+      * `RATIFIED_FINAL_HOLDOUT` moved without its label -> 2 red (the drift pin);
+      * burned block shrunk to C141's span -> the disjointness pin, plus 3 in the guard;
+      * frozen/not-run banner removed -> 1 red; an `# OUTCOME` appended -> 1 red;
+      * the nonzero-result protocol clause deleted -> 1 red;
+      * the recovered disclosure deleted -> 1 red here and 1 in the guard;
+      * C141 un-demoted -> 1 red; the burn rationale softened in the ledger -> 1 red.
     """
 
     @classmethod

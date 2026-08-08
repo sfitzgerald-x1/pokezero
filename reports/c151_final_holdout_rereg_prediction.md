@@ -498,10 +498,34 @@ between a program that corrects itself and one that edits its history.
 * `tests/test_seed_registry_coverage.py`, `tests/test_final_holdout_guard.py` — the pins.
 * `.github/workflows/engine-fidelity-gates.yml` — two exact `Ran N tests` guards, which live in
   YAML and **no local `unittest` or `pytest` run can see**.
+* `reports/certification_contract_lifecycle.json` — **one JSON is modified after all**, and the
+  correction is recorded rather than quietly absorbed. An earlier draft of this section said "no
+  JSON is added or modified". That was **false the moment the guard changed**, and the thing
+  that caught it was a pin rather than a reading:
+  `test_production_matcher_is_not_the_rejected_experiment` binds
+  `successor_pending_identity.differential_sha256` to the exact bytes of
+  `scripts/engine_transition_differential.py`, so any edit to the differential forces a
+  reviewable re-stamp. Verified as a real regression rather than local noise by running the
+  module on a throwaway worktree at the base commit `2acd40ff`, where it is green.
 
-**No JSON is added or modified**, so neither corpus denominator moves. Re-derived by calling
-each selector itself rather than by arithmetic: `_sweep_reports()` from
-`tests/test_boundary_verdict_partition.py` returns **95** against `_EXPECTED_SWEEP_ARTIFACTS =
-95`, and `counter_artifacts()` from `tests/test_never_fired_counter_census.py` returns **375**
-against `_EXPECTED_COUNTER_ARTIFACTS = 375`. The two move independently and must not be used to
-check one another.
+**Nothing is ADDED to either corpus, and the one content change moves neither denominator.**
+Re-derived by calling each selector itself *after* the JSON edit rather than by arithmetic:
+`_sweep_reports()` from `tests/test_boundary_verdict_partition.py` returns **95** against
+`_EXPECTED_SWEEP_ARTIFACTS = 95`, and `counter_artifacts()` from
+`tests/test_never_fired_counter_census.py` returns **375** against
+`_EXPECTED_COUNTER_ARTIFACTS = 375`. Re-derived *after* is the load-bearing part:
+`counter_artifacts()` selects on counter-shaped leaves rather than on filenames, so a content
+change alone can move a member in or out. It did not, but that was measured. The two
+denominators move independently and must not be used to check one another.
+
+**What the re-stamp certifies, per C144's standing instruction that a re-stamp must say which
+changes it covers.** The differential's only edit is the seed-admission guard, and that this
+touches no classification is **AST-verified rather than asserted**: comparing parsed top-level
+definitions before and after gives exactly one added function
+(`_reject_burned_final_holdout`) and two changed ones (`_reject_unguarded_final_holdout`,
+`_reject_reserved_seeds_in_records`), nothing removed, 60 definitions before and 61 after. No
+matcher, classifier, attributor or counter function is in that set, so no committed number is
+re-derived and no boundary changes verdict. What *does* change is which inputs are **admitted**:
+a run or a `--merge-from` over the burned block is now refused where the opt-in previously
+permitted it. C141's committed checkpoint carries 200 of those seeds, so that is a live effect
+rather than a hypothetical one.

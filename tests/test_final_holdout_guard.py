@@ -398,6 +398,30 @@ class TheBurnedBlockAndTheOwnerRatificationTests(unittest.TestCase):
     recovered disclosure says the disposition was explicitly left to the owner and
     "I have **not** chosen". Pinning the constant converts the blessing into a diff that
     carries the owner's name and cannot land without review.
+
+    MUTATION BATTERY: 18 applied across this class and
+    `TheRatifiedC151WindowIsNotYetSweptTests` in `tests/test_seed_registry_coverage.py`, 18
+    caught, plus a clean-tree control that stays green. Restore was `git checkout HEAD -- .`
+    with `git status --porcelain` verified empty between mutations. The ten that reach THIS
+    class, and each is a real escape route rather than a typo:
+
+      1. the burn delegation deleted from `_reject_unguarded_final_holdout`, so the opt-in
+         reopens the block -> 3 red, including the end-to-end CLI pin, which ERRORS because
+         `main()` then runs past the guard into a nonexistent Showdown root. That error is
+         the pin working: without the guard there is nothing between argv and the sweep;
+      2. the aggregation burn scan moved AFTER the `opted_in` early return -> 1 red. This is
+         the fail-open the reserved-seed guard already learned once, one level up;
+      3. the burned block shrunk to C141's swept span, dropping the contaminated head and
+         the overrun tail -> 4 red across both modules;
+      4. `OWNER_RATIFIED`'s owner rewritten from `scott` to `agent` -> 3 red. A window with
+         someone else's name on it is a self-blessing with extra steps;
+      5. `RATIFIED_FINAL_HOLDOUT` moved while the label stayed -> 2 red (the drift pin);
+      6. the typo exemplar restored to `19,300,000` -> 1 red;
+      7. the precondition dropped from the reserved-branch message -> 1 red;
+      8. the overrun reason stripped from the burn message -> 1 red. "Reserved" without a
+         reason is what sends a reader looking for the flag that lifts it;
+      9. the recovered disclosure deleted -> 1 red here and 1 in the sibling module;
+     10. and the clean-tree control, green, so none of the above is a false alarm.
     """
 
     def test_the_whole_burned_block_is_refused_including_both_edges(self) -> None:
